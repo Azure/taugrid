@@ -1,0 +1,172 @@
+# TauGrid Development Guide
+
+This guide describes the intended public development workflow for TauGrid.
+Product components are being migrated from the private AKS AI Runtime integration
+repository. Until a component is present here, its commands below describe the
+validation contract it must satisfy when migrated; they are not a claim that the
+component is already available in this repository.
+
+## Repository Layout
+
+The public repository is organized by ownership and release boundary:
+
+| Path | Contents |
+| --- | --- |
+| `cli/` | Go `tau` CLI, renderers, lifecycle tools, Portal, and Stellar |
+| `sdk/python/` | Python authoring SDK |
+| `controllers/` | Workspace and Ray dashboard controllers |
+| `monitoring/` | GPU health and metrics components |
+| `charts/` | Public Helm charts |
+| `images/` | Reproducible container image definitions |
+| `deploy/` | Reusable, non-environment-specific deployment examples |
+| `examples/` | Runnable training, fine-tuning, inference, and local examples |
+| `docs/` | Architecture and contributor documentation |
+| `site/` | Hugo/Docsy documentation site |
+| `tests/e2e/` | Portable cross-component and anonymous-install tests |
+
+Live Microsoft environments, credentials, private registry configuration, EV2
+assets, and cluster-specific GitOps state do not belong in this repository.
+
+## Prerequisites
+
+Install only the tools needed for the area you are changing:
+
+- Git
+- Go, using the version declared by the component's `go.mod`
+- Python 3.10 or later and a virtual environment
+- Helm 3
+- Docker with BuildKit for image work
+- `kubectl` and Kind for portable integration tests
+- Hugo extended, Go, and Node.js for the Docsy site
+
+Use versions pinned by `go.mod`, `pyproject.toml`, chart metadata, workflows, or
+tooling files once they are available. Do not silently substitute a newer major
+version in release or generated output.
+
+## Get the Source
+
+```bash
+git clone https://github.com/Azure/taugrid.git
+cd taugrid
+git switch -c <type>/<short-description>
+```
+
+Do not commit local kubeconfigs, cloud credentials, `.env` files, generated
+secrets, private endpoints, or test output containing sensitive information.
+
+## Go Components
+
+Run formatting and tests from each changed Go module:
+
+```bash
+gofmt -w <changed-go-files>
+go test ./...
+go vet ./...
+```
+
+For CLI changes, verify command help and offline rendering where applicable:
+
+```bash
+go run ./cmd/tau --help
+go run ./cmd/tau-gen --help
+```
+
+Controller changes should include unit tests for reconciliation behavior and a
+Kind test when they affect CRDs, RBAC, admission, or generated Kubernetes
+resources. Regenerate API artifacts with the component's checked-in Makefile;
+never edit generated CRDs manually.
+
+## Python SDK
+
+Use an isolated environment:
+
+```bash
+cd sdk/python
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+python -m pytest
+```
+
+Keep the Python SDK's rendered intent compatible with the Go CLI. Changes to a
+shared configuration contract require tests on both sides.
+
+## Helm Charts
+
+For every changed chart, run the chart's checked-in tests in addition to basic
+Helm validation:
+
+```bash
+helm lint charts/<chart>
+helm dependency build charts/<chart>
+helm template test charts/<chart> --namespace taugrid-system >/dev/null
+```
+
+If the chart contains `helm-unittest` suites, run them with the repository's
+pinned plugin or CI container. Cover default values and every public optional
+feature affected by the change. Public defaults must use anonymously accessible
+dependencies and immutable image versions or digests.
+
+## Documentation Site
+
+The site uses Hugo and Docsy. From `site/`, use its Makefile as the source of
+truth:
+
+```bash
+make check
+make build
+make serve
+```
+
+Check public links, commands, image references, and navigation. Public docs must
+not depend on Microsoft authentication, private repositories, internal DNS, or
+unpublished artifacts.
+
+## Containers
+
+Container builds must be reproducible from a clean checkout and use public,
+pinned base images. Build the changed image using its Makefile or documented
+BuildKit command, then run its unit and smoke tests.
+
+Do not publish from a contributor pull request. Release workflows own signing,
+SBOM generation, vulnerability scanning, and promotion to MCR.
+
+## Portable Integration Tests
+
+Prefer offline rendering, unit tests, and Kind for pull-request validation.
+Tests must not require an Azure subscription, a persistent Microsoft cluster,
+private network access, or repository secrets unless they are explicitly marked
+as maintainer-only post-merge validation.
+
+Changes that affect Kubernetes APIs or installation should validate, as
+applicable:
+
+1. clean chart installation;
+2. CRD and RBAC creation;
+3. a bounded CPU-only smoke workload;
+4. upgrade or migration behavior; and
+5. cleanup without deleting user-owned resources.
+
+GPU and AKS validation supplements portable tests; it does not replace them.
+
+## Generated Files and Dependencies
+
+- Commit generated files with the source change that produced them.
+- Preserve upstream provenance for vendored or forked charts and code.
+- Record third-party attribution required by the dependency's license.
+- Use Dependabot or the component's documented update process for dependency
+  changes.
+- Avoid checking in build outputs, credentials, caches, or local environment
+  state.
+
+## Before Opening a Pull Request
+
+- Run all component checks relevant to your change.
+- Review the diff for secrets, private endpoints, internal identifiers, and
+  unrelated changes.
+- Update documentation and examples for public behavior changes.
+- Explain compatibility and migration impact.
+- Confirm new dependencies are publicly obtainable and license-compatible.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution and review process.

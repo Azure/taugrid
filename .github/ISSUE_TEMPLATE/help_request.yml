@@ -1,0 +1,59 @@
+name: Help request
+description: Ask for help using or configuring TauGrid
+title: "[Help]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for help with TauGrid. Search existing issues first. Do not include credentials, private endpoints, customer data, or security vulnerabilities.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: Describe your intended workload or outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: Include the relevant commands or configuration and explain where you are blocked.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: TauGrid or tau version
+      description: Provide a release version, image/chart version, or commit SHA when available.
+      placeholder: v0.1.0 or commit SHA
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include relevant Kubernetes, Helm, cloud/provider, GPU, OS, and architecture versions.
+      placeholder: Kubernetes 1.x, Helm 3.x, Linux amd64, GPU model, installation method
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: Add sanitized logs, events, or status output. Remove credentials and private identifiers.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched the documentation and existing issues.
+          required: true
+        - label: I removed secrets, private endpoints, customer data, and other sensitive information.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
