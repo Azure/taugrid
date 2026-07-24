@@ -1,0 +1,114 @@
+<p align="center">
+  <img src="site/static/images/taugrid.png" alt="TauGrid logo" width="480">
+</p>
+
+<p align="center">
+  Cloud-native AI infrastructure for GPU workloads on Kubernetes
+</p>
+
+---
+
+TauGrid makes it easier for teams to run GPU workloads on Kubernetes, spanning data preparation, distributed training, fine-tuning, and inference.
+
+It brings together the **tau CLI**, workload queueing and admission with **Kueue**, Ray cluster orchestration with **KubeRay**, node-level **GPU health monitoring**, and cluster and workload **observability** into a cohesive stack. Platform teams get an integrated foundation instead of assembling these pieces from scratch, while researchers can focus on their code and experiments rather than Kubernetes plumbing.
+
+## Features
+
+| Capability | Description |
+|---|---|
+| **tau CLI** | Submit, monitor, and manage AI workloads from your terminal or CI pipeline |
+| **Workload Queueing** | Fair-share scheduling, quota management, and priority-based admission via Kueue |
+| **Ray Orchestration** | Managed Ray clusters for distributed training and inference via KubeRay |
+| **GPU Health Monitoring** | Node-level diagnostics, automated drain on hardware faults, and fleet health visibility |
+| **Observability** | Integrated metrics, logs, and dashboards for clusters, GPUs, and workloads |
+
+## Architecture
+
+TauGrid is built on open Kubernetes-native components:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Researcher                                                     │
+│  tau run · status · logs · get · cancel                         │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────┐
+│  TauGrid Control Plane                                          │
+│  ┌────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
+│  │   Kueue    │  │   KubeRay    │  │   GPU Health Monitor   │  │
+│  │  Admission │  │ Orchestration│  │   Node Diagnostics     │  │
+│  └────────────┘  └──────────────┘  └────────────────────────┘  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────┐
+│  Compute, Data, and Evidence                                    │
+│  CPU + GPU  ·  Datasets + Checkpoints  ·  Observability         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Getting Started
+
+### Prerequisites
+
+- A Kubernetes cluster (1.28+) with GPU nodes
+- `kubectl` configured for your cluster
+- Helm 3.x
+
+### Install TauGrid
+
+```bash
+helm repo add taugrid https://azure.github.io/taugrid
+helm repo update
+helm install taugrid taugrid/taugrid --namespace taugrid-system --create-namespace
+```
+
+### Install the tau CLI
+
+```bash
+# Linux / macOS
+curl -fsSL https://aka.ms/install-tau | bash
+
+# Or via Go
+go install github.com/Azure/taugrid/cmd/tau@latest
+```
+
+### Submit Your First Workload
+
+```bash
+# Submit a training job
+tau run --queue default --gpu 4 -- python train.py
+
+# Check status
+tau status
+
+# Stream logs
+tau logs <job-name>
+```
+
+## Documentation
+
+Full documentation is available at [https://azure.github.io/taugrid](https://azure.github.io/taugrid).
+
+## Contributing
+
+This project welcomes contributions and suggestions. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+
+## Support
+
+For bug reports and feature requests, please [open a GitHub issue](https://github.com/Azure/taugrid/issues).
+
+## Security
+
+Please see [SECURITY.md](SECURITY.md) for reporting security vulnerabilities.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Trademarks
+
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.
