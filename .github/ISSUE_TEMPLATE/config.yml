@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://aka.ms/SECURITY.md
+    about: Report security vulnerabilities privately. Do not open a public issue.
+  - name: Microsoft Open Source Code of Conduct
+    url: https://opensource.microsoft.com/codeofconduct/
+    about: Read the Code of Conduct and find conduct-reporting guidance.
