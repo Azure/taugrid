@@ -16,7 +16,7 @@ image:
   repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
   # A digest is immutable, so IfNotPresent is correct; set tag instead only for
   # a mutable pre-release build.
-  digest: sha256:93f49562fdb9e733579af34290ad6f86e0c958a37191ba75e4590d9750b53546
+  digest: sha256:6ef8473f89bf0d27dae303aef37b6846915d59b3a4203cdad2f6753875ef10ea
   tag: ""
   pullPolicy: IfNotPresent
 
