@@ -1,0 +1,45 @@
+schema_version: 1
+name: aks-cpu-quickstart
+run:
+  # Reuses the shared CPU Ray Train PyTorch demo script unmodified; only the
+  # resource sizing below differs from cli/examples/cpu-multi-interest-ray/tau.yaml.
+  entrypoint: ../cpu-multi-interest-ray/train.py
+  workload_kind: rayjob
+resource_naming:
+  prefix: tau
+compute:
+  # CPU-only Tau RayJob mode. workers is the total Ray pod count:
+  # 1 head + 4 worker pods for a 5-pod Kueue gang (same shape as the shared demo).
+  gpus: 0
+  cpus: 1
+  # The head pod needs 12Gi. Measured on a 3-node Standard_D8s_v5 CPU AKS
+  # cluster: the shared demo's `memory: 2Gi` and an intermediate 4Gi both fail.
+  # At 4Gi the RayJob exits 1 at ~2m30s, before training starts, because the
+  # head concurrently holds Ray GCS, ~7 `ray-dashboard-*Head-0` subprocesses at
+  # roughly 0.19GB each, and the unpacking of the `torch` wheel from
+  # runtime.pip. That combination trips Ray's memory monitor, which kills the
+  # job (the failure output carries Ray's own OOM guidance URL). At 12Gi the
+  # same config succeeds and runs real PyTorch DDP training.
+  #
+  # Only the head was undersized; worker_memory stays at 4Gi. No `tau run` CLI
+  # flag overrides compute.* fields (see docs/tau/tau-run-config.md /
+  # tau-manifest-workflow.md), so this quickstart keeps its own copy of the
+  # config instead of editing the shared example.
+  memory: 12Gi
+  workers: 5
+  worker_cpus: 2
+  worker_memory: 4Gi
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+  pip:
+    # The shared demo's runtime.pip omits `torch`, which train.py imports
+    # directly; the base Ray image does not ship it. CPU-only wheel from the
+    # default PyPI index (no CUDA extra index needed for CPU-only Standard_D
+    # nodes). Verified working on this CPU-only image: a measured run imported
+    # torch 2.13.0+cu130 and completed training. The root-owned site-packages
+    # permission failure seen on the CUDA image variant
+    # (ray:py3.12-ray2.54.0-cuda13.0) does not apply here.
+    - PyYAML>=6.0
+    - torch>=2.4.0
+# Source: arxiv:2506.23060v1
+# Model: multi-interest retrieval with implicit DCM and explicit topics.

@@ -1,0 +1,155 @@
+components:
+  kueue:
+    enabled: true
+  kuberayOperator:
+    enabled: true
+  tauCoreController:
+    enabled: true
+  taugridCore:
+    enabled: true
+  # gpuMonitoring is intentionally absent. Helm evaluates only the first
+  # condition path that exists, so while this key is unset the gpu-monitoring
+  # subchart follows components.tauCoreController.enabled: a cluster with a Tau
+  # control plane always gets GPU node health monitoring. Set it explicitly to
+  # decouple them, e.g. --set components.gpuMonitoring.enabled=false.
+  #
+  # gpuMonitoring:
+  #   enabled: true
+
+# Portable baseline queue. These quotas bound concurrent Kueue admission;
+# Kubernetes scheduling still enforces the cluster's real capacity.
+# Production operators should replace them with deliberate capacity policy.
+baselineQueue:
+  enabled: true
+  name: jobqueue
+  namespaceSelector:
+    matchExpressions:
+      - key: tau.azure.com/workspace
+        operator: Exists
+  topology:
+    enabled: true
+    name: default-node-topology
+  flavor:
+    name: taugrid-default
+    nodeLabels:
+      kubernetes.io/os: linux
+    tolerations: []
+  resources:
+    - name: cpu
+      nominalQuota: "100000"
+    - name: memory
+      nominalQuota: 100Ti
+    - name: nvidia.com/gpu
+      nominalQuota: "1000"
+
+kueue:
+  controllerManager:
+    manager:
+      image:
+        repository: mcr.microsoft.com/oss/v2/kueue/kueue
+        tag: v0.18.2
+        pullPolicy: IfNotPresent
+  # Keep the active upstream configuration when replacing this embedded YAML
+  # string, and include the AKS DRA device-class mapping used by the published
+  # Kueue fork.
+  managerConfig:
+    controllerManagerConfigYaml: |-
+      apiVersion: config.kueue.x-k8s.io/v1beta2
+      kind: Configuration
+      health:
+        healthProbeBindAddress: :8081
+      metrics:
+        bindAddress: :8443
+      webhook:
+        port: 9443
+      leaderElection:
+        leaderElect: true
+        resourceName: c1f6bfd2.kueue.x-k8s.io
+      controller:
+        groupKindConcurrency:
+          Job.batch: 5
+          Pod: 5
+          Workload.kueue.x-k8s.io: 5
+          LocalQueue.kueue.x-k8s.io: 1
+          ClusterQueue.kueue.x-k8s.io: 1
+          ResourceFlavor.kueue.x-k8s.io: 1
+      clientConnection:
+        qps: 50
+        burst: 100
+      integrations:
+        frameworks:
+          - batch/job
+          - kubeflow.org/mpijob
+          - ray.io/rayjob
+          - ray.io/rayservice
+          - ray.io/raycluster
+          - jobset.x-k8s.io/jobset
+          - trainer.kubeflow.org/trainjob
+          - kubeflow.org/paddlejob
+          - kubeflow.org/pytorchjob
+          - kubeflow.org/tfjob
+          - kubeflow.org/xgboostjob
+          - kubeflow.org/jaxjob
+          - workload.codeflare.dev/appwrapper
+          - pod
+          - deployment
+          - statefulset
+          - leaderworkerset.x-k8s.io/leaderworkerset
+      resources:
+        deviceClassMappings:
+          - name: gpu.nvidia.com
+            deviceClassNames:
+              - gpu.nvidia.com
+
+kuberay-operator:
+  image:
+    repository: mcr.microsoft.com/oss/v2/kuberay/operator
+    tag: v1.6.2
+    pullPolicy: IfNotPresent
+  podAnnotations:
+    adx-mon/scrape: "true"
+    adx-mon/port: "8080"
+  configuration:
+    enabled: true
+    defaultContainerEnvs:
+      - name: RAY_DATA_DISABLE_PROGRESS_BARS
+        value: "1"
+      - name: RAY_metric_cardinality_level
+        value: recommended
+
+# The Tau control plane is an internal preview, so its image still lives in a
+# private ACR pinned by digest. A cluster's kubelet identity needs AcrPull on
+# that registry, or the image must be mirrored and overridden here, until the
+# controller is promoted to MCR.
+tau-core-controller:
+  platformNamespace: tau-platform
+  image:
+    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
+    pullPolicy: IfNotPresent
+  tauCluster:
+    # Node topology labels are cluster-specific. Declare a rule here only
+    # alongside the ResourceFlavor that selects on it.
+    nodeLabelRules: []
+
+# TauGrid services are opt-in. Fresh installs start with only the workload
+# control plane and pull no mutable third-party images.
+taugrid-core:
+  # A fresh cluster has no GitOps owner for these namespaces, so the chart
+  # creates them. Every taugrid-core component below is off by default, so this
+  # renders nothing until one is enabled. A namespace owned by someone else is
+  # skipped rather than adopted, so this stays safe on a cluster where another
+  # owner created it; GitOps overlays that own the whole set still set it to
+  # false. See the taugrid-core README, "Namespace ownership".
+  namespaces:
+    # Emits Namespace objects only for enabled services, so keeping ownership on
+    # is a no-op for the default control-plane-only install and makes opt-in
+    # services work on a genuinely fresh cluster.
+    create: true
+  prewarm:
+    enabled: false
+  stellar:
+    enabled: false
+  lifecycleRecorder:
+    enabled: false
+  portal:
+    enabled: false

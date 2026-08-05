@@ -1,0 +1,152 @@
+suite: container log collection (static-pod-target)
+templates:
+  - collector/configmap.yaml
+
+tests:
+
+  # ── Disabled by default ──────────────────────────────────────────
+  - it: does not render static-pod-target when containerLogs disabled
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+      collector.containerLogs.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "static-pod-target"
+
+  # ── Enabled with targets ────────────────────────────────────────
+  - it: renders static-pod-target blocks when containerLogs enabled
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+      collector.containerLogs.enabled: true
+      collector.containerLogs.targets:
+        - namespace: kuberay-system
+          labels:
+            app.kubernetes.io/name: kuberay-operator
+          destination: "Logs:SystemLogs"
+          parsers: ["json"]
+        - labels:
+            ray.io/is-ray-node: "yes"
+          destination: "Logs:ContainerLogs"
+          parsers: ["json"]
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[\\[host-log\\.static-pod-target\\]\\]"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "namespace = 'kuberay-system'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "destination = 'Logs:SystemLogs'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "destination = 'Logs:ContainerLogs'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"app.kubernetes.io/name" = "kuberay-operator"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"ray.io/is-ray-node" = "yes"'
+
+  # ── Renders without namespace (labels only) ─────────────────────
+  - it: omits namespace field when not specified
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+      collector.containerLogs.enabled: true
+      collector.containerLogs.targets:
+        - labels:
+            ray.io/is-ray-node: "yes"
+          destination: "Logs:ContainerLogs"
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[\\[host-log\\.static-pod-target\\]\\]"
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "\\[\\[host-log\\.static-pod-target\\]\\]\\n.*namespace"
+
+  # ── Works independently of journalLogs ──────────────────────────
+  - it: renders host-log section with only containerLogs (journalLogs disabled)
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+      collector.journalLogs.enabled: false
+      collector.containerLogs.enabled: true
+      collector.containerLogs.targets:
+        - namespace: test-ns
+          destination: "Logs:TestTable"
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[\\[host-log\\]\\]"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "disable-kube-discovery = false"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[\\[host-log\\.static-pod-target\\]\\]"
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "journal-target"
+
+  # ── Both journalLogs and containerLogs enabled ──────────────────
+  - it: renders both journal-target and static-pod-target when both enabled
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+      collector.journalLogs.enabled: true
+      collector.containerLogs.enabled: true
+      collector.containerLogs.targets:
+        - namespace: kuberay-system
+          labels:
+            app.kubernetes.io/name: kuberay-operator
+          destination: "Logs:SystemLogs"
+          parsers: ["json"]
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "journal-target"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[\\[host-log\\.static-pod-target\\]\\]"
+
+  # ── values-ai-runtime.yaml preset ────────────────────────────────
+  - it: renders all 5 default targets with values-ai-runtime.yaml
+    values:
+      - ../values-ai-runtime.yaml
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "namespace = 'kuberay-system'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "namespace = 'kueue-system'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"app.kubernetes.io/name" = "dcgm-exporter"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"tau.azure.com/managed-by" = "tau"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"ray.io/is-ray-node" = "yes"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "destination = 'Logs:SystemLogs'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "destination = 'Logs:ContainerLogs'"
+
+  # ── Default parsers fallback ────────────────────────────────────
+  - it: defaults parsers to json when not specified
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+      collector.containerLogs.enabled: true
+      collector.containerLogs.targets:
+        - namespace: test-ns
+          destination: "Logs:TestTable"
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "parsers.*json"

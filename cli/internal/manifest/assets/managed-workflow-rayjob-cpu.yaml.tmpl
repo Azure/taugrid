@@ -1,0 +1,195 @@
+# Tau CPU RayJob template — CPU-only PyTorch/Ray training.
+#
+# Renders one Ray head pod plus (workers - 1) CPU Ray worker pods. Kueue sees
+# the head and worker groups as separate PodSets and admits them together, which
+# gives the same gang-scheduling behavior as the GPU RayJob path without DRA
+# claims or GPU tolerations.
+#
+# Self-contained payload: the trainer script bundle and a redacted copy of
+# the manifest are base64-encoded and embedded directly in the head pod's own
+# initContainers (tau-script-payload, tau-manifest-payload) — see
+# internal/payload. No ConfigMap is created or referenced. When workers > 1,
+# each worker pod additionally gets its own tau-script-payload
+# initContainer (script only, never manifest): the tau-py SDK wrapper's
+# ray.train.torch.TorchTrainer path re-reads /script/<trainer-filename>
+# from each worker's own local disk (this dispatch is unconditional on
+# ctx.workers > 1, regardless of GPU count, so this CPU-only template needs
+# it too), so the script must be embedded there too. Workers never read
+# /manifest — it's parsed once, on the head, before any worker actor is
+# spawned.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: ${RESOURCE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    kueue.x-k8s.io/queue-name: ${QUEUE_NAME}
+${JOB_LABELS}${JOB_ANNOTATIONS_BLOCK}
+spec:
+  suspend: true
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 15
+  submissionMode: HTTPMode
+  entrypoint: |
+    set -eu
+${DRIVER_LOG_COMPLETION_SETUP}
+    trap tau_complete_driver_logs EXIT
+    # A plain install fails with EACCES on the canonical Ray *CUDA* image
+    # (observed on ray:py3.12-ray2.54.0-cuda13.0, which runs as nonroot
+    # against a root-owned site-packages). It succeeds on the plain
+    # ray:py3.12-ray2.54.0 image, and this template has no default image at
+    # all -- runtime.image is always researcher-supplied here -- so the
+    # fallback is written to no-op rather than to switch on the variant.
+    pip install --quiet --no-cache-dir ${PIP_PACKAGES} \
+      || pip install --quiet --no-cache-dir --user ${PIP_PACKAGES}
+    # --user installs console scripts into the user base bin dir, which is not
+    # on PATH for these images. This entrypoint calls python3 directly, but any
+    # console script a researcher pins via runtime.pip would otherwise install
+    # as an importable library whose command-line entry point is not runnable.
+    PATH="$(python3 -m site --user-base)/bin:$PATH"
+    export PATH
+    python3 /script/train.py \
+      --manifest /manifest/${MANIFEST_NAME} \
+      --smoke-pairs ${SMOKE_PAIRS}
+${ARTIFACT_FINALIZE}
+  runtimeEnvYAML: |
+    pip:
+{{- range .RuntimePip }}
+      - {{ . }}
+{{- end }}
+  rayClusterSpec:
+    rayVersion: "2.40.0"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "${CPUS}"
+        num-gpus: "0"
+      template:
+${POD_METADATA_BLOCK}
+        spec:
+          restartPolicy: Never
+${NODE_SELECTOR_BLOCK}${POD_PRIORITY_CLASS_BLOCK}${SERVICE_ACCOUNT_BLOCK}
+${PAYLOAD_INIT_CONTAINERS_HEAD}          containers:
+            - name: ray-head
+              image: ${IMAGE}
+              command: ["/bin/bash", "-lc", "--"]
+              args:
+                - |
+                  if ! python3 -c "import ray" >/dev/null 2>&1; then
+                    python3 -m pip install --quiet --no-cache-dir "ray[default]==2.40.0"
+                  fi
+                  ulimit -n 65536
+                  exec bash -lc "${KUBERAY_GEN_RAY_START_CMD}"
+              env:
+                - { name: HF_HOME, value: "/tmp/hf" }
+                - { name: GIT_PYTHON_REFRESH, value: "quiet" }
+                - { name: TAU_DATA_DIR, value: "/data" }
+                - { name: TAU_METRICS_HISTORY, value: "/data/checkpoints/finetunes/${NAME}/metrics-history.jsonl" }
+${RUNTIME_ENV_HEAD}
+{{if .RDMAEnabled}}              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                allowPrivilegeEscalation: false
+                seccompProfile:
+                  type: RuntimeDefault
+                capabilities:
+                  drop:
+                    - ALL
+                  add:
+                    - IPC_LOCK
+                    - SYS_RESOURCE
+                    - DAC_OVERRIDE
+{{end}}
+              resources:
+                requests: { cpu: "${CPUS}", memory: ${MEMORY}{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                limits:   { cpu: "${CPU_LIMIT}", memory: ${MEMORY_LIMIT}{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+              readinessProbe:
+                exec:
+                  command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8265), 2).close()"]
+                initialDelaySeconds: 10
+                periodSeconds: 10
+              livenessProbe:
+                exec:
+                  command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8265), 2).close()"]
+                initialDelaySeconds: 30
+                periodSeconds: 20
+              volumeMounts:
+                - { name: script,   mountPath: /script,   readOnly: true }
+                - { name: manifest, mountPath: /manifest, readOnly: true }
+                - { name: data,     mountPath: /data }
+                - { name: dshm,     mountPath: /dev/shm }
+${EXTRA_VOLUME_MOUNTS_HEAD}
+${DRIVER_LOG_OFFLOAD_SIDECAR}
+          volumes:
+            - name: script
+              emptyDir: {}
+            - name: manifest
+              emptyDir: {}
+            - name: data{{if .DataPVC}}
+              persistentVolumeClaim: { claimName: ${DATA_PVC} }{{else}}
+              emptyDir: {}{{end}}
+            - name: dshm
+              emptyDir: { medium: Memory, sizeLimit: 4Gi }
+${EXTRA_VOLUMES_HEAD}
+    workerGroupSpecs:{{if gt .Workers 1}}
+      - replicas: {{.WorkerReplicas}}
+        minReplicas: {{.WorkerReplicas}}
+        maxReplicas: {{.WorkerReplicas}}
+        groupName: ${RESOURCE_NAME}-cpu
+        rayStartParams:
+          num-cpus: "${WORKER_CPUS}"
+          num-gpus: "0"
+        template:
+${WORKER_POD_METADATA_BLOCK}
+          spec:
+            restartPolicy: Never
+${WORKER_NODE_SELECTOR_BLOCK}${WORKER_POD_PRIORITY_CLASS_BLOCK}${WORKER_SERVICE_ACCOUNT_BLOCK}
+${PAYLOAD_INIT_CONTAINERS_WORKER}            containers:
+              - name: ray-worker
+                image: ${IMAGE}
+                command: ["/bin/bash", "-lc", "--"]
+                args:
+                  - |
+                    if ! python3 -c "import ray" >/dev/null 2>&1; then
+                      python3 -m pip install --quiet --no-cache-dir "ray[default]==2.40.0"
+                    fi
+                    ulimit -n 65536
+                    exec bash -lc "${KUBERAY_GEN_RAY_START_CMD}"
+                env:
+                  - { name: HF_HOME, value: "/tmp/hf" }
+                  - { name: GIT_PYTHON_REFRESH, value: "quiet" }
+                  - { name: TAU_DATA_DIR, value: "/data" }
+                  - { name: TAU_METRICS_HISTORY, value: "/data/checkpoints/finetunes/${NAME}/metrics-history.jsonl" }
+${RUNTIME_ENV_WORKER}
+{{if .RDMAEnabled}}                securityContext:
+                  runAsUser: 0
+                  runAsGroup: 0
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
+                  capabilities:
+                    drop:
+                      - ALL
+                    add:
+                      - IPC_LOCK
+                      - SYS_RESOURCE
+                      - DAC_OVERRIDE
+{{end}}
+                resources:
+                  requests: { cpu: "${WORKER_CPUS}", memory: ${WORKER_MEMORY}{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: ${WORKER_MEMORY_LIMIT}{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                volumeMounts:
+                  - { name: script,   mountPath: /script,   readOnly: true }
+                  - { name: data,     mountPath: /data }
+                  - { name: dshm,     mountPath: /dev/shm }
+${EXTRA_VOLUME_MOUNTS_WORKER}
+            volumes:
+              - name: script
+                emptyDir: {}
+              - name: data{{if .DataPVC}}
+                persistentVolumeClaim: { claimName: ${DATA_PVC} }{{else}}
+                emptyDir: {}{{end}}
+              - name: dshm
+                emptyDir: { medium: Memory, sizeLimit: 4Gi }
+{{if gt .Workers 1}}${EXTRA_VOLUMES_WORKER}{{end}}
+{{else}} []{{end}}

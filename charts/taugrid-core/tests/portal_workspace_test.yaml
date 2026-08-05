@@ -1,0 +1,38 @@
+suite: Portal workspace scope
+templates:
+  - templates/portal.yaml
+tests:
+  - it: scopes the embedded Stellar board to the default workspace
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --workspace
+        documentSelector:
+          path: kind
+          value: Deployment
+      # Must stay the name `tau workspace create` gives a stock install, or the
+      # portal scopes its reads to a workspace no run is tagged with. This is
+      # spelled out rather than derived because helm-unittest cannot read
+      # values, so changing portal.workspace has to change this line too.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: taugrid-default
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: accepts an explicit fixed workspace scope
+    set:
+      portal.enabled: true
+      portal.workspace: research
+      portal.image.tag: pinned
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: research
+        documentSelector:
+          path: kind
+          value: Deployment

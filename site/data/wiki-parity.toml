@@ -1,0 +1,69 @@
+[[pairs]]
+id = "overview"
+site = "content/en/docs/overview/_index.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview"
+owner = "taugrid"
+maturity = "shipped"
+reviewed = "2026-07-16"
+
+[[pairs]]
+id = "getting-started"
+site = "content/en/docs/getting-started/_index.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Example-10-Researcher-Onboarding"
+owner = "taugrid"
+maturity = "shipped"
+reviewed = "2026-07-16"
+
+[[pairs]]
+id = "workspace"
+site = "content/en/docs/reference/workspace.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Researcher-Onboarding-Workspace-Design"
+owner = "taugrid"
+maturity = "experimental"
+reviewed = "2026-07-16"
+
+[[pairs]]
+id = "day-two"
+site = "content/en/docs/tasks/researcher/_index.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Day-2-Workflows"
+owner = "taugrid"
+maturity = "shipped"
+reviewed = "2026-07-16"
+
+[[pairs]]
+id = "operations"
+site = "content/en/docs/operations/_index.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Operations-and-Multi-Cluster"
+owner = "taugrid"
+maturity = "shipped"
+reviewed = "2026-07-16"
+
+[[pairs]]
+id = "contributing"
+site = "content/en/docs/community/contributing.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Architecture-Contributing-and-Roadmap"
+owner = "taugrid"
+maturity = "shipped"
+reviewed = "2026-07-16"
+
+[[pairs]]
+id = "visual-curriculum"
+site = "content/en/docs/overview/visual-curriculum.md"
+wiki = "https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview#complete-visual-curriculum"
+owner = "taugrid"
+maturity = "shipped"
+reviewed = "2026-07-16"
+
+[[site_only]]
+id = "canonical-glossary"
+site = "content/en/docs/concepts/glossary.md"
+owner = "taugrid"
+reason = "Versioned source-adjacent terminology; wiki concepts remain grouped under the overview and workspace parity pairs."
+reviewed = "2026-07-16"
+
+[[site_only]]
+id = "cli-reference"
+site = "content/en/docs/reference/cli.md"
+owner = "taugrid"
+reason = "Exact installed command paths track the versioned CLI; the wiki maintains task journeys rather than a duplicate command catalog."
+reviewed = "2026-07-16"

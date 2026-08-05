@@ -1,0 +1,384 @@
+# Sample RayJob template for multi-node Ray Train.
+#
+# Renders a RayJob: one Ray head pod with N GPUs (nvidia.com/gpu device
+# plugin). When ${WORKERS} > 1, also renders workerGroupSpecs with
+# (workers - 1) worker pod replicas (each with N GPUs via the same
+# nvidia.com/gpu request, or CPU-only when ${GPUS}=0). Kueue admits
+# the head + worker pod sets atomically (gang admission) so the run only
+# starts when all pods can be placed.
+#
+# Single-node (workers=1, default) uses today's flow: bash entrypoint pip
+# installs torch + reference trainer deps on the head, then `torchrun --standalone`
+# (or plain python3 for gpus=1). Multi-node (workers>1) requires the
+# tau-py SDK (--main-script): the entrypoint runs the SDK wrapper as
+# plain python3, which calls ray.init() + ray.train.torch.TorchTrainer
+# to drive distributed training across worker pods. The wrapper ships
+# torch + reference trainer deps to workers via Ray runtime_env (no per-worker pip
+# install needed in this template).
+#
+# Substitution markers are shell-style ${VAR} (so this file can be hand-
+# rendered with envsubst for debugging); tau translates them to
+# {{.Var}} before text/template parsing. Template conditionals use Go
+# template syntax ({{if gt .Workers 1}} ... {{end}}) directly.
+#
+# Self-contained payload: the trainer script bundle and a redacted copy of
+# the manifest are base64-encoded and embedded directly in the head pod's
+# own initContainers (tau-script-payload, tau-manifest-payload) — see
+# internal/payload. No ConfigMap is created or referenced. When
+# ${WORKERS} > 1, each worker pod additionally gets its own
+# tau-script-payload initContainer (script only, never manifest): the
+# tau-py SDK wrapper's ray.train.torch.TorchTrainer path re-reads
+# /script/<trainer-filename> from each worker's own local disk, so the
+# script must be embedded there too. Workers never read /manifest — it's
+# parsed once, on the head, before any worker actor is spawned.
+#
+# Required substitutions:
+#   ${NAME}              short kebab-case name (matches manifest.name)
+#   ${MANIFEST_NAME}     basename of manifest YAML (embedded in the manifest payload)
+#   ${SMOKE_PAIRS}       int; 0 = use full dataset
+#   ${GPUS}              int; per-pod GPU count (0..8; 0 = CPU-only)
+#   ${WORKERS}           int; pod count (1 = single-node, >1 = multi-node)
+#   ${PROFILE_NAME}      tau.azure.com/profile label value
+#   ${LANE_LABEL}        tau.azure.com/lane label value
+#   ${QUEUE_NAME}        kueue.x-k8s.io/queue-name label value (Kueue admission)
+#
+# Image: TauGrid MCR Ray base unless manifest runtime.image overrides it.
+# KubeRay needs Ray present at
+# container start to bootstrap the head node before spec.entrypoint
+# runs, but we deliberately avoid Ray ML images so we can keep the
+# batch Job and RayJob paths on the same first-party MCR base image and
+# pin torch in the manifest/runtime contract (Ray ML images ship their
+# own opinionated torch). Cost: ~30-60s extra cold start while pip pulls
+# torch + reference trainer deps. Benefit: Job and RayJob trainer
+# environments match, so a result reproduced on one path should
+# reproduce on the other.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: ${RESOURCE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    kueue.x-k8s.io/queue-name: ${QUEUE_NAME}
+${JOB_LABELS}${JOB_ANNOTATIONS_BLOCK}
+spec:
+  # Kueue admits by flipping suspend=false once head + worker pod sets
+  # all have capacity reserved on the LocalQueue above (gang admission).
+  suspend: true
+  shutdownAfterJobFinishes: true
+  # shutdownAfterJobFinishes and this TTL compose: the TTL is the delay before
+  # cleanup, not an independent knob (KubeRay's own default is 0). Until it elapses
+  # a finished RayJob keeps its head/worker pods Running and holding node capacity,
+  # so a job can report SUCCEEDED while still consuming the cluster.
+  #
+  # Short but non-zero: the log offloader gets five seconds to drain after the
+  # entrypoint completion marker, with margin for KubeRay's reconciliation loop.
+  # This bounds the quota-released / physical-resources-held gap to seconds rather
+  # than a long human log-inspection window.
+  ttlSecondsAfterFinished: 15
+  # HTTPMode posts the entrypoint as a single JSON string to the Ray
+  # dashboard /api/jobs/ endpoint. The default K8sJobMode spawns a
+  # submitter pod that runs `ray job submit -- $entrypoint` with the
+  # entrypoint inlined unquoted, which silently truncates any multi-line
+  # script to its first line. This script is multi-line by necessity
+  # (storage probe + pip install + python invocation), so HTTPMode is
+  # required for correctness, not just preference.
+  submissionMode: HTTPMode
+  entrypoint: |
+    set -eu
+${DRIVER_LOG_COMPLETION_SETUP}
+{{if .MetricsOffload.Enabled}}    TAU_METRICS_COMPLETION={{.MetricsOffload.CompletionFileShell}}
+    TAU_METRICS_DONE={{.MetricsOffload.DoneFileShell}}
+    TAU_METRICS_DONE_TIMEOUT={{.MetricsOffload.DoneTimeoutSeconds}}
+    tau_write_metrics_completion() {
+      status="$?"
+      trap - EXIT
+      state="succeeded"
+      if [ "$status" -ne 0 ]; then
+        state="failed"
+      fi
+      completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      (mkdir -p "$(dirname "$TAU_METRICS_COMPLETION")" && printf '{"state":"%s","reason":"rayjob-entrypoint-exit","message":"entrypoint exited with code %s","completed_at":"%s"}\n' "$state" "$status" "$completed_at" > "$TAU_METRICS_COMPLETION") || true
+      deadline=$(( $(date +%s) + TAU_METRICS_DONE_TIMEOUT ))
+      while [ ! -f "$TAU_METRICS_DONE" ]; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+          echo "metrics offloader did not confirm terminal publication within ${TAU_METRICS_DONE_TIMEOUT}s" >&2
+          if [ "$status" -eq 0 ]; then
+            status=125
+          fi
+          break
+        fi
+        sleep 1
+      done
+      tau_write_driver_log_completion "$status"
+      exit "$status"
+    }
+    trap tau_write_metrics_completion EXIT
+{{else}}    trap tau_complete_driver_logs EXIT
+{{end}}
+${STORAGE_PREFLIGHT}
+    # Pin torch in the manifest/runtime contract so the batch Job and
+    # RayJob paths install the same trainer runtime. The torch wheel from
+    # PyPI bundles its own CUDA runtime libs; the TauGrid Ray base
+    # supplies the driver interface and Python runtime. Sample-specific
+    # deps follow.
+    # A plain install fails with EACCES on the canonical Ray CUDA image this
+    # template defaults to: pip cannot write to the root-owned
+    # /usr/lib/python3.12/site-packages/nvidia. Observed on
+    # ray:py3.12-ray2.54.0-cuda13.0. Retry into the user site rather than
+    # requiring every researcher to set PIP_USER=1 by hand. The first form
+    # still wins on images that install cleanly, including the plain
+    # non-CUDA ray tags.
+    pip install --quiet --no-cache-dir ${PIP_PACKAGES} \
+      || pip install --quiet --no-cache-dir --user ${PIP_PACKAGES}
+    # --user installs console scripts (torchrun, deepspeed, ...) into the user
+    # base bin dir, which is not on PATH for these images. Without this the
+    # fallback yields importable libraries but `torchrun: command not found`.
+    PATH="$(python3 -m site --user-base)/bin:$PATH"
+    export PATH
+{{if gt .Workers 1}}
+    # Multi-node: the SDK wrapper drives Ray Train (TorchTrainer); torchrun
+    # is single-node only and would not coordinate across worker pods.
+    # The wrapper's runtime_env ships torch + Sample deps to worker pods
+    # so they don't need their own pip install.
+    python3 /script/train.py \
+      --manifest /manifest/${MANIFEST_NAME} \
+      --smoke-pairs ${SMOKE_PAIRS}{{else}}
+    if [ "${GPUS}" -le "1" ]; then
+      python3 /script/train.py \
+        --manifest /manifest/${MANIFEST_NAME} \
+        --smoke-pairs ${SMOKE_PAIRS}
+    else
+      torchrun --standalone --nproc_per_node=${GPUS} \
+        /script/train.py \
+        --manifest /manifest/${MANIFEST_NAME} \
+        --smoke-pairs ${SMOKE_PAIRS}
+    fi{{end}}
+${ARTIFACT_FINALIZE}
+{{if gt .Workers 1}}
+  # Multi-node deps shipped via RayJob-level runtime_env. Workers do NOT
+  # run the head's bash entrypoint pip install; this is the only path
+  # that gets the SDK runtime libs onto worker pods. The pip list comes
+  # from the manifest's runtime.pip block (rendered here via Go template).
+  # Set runtime.pip explicitly in your manifest to control what ships
+  # to workers; absent that, the renderer falls back to the legacy Sample
+  # list (torch + microsoft-sample + peft + safetensors + pyyaml + xarray).
+  runtimeEnvYAML: |
+    pip:
+{{- range .RuntimePip }}
+      - {{ . }}
+{{- end }}{{end}}
+  rayClusterSpec:
+    rayVersion: "2.54.0"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-gpus: "${GPUS}"
+      template:
+${POD_METADATA_BLOCK}
+        spec:
+          restartPolicy: Never
+${NODE_SELECTOR_BLOCK}
+${POD_PRIORITY_CLASS_BLOCK}${SERVICE_ACCOUNT_BLOCK}{{if .HasGPU}}
+          tolerations:
+            - { effect: NoSchedule, key: sku, operator: Equal, value: gpu }
+            - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }{{end}}
+${PAYLOAD_INIT_CONTAINERS_HEAD}          containers:
+            - name: ray-head
+              image: ${IMAGE}
+              env:
+                - { name: HF_HOME, value: "/tmp/hf" }
+                - { name: NCCL_DEBUG, value: "WARN" }
+                - { name: NCCL_SOCKET_IFNAME, value: "eth0" }
+                - { name: GIT_PYTHON_REFRESH, value: "quiet" }
+                - { name: TAU_DATA_DIR, value: "/data" }
+                - { name: TAU_HOT_DIR, value: "/mnt" }
+                - { name: TAU_DATASETS_DIR, value: "/mnt/datasets" }
+                - { name: TAU_CHECKPOINTS_DIR, value: "/mnt/checkpoints" }
+                - { name: TAU_DURABLE_DATASETS_DIR, value: "/data/datasets" }
+                - { name: TAU_DURABLE_CHECKPOINTS_DIR, value: "/data/checkpoints" }
+                - { name: TAU_METRICS_HISTORY, value: "/data/checkpoints/finetunes/${NAME}/metrics-history.jsonl" }
+${RUNTIME_ENV_HEAD}
+{{if .RDMAEnabled}}              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                allowPrivilegeEscalation: false
+                seccompProfile:
+                  type: RuntimeDefault
+                capabilities:
+                  drop:
+                    - ALL
+                  add:
+                    - IPC_LOCK
+                    - SYS_RESOURCE
+                    - DAC_OVERRIDE
+{{end}}
+              resources:{{if .UseDRA}}
+                claims:
+                  - name: gpu
+                requests: { cpu: "${CPUS}", memory: "${MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else if .UseDevicePlugin}}
+                requests: { cpu: "${CPUS}", memory: "${MEMORY}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else}}
+                requests: { cpu: "${CPUS}", memory: "${MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{end}}
+              volumeMounts:
+                - { name: script,   mountPath: /script,   readOnly: true }
+                - { name: manifest, mountPath: /manifest, readOnly: true }
+                - { name: data,     mountPath: /data }
+                - { name: tau-hot, mountPath: /mnt }
+                - { name: dshm,     mountPath: /dev/shm }
+${EXTRA_VOLUME_MOUNTS_HEAD}
+              readinessProbe:
+                exec:
+                  command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8265), 2).close()"]
+                initialDelaySeconds: 10
+                periodSeconds: 10
+              livenessProbe:
+                exec:
+                  command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8265), 2).close()"]
+                initialDelaySeconds: 30
+                periodSeconds: 20
+{{if .MetricsOffload.Enabled}}            - name: metrics-offload
+              image: {{.MetricsOffload.ImageYAML}}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: NODE_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.hostIP
+                - { name: TAU_EXP_STORE, value: {{.MetricsOffload.StoreYAML}} }
+                - { name: TAU_METRICS_HISTORY, value: {{.MetricsOffload.HistoryYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_RUN, value: "${NAME}" }
+                - { name: TAU_METRICS_OFFLOAD_PROJECT, value: {{.MetricsOffload.ProjectYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_EXPERIMENT, value: {{.MetricsOffload.ExperimentYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_GROUP, value: {{.MetricsOffload.GroupYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_TAGS, value: {{.MetricsOffload.TagsYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_SOURCE, value: {{.MetricsOffload.SourceYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_OUT, value: {{.MetricsOffload.OutYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_COMPLETION_FILE, value: {{.MetricsOffload.CompletionFileYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_INTERVAL, value: {{.MetricsOffload.IntervalYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT, value: {{.MetricsOffload.RemoteWriteEndpointYAML}} }
+                - { name: TAU_GROUP, value: {{.MetricsOffload.GroupYAML}} }
+                - { name: TAU_EXPERIMENT, value: {{.MetricsOffload.ExperimentYAML}} }
+              command: ["/usr/local/bin/taugrid-portal"]
+              args: ["experiment", "offload", "metrics", "--watch", "--done-file", {{.MetricsOffload.DoneFileYAML}}]
+              resources:
+                requests: { cpu: "100m", memory: "128Mi" }
+                limits:   { cpu: "500m", memory: "512Mi" }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - { name: data, mountPath: /data }
+{{end}}
+${DRIVER_LOG_OFFLOAD_SIDECAR}
+{{if .UseDRA}}          resourceClaims:
+            - name: gpu
+              resourceClaimTemplateName: ${CLAIM}
+{{end}}
+          volumes:
+            - name: script
+              emptyDir: {}
+            - name: manifest
+              emptyDir: {}
+            - name: data{{if .DataPVC}}
+              persistentVolumeClaim: { claimName: ${DATA_PVC} }{{else}}
+              emptyDir: {}{{end}}
+            - name: tau-hot
+              emptyDir: {}
+            - name: dshm
+              emptyDir: { medium: Memory, sizeLimit: 16Gi }
+${EXTRA_VOLUMES_HEAD}
+    workerGroupSpecs:{{if gt .Workers 1}}
+      # Multi-node: render (Workers - 1) worker pod replicas, each with the
+      # same nvidia.com/gpu request and rayStartParams.num-gpus as the head.
+      # KubeRay
+      # treats head + worker pod sets as separate PodSets in the Kueue
+      # Workload, so admission is gang-style (all-or-nothing across all
+      # pod sets).
+      - replicas: {{.WorkerReplicas}}
+        minReplicas: {{.WorkerReplicas}}
+        maxReplicas: {{.WorkerReplicas}}
+        groupName: ${RESOURCE_NAME}-w
+        rayStartParams:
+          num-gpus: "${GPUS}"
+        template:
+${WORKER_POD_METADATA_BLOCK}
+          spec:
+            restartPolicy: Never
+${WORKER_NODE_SELECTOR_BLOCK}${WORKER_POD_PRIORITY_CLASS_BLOCK}${WORKER_SERVICE_ACCOUNT_BLOCK}{{if .HasGPU}}
+            tolerations:
+              - { effect: NoSchedule, key: sku, operator: Equal, value: gpu }
+              - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }{{end}}
+${PAYLOAD_INIT_CONTAINERS_WORKER}            containers:
+              - name: ray-worker
+                image: ${IMAGE}
+                env:
+                  - { name: HF_HOME, value: "/tmp/hf" }
+                  - { name: NCCL_DEBUG, value: "WARN" }
+                  - { name: NCCL_SOCKET_IFNAME, value: "eth0" }
+                  - { name: GIT_PYTHON_REFRESH, value: "quiet" }
+                  - { name: TAU_DATA_DIR, value: "/data" }
+                  - { name: TAU_HOT_DIR, value: "/mnt" }
+                  - { name: TAU_DATASETS_DIR, value: "/mnt/datasets" }
+                  - { name: TAU_CHECKPOINTS_DIR, value: "/mnt/checkpoints" }
+                  - { name: TAU_DURABLE_DATASETS_DIR, value: "/data/datasets" }
+                  - { name: TAU_DURABLE_CHECKPOINTS_DIR, value: "/data/checkpoints" }
+                  - { name: TAU_METRICS_HISTORY, value: "/data/checkpoints/finetunes/${NAME}/metrics-history.jsonl" }
+${RUNTIME_ENV_WORKER}
+{{if .RDMAEnabled}}                securityContext:
+                  runAsUser: 0
+                  runAsGroup: 0
+                  allowPrivilegeEscalation: false
+                  seccompProfile:
+                    type: RuntimeDefault
+                  capabilities:
+                    drop:
+                      - ALL
+                    add:
+                      - IPC_LOCK
+                      - SYS_RESOURCE
+                      - DAC_OVERRIDE
+{{end}}
+                resources:{{if .UseDRA}}
+                  claims:
+                    - name: gpu
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else if .UseDevicePlugin}}
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else}}
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{end}}
+                volumeMounts:
+                  - { name: script,   mountPath: /script,   readOnly: true }
+                  - { name: data,     mountPath: /data }
+                  - { name: tau-hot, mountPath: /mnt }
+                  - { name: dshm,     mountPath: /dev/shm }
+${EXTRA_VOLUME_MOUNTS_WORKER}
+                readinessProbe:
+                  exec:
+                    command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 52365), 2).close()"]
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                livenessProbe:
+                  exec:
+                    command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 52365), 2).close()"]
+                  initialDelaySeconds: 30
+                  periodSeconds: 20
+{{if .UseDRA}}            resourceClaims:
+              - name: gpu
+                resourceClaimTemplateName: ${CLAIM}
+{{end}}
+            volumes:
+              - name: script
+                emptyDir: {}
+              - name: data{{if .DataPVC}}
+                persistentVolumeClaim: { claimName: ${DATA_PVC} }{{else}}
+                emptyDir: {}{{end}}
+              - name: tau-hot
+                emptyDir: {}
+              - name: dshm
+                emptyDir: { medium: Memory, sizeLimit: 16Gi }{{else}} []{{end}}
+{{if gt .Workers 1}}${EXTRA_VOLUMES_WORKER}{{end}}

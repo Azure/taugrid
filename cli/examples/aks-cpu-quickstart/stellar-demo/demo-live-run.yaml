@@ -1,0 +1,55 @@
+# Direct `tau run --config` schema (docs/tau/tau-run-config.md) -- NOT the
+# managed workflow manifest schema used by ../tau.yaml. This variant is
+# required because `run.working_dir` (needed to ship the local `tau/`
+# package containing the real Stellar SDK -- see tau/__init__.py) is only
+# supported under this schema's `engine: ray`.
+name: demo-live-run
+engine: ray
+run:
+  entrypoint: train.py
+  # Ships this whole directory (train.py + tau/) to every Ray pod so
+  # `from tau import stellar` resolves in-cluster. Ray unpacks the archive
+  # and prepends it to PYTHONPATH; the entrypoint runs as `python3 -m train`
+  # regardless of process CWD.
+  working_dir: .
+compute:
+  # CPU-only. `workers: 2` = 1 head + 1 worker pod, i.e. exactly one Ray
+  # Train worker process (see train.py) -- this keeps the post-run
+  # `kubectl cp` retrieval of /tmp/tau_stellar_demo unambiguous (README.md),
+  # unlike the sibling 5-pod ../tau.yaml demo.
+  workers: 2
+  # gpus_per_worker defaults to 1 in this schema -- must be zeroed explicitly
+  # for a CPU-only demo (unlike the managed schema's `gpus: 0`, which
+  # defaults to 0 already).
+  gpus_per_worker: 0
+  # Same OOM history as ../tau.yaml (Ray GCS + dashboard + a connecting
+  # worker exceed the 2Gi default at steady state on a real AKS cluster) --
+  # bump head memory the same way.
+  head_cpu_request: "1"
+  head_memory_request: 4Gi
+  head_memory_limit: 4Gi
+  worker_cpu_request: "2"
+  worker_memory_request: 4Gi
+  worker_memory_limit: 4Gi
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+  pip:
+    # torch is imported directly by train.py; the base Ray image does not
+    # ship it. CPU-only wheel from the default PyPI index (no CUDA extra
+    # index needed for Standard_D nodes).
+    - torch>=2.4.0
+  env:
+    # DEMO_* not TAU_* -- `tau` reserves the TAU_ prefix for its own contract.
+    DEMO_EXPERIMENT: "live-dashboard-walkthrough"
+    DEMO_VARIANT: "live-25min"
+    DEMO_LR: "2e-3"
+    # Step cap is deliberately far above what MAX_SECONDS will reach; the
+    # wall-clock bound is the real stopping condition so the run lasts a
+    # predictable ~25 minutes regardless of node speed. That is what makes the
+    # Ray/Kueue dashboard walkthrough reproducible -- a step-count-only run
+    # finishes in ~1 minute of compute and there is nothing live left to show.
+    DEMO_STEPS: "1000000"
+    DEMO_MAX_SECONDS: "1500"
+    # Print a progress line every 25 steps so `tau run logs -f` visibly streams
+    # during the walkthrough instead of sitting silent between step 24 and the end.
+    DEMO_LOG_EVERY: "25"

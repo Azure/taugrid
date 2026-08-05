@@ -1,0 +1,111 @@
+suite: ManagementCommand pre-create tables
+templates:
+  - templates/management-commands/precreate-metrics-tables.yaml
+  - templates/management-commands/precreate-logs-tables.yaml
+tests:
+  # --- Metrics table pre-creation ---
+  - it: "renders metrics ManagementCommands when enabled"
+    template: templates/management-commands/precreate-metrics-tables.yaml
+    set:
+      managementCommands.precreateMetricsTables.enabled: true
+      managementCommands.precreateMetricsTables.batchSize: 15
+      managementCommands.precreateMetricsTables.tables:
+        - DCGMFIDEVGPUUTIL
+        - DCGMFIDEVFBUSED
+        - NodeCpuSecondsTotal
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: ManagementCommand
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - matchRegex:
+          path: spec.body
+          pattern: "create-merge tables"
+      - matchRegex:
+          path: spec.body
+          pattern: "DCGMFIDEVGPUUTIL.*Timestamp.*datetime.*SeriesId.*long.*Labels.*dynamic.*Value.*real.*Container.*string.*Namespace.*string.*Pod.*string.*Cluster.*string.*Host.*string"
+      - matchRegex:
+          path: spec.body
+          pattern: "NodeCpuSecondsTotal.*Timestamp.*datetime.*SeriesId.*long.*Labels.*dynamic.*Value.*real.*Container.*string.*Namespace.*string.*Pod.*string.*Cluster.*string.*Host.*string"
+      - notMatchRegex:
+          path: spec.body
+          pattern: "ExperimentMetrics \\("
+
+  - it: "batches metrics tables (2 batches of 2 for batchSize=2)"
+    template: templates/management-commands/precreate-metrics-tables.yaml
+    set:
+      managementCommands.precreateMetricsTables.enabled: true
+      managementCommands.precreateMetricsTables.batchSize: 2
+      managementCommands.precreateMetricsTables.tables:
+        - TableA
+        - TableB
+        - TableC
+        - TableD
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: "does not render metrics ManagementCommands when disabled"
+    template: templates/management-commands/precreate-metrics-tables.yaml
+    set:
+      managementCommands.precreateMetricsTables.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- Logs table pre-creation ---
+  - it: "renders logs ManagementCommand when enabled"
+    template: templates/management-commands/precreate-logs-tables.yaml
+    set:
+      managementCommands.precreateLogsTables.enabled: true
+      managementCommands.precreateLogsTables.tables:
+        - ContainerLogs
+        - KernelLogs
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: ManagementCommand
+      - equal:
+          path: spec.database
+          value: "Logs"
+      - matchRegex:
+          path: spec.body
+          pattern: "ContainerLogs.*Timestamp.*datetime.*ObservedTimestamp.*datetime.*TraceId.*string.*SpanId.*string.*SeverityText.*string.*SeverityNumber.*int.*Body.*dynamic.*Resource.*dynamic.*Attributes.*dynamic.*Container.*string.*Namespace.*string.*Pod.*string.*Cluster.*string.*Host.*string.*Workspace.*string.*Project.*string.*ExperimentId.*string.*RunGroupId.*string.*RunId.*string"
+      - matchRegex:
+          path: spec.body
+          pattern: "KernelLogs.*Timestamp.*datetime.*ObservedTimestamp.*datetime.*TraceId.*string.*SpanId.*string.*SeverityText.*string.*SeverityNumber.*int.*Body.*dynamic.*Resource.*dynamic.*Attributes.*dynamic.*Container.*string.*Namespace.*string.*Pod.*string.*Cluster.*string.*Host.*string.*Workspace.*string.*Project.*string.*ExperimentId.*string.*RunGroupId.*string.*RunId.*string"
+
+  - it: "does not render logs ManagementCommand when disabled"
+    template: templates/management-commands/precreate-logs-tables.yaml
+    set:
+      managementCommands.precreateLogsTables.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- Integration with values-ai-runtime.yaml ---
+  - it: "values-ai-runtime enables both metrics and logs precreation"
+    template: templates/management-commands/precreate-metrics-tables.yaml
+    values:
+      - ../values-ai-runtime.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: "default ai-runtime metrics precreation includes canonical experiment metrics with Cluster"
+    template: templates/management-commands/precreate-metrics-tables.yaml
+    set:
+      managementCommands.precreateMetricsTables.enabled: true
+      managementCommands.precreateMetricsTables.batchSize: 100
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "ExperimentMetrics.*Timestamp.*datetime.*SeriesId.*long.*Labels.*dynamic.*Value.*real.*Container.*string.*Namespace.*string.*Pod.*string.*Cluster.*string.*Host.*string"

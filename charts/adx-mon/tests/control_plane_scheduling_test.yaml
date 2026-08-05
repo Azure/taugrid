@@ -1,0 +1,45 @@
+suite: control plane scheduling (system node pool)
+values:
+  - ../values.yaml
+  - ../values-ai-runtime.yaml
+set:
+  adx.clusterUrl: https://test.kusto.windows.net
+  adx.clientId: test-id
+tests:
+  - it: schedules operator on system node pool
+    template: templates/operator/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            kubernetes.azure.com/mode: system
+
+  - it: schedules ingestor on system node pool
+    template: templates/ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            kubernetes.azure.com/mode: system
+
+  - it: schedules alerter on system node pool
+    template: templates/alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            kubernetes.azure.com/mode: system
+
+  - it: schedules collector-singleton on system node pool
+    template: templates/collector-singleton/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            kubernetes.azure.com/mode: system
+
+  - it: does NOT add nodeSelector to collector DaemonSet
+    template: templates/collector/daemonset.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.nodeSelector

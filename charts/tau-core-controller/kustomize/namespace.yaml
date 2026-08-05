@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tau-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/name: tau-core-controller
+    app.kubernetes.io/part-of: taugrid
+    tau.azure.com/managed-by: gitops

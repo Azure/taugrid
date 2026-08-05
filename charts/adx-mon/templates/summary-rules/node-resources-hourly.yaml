@@ -1,0 +1,74 @@
+{{- if and .Values.summaryRules.enabled .Values.summaryRules.items.nodeResourcesHourly.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-node-resources-hourly
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: summary-rule
+spec:
+  database: {{ .Values.summaryRules.items.nodeResourcesHourly.database | quote }}
+  table: {{ .Values.summaryRules.items.nodeResourcesHourly.table | quote }}
+  interval: {{ .Values.summaryRules.items.nodeResourcesHourly.interval | quote }}
+  {{- with .Values.summaryRules.items.nodeResourcesHourly.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  body: |
+    // Hourly node resource utilization rollup: CPU, memory, filesystem per node.
+    // CPU: NodeCpuSecondsTotal is a monotonic counter. We compute the delta
+    // (max - min) per CPU per hour to get actual seconds consumed, then derive
+    // idle percentage = (idle_delta / (cpu_count × 3600)) × 100.
+    // CPU utilization = 100 - idle_pct.
+    let cpu_idle = NodeCpuSecondsTotal
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | where tostring(labels.mode) == "idle"
+    | extend instance = tostring(labels.instance), cpu = tostring(labels.cpu)
+    // NOTE: max-min assumes no counter resets within the 1h window.
+    // A node reboot mid-hour may produce invalid CPU%. This is an
+    // acceptable edge case for hourly rollups; the affected row is
+    // one hour out of thousands and self-heals on the next window.
+    | summarize min_val = min(Value), max_val = max(Value)
+        by bin(Timestamp, 1h), instance, cpu
+    | summarize
+        total_idle_delta = sum(max_val - min_val),
+        cpu_count = dcount(cpu)
+        by Timestamp, instance
+    | extend avg_cpu_idle_pct = round(total_idle_delta / (toreal(cpu_count) * 3600.0) * 100, 1),
+             cpu_util_pct = round(100.0 - (total_idle_delta / (toreal(cpu_count) * 3600.0) * 100), 1);
+    let mem = NodeMemoryMemAvailableBytes
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend instance = tostring(labels.instance)
+    | summarize avg_mem_avail = avg(Value) by bin(Timestamp, 1h), instance;
+    let mem_total = NodeMemoryMemTotalBytes
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend instance = tostring(labels.instance)
+    | summarize mem_total = max(Value) by bin(Timestamp, 1h), instance;
+    let fs_avail = NodeFilesystemAvailBytes
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | where tostring(labels.mountpoint) == "/"
+    | extend instance = tostring(labels.instance)
+    | summarize avg_fs_avail = avg(Value) by bin(Timestamp, 1h), instance;
+    let fs_total = NodeFilesystemSizeBytes
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | where tostring(labels.mountpoint) == "/"
+    | extend instance = tostring(labels.instance)
+    | summarize fs_total = max(Value) by bin(Timestamp, 1h), instance;
+    cpu_idle
+    | join kind=leftouter mem on Timestamp, instance
+    | join kind=leftouter mem_total on Timestamp, instance
+    | join kind=leftouter fs_avail on Timestamp, instance
+    | join kind=leftouter fs_total on Timestamp, instance
+    | extend mem_used_pct = iff(mem_total > 0, round((1.0 - avg_mem_avail / mem_total) * 100, 1), 0.0),
+             fs_used_pct = iff(fs_total > 0, round((1.0 - avg_fs_avail / fs_total) * 100, 1), 0.0)
+    | project Timestamp, instance, cpu_count,
+        cpu_util_pct, avg_cpu_idle_pct,
+        avg_mem_avail, mem_total, mem_used_pct,
+        avg_fs_avail, fs_total, fs_used_pct
+{{- end }}

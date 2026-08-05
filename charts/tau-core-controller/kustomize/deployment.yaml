@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tau-core-controller
+  namespace: tau-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/name: tau-core-controller
+    app.kubernetes.io/part-of: taugrid
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tau-core-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tau-core-controller
+        app.kubernetes.io/part-of: taugrid
+    spec:
+      serviceAccountName: tau-core-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:93f49562fdb9e733579af34290ad6f86e0c958a37191ba75e4590d9750b53546
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect
+            - --platform-namespace=tau-platform
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true

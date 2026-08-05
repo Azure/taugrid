@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Tau in one picture</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">A repository-first workflow layer for policy-aware AI workloads on Kubernetes</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="184" width="360" height="44" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="236" y="208" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="236" dy="0">OPEN SOURCE • KUBERNETES-NATIVE</tspan></text>
+<rect x="56" y="260" width="420" height="760" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="108" cy="310" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="108" y="314" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="108" dy="0">DEV</tspan></text>
+<text x="152" y="300" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="152" dy="0">1 · RESEARCHER INTENT</tspan></text>
+<text x="152" y="349" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="152" dy="0">The repository is</tspan><tspan x="152" dy="37">the front door</tspan></text>
+<text x="84" y="415" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="400" fill="#000000"><tspan x="84" dy="0">Python / Ray code</tspan><tspan x="84" dy="32"></tspan><tspan x="84" dy="32">Checked-in tau.yaml</tspan><tspan x="84" dy="32"></tspan><tspan x="84" dy="32">Workspace connection descriptor</tspan><tspan x="84" dy="32"></tspan><tspan x="84" dy="32">tau run &lt;name&gt;</tspan><tspan x="84" dy="32"></tspan><tspan x="84" dy="32">status · logs · get · cancel</tspan></text>
+<rect x="536" y="230" width="650" height="820" rx="22" fill="transparent" stroke="#F7630C" stroke-width="4"/>
+<text x="860" y="274" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="860" dy="0">2 · TAU WORKFLOW LAYER</tspan></text>
+<text x="860" y="334" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#000000"><tspan x="860" dy="0">Turn project intent into governed execution</tspan></text>
+<rect x="584" y="370" width="554" height="142" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="636" cy="420" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="636" y="424" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="636" dy="0">1</tspan></text>
+<text x="680" y="410" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="680" dy="0">DISCOVER + VALIDATE</tspan></text>
+<text x="680" y="459" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="680" dy="0">Resolve context</tspan></text>
+<text x="612" y="490" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="612" dy="0">Descriptor · config · authorization</tspan></text>
+<rect x="584" y="528" width="554" height="142" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="636" cy="578" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="636" y="582" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="636" dy="0">2</tspan></text>
+<text x="680" y="568" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="680" dy="0">RESOLVE POLICY</tspan></text>
+<text x="680" y="617" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="680" dy="0">Choose execution contract</tspan></text>
+<text x="612" y="648" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="612" dy="0">Queue · resources · storage · identity</tspan></text>
+<rect x="584" y="686" width="554" height="142" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="636" cy="736" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="636" y="740" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="636" dy="0">3</tspan></text>
+<text x="680" y="726" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="680" dy="0">RENDER + SUBMIT</tspan></text>
+<text x="680" y="775" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="680" dy="0">Create workload intent</tspan></text>
+<text x="612" y="806" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="612" dy="0">Kubernetes Job or KubeRay RayJob</tspan></text>
+<rect x="584" y="844" width="554" height="142" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="636" cy="894" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="636" y="898" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="636" dy="0">4</tspan></text>
+<text x="680" y="884" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="680" dy="0">OBSERVE + PRESERVE</tspan></text>
+<text x="680" y="933" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="680" dy="0">Close the lifecycle</tspan></text>
+<text x="612" y="964" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="612" dy="0">Status · logs · checkpoints · evidence</tspan></text>
+<rect x="1246" y="230" width="898" height="390" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4"/>
+<text x="1695" y="274" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1695" dy="0">3 · OPEN KUBERNETES CONTROL PLANE</tspan></text>
+<rect x="1290" y="330" width="250" height="214" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1342" cy="380" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1342" y="384" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1342" dy="0">KQ</tspan></text>
+<text x="1386" y="370" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1386" dy="0">ADMISSION</tspan></text>
+<text x="1386" y="419" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1386" dy="0">Kueue</tspan></text>
+<text x="1318" y="481" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1318" dy="0">Quota</tspan><tspan x="1318" dy="26">priority</tspan><tspan x="1318" dy="26">when to run</tspan></text>
+<rect x="1570" y="330" width="250" height="214" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1622" cy="380" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1622" y="384" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1622" dy="0">RAY</tspan></text>
+<text x="1666" y="370" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1666" dy="0">ORCHESTRATION</tspan></text>
+<text x="1666" y="419" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1666" dy="0">KubeRay</tspan></text>
+<text x="1598" y="481" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1598" dy="0">Ray clusters</tspan><tspan x="1598" dy="26">distributed workers</tspan></text>
+<rect x="1850" y="330" width="250" height="214" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1902" cy="380" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1902" y="384" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1902" dy="0">K8S</tspan></text>
+<text x="1946" y="370" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1946" dy="0">EXECUTION</tspan></text>
+<text x="1946" y="419" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1946" dy="0">Kubernetes</tspan></text>
+<text x="1878" y="481" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1878" dy="0">Pods</tspan><tspan x="1878" dy="26">scheduling</tspan><tspan x="1878" dy="26">service accounts</tspan></text>
+<rect x="1246" y="660" width="898" height="390" rx="22" fill="transparent" stroke="#038387" stroke-width="4"/>
+<text x="1695" y="704" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1695" dy="0">4 · COMPUTE, DATA, AND EVIDENCE</tspan></text>
+<rect x="1290" y="760" width="250" height="214" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1342" cy="810" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1342" y="814" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1342" dy="0">GPU</tspan></text>
+<text x="1386" y="800" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1386" dy="0">COMPUTE</tspan></text>
+<text x="1386" y="849" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1386" dy="0">CPU + GPU</tspan></text>
+<text x="1318" y="911" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1318" dy="0">Your model and data</tspan><tspan x="1318" dy="26">make real progress</tspan></text>
+<rect x="1570" y="760" width="250" height="214" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1622" cy="810" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1622" y="814" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1622" dy="0">DATA</tspan></text>
+<text x="1666" y="800" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1666" dy="0">DURABLE STATE</tspan></text>
+<text x="1666" y="849" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1666" dy="0">Data +</tspan><tspan x="1666" dy="37">artifacts</tspan></text>
+<text x="1598" y="911" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1598" dy="0">Datasets</tspan><tspan x="1598" dy="26">checkpoints</tspan><tspan x="1598" dy="26">model outputs</tspan></text>
+<rect x="1850" y="760" width="250" height="214" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1902" cy="810" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1902" y="814" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1902" dy="0">EXP</tspan></text>
+<text x="1946" y="800" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1946" dy="0">EXPERIMENT VIEW</tspan></text>
+<text x="1946" y="849" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1946" dy="0">Stellar</tspan></text>
+<text x="1878" y="911" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1878" dy="0">Local expstore</tspan><tspan x="1878" dy="26">optional hosted projection</tspan></text>
+<polyline points="476,640 536,640" fill="none" stroke="#0078D4" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1186,540 1246,540" fill="none" stroke="#F7630C" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1695,620 1695,660" fill="none" stroke="#5C2D91" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="584" y="1068" width="430" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="799" y="1092" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="799" dy="0">EXPERIMENTAL: MULTI-CLUSTER PREFLIGHT</tspan></text>
+<rect x="1030" y="1068" width="430" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1245" y="1092" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1245" dy="0">FUTURE: WORKSPACE-SCOPED USER AUTH</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Tau does not provision cloud resources, replace Ray/PyTorch trainers, allocate quota, or schedule pods and GPUs.</tspan></text>
+</svg>

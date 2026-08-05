@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+check_cmd() {
+  if command -v "$1" >/dev/null 2>&1; then
+    echo "ok: $1"
+  else
+    echo "missing: $1" >&2
+    return 1
+  fi
+}
+
+check_file() {
+  if [[ -f "$1" ]]; then
+    echo "ok: $1"
+  else
+    echo "missing: $1" >&2
+    return 1
+  fi
+}
+
+status=0
+check_cmd uv || status=1
+check_cmd python3 || status=1
+check_cmd tau || status=1
+check_cmd docker || true
+
+for path in .env.example pyproject.toml {{if .HasWorkspaceConnection}}tau/workspace.connection.yaml {{end}}tau/smoke.yaml tau/train.yaml images/train.Dockerfile scripts/setup-azure.sh; do
+  check_file "$path" || status=1
+done
+
+if [[ -f .env ]]; then
+  if [[ -z "${IMAGE:-}" || "$IMAGE" == \<* ]]; then
+    echo "warn: IMAGE is not set in .env; configure it before build/push/run." >&2
+  else
+    echo "ok: IMAGE is set"
+  fi
+else
+  echo "warn: .env not found; copy .env.example to .env before build/push/run." >&2
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  uv run python -m {{.Package}}.smoke || status=1
+else
+  echo "warn: smoke skipped because uv is not on PATH" >&2
+fi
+if command -v tau >/dev/null 2>&1; then
+  tau run validate --config tau/smoke.yaml || status=1
+  tau run validate --config tau/train.yaml || status=1
+  tau run validate --config tau/train-gpu.yaml || status=1
+else
+  echo "warn: Tau config validation skipped because tau is not on PATH" >&2
+fi
+bash -n scripts/*.sh || status=1
+
+exit "$status"

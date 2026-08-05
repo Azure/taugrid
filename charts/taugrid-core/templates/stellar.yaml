@@ -1,0 +1,367 @@
+{{- /*
+Stellar uses tau-* object names, matching the portal. Its Service stays
+ClusterIP-only, and spec.selector is immutable, so renaming it needs its own
+rollout. Do not parameterize these names to match the sibling templates without
+that plan. See README.md "Upgrading existing releases".
+*/ -}}
+{{- if .Values.stellar.enabled }}
+{{- $stellar := .Values.stellar -}}
+{{- $source := lower (default "kusto" $stellar.source) -}}
+{{- $usesExpstore := ne $source "kusto" -}}
+{{- $discovery := default dict $stellar.discovery -}}
+{{- $kusto := default dict $stellar.kusto -}}
+{{- $serviceAccount := default dict $stellar.serviceAccount -}}
+{{- $serviceAccountName := default "tau-stellar" $serviceAccount.name -}}
+{{- $extraInitContainers := default list $stellar.extraInitContainers -}}
+{{- $extraVolumeMounts := default list $stellar.extraVolumeMounts -}}
+{{- $extraVolumes := default list $stellar.extraVolumes -}}
+{{- $hasInitContainers := or $usesExpstore (gt (len $extraInitContainers) 0) -}}
+{{- $hasVolumeMounts := or $usesExpstore (gt (len $extraVolumeMounts) 0) -}}
+{{- $hasVolumes := or $usesExpstore (gt (len $extraVolumes) 0) -}}
+{{- if and $stellar.importer.enabled (eq $source "kusto") -}}
+{{- fail "stellar.importer.enabled requires stellar.source=local or auto; source=kusto must not mount workload JSONL/PVC inputs" -}}
+{{- end -}}
+{{- if and $stellar.importer.enabled (not $stellar.importer.run) -}}
+{{- fail "stellar.importer.run is required when stellar.importer.enabled=true" -}}
+{{- end -}}
+{{- if and $stellar.importer.enabled (empty $stellar.importer.history) -}}
+{{- fail "stellar.importer.history must contain at least one path when stellar.importer.enabled=true" -}}
+{{- end -}}
+{{- if and $usesExpstore (not $stellar.init.name) -}}
+{{- fail "stellar.init.name is required when stellar.enabled=true" -}}
+{{- end -}}
+{{- if not $stellar.workspace -}}
+{{- fail "stellar.workspace is required when stellar.enabled=true; Stellar scopes every read to one TauWorkspace, and an unset workspace would fall back to the placeholder \"default\" and match no real runs" -}}
+{{- end -}}
+{{- if and $usesExpstore (not $stellar.expstore.pvcName) -}}
+{{- fail "stellar.expstore.pvcName must name a pre-provisioned platform-managed PVC when stellar.source=local or auto" -}}
+{{- end -}}
+{{- if not $stellar.image.repository -}}
+{{- fail "stellar.image.repository is required when stellar.enabled=true" -}}
+{{- end -}}
+{{- if not $stellar.image.tag -}}
+{{- fail "stellar.image.tag is required when stellar.enabled=true; publish or select a real Tau image tag" -}}
+{{- end -}}
+{{- if not (has $source (list "local" "auto" "kusto")) -}}
+{{- fail "stellar.source must be local, auto, or kusto" -}}
+{{- end -}}
+{{- if ne $stellar.service.type "ClusterIP" -}}
+{{- fail "stellar.service.type must remain ClusterIP; use the Portal authenticated-proxy contract for researcher browser access" -}}
+{{- end -}}
+{{- if and (eq $source "kusto") (not $kusto.metricsFile) (not $kusto.queryCommand) -}}
+{{- fail "stellar.kusto.metricsFile or stellar.kusto.queryCommand is required when stellar.source=kusto" -}}
+{{- end -}}
+{{- if $serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $stellar.namespace }}
+  labels:
+    app: tau-stellar
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+  {{- with $serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tau-stellar
+  namespace: {{ $stellar.namespace }}
+  {{- with $stellar.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    app: tau-stellar
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $stellar.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tau-stellar
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: tau-stellar
+        {{- include "taugrid-core.labels" . | nindent 8 }}
+        {{- with $stellar.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if or $serviceAccount.create $serviceAccount.name }}
+      serviceAccountName: {{ $serviceAccountName }}
+      {{- end }}
+      {{- with $stellar.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $stellar.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $stellar.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $stellar.podSecurityContext | nindent 8 }}
+      {{- if $hasInitContainers }}
+      initContainers:
+        {{- if $usesExpstore }}
+        - name: init-expstore
+          image: "{{ $stellar.image.repository }}:{{ $stellar.image.tag }}"
+          imagePullPolicy: {{ $stellar.image.pullPolicy }}
+          args:
+            - experiment
+            - init
+            - {{ $stellar.init.name | quote }}
+            - --store
+            - {{ $stellar.storePath | quote }}
+            {{- with $stellar.init.project }}
+            - --project
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $stellar.init.group }}
+            - --group
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $stellar.init.idempotencyKey }}
+            - --idempotency-key
+            - {{ . | quote }}
+            {{- end }}
+          resources:
+            requests: { cpu: "50m", memory: 128Mi }
+            limits: { cpu: "250m", memory: 512Mi }
+          securityContext:
+            {{- toYaml $stellar.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: expstore
+              mountPath: {{ $stellar.storePath }}
+        {{- end }}
+        {{- with $extraInitContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: stellar
+          image: "{{ $stellar.image.repository }}:{{ $stellar.image.tag }}"
+          imagePullPolicy: {{ $stellar.image.pullPolicy }}
+          {{- with $stellar.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $stellar.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - experiment
+            - serve
+            {{- if $usesExpstore }}
+            - --store
+            - {{ $stellar.storePath | quote }}
+            {{- end }}
+            - --addr
+            - "0.0.0.0:{{ $stellar.service.targetPort }}"
+            - --workspace
+            - {{ $stellar.workspace | quote }}
+            - --source
+            - {{ $source | quote }}
+            {{- with $kusto.metricsFile }}
+            - --kusto-metrics-file
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.project }}
+            - --kusto-project
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.endpoint }}
+            - --kusto-endpoint
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.database }}
+            - --kusto-database
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.ingestion }}
+            - --kusto-ingestion
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $discovery.since }}
+            - --discovery-since
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $discovery.maxSince }}
+            - --max-discovery-since
+            - {{ . | quote }}
+            {{- end }}
+            {{- range $project := $discovery.allowedProjects }}
+            - --allowed-project
+            - {{ $project | quote }}
+            {{- end }}
+            {{- if and (default false $discovery.legacyProjectScope) $kusto.project }}
+            - --allowed-project
+            - {{ $kusto.project | quote }}
+            {{- end }}
+            {{- range $project := $discovery.featuredProjects }}
+            - --featured-project
+            - {{ $project | quote }}
+            {{- end }}
+            {{- with $kusto.since }}
+            - --kusto-since
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.targetSince }}
+            - --target-since
+            - {{ . | quote }}
+            {{- end }}
+            {{- if $kusto.targetPoints }}
+            - --kusto-target-points
+            - {{ $kusto.targetPoints | quote }}
+            {{- end }}
+            {{- with $kusto.queryCommand }}
+            - --kusto-query-command
+            - {{ . | quote }}
+            {{- end }}
+            {{- range $arg := $kusto.queryArgs }}
+            - --kusto-query-arg
+            - {{ $arg | quote }}
+            {{- end }}
+            {{- with $stellar.defaultTarget }}
+            - --default-target
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $stellar.service.targetPort }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $stellar.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $stellar.containerSecurityContext | nindent 12 }}
+          {{- if $hasVolumeMounts }}
+          volumeMounts:
+            {{- if $usesExpstore }}
+            - name: expstore
+              mountPath: {{ $stellar.storePath }}
+            {{- end }}
+            {{- with $extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+        {{- if $stellar.importer.enabled }}
+        - name: metrics-importer
+          image: "{{ $stellar.image.repository }}:{{ $stellar.image.tag }}"
+          imagePullPolicy: {{ $stellar.image.pullPolicy }}
+          args:
+            - experiment
+            - --store
+            - {{ $stellar.storePath | quote }}
+            - offload
+            - metrics
+            - --watch
+            - --interval
+            - {{ $stellar.importer.interval | quote }}
+            - --out
+            - {{ $stellar.importer.outPath | quote }}
+            - --run
+            - {{ $stellar.importer.run | quote }}
+            - --group
+            - {{ $stellar.importer.group | quote }}
+            - --source
+            - {{ $stellar.importer.source | quote }}
+            {{- range $history := $stellar.importer.history }}
+            - --history
+            - {{ $history | quote }}
+            {{- end }}
+            {{- with $stellar.importer.project }}
+            - --project
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $stellar.importer.question }}
+            - --question
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $stellar.importer.completionFile }}
+            - --completion-file
+            - {{ . | quote }}
+            {{- end }}
+            {{- range $arg := $stellar.importer.extraArgs }}
+            - {{ $arg | quote }}
+            {{- end }}
+          resources:
+            requests: { cpu: "100m", memory: 256Mi }
+            limits: { cpu: "500m", memory: 1Gi }
+          securityContext:
+            {{- toYaml $stellar.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: expstore
+              mountPath: {{ $stellar.storePath }}
+            - name: importer-spool
+              mountPath: {{ $stellar.importer.outPath }}
+            {{- with $stellar.importer.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+      {{- if $hasVolumes }}
+      volumes:
+        {{- if $usesExpstore }}
+        - name: expstore
+          persistentVolumeClaim:
+            claimName: {{ $stellar.expstore.pvcName }}
+        {{- end }}
+        {{- if $stellar.importer.enabled }}
+        - name: importer-spool
+          emptyDir: {}
+        {{- with $stellar.importer.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- end }}
+        {{- with $extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $stellar.serviceName }}
+  namespace: {{ $stellar.namespace }}
+  labels:
+    app: tau-stellar
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+  {{- with $stellar.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $stellar.service.type }}
+  {{- with $stellar.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with $stellar.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    app: tau-stellar
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ $stellar.service.port }}
+      targetPort: http
+{{- end }}

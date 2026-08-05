@@ -1,0 +1,22 @@
+{{- $base := .Get "base" -}}
+{{- $title := .Get "title" -}}
+{{- $question := .Get "question" -}}
+{{- $source := .Get "source" -}}
+<figure class="tau-visual">
+  <a href="{{ printf "images/tau/%s.svg" $base | relURL }}">
+    <img
+      src="{{ printf "images/tau/%s.svg" $base | relURL }}"
+      alt="{{ $title }}"
+      loading="lazy"
+    >
+  </a>
+  <figcaption>
+    <strong>{{ $title }}</strong>
+    <span>{{ $question }}</span>
+    <span class="tau-visual__links">
+      <a href="{{ printf "images/tau/%s.svg" $base | relURL }}">SVG</a>
+      <a href="{{ printf "images/tau/%s.png" $base | relURL }}">PNG</a>
+      <a href="{{ printf "sources/tau/%s.%s" $base $source | relURL }}">Editable source</a>
+    </span>
+  </figcaption>
+</figure>

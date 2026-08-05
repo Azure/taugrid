@@ -1,0 +1,29 @@
+{{/*
+Test fixture — only rendered when _test.enabled=true (set by helm-unittest).
+Exercises all helpers from _helpers.tpl for unit test coverage.
+Never rendered in production installs.
+*/}}
+{{- if .Values._test.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-test
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+data:
+  name: {{ include "adx-mon.name" . }}
+  fullname: {{ include "adx-mon.fullname" . }}
+  chart: {{ include "adx-mon.chart" . }}
+  imageTag: {{ include "adx-mon.imageTag" (dict "image" .Values.operator.image "chart" .Chart) }}
+  image: {{ include "adx-mon.image" (dict "image" .Values.operator.image "chart" .Chart) }}
+  saOperator: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "operator") }}
+  saCollector: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "collector") }}
+  saIngestor: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "ingestor") }}
+  selectorLabels: |
+    {{- include "adx-mon.selectorLabels" . | nindent 4 }}
+  componentSelectorLabels: |
+    {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "operator") | nindent 4 }}
+  componentLabels: |
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "operator") | nindent 4 }}
+  namespace: {{ include "adx-mon.namespace" . }}
+{{- end }}

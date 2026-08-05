@@ -1,0 +1,19 @@
+ARG PYTHON_VERSION={{.PythonVersion}}
+
+FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION}
+
+ENV PYTHONUNBUFFERED=1
+ENV PROJECT_ROOT=/workspace
+
+RUN tdnf install -y bash ca-certificates git && tdnf clean all
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && python3 -m pip install --no-cache-dir uv
+
+WORKDIR /workspace
+COPY pyproject.toml README.md .python-version ./
+COPY src ./src
+COPY scripts ./scripts
+
+RUN uv sync --no-dev
+
+CMD ["uv", "run", "python", "-m", "{{.Package}}.smoke"]

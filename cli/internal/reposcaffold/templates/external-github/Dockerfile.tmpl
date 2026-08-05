@@ -1,0 +1,31 @@
+ARG PYTHON_VERSION={{.PythonVersion}}
+
+FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION}
+
+ARG UPSTREAM_REPO={{.UpstreamRepo}}
+ARG UPSTREAM_REF={{.UpstreamRef}}
+ARG UPSTREAM_ROOT={{.UpstreamRoot}}
+
+ENV PYTHONUNBUFFERED=1
+ENV PROJECT_ROOT=/workspace
+ENV UPSTREAM_ROOT=${UPSTREAM_ROOT}
+
+RUN tdnf install -y bash ca-certificates git gcc gcc-c++ make && tdnf clean all
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && python3 -m pip install --no-cache-dir uv
+
+RUN git clone "${UPSTREAM_REPO}" "${UPSTREAM_ROOT}" \
+    && cd "${UPSTREAM_ROOT}" \
+    && git checkout "${UPSTREAM_REF}" \
+    && if [ -f pyproject.toml ] || [ -f setup.py ]; then python3 -m pip install --no-cache-dir .; fi \
+    && git rev-parse HEAD >"${UPSTREAM_ROOT}/.pinned-ref" \
+    && printf '%s\n' "${UPSTREAM_REPO}" >"${UPSTREAM_ROOT}/.upstream-repo"
+
+WORKDIR /workspace
+COPY pyproject.toml README.md .python-version ./
+COPY src ./src
+COPY scripts ./scripts
+
+RUN uv sync --no-dev
+
+CMD ["uv", "run", "python", "-m", "{{.Package}}.smoke"]

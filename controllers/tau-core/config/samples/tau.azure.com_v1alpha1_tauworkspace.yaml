@@ -1,0 +1,23 @@
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: aurora
+  namespace: tau-platform
+spec:
+  principalRef:
+    provider: entra
+    name: aurora-researchers
+  kubernetesSubject:
+    kind: Group
+    name: aurora-researchers
+  role: tau-researcher-v1
+  target:
+    namespace: aurora
+    createNamespace: true
+  queue: aurora
+  workloadIdentity:
+    serviceAccountName: tau-workload
+    clientId: <managed-identity-client-id>
+  defaults:
+    outputRoot: /data/projects/aurora/runs
+    priority: default

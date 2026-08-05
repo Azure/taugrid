@@ -1,0 +1,51 @@
+{{- if and .Values.alertRules.enabled .Values.alertRules.items.eccUncorrectable.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-ecc-uncorrectable
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertrule
+  annotations:
+    adx-mon/sig: "GPU"
+spec:
+  database: {{ .Values.adx.metricsDatabase | quote }}
+  interval: {{ .Values.alertRules.items.eccUncorrectable.interval | quote }}
+  {{- with .Values.alertRules.items.eccUncorrectable.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  query: |
+    // Alert on uncorrectable ECC errors (row remapping failures).
+    // DCGM_FI_DEV_ROW_REMAP_FAILURE > 0 means the GPU cannot remap further rows.
+    // DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS tracks permanent row remap count.
+    let remap_failures = DCGMFIDEVROWREMAPFAILURE
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend gpu = tostring(labels.gpu),
+             instance = tostring(labels.instance),
+             namespace = tostring(labels.exported_namespace),
+             pod = tostring(labels.pod)
+    | where Value > 0
+    | summarize last_value = max(Value) by instance, gpu;
+    let uncorrectable = DCGMFIDEVUNCORRECTABLEREMAPPEDROWS
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend gpu = tostring(labels.gpu),
+             instance = tostring(labels.instance)
+    | summarize max_rows = max(Value) by instance, gpu
+    | where max_rows > 0;
+    remap_failures
+    | union (uncorrectable | project instance, gpu, last_value = max_rows)
+    | summarize error_count = count(), gpus = make_set(gpu) by instance
+    | extend Severity = 2
+    | extend Title = strcat("Uncorrectable ECC errors on node ", instance)
+    | extend Summary = strcat("Node ", instance, " has ", error_count, " GPU(s) with uncorrectable ECC errors or row remap failures: GPUs ", tostring(gpus), ". GPU replacement may be required.")
+    | extend Description = strcat("GPUs affected: ", tostring(gpus), ". Row remap failure indicates the GPU can no longer remap faulty memory rows. Hardware replacement is recommended.")
+    | extend CorrelationId = instance
+  destination: {{ .Values.alertRules.items.eccUncorrectable.destination | default "" | quote }}
+  {{- if .Values.alertRules.items.eccUncorrectable.autoMitigateAfter }}
+  autoMitigateAfter: {{ .Values.alertRules.items.eccUncorrectable.autoMitigateAfter | quote }}
+  {{- end }}
+{{- end }}

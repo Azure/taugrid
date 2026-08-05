@@ -1,0 +1,400 @@
+{{- if .Values.portal.enabled }}
+{{- $portal := .Values.portal -}}
+{{- $source := lower (default "kusto" $portal.source) -}}
+{{- $kusto := default dict $portal.kusto -}}
+{{- $runHistory := default dict $portal.runHistory -}}
+{{- $jobs := default dict $portal.jobs -}}
+{{- $jobsScopeModeConfigured := ne (trim (default "" $jobs.scopeMode)) "" -}}
+{{- $jobsScopeMode := lower (default "disabled" $jobs.scopeMode) -}}
+{{- $jobsOperatorScopes := default list $jobs.operatorScopes -}}
+{{- $workloadNamespace := default $jobs.namespace $portal.workloadNamespace -}}
+{{- $kueueviz := default dict $portal.kueueviz -}}
+{{- $workspaceDirectory := default dict $portal.workspaceDirectory -}}
+{{- $workspaceDirectoryEnabled := default false $workspaceDirectory.enabled -}}
+{{- $workspaceAuth := default dict $workspaceDirectory.auth -}}
+{{- $access := default dict $portal.access -}}
+{{- $accessMode := lower (trim (default "cluster-internal" $access.mode)) -}}
+{{- $externalURL := trim (default "" $access.externalURL) -}}
+{{- $externalURLParts := dict -}}
+{{- if $externalURL -}}
+{{- $externalURLParts = urlParse $externalURL -}}
+{{- end -}}
+{{- $rbac := default dict $portal.rbac -}}
+{{- $serviceAccount := default dict $portal.serviceAccount -}}
+{{- $resourceName := default "tau-portal" $portal.resourceName -}}
+{{- $serviceName := default $resourceName $portal.serviceName -}}
+{{- $serviceAccountName := default $resourceName $serviceAccount.name -}}
+{{- $workspaceConfigMapName := printf "%s-workspaces" $resourceName -}}
+{{- $image := include "taugrid-core.image" (dict "component" "portal" "image" $portal.image) -}}
+{{- $extraInitContainers := default list $portal.extraInitContainers -}}
+{{- $extraVolumeMounts := default list $portal.extraVolumeMounts -}}
+{{- $extraVolumes := default list $portal.extraVolumes -}}
+{{- $hasInitContainers := gt (len $extraInitContainers) 0 -}}
+{{- $hasVolumeMounts := or $workspaceDirectoryEnabled (gt (len $extraVolumeMounts) 0) -}}
+{{- $hasVolumes := or $workspaceDirectoryEnabled (gt (len $extraVolumes) 0) -}}
+{{- if not (has $source (list "local" "auto" "kusto")) -}}
+{{- fail "portal.source must be local, auto, or kusto" -}}
+{{- end -}}
+{{- if not (has $accessMode (list "cluster-internal" "authenticated-proxy")) -}}
+{{- fail "portal.access.mode must be cluster-internal or authenticated-proxy" -}}
+{{- end -}}
+{{- if ne $portal.service.type "ClusterIP" -}}
+{{- fail "portal.service.type must remain ClusterIP; expose Portal only through a platform-owned authenticated HTTPS proxy" -}}
+{{- end -}}
+{{- if and (eq $accessMode "cluster-internal") $externalURL -}}
+{{- fail "portal.access.externalURL requires portal.access.mode=authenticated-proxy" -}}
+{{- end -}}
+{{- if and (eq $accessMode "authenticated-proxy") (not $externalURL) -}}
+{{- fail "portal.access.mode=authenticated-proxy requires portal.access.externalURL" -}}
+{{- end -}}
+{{- if and $externalURL (or (ne (get $externalURLParts "scheme") "https") (not (get $externalURLParts "hostname")) (get $externalURLParts "userinfo") (get $externalURLParts "query") (get $externalURLParts "fragment")) -}}
+{{- fail "portal.access.externalURL must be an HTTPS URL with a host and without credentials, query, or fragment" -}}
+{{- end -}}
+{{- if and (has $source (list "local" "auto")) (not $portal.store) -}}
+{{- fail "portal.source=local/auto requires `portal.store` (a mounted expstore path) for the embedded Stellar experience; use portal.source=kusto for a store-less portal" -}}
+{{- end -}}
+{{- if and $runHistory.enabled (not $kusto.queryCommand) -}}
+{{- fail "portal.runHistory.enabled=true requires portal.kusto.queryCommand and an active lifecycle recorder" -}}
+{{- end -}}
+{{- if not (has $jobsScopeMode (list "disabled" "workspace" "operator")) -}}
+{{- fail "portal.jobs.scopeMode must be disabled, workspace, or operator" -}}
+{{- end -}}
+{{- if and (eq $jobsScopeMode "workspace") (not $workspaceDirectoryEnabled) -}}
+{{- fail "portal.jobs.scopeMode=workspace requires portal.workspaceDirectory.enabled=true" -}}
+{{- end -}}
+{{- if and (eq $jobsScopeMode "workspace") (gt (len $jobsOperatorScopes) 0) -}}
+{{- fail "portal.jobs.scopeMode=workspace does not accept portal.jobs.operatorScopes" -}}
+{{- end -}}
+{{- if and (eq $jobsScopeMode "operator") (eq (len $jobsOperatorScopes) 0) -}}
+{{- fail "portal.jobs.scopeMode=operator requires at least one portal.jobs.operatorScopes entry" -}}
+{{- end -}}
+{{- if and (eq $jobsScopeMode "disabled") (gt (len $jobsOperatorScopes) 0) -}}
+{{- fail "portal.jobs.operatorScopes requires portal.jobs.scopeMode=operator" -}}
+{{- end -}}
+{{- $operatorScopeTeams := dict -}}
+{{- range $index, $scope := $jobsOperatorScopes -}}
+{{- if or (not $scope.team) (not $scope.namespace) (not $scope.localQueue) -}}
+{{- fail (printf "portal.jobs.operatorScopes[%d] requires team, namespace, and localQueue" $index) -}}
+{{- end -}}
+{{- $scopeKey := printf "%s/%s" $scope.namespace $scope.localQueue -}}
+{{- if hasKey $operatorScopeTeams $scopeKey -}}
+{{- fail (printf "portal.jobs.operatorScopes contains duplicate namespace/LocalQueue scope %s" $scopeKey) -}}
+{{- end -}}
+{{- $_ := set $operatorScopeTeams $scopeKey $scope.team -}}
+{{- end -}}
+{{- if $workspaceDirectoryEnabled -}}
+{{- if not $workspaceDirectory.localCluster -}}
+{{- fail "portal.workspaceDirectory.localCluster is required when workspaceDirectory.enabled=true" -}}
+{{- end -}}
+{{- if eq (len (default list $workspaceDirectory.workspaces)) 0 -}}
+{{- fail "portal.workspaceDirectory.workspaces must contain at least one authorized workspace when enabled" -}}
+{{- end -}}
+{{- if eq $jobsScopeMode "workspace" -}}
+{{- range $index, $workspace := (default list $workspaceDirectory.workspaces) -}}
+{{- if or (not $workspace.team) (not $workspace.namespace) (not $workspace.localQueue) -}}
+{{- fail (printf "portal.workspaceDirectory.workspaces[%d] requires team, namespace, and localQueue when portal.jobs.scopeMode=workspace" $index) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $workspaceConfigMapName }}
+  namespace: {{ $portal.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+data:
+  workspaces.json: |
+    {{- dict "localCluster" $workspaceDirectory.localCluster "endpoints" (default list $workspaceDirectory.endpoints) "workspaces" (default list $workspaceDirectory.workspaces) | toPrettyJson | nindent 4 }}
+---
+{{ end }}
+{{- if $rbac.create }}
+{{- if not $serviceAccount.create -}}
+{{- fail "portal.rbac.create=true requires portal.serviceAccount.create=true so the ClusterRoleBinding has a subject" -}}
+{{- end -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $serviceAccountName }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+rules:
+  # Ray board: discover <rc>-dashboard Services cluster-wide.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  # Ray board: read Ray head pod readiness to gate the dashboard "open" link,
+  # and Job detail pod status. A head Service can outlive its head pod, so the
+  # board checks pod Ready before offering a live dashboard link.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # Cluster Nodes board: read node hardware inventory (SKU, agentpool,
+  # CPU/memory/GPU capacity) from cluster-scoped Node objects.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # Fleet Compute runtime-plumbing summary: GPU/runtime DaemonSet readiness.
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch"]
+  # Jobs / Queue board: read Kueue queue depth and admitted/pending workloads.
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["localqueues", "clusterqueues", "workloads"]
+    verbs: ["get", "list", "watch"]
+  # Runs board: list submitted RayJobs and batch Jobs in the workload namespace.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $serviceAccountName }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ $portal.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $serviceAccountName }}
+---
+{{- end }}
+{{- if $serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $portal.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+  {{- with $serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $resourceName }}
+  namespace: {{ $portal.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $portal.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ $resourceName }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $resourceName }}
+        {{- include "taugrid-core.labels" . | nindent 8 }}
+        {{- with $portal.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if or $serviceAccount.create $serviceAccount.name }}
+      serviceAccountName: {{ $serviceAccountName }}
+      {{- end }}
+      {{- with $portal.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $portal.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $portal.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $portal.podSecurityContext | nindent 8 }}
+      {{- if $hasInitContainers }}
+      initContainers:
+        {{- with $extraInitContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: portal
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $portal.image.pullPolicy }}
+          {{- with $portal.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $portal.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - portal
+            - serve
+            - --addr
+            - "0.0.0.0:{{ $portal.service.targetPort }}"
+            - --source
+            - {{ $source | quote }}
+            - --workspace
+            - {{ default "default" $portal.workspace | quote }}
+            {{- with $portal.store }}
+            - --store
+            - {{ . | quote }}
+            {{- end }}
+            # Ray and Runs retain an explicit legacy namespace. Jobs scopes are
+            # authorized independently below.
+            {{- with $workloadNamespace }}
+            - --namespace
+            - {{ . | quote }}
+            {{- end }}
+            {{- if $jobsScopeModeConfigured }}
+            - --jobs-scope-mode
+            - {{ $jobsScopeMode | quote }}
+            {{- range $scope := $jobsOperatorScopes }}
+            - --jobs-operator-scope
+            - {{ printf "%s=%s/%s" $scope.team $scope.namespace $scope.localQueue | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $workspaceDirectoryEnabled }}
+            - --workspace-directory
+            # Compatibility wire path consumed by existing Tau CLI releases.
+            - /etc/tau-portal/workspaces.json
+            - --workspace-user-header
+            - {{ default "X-MS-CLIENT-PRINCIPAL-NAME" $workspaceAuth.userHeader | quote }}
+            - --workspace-groups-header
+            - {{ default "X-MS-CLIENT-PRINCIPAL-GROUPS" $workspaceAuth.groupsHeader | quote }}
+            {{- end }}
+            {{- with $jobs.policyPath }}
+            - --policy
+            - {{ . | quote }}
+            {{- end }}
+            {{- if $kueueviz.enabled }}
+            # Kueue (Live) board: reverse-proxy the KueueViz backend/frontend
+            # ClusterIP Services (enabled by the Flex kueue overlay) same-origin
+            # under /api/portal/kueueviz/*.
+            - --kueueviz
+            - --kueueviz-namespace
+            - {{ default "kueue-system" $kueueviz.namespace | quote }}
+            - --kueueviz-backend-service
+            - {{ default "kueue-kueueviz-backend" $kueueviz.backendService | quote }}
+            - --kueueviz-frontend-service
+            - {{ default "kueue-kueueviz-frontend" $kueueviz.frontendService | quote }}
+            {{- end }}
+            {{- with $portal.cluster }}
+            # Scope the Kusto-backed Cluster Health and Cost boards to this
+            # cluster's rows in the shared Metrics database (a per-request
+            # ?cluster= overrides).
+            - --cluster
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.endpoint }}
+            - --kusto-endpoint
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.database }}
+            - --kusto-database
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.ingestion }}
+            - --kusto-ingestion
+            - {{ . | quote }}
+            {{- end }}
+            {{- with $kusto.queryCommand }}
+            - --kusto-query-command
+            - {{ . | quote }}
+            {{- end }}
+            {{- range $arg := $kusto.queryArgs }}
+            - --kusto-query-arg
+            - {{ $arg | quote }}
+            {{- end }}
+            {{- if $runHistory.enabled }}
+            - --run-history-enabled
+            - --run-history-table
+            - {{ default "TauExpRunLifecycle" $runHistory.table | quote }}
+            - --run-history-limit
+            - {{ default 200 $runHistory.limit | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $portal.service.targetPort }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $portal.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $portal.containerSecurityContext | nindent 12 }}
+          {{- if $hasVolumeMounts }}
+          volumeMounts:
+            {{- if $workspaceDirectoryEnabled }}
+            - name: workspace-directory
+              mountPath: /etc/tau-portal/workspaces.json
+              subPath: workspaces.json
+              readOnly: true
+            {{- end }}
+            {{- with $extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+      {{- if $hasVolumes }}
+      volumes:
+        {{- if $workspaceDirectoryEnabled }}
+        - name: workspace-directory
+          configMap:
+            name: {{ $workspaceConfigMapName }}
+        {{- end }}
+        {{- with $extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $serviceName }}
+  namespace: {{ $portal.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+  {{- with $portal.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $portal.service.type }}
+  {{- with $portal.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with $portal.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    app: {{ $resourceName }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ $portal.service.port }}
+      targetPort: http
+{{- end }}

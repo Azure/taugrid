@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "llama-nemotron-post-training",
+  "alias": "latest",
+  "version": "v1.1",
+  "digest": "sha256:2de3186d504ecddd955921322c11bc6218c10e23de4dc31ba2a43731f8c3085e",
+  "record_path": "/data/dataset-registry/datasets/llama-nemotron-post-training/v1.1/dataset.json",
+  "updated_at": "2026-06-02T07:51:35Z"
+}

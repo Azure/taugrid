@@ -1,0 +1,23 @@
+schema_version: 1
+name: cpu-multi-interest-ray
+run:
+  entrypoint: train.py
+  workload_kind: rayjob
+resource_naming:
+  prefix: tau
+compute:
+  # CPU-only Tau RayJob mode. workers is the total Ray pod count:
+  # 1 head + 4 worker pods for a 5-pod Kueue gang.
+  gpus: 0
+  cpus: 1
+  memory: 2Gi
+  workers: 5
+  worker_cpus: 2
+  worker_memory: 4Gi
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+  pip:
+    - PyYAML>=6.0
+# Provenance (comments, not config: nothing reads these):
+#   source: arxiv:2506.23060v1
+#   model:  multi-interest retrieval with implicit DCM and explicit topics

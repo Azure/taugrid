@@ -1,0 +1,157 @@
+suite: NOTES.txt rendering
+templates:
+  - templates/NOTES.txt
+tests:
+  - it: renders chart version and namespace
+    release:
+      name: adx-mon
+      namespace: observability
+    asserts:
+      - matchRegexRaw:
+          pattern: "adx-mon.*installed"
+      - matchRegexRaw:
+          pattern: "Namespace:.*observability"
+      - matchRegexRaw:
+          pattern: "Release:.*adx-mon"
+
+  - it: shows ADX endpoint when clusterUrl is set
+    set:
+      adx.clusterUrl: "https://mycluster.westus2.kusto.windows.net"
+    asserts:
+      - matchRegexRaw:
+          pattern: "Cluster URL:.*https://mycluster.westus2.kusto.windows.net"
+      - matchRegexRaw:
+          pattern: "Metrics DB:.*Metrics"
+      - matchRegexRaw:
+          pattern: "Logs DB:.*Logs"
+      - matchRegexRaw:
+          pattern: "Cost Tracking DB:.*CostTracking"
+      - matchRegexRaw:
+          pattern: "Audit DB:.*Audit"
+
+  - it: shows ConfigMap mode when configMapRef is set
+    set:
+      adx.clusterUrl: ""
+      adx.configMapRef: "adx-mon-config"
+    asserts:
+      - matchRegexRaw:
+          pattern: 'Config Source:.*ConfigMap "adx-mon-config"'
+      - matchRegexRaw:
+          pattern: "ArgoCD mode"
+
+  - it: warns when no ADX endpoint configured
+    set:
+      adx.clusterUrl: ""
+      adx.configMapRef: ""
+    asserts:
+      - matchRegexRaw:
+          pattern: "No ADX endpoint configured"
+
+  - it: shows all components enabled by default
+    asserts:
+      - matchRegexRaw:
+          pattern: "Operator.*1 replica"
+      - matchRegexRaw:
+          pattern: "Collector.*DaemonSet"
+      - matchRegexRaw:
+          pattern: "Collector Singleton"
+      - matchRegexRaw:
+          pattern: "Ingestor.*1 replica"
+      - matchRegexRaw:
+          pattern: "Alerter.*1 replica"
+      - matchRegexRaw:
+          pattern: "kube-state-metrics.*1 shard"
+
+  - it: shows disabled components
+    set:
+      operator.enabled: false
+      collector.enabled: false
+      collectorSingleton.enabled: false
+      ingestor.enabled: false
+      alerter.enabled: false
+      kube-state-metrics.enabled: false
+    asserts:
+      - matchRegexRaw:
+          pattern: "Operator.*disabled"
+      - matchRegexRaw:
+          pattern: "Collector.*disabled"
+      - matchRegexRaw:
+          pattern: "Collector Singleton.*disabled"
+      - matchRegexRaw:
+          pattern: "Ingestor.*disabled"
+      - matchRegexRaw:
+          pattern: "Alerter.*disabled"
+      - matchRegexRaw:
+          pattern: "kube-state-metrics.*disabled"
+
+  - it: shows CRD resources section
+    asserts:
+      - matchRegexRaw:
+          pattern: "Functions:.*enabled"
+      - matchRegexRaw:
+          pattern: "AlertRules:.*enabled"
+      - matchRegexRaw:
+          pattern: "SummaryRules:.*enabled"
+
+  - it: shows GPU telemetry status
+    asserts:
+      - matchRegexRaw:
+          pattern: "DCGM Exporter:.*annotation discovery"
+      - matchRegexRaw:
+          pattern: "Kernel Logs:.*journald"
+
+  - it: shows GPU disabled when turned off
+    set:
+      collector.gpu.dcgmScrape: false
+      collector.gpu.kernelTarget: false
+    asserts:
+      - matchRegexRaw:
+          pattern: "DCGM Exporter:.*disabled"
+      - matchRegexRaw:
+          pattern: "Kernel Logs:.*disabled"
+
+  - it: shows audit log pipeline section
+    asserts:
+      - matchRegexRaw:
+          pattern: "Audit Log Pipeline"
+      - matchRegexRaw:
+          pattern: "Database:.*Audit"
+      - matchRegexRaw:
+          pattern: "chart README for setup instructions"
+
+  - it: shows verify commands with correct namespace
+    release:
+      name: test-release
+      namespace: monitoring
+    asserts:
+      - matchRegexRaw:
+          pattern: "kubectl get pods -n monitoring"
+      - matchRegexRaw:
+          pattern: "kubectl get functions,alertrules,summaryrules -n monitoring"
+
+  - it: shows ADX verify commands when clusterUrl set
+    set:
+      adx.clusterUrl: "https://test.kusto.windows.net"
+    asserts:
+      - matchRegexRaw:
+          pattern: "kubectl logs.*ingestor"
+
+  - it: shows management commands status when enabled
+    set:
+      managementCommands.precreateMetricsTables.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "ManagementCommands:.*pre-create tables enabled"
+
+  - it: shows correct replica counts
+    set:
+      operator.replicas: 2
+      ingestor.replicas: 3
+      alerter.replicas: 2
+    asserts:
+      - matchRegexRaw:
+          pattern: "Operator.*2 replica"
+      - matchRegexRaw:
+          pattern: "Ingestor.*3 replica"
+      - matchRegexRaw:
+          pattern: "Alerter.*2 replica"

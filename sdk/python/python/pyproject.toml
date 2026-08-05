@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tau"
+dynamic = ["version"]
+description = "Python-first Tau SDK. Researchers write Python; the Go tau CLI remains the canonical Kubernetes, Kueue, Ray, and expstore executor."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Azure AI Runtime" }]
+dependencies = [
+    "PyYAML>=6.0.3",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+]
+lightning = [
+    "lightning>=2.6.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["tau*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "tau.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

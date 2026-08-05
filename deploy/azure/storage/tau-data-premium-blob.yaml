@@ -1,0 +1,75 @@
+# Optional platform storage example: Premium Blob (BlobFuse)
+# =============================================================================
+# TauGrid does not apply, own, or delete these objects. A platform owner may
+# adapt this example in reviewed Helm/GitOps/IaC when Premium Blob fits the
+# workload. Azure Blob and this claim name are not required by Tau.
+#
+# This example creates a PVC named `blob-training` in `ray`. Adapt both values to
+# the target workload namespace and desired claim name. Workloads reference the
+# existing claim with `storage.data_pvc`.
+#
+# WHEN TO PICK THIS (Premium Blob)
+# -----------------------------------------------------------------------------
+# Default for most clusters. Object-backed Premium block-blob is cheap, RWX,
+# survives pod deletion, and is the right home for datasets, checkpoints, and
+# Stellar/JSONL logs. Premium (vs Standard) blob gives high transaction rates
+# and low latency for the many-small-file access patterns of training I/O.
+# Keep hot per-run scratch on /mnt (node-local emptyDir) — see the storage
+# README. If emptyDir /mnt is too small/slow for your working set, pick the
+# Lustre default instead.
+#
+# CAVEAT (blobfuse is object storage, not a POSIX FS):
+#   - Concurrent writes to the SAME file are unsafe. Have rank-0 write
+#     checkpoints; use per-run subdirectories under /data.
+#
+# PREREQUISITES (verify before applying):
+#   - Azure Blob CSI driver installed (AKS addon `azureBlobCsiDriver`, or:
+#       kubectl get csidrivers | grep blob.csi.azure.com )
+#   - The workload namespace exists (provisioned by lanes/shared-gpu-queue.yaml).
+#
+# This uses DYNAMIC provisioning: the CSI driver creates a fresh Premium
+# block-blob storage account + container in the node resource group, using the
+# kubelet/node managed identity — no account keys or REPLACE_* values needed.
+# If instead you want all jobs to share an EXISTING account/container that
+# already holds datasets, keep the static PV/PVC binding in your cluster
+# registration or GitOps repo alongside the account/container/identity choices.
+# =============================================================================
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: blob-premium-rwx
+  annotations:
+    # Durable /data must never be deleted just because an overlay label or app
+    # path changes. Cleanup stays an explicit operator action.
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+provisioner: blob.csi.azure.com
+parameters:
+  skuName: Premium_LRS        # Premium block-blob account (high TPS, low latency)
+  protocol: fuse              # blobfuse2
+reclaimPolicy: Retain         # never delete research data when the PVC is removed
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - -o allow_other
+  - --file-cache-timeout-in-seconds=120
+  - --use-attr-cache=true
+  - --cancel-list-on-mount-seconds=10
+  - --log-level=LOG_WARNING
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blob-training         # canonical durable /data PVC (opt-in contract name)
+  namespace: ray              # canonical workload namespace for /data PVCs
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  accessModes:
+    - ReadWriteMany           # RayJob head + workers mount /data concurrently
+  storageClassName: blob-premium-rwx
+  resources:
+    requests:
+      # Advisory for blobfuse (the container is effectively elastic); set
+      # something sane so the PVC binds.
+      storage: 1Ti

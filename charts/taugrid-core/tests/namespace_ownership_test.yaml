@@ -1,0 +1,62 @@
+suite: Namespace ownership guards stay silent without a cluster
+templates:
+  - templates/namespaces.yaml
+  - templates/lifecycle-recorder.yaml
+tests:
+  # `lookup` returns empty with no API connection, which is every `helm
+  # template`, `--dry-run=client`, and ArgoCD manifest generation. Both guards
+  # must read that as "carry on" — a chart that refuses to render off-cluster
+  # breaks CI and GitOps rendering, not just installs.
+  - it: still renders namespaces when lookup cannot reach a cluster
+    templates:
+      - templates/namespaces.yaml
+    set:
+      prewarm.enabled: false
+      stellar.enabled: false
+      portal.enabled: true
+      portal.namespace: ns-portal
+      portal.image.tag: test
+      lifecycleRecorder.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: ns-portal
+
+  - it: still renders the recorder when its target namespace cannot be looked up
+    templates:
+      - templates/lifecycle-recorder.yaml
+    values:
+      - lifecycle-recorder-values.yaml
+    set:
+      prewarm.enabled: false
+      stellar.enabled: false
+      portal.enabled: false
+      lifecycleRecorder.targetNamespace: ns-absent-from-this-render
+    asserts:
+      - hasDocuments:
+          count: 4
+      - documentIndex: 1
+        isKind:
+          of: Role
+      - documentIndex: 1
+        equal:
+          path: metadata.namespace
+          value: ns-absent-from-this-render
+
+  # The required-value check must still fire off-cluster: it reads values, not
+  # the API, so it is the one namespace failure a render can prove.
+  - it: still rejects an empty target namespace without a cluster
+    templates:
+      - templates/lifecycle-recorder.yaml
+    values:
+      - lifecycle-recorder-values.yaml
+    set:
+      prewarm.enabled: false
+      stellar.enabled: false
+      portal.enabled: false
+      lifecycleRecorder.targetNamespace: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: lifecycleRecorder.targetNamespace is required when lifecycleRecorder.enabled=true

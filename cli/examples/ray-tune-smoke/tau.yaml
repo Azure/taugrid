@@ -1,0 +1,28 @@
+name: tune-smoke
+engine: ray
+entrypoint: train.py
+
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+  pip:
+    - torch==2.4.0
+
+execution:
+  launcher: ray-tune
+  metric: loss
+  mode: min
+  num_samples: 1
+  max_concurrent_trials: 2
+  configs:
+    lr: [0.001, 0.01, 0.1]
+    batch_size: [32, 64]
+
+compute:
+  workers: 1
+  gpus_per_worker: 1
+
+policy:
+  namespace: ray
+  queue: team-a
+  gpu_class: any
+  disable_default_priorities: true

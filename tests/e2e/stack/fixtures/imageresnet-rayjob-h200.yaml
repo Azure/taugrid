@@ -1,0 +1,90 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: imageresnet-rich-artifacts
+  namespace: e2e-stack
+  labels:
+    kueue.x-k8s.io/queue-name: gpu-team-training
+spec:
+  entrypoint: python /workspace/sdk/python/examples/imageresnet_ray_train.py
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 3600
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: ray-job-submitter
+          image: {{RAY_IMAGE}}
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+  runtimeEnvYAML: |
+    env_vars:
+      STELLAR_PROJECT: imageresnet
+      STELLAR_GROUP: h200-rich-artifacts
+      STELLAR_QUESTION_ID: imageresnet-rich-artifacts
+      TAU_EXP_STORE: /data/tau-exp
+      TAU_STELLAR_DIR: /data/tau-stellar
+      IMAGERESNET_DATA_ROOT: /data
+      IMAGERESNET_NUM_WORKERS: "{{IMAGERESNET_NUM_WORKERS}}"
+      IMAGERESNET_STEPS: "8"
+      IMAGERESNET_BATCH_SIZE: "32"
+      IMAGERESNET_COMPLETION_FILE: /data/tau-artifacts.done
+      TAU_BINARY: /usr/local/bin/tau
+      NCCL_IB_DISABLE: "1"
+      NCCL_SOCKET_IFNAME: "eth0"
+      TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+  rayClusterSpec:
+    rayVersion: "{{RAY_VERSION}}"
+    headGroupSpec:
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: {{RAY_IMAGE}}
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: 8Gi
+                limits:
+                  cpu: "4"
+                  memory: 16Gi
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{TAU_DATA_PVC}}
+    workerGroupSpecs:
+      - groupName: gpu-workers
+        replicas: {{IMAGERESNET_NUM_WORKERS}}
+        minReplicas: {{IMAGERESNET_NUM_WORKERS}}
+        maxReplicas: {{IMAGERESNET_NUM_WORKERS}}
+        rayStartParams: {}
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: {{RAY_IMAGE}}
+                resources:
+                  requests:
+                    cpu: "4"
+                    memory: 16Gi
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "4"
+                    memory: 32Gi
+                    nvidia.com/gpu: "1"
+                volumeMounts:
+                  - name: data
+                    mountPath: /data
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: {{TAU_DATA_PVC}}

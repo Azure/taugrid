@@ -1,0 +1,90 @@
+baseURL = "https://azure.github.io/taugrid/"
+title = "TauGrid"
+enableRobotsTXT = true
+enableGitInfo = true
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = false
+disableKinds = ["taxonomy", "term"]
+
+[outputs]
+  home = ["HTML", "RSS", "JSON"]
+
+[menu]
+  [[menu.main]]
+    name = "Examples"
+    weight = 30
+    pageRef = "/docs/examples"
+  [[menu.main]]
+    name = "Visuals"
+    weight = 40
+    pageRef = "/docs/overview/visual-curriculum"
+  [[menu.main]]
+    name = "GitHub Wiki"
+    weight = 90
+    url = "https://github.com/Azure/taugrid/wiki"
+  [[menu.main]]
+    name = "GitHub"
+    weight = 100
+    url = "https://github.com/Azure/taugrid"
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.highlight]
+    guessSyntax = true
+    noClasses = false
+
+[languages]
+  [languages.en]
+    label = "English"
+    contentDir = "content/en"
+    weight = 1
+    [languages.en.params]
+      language_code = "en-US"
+
+[params]
+  description = "Cloud-native AI infrastructure for GPU workloads on Kubernetes, from data preparation to distributed training, fine-tuning, and inference"
+  github_repo = "https://github.com/Azure/taugrid"
+  github_project_repo = "https://github.com/Azure/taugrid"
+  github_subdir = "site"
+  github_branch = "main"
+  githubbranch = "main"
+  copyright = "Microsoft"
+  version = "v0.1.3"
+  version_menu = "Version"
+  archived_version = false
+  offlineSearch = true
+  offlineSearchSummaryLength = 100
+  offlineSearchMaxResults = 12
+  prism_syntax_highlighting = false
+
+  [[params.versions]]
+    version = "v0.1.3"
+    url = "https://azure.github.io/taugrid/"
+  [[params.versions]]
+    version = "main source"
+    url = "https://github.com/Azure/taugrid/tree/main"
+
+  [params.ui]
+    navbar_logo = false
+    sidebar_menu_compact = true
+    sidebar_search_disable = false
+    breadcrumb_disable = false
+    sidebar_menu_foldable = true
+    footer_about_enable = false
+    showLightDarkModeMenu = true
+
+    [params.ui.feedback]
+      enable = false
+
+[module]
+  proxy = "https://proxy.golang.org"
+  [module.hugoVersion]
+    extended = true
+    min = "0.146.0"
+  [[module.imports]]
+    path = "github.com/google/docsy"
+
+[security]
+  allowContent = [".*"]

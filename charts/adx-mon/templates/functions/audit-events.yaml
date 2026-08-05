@@ -1,0 +1,46 @@
+{{- if and .Values.functions.enabled .Values.functions.items.auditEvents.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-audit-events
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.auditEvents.database | quote }}
+  body: |
+    // Audit events view: parses raw KubeAuditLogs (RawData: dynamic) delivered
+    // by the AKS → Event Hub → ADX pipeline into a flat, queryable schema.
+    //
+    // Depends on KubeAuditLogs table in the Audit database (created by audit pipeline).
+    // The table is pre-created by adx-cluster.template.json (precreate-kubeauditlogs
+    // Kusto script) and populated by the EV2-managed ADX data connection (WI-26).
+    //
+    // Table schema: KubeAuditLogs (RawData: dynamic)
+    // Ingestion mapping: KubeAuditLogs_mapping — maps the full Event Hub message
+    // ({"records": [...]}) into the RawData column via path "$".
+    // Each row's RawData contains one Event Hub message envelope.
+    .create-or-alter function AuditEvents () {
+      KubeAuditLogs
+      | mv-expand record = RawData.records
+      | extend log = parse_json(tostring(record.properties.log))
+      | extend _resourceId = tostring(record.resourceId)
+      | extend Cluster = tostring(split(_resourceId, "/")[-1])
+      | project
+          Timestamp       = todatetime(record['time']),
+          Cluster,
+          Category        = tostring(record.category),
+          OperationName   = tostring(record.operationName),
+          ResourceId      = _resourceId,
+          Verb            = tostring(log.verb),
+          Resource        = tostring(log.objectRef.resource),
+          Namespace       = tostring(log.objectRef.namespace),
+          Name            = tostring(log.objectRef.name),
+          User            = tostring(log.user.username),
+          UserAgent       = tostring(log.userAgent),
+          Stage           = tostring(log.stage),
+          ResponseCode    = toint(log.responseStatus.code),
+          SourceIP        = tostring(log.sourceIPs[0])
+    }
+{{- end }}

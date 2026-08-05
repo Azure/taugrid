@@ -1,0 +1,87 @@
+# NVIDIA device plugin DaemonSet.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# `az aks nodepool add` with a GPU SKU installs the NVIDIA *driver* (the node
+# pool reports gpuProfile.driver=Install and the node is labelled
+# accelerator=nvidia), but on current AKS it does NOT deploy a device plugin.
+# Without one the kubelet never advertises the nvidia.com/gpu extended
+# resource, so Kueue cannot admit a GPU workload and the pod sits Pending on
+# "Insufficient nvidia.com/gpu" with nothing in the events to explain it.
+#
+# This is cluster infrastructure, not TauGrid configuration: the TauGrid chart
+# is unchanged and every install still looks the same.
+#
+# IMAGE SOURCING
+# --------------
+# Pinned by digest to the Microsoft-mirrored copy on MCR rather than to
+# nvcr.io, per AGENTS.md > "Container image sourcing": never reference an
+# external mutable tag from a manifest that runs on a cluster, and this one is
+# privileged with host device access.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+    spec:
+      # Tolerate a tainted GPU pool so this still works if an operator chose to
+      # taint theirs. The quickstart's own pool is untainted because TauGrid's
+      # stock ResourceFlavor declares no tolerations.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: sku
+          operator: Equal
+          value: gpu
+          effect: NoSchedule
+      priorityClassName: system-node-critical
+      # Only land on nodes AKS has actually labelled as GPU nodes; otherwise the
+      # plugin crash-loops on every CPU node in the cluster.
+      nodeSelector:
+        accelerator: nvidia
+      containers:
+        - name: nvidia-device-plugin-ctr
+          image: mcr.microsoft.com/oss/v2/nvidia/k8s-device-plugin@sha256:78410ff8b27e623df1fa53e65a81fe57bdff26d2c2e88decf58d8bd08323738d
+          env:
+            # AKS sets containerd's default runtime to nvidia-container-runtime,
+            # but that hook only injects the GPU devices and driver libraries
+            # into a container when NVIDIA_VISIBLE_DEVICES is set. Without these
+            # two vars the plugin loads NVML successfully and then reports
+            # "No devices found. Waiting indefinitely." -- it can see the
+            # library but not the hardware.
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "all"
+            - name: FAIL_ON_INIT_ERROR
+              value: "false"
+          securityContext:
+            # Privileged plus an explicit /dev mount, rather than relying on the
+            # nvidia-container-runtime hook to inject the devices. The hook is
+            # configured on AKS but did not inject them for this pod even with
+            # NVIDIA_VISIBLE_DEVICES set, and a plugin that cannot enumerate
+            # devices fails silently ("No devices found") instead of crashing.
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: dev
+              mountPath: /dev
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: dev
+          hostPath:
+            path: /dev

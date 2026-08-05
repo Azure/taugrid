@@ -1,0 +1,11 @@
+apiVersion: v2
+name: tau-core-controller
+description: TauGrid cluster and workspace reconciliation APIs and controller.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - taugrid
+  - kubernetes
+  - controller

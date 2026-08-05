@@ -1,0 +1,93 @@
+{{- if .Values.operator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-operator
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "operator") | nindent 4 }}
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "operator") | nindent 6 }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        adx-mon/log-destination: "Logs:Operator"
+        adx-mon/log-parsers: json
+      labels:
+        {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "operator") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "operator") }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- $clusterName := include "adx-mon.clusterName" . | trim }}
+      containers:
+        - name: operator
+          image: {{ include "adx-mon.image" (dict "image" .Values.operator.image "chart" .Chart) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /operator
+          {{- if or $clusterName .Values.global.region }}
+          args:
+            {{- if $clusterName }}
+            - --cluster-labels=cluster={{ $clusterName }}
+            {{- end }}
+            {{- if .Values.global.region }}
+            - --cluster-labels=region={{ .Values.global.region }}
+            {{- end }}
+          {{- end }}
+          env:
+            - name: GODEBUG
+              value: http2client=0
+            - name: LOG_LEVEL
+              value: INFO
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+          # No ports/probes: operator uses controller-runtime with metrics server
+          # disabled (BindAddress: "0"). Distroless base means no shell for exec
+          # probes. Track upstream health endpoint as follow-up.
+          # NOTE: AKS Automatic requires probes; operator needs upstream changes first.
+          volumeMounts:
+            - mountPath: /etc/ssl/certs
+              name: ca-certs
+              readOnly: true
+            - mountPath: /etc/pki/ca-trust/extracted
+              name: etc-pki-ca-certs
+              readOnly: true
+      {{- with .Values.operator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: ca-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+{{- end }}

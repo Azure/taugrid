@@ -1,0 +1,837 @@
+package workspaceconnection
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Azure/taugrid/core/fileutil"
+)
+
+const (
+	connectionStateSchemaV1 = "tau.workspace.connection-state.v1"
+	connectionStateSchema   = "tau.workspace.connection-state.v2"
+)
+
+// defaultRevalidationTimeout bounds non-interactive revalidation. Overridable
+// per-Manager for tests; there is no env knob until someone needs one.
+const defaultRevalidationTimeout = 30 * time.Second
+
+var (
+	ErrInteractiveRequired = errors.New("workspace connection requires interactive review")
+	ErrConnectionDeclined  = errors.New("workspace connection change was not confirmed")
+)
+
+type CredentialProvider interface {
+	UserKubeconfig(context.Context, Descriptor) ([]byte, error)
+}
+
+type Verifier interface {
+	Verify(context.Context, Descriptor, string) (Verification, error)
+}
+
+type Verification struct {
+	ContextName       string
+	Namespace         string
+	Queue             string
+	ServiceAccount    string
+	WorkspaceUID      string
+	WorkspacePhase    string
+	WorkspaceRevision string
+}
+
+type ActiveConnection struct {
+	Workspace           string
+	ResourceID          string
+	AuthorizationMode   string
+	ContextName         string
+	KubeconfigPath      string
+	Namespace           string
+	Queue               string
+	ServiceAccount      string
+	RequiredRole        string
+	DescriptorPath      string
+	DescriptorDigest    string
+	WorkspaceUID        string
+	WorkspaceRevision   string
+	ConfiguredAt        time.Time
+	VerifiedAt          time.Time
+	RepositoryRoot      string
+	PrivateCluster      bool
+	NetworkInstructions string
+}
+
+type connectionState struct {
+	Schema              string     `json:"schema"`
+	Workspace           string     `json:"workspace"`
+	Provider            string     `json:"provider,omitempty"`
+	ResourceID          string     `json:"resource_id"`
+	TenantID            string     `json:"tenant_id,omitempty"`
+	AuthorizationMode   string     `json:"authorization_mode"`
+	ContextName         string     `json:"context_name"`
+	KubeconfigPath      string     `json:"kubeconfig_path"`
+	Namespace           string     `json:"namespace"`
+	Queue               string     `json:"queue"`
+	ServiceAccount      string     `json:"service_account,omitempty"`
+	RequiredRole        string     `json:"required_role"`
+	DescriptorPath      string     `json:"descriptor_path"`
+	DescriptorDigest    string     `json:"descriptor_digest"`
+	WorkspaceUID        string     `json:"workspace_uid,omitempty"`
+	WorkspaceRevision   string     `json:"workspace_revision"`
+	ConfiguredAt        time.Time  `json:"configured_at,omitempty"`
+	ConfirmedAt         *time.Time `json:"confirmed_at,omitempty"`
+	VerifiedAt          time.Time  `json:"verified_at"`
+	RepositoryRoot      string     `json:"repository_root"`
+	PrivateCluster      bool       `json:"private_cluster"`
+	NetworkInstructions string     `json:"network_instructions,omitempty"`
+}
+
+type Manager struct {
+	ConfigDir string
+	// Interactive reports whether stdin is a terminal. It no longer gates
+	// consent — the confirmation prompt reads piped stdin like any other unix
+	// tool — and now only bounds credential revalidation, which may need a
+	// terminal of its own for kubelogin.
+	Interactive  bool
+	Input        io.Reader
+	Output       io.Writer
+	Credentials  CredentialProvider
+	Verifier     Verifier
+	Now          func() time.Time
+	ReadinessTTL time.Duration
+	// RevalidationTimeout bounds non-interactive revalidation. Zero falls back
+	// to TAU_CONNECTION_REVALIDATION_TIMEOUT, then defaultRevalidationTimeout.
+	RevalidationTimeout time.Duration
+	TauVersion          string
+}
+
+func DefaultConfigDir() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config directory: %w", err)
+	}
+	return filepath.Join(base, "tau"), nil
+}
+
+func (m Manager) Ensure(ctx context.Context, startDir string) (ActiveConnection, error) {
+	discovery, err := Discover(startDir)
+	if err != nil {
+		return ActiveConnection{}, err
+	}
+	return m.EnsureDiscovery(ctx, discovery)
+}
+
+// EnsureDiscovery activates one already-resolved descriptor. Callers use this
+// for catalog entries so connection routing cannot fall back to ancestor search.
+func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (ActiveConnection, error) {
+	if strings.TrimSpace(m.TauVersion) != "" {
+		if err := CheckTauVersion(m.TauVersion, discovery.Descriptor.Requirements.MinTauVersion); err != nil {
+			return ActiveConnection{}, err
+		}
+	}
+	configDir, err := m.configDir()
+	if err != nil {
+		return ActiveConnection{}, err
+	}
+	connectionKey := ConnectionKey(discovery.Descriptor)
+	statePath := filepath.Join(configDir, "connections", connectionKey+".json")
+	state, loadedStatePath, stateErr := loadConnectionStateForDiscovery(statePath, discovery)
+	hasState := stateErr == nil
+	stateConfigured := hasState && state.configures(discovery)
+	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
+	stateMatches := stateConfigured && !kubeconfigMissing
+	if stateMatches {
+		requiresVerificationBaseline := state.Schema == connectionStateSchemaV1
+		stateUpgraded := state.upgrade(discovery)
+		if m.stateFresh(state) && !requiresVerificationBaseline {
+			if stateUpgraded {
+				if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
+					return ActiveConnection{}, fmt.Errorf("upgrade Tau workspace connection state: %w", err)
+				}
+			}
+			return state.active(), nil
+		}
+	}
+	if stateMatches {
+		if m.Verifier == nil {
+			return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
+		}
+		// Revalidation reads the TauWorkspace and runs `auth can-i` checks; it
+		// never asks the user anything, so it must not require a terminal.
+		// The kubeconfig is kubelogin exec auth (clusteraccess.NormalizeKubeconfig
+		// rejects static credentials), so kubectl *can* block on a browser or
+		// device-code prompt when kubelogin's token cache is cold. Without a
+		// terminal that would hang forever, which is worse for an automated
+		// caller than a clean failure, so bound it and report how to recover.
+		verifyCtx, cancel := m.signInDeadline(ctx)
+		defer cancel()
+		verification, verifyErr := m.Verifier.Verify(verifyCtx, discovery.Descriptor, state.KubeconfigPath)
+		if verifyErr != nil {
+			if timeout := m.signInTimeout(verifyCtx, "revalidating the cached workspace connection"); timeout != nil {
+				return ActiveConnection{}, timeout
+			}
+			return ActiveConnection{}, fmt.Errorf("revalidate Tau workspace connection: %w", verifyErr)
+		}
+		if err := validateVerification(discovery.Descriptor, verification); err != nil {
+			return ActiveConnection{}, fmt.Errorf("revalidate Tau workspace connection: %w", err)
+		}
+		if changes := state.contractChanges(verification); len(changes) > 0 {
+			if !m.Interactive {
+				return ActiveConnection{}, fmt.Errorf(
+					"%w: cached workspace connection contract changed (%s)",
+					ErrInteractiveRequired,
+					strings.Join(changes, ", "),
+				)
+			}
+			confirmed, err := m.confirmContractChange(state, verification, changes)
+			if err != nil {
+				return ActiveConnection{}, err
+			}
+			if !confirmed {
+				return ActiveConnection{}, ErrConnectionDeclined
+			}
+			state.ConfiguredAt = m.now()
+		}
+		state.ContextName = firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName)
+		state.Namespace = verification.Namespace
+		state.Queue = verification.Queue
+		state.ServiceAccount = verification.ServiceAccount
+		state.WorkspaceUID = verification.WorkspaceUID
+		state.WorkspaceRevision = verification.WorkspaceRevision
+		state.VerifiedAt = m.now()
+		if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
+			return ActiveConnection{}, fmt.Errorf("update Tau workspace connection state: %w", err)
+		}
+		return state.active(), nil
+	}
+	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		return ActiveConnection{}, stateErr
+	}
+	if kubeconfigMissing {
+		if m.Credentials == nil {
+			return ActiveConnection{}, fmt.Errorf("workspace connection credential provider is not configured")
+		}
+		if m.Verifier == nil {
+			return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
+		}
+		rawKubeconfig, err := m.Credentials.UserKubeconfig(ctx, discovery.Descriptor)
+		if err != nil {
+			return ActiveConnection{}, fmt.Errorf("reacquire AKS cluster-user credentials: %w", err)
+		}
+		if len(rawKubeconfig) == 0 {
+			return ActiveConnection{}, fmt.Errorf("reacquire AKS cluster-user credentials: Azure returned an empty kubeconfig")
+		}
+		kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
+		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
+		if err != nil {
+			return ActiveConnection{}, fmt.Errorf("verify reacquired Tau workspace connection: %w", err)
+		}
+		state.upgrade(discovery)
+		if changes := state.contractChanges(verification); len(changes) > 0 {
+			if !m.Interactive {
+				return ActiveConnection{}, fmt.Errorf(
+					"%w: cached workspace connection contract changed (%s)",
+					ErrInteractiveRequired,
+					strings.Join(changes, ", "),
+				)
+			}
+			confirmed, err := m.confirmContractChange(state, verification, changes)
+			if err != nil {
+				return ActiveConnection{}, err
+			}
+			if !confirmed {
+				return ActiveConnection{}, ErrConnectionDeclined
+			}
+			state.ConfiguredAt = m.now()
+		}
+		finalPreexisted := fileExists(kubeconfigPath)
+		if err := fileutil.WriteFileAtomic(kubeconfigPath, rawKubeconfig, 0o600); err != nil {
+			return ActiveConnection{}, fmt.Errorf("replace isolated Tau kubeconfig: %w", err)
+		}
+		state.ContextName = firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName)
+		state.KubeconfigPath = kubeconfigPath
+		state.Namespace = verification.Namespace
+		state.Queue = verification.Queue
+		state.ServiceAccount = verification.ServiceAccount
+		state.WorkspaceUID = verification.WorkspaceUID
+		state.WorkspaceRevision = verification.WorkspaceRevision
+		state.VerifiedAt = m.now()
+		if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
+			if !finalPreexisted {
+				_ = os.Remove(kubeconfigPath)
+			}
+			return ActiveConnection{}, fmt.Errorf("update Tau workspace connection state: %w", err)
+		}
+		return state.active(), nil
+	}
+	if hasState {
+		changes := state.configurationChanges(discovery)
+		if !m.Interactive {
+			return ActiveConnection{}, fmt.Errorf(
+				"%w: configured workspace connection changed (%s)",
+				ErrInteractiveRequired,
+				strings.Join(changes, ", "),
+			)
+		}
+		confirmed, err := m.confirmConfigurationChange(state, discovery.Descriptor, changes)
+		if err != nil {
+			return ActiveConnection{}, err
+		}
+		if !confirmed {
+			return ActiveConnection{}, ErrConnectionDeclined
+		}
+	}
+	if m.Credentials == nil {
+		return ActiveConnection{}, fmt.Errorf("workspace connection credential provider is not configured")
+	}
+	if m.Verifier == nil {
+		return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
+	}
+
+	// Credential acquisition stays on the caller context. Both supported auth
+	// modes (interactive browser, device code) are human-paced by design, and
+	// device code is explicitly the non-TTY flow: it prints a code to stderr and
+	// waits for someone to finish signing in elsewhere. A deadline here would
+	// cancel exactly the path this command is meant to support. Sign-in that
+	// never completes is the caller's own timeout to impose.
+	rawKubeconfig, err := m.Credentials.UserKubeconfig(ctx, discovery.Descriptor)
+	if err != nil {
+		return ActiveConnection{}, fmt.Errorf("obtain AKS cluster-user credentials: %w", err)
+	}
+	if len(rawKubeconfig) == 0 {
+		return ActiveConnection{}, fmt.Errorf("obtain AKS cluster-user credentials: Azure returned an empty kubeconfig")
+	}
+	kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
+	verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
+	if err != nil {
+		return ActiveConnection{}, fmt.Errorf("verify Tau workspace connection: %w", err)
+	}
+	if hasState {
+		if changes := state.contractChanges(verification); len(changes) > 0 {
+			confirmed, err := m.confirmContractChange(state, verification, changes)
+			if err != nil {
+				return ActiveConnection{}, err
+			}
+			if !confirmed {
+				return ActiveConnection{}, ErrConnectionDeclined
+			}
+		}
+	}
+	finalPreexisted := fileExists(kubeconfigPath)
+	if err := fileutil.WriteFileAtomic(kubeconfigPath, rawKubeconfig, 0o600); err != nil {
+		return ActiveConnection{}, fmt.Errorf("write isolated Tau kubeconfig: %w", err)
+	}
+	previousKubeconfigPath := state.KubeconfigPath
+	now := m.now()
+	state = connectionState{
+		Schema:              connectionStateSchema,
+		Workspace:           discovery.Descriptor.Workspace,
+		Provider:            discovery.Descriptor.Cluster.Provider,
+		ResourceID:          discovery.Descriptor.Cluster.ResourceID,
+		TenantID:            discovery.Descriptor.Identity.TenantID,
+		AuthorizationMode:   discovery.Descriptor.Authorization.Mode,
+		ContextName:         firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName),
+		KubeconfigPath:      kubeconfigPath,
+		Namespace:           verification.Namespace,
+		Queue:               verification.Queue,
+		ServiceAccount:      verification.ServiceAccount,
+		RequiredRole:        discovery.Descriptor.Authorization.RequiredRole,
+		DescriptorPath:      discovery.Path,
+		DescriptorDigest:    discovery.Digest,
+		WorkspaceUID:        verification.WorkspaceUID,
+		WorkspaceRevision:   verification.WorkspaceRevision,
+		ConfiguredAt:        now,
+		VerifiedAt:          now,
+		RepositoryRoot:      discovery.RepositoryRoot,
+		PrivateCluster:      discovery.Descriptor.Network.PrivateCluster,
+		NetworkInstructions: discovery.Descriptor.Network.Instructions,
+	}
+	if err := fileutil.WriteJSONFileAtomic(statePath, state); err != nil {
+		if !finalPreexisted {
+			_ = os.Remove(kubeconfigPath)
+		}
+		return ActiveConnection{}, fmt.Errorf("write Tau workspace connection state: %w", err)
+	}
+	if hasState {
+		if loadedStatePath != statePath {
+			_ = os.Remove(loadedStatePath)
+		}
+		if previousKubeconfigPath != kubeconfigPath {
+			_ = os.Remove(previousKubeconfigPath)
+		}
+	}
+	return state.active(), nil
+}
+
+func (m Manager) configDir() (string, error) {
+	if strings.TrimSpace(m.ConfigDir) != "" {
+		return filepath.Clean(m.ConfigDir), nil
+	}
+	return DefaultConfigDir()
+}
+
+func (m Manager) confirmContractChange(state connectionState, verification Verification, changes []string) (bool, error) {
+	input := m.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	output := m.Output
+	if output == nil {
+		output = os.Stdout
+	}
+	fmt.Fprintln(output, "Tau detected a change to the configured workspace connection contract:")
+	for _, change := range changes {
+		fmt.Fprintf(output, "  - %s\n", change)
+	}
+	fmt.Fprintf(
+		output,
+		"\nPin the updated namespace %q and LocalQueue %q for workspace %q? [y/N] ",
+		verification.Namespace,
+		verification.Queue,
+		state.Workspace,
+	)
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read workspace connection contract confirmation: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	case "", "n", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("workspace connection contract confirmation must be yes or no")
+	}
+}
+
+func (m Manager) confirmConfigurationChange(state connectionState, descriptor Descriptor, changes []string) (bool, error) {
+	input := m.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	output := m.Output
+	if output == nil {
+		output = os.Stdout
+	}
+	fmt.Fprintln(output, "Tau detected a change to the configured workspace connection:")
+	for _, change := range changes {
+		fmt.Fprintf(output, "  - %s\n", change)
+	}
+	fmt.Fprintf(
+		output,
+		"\nPin workspace %q on AKS context %q for this repository? [y/N] ",
+		descriptor.Workspace,
+		descriptor.Cluster.ContextName,
+	)
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read workspace connection configuration confirmation: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	case "", "n", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("workspace connection configuration confirmation must be yes or no")
+	}
+}
+
+func (m Manager) now() time.Time {
+	if m.Now != nil {
+		return m.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (m Manager) stateFresh(state connectionState) bool {
+	ttl := m.ReadinessTTL
+	if ttl == 0 {
+		ttl = 5 * time.Minute
+	}
+	if ttl < 0 {
+		return false
+	}
+	return !state.VerifiedAt.IsZero() && m.now().Sub(state.VerifiedAt) <= ttl
+}
+
+func validateVerification(descriptor Descriptor, verification Verification) error {
+	contextName := firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
+	if contextName != descriptor.Cluster.ContextName {
+		return fmt.Errorf(
+			"workspace %q resolved cluster context %q, expected %q",
+			descriptor.Workspace,
+			contextName,
+			descriptor.Cluster.ContextName,
+		)
+	}
+	if verification.WorkspacePhase != "Ready" {
+		return fmt.Errorf(
+			"workspace %q is not Ready (phase=%s)",
+			descriptor.Workspace,
+			verification.WorkspacePhase,
+		)
+	}
+	if strings.TrimSpace(verification.WorkspaceUID) == "" {
+		return fmt.Errorf("workspace %q has no stable Kubernetes UID", descriptor.Workspace)
+	}
+	if strings.TrimSpace(verification.Namespace) == "" {
+		return fmt.Errorf("workspace %q has no resolved target namespace", descriptor.Workspace)
+	}
+	if strings.TrimSpace(verification.Queue) == "" {
+		return fmt.Errorf("workspace %q has no resolved LocalQueue", descriptor.Workspace)
+	}
+	return nil
+}
+
+// revalidationTimeout bounds non-interactive revalidation so a kubelogin
+// sign-in prompt fails fast instead of hanging a caller with no terminal.
+// signInDeadline bounds a call that may block on a kubelogin sign-in prompt.
+// Without a terminal that prompt can never be answered, so hanging forever is
+// strictly worse for an automated caller than failing with instructions.
+// Interactive callers keep the unbounded context so a human can complete it.
+func (m Manager) signInDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if m.Interactive {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, m.revalidationTimeout())
+}
+
+// signInTimeout returns the actionable error for a call bounded by
+// signInDeadline, or nil when the failure was not the deadline.
+func (m Manager) signInTimeout(bounded context.Context, stage string) error {
+	if m.Interactive || !errors.Is(bounded.Err(), context.DeadlineExceeded) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: %s timed out after %s, most likely because kubelogin needed a sign-in prompt and no terminal is attached; run a tau command in a terminal once to complete sign-in",
+		ErrInteractiveRequired,
+		stage,
+		m.revalidationTimeout(),
+	)
+}
+
+func (m Manager) revalidationTimeout() time.Duration {
+	if m.RevalidationTimeout > 0 {
+		return m.RevalidationTimeout
+	}
+	return defaultRevalidationTimeout
+}
+
+func loadConnectionState(path string) (connectionState, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return connectionState{}, err
+	}
+	var state connectionState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return connectionState{}, fmt.Errorf("parse Tau workspace connection state %s: %w", path, err)
+	}
+	return state, nil
+}
+
+func loadConnectionStateForDiscovery(statePath string, discovery Discovery) (connectionState, string, error) {
+	state, err := loadConnectionState(statePath)
+	if err == nil {
+		return state, statePath, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return connectionState{}, "", err
+	}
+	connectionsDir := filepath.Dir(statePath)
+	entries, readErr := os.ReadDir(connectionsDir)
+	if errors.Is(readErr, os.ErrNotExist) {
+		return connectionState{}, "", os.ErrNotExist
+	}
+	if readErr != nil {
+		return connectionState{}, "", fmt.Errorf("inspect Tau workspace connection states: %w", readErr)
+	}
+	var matchedState connectionState
+	matchedPath := ""
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		candidatePath := filepath.Join(connectionsDir, entry.Name())
+		candidate, candidateErr := loadConnectionState(candidatePath)
+		if candidateErr != nil || candidate.DescriptorPath != discovery.Path {
+			continue
+		}
+		if matchedPath != "" {
+			return connectionState{}, "", fmt.Errorf(
+				"multiple Tau workspace connection states pin descriptor %s",
+				discovery.Path,
+			)
+		}
+		matchedState = candidate
+		matchedPath = candidatePath
+	}
+	if matchedPath == "" {
+		return connectionState{}, "", os.ErrNotExist
+	}
+	return matchedState, matchedPath, nil
+}
+
+func (s connectionState) configures(discovery Discovery) bool {
+	supportedSchema := s.Schema == connectionStateSchema || s.Schema == connectionStateSchemaV1
+	hasConfiguration := !s.ConfiguredAt.IsZero()
+	hasStableWorkspaceIdentity := strings.TrimSpace(s.WorkspaceUID) != ""
+	hasTrustIdentity := s.Provider == discovery.Descriptor.Cluster.Provider &&
+		s.TenantID == discovery.Descriptor.Identity.TenantID
+	if s.Schema == connectionStateSchemaV1 {
+		hasConfiguration = (s.ConfirmedAt != nil && !s.ConfirmedAt.IsZero()) || !s.VerifiedAt.IsZero()
+		hasStableWorkspaceIdentity = true
+		hasTrustIdentity = true
+	}
+	return supportedSchema &&
+		hasConfiguration &&
+		hasStableWorkspaceIdentity &&
+		hasTrustIdentity &&
+		s.Workspace == discovery.Descriptor.Workspace &&
+		s.ResourceID == discovery.Descriptor.Cluster.ResourceID &&
+		s.AuthorizationMode == discovery.Descriptor.Authorization.Mode &&
+		s.RequiredRole == discovery.Descriptor.Authorization.RequiredRole &&
+		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
+		s.DescriptorDigest == discovery.Digest
+}
+
+func (s *connectionState) upgrade(discovery Discovery) bool {
+	changed := false
+	if s.Schema == connectionStateSchemaV1 {
+		s.Schema = connectionStateSchema
+		if s.ConfirmedAt != nil {
+			s.ConfiguredAt = *s.ConfirmedAt
+		}
+		if s.ConfiguredAt.IsZero() {
+			s.ConfiguredAt = s.VerifiedAt
+		}
+		s.ConfirmedAt = nil
+		s.Provider = discovery.Descriptor.Cluster.Provider
+		s.TenantID = discovery.Descriptor.Identity.TenantID
+		changed = true
+	}
+	if s.DescriptorPath != discovery.Path {
+		s.DescriptorPath = discovery.Path
+		changed = true
+	}
+	if s.RepositoryRoot != discovery.RepositoryRoot {
+		s.RepositoryRoot = discovery.RepositoryRoot
+		changed = true
+	}
+	return changed
+}
+
+func (s connectionState) configurationChanges(discovery Discovery) []string {
+	var changes []string
+	if s.Schema != connectionStateSchema && s.Schema != connectionStateSchemaV1 {
+		changes = append(changes, fmt.Sprintf("state schema %q is unsupported", s.Schema))
+	}
+	if s.Workspace != discovery.Descriptor.Workspace {
+		changes = append(changes, fmt.Sprintf("workspace %q -> %q", s.Workspace, discovery.Descriptor.Workspace))
+	}
+	if s.Schema == connectionStateSchema && s.Provider != discovery.Descriptor.Cluster.Provider {
+		changes = append(changes, fmt.Sprintf("cluster provider %q -> %q", s.Provider, discovery.Descriptor.Cluster.Provider))
+	}
+	if s.ResourceID != discovery.Descriptor.Cluster.ResourceID {
+		changes = append(changes, fmt.Sprintf("AKS resource %q -> %q", s.ResourceID, discovery.Descriptor.Cluster.ResourceID))
+	}
+	if s.ContextName != discovery.Descriptor.Cluster.ContextName {
+		changes = append(changes, fmt.Sprintf("AKS context %q -> %q", s.ContextName, discovery.Descriptor.Cluster.ContextName))
+	}
+	if s.Schema == connectionStateSchema && s.TenantID != discovery.Descriptor.Identity.TenantID {
+		changes = append(changes, fmt.Sprintf("tenant %q -> %q", s.TenantID, discovery.Descriptor.Identity.TenantID))
+	}
+	if s.AuthorizationMode != discovery.Descriptor.Authorization.Mode {
+		changes = append(changes, fmt.Sprintf("authorization mode %q -> %q", s.AuthorizationMode, discovery.Descriptor.Authorization.Mode))
+	}
+	if s.RequiredRole != discovery.Descriptor.Authorization.RequiredRole {
+		changes = append(changes, fmt.Sprintf("required role %q -> %q", s.RequiredRole, discovery.Descriptor.Authorization.RequiredRole))
+	}
+	if s.DescriptorDigest != discovery.Digest {
+		changes = append(changes, fmt.Sprintf("descriptor digest %q -> %q", s.DescriptorDigest, discovery.Digest))
+	}
+	if s.Schema == connectionStateSchema && s.ConfiguredAt.IsZero() {
+		changes = append(changes, "configuration timestamp is missing")
+	}
+	if s.Schema == connectionStateSchema && strings.TrimSpace(s.WorkspaceUID) == "" {
+		changes = append(changes, "workspace UID pin is missing")
+	}
+	if len(changes) == 0 {
+		changes = append(changes, "stored configuration is incomplete")
+	}
+	return changes
+}
+
+func (s connectionState) contractChanges(verification Verification) []string {
+	var changes []string
+	if s.WorkspaceUID != "" && s.WorkspaceUID != verification.WorkspaceUID {
+		changes = append(changes, fmt.Sprintf("workspace UID %q -> %q", s.WorkspaceUID, verification.WorkspaceUID))
+	}
+	if s.Namespace != verification.Namespace {
+		changes = append(changes, fmt.Sprintf("namespace %q -> %q", s.Namespace, verification.Namespace))
+	}
+	if s.Queue != verification.Queue {
+		changes = append(changes, fmt.Sprintf("LocalQueue %q -> %q", s.Queue, verification.Queue))
+	}
+	if s.ServiceAccount != verification.ServiceAccount {
+		changes = append(changes, fmt.Sprintf("service account %q -> %q", s.ServiceAccount, verification.ServiceAccount))
+	}
+	return changes
+}
+
+func (s connectionState) active() ActiveConnection {
+	return ActiveConnection{
+		Workspace:           s.Workspace,
+		ResourceID:          s.ResourceID,
+		AuthorizationMode:   s.AuthorizationMode,
+		ContextName:         s.ContextName,
+		KubeconfigPath:      s.KubeconfigPath,
+		Namespace:           s.Namespace,
+		Queue:               s.Queue,
+		ServiceAccount:      s.ServiceAccount,
+		RequiredRole:        s.RequiredRole,
+		DescriptorPath:      s.DescriptorPath,
+		DescriptorDigest:    s.DescriptorDigest,
+		WorkspaceUID:        s.WorkspaceUID,
+		WorkspaceRevision:   s.WorkspaceRevision,
+		ConfiguredAt:        s.ConfiguredAt,
+		VerifiedAt:          s.VerifiedAt,
+		RepositoryRoot:      s.RepositoryRoot,
+		PrivateCluster:      s.PrivateCluster,
+		NetworkInstructions: s.NetworkInstructions,
+	}
+}
+
+func safeFilename(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-.")
+	if name == "" {
+		return "connection"
+	}
+	return name
+}
+
+func ConnectionKey(descriptor Descriptor) string {
+	return safeFilename(descriptor.Workspace) + "-" + resourceIDHash(descriptor.Cluster.ResourceID)
+}
+
+func resourceIDHash(resourceID string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(resourceID))))
+	return hex.EncodeToString(sum[:6])
+}
+
+func descriptorDigestHash(digest string) string {
+	value := strings.TrimPrefix(digest, "sha256:")
+	if len(value) > 12 {
+		return value[:12]
+	}
+	return safeFilename(value)
+}
+
+func isolatedKubeconfigPath(configDir string, discovery Discovery) string {
+	return filepath.Join(
+		configDir,
+		"kubeconfigs",
+		safeFilename(discovery.Descriptor.Cluster.ContextName)+"-"+
+			resourceIDHash(discovery.Descriptor.Cluster.ResourceID)+"-"+
+			descriptorDigestHash(discovery.Digest)+".yaml",
+	)
+}
+
+func (m Manager) verifyCandidate(
+	ctx context.Context,
+	configDir string,
+	discovery Discovery,
+	rawKubeconfig []byte,
+) (Verification, error) {
+	candidatePath, err := writeKubeconfigCandidate(configDir, rawKubeconfig)
+	if err != nil {
+		return Verification{}, err
+	}
+	defer func() {
+		_ = os.Remove(candidatePath)
+	}()
+	// The candidate kubeconfig is kubelogin exec auth, so this verify can block
+	// on a sign-in prompt that a caller with no terminal can never answer.
+	verifyCtx, cancel := m.signInDeadline(ctx)
+	defer cancel()
+	verification, err := m.Verifier.Verify(verifyCtx, discovery.Descriptor, candidatePath)
+	if err != nil {
+		if timeout := m.signInTimeout(verifyCtx, "verifying the new workspace connection"); timeout != nil {
+			return Verification{}, timeout
+		}
+		return Verification{}, err
+	}
+	if err := validateVerification(discovery.Descriptor, verification); err != nil {
+		return Verification{}, err
+	}
+	return verification, nil
+}
+
+// candidateChmod is overridden in tests to simulate filesystems (BlobFuse and
+// friends) that reject chmod on a file this process just created.
+var candidateChmod = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
+
+func writeKubeconfigCandidate(configDir string, rawKubeconfig []byte) (string, error) {
+	kubeconfigDir := filepath.Join(configDir, "kubeconfigs")
+	if err := os.MkdirAll(kubeconfigDir, 0o700); err != nil {
+		return "", fmt.Errorf("create Tau kubeconfig directory: %w", err)
+	}
+	candidate, err := os.CreateTemp(kubeconfigDir, ".candidate-*.yaml")
+	if err != nil {
+		return "", fmt.Errorf("create Tau kubeconfig candidate: %w", err)
+	}
+	candidatePath := candidate.Name()
+	removeCandidate := func() {
+		_ = candidate.Close()
+		_ = os.Remove(candidatePath)
+	}
+	if err := candidateChmod(candidate, 0o600); err != nil && !fileutil.ChmodUnsupported(err) {
+		removeCandidate()
+		return "", fmt.Errorf("secure Tau kubeconfig candidate: %w", err)
+	}
+	if _, err := candidate.Write(rawKubeconfig); err != nil {
+		removeCandidate()
+		return "", fmt.Errorf("write Tau kubeconfig candidate: %w", err)
+	}
+	if err := candidate.Sync(); err != nil {
+		removeCandidate()
+		return "", fmt.Errorf("sync Tau kubeconfig candidate: %w", err)
+	}
+	if err := candidate.Close(); err != nil {
+		_ = os.Remove(candidatePath)
+		return "", fmt.Errorf("close Tau kubeconfig candidate: %w", err)
+	}
+	return candidatePath, nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}

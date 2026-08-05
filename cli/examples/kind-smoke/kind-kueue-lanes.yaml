@@ -1,0 +1,73 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ray
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/audit-version: latest
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: taugrid-train-default
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+value: 1000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Default pod priority for local Tau Kind smoke jobs.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: taugrid-train-default
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+value: 1000
+description: Default Kueue priority for local Tau Kind smoke jobs.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: kind-cpu
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+spec: {}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: kind-cpu-cq
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ray
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+    - coveredResources: ["cpu", "memory"]
+      flavors:
+        - name: kind-cpu
+          resources:
+            - name: cpu
+              nominalQuota: "4"
+            - name: memory
+              nominalQuota: 12Gi
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: kind-cpu
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+    tau.azure.com/queue-role: local-smoke
+spec:
+  clusterQueue: kind-cpu-cq

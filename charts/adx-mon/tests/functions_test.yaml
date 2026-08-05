@@ -1,0 +1,390 @@
+suite: Function CRD templates
+templates:
+  - templates/functions/gpu-health.yaml
+  - templates/functions/node-health.yaml
+  - templates/functions/container-metrics.yaml
+  - templates/functions/kueue-metrics.yaml
+  - templates/functions/nccl-errors.yaml
+  - templates/functions/xid-errors.yaml
+  - templates/functions/training-job-summary.yaml
+  - templates/functions/experiment-metrics-dashboard-rows.yaml
+  - templates/functions/audit-events.yaml
+release:
+  name: adx-mon
+  namespace: adx-mon
+tests:
+  # ── gpu-health ─────────────────────────────────────────────
+  - it: should render gpu-health Function CR
+    template: templates/functions/gpu-health.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-gpu-health
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - matchRegex:
+          path: spec.body
+          pattern: "GpuHealth"
+      - matchRegex:
+          path: spec.body
+          pattern: "Labels.Hostname"
+      - matchRegex:
+          path: spec.body
+          pattern: "tostring\\(Namespace\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "tostring\\(Pod\\)"
+      - isNotEmpty:
+          path: metadata.labels
+
+  - it: should suppress gpu-health when functions.enabled is false
+    template: templates/functions/gpu-health.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress gpu-health when item is disabled
+    template: templates/functions/gpu-health.yaml
+    set:
+      functions.items.gpuHealth.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── node-health ────────────────────────────────────────────
+  - it: should render node-health Function CR
+    template: templates/functions/node-health.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-node-health
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - matchRegex:
+          path: spec.body
+          pattern: "NodeHealth"
+
+  - it: should suppress node-health when functions.enabled is false
+    template: templates/functions/node-health.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress node-health when item is disabled
+    template: templates/functions/node-health.yaml
+    set:
+      functions.items.nodeHealth.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── container-metrics ──────────────────────────────────────
+  - it: should render container-metrics Function CR
+    template: templates/functions/container-metrics.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-container-metrics
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - matchRegex:
+          path: spec.body
+          pattern: "ContainerMetrics"
+
+  - it: should suppress container-metrics when functions.enabled is false
+    template: templates/functions/container-metrics.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress container-metrics when item is disabled
+    template: templates/functions/container-metrics.yaml
+    set:
+      functions.items.containerMetrics.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── kueue-metrics ──────────────────────────────────────────
+  - it: should render kueue-metrics Function CR
+    template: templates/functions/kueue-metrics.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-kueue-metrics
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - matchRegex:
+          path: spec.body
+          pattern: "KueueMetrics"
+      - matchRegex:
+          path: spec.body
+          pattern: 'column_ifexists\("Cluster", ""\)'
+      - matchRegex:
+          path: spec.body
+          pattern: "project Timestamp, Cluster=cluster"
+
+  - it: should suppress kueue-metrics when functions.enabled is false
+    template: templates/functions/kueue-metrics.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress kueue-metrics when item is disabled
+    template: templates/functions/kueue-metrics.yaml
+    set:
+      functions.items.kueueMetrics.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── nccl-errors ────────────────────────────────────────────
+  - it: should render nccl-errors Function CR
+    template: templates/functions/nccl-errors.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-nccl-errors
+      - equal:
+          path: spec.database
+          value: "Logs"
+      - matchRegex:
+          path: spec.body
+          pattern: "NcclErrors"
+
+  - it: should suppress nccl-errors when functions.enabled is false
+    template: templates/functions/nccl-errors.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress nccl-errors when item is disabled
+    template: templates/functions/nccl-errors.yaml
+    set:
+      functions.items.ncclErrors.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── xid-errors ─────────────────────────────────────────────
+  - it: should render xid-errors Function CR
+    template: templates/functions/xid-errors.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-xid-errors
+      - equal:
+          path: spec.database
+          value: "Logs"
+      - matchRegex:
+          path: spec.body
+          pattern: "XidErrors"
+
+  - it: should suppress xid-errors when functions.enabled is false
+    template: templates/functions/xid-errors.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress xid-errors when item is disabled
+    template: templates/functions/xid-errors.yaml
+    set:
+      functions.items.xidErrors.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── training-job-summary ───────────────────────────────────
+  - it: should render training-job-summary Function CR
+    template: templates/functions/training-job-summary.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-training-job-summary
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - matchRegex:
+          path: spec.body
+          pattern: "TrainingJobSummary"
+      - matchRegex:
+          path: spec.body
+          pattern: 'column_ifexists\("Cluster", ""\)'
+      - matchRegex:
+          path: spec.body
+          pattern: "project Timestamp, Cluster=cluster"
+      - matchRegex:
+          path: spec.body
+          pattern: "nvidia_com_gpu"
+
+  - it: should suppress training-job-summary when functions.enabled is false
+    template: templates/functions/training-job-summary.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress training-job-summary when item is disabled
+    template: templates/functions/training-job-summary.yaml
+    set:
+      functions.items.trainingJobSummary.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── experiment-metrics-dashboard-rows ───────────────────────
+  - it: should render experiment-metrics-dashboard-rows Function CR
+    template: templates/functions/experiment-metrics-dashboard-rows.yaml
+    asserts:
+      - isKind:
+          of: Function
+      - equal:
+          path: metadata.name
+          value: adx-mon-experiment-metrics-dashboard-rows
+      - equal:
+          path: spec.database
+          value: "Metrics"
+      - equal:
+          path: spec.body
+          value: |
+            // skipvalidation keeps the optional Tau remote-write function installable
+            // before any cluster has emitted ExperimentMetrics; it must not hide schema drift.
+            .create-or-alter function with (folder = 'Tau/experiments', docstring = 'Normalize adx-mon experiment_metrics rows to the Tau dashboard metric contract.', skipvalidation = 'true') ExperimentMetricsDashboardRows()
+            {
+            ExperimentMetrics
+            | extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), ['project']=tostring(Labels['project']), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)
+            | project exported_at=Timestamp, workspace_id, cluster, source_store_id, metric_file_id, metric_file_path, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags
+            }
+
+  - it: should suppress experiment-metrics-dashboard-rows when functions.enabled is false
+    template: templates/functions/experiment-metrics-dashboard-rows.yaml
+    set:
+      functions.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should suppress experiment-metrics-dashboard-rows when item is disabled
+    template: templates/functions/experiment-metrics-dashboard-rows.yaml
+    set:
+      functions.items.experimentMetricsDashboardRows.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── Cross-cutting ──────────────────────────────────────────
+  - it: should set correct labels on all Function CRs
+    template: templates/functions/gpu-health.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: function
+      - isNotEmpty:
+          path: metadata.labels["app.kubernetes.io/name"]
+      - isNotEmpty:
+          path: metadata.labels["app.kubernetes.io/instance"]
+
+  - it: should use custom namespace when set
+    template: templates/functions/gpu-health.yaml
+    set:
+      global.namespace: custom-ns
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-ns
+
+  - it: should allow database override per function
+    template: templates/functions/gpu-health.yaml
+    set:
+      functions.items.gpuHealth.database: CustomMetricsDB
+    asserts:
+      - equal:
+          path: spec.database
+          value: "CustomMetricsDB"
+
+  # ── AuditEvents function ────────────────────────────────────
+  - it: audit-events function renders with default values
+    template: templates/functions/audit-events.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Function
+      - equal:
+          path: spec.database
+          value: "Audit"
+
+  - it: audit-events function renders when enabled
+    template: templates/functions/audit-events.yaml
+    set:
+      functions.items.auditEvents.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Function
+      - equal:
+          path: spec.database
+          value: "Audit"
+      - matchRegex:
+          path: spec.body
+          pattern: "AuditEvents"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubeAuditLogs"
+      - matchRegex:
+          path: spec.body
+          pattern: 'RawData\.records'
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'parse_json\(records\)'
+
+  - it: audit-events function uses configured database
+    template: templates/functions/audit-events.yaml
+    set:
+      functions.items.auditEvents.enabled: true
+      functions.items.auditEvents.database: CustomAudit
+    asserts:
+      - equal:
+          path: spec.database
+          value: "CustomAudit"
+
+  - it: audit-events function suppressed when functions.enabled=false
+    template: templates/functions/audit-events.yaml
+    set:
+      functions.enabled: false
+      functions.items.auditEvents.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

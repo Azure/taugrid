@@ -1,0 +1,48 @@
+{{- if and .Values.functions.enabled .Values.functions.items.kueueMetrics.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-kueue-metrics
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.kueueMetrics.database | quote }}
+  body: |
+    // Kueue metrics view: queue depth, admission latency, admitted/pending workloads.
+    // Uses kube-state-metrics CRS metrics and Kueue controller metrics.
+    // NOTE: admission_wait and admission_attempts require the Kueue controller
+    // Prometheus endpoint to be scraped (added in values-ai-runtime.yaml, WI-18).
+    // Until then, those union legs return empty results (not an error).
+    .create-or-alter function KueueMetrics () {
+      let cq_pending = KubeCustomresourceClusterqueuePendingWorkloads
+    | extend cluster=tostring(column_ifexists("Cluster", "")),
+             cluster_queue = tostring(Labels.name);
+    let cq_admitted = KubeCustomresourceClusterqueueAdmittedWorkloads
+    | extend cluster=tostring(column_ifexists("Cluster", "")),
+             cluster_queue = tostring(Labels.name);
+    let lq_pending = KubeCustomresourceLocalqueuePendingWorkloads
+    | extend cluster=tostring(column_ifexists("Cluster", "")),
+             local_queue = tostring(Labels.name),
+               namespace = tostring(Labels.namespace);
+    let lq_admitted = KubeCustomresourceLocalqueueAdmittedWorkloads
+    | extend cluster=tostring(column_ifexists("Cluster", "")),
+             local_queue = tostring(Labels.name),
+             namespace = tostring(Labels.namespace);
+    let admission_wait = KueueAdmissionWaitTimeSeconds
+    | extend cluster=tostring(column_ifexists("Cluster", "")),
+             cluster_queue = tostring(Labels.cluster_queue);
+    let admission_attempts = KueueAdmissionAttemptsTotal
+    | extend cluster=tostring(column_ifexists("Cluster", "")),
+             cluster_queue = tostring(Labels.cluster_queue),
+             result = tostring(Labels.result);
+    union
+      (cq_pending        | project Timestamp, Cluster=cluster, queue_type="cluster_queue", queue_name=cluster_queue, namespace="", metric="pending_workloads", Value),
+      (cq_admitted       | project Timestamp, Cluster=cluster, queue_type="cluster_queue", queue_name=cluster_queue, namespace="", metric="admitted_workloads", Value),
+      (lq_pending        | project Timestamp, Cluster=cluster, queue_type="local_queue", queue_name=local_queue, namespace, metric="pending_workloads", Value),
+      (lq_admitted       | project Timestamp, Cluster=cluster, queue_type="local_queue", queue_name=local_queue, namespace, metric="admitted_workloads", Value),
+      (admission_wait    | project Timestamp, Cluster=cluster, queue_type="cluster_queue", queue_name=cluster_queue, namespace="", metric="admission_wait_seconds", Value),
+      (admission_attempts | project Timestamp, Cluster=cluster, queue_type="cluster_queue", queue_name=cluster_queue, namespace="", metric=strcat("admission_attempts_", result), Value)
+    }
+{{- end }}

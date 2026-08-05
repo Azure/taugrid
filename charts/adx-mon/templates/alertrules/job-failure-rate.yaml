@@ -1,0 +1,60 @@
+{{- if and .Values.alertRules.enabled .Values.alertRules.items.jobFailureRate.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-job-failure-rate
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertrule
+  annotations:
+    adx-mon/sig: "Workload"
+spec:
+  database: {{ .Values.adx.metricsDatabase | quote }}
+  interval: {{ .Values.alertRules.items.jobFailureRate.interval | quote }}
+  {{- with .Values.alertRules.items.jobFailureRate.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  query: |
+    // Alert when job failure rate exceeds 25% over the evaluation window.
+    // Uses latest snapshot of KSM kube_job_failed/complete gauges per job,
+    // then counts distinct jobs with failures vs completions per namespace.
+    // This avoids conflating cumulative lifetime counters across windows.
+    let latest_failed = KubeJobFailed
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.namespace),
+             job_name = tostring(labels.job_name)
+    | summarize arg_max(Timestamp, Value) by namespace, job_name
+    | where Value > 0
+    | project namespace, job_name, status = "failed";
+    let latest_complete = KubeJobComplete
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.namespace),
+             job_name = tostring(labels.job_name)
+    | summarize arg_max(Timestamp, Value) by namespace, job_name
+    | where Value > 0
+    | project namespace, job_name, status = "complete";
+    latest_failed
+    | union latest_complete
+    | summarize statuses = make_set(status) by namespace, job_name
+    | extend is_failed = iff(statuses has "failed" and not(statuses has "complete"), 1, 0)
+    | summarize
+        total_jobs = dcount(job_name),
+        failed_jobs = dcountif(job_name, is_failed == 1)
+        by namespace
+    | where total_jobs > 0
+    | extend failure_rate = round(todouble(failed_jobs) / total_jobs * 100, 1)
+    | where failure_rate > 25
+    | extend Severity = 3
+    | extend Title = strcat("High job failure rate in namespace ", namespace)
+    | extend Summary = strcat("Namespace ", namespace, " has a ", tostring(failure_rate), "% job failure rate (", tostring(failed_jobs), " failed / ", tostring(total_jobs), " total jobs in window).")
+    | extend Description = strcat("Job failure rate of ", tostring(failure_rate), "% exceeds the 25% threshold. Only jobs actively reported by KSM in this evaluation window are counted. Jobs that are both failed and complete are not counted as failures.")
+    | extend CorrelationId = namespace
+  destination: {{ .Values.alertRules.items.jobFailureRate.destination | default "" | quote }}
+  {{- if .Values.alertRules.items.jobFailureRate.autoMitigateAfter }}
+  autoMitigateAfter: {{ .Values.alertRules.items.jobFailureRate.autoMitigateAfter | quote }}
+  {{- end }}
+{{- end }}

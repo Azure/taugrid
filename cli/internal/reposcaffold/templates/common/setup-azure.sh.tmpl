@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+echo "Running optional Azure/ACR image-publishing checks."
+echo "Tau workspace authentication and AKS credentials are handled by tau run."
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing required command: $1" >&2
+    exit 2
+  fi
+}
+
+if [[ -n "${ACR_NAME:-}" ]]; then
+  require_cmd az
+  require_cmd docker
+  az account show >/dev/null || {
+    echo "Azure login not found. Run: az login" >&2
+    exit 2
+  }
+  az acr login --name "$ACR_NAME"
+else
+  echo "ACR_NAME not set; skipping az acr login." >&2
+fi
+
+echo "Optional Azure/ACR checks complete."

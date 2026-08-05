@@ -1,0 +1,330 @@
+suite: collector DaemonSet templates
+templates:
+  - collector/daemonset.yaml
+  - collector/configmap.yaml
+  - collector/serviceaccount.yaml
+  - collector/clusterrole.yaml
+  - collector/clusterrolebinding.yaml
+
+tests:
+
+  # ── DaemonSet ──────────────────────────────────────────
+  - it: renders collector DaemonSet by default
+    template: collector/daemonset.yaml
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-collector
+
+  - it: does not render DaemonSet when disabled
+    template: collector/daemonset.yaml
+    set:
+      collector.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: uses correct image
+    template: collector/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/collector:v0.3.0
+
+  - it: sets hostPort from values
+    template: collector/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].hostPort
+          value: 3100
+
+  - it: uses RollingUpdate strategy with 30% maxUnavailable
+    template: collector/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.updateStrategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.updateStrategy.rollingUpdate.maxUnavailable
+          value: "30%"
+
+  - it: mounts all required host paths
+    template: collector/daemonset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: varlog
+            mountPath: /var/log
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: etcmachineid
+            mountPath: /etc/machine-id
+            readOnly: true
+
+  - it: sets collector-specific security context
+    template: collector/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 1000
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsGroup
+          value: 3000
+
+  - it: sets component labels
+    template: collector/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: collector
+
+  - it: rolls collector pods when rendered config changes
+    template: collector/daemonset.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: "^[a-f0-9]{64}$"
+
+  - it: includes GPU tolerations
+    template: collector/daemonset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+
+  - it: gets HOSTNAME from spec.nodeName
+    template: collector/daemonset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HOSTNAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+
+
+  - it: has init container to fix WAL directory permissions
+    template: collector/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: fix-permissions
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: mcr.microsoft.com/azurelinux/base/core:3.0
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsUser
+          value: 0
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsNonRoot
+          value: false
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: storage
+            mountPath: /mnt/data
+
+  - it: uses custom init container image when overridden
+    template: collector/daemonset.yaml
+    set:
+      collector.initImage.repository: myregistry.io/base
+      collector.initImage.tag: "1.0"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: myregistry.io/base:1.0
+
+  # ── ConfigMap ──────────────────────────────────────────
+  - it: renders collector ConfigMap
+    template: collector/configmap.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-collector-config
+
+  - it: does not render ConfigMap when disabled
+    template: collector/configmap.yaml
+    set:
+      collector.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: config.toml contains ingestor endpoint
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "endpoint = 'https://RELEASE-NAME-adx-mon-ingestor"
+
+  - it: config.toml lifts cluster metadata into ADX columns for metrics and logs
+    template: collector/configmap.yaml
+    set:
+      global.clusterName: test-cluster
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\{ name = 'cluster', column = 'Cluster' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\{ name = 'host', column = 'Host' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "lift-resources[\\s\\S]*\\{ name = 'label.tau.azure.com/workspace', column = 'Workspace' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "lift-resources[\\s\\S]*\\{ name = 'annotation.tau.azure.com/stellar-experiment-id', column = 'ExperimentId' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "lift-resources[\\s\\S]*\\{ name = 'label.tau.azure.com/run-id', column = 'RunId' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[add-labels\\][\\s\\S]*cluster = 'test-cluster'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[add-attributes\\][\\s\\S]*cluster = 'test-cluster'"
+
+  - it: config.toml includes kernel journal target when gpu.kernelTarget is true
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "_TRANSPORT=kernel"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "KernelLogs"
+
+  - it: config.toml omits kernel journal target when gpu.kernelTarget is false
+    template: collector/configmap.yaml
+    set:
+      collector.gpu.kernelTarget: false
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "_TRANSPORT=kernel"
+
+  # ── DaemonSet drop-list carve-out (Gap 1 / #953) ───────
+  - it: DaemonSet drop-list un-drops the controller-runtime dashboard families
+    template: collector/configmap.yaml
+    asserts:
+      # the whole low-cardinality families are removed from the DaemonSet drop-list
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^controller_runtime'
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^workqueue'
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^leader_election'
+
+  - it: DaemonSet drop-list keeps apiserver flood protection
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^apiserver\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^etcd\.\*"'
+
+  - it: DaemonSet carve-out is data-driven (emptying exclude re-drops the families)
+    template: collector/configmap.yaml
+    set:
+      collector.prometheusScrape.scrapeDropMetricsExclude: []
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^controller_runtime\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^workqueue\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^leader_election\.\*"'
+
+  # ── ray_object_store recovery (Gap 2 / #954) ───────────
+  - it: recovers ray_object_store_* but keeps directory/manager dropped
+    template: collector/configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^ray_object_store'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^ray_object_directory_\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^ray_object_manager_\.\*"'
+
+    # ── ServiceAccount ──────────────────────────────────────
+  - it: renders collector ServiceAccount
+    template: collector/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-collector
+
+  # ── ClusterRole ─────────────────────────────────────────
+  - it: renders collector ClusterRole with node/metrics access
+    template: collector/clusterrole.yaml
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [nodes/metrics, nodes/proxy]
+            verbs: [get]
+      - contains:
+          path: rules
+          content:
+            nonResourceURLs: ["/metrics"]
+            verbs: [get]
+
+  # ── ClusterRoleBinding ──────────────────────────────────
+  - it: renders collector ClusterRoleBinding
+    template: collector/clusterrolebinding.yaml
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-adx-mon-collector
+
+  - it: renders insecure-skip-verify true by default in configmap
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "insecure-skip-verify = true"
+
+  - it: renders insecure-skip-verify false when overridden
+    template: collector/configmap.yaml
+    set:
+      collector.insecureSkipVerify: false
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "insecure-skip-verify = false"
+
+  - it: sets disable-kube-discovery on journal-target host-log block
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "disable-kube-discovery = true"

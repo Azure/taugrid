@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Tau capability maturity</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">A review-date snapshot that separates reliable user contracts from rollout work and north-star direction</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="1580" y="108" width="150" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1655" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1655" dy="0">SHIPPED</tspan></text>
+<rect x="1744" y="108" width="190" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1839" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1839" dy="0">EXPERIMENTAL</tspan></text>
+<rect x="1948" y="108" width="140" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="2018" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="2018" dy="0">FUTURE</tspan></text>
+<rect x="56" y="240" width="648" height="820" rx="22" fill="transparent" stroke="#107C10" stroke-width="5"/>
+<text x="380" y="308" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" fill="#000000"><tspan x="380" dy="0">SHIPPED</tspan></text>
+<text x="380" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="380" dy="0">Safe to present as a current contract</tspan></text>
+<rect x="88" y="430" width="584" height="72" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2" filter="url(#shadow)"/>
+<ellipse cx="132" cy="466" rx="26" ry="26" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="132" y="470" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="132" dy="0">1</tspan></text>
+<text x="180" y="467" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="180" dy="0">Config-first tau.yaml + tau run</tspan></text>
+<rect x="88" y="524" width="584" height="72" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2" filter="url(#shadow)"/>
+<ellipse cx="132" cy="560" rx="26" ry="26" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="132" y="564" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="132" dy="0">2</tspan></text>
+<text x="180" y="561" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="180" dy="0">Kubernetes Job and KubeRay RayJob</tspan></text>
+<rect x="88" y="618" width="584" height="72" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2" filter="url(#shadow)"/>
+<ellipse cx="132" cy="654" rx="26" ry="26" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="132" y="658" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="132" dy="0">3</tspan></text>
+<text x="180" y="655" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="180" dy="0">Status · logs · list · get · cancel</tspan></text>
+<rect x="88" y="712" width="584" height="72" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2" filter="url(#shadow)"/>
+<ellipse cx="132" cy="748" rx="26" ry="26" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="132" y="752" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="132" dy="0">4</tspan></text>
+<text x="180" y="749" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="180" dy="0">Retry / resume with checkpoint contract</tspan></text>
+<rect x="88" y="806" width="584" height="72" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2" filter="url(#shadow)"/>
+<ellipse cx="132" cy="842" rx="26" ry="26" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="132" y="846" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="132" dy="0">5</tspan></text>
+<text x="180" y="843" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="180" dy="0">Local-first expstore and Stellar views</tspan></text>
+<rect x="88" y="900" width="584" height="72" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2" filter="url(#shadow)"/>
+<ellipse cx="132" cy="936" rx="26" ry="26" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="132" y="940" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="132" dy="0">6</tspan></text>
+<text x="180" y="937" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="180" dy="0">Artifacts, profiling, queue/topology checks</tspan></text>
+<rect x="776" y="240" width="648" height="820" rx="22" fill="transparent" stroke="#F7630C" stroke-width="5" stroke-dasharray="12 9"/>
+<text x="1100" y="308" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" fill="#000000"><tspan x="1100" dy="0">EXPERIMENTAL / IMPLEMENTING</tspan></text>
+<text x="1100" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1100" dy="0">Code exists, but rollout or maturity gates remain</tspan></text>
+<rect x="808" y="430" width="584" height="72" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="852" cy="466" rx="26" ry="26" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="852" y="470" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="852" dy="0">1</tspan></text>
+<text x="900" y="467" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="900" dy="0">TauWorkspace controller and bootstrap</tspan></text>
+<rect x="808" y="524" width="584" height="72" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="852" cy="560" rx="26" ry="26" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="852" y="564" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="852" dy="0">2</tspan></text>
+<text x="900" y="561" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="900" dy="0">Dataset registry control plane</tspan></text>
+<rect x="808" y="618" width="584" height="72" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="852" cy="654" rx="26" ry="26" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="852" y="658" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="852" dy="0">3</tspan></text>
+<text x="900" y="655" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="900" dy="0">MultiKueue dependency preflight</tspan></text>
+<rect x="808" y="712" width="584" height="72" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="852" cy="748" rx="26" ry="26" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="852" y="752" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="852" dy="0">4</tspan></text>
+<text x="900" y="749" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="900" dy="0">Hosted scalar projection integrations</tspan></text>
+<rect x="808" y="806" width="584" height="72" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="852" cy="842" rx="26" ry="26" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="852" y="846" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="852" dy="0">5</tspan></text>
+<text x="900" y="843" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="900" dy="0">Workspace readiness and storage probes</tspan></text>
+<rect x="808" y="900" width="584" height="72" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="852" cy="936" rx="26" ry="26" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="852" y="940" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="852" dy="0">6</tspan></text>
+<text x="900" y="937" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="900" dy="0">Provider-specific production presets</tspan></text>
+<rect x="1496" y="240" width="648" height="820" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="5" stroke-dasharray="12 9"/>
+<text x="1820" y="308" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" fill="#000000"><tspan x="1820" dy="0">FUTURE</tspan></text>
+<text x="1820" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1820" dy="0">Direction only; not an available user promise</tspan></text>
+<rect x="1528" y="430" width="584" height="72" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1572" cy="466" rx="26" ry="26" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1572" y="470" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="1572" dy="0">1</tspan></text>
+<text x="1620" y="467" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="1620" dy="0">Workspace-scoped researcher authorization</tspan></text>
+<rect x="1528" y="524" width="584" height="72" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1572" cy="560" rx="26" ry="26" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1572" y="564" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="1572" dy="0">2</tspan></text>
+<text x="1620" y="561" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="1620" dy="0">Released model-serving UX and quickstart</tspan></text>
+<rect x="1528" y="618" width="584" height="72" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1572" cy="654" rx="26" ry="26" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1572" y="658" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="1572" dy="0">3</tspan></text>
+<text x="1620" y="655" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="1620" dy="0">Automatic dataset replication</tspan></text>
+<rect x="1528" y="712" width="584" height="72" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1572" cy="748" rx="26" ry="26" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1572" y="752" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="1572" dy="0">4</tspan></text>
+<text x="1620" y="749" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="1620" dy="0">General any-worker multi-cluster routing</tspan></text>
+<rect x="1528" y="806" width="584" height="72" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1572" cy="842" rx="26" ry="26" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1572" y="846" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="1572" dy="0">5</tspan></text>
+<text x="1620" y="843" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="1620" dy="0">Broader provider adapter ecosystem</tspan></text>
+<rect x="1528" y="900" width="584" height="72" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1572" cy="936" rx="26" ry="26" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1572" y="940" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="700" fill="#000000"><tspan x="1572" dy="0">6</tspan></text>
+<text x="1620" y="937" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="1620" dy="0">Capability discovery and stable HTTP API</tspan></text>
+<rect x="620" y="1090" width="960" height="44" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1114" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1100" dy="0">REVIEW DATE: JULY 15, 2026 • LINK FUTURE CLAIMS TO A DESIGN OR TRACKED ISSUE</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Maturity labels describe this repository snapshot; they must be updated when a release gate lands or a design changes direction.</tspan></text>
+</svg>

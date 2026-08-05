@@ -1,0 +1,28 @@
+# Gang scheduling test — FITS scenario
+#
+# This Job needs 2 pods × 1 CPU = 2 CPU total.
+# The ClusterQueue has 3 CPU quota — this fits!
+# Kueue will admit it and BOTH pods appear together.
+# After admission, 1 CPU remains unused in the queue.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e2e-gang-fits
+  namespace: e2e-kueue
+  labels:
+    kueue.x-k8s.io/queue-name: e2e-queue
+spec:
+  suspend: true
+  parallelism: 2
+  completions: 2
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: worker
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep infinity"]
+        resources:
+          requests:
+            cpu: "1"  # 1 CPU per pod → 2 × 1 = 2 CPU total ≤ 3 CPU quota

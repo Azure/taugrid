@@ -1,0 +1,78 @@
+# Namespace and minimal RayCluster for e2e testing.
+#
+# 1 head pod (CPU-only) + 1 worker pod (CPU-only). This fixture exercises the
+# KubeRay operator and basic head/worker scheduling — it intentionally does NOT
+# request a GPU so the kuberay package runs on any cluster (CPU or GPU).
+# GPU end-to-end coverage lives in tests/e2e/stack via inference-rayjob-gpu.yaml.
+#
+# Uses the custom Ray image built from images/ray/.
+# {{RAY_IMAGE}} is resolved at test time from the RAY_E2E_IMAGE env var, which
+# CI sets to the image just pushed to the PR-scoped ACR (aksairuntime).
+# {{RAY_VERSION}} follows RAY_E2E_VERSION, the image tag, or the Makefile fallback.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-kuberay
+---
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: e2e-raycluster
+  namespace: e2e-kuberay
+spec:
+  rayVersion: "{{RAY_VERSION}}"
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: {{RAY_IMAGE}}
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+            limits:
+              cpu: "1"
+              memory: "4Gi"
+          startupProbe:
+            httpGet:
+              path: /api/version
+              port: 8265
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+  workerGroupSpecs:
+  - groupName: workers
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+        - name: ray-worker
+          image: {{RAY_IMAGE}}
+          resources:
+            requests:
+              cpu: "1"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: 52365
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60

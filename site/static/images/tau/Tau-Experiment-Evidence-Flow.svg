@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Experiment evidence is local first</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Keep the authoritative run packet and non-scalar artifacts under project control; project scalars to hosted analytics when useful</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="230" width="2088" height="410" rx="22" fill="transparent" stroke="#038387" stroke-width="4"/>
+<text x="88" y="276" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="88" dy="0">AUTHORITATIVE LOCAL / DURABLE PATH</tspan></text>
+<rect x="96" y="340" width="350" height="210" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="390" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="148" y="394" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">CODE</tspan></text>
+<text x="192" y="380" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">STEP 1</tspan></text>
+<text x="192" y="423" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="192" dy="0">Python / trainer</tspan></text>
+<text x="124" y="488" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="124" dy="0">stellar.log or imported history</tspan><tspan x="124" dy="22">checkpoint and artifact files</tspan></text>
+<polyline points="446,445 506,445" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="506" y="340" width="350" height="210" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="558" cy="390" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="558" y="394" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="558" dy="0">FILES</tspan></text>
+<text x="602" y="380" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="602" dy="0">STEP 2</tspan></text>
+<text x="602" y="423" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="602" dy="0">Run packet</tspan></text>
+<text x="534" y="488" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="534" dy="0">history.jsonl · config · manifest</tspan><tspan x="534" dy="22">artifact pointers + recovery state</tspan></text>
+<polyline points="856,445 916,445" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="916" y="340" width="350" height="210" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="968" cy="390" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="968" y="394" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="968" dy="0">DB</tspan></text>
+<text x="1012" y="380" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1012" dy="0">STEP 3</tspan></text>
+<text x="1012" y="423" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1012" dy="0">Expstore</tspan></text>
+<text x="944" y="488" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="944" dy="0">Local source of truth for runs</tspan><tspan x="944" dy="22">artifacts, checkpoints, overlays</tspan></text>
+<polyline points="1266,445 1326,445" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1326" y="340" width="350" height="210" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1378" cy="390" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1378" y="394" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1378" dy="0">UI</tspan></text>
+<text x="1422" y="380" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1422" dy="0">STEP 4</tspan></text>
+<text x="1422" y="423" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1422" dy="0">Stellar local view</tspan></text>
+<text x="1354" y="488" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1354" dy="0">Search · compare · plot</tspan><tspan x="1354" dy="22">inspect non-scalar artifacts</tspan></text>
+<polyline points="1676,445 1736,445" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1736" y="340" width="350" height="210" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1788" cy="390" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="1788" y="394" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1788" dy="0">NEXT</tspan></text>
+<text x="1832" y="380" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1832" dy="0">STEP 5</tspan></text>
+<text x="1832" y="423" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1832" dy="0">Next iteration</tspan></text>
+<text x="1764" y="488" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1764" dy="0">Choose evidence</tspan><tspan x="1764" dy="22">update code/config</tspan><tspan x="1764" dy="22">submit again</tspan></text>
+<rect x="56" y="690" width="2088" height="390" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4"/>
+<text x="88" y="736" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="88" dy="0">OPTIONAL HOSTED SCALAR PROJECTION</tspan></text>
+<rect x="146" y="810" width="360" height="190" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="198" cy="860" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="198" y="864" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="198" dy="0">SIDE</tspan></text>
+<text x="242" y="850" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="242" dy="0">RAYJOB SIDECAR</tspan></text>
+<text x="242" y="893" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="242" dy="0">Metrics offload</tspan></text>
+<text x="174" y="956" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="174" dy="0">Tail metrics history and</tspan><tspan x="174" dy="19">remote-write scalar samples</tspan></text>
+<rect x="606" y="810" width="360" height="190" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="658" cy="860" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="658" y="864" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="658" dy="0">RW</tspan></text>
+<text x="702" y="850" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="702" dy="0">INGEST</tspan></text>
+<text x="702" y="893" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="702" dy="0">adx-mon</tspan></text>
+<text x="634" y="956" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="634" dy="0">Prometheus remote-write</tspan><tspan x="634" dy="19">endpoint and ingestion pipeline</tspan></text>
+<rect x="1066" y="810" width="360" height="190" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1118" cy="860" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1118" y="864" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1118" dy="0">ADX</tspan></text>
+<text x="1162" y="850" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1162" dy="0">ANALYTICS</tspan></text>
+<text x="1162" y="893" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1162" dy="0">ADX / Kusto</tspan></text>
+<text x="1094" y="956" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1094" dy="0">Fleet-scale scalar projection</tspan><tspan x="1094" dy="19">and query source</tspan></text>
+<rect x="1526" y="810" width="500" height="190" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1578" cy="860" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1578" y="864" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1578" dy="0">WEB</tspan></text>
+<text x="1622" y="850" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1622" dy="0">HOSTED VIEW</tspan></text>
+<text x="1622" y="893" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1622" dy="0">Stellar + overlay store</tspan></text>
+<text x="1554" y="955" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1554" dy="0">Merge hosted scalars with labels</tspan><tspan x="1554" dy="18">and workspace configuration;</tspan><tspan x="1554" dy="18">non-scalar artifacts stay durable/local</tspan></text>
+<polyline points="506,905 606,905" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="966,905 1066,905" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1426,905 1526,905" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1091,550 1091,690 326,690 326,810" fill="none" stroke="#F7630C" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="720" y="1110" width="900" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1170" y="1134" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1170" dy="0">REMOTE METRICS ARE A PROJECTION, NOT THE ONLY COPY OF RUN STATE</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Expstore remains local truth for run packets, artifacts, checkpoints, and recovery; hosted dashboards may use ADX/Kusto as their scalar source.</tspan></text>
+</svg>

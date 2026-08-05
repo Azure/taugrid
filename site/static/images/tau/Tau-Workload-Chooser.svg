@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Which Tau workload path should I use?</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Choose from the execution shape and lifecycle you need—not from implementation package names</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="1580" y="108" width="150" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1655" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1655" dy="0">SHIPPED</tspan></text>
+<rect x="1744" y="108" width="190" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1839" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1839" dy="0">EXPERIMENTAL</tspan></text>
+<rect x="1948" y="108" width="140" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="2018" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="2018" dy="0">FUTURE</tspan></text>
+<rect x="56" y="240" width="420" height="280" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="108" cy="290" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="108" y="294" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="108" dy="0">?</tspan></text>
+<text x="152" y="280" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="152" dy="0">START WITH INTENT</tspan></text>
+<text x="152" y="329" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="152" dy="0">What must execute?</tspan></text>
+<text x="84" y="389" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="84" dy="0">A script or utility</tspan><tspan x="84" dy="23">Ray Train / distributed work</tspan><tspan x="84" dy="23">Evaluation</tspan><tspan x="84" dy="23">Profiling</tspan><tspan x="84" dy="23">A long-lived endpoint</tspan></text>
+<rect x="600" y="220" width="430" height="220" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="652" cy="270" rx="28" ry="28" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="652" y="274" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="652" dy="0">JOB</tspan></text>
+<text x="696" y="260" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="696" dy="0">ONE POD</tspan></text>
+<text x="696" y="309" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="696" dy="0">Kubernetes Job</tspan></text>
+<text x="628" y="368" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="628" dy="0">Best for scripts, preprocessing,</tspan><tspan x="628" dy="22">utilities, and single-pod compute</tspan></text>
+<rect x="600" y="500" width="430" height="220" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="652" cy="550" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="652" y="554" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="652" dy="0">RAY</tspan></text>
+<text x="696" y="540" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="696" dy="0">DISTRIBUTED</tspan></text>
+<text x="696" y="589" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="696" dy="0">KubeRay RayJob</tspan></text>
+<text x="628" y="648" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="628" dy="0">Default Ray Train path for</tspan><tspan x="628" dy="22">head + worker execution under Kueue</tspan></text>
+<rect x="600" y="780" width="430" height="220" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="652" cy="830" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="652" y="834" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="652" dy="0">EVAL</tspan></text>
+<text x="696" y="820" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="696" dy="0">ASYMMETRIC EVAL</tspan></text>
+<text x="696" y="869" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="696" dy="0">RayJob evaluation</tspan></text>
+<text x="628" y="928" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="628" dy="0">GPU head with CPU workers when</tspan><tspan x="628" dy="22">evaluation has a different shape</tspan></text>
+<rect x="1170" y="220" width="430" height="220" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1222" cy="270" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1222" y="274" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1222" dy="0">NSYS</tspan></text>
+<text x="1266" y="260" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1266" dy="0">OPTION ON RAYJOB</tspan></text>
+<text x="1266" y="309" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1266" dy="0">Nsight profiling</tspan></text>
+<text x="1198" y="368" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1198" dy="0">Bounded, rank-scoped profiling</tspan><tspan x="1198" dy="22">for distributed GPU work</tspan></text>
+<rect x="1170" y="500" width="430" height="220" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1222" cy="550" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1222" y="554" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1222" dy="0">RL</tspan></text>
+<text x="1266" y="540" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1266" dy="0">WORKLOAD PATTERN</tspan></text>
+<text x="1266" y="589" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1266" dy="0">Sandbox / RL</tspan></text>
+<text x="1198" y="648" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1198" dy="0">Use Job or RayJob by topology;</tspan><tspan x="1198" dy="22">Tau is not a separate trainer API</tspan></text>
+<rect x="1170" y="780" width="430" height="220" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1222" cy="830" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1222" y="834" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1222" dy="0">SERVE</tspan></text>
+<text x="1266" y="820" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1266" dy="0">FUTURE UX</tspan></text>
+<text x="1266" y="869" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1266" dy="0">Model serving</tspan></text>
+<text x="1198" y="928" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1198" dy="0">Durable checkpoint + project Serve app</tspan><tspan x="1198" dy="22">+ RayService or Deployment</tspan></text>
+<rect x="1740" y="360" width="404" height="500" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1792" cy="410" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1792" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1792" dy="0">TAU</tspan></text>
+<text x="1836" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1836" dy="0">SHARED TAU CONTRACT</tspan></text>
+<text x="1836" y="445" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="1836" dy="0">Every shipped path</tspan><tspan x="1836" dy="32">still gets</tspan></text>
+<text x="1768" y="511" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1768" dy="0">Config validation</tspan><tspan x="1768" dy="26">queue and resource policy</tspan><tspan x="1768" dy="26">storage and identity wiring</tspan><tspan x="1768" dy="26">status / logs / get / cancel</tspan><tspan x="1768" dy="26">durable evidence expectations</tspan></text>
+<polyline points="476,375 550,375 550,330 600,330" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="476,375 550,375 550,610 600,610" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="476,375 550,375 550,890 600,890" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1030,610 1090,610 1090,330 1170,330" fill="none" stroke="#5C2D91" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1030,610 1170,610" fill="none" stroke="#107C10" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1030,890 1170,890" fill="none" stroke="#5C2D91" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<polyline points="1600,330 1680,330 1680,610 1740,610" fill="none" stroke="#038387" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1600,610 1680,610 1680,610 1740,610" fill="none" stroke="#038387" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1600,890 1680,890 1680,610 1740,610" fill="none" stroke="#038387" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="520" y="1060" width="980" height="44" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="1010" y="1084" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1010" dy="0">SMOKE IS A SMALL VALIDATION RUN, NOT A DISTINCT WORKLOAD ENGINE</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Serving remains future UX; do not infer that every target flag or lifecycle command is shipped from the design contract alone.</tspan></text>
+</svg>

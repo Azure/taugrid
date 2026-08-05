@@ -1,0 +1,245 @@
+suite: SummaryRule CRD templates
+templates:
+  - summary-rules/gpu-utilization-hourly.yaml
+  - summary-rules/gpu-cost-hourly.yaml
+  - summary-rules/gpu-cost-daily.yaml
+  - summary-rules/namespace-cost-monthly.yaml
+  - summary-rules/node-resources-hourly.yaml
+values:
+  - ../values.yaml
+tests:
+  # --- gpu-utilization-hourly ---
+  - it: renders gpu-utilization-hourly SummaryRule when enabled
+    template: summary-rules/gpu-utilization-hourly.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: SummaryRule
+      - equal:
+          path: apiVersion
+          value: adx-mon.azure.com/v1
+      - equal:
+          path: spec.database
+          value: Metrics
+      - equal:
+          path: spec.table
+          value: GpuUtilizationHourly
+      - equal:
+          path: spec.interval
+          value: "1h"
+      - matchRegex:
+          path: spec.body
+          pattern: "DCGMFIDEVGPUUTIL"
+      - matchRegex:
+          path: spec.body
+          pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.body
+          pattern: "percentile\\(Value, 95\\)"
+
+  - it: does not render gpu-utilization-hourly when disabled
+    template: summary-rules/gpu-utilization-hourly.yaml
+    set:
+      summaryRules.items.gpuUtilizationHourly.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- gpu-cost-hourly ---
+  - it: renders gpu-cost-hourly with inline datatable and cost calculation
+    template: summary-rules/gpu-cost-hourly.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.database
+          value: CostTracking
+      - equal:
+          path: spec.table
+          value: GpuCostHourly
+      - equal:
+          path: spec.interval
+          value: "1h"
+      - matchRegex:
+          path: spec.body
+          pattern: "datatable\\(sku:string, rate_per_gpu_hour:real\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "nvidia_com_gpu"
+      - matchRegex:
+          path: spec.body
+          pattern: "hourly_cost"
+      - matchRegex:
+          path: spec.body
+          pattern: "gpu_count \\* rate_per_gpu_hour"
+      - matchRegex:
+          path: spec.body
+          pattern: "_startTime \\.\\. _endTime"
+
+  - it: includes GPU rates from values in the datatable
+    template: summary-rules/gpu-cost-hourly.yaml
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: "Standard_NC6s_v3"
+      - matchRegex:
+          path: spec.body
+          pattern: "Standard_ND96isr_H100_v5"
+
+  - it: does not render gpu-cost-hourly when disabled
+    template: summary-rules/gpu-cost-hourly.yaml
+    set:
+      summaryRules.items.gpuCostHourly.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- gpu-cost-daily ---
+  - it: renders gpu-cost-daily with total_cost column
+    template: summary-rules/gpu-cost-daily.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.database
+          value: CostTracking
+      - equal:
+          path: spec.table
+          value: GpuCostDaily
+      - equal:
+          path: spec.interval
+          value: "24h"
+      - matchRegex:
+          path: spec.body
+          pattern: "GpuCostHourly"
+      - matchRegex:
+          path: spec.body
+          pattern: "total_cost = sum\\(hourly_cost\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "_startTime \\.\\. _endTime"
+
+  - it: does not render gpu-cost-daily when disabled
+    template: summary-rules/gpu-cost-daily.yaml
+    set:
+      summaryRules.items.gpuCostDaily.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- namespace-cost-monthly ---
+  - it: renders namespace-cost-monthly with total_cost and pod_day_count
+    template: summary-rules/namespace-cost-monthly.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.database
+          value: CostTracking
+      - equal:
+          path: spec.table
+          value: NamespaceCostMonthly
+      - equal:
+          path: spec.interval
+          value: "24h"
+      - matchRegex:
+          path: spec.body
+          pattern: "GpuCostDaily"
+      - matchRegex:
+          path: spec.body
+          pattern: "total_cost = sum\\(total_cost\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "pod_day_count"
+      - matchRegex:
+          path: spec.body
+          pattern: "Timestamp = bin"
+
+  - it: does not render namespace-cost-monthly when disabled
+    template: summary-rules/namespace-cost-monthly.yaml
+    set:
+      summaryRules.items.namespaceCostMonthly.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- node-resources-hourly ---
+  - it: renders node-resources-hourly with CPU counter rate calculation
+    template: summary-rules/node-resources-hourly.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.database
+          value: Metrics
+      - equal:
+          path: spec.table
+          value: NodeResourcesHourly
+      - equal:
+          path: spec.interval
+          value: "1h"
+      - matchRegex:
+          path: spec.body
+          pattern: "NodeCpuSecondsTotal"
+      - matchRegex:
+          path: spec.body
+          pattern: "min_val = min\\(Value\\), max_val = max\\(Value\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "cpu_util_pct"
+      - matchRegex:
+          path: spec.body
+          pattern: "avg_cpu_idle_pct"
+      - matchRegex:
+          path: spec.body
+          pattern: "_startTime \\.\\. _endTime"
+
+  - it: does not render node-resources-hourly when disabled
+    template: summary-rules/node-resources-hourly.yaml
+    set:
+      summaryRules.items.nodeResourcesHourly.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- global disable ---
+  - it: does not render any summary rules when summaryRules.enabled is false
+    set:
+      summaryRules.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- labels ---
+  - it: renders correct labels on summary rules
+    template: summary-rules/gpu-utilization-hourly.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: summary-rule
+      - exists:
+          path: metadata.labels["app.kubernetes.io/name"]
+
+  # --- criteria ---
+  - it: sets criteria when configured
+    template: summary-rules/gpu-utilization-hourly.yaml
+    set:
+      summaryRules.items.gpuUtilizationHourly.criteria:
+        region:
+          - eastus
+    asserts:
+      - equal:
+          path: spec.criteria.region[0]
+          value: eastus
+
+  # --- interval override ---
+  - it: allows interval override
+    template: summary-rules/gpu-utilization-hourly.yaml
+    set:
+      summaryRules.items.gpuUtilizationHourly.interval: "30m"
+    asserts:
+      - equal:
+          path: spec.interval
+          value: "30m"

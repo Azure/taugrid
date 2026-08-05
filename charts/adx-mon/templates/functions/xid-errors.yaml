@@ -1,0 +1,44 @@
+{{- if and .Values.functions.enabled .Values.functions.items.xidErrors.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-xid-errors
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.xidErrors.database | quote }}
+  body: |
+    // GPU XID error view: extracts NVIDIA XID errors from kernel dmesg logs.
+    // XID errors indicate GPU hardware faults (e.g., XID 48 = DBE, XID 74 = NVLink).
+    .create-or-alter function XidErrors () {
+      KernelLogs
+      | where Body has "NVRM: Xid"
+      | extend node = tostring(Resource["k8s.node.name"]),
+               message = tostring(Body)
+      | parse message with * "Xid (PCI:" pci_address "): " xid_code:int "," xid_detail
+      | extend severity = case(
+                  xid_code in (48, 64, 94), "Critical",
+                  xid_code in (31, 32, 45, 74, 79), "Error",
+                  xid_code in (13, 43, 61, 62, 63, 68), "Warning",
+                  "Info"),
+               xid_description = case(
+                  xid_code == 13, "Graphics Engine Exception",
+                  xid_code == 31, "GPU memory page fault",
+                  xid_code == 32, "Invalid or corrupted push buffer stream",
+                  xid_code == 43, "GPU stopped processing",
+                  xid_code == 45, "Preemptive cleanup - no error",
+                  xid_code == 48, "Double Bit ECC Error",
+                  xid_code == 61, "Internal firmware error",
+                  xid_code == 62, "Internal firmware error",
+                  xid_code == 63, "Internal firmware error",
+                  xid_code == 64, "Falling off the bus",
+                  xid_code == 68, "Video processor exception",
+                  xid_code == 74, "NVLink error",
+                  xid_code == 79, "GPU has fallen off the bus",
+                  xid_code == 94, "Contained ECC Error - requires GPU reset",
+                  strcat("XID ", tostring(xid_code)))
+      | project Timestamp, Cluster, node, pci_address, xid_code, xid_description, severity, xid_detail, message
+    }
+{{- end }}

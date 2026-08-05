@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "tulu-3-sft-mixture",
+  "alias": "latest",
+  "version": "v3",
+  "digest": "sha256:44592a94d6e39c82ddfd2ce182c50e9c76f25535952947389ec86ae26f330979",
+  "record_path": "/data/dataset-registry/datasets/tulu-3-sft-mixture/v3/dataset.json",
+  "updated_at": "2026-06-02T07:51:39Z"
+}

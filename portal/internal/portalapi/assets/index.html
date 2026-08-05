@@ -1,0 +1,1686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TauGrid — Portal</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6f8; --panel: #fff; --line: #e4e8ee; --text: #1a2230;
+    --muted: #5c6a7d; --accent: #2563eb; --accent-bg: #eaf1fe;
+    --hover: #f2f6fc; --ok: #15803d; --ok-bg: #e7f6ec; --warn: #b91c1c; --warn-bg: #fdecec;
+    --amber: #b45309;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+  header.topbar {
+    display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 20px;
+    background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10;
+  }
+  header.topbar .brand { display: flex; align-items: baseline; gap: 10px; }
+  header.topbar strong { font-size: 15px; font-weight: 750; letter-spacing: -.01em; }
+  header.topbar .eyebrow { color: var(--muted); font-size: 12px; }
+  header.topbar .spacer { flex: 1 1 auto; }
+  .tab-toggle {
+    display: inline-flex; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px; gap: 2px;
+  }
+  .tab-toggle button {
+    border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    font: inherit; font-size: 13px; font-weight: 600; padding: 5px 14px; border-radius: 999px;
+  }
+  .tab-toggle button:hover { color: var(--text); }
+  .tab-toggle button.active { background: var(--accent); color: #fff; }
+  .workspace-picker { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .workspace-picker select {
+    min-width: 170px; max-width: 260px; border: 1px solid var(--line); border-radius: 7px;
+    background: #fff; color: var(--text); padding: 6px 28px 6px 9px; font: inherit;
+  }
+  .scope-banner {
+    display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted);
+    font-size: 12px;
+  }
+  .scope-banner strong { color: var(--text); }
+  .scope-banner.unavailable { border-color: #f4b9b9; background: var(--warn-bg); color: var(--warn); }
+  /* Fleet in-page sub-tabs (Health | Utilization | Compute) */
+  .subtabs { display: inline-flex; gap: 4px; margin: 4px 0 8px; border-bottom: 1px solid var(--line); width: 100%; }
+  .subtabs button {
+    border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    font: inherit; font-size: 13px; font-weight: 600; padding: 8px 14px;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .subtabs button:hover { color: var(--text); }
+  .subtabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .layout { display: flex; align-items: flex-start; }
+  aside.sidebar {
+    width: 220px; flex: 0 0 220px; min-height: calc(100vh - 56px);
+    background: #fff; border-right: 1px solid var(--line); padding: 14px 0;
+    position: sticky; top: 56px;
+  }
+  aside.sidebar .group { margin-bottom: 6px; }
+  aside.sidebar a {
+    display: flex; align-items: center; gap: 9px; padding: 8px 18px; color: var(--text);
+    text-decoration: none; font-size: 13px; font-weight: 550; border-left: 3px solid transparent;
+  }
+  aside.sidebar a:hover { background: var(--hover); color: var(--accent); }
+  aside.sidebar a.active {
+    background: var(--accent-bg); color: var(--accent);
+    border-left-color: var(--accent); font-weight: 700;
+  }
+  aside.sidebar a .ico { width: 16px; height: 16px; flex: 0 0 16px; opacity: .8; }
+  aside.sidebar a.external::after { content: " ↗"; color: var(--muted); }
+  main { flex: 1 1 auto; padding: 28px 28px; min-width: 0; }
+  .card {
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    padding: 22px; box-shadow: 0 1px 2px rgba(20,30,50,.04);
+  }
+  .boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 18px; }
+  .board { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: #fff; text-decoration: none; color: inherit; }
+  .board:hover { border-color: var(--accent); }
+  .board h3 { margin: 0 0 6px; font-size: 15px; }
+  .board p { margin: 0; color: var(--muted); font-size: 13px; }
+  .pill { display: inline-block; margin-top: 10px; font-size: 11px; color: var(--accent); background: var(--accent-bg); padding: 2px 8px; border-radius: 999px; }
+  /* stat cards — persona Overview headline metrics */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-top: 18px; }
+  .stat {
+    border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; background: #fff;
+    text-decoration: none; color: inherit; display: block; border-top: 3px solid transparent;
+  }
+  .stat:hover { border-color: var(--accent); }
+  .stat .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); line-height: 1.3; }
+  .stat .value { margin-top: 10px; font-size: 28px; font-weight: 760; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .value .of { font-size: 15px; font-weight: 600; color: var(--muted); }
+  .stat .value .unit { font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+  .stat .sub { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .stat.good .value { color: var(--ok); } .stat.good { border-top-color: var(--ok); }
+  .stat.bad .value { color: var(--warn); } .stat.bad { border-top-color: var(--warn); }
+  .stat.warn .value { color: var(--amber); } .stat.warn { border-top-color: var(--amber); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; vertical-align: middle; margin-left: 8px; }
+  .dot.green { background: var(--ok); } .dot.amber { background: var(--amber); } .dot.red { background: var(--warn); }
+  .bar { margin-top: 10px; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  /* Jobs lifecycle sections */
+  .section-head { display: flex; align-items: center; gap: 8px; margin: 26px 0 12px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  .section-head .count { color: var(--muted); font-weight: 600; }
+  .joblist { display: flex; flex-direction: column; gap: 10px; }
+  .jobcard { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: #fff; }
+  .jobcard .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .jobcard .name { font-weight: 700; font-size: 14px; }
+  .jobcard .meta { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+  .badge { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 6px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .badge.kind { background: var(--accent-bg); color: var(--accent); border-color: transparent; }
+  .badge.run { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+  .badge.queue { background: #fef4e6; color: var(--amber); border-color: transparent; }
+  .badge.done { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+  .badge.fail { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+  .btn-primary {
+    display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff;
+    border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-size: 13px; font-weight: 650;
+    cursor: pointer; text-decoration: none;
+  }
+  .btn-primary:hover { background: #1d4fd7; }
+  .btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .note { margin-top: 24px; color: var(--muted); font-size: 13px; }
+  code { background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  table.jobs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  table.jobs th, table.jobs td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  table.jobs th { color: var(--muted); font-weight: 650; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+  table.jobs tbody tr:hover { background: var(--hover); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .warn { color: var(--warn); }
+  .empty { color: var(--muted); padding: 18px 0; }
+  .muted { color: var(--muted); }
+  a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+  iframe.stellar {
+    width: 100%; height: calc(100vh - 230px); min-height: 480px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff; margin-top: 12px;
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <strong>TauGrid</strong>
+    <div class="eyebrow">Observability Portal</div>
+  </div>
+  <div class="spacer"></div>
+  <label class="workspace-picker">Workspace <select id="workspace-select" aria-label="Workspace"></select></label>
+  <div class="tab-toggle" id="tab-toggle"></div>
+</header>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div id="scope-banner"></div>
+    <div class="card" id="view"></div>
+  </main>
+</div>
+<script>
+  const descriptions = {
+    overview: "Cross-source home: running experiments with node + queue context.",
+    experiments: "Training curves, run comparison, metric summaries.",
+    runs: "Submitted Jobs and RayJobs — name, kind, status, age.",
+    jobs: "Kueue queue position, admission status, GPU utilization per job.",
+    kueueviz: "Live KueueViz dashboard — real-time queues, workloads, cluster-queues over WebSocket.",
+    cluster: "GPU node status, ECC errors, NVLink health, thermals.",
+    nodes: "Fleet hardware inventory — SKU, agentpool, CPU/memory/GPU per node.",
+    gpu: "Live GPU utilization ranked hottest-first, with the cluster average.",
+    ray: "Per-cluster Ray dashboards — tasks, actors, object store.",
+    cost: "GPU-hours per team/job and utilization efficiency.",
+    observability: "adx-mon pipeline health — Collector, Ingestor, Alerter, AlertRules.",
+  };
+
+  // tabs is the top-level navigation: three tabs (Platform / Workloads /
+  // Experiments), each owning the boards in its sidebar. Selecting a tab shows
+  // only its pages. Overview is the shared /portal landing but renders a
+  // tab-specific page (renderOverviewWorkloads vs renderOverviewPlatform vs the
+  // Experiments Stellar embed). Paths map to the routes below; Fleet is one page
+  // with in-page sub-tabs (Health | Utilization | Compute); Stellar embeds the
+  // mounted Stellar SPA in a same-origin iframe.
+  const tabs = [
+    { id: "platform", label: "Platform", items: [
+      { title: "Overview", path: "/portal" },
+      { title: "Fleet", path: "/portal/fleet" },
+      { title: "Kueue", path: "/portal/jobs" },
+      { title: "Ray", path: "/portal/ray" },
+      { title: "Observability", path: "/portal/observability" },
+      { title: "Cost", path: "/portal/cost" },
+    ]},
+    { id: "workloads", label: "Workloads", items: [
+      { title: "Overview", path: "/portal" },
+      { title: "Jobs", path: "/portal/runs" },
+      { title: "Services", path: "/portal/services" },
+    ]},
+    { id: "experiments", label: "Experiments", items: [
+      { title: "Overview", path: "/portal" },
+      { title: "Stellar", path: "/portal/experiments" },
+    ]},
+  ];
+
+  // The shared /portal Overview belongs to every tab; every other path is owned
+  // by exactly one. tabForPath returns the owning tab id, or null for the shared
+  // Overview (caller keeps the stored tab in that case). Fleet's three boards
+  // (/portal/cluster, /portal/gpu, /portal/nodes) are reachable via the Fleet
+  // sub-tabs; they resolve to the platform tab so a deep-link keeps the right
+  // sidebar active.
+  function tabForPath(path) {
+    const platformExtra = ["/portal/fleet", "/portal/cluster", "/portal/gpu", "/portal/nodes", "/portal/kueueviz"];
+    if (platformExtra.includes(path)) return "platform";
+    for (const t of tabs) {
+      for (const item of t.items) {
+        if (item.path === "/portal") continue; // shared, skip
+        if (item.path === path) return t.id;
+      }
+    }
+    return null;
+  }
+
+  // currentTab reads the persisted choice, falling back to the tab that owns the
+  // current path, then "workloads". A stored value always wins for the shared
+  // Overview so a refresh on /portal keeps the last-picked tab.
+  function currentTab() {
+    const owner = tabForPath(location.pathname);
+    if (owner) return owner;
+    const stored = localStorage.getItem("portalTab");
+    if (stored && tabs.some(t => t.id === stored)) return stored;
+    return "workloads";
+  }
+
+  // setTab persists the choice and repaints the shell. If the current page does
+  // not belong to the new tab, navigate to that tab's Overview; otherwise stay
+  // put and just re-render nav + view (Overview content differs per tab, so a
+  // re-render is needed even without navigation).
+  function setTab(id) {
+    localStorage.setItem("portalTab", id);
+    const owner = tabForPath(location.pathname);
+    if (owner && owner !== id) {
+      history.pushState({}, "", withWorkspace("/portal"));
+    }
+    route();
+  }
+
+
+  const el = (tag, attrs, ...kids) => {
+    const n = document.createElement(tag);
+    for (const k in (attrs || {})) {
+      if (k === "class") n.className = attrs[k];
+      else if (k === "html") n.innerHTML = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    }
+    for (const kid of kids) n.append(kid);
+    return n;
+  };
+
+  let activeScope = null;
+  let authorizedWorkspaces = [];
+  let workspaceManaged = false;
+
+  function currentWorkspace() {
+    return new URLSearchParams(location.search).get("workspace") || "";
+  }
+
+  function withWorkspace(path, workspace) {
+    // Legacy (unscoped) portals report managed=false and use a "default"
+    // sentinel workspace. Injecting workspace=default into links would filter
+    // Kusto rows by a tau_workspace tag that legacy data never carries, so we
+    // leave paths untouched unless the portal runs in managed workspace mode.
+    if (!workspaceManaged) return path;
+    const id = workspace === undefined ? currentWorkspace() : workspace;
+    if (!id) return path;
+    const u = new URL(path, location.origin);
+    if (u.origin !== location.origin) return path;
+    u.searchParams.set("workspace", id);
+    return u.pathname + u.search + u.hash;
+  }
+
+  function remoteWorkspaceURL(scope) {
+    if (!scope || !scope.portalEndpoint) return "";
+    const u = new URL(scope.portalEndpoint);
+    u.pathname = u.pathname.replace(/\/$/, "") + location.pathname;
+    u.search = location.search;
+    u.searchParams.set("workspace", scope.workspace);
+    u.searchParams.delete("namespace");
+    u.searchParams.delete("cluster");
+    return u.toString();
+  }
+
+  function renderWorkspaceSelector() {
+    const select = document.getElementById("workspace-select");
+    select.textContent = "";
+    for (const scope of authorizedWorkspaces) {
+      const option = el("option", { value: scope.workspace }, scope.name || scope.workspace);
+      if (activeScope && scope.workspace === activeScope.workspace) option.selected = true;
+      select.append(option);
+    }
+    select.disabled = authorizedWorkspaces.length < 2;
+    select.onchange = () => {
+      const u = new URL(location.href);
+      u.searchParams.set("workspace", select.value);
+      u.searchParams.delete("namespace");
+      u.searchParams.delete("cluster");
+      history.pushState({}, "", u.pathname + u.search + u.hash);
+      route();
+    };
+  }
+
+  function renderScopeBanner() {
+    const host = document.getElementById("scope-banner");
+    host.textContent = "";
+    if (!activeScope) {
+      host.append(el("div", { class: "scope-banner unavailable" }, "No authorized workspace is available."));
+      return;
+    }
+    const banner = el("div", { class: "scope-banner" + (activeScope.availability === "available" ? "" : " unavailable") });
+    const field = (label, value) => el("span", {}, el("strong", {}, label + ": "), value || "not configured");
+    banner.append(
+      field("workspace", activeScope.name || activeScope.workspace),
+      field("cluster", activeScope.cluster),
+      field("namespace", activeScope.namespace),
+      field("queue", activeScope.localQueue),
+      field("result scope", activeScope.resultScope),
+      field("authorization", activeScope.authorizationMode),
+      field("source", activeScope.source),
+      field("state", activeScope.availability));
+    host.append(banner);
+  }
+
+  async function loadWorkspaceContext() {
+    const requested = currentWorkspace();
+    const url = "/api/portal/workspaces" + (requested ? "?workspace=" + encodeURIComponent(requested) : "");
+    const res = await fetch(url, { headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error("workspace directory: " + res.status + " " + (await res.text()).trim());
+    const directory = await res.json();
+    if (requested !== currentWorkspace()) return false;
+    authorizedWorkspaces = directory.workspaces || [];
+    activeScope = directory.selected || null;
+    workspaceManaged = directory.managed === true;
+    if (workspaceManaged && activeScope && !requested) {
+      history.replaceState({}, "", withWorkspace(location.pathname + location.search, activeScope.workspace));
+    }
+    renderWorkspaceSelector();
+    renderScopeBanner();
+    if (!activeScope) return false;
+    if (activeScope.availability === "redirect") {
+      const target = remoteWorkspaceURL(activeScope);
+      if (target) location.assign(target);
+      return false;
+    }
+    return activeScope.availability === "available";
+  }
+
+  async function fetchJSON(path) {
+    const requested = currentWorkspace();
+    const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" } });
+    if (!res.ok) {
+      const raw = (await res.text()).trim();
+      // Scoped error envelopes carry a "reason" naming the cause and its
+      // remedy; anything else (plain text, proxy HTML) shows as-is.
+      let detail = raw;
+      try { detail = JSON.parse(raw).reason || raw; } catch (e) { /* not JSON */ }
+      throw new Error(res.status + " " + detail);
+    }
+    const data = await res.json();
+    if (data.scope && requested === currentWorkspace()) {
+      activeScope = data.scope;
+      renderScopeBanner();
+    }
+    return data;
+  }
+
+  // renderTabToggle paints the three pills in the topbar, highlighting the
+  // active tab. Clicking switches tabs (setTab persists + repaints).
+  function renderTabToggle() {
+    const host = document.getElementById("tab-toggle");
+    host.textContent = "";
+    const active = currentTab();
+    for (const t of tabs) {
+      const b = el("button", { type: "button" }, t.label);
+      if (t.id === active) b.className = "active";
+      b.addEventListener("click", () => { if (t.id !== active) setTab(t.id); });
+      host.append(b);
+    }
+  }
+
+  // renderSidebar builds the navigation for the *current* tab only — no section
+  // headers, since the topbar toggle already conveys which tab is active. It is
+  // pure presentation (no API call), so the shell paints instantly and the
+  // per-board fetch happens in each render*. The active link is derived from
+  // location.pathname; Fleet stays active across its sub-tab routes.
+  function renderSidebar() {
+    const sidebar = document.getElementById("sidebar");
+    sidebar.textContent = "";
+    const tab = tabs.find(t => t.id === currentTab()) || tabs[0];
+    const fleetPaths = ["/portal/fleet", "/portal/cluster", "/portal/gpu", "/portal/nodes"];
+    const g = el("div", { class: "group" });
+    for (const item of tab.items) {
+      const a = el("a", { href: withWorkspace(item.path) }, item.title);
+      const activePath = item.path === "/portal/fleet"
+        ? fleetPaths.includes(location.pathname)
+        : item.path === location.pathname;
+      if (item.external) a.className = "external";
+      else if (activePath) a.className = "active";
+      g.append(a);
+    }
+    sidebar.append(g);
+  }
+
+  // statCard builds one headline metric tile for the persona Overviews, linking
+  // to a board drill-down. When `unavailable` is set it shows a muted "—" + reason
+  // instead of the metric but still links through. Options: value (big number),
+  // of ("/ N" denominator), unit (suffix e.g. "%"), sub (muted subtitle string or
+  // node), dot ("green"|"amber"|"red" status dot), tone ("good"|"bad"|"warn" card
+  // accent), bar (0..1 fraction → progress bar).
+  const statCard = ({ href, label, value, of, unit, sub, dot, tone, bar, unavailable }) => {
+    const card = el("a", { class: "stat" + (tone ? " " + tone : ""), href: withWorkspace(href || "/portal") });
+    card.append(el("div", { class: "label" }, label));
+    if (unavailable) {
+      card.append(el("div", { class: "value" }, "—"));
+      card.append(el("p", { class: "sub" }, typeof unavailable === "string" ? unavailable : "unavailable"));
+      return card;
+    }
+    const v = el("div", { class: "value" }, String(value));
+    if (of !== undefined && of !== null) v.append(el("span", { class: "of" }, " / " + of));
+    if (unit) v.append(el("span", { class: "unit" }, unit));
+    if (dot) v.append(el("span", { class: "dot " + dot }));
+    card.append(v);
+    if (bar !== undefined && bar !== null) {
+      const pct = Math.max(0, Math.min(100, bar * 100));
+      card.append(el("div", { class: "bar" }, el("span", { style: "width:" + pct + "%" })));
+    }
+    if (sub) card.append(el("p", { class: "sub" }, sub));
+    return card;
+  };
+
+  // renderOverviewWorkloads is the Workloads landing page: in-flight training
+  // workloads at a glance. It reuses /api/portal/overview (queue rollup) plus one
+  // best-effort /api/portal/cluster call to compute a real average GPU
+  // utilization. Every card soft-degrades on its source; the cluster call failing
+  // only blanks the utilization card. "Running now" lists admitted workloads with
+  // experiment deep-links (renderRunning, shared with the payload).
+  async function renderOverviewWorkloads(view) {
+    view.append(
+      el("h1", { style: "margin:0 0 6px;font-size:20px;" }, "Overview"),
+      el("p", { class: "muted", style: "margin:0;" }, "Your training workloads at a glance."));
+    let data;
+    try {
+      data = await fetchJSON("/api/portal/overview");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" }, "Overview unavailable: " + e.message));
+      return;
+    }
+    const cards = data.cards || {};
+    const q = cards.queue;
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+
+    // Average utilization is a real per-GPU aggregate from the Cluster Health
+    // board. Failure or no Kusto → the card shows "—"; it never blocks the rest.
+    let avgUtil = null;
+    try {
+      const cl = await fetchJSON("/api/portal/cluster");
+      const gs = cl.gpus || [];
+      if (gs.length) avgUtil = gs.reduce((s, g) => s + (g.utilizationPct ?? 0), 0) / gs.length;
+    } catch (e) { /* leave avgUtil null → unavailable */ }
+
+    const capacity = q ? ((q.gpuUsed ?? 0) + (q.gpuHeadroom ?? 0)) : 0;
+    const stats = el("div", { class: "stats" });
+    stats.append(
+      statCard({
+        href: "/portal/runs", label: "Active jobs",
+        unavailable: cards.queueUnavailable,
+        value: q ? (q.admitted ?? 0) : 0,
+        dot: q && (q.admitted ?? 0) > 0 ? "green" : null,
+      }),
+      statCard({
+        href: "/portal/runs", label: "Queued",
+        unavailable: cards.queueUnavailable,
+        value: q ? (q.pending ?? 0) : 0,
+      }),
+      statCard({
+        href: "/portal/jobs", label: "GPUs in use",
+        unavailable: cards.queueUnavailable,
+        value: q ? (q.gpuUsed ?? 0) : 0,
+        of: q ? capacity : null,
+        bar: capacity > 0 ? (q.gpuUsed ?? 0) / capacity : null,
+      }),
+      statCard({
+        href: "/portal/fleet?view=util", label: "Avg utilization",
+        unavailable: avgUtil === null ? "no Kusto query source" : null,
+        value: avgUtil === null ? null : n1(avgUtil) + "%",
+      }),
+    );
+    view.append(stats);
+    renderRunning(view, data);
+  }
+
+  // renderOverviewPlatform is the Platform landing page: fleet health & capacity
+  // at a glance. It reuses /api/portal/overview only (fleet/health/queue/cost
+  // rollups); each card soft-degrades on its own source's *Unavailable field and
+  // deep-links to the matching board.
+  async function renderOverviewPlatform(view) {
+    view.append(
+      el("h1", { style: "margin:0 0 6px;font-size:20px;" }, "Overview"),
+      el("p", { class: "muted", style: "margin:0;" }, "Fleet health & capacity at a glance."));
+    let data;
+    try {
+      data = await fetchJSON("/api/portal/overview");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" }, "Overview unavailable: " + e.message));
+      return;
+    }
+    const cards = data.cards || {};
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+    const f = cards.fleet, h = cards.health, q = cards.queue, c = cards.cost;
+    const stats = el("div", { class: "stats" });
+    stats.append(
+      statCard({
+        href: "/portal/fleet?view=compute", label: "Total nodes",
+        unavailable: cards.fleetUnavailable,
+        value: f ? (f.readyNodes ?? 0) : 0, of: f ? (f.totalNodes ?? 0) : null,
+        sub: f ? "ready / total" : null,
+      }),
+      statCard({
+        href: "/portal/fleet?view=compute", label: "Total GPUs",
+        unavailable: cards.fleetUnavailable,
+        value: f ? (f.totalGPUs ?? 0) : 0,
+        sub: f ? (f.gpuNodes ?? 0) + " GPU nodes" : null,
+      }),
+      statCard({
+        href: "/portal/fleet?view=health", label: "Unhealthy",
+        unavailable: cards.healthUnavailable,
+        value: h ? (h.errorGPUs ?? 0) : 0,
+        tone: h ? (h.errorGPUs > 0 ? "bad" : "good") : null,
+        dot: h ? (h.errorGPUs > 0 ? "red" : "green") : null,
+        sub: h ? (h.errorGPUs > 0 ? "of " + (h.totalGPUs ?? 0) + " GPUs" : "all healthy") : null,
+      }),
+      statCard({
+        href: "/portal/jobs", label: "Headroom",
+        unavailable: cards.queueUnavailable,
+        value: q ? (q.gpuHeadroom ?? 0) : 0,
+        sub: q ? "GPUs free · " + (q.gpuUsed ?? 0) + " in use" : null,
+      }),
+      statCard({
+        href: "/portal/cost", label: "GPU-hours",
+        unavailable: cards.costUnavailable,
+        value: c ? n1(c.totalGPUHours) : 0,
+        sub: c ? "window " + (c.window || "—") : null,
+      }),
+      statCard({
+        href: "/portal/cost", label: "Idle GPUs",
+        unavailable: cards.costUnavailable,
+        value: c ? (c.idleGPUs ?? 0) : 0,
+        tone: c && (c.idleGPUs ?? 0) > 0 ? "warn" : null,
+      }),
+    );
+    view.append(stats);
+  }
+
+  // renderOverviewExperiments is the Experiments landing: headline counts from the
+  // mounted Stellar experiment store, matching the other tabs' stat-card overviews.
+  // It reuses Stellar's own /api/stellar/experiments discovery (the same source the
+  // embedded tracker uses) and rolls the returned experiments into distinct
+  // projects, an experiment total, and a tracked-run sum. The store being
+  // unavailable blanks the cards to "—" but still links through to Stellar.
+  async function renderOverviewExperiments(view) {
+    view.append(
+      el("h1", { style: "margin:0 0 6px;font-size:20px;" }, "Overview"),
+      el("p", { class: "muted", style: "margin:0;" }, "Experiment tracking at a glance."));
+    if (!activeScope || !activeScope.experimentsUrl) {
+      view.append(el("div", { class: "empty" },
+        "Experiment tracking is untracked for this workspace. Tau workloads remain available on Jobs."));
+      return;
+    }
+    let data = null;
+    try {
+      data = await fetchJSON(withWorkspace("/api/stellar/experiments"));
+    } catch (e) { /* leave data null → cards show unavailable, links still work */ }
+    const exps = (data && data.experiments) || [];
+    const projects = new Set();
+    let runs = 0;
+    for (const x of exps) {
+      if (x.project) projects.add(x.project);
+      runs += x.run_count || 0;
+    }
+    const total = data ? (data.total ?? exps.length) : 0;
+    const un = data === null ? "Stellar experiment store unavailable" : null;
+    const stats = el("div", { class: "stats" });
+    stats.append(
+      statCard({
+        href: withWorkspace("/portal/experiments"), label: "Projects",
+        unavailable: un, value: projects.size,
+      }),
+      statCard({
+        href: withWorkspace("/portal/experiments"), label: "Experiments",
+        unavailable: un, value: total,
+      }),
+      statCard({
+        href: withWorkspace("/portal/experiments"), label: "Tracked runs",
+        unavailable: un, value: runs,
+      }),
+    );
+    view.append(stats);
+    view.append(el("p", { class: "note" },
+      "Training curves, run comparison, and metric summaries live in ",
+      el("a", { href: withWorkspace("/portal/experiments"), class: "back" }, "Stellar"),
+      " — or open the ",
+      el("a", { href: withWorkspace(activeScope.experimentsUrl), target: "_blank" }, "full experience ↗"),
+      "."));
+  }
+
+  // renderRunning appends the "Running now" cross-link section from the overview
+  // payload: admitted Kueue workloads, each linking to its experiment (Stellar).
+  // It degrades to a hint when the portal has no Kubernetes access.
+  function renderRunning(view, data) {
+    view.append(el("h3", { style: "margin:26px 0 0;font-size:15px;" }, "Running now"));
+    if (data.runningUnavailable) {
+      view.append(el("div", { class: "empty" },
+        "Running jobs unavailable: " + data.runningUnavailable +
+        " — start the portal with Kubernetes access to cross-link jobs to experiments."));
+      return;
+    }
+    const running = data.running || [];
+    if (running.length === 0) {
+      view.append(el("div", { class: "empty" }, "No admitted workloads right now."));
+      return;
+    }
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Job"), el("th", {}, "Namespace"),
+      el("th", {}, "Queue"), el("th", {}, "Cluster queue"), el("th", {}, "Experiment"))));
+    const tbody = el("tbody");
+    for (const r of running) {
+      // Label the experiment link with the Stellar identity tau run stamped
+      // (experiment, else project) and fall back to the run-id when a run
+      // carries none. The path itself is still run-id scoped — project/
+      // experiment here are label-normalized and display-only.
+      const expLabel = r.experiment || r.project || r.runId || "open";
+      let exp;
+      if (r.experimentPath) {
+        exp = el("a", { href: withWorkspace(r.experimentPath), class: "back", title: r.runId || "" }, expLabel + " ↗");
+      } else if (r.experimentTracking === "available" && activeScope && activeScope.experimentsUrl) {
+        exp = el("a", { href: withWorkspace("/portal/experiments"), class: "back" }, "available ↗");
+      } else {
+        exp = el("span", { class: "muted" }, r.experimentTracking || "untracked");
+      }
+      tbody.append(el("tr", {},
+        el("td", {}, r.job || r.name || "—"), el("td", {}, r.namespace || "—"),
+        el("td", {}, r.queue || "—"), el("td", {}, r.clusterQueue || "—"),
+        el("td", {}, exp)));
+    }
+    table.append(tbody);
+    view.append(table);
+  }
+
+  // renderKueue is the Platform "Kueue" page: one page with in-page sub-tabs
+  // (Scheduler | Live) merging the snapshot-based scheduler board and the live
+  // KueueViz board that used to be two separate sidebar entries. The active
+  // sub-tab comes from ?view= or the legacy /portal/kueueviz deep-link (→live),
+  // so existing links keep working. Each section paints into its own container
+  // beneath the shared page header.
+  async function renderKueue(view) {
+    const path = location.pathname;
+    const params = new URLSearchParams(location.search);
+    let active = params.get("view") || "scheduler";
+    if (path === "/portal/kueueviz") active = "live";
+    if (!["scheduler", "live"].includes(active)) active = "scheduler";
+
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Kueue"));
+    view.append(el("p", { style: "margin:0 0 4px;color:var(--muted);" },
+      "Kueue queue pressure and admission — a scheduler snapshot plus the live KueueViz dashboard."));
+
+    const subs = [
+      { id: "scheduler", label: "Scheduler" },
+      { id: "live", label: "Live" },
+    ];
+    const bar = el("div", { class: "subtabs" });
+    for (const s of subs) {
+      const b = el("button", { type: "button" }, s.label);
+      if (s.id === active) b.className = "active";
+      b.addEventListener("click", () => {
+        if (s.id === active) return;
+        history.pushState({}, "", "/portal/jobs?view=" + s.id);
+        route();
+      });
+      bar.append(b);
+    }
+    view.append(bar);
+
+    const section = el("div");
+    view.append(section);
+    if (active === "live") renderKueueVizSection(section);
+    else await renderJobsSection(section);
+  }
+
+  // renderJobsSection paints the snapshot Kueue scheduler table (Kueue ›
+  // Scheduler) from /api/portal/jobs.
+  async function renderJobsSection(view) {
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "Computed GPU quota and queue pressure for the authorized workspace or configured operator scopes. " +
+      "Use Kueue (Live) for raw cluster-wide scheduler state."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/jobs");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Jobs board unavailable: " + e.message));
+      return;
+    }
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "scope: " + (snap.namespace || "configured namespaces") + (snap.policySource ? " · policy: " + snap.policySource : "")));
+    for (const h of (snap.hints || [])) view.append(el("div", { class: "warn" }, "⚠ " + h));
+
+    const groups = snap.groups || [];
+    if (groups.length === 0) {
+      view.append(el("div", { class: "empty" }, "No queue groups match. The cluster may have no Kueue queues configured."));
+      return;
+    }
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Namespace"),
+      el("th", {}, "Team"), el("th", {}, "Lane"), el("th", {}, "GPU class"),
+      el("th", {}, "Queue"), el("th", { class: "num" }, "Pending"),
+      el("th", { class: "num" }, "Admitted"), el("th", { class: "num" }, "GPU used"),
+      el("th", { class: "num" }, "GPU nominal"), el("th", { class: "num" }, "Headroom"))));
+    const tbody = el("tbody");
+    for (const g of groups) {
+      const headroom = el("td", { class: "num" }, String(g.gpuHeadroom ?? 0));
+      if (g.queueFound && g.quotaFound && g.pending > 0 && (g.gpuHeadroom ?? 0) === 0) headroom.className = "num warn";
+      tbody.append(el("tr", {},
+        el("td", {}, g.namespace || "—"),
+        el("td", {}, g.team || "—"), el("td", {}, g.lane || "—"), el("td", {}, g.gpuClass || "—"),
+        el("td", {}, g.queue || "—"), el("td", { class: "num" }, String(g.pending ?? 0)),
+        el("td", { class: "num" }, String(g.admitted ?? 0)), el("td", { class: "num" }, String(g.gpuUsed ?? 0)),
+        el("td", { class: "num" }, String(g.gpuNominal ?? 0)), headroom));
+    }
+    table.append(tbody);
+    view.append(table);
+  }
+
+  // renderFleet is the Platform "Fleet" page: one page with in-page sub-tabs
+  // (Health | Utilization | Compute) over the three fleet boards that used to be
+  // separate sidebar entries. The active sub-tab comes from ?view= or a legacy
+  // deep-link path (/portal/cluster→health, /portal/gpu→util, /portal/nodes→
+  // compute), so the Cost board's idle-GPU drill-down (/portal/cluster?instance=)
+  // still lands on Health scoped to that node. Each section renderer paints into
+  // its own container beneath the shared page header.
+  async function renderFleet(view) {
+    const path = location.pathname;
+    const params = new URLSearchParams(location.search);
+    let active = params.get("view") || "health";
+    if (path === "/portal/gpu") active = "util";
+    else if (path === "/portal/nodes") active = "compute";
+    else if (path === "/portal/cluster") active = "health";
+    if (!["health", "util", "compute"].includes(active)) active = "health";
+
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Fleet"));
+    view.append(el("p", { style: "margin:0 0 4px;color:var(--muted);" },
+      "GPU health, utilization, and hardware inventory for the whole fleet."));
+
+    const subs = [
+      { id: "health", label: "Health" },
+      { id: "util", label: "Utilization" },
+      { id: "compute", label: "Compute" },
+    ];
+    const bar = el("div", { class: "subtabs" });
+    for (const s of subs) {
+      const b = el("button", { type: "button" }, s.label);
+      if (s.id === active) b.className = "active";
+      b.addEventListener("click", () => {
+        if (s.id === active) return;
+        history.pushState({}, "", withWorkspace("/portal/fleet?view=" + s.id));
+        route();
+      });
+      bar.append(b);
+    }
+    view.append(bar);
+
+    const section = el("div");
+    view.append(section);
+    if (active === "health") await renderClusterSection(section);
+    else if (active === "util") await renderGpuUtilSection(section);
+    else await renderNodesSection(section);
+  }
+
+  // renderClusterSection paints the per-GPU DCGM health table (Fleet › Health).
+  // It reads /api/portal/cluster and honors a ?instance= scope forwarded from the
+  // Cost board's idle-GPU drill-down.
+  async function renderClusterSection(view) {
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "Latest per-GPU health from GpuHealth() (Metrics ADX), via /api/portal/cluster. " +
+      "InfiniBand, NPD, and AlertRule signals are deferred (see internal/portalapi/README.md)."));
+    // A drill-down from the Cost board (idle GPU → this node) arrives as
+    // ?instance=; forward it to the API and show the active scope.
+    const instance = new URLSearchParams(location.search).get("instance") || "";
+    const api = "/api/portal/cluster" + (instance ? "?instance=" + encodeURIComponent(instance) : "");
+    if (instance) {
+      view.append(el("p", { class: "note", style: "margin-top:0;" },
+        el("span", {}, "scoped to instance "), el("code", {}, instance), el("span", {}, "  "),
+        el("a", { class: "back", href: withWorkspace("/portal/fleet?view=health") }, "clear")));
+    }
+    let snap;
+    try {
+      snap = await fetchJSON(api);
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Cluster board unavailable: " + e.message +
+        " — start the portal with a --kusto-query-command."));
+      return;
+    }
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "window: " + (snap.window || "—") + " · GPUs: " + (snap.totalGPUs ?? 0) +
+      " · unhealthy: " + (snap.errorGPUs ?? 0) +
+      (snap.models && snap.models.length
+        ? " · models: " + snap.models.map(m => m.modelName + "×" + m.gpus).join(", ")
+        : "")));
+
+    const gpus = snap.gpus || [];
+    if (gpus.length === 0) {
+      view.append(el("div", { class: "empty" }, "No GPU samples in the window. The cluster may report no DCGM metrics."));
+      return;
+    }
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Instance"), el("th", {}, "GPU"), el("th", {}, "Model"),
+      el("th", { class: "num" }, "Util %"), el("th", { class: "num" }, "Temp °C"),
+      el("th", { class: "num" }, "Power W"), el("th", { class: "num" }, "Mem used MB"),
+      el("th", { class: "num" }, "Uncorr. rows"), el("th", {}, "Health"))));
+    const tbody = el("tbody");
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+    for (const g of gpus) {
+      const health = el("td", {}, g.healthy ? "ok" : "error");
+      if (!g.healthy) health.className = "warn";
+      tbody.append(el("tr", {},
+        el("td", {}, g.instance || "—"), el("td", {}, g.gpu || "—"), el("td", {}, g.modelName || "—"),
+        el("td", { class: "num" }, String(n1(g.utilizationPct))),
+        el("td", { class: "num" }, String(n1(g.temperatureCelsius))),
+        el("td", { class: "num" }, String(n1(g.powerWatts))),
+        el("td", { class: "num" }, String(n1(g.memoryUsedMB))),
+        el("td", { class: "num" }, String(g.uncorrectableRemappedRows ?? 0)),
+        health));
+    }
+    table.append(tbody);
+    view.append(table);
+  }
+
+  async function renderNodesSection(view) {
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "Fleet hardware inventory — SKU, agentpool, and CPU/memory/GPU capacity per node, via /api/portal/nodes."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/nodes");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Nodes board unavailable: " + e.message +
+        " — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."));
+      return;
+    }
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "nodes: " + (snap.totalNodes ?? 0) + " (" + (snap.readyNodes ?? 0) + " ready)" +
+      " · GPU nodes: " + (snap.gpuNodes ?? 0) + " · GPUs: " + (snap.totalGPUs ?? 0) +
+      " · CPU cores: " + (snap.totalCPUCores ?? 0) + " · memory: " + n1(snap.totalMemoryGiB) + " GiB"));
+
+    if ((snap.totalNodes ?? 0) === 0) {
+      view.append(el("div", { class: "empty" }, "No nodes reported. The cluster may be empty or access may be restricted."));
+      return;
+    }
+
+    // Per-SKU rollup: how the fleet is composed (GPU pools lead).
+    const skus = snap.skus || [];
+    if (skus.length) {
+      view.append(el("h3", { style: "margin:18px 0 0;font-size:14px;" }, "Fleet composition by SKU"));
+      const st = el("table", { class: "jobs" });
+      st.append(el("thead", {}, el("tr", {},
+        el("th", {}, "SKU"), el("th", { class: "num" }, "Nodes"), el("th", { class: "num" }, "GPUs"))));
+      const stb = el("tbody");
+      for (const s of skus) {
+        stb.append(el("tr", {},
+          el("td", {}, s.sku || "—"),
+          el("td", { class: "num" }, String(s.nodes ?? 0)),
+          el("td", { class: "num" }, String(s.gpus ?? 0))));
+      }
+      st.append(stb);
+      view.append(st);
+    }
+
+    // Per-node inventory.
+    view.append(el("h3", { style: "margin:22px 0 0;font-size:14px;" }, "Nodes"));
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Node"), el("th", {}, "Pool"), el("th", {}, "SKU"),
+      el("th", {}, "Region/Zone"), el("th", { class: "num" }, "CPU"),
+      el("th", { class: "num" }, "Mem GiB"), el("th", { class: "num" }, "GPU"),
+      el("th", {}, "Status"))));
+    const tbody = el("tbody");
+    for (const nd of (snap.nodes || [])) {
+      const status = el("td", {}, nd.ready ? "Ready" : "NotReady");
+      if (!nd.ready) status.className = "warn";
+      const loc = [nd.region, nd.zone].filter(Boolean).join(" / ") || "—";
+      const gpuCell = nd.gpuCapacity
+        ? String(nd.gpuCapacity) + (nd.gpuProduct ? " " + nd.gpuProduct : "")
+        : "—";
+      tbody.append(el("tr", {},
+        el("td", {}, nd.name || "—"), el("td", {}, nd.agentPool || "—"), el("td", {}, nd.sku || "—"),
+        el("td", {}, loc), el("td", { class: "num" }, String(nd.cpuCores ?? 0)),
+        el("td", { class: "num" }, String(n1(nd.memoryGiB))),
+        el("td", { class: "num" }, gpuCell), status));
+    }
+    table.append(tbody);
+    view.append(table);
+
+    // Runtime plumbing stays with Compute: it answers whether the node-level
+    // GPU monitoring stack is ready, without creating a duplicate alert page.
+    const daemonSets = snap.daemonSets || [];
+    if (daemonSets.length) {
+      view.append(el("h3", { style: "margin:22px 0 0;font-size:14px;" }, "Runtime DaemonSets"));
+      const dst = el("table", { class: "jobs" });
+      dst.append(el("thead", {}, el("tr", {},
+        el("th", {}, "Namespace"), el("th", {}, "DaemonSet"),
+        el("th", { class: "num" }, "Ready / Desired"),
+        el("th", { class: "num" }, "Available"), el("th", {}, "Status"))));
+      const dsb = el("tbody");
+      for (const ds of daemonSets) {
+        const healthy = ds.healthy !== false;
+        const status = el("td", {}, healthy ? "Ready" : "Not ready");
+        if (!healthy) status.className = "warn";
+        dsb.append(el("tr", {},
+          el("td", {}, ds.namespace || "—"), el("td", {}, ds.name || "—"),
+          el("td", { class: "num" }, String(ds.ready ?? 0) + " / " + String(ds.desired ?? 0)),
+          el("td", { class: "num" }, String(ds.available ?? 0)), status));
+      }
+      dst.append(dsb);
+      view.append(dst);
+    } else if (snap.daemonSetsError) {
+      view.append(el("p", { class: "note warn" }, "Runtime DaemonSets unavailable: " + snap.daemonSetsError));
+    }
+  }
+
+  async function renderCost(view) {
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Cost"));
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "GPU-hours by namespace and idle GPUs, derived from GpuHealth() utilization, via /api/portal/cost. " +
+      "Per-user/team attribution and budgets are deferred (see internal/portalapi/README.md)."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/cost");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Cost board unavailable: " + e.message +
+        " — start the portal with a --kusto-query-command."));
+      return;
+    }
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "window: " + (snap.window || "—") + " · total GPU-hours: " + (snap.totalGPUHours ?? 0)));
+
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+    const namespaces = snap.namespaces || [];
+    if (namespaces.length === 0) {
+      view.append(el("div", { class: "empty" }, "No namespaced GPU usage in the window."));
+    } else {
+      view.append(el("h3", { style: "margin:18px 0 0;font-size:14px;" }, "GPU-hours by namespace"));
+      const nt = el("table", { class: "jobs" });
+      nt.append(el("thead", {}, el("tr", {},
+        el("th", {}, "Namespace"), el("th", { class: "num" }, "GPU-hours"),
+        el("th", { class: "num" }, "GPUs"), el("th", { class: "num" }, "Avg util %"))));
+      const ntb = el("tbody");
+      for (const ns of namespaces) {
+        ntb.append(el("tr", {},
+          el("td", {}, ns.namespace || "—"),
+          el("td", { class: "num" }, String(n1(ns.gpuHours))),
+          el("td", { class: "num" }, String(ns.gpus ?? 0)),
+          el("td", { class: "num" }, String(n1(ns.avgUtilPct)))));
+      }
+      nt.append(ntb);
+      view.append(nt);
+    }
+
+    const idle = snap.idleGPUs || [];
+    view.append(el("h3", { style: "margin:22px 0 0;font-size:14px;" }, "Idle / underutilized GPUs"));
+    if (idle.length === 0) {
+      view.append(el("div", { class: "empty" }, "No underutilized GPUs — every GPU is above the idle threshold."));
+      return;
+    }
+    const it = el("table", { class: "jobs" });
+    it.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Instance"), el("th", {}, "GPU"), el("th", {}, "Model"),
+      el("th", {}, "Namespace"), el("th", {}, "Pod"),
+      el("th", { class: "num" }, "Avg util %"), el("th", { class: "num" }, "Samples"))));
+    const itb = el("tbody");
+    for (const g of idle) {
+      const util = el("td", { class: "num warn" }, String(n1(g.avgUtilPct)));
+      const instance = g.instance
+        ? el("td", {}, el("a", { href: withWorkspace("/portal/cluster?instance=" + encodeURIComponent(g.instance)), class: "back" }, g.instance))
+        : el("td", {}, "—");
+      itb.append(el("tr", {},
+        instance, el("td", {}, g.gpu || "—"), el("td", {}, g.modelName || "—"),
+        el("td", {}, g.namespace || "—"), el("td", {}, g.pod || "—"),
+        util, el("td", { class: "num" }, String(g.samples ?? 0))));
+    }
+    it.append(itb);
+    view.append(it);
+  }
+
+  async function renderRay(view) {
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Ray"));
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "Per-cluster Ray dashboards discovered from <cluster>-head-svc Services, via /api/portal/ray. " +
+      "The dashboard is proxied live by the portal and is only available while the RayCluster is running."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/ray");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Ray board unavailable: " + e.message +
+        " — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."));
+      return;
+    }
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "clusters: " + (snap.total ?? 0)));
+
+    const clusters = snap.clusters || [];
+    if (clusters.length === 0) {
+      view.append(el("div", { class: "empty" },
+        "No Ray clusters found. Either no RayClusters are running, or the portal has no Kubernetes access."));
+      return;
+    }
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Cluster"), el("th", {}, "Namespace"),
+      el("th", {}, "Service"), el("th", {}, "Type"), el("th", {}, "Dashboard"))));
+    const tbody = el("tbody");
+    for (const c of clusters) {
+      let link;
+      if (c.proxyPath && c.available) {
+        link = el("a", { href: withWorkspace(c.proxyPath), target: "_blank", rel: "noopener", class: "back" }, "open ↗");
+      } else if (c.proxyPath) {
+        link = el("span", { class: "back", style: "opacity:0.5;cursor:not-allowed;", title: "Ray dashboard unreachable: head pod not Ready" }, "open ↗");
+      } else {
+        link = el("span", { class: "warn" }, "—");
+      }
+      tbody.append(el("tr", {},
+        el("td", {}, c.name || "—"), el("td", {}, c.namespace || "—"),
+        el("td", {}, c.service || "—"), el("td", {}, c.type || "—"),
+        el("td", {}, link)));
+    }
+    table.append(tbody);
+    view.append(table);
+  }
+
+  // renderRuns organizes Tau-managed workloads by lifecycle: Running (status ==
+  // Running), Queued (Pending/Suspended, i.e. admitted-but-not-started or
+  // gated), and Recent (Complete/Failed terminal). The API (/api/portal/runs)
+  // returns only name/kind/status/age — progress bars, ETA, loss/accuracy, queue
+  // position, and priority in the mockup have no backend data source yet
+  // (internal/portalapi/README.md → deferred), so they are intentionally omitted
+  // rather than faked. "+ Submit new" is a visual placeholder; the portal is
+  // read-only and submission is a future increment.
+  async function renderRuns(view) {
+    const head = el("div", { class: "page-head" });
+    head.append(el("div", {},
+      el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Jobs"),
+      el("p", { class: "muted", style: "margin:0;" },
+        "Tau-managed training and inference workloads.")));
+    const submit = el("button", { class: "btn-primary", type: "button", disabled: "",
+      title: "Submission from the portal is coming soon — the portal is read-only today." },
+      "+ Submit new");
+    head.append(submit);
+    view.append(head);
+
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/runs");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Jobs board unavailable: " + e.message +
+        " — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."));
+      return;
+    }
+    view.append(el("p", { class: "note", style: "margin-top:10px;" },
+      "namespace: " + (snap.namespace || "all namespaces") + " · runs: " + (snap.total ?? 0) +
+      " · history: " + (snap.historyState || "live-only")));
+    if (snap.historyState === "history-unavailable") {
+      view.append(el("p", { class: "note warn", style: "margin-top:0;" },
+        snap.historyDiagnostic || "Durable run history is temporarily unavailable; showing live Kubernetes workloads only."));
+    }
+
+    const runs = snap.runs || [];
+    if (runs.length === 0) {
+      view.append(el("div", { class: "empty" },
+        "No Tau-managed workloads in " + (snap.namespace ? "namespace " + snap.namespace : "any namespace") + ". Submit one with tau run submit."));
+      return;
+    }
+
+    // Bucket by the runs.go status domain: batch Job → Running/Pending/
+    // Suspended/Complete/Failed; RayJob → JobDeploymentStatus (Running/Complete/
+    // Failed/Suspended). Anything unrecognized falls through to Recent so it is
+    // never silently dropped.
+    const running = [], queued = [], recent = [];
+    for (const r of runs) {
+      const s = r.status || "";
+      if (s === "Running") running.push(r);
+      else if (s === "Pending" || s === "Suspended") queued.push(r);
+      else recent.push(r);
+    }
+
+    const kindBadge = r => el("span", { class: "badge kind" }, r.kind || "—");
+    const statusBadge = (r, cls, text) => el("span", { class: "badge " + cls }, text || r.status || "—");
+    const tracking = r => {
+      if (r.experimentPath) {
+        return el("a", { href: withWorkspace(r.experimentPath), class: "back" }, "open ↗");
+      }
+      if (r.experimentTracking === "available" && activeScope && activeScope.experimentsUrl) {
+        return el("a", { href: withWorkspace("/portal/experiments"), class: "back" }, "available ↗");
+      }
+      return el("span", { class: "muted" }, r.experimentTracking || "untracked");
+    };
+
+    // nameCell deep-links a run to its per-job detail page when both namespace
+    // and name are known; otherwise it renders plain text (the detail route
+    // needs /portal/runs/<ns>/<name>). Namespace falls back to the snapshot's.
+    const nameCell = r => {
+      const ns = r.namespace || snap.namespace || "";
+      if (ns && r.name) {
+        return el("a", { href: withWorkspace("/portal/runs/" + encodeURIComponent(ns) + "/" + encodeURIComponent(r.name)) }, r.name);
+      }
+      return document.createTextNode(r.name || "—");
+    };
+
+    // sectionHead paints "● NAME (count)" with a status-tinted dot.
+    const sectionHead = (dot, name, count) =>
+      el("div", { class: "section-head" },
+        el("span", { class: "dot " + dot }), name, el("span", { class: "count" }, "(" + count + ")"));
+
+    // Running & Queued render as cards (name + kind + status badge + age). No
+    // progress/ETA/metrics — those have no data source.
+    const cardFor = (r, badgeCls, badgeText) => {
+      const c = el("div", { class: "jobcard" });
+      c.append(el("div", { class: "top" },
+        el("span", { class: "name" }, nameCell(r)), kindBadge(r), statusBadge(r, badgeCls, badgeText)));
+      c.append(el("div", { class: "meta" },
+        el("span", {}, "age " + (r.age || "—")),
+        el("span", {}, "Stellar: "), tracking(r)));
+      return c;
+    };
+
+    if (running.length) {
+      view.append(sectionHead("green", "Running", running.length));
+      const list = el("div", { class: "joblist" });
+      for (const r of running) list.append(cardFor(r, "run", "Running"));
+      view.append(list);
+    }
+    if (queued.length) {
+      view.append(sectionHead("amber", "Queued", queued.length));
+      const list = el("div", { class: "joblist" });
+      for (const r of queued) list.append(cardFor(r, "queue"));
+      view.append(list);
+    }
+    if (recent.length) {
+      view.append(sectionHead("red", "Recent", recent.length));
+      const table = el("table", { class: "jobs" });
+      table.append(el("thead", {}, el("tr", {},
+        el("th", {}, "Name"), el("th", {}, "Kind"),
+        el("th", {}, "Result"), el("th", {}, "Stellar"), el("th", { class: "num" }, "Age"))));
+      const tbody = el("tbody");
+      for (const r of recent) {
+        const failed = r.status === "Failed";
+        tbody.append(el("tr", {},
+          el("td", {}, nameCell(r)), el("td", {}, kindBadge(r)),
+          el("td", {}, statusBadge(r, failed ? "fail" : "done")),
+          el("td", {}, tracking(r)),
+          el("td", { class: "num" }, r.age || "—")));
+      }
+      table.append(tbody);
+      view.append(table);
+    }
+
+    view.append(el("p", { class: "note" },
+      "Progress, ETA, and training metrics are a future increment (see internal/portalapi/README.md)."));
+  }
+
+  // renderJobDetail is the per-job detail page (/portal/runs/<ns>/<name>). It
+  // consolidates one workload from /api/portal/runs/{ns}/{name}: the Job/RayJob
+  // object header, its Kueue Workload admission, the pods it scheduled (with
+  // per-node deep links), recent Events, an "Open in Experiments" deep link (only
+  // when the run carries a run-id), and the durable Kusto lifecycle (state +
+  // artifact/checkpoint URIs) when the portal has a Kusto source configured
+  // (either --kusto-endpoint or a --kusto-query-command adapter).
+  async function renderJobDetail(view, ns, name) {
+    const head = el("div", { class: "page-head" });
+    head.append(el("div", {},
+      el("h1", { style: "margin:0 0 4px;font-size:20px;" }, name || "—"),
+      el("p", { class: "muted", style: "margin:0;" }, "namespace: " + (ns || "—"))));
+    head.append(el("a", { class: "btn", href: "/portal/runs" }, "← Back to Jobs"));
+    view.append(head);
+
+    if (!ns || !name) {
+      view.append(el("div", { class: "empty warn" }, "Invalid job path: expected /portal/runs/<namespace>/<name>."));
+      return;
+    }
+
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/runs/" + encodeURIComponent(ns) + "/" + encodeURIComponent(name));
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "Job detail unavailable: " + e.message +
+        " — the workload may have been garbage-collected, or the portal lacks Kubernetes access."));
+      return;
+    }
+
+    // Header line: kind · status · age · run-id, plus the Experiments deep link.
+    // This identity line stays pinned above the sub-tab bar — it is the page's
+    // identity, not one tab's content.
+    const meta = el("div", { class: "meta", style: "margin:10px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;" });
+    meta.append(el("span", { class: "badge kind" }, snap.kind || "—"));
+    meta.append(el("span", { class: "badge" }, snap.status || "—"));
+    if (snap.resourceRelease) {
+      const release = snap.resourceRelease;
+      const releaseClass = release.computeState === "reusable" ? "badge" : "badge warn";
+      meta.append(el("span", {
+        class: releaseClass,
+        title: release.message || "",
+      }, "quota " + (release.quotaState || "unknown") + " · compute " + (release.computeState || "unknown")));
+    }
+    if (snap.object && snap.object.age) meta.append(el("span", {}, "age " + snap.object.age));
+    if (snap.runId) meta.append(el("span", { class: "muted" }, "run-id " + snap.runId));
+    if (snap.links && snap.links.stellarPath) {
+      meta.append(el("a", { class: "btn-primary", href: withWorkspace(snap.links.stellarPath) }, "Open in Experiments"));
+    }
+    if (snap.links && snap.links.rayDashboardPath) {
+      // The reverse-proxy reaches the RayCluster head Service (:8265), which only
+      // serves while the head pod is Ready. The head Service (and this path) can
+      // outlive a finished RayJob's head pod for ttlSecondsAfterFinished, so
+      // terminal jobDeploymentStatus is NOT the signal — the backend
+      // computes reachability from head-pod readiness and reports it as
+      // rayDashboardReachable. Keep the button visible for its informational value
+      // but disable it with a tooltip when the dashboard cannot be reached.
+      const reachable = snap.links.rayDashboardReachable === true;
+      if (reachable) {
+        meta.append(el("a", { class: "back", href: withWorkspace(snap.links.rayDashboardPath), target: "_blank", rel: "noopener" }, "Ray dashboard ↗"));
+      } else {
+        meta.append(el("span", {
+          class: "back",
+          style: "color:var(--accent);font-size:13px;opacity:0.5;cursor:not-allowed;",
+          title: "Ray dashboard not reachable: the cluster head pod is not Ready",
+        }, "Ray dashboard ↗"));
+      }
+    }
+    view.append(meta);
+
+    // A small key/value table helper for the object + lifecycle sections.
+    const kv = (rows) => {
+      const t = el("table", { class: "jobs" });
+      const tb = el("tbody");
+      for (const [k, v] of rows) {
+        if (v === undefined || v === null || v === "") continue;
+        tb.append(el("tr", {}, el("td", { style: "width:200px;color:var(--muted);" }, k), el("td", {}, v)));
+      }
+      t.append(tb);
+      return t;
+    };
+
+    // Empty-state placeholder so a data-less tab shows a stable label instead of
+    // vanishing — the tab bar must not jump around as sources degrade.
+    const emptyNote = (msg) => el("p", { class: "muted", style: "margin:8px 0;" }, msg);
+
+    // Overview: native Job/RayJob object fields + Kueue admission.
+    const renderOverviewTab = (section) => {
+      const o = snap.object || {};
+      section.append(el("h2", { style: "font-size:15px;margin:8px 0 6px;" }, "Object"));
+      section.append(kv([
+        ["Created", o.created],
+        ["Deployment status", o.jobDeploymentStatus],
+        ["Ray cluster", o.rayClusterName],
+        ["Ray job id", o.jobId],
+        ["Reason", o.reason],
+        ["Message", o.message],
+      ]));
+
+      if (snap.resourceRelease) {
+        const release = snap.resourceRelease;
+        section.append(el("h2", { style: "font-size:15px;margin:16px 0 6px;" }, "Resource release"));
+        section.append(kv([
+          ["Quota", release.quotaState],
+          ["Physical compute", release.computeState],
+          ["Active Ray pods", release.activePods],
+          ["Nodes still held", (release.nodes || []).join(", ")],
+          ["Diagnostic", release.message],
+        ]));
+      }
+
+      section.append(el("h2", { style: "font-size:15px;margin:16px 0 6px;" }, "Kueue admission"));
+      if (snap.workloads && snap.workloads.length) {
+        const t = el("table", { class: "jobs" });
+        t.append(el("thead", {}, el("tr", {},
+          el("th", {}, "Workload"), el("th", {}, "Queue"), el("th", {}, "ClusterQueue"),
+          el("th", {}, "Admitted"), el("th", {}, "Finished"))));
+        const tb = el("tbody");
+        for (const w of snap.workloads) {
+          tb.append(el("tr", {},
+            el("td", {}, w.name || "—"), el("td", {}, w.queue || "—"),
+            el("td", {}, w.clusterQueue || "—"),
+            el("td", {}, w.admitted ? "yes" : "no"),
+            el("td", {}, w.finished ? "yes" : "no")));
+        }
+        t.append(tb);
+        section.append(t);
+      } else {
+        section.append(emptyNote("No Kueue Workload is associated with this run."));
+      }
+    };
+
+    // Pods: phase, node (deep-linked to the Cluster board), restarts.
+    const renderPodsTab = (section) => {
+      if (!(snap.pods && snap.pods.length)) {
+        section.append(emptyNote("No pods found for this run — it may not be scheduled yet, or the objects were garbage-collected."));
+        return;
+      }
+      const t = el("table", { class: "jobs" });
+      t.append(el("thead", {}, el("tr", {},
+        el("th", {}, "Name"), el("th", {}, "Phase"), el("th", {}, "Node"),
+        el("th", { class: "num" }, "Restarts"))));
+      const tb = el("tbody");
+      for (const p of snap.pods) {
+        const nodeCell = p.nodePath
+          ? el("td", {}, el("a", { href: withWorkspace(p.nodePath) }, p.node || "—"))
+          : el("td", {}, p.node || "—");
+        tb.append(el("tr", {},
+          el("td", {}, p.name || "—"), el("td", {}, el("span", { class: "badge" }, p.phase || "—")),
+          nodeCell, el("td", { class: "num" }, p.restarts ?? 0)));
+      }
+      t.append(tb);
+      section.append(t);
+    };
+
+    // Events: recent scheduling / image-pull / failure signals.
+    const renderEventsTab = (section) => {
+      if (!(snap.events && snap.events.length)) {
+        section.append(emptyNote("No recent events for this run."));
+        return;
+      }
+      const t = el("table", { class: "jobs" });
+      t.append(el("thead", {}, el("tr", {},
+        el("th", {}, "Type"), el("th", {}, "Reason"), el("th", {}, "Message"),
+        el("th", { class: "num" }, "Count"), el("th", {}, "Last"))));
+      const tb = el("tbody");
+      for (const ev of snap.events) {
+        tb.append(el("tr", {},
+          el("td", {}, el("span", { class: "badge " + (ev.type === "Warning" ? "fail" : "done") }, ev.type || "—")),
+          el("td", {}, ev.reason || "—"), el("td", {}, ev.message || "—"),
+          el("td", { class: "num" }, ev.count ?? 0), el("td", {}, ev.last || "—")));
+      }
+      t.append(tb);
+      section.append(t);
+    };
+
+    // Results: durable lifecycle state from Kusto after the K8s object is gone.
+    const renderResultsTab = (section) => {
+      if (snap.lifecycle) {
+        const l = snap.lifecycle;
+        section.append(el("h2", { style: "font-size:15px;margin:8px 0 6px;" }, "Run results (durable)"));
+        section.append(kv([
+          ["State", l.effectiveState || l.state],
+          ["Reason", l.reason],
+          ["Message", l.message],
+          ["Completed", l.completionTime],
+          ["Artifact URI", l.artifactUri],
+          ["Checkpoint URI", l.checkpointUri],
+        ]));
+      }
+
+      // Metrics live in the Experiments board; only surface the Kusto/durable
+      // hint when it is actually actionable — i.e. this run carries a run-id (so a
+      // durable row could exist) but none came back. A run without a run-id can
+      // never join to Kusto, so pointing at the query command would be misleading.
+      const notes = ["Training metrics live in Experiments (use the Open in Experiments link above)."];
+      if (snap.runId && !snap.lifecycle) {
+        notes.push("No durable results row for this run-id yet — it appears once the " +
+          "run's lifecycle lands in Kusto (and requires a Kusto source: " +
+          "--kusto-endpoint or --kusto-query-command).");
+      }
+      section.append(el("p", { class: "note", style: "margin-top:12px;" }, notes.join(" ")));
+    };
+
+    // In-page sub-tabs, mirroring the Fleet pattern: ?view= drives the active
+    // tab, clicking pushes state + re-routes, and each renderer paints into a
+    // shared container beneath the tab bar.
+    const subs = [
+      { id: "overview", label: "Overview", render: renderOverviewTab },
+      { id: "pods", label: "Pods", render: renderPodsTab },
+      { id: "events", label: "Events", render: renderEventsTab },
+      { id: "results", label: "Results", render: renderResultsTab },
+    ];
+    let active = new URLSearchParams(location.search).get("view") || "overview";
+    if (!subs.some((s) => s.id === active)) active = "overview";
+    const base = "/portal/runs/" + encodeURIComponent(ns) + "/" + encodeURIComponent(name);
+    const bar = el("div", { class: "subtabs" });
+    for (const s of subs) {
+      const b = el("button", { type: "button" }, s.label);
+      if (s.id === active) b.className = "active";
+      b.addEventListener("click", () => {
+        if (s.id === active) return;
+        history.pushState({}, "", withWorkspace(base + "?view=" + s.id));
+        route();
+      });
+      bar.append(b);
+    }
+    view.append(bar);
+    const section = el("div");
+    view.append(section);
+    subs.find((s) => s.id === active).render(section);
+  }
+
+  // renderGpuUtilSection is the Utilization board (Fleet › Utilization): per-GPU
+  // utilization from the Cluster Health API (/api/portal/cluster) re-sorted
+  // hottest-first with the cluster average + idle count, followed by a per-node
+  // CPU/memory table from /api/portal/nodeutil. The node section is best-effort
+  // and renders even when GPU telemetry is unavailable or empty (node-exporter
+  // typically covers the whole fleet where DCGM does not). A per-team heatmap
+  // remains a deferred backend (see internal/portalapi/README.md).
+  async function renderGpuUtilSection(view) {
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "Per-GPU utilization from GpuHealth() (via /api/portal/cluster), with per-node CPU/memory from node-exporter (via /api/portal/nodeutil) below."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/cluster");
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" },
+        "GPU utilization unavailable: " + e.message +
+        " — start the portal with a --kusto-query-command."));
+      await renderNodeUtil(view);
+      return;
+    }
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+    const gpus = (snap.gpus || []).slice().sort((a, b) => (b.utilizationPct ?? 0) - (a.utilizationPct ?? 0));
+    if (gpus.length === 0) {
+      view.append(el("div", { class: "empty" }, "No GPU samples in the window. The cluster may report no DCGM metrics."));
+      await renderNodeUtil(view);
+      return;
+    }
+    const avg = gpus.reduce((s, g) => s + (g.utilizationPct ?? 0), 0) / gpus.length;
+    const idle = gpus.filter(g => (g.utilizationPct ?? 0) < 5).length;
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "window: " + (snap.window || "—") + " · GPUs: " + gpus.length +
+      " · cluster avg: " + n1(avg) + "% · idle (<5%): " + idle));
+    view.append(el("p", { class: "note", style: "margin-top:4px;" },
+      "Heatmap and per-team breakdown are deferred (see internal/portalapi/README.md)."));
+
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Instance"), el("th", {}, "GPU"), el("th", {}, "Model"),
+      el("th", { class: "num" }, "Util %"), el("th", { class: "num" }, "Mem used MB"),
+      el("th", { class: "num" }, "Power W"))));
+    const tbody = el("tbody");
+    for (const g of gpus) {
+      const util = el("td", { class: "num" }, String(n1(g.utilizationPct)));
+      if ((g.utilizationPct ?? 0) < 5) util.className = "num muted";
+      tbody.append(el("tr", {},
+        el("td", {}, g.instance || "—"), el("td", {}, g.gpu || "—"), el("td", {}, g.modelName || "—"),
+        util, el("td", { class: "num" }, String(n1(g.memoryUsedMB))),
+        el("td", { class: "num" }, String(n1(g.powerWatts)))));
+    }
+    table.append(tbody);
+    view.append(table);
+    await renderNodeUtil(view);
+  }
+
+  // renderNodeUtil appends the per-node CPU/memory table to the Utilization page.
+  // It is best-effort: the /api/portal/nodeutil board is Kusto-backed
+  // (node-exporter tables in the Metrics ADX), so a portal started without
+  // --kusto-query-command returns 503 and we simply show a muted note instead of
+  // failing the whole page. Rows arrive already ordered hottest-CPU-first from
+  // the server.
+  async function renderNodeUtil(view) {
+    view.append(el("h3", { style: "margin:26px 0 0;font-size:14px;" }, "Node resource utilization"));
+    view.append(el("p", { class: "note", style: "margin-top:2px;" },
+      "Per-node CPU and memory from node-exporter (Metrics ADX), via /api/portal/nodeutil."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/nodeutil");
+    } catch (e) {
+      view.append(el("div", { class: "empty" },
+        "Node utilization unavailable: " + e.message +
+        " — start the portal with a --kusto-query-command."));
+      return;
+    }
+    const n1 = x => (Math.round((x ?? 0) * 10) / 10);
+    const nodes = snap.nodes || [];
+    if (nodes.length === 0) {
+      view.append(el("div", { class: "empty" }, "No node samples in the window."));
+      return;
+    }
+    view.append(el("p", { class: "note", style: "margin-top:2px;" },
+      "window: " + (snap.window || "—") + " · nodes: " + nodes.length));
+    const table = el("table", { class: "jobs" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Node"), el("th", { class: "num" }, "Cores"),
+      el("th", { class: "num" }, "CPU %"), el("th", { class: "num" }, "Mem %"),
+      el("th", { class: "num" }, "Mem GiB (used/tot)"))));
+    const tbody = el("tbody");
+    const gib = b => (b ?? 0) / (1024 * 1024 * 1024);
+    for (const nd of nodes) {
+      const cpu = el("td", { class: "num" }, String(n1(nd.cpuUtilPct)));
+      if ((nd.cpuUtilPct ?? 0) < 5) cpu.className = "num muted";
+      const usedGiB = gib((nd.memTotalBytes ?? 0) - (nd.memAvailBytes ?? 0));
+      const totGiB = gib(nd.memTotalBytes);
+      tbody.append(el("tr", {},
+        el("td", {}, nd.instance || "—"),
+        el("td", { class: "num" }, String(n1(nd.cpuCores))),
+        cpu,
+        el("td", { class: "num" }, String(n1(nd.memUsedPct))),
+        el("td", { class: "num" }, n1(usedGiB) + " / " + n1(totGiB))));
+    }
+    table.append(tbody);
+    view.append(table);
+  }
+  // renderServices is the Workloads › Services placeholder: inference/serving
+  // endpoints (Ray Serve, KServe) are not portal-readable yet, so this page
+  // points at the roadmap rather than faking data.
+  function renderServices(view) {
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Services"));
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "Long-running inference and serving endpoints."));
+    view.append(el("div", { class: "empty" },
+      "This board is not implemented yet. Serving endpoints (Ray Serve / KServe) " +
+      "have no portal-readable data source today."));
+  }
+
+  // Ingestor, Alerter, AlertRule CRDs + WAL metrics) is a deferred backend with no
+  // API yet. It points at the roadmap rather than faking data.
+  function renderObservability(view) {
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Observability"));
+    view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
+      "adx-mon ingestion pipeline health — Collector, Ingestor, Alerter, and AlertRule status."));
+    view.append(el("div", { class: "empty" },
+      "This board is not implemented yet. It requires a backend that reads the adx-mon " +
+      "Collector/Ingestor/Alerter/AlertRule CRDs, pod readiness, and ingestor WAL metrics — " +
+      "none of which the portal reads today. See internal/portalapi/README.md → Deferred backends."));
+  }
+
+  // renderExperiments embeds the mounted Stellar SPA in a same-origin iframe so
+  // the tab sidebar stays visible and Stellar reads as one board among many.
+  // Stellar is reused unchanged (the portal sends X-Frame-Options: SAMEORIGIN to
+  // permit this); a full-page link is offered for the standalone experience.
+  function renderExperiments(view) {
+    view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Experiments"));
+    view.append(el("p", { style: "margin:0 0 4px;color:var(--muted);" },
+      descriptions.experiments));
+    if (!activeScope || !activeScope.experimentsUrl) {
+      view.append(el("div", { class: "empty" },
+        "Experiment tracking is untracked for this workspace. Runs remain visible on Jobs; " +
+        "detailed Stellar metrics require an explicitly configured capture/offload producer."));
+      return;
+    }
+    let target = activeScope.experimentsUrl;
+    if (target.startsWith("/")) {
+      target = withWorkspace(target);
+    } else if (workspaceManaged) {
+      const u = new URL(target);
+      u.searchParams.set("workspace", activeScope.workspace);
+      target = u.toString();
+    }
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "Scoped experiment source: ", el("a", { href: target, target: "_blank", rel: "noopener" }, "open full page ↗")));
+    view.append(el("iframe", { class: "stellar", src: target, title: "Experiment tracking" }));
+  }
+
+  // renderKueueVizSection embeds the reverse-proxied KueueViz dashboard in a
+  // same-origin iframe (via /api/portal/kueueviz/). The portal injects a
+  // same-origin /env.js so the SPA's WebSocket dials back through the portal
+  // proxy, keeping the page origin and socket origin identical. This is the
+  // "Live" sub-tab of the Kueue page; it returns 503 when the portal runs
+  // without --kueueviz.
+  function renderKueueVizSection(view) {
+    view.append(el("p", { style: "margin:0 0 4px;color:var(--muted);" },
+      descriptions.kueueviz));
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "Live KueueViz dashboard, reverse-proxied through the portal — ",
+      el("a", { href: "/api/portal/kueueviz/", target: "_blank" }, "open in a full page ↗"),
+      " for more room."));
+    // The iframe src returns 503 when the portal runs without --kueueviz, and
+    // 502 (via proxyToKueueVizRewrite's ErrorHandler) when the KueueViz Services
+    // are unreachable. `fetch` resolves normally for both, so probe first and
+    // treat any non-OK status as unavailable — otherwise the iframe would show a
+    // bare 502/503 error page instead of a friendly explanation. (The sidebar
+    // board is already omitted server-side when disabled, but this in-page "Live"
+    // subtab bar is static.)
+    const frame = el("iframe", { class: "stellar", src: "/api/portal/kueueviz/", title: "Kueue (Live) — KueueViz" });
+    fetch("/api/portal/kueueviz/", { method: "GET" }).then((resp) => {
+      if (resp.status === 503) {
+        view.append(el("div", { class: "empty warn" },
+          "The Kueue (Live) board is unavailable: this portal was started without --kueueviz. " +
+          "Enable the KueueViz reverse proxy to use this board."));
+        return;
+      }
+      if (!resp.ok) {
+        view.append(el("div", { class: "empty warn" },
+          "The Kueue (Live) board could not be reached. The KueueViz backend/frontend Services may not be deployed."));
+        return;
+      }
+      view.append(frame);
+    }).catch(() => {
+      view.append(el("div", { class: "empty warn" },
+        "The Kueue (Live) board could not be reached. The KueueViz backend/frontend Services may not be deployed."));
+    });
+  }
+
+  // route renders into a *fresh* inner container swapped into #view on every
+  // navigation. Board renders are async (they await their API), so a slow render
+  // can still be in flight when the user navigates away; because each route()
+  // replaces the container, a superseded render's later appends land on a
+  // detached node (harmless) instead of racing on the live view. This is what
+  // keeps a mid-flight ML Overview (which also awaits the Cluster board for its
+  // avg-util card) from clobbering a Platform Overview the user just switched to.
+  async function route() {
+    const host = document.getElementById("view");
+    const view = el("div");
+    host.replaceChildren(view);
+    try {
+      const local = await loadWorkspaceContext();
+      renderTabToggle();
+      renderSidebar();
+      if (!local) {
+        if (activeScope && activeScope.availability !== "redirect") {
+          view.append(el("div", { class: "empty warn" },
+            "Workspace data is " + activeScope.availability + " on this Portal. No local fallback was used."));
+        }
+        return;
+      }
+      const path = location.pathname;
+      if (path === "/portal/runs") {
+        await renderRuns(view);
+      } else if (path.startsWith("/portal/runs/")) {
+        // Per-job detail: /portal/runs/<namespace>/<name>. Split the tail into
+        // exactly two segments so a name containing no slash is required.
+        const rest = path.slice("/portal/runs/".length).split("/");
+        await renderJobDetail(view, decodeURIComponent(rest[0] || ""), decodeURIComponent(rest[1] || ""));
+      } else if (path === "/portal/services") {
+        renderServices(view);
+      } else if (path === "/portal/experiments") {
+        renderExperiments(view);
+      } else if (path === "/portal/jobs") {
+        await renderKueue(view);
+      } else if (path === "/portal/kueueviz") {
+        await renderKueue(view);
+      } else if (path === "/portal/fleet" || path === "/portal/cluster" ||
+                 path === "/portal/gpu" || path === "/portal/nodes") {
+        await renderFleet(view);
+      } else if (path === "/portal/cost") {
+        await renderCost(view);
+      } else if (path === "/portal/ray") {
+        await renderRay(view);
+      } else if (path === "/portal/observability") {
+        renderObservability(view);
+      } else if (currentTab() === "platform") {
+        await renderOverviewPlatform(view);
+      } else if (currentTab() === "experiments") {
+        await renderOverviewExperiments(view);
+      } else {
+        await renderOverviewWorkloads(view);
+      }
+    } catch (e) {
+      view.textContent = "Failed to load: " + e.message;
+    }
+  }
+  // Intercept same-origin sidebar clicks so navigation stays a client-side
+  // re-render (no full reload); popstate handles Back/Forward and setTab's
+  // pushState to a tab's Overview.
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest("a");
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    if (a.classList.contains("external") || a.target === "_blank") return;
+    if (!href.startsWith("/portal")) return;
+    e.preventDefault();
+    const scopedHref = withWorkspace(href);
+    const dest = location.pathname + location.search;
+    if (scopedHref !== dest) history.pushState({}, "", scopedHref);
+    route();
+  });
+  window.addEventListener("popstate", route);
+  route();
+</script>
+</body>
+</html>

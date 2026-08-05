@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Why Tau?</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Keep Kubernetes and Ray flexibility while replacing repeated platform plumbing with a repository contract</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="184" width="500" height="44" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="306" y="208" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="306" dy="0">SAME OPEN SUBSTRATES • DIFFERENT USER EXPERIENCE</tspan></text>
+<rect x="56" y="250" width="950" height="820" rx="22" fill="transparent" stroke="#D13438" stroke-width="4"/>
+<text x="531" y="298" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="531" dy="0">WITHOUT A WORKFLOW LAYER</tspan></text>
+<text x="531" y="356" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#000000"><tspan x="531" dy="0">Each project reassembles platform details</tspan></text>
+<rect x="110" y="408" width="842" height="96" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="162" cy="458" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="162" y="462" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="162" dy="0">1</tspan></text>
+<text x="206" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="206" dy="0">1 · ACCESS</tspan></text>
+<text x="206" y="497" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="206" dy="0">Pick kubeconfig, context, and namespace</tspan></text>
+<rect x="110" y="530" width="842" height="96" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="162" cy="580" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="162" y="584" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="162" dy="0">2</tspan></text>
+<text x="206" y="570" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="206" dy="0">2 · WORKLOAD</tspan></text>
+<text x="206" y="619" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="206" dy="0">Hand-author Job or RayJob structure</tspan></text>
+<rect x="110" y="652" width="842" height="96" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="162" cy="702" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="162" y="706" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="162" dy="0">3</tspan></text>
+<text x="206" y="692" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="206" dy="0">3 · POLICY</tspan></text>
+<text x="206" y="741" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="206" dy="0">Remember queue, priority, resources, mounts</tspan></text>
+<rect x="110" y="774" width="842" height="96" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="162" cy="824" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="162" y="828" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="162" dy="0">4</tspan></text>
+<text x="206" y="814" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="206" dy="0">4 · LIFECYCLE</tspan></text>
+<text x="206" y="863" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="206" dy="0">Switch tools for status, logs, and cleanup</tspan></text>
+<rect x="110" y="896" width="842" height="96" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="162" cy="946" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="162" y="950" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="162" dy="0">5</tspan></text>
+<text x="206" y="936" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="206" dy="0">5 · EVIDENCE</tspan></text>
+<text x="206" y="985" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="206" dy="0">Invent checkpoint and artifact conventions</tspan></text>
+<rect x="1194" y="250" width="950" height="820" rx="22" fill="transparent" stroke="#107C10" stroke-width="4"/>
+<text x="1669" y="298" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1669" dy="0">WITH TAU</tspan></text>
+<text x="1669" y="356" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#000000"><tspan x="1669" dy="0">The repository declares intent; Tau applies policy</tspan></text>
+<rect x="1248" y="408" width="842" height="96" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1300" cy="458" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1300" y="462" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1300" dy="0">1</tspan></text>
+<text x="1344" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1344" dy="0">1 · CONNECT</tspan></text>
+<text x="1344" y="497" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1344" dy="0">Check in a credential-free workspace descriptor</tspan></text>
+<rect x="1248" y="530" width="842" height="96" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1300" cy="580" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1300" y="584" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1300" dy="0">2</tspan></text>
+<text x="1344" y="570" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1344" dy="0">2 · AUTHOR</tspan></text>
+<text x="1344" y="619" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1344" dy="0">Keep workload intent in tau.yaml</tspan></text>
+<rect x="1248" y="652" width="842" height="96" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1300" cy="702" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1300" y="706" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1300" dy="0">3</tspan></text>
+<text x="1344" y="692" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1344" dy="0">3 · SUBMIT</tspan></text>
+<text x="1344" y="741" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1344" dy="0">Use tau run while Tau renders Job or RayJob</tspan></text>
+<rect x="1248" y="774" width="842" height="96" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1300" cy="824" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1300" y="828" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1300" dy="0">4</tspan></text>
+<text x="1344" y="814" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1344" dy="0">4 · CONTROL</tspan></text>
+<text x="1344" y="863" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1344" dy="0">Use one lifecycle surface for status and logs</tspan></text>
+<rect x="1248" y="896" width="842" height="96" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1300" cy="946" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1300" y="950" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1300" dy="0">5</tspan></text>
+<text x="1344" y="936" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1344" dy="0">5 · ITERATE</tspan></text>
+<text x="1344" y="985" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1344" dy="0">Retrieve durable evidence and compare runs</tspan></text>
+<polyline points="1006,660 1194,660" fill="none" stroke="#0078D4" stroke-width="6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1022" y="612" width="158" height="44" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="1101" y="636" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1101" dy="0">REPOSITORY CONTRACT</tspan></text>
+<text x="1100" y="1115" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="25" font-weight="700" fill="#000000"><tspan x="1100" dy="0">Result: explicit ownership, reviewable intent, repeatable runs, and policy that stays with the platform.</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Tau reduces workflow glue; it does not remove the need to understand your model, data, resources, or cluster policy.</tspan></text>
+</svg>

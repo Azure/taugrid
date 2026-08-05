@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "name": "tulu-3-sft-mixture",
+  "version": "v3",
+  "purpose": "rl",
+  "source": {
+    "kind": "huggingface",
+    "repo": "allenai/tulu-3-sft-mixture",
+    "revision": "b14afda60f1bbebe55d5d2fa1e4df5042f97f8be"
+  },
+  "account": "airundatasets",
+  "container": "datasets",
+  "prefix": "tulu-3-sft-mixture/v3",
+  "files": [
+    {
+      "path": "data/train-00000-of-00006.parquet",
+      "bytes": 361046463,
+      "sha256": "41d4524345443ccca4202df2f01d84d84371afcde36f637178e0e2bcd14f79c7"
+    },
+    {
+      "path": "data/train-00001-of-00006.parquet",
+      "bytes": 477019443,
+      "sha256": "c612164eabfacb99e37de582bf91712f878602755cf87daaa514bdeebec71f56"
+    },
+    {
+      "path": "data/train-00002-of-00006.parquet",
+      "bytes": 146926607,
+      "sha256": "e15d19cb441578dacefa251e18023e2612497eaead1191c8b31acebf1a45260b"
+    },
+    {
+      "path": "data/train-00003-of-00006.parquet",
+      "bytes": 162138577,
+      "sha256": "b9e312d1a0e777a3a64450cb89d2e28116ef96b4f85875157deddc811599be79"
+    },
+    {
+      "path": "data/train-00004-of-00006.parquet",
+      "bytes": 149552548,
+      "sha256": "44ddad0bc45d272c4be32bd78a1473c0902e153d42178366414e0532ab29dd27"
+    },
+    {
+      "path": "data/train-00005-of-00006.parquet",
+      "bytes": 116271230,
+      "sha256": "244ec7ec0591fc67553ca0c9f42a0cba2b34a100438369bd323267a93b3b34ca"
+    }
+  ],
+  "total_bytes": 1412954868,
+  "digest": "sha256:44592a94d6e39c82ddfd2ce182c50e9c76f25535952947389ec86ae26f330979",
+  "assurance": "manifest-supplied",
+  "created_at": "2026-06-02T07:51:32Z",
+  "tags": {
+    "family": "tulu",
+    "ingest": "pending",
+    "license": "odc-by"
+  },
+  "rl": {
+    "kind": "trajectories",
+    "schema": "tulu-3-sft"
+  }
+}

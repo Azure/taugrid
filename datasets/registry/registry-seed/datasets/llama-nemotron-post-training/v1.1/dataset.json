@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "name": "llama-nemotron-post-training",
+  "version": "v1.1",
+  "purpose": "rl",
+  "source": {
+    "kind": "huggingface",
+    "repo": "nvidia/Llama-Nemotron-Post-Training-Dataset",
+    "revision": "ab2a40d258a6a4d9d4c277d702aeea445081766c"
+  },
+  "account": "airundatasets",
+  "container": "datasets",
+  "prefix": "llama-nemotron-post-training/v1.1",
+  "files": [
+    {
+      "path": "RL/instruction_following/instruction_following.jsonl",
+      "bytes": 177277390,
+      "sha256": "59267e602ef619c343717e714246cf977dbf3896babf0667b709ee3a1a7788f2"
+    },
+    {
+      "path": "SFT/chat/chat.jsonl",
+      "bytes": 255090042,
+      "sha256": "71a04ec30b93abaf9121eca67baa5f2d9304adc3a5a28b38121b2ac68056d12b"
+    },
+    {
+      "path": "SFT/code/code_v1.1.jsonl",
+      "bytes": 17589496293,
+      "sha256": "dc8cbf0e4b729335ca70c0bf9a41b93bcaa7db6b011be21cd922bbde2f5fb65f"
+    },
+    {
+      "path": "SFT/code/code_v1.jsonl",
+      "bytes": 30699156279,
+      "sha256": "58796a4ae89504bf0f1a5b073253b6dd06f5bdd8a1b5de3316939f81b9dfe960"
+    },
+    {
+      "path": "SFT/math/math_v1.1.jsonl",
+      "bytes": 41399508529,
+      "sha256": "84c561a510cac2652d787a8c6530635a51079679b0fac6c6430e85330da0ff74"
+    },
+    {
+      "path": "SFT/math/math_v1.jsonl",
+      "bytes": 34060403583,
+      "sha256": "22eada1e6ff3bf129be97eba3cf1a294da4ab825a6cc65b32c459cedd9855ba2"
+    },
+    {
+      "path": "SFT/safety/safety.jsonl",
+      "bytes": 57682871,
+      "sha256": "e3ffe6f7a469d276d6f1af7568f116ce9cabe28274a949c6ffdd1f4c240f75c8"
+    },
+    {
+      "path": "SFT/science/science.jsonl",
+      "bytes": 6015668166,
+      "sha256": "04e58d912b66a2b0190c4833885c64d95b1a05a16c91bc53403642e5cfae3e0c"
+    },
+    {
+      "path": "train/when2call_train_pref.jsonl",
+      "bytes": 16165593,
+      "sha256": "c3b28fa7815b8906e53fc51f3fa9deabb0fb7fce45494d1f1611e69ebfae1bbc"
+    },
+    {
+      "path": "train/when2call_train_sft.jsonl",
+      "bytes": 22014846,
+      "sha256": "512839e1159bb3b6507ae3448af7ce58869db5aac6dcd384d03bae472fbd3676"
+    }
+  ],
+  "total_bytes": 130292463592,
+  "digest": "sha256:2de3186d504ecddd955921322c11bc6218c10e23de4dc31ba2a43731f8c3085e",
+  "assurance": "manifest-supplied",
+  "created_at": "2026-06-02T07:51:29Z",
+  "tags": {
+    "family": "nemotron",
+    "ingest": "pending",
+    "license": "cc-by-4.0",
+    "model": "llama-3.1-nemotron-ultra-253b"
+  },
+  "rl": {
+    "kind": "trajectories",
+    "schema": "llama-nemotron-sft-rl"
+  }
+}

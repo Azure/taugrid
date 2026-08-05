@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="${PROJECT_ROOT:-/workspace}"
+cd "$PROJECT_ROOT"
+
+if [[ -z "${TRAIN_COMMAND:-}" ]]; then
+  TRAIN_COMMAND={{.TrainCommandSQ}}
+fi
+echo "Running train command: $TRAIN_COMMAND"
+exec bash -lc "$TRAIN_COMMAND"

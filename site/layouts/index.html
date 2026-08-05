@@ -1,0 +1,141 @@
+{{ define "main" }}
+<div class="tau-home">
+  <section class="tau-hero">
+    <div class="tau-hero__inner">
+      <img
+        class="tau-logo"
+        src="{{ "images/taugrid.png" | relURL }}"
+        alt="TauGrid"
+        width="1073"
+        height="412"
+      >
+      <p class="tau-eyebrow">TauGrid · Kubernetes-native · Open source</p>
+      <h1>Cloud-native AI infrastructure for GPU workloads on Kubernetes</h1>
+      <p class="tau-hero__lead">
+        TauGrid brings the <code>tau</code> CLI, Kueue queueing, KubeRay
+        orchestration, GPU-node health monitoring, and observability into one
+        stack — spanning data preparation, distributed training, fine-tuning,
+        and inference. Platform teams get an integrated foundation; researchers
+        focus on their code, not Kubernetes plumbing.
+      </p>
+      <div class="tau-actions" aria-label="Primary actions">
+        <a class="tau-button tau-button--primary" href="{{ "docs/getting-started/quickstart/" | relURL }}">Run the quickstart</a>
+        <a class="tau-button" href="{{ "docs/getting-started/" | relURL }}">Deploy the stack</a>
+        <a class="tau-button" href="{{ "docs/examples/" | relURL }}">Explore examples</a>
+        <a class="tau-button" href="{{ "docs/overview/visual-curriculum/" | relURL }}">Browse visual guide</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="tau-section" aria-labelledby="reader-paths">
+    <div class="tau-section__inner">
+      <div class="tau-section__heading">
+        <p class="tau-eyebrow">Start by role</p>
+        <h2 id="reader-paths">One stack, different jobs to be done</h2>
+        <p>Task-oriented paths keep platform bootstrap separate from researcher day-to-day workflows.</p>
+      </div>
+      <div class="tau-grid">
+        <a class="tau-card" href="{{ "docs/tasks/platform/" | relURL }}">
+          <span class="tau-card__eyebrow">Platform engineer</span>
+          <h3>Stand up and govern the stack</h3>
+          <p>Deploy Kueue, KubeRay, GPU monitoring, and observability, then provide identity, queue, and storage policy.</p>
+          <span class="tau-card__link">Platform tasks →</span>
+        </a>
+        <a class="tau-card" href="{{ "docs/tasks/researcher/" | relURL }}">
+          <span class="tau-card__eyebrow">Researcher</span>
+          <h3>Run and compare experiments</h3>
+          <p>Connect a repository, submit a smoke test or training run, inspect progress, and preserve results.</p>
+          <span class="tau-card__link">Researcher tasks →</span>
+        </a>
+        <a class="tau-card" href="{{ "docs/tasks/operator/" | relURL }}">
+          <span class="tau-card__eyebrow">Operator</span>
+          <h3>Find the first blocked layer</h3>
+          <p>Separate config resolution, Kueue admission, scheduling, GPU health, and model progress.</p>
+          <span class="tau-card__link">Operations tasks →</span>
+        </a>
+        <a class="tau-card" href="{{ "docs/tasks/contributor/" | relURL }}">
+          <span class="tau-card__eyebrow">Contributor</span>
+          <h3>Extend a portable capability</h3>
+          <p>Choose the owning package, preserve compatibility, and prove the external contract.</p>
+          <span class="tau-card__link">Contributor tasks →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="tau-section tau-section--soft" aria-labelledby="stack">
+    <div class="tau-section__inner">
+      <div class="tau-section__heading">
+        <p class="tau-eyebrow">One integrated stack</p>
+        <h2 id="stack">The components, brought together</h2>
+        <p>TauGrid integrates these pieces without hiding them — each keeps its own responsibility and stays inspectable.</p>
+      </div>
+      <div class="tau-flow" role="list" aria-label="TauGrid components">
+        <div class="tau-flow__node" role="listitem"><strong>tau CLI</strong><span>Resolve, submit, observe</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>Kueue</strong><span>Queueing and admission</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>KubeRay</strong><span>Ray orchestration</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>GPU health</strong><span>Node-level monitoring</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>Observability</strong><span>Metrics and evidence</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tau-section" aria-labelledby="lifecycle">
+    <div class="tau-section__inner">
+      <div class="tau-section__heading">
+        <p class="tau-eyebrow">End to end</p>
+        <h2 id="lifecycle">Across the GPU workload lifecycle</h2>
+        <p>The same stack carries a workload from raw data through to a running endpoint.</p>
+      </div>
+      <div class="tau-flow" role="list" aria-label="Workload lifecycle">
+        <div class="tau-flow__node" role="listitem"><strong>Data preparation</strong><span>Curated datasets</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>Distributed training</strong><span>Multi-node Ray and Jobs</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>Fine-tuning</strong><span>Checkpoints and evaluation</span></div>
+        <div class="tau-flow__node" role="listitem"><strong>Inference</strong><span>Serving endpoints</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tau-section tau-section--soft" aria-labelledby="capabilities">
+    <div class="tau-section__inner">
+      <div class="tau-section__heading">
+        <p class="tau-eyebrow">What you get</p>
+        <h2 id="capabilities">Useful without hiding ownership</h2>
+        <p>TauGrid standardizes the repeated infrastructure plumbing while leaving cloud provisioning, scheduling, and model code with their rightful owners.</p>
+      </div>
+      <div class="tau-grid tau-grid--three">
+        <a class="tau-card" href="{{ "docs/overview/architecture/" | relURL }}">
+          <span class="tau-card__eyebrow">Batteries included</span>
+          <h3>An integrated foundation</h3>
+          <p>Kueue, KubeRay, GPU-node health, and observability ship and upgrade together, not as pieces you wire up yourself.</p>
+        </a>
+        <a class="tau-card" href="{{ "docs/concepts/config-resolution/" | relURL }}">
+          <span class="tau-card__eyebrow">Repository first</span>
+          <h3>Reviewed, policy-aware runs</h3>
+          <p>Check in workload config, validate and render it, and submit through upstream Kueue and Kubernetes.</p>
+        </a>
+        <a class="tau-card" href="{{ "docs/concepts/evidence/" | relURL }}">
+          <span class="tau-card__eyebrow">Local first</span>
+          <h3>Durable experiment evidence</h3>
+          <p>Preserve experiment records, checkpoints, and artifacts locally, and export scalar metrics when useful.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="tau-section tau-section--soft" aria-labelledby="community">
+    <div class="tau-section__inner">
+      <div class="tau-section__heading">
+        <p class="tau-eyebrow">Open source</p>
+        <h2 id="community">Built in the open</h2>
+        <p>TauGrid is MIT-licensed and developed in the open on GitHub. Every capability is labeled by maturity — shipped, experimental, or future — so you always know what is a supported contract today and what is still in progress.</p>
+      </div>
+      <div class="tau-actions">
+        <a class="tau-button tau-button--primary" href="{{ .Site.Params.github_repo }}">View on GitHub</a>
+        <a class="tau-button" href="{{ "docs/community/contributing/" | relURL }}">Contribute</a>
+        <a class="tau-button" href="{{ "docs/overview/capability-maturity/" | relURL }}">Review capability maturity</a>
+      </div>
+    </div>
+  </section>
+</div>
+{{ end }}

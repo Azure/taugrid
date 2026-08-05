@@ -1,0 +1,828 @@
+# -- Global settings
+global:
+  # -- Namespace override for all AdxMon components (defaults to .Release.Namespace)
+  namespace: ""
+  # -- Cluster name label added to all telemetry
+  clusterName: ""
+  # -- Region label added to all telemetry
+  region: ""
+  # -- Image pull policy
+  imagePullPolicy: IfNotPresent
+  # -- Image pull secrets
+  imagePullSecrets: []
+
+# -- ADX connection configuration
+adx:
+  # -- ADX cluster URL (e.g., https://mycluster.westus2.kusto.windows.net)
+  clusterUrl: ""
+  # -- Managed Identity client ID for ADX auth
+  clientId: ""
+  # -- Metrics database name
+  metricsDatabase: "Metrics"
+  # -- Logs database name
+  logsDatabase: "Logs"
+  # -- Cost tracking database name
+  costTrackingDatabase: "CostTracking"
+  # -- Audit database name
+  auditDatabase: "Audit"
+  # -- Name of a pre-existing ConfigMap in the release namespace containing ADX_CLUSTER_URL and ADX_CLIENT_ID.
+  # When set AND adx.clusterUrl is empty, pods read ADX config from this ConfigMap.
+  # Useful for ArgoCD deployments where per-cluster config is pre-provisioned.
+  configMapRef: ""
+
+# -- Operator settings
+operator:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/adx-mon/operator
+    tag: ""  # Defaults to appVersion
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  nodeSelector: {}
+  affinity: {}
+
+# -- Collector settings (DaemonSet - runs on every node)
+collector:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/adx-mon/collector
+    tag: ""  # Defaults to appVersion
+  resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 500m
+      memory: 2Gi
+  # -- Host port for Prometheus remote write endpoint
+  hostPort: 3100
+  # -- WAL storage directory on host
+  storageDir: /mnt/collector
+  # -- Init container image for WAL directory permission fix
+  initImage:
+    repository: mcr.microsoft.com/azurelinux/base/core
+    tag: "3.0"
+  # -- WAL flush interval in milliseconds
+  walFlushIntervalMs: 1000
+  # -- Max batch size for metric samples
+  maxBatchSize: 10000
+  # -- Max connections to accept
+  maxConnections: 100
+  # -- Skip TLS verification when transferring to ingestor.
+  # Must be true when ingestor uses default (fake) TLS credentials.
+  # Set to false only when using proper certificates with valid SANs (see #145).
+  insecureSkipVerify: true
+  # -- Prometheus scrape configuration
+  prometheusScrape:
+    enabled: true
+    scrapeIntervalSeconds: 30
+    scrapeTimeoutSeconds: 25
+    # -- Static scrape targets beyond defaults
+    extraStaticTargets: []
+    # -- Regex patterns for metrics to keep (empty = keep all)
+    keepMetrics: []
+    # -- Metric families to REMOVE from the DaemonSet collector's effective
+    # drop-list (set difference against `dropMetrics`). Un-drops the KubeRay
+    # operator dashboard metrics on the DaemonSet path only; the singleton +
+    # remote-write receiver keep the full `dropMetrics`. Entries must match
+    # `dropMetrics` verbatim. Rationale/alternatives: see PR #975 / issue #953.
+    scrapeDropMetricsExclude:
+      - '^controller_runtime.*'
+      - '^workqueue.*'
+      - '^leader_election.*'
+    # -- Regex patterns for metrics to drop
+    # IMPORTANT: Regexes must be lowercase (adx-mon matches raw Prometheus names).
+    # Emptying this list removes the global filter — CI lint will block the PR.
+    # See: docs/runbooks/adx-ingestion-queue-bombing.md
+    dropMetrics:
+      # ---- Apiserver & control plane (NOT in PRD) ----
+      - '^apiserver.*'              # All apiserver metrics (~170 tables)
+      - '^apiextensions_apiserver.*'  # API extensions
+      - '^apiextensions_openapi.*'    # OpenAPI regeneration counters
+      - '^aggregator.*'             # Aggregator discovery
+      - '^authenticated_user.*'       # Authenticated user requests
+      - '^authentication.*'          # Auth handler internals
+      - '^authorization.*'           # Auth decision internals
+      - '^field_validation.*'         # Field validation duration
+      - '^serviceaccount.*'          # Service account token tracking
+      - '^watch_cache.*'              # Watch cache internals
+      - '^pod_security.*'             # Pod security evaluations
+      - '^cardinality_enforcement.*'  # Cardinality enforcement
+
+      # ---- etcd (NOT in PRD) ----
+      - '^etcd.*'                    # All etcd metrics (~13 tables)
+      - '^grpc.*'                    # gRPC client internals (etcd)
+
+      # ---- Controller/operator runtime (NOT in PRD) ----
+      - '^controller_runtime.*'       # Controller runtime internals
+      - '^workqueue.*'               # Work queue metrics
+      - '^certwatcher.*'             # Cert watcher counters
+      - '^leader_election.*'          # Leader election status
+      - '^rest_[cc]lient.*'           # kube client-go internals
+
+      # ---- Go/process runtime (NOT in PRD) ----
+      - '^go.*'                      # Go runtime internals (~157 tables)
+      - '^process.*'                 # Process-level metrics (redundant with cadvisor)
+
+      # ---- KSM metrics NOT needed by PRD ----
+      # PRD requires: pods, nodes, deployments, jobs, Kueue CRs only.
+      - '^kube_apiserver.*'           # KSM apiserver allocator metrics
+      - '^kube_certificatesigning.*'  # CSR metrics
+      - '^kube_configmap.*'           # ConfigMap metadata (noisy)
+      - '^kube_daemonset.*'           # DaemonSet metrics (not in PRD)
+      - '^kube_endpoint.*'            # Endpoint/EndpointSlice metrics
+      - '^kube_lease.*'               # Lease metrics
+      - '^kube_mutatingwebhook.*'     # Webhook config metrics
+      - '^kube_namespace.*'           # Namespace metrics (not in PRD)
+      - '^kube_networkpolicy.*'       # Network policy metrics
+      - '^kube_persistentvolume.*'    # PV/PVC metrics (not in PRD)
+      - '^kube_replicaset.*'          # ReplicaSet metrics (redundant with Deployment)
+      - '^kube_secret.*'              # Secret metadata (noisy, security risk)
+      - '^kube_service_[a-z].*'        # Service metrics (not needed)
+      - '^kube_statefulset.*'         # StatefulSet metrics (not in PRD)
+      - '^kube_storageclass.*'        # Storage class metrics
+      - '^kube_validatingwebhook.*'   # Webhook config metrics
+      - '^kube_volumeattachment.*'    # Volume attachment metrics
+      - '^kubernetes_build_info$'      # K8s build info
+      - '^kubernetes_feature_enabled$' # K8s feature flags
+
+      # ---- Node exporter noise (NOT in PRD) ----
+      # Keep: boot_time, cpu_seconds_total, disk_read/write_bytes_total,
+      #   filesystem_avail/size_bytes, infiniband_*, load1/5/15,
+      #   memory_MemAvailable/MemFree/MemTotal_bytes, network_receive/transmit_bytes_total, uname_info
+      - '^node_arp.*'                 # ARP table
+      - '^node_context.*'             # Context switches
+      - '^node_cooling.*'             # Cooling device
+      - '^node_cpu_guest.*'           # CPU guest seconds
+      - '^node_dmi.*'                 # DMI info
+      - '^node_disk_discard.*'        # Disk discard ops
+      - '^node_disk_flush.*'          # Disk flush ops
+      - '^node_disk_info$'            # Disk info labels
+      - '^node_disk_io.*'             # Disk io_now/io_time (keep read/write bytes)
+      - '^node_entropy.*'             # Entropy pool
+      - '^node_filefd.*'              # File descriptors
+      - '^node_filesystem_device.*'   # FS device errors
+      - '^node_filesystem_files.*'    # Inode counts
+      - '^node_filesystem_mount.*'    # Mount info
+      - '^node_filesystem_readonly$'  # FS readonly flag
+      - '^node_forks.*'               # Fork count
+      - '^node_hwmon.*'               # Hardware monitor
+      - '^node_intr.*'                # Interrupts
+      - '^node_memory_[A-HJ-LN-TV-Z].*'  # Memory subsections not in PRD
+      - '^node_memory_Memlock.*'      # Memlock (keep MemAvailable/Free/Total)
+      - '^node_netstat.*'             # Netstat (noisy)
+      - '^node_network_address.*'      # Network address info
+      - '^node_network_carrier.*'     # Carrier state
+      - '^node_network_device.*'      # Device info
+      - '^node_network_dormant.*'     # Dormant state
+      - '^node_network_flags.*'       # Interface flags
+      - '^node_network_iface.*'       # Interface IDs
+      - '^node_network_info$'         # Network info labels
+      - '^node_network_mtu.*'         # MTU bytes
+      - '^node_network_name.*'        # Name assign type
+      - '^node_network_net_dev.*'     # /proc/net/dev group
+      - '^node_network_protocol.*'    # Protocol type
+      - '^node_network_speed.*'       # Speed bytes
+      - '^node_network_up$'           # Interface up state
+      - '^node_nf_conntrack.*'        # Connection tracking
+      - '^node_nvme.*'                # NVMe info
+      - '^node_os.*'                  # OS info
+      - '^node_pressure.*'            # PSI pressure stall
+      - '^node_procs.*'               # Process counts
+      - '^node_rapl.*'                # Intel RAPL power
+      - '^node_schedstat.*'           # Scheduler stats
+      - '^node_scrape.*'              # Scraper self-metrics
+      - '^node_selinux.*'             # SELinux
+      - '^node_sockstat.*'            # Socket stats
+      - '^node_softnet.*'             # Kernel softnet
+      - '^node_swap.*'                # Swap (redundant with NodeMemory)
+      - '^node_textfile.*'            # Textfile collector
+      - '^node_time_.*'              # Clock info
+      - '^node_timex.*'              # NTP timex internals
+      - '^node_udp.*'                 # UDP stats
+      - '^node_vmstat.*'              # VM stats
+      - '^node_xfs.*'                # XFS internals
+
+      # ---- cadvisor/container noise ----
+      # Keep: container_cpu_cfs*, container_cpu_usage*, container_memory_cache,
+      #   container_memory_rss, container_memory_usage_bytes, container_memory_working_set_bytes,
+      #   container_network_receive_bytes_total, container_network_transmit_bytes_total,
+      #   container_oom_events_total, container_spec_cpu_quota, container_spec_memory_limit_bytes
+      - '^cadvisor.*'                 # cadvisor self-metrics
+      - '^container_blkio.*'          # Block I/O (noisy)
+      - '^container_file_descriptors$' # FD count
+      - '^container_fs.*'             # Filesystem (high cardinality)
+      - '^container_last_seen$'       # Last seen timestamp
+      - '^container_memory_failures.*' # Memory failures (rare)
+      - '^container_memory_mapped_file$' # Memory mapped file
+      - '^container_memory_max_usage.*' # Max usage (keep working_set)
+      - '^container_memory_swap$'     # Swap (rare on k8s)
+      - '^container_network_receive_errors.*'  # Network errors
+      - '^container_network_receive_packets.*' # Packet counts
+      - '^container_network_transmit_errors.*' # Transmit errors
+      - '^container_network_transmit_packets.*' # Transmit packets
+      - '^container_pressure.*'       # cgroup pressure (noisy)
+      - '^container_processes$'       # Process count
+      - '^container_sockets$'         # Socket count
+      - '^container_spec_cpu_period$' # CPU period (constant)
+      - '^container_spec_cpu_shares$' # CPU shares
+      - '^container_start_time.*'     # Start time (in pod info)
+      - '^container_tasks_state$'     # Task state counts
+      - '^container_threads.*'        # Thread counts
+      - '^container_ulimits.*'        # Ulimit values
+      - '^machine_cpu_.*'             # Machine CPU (use node_exporter)
+      - '^machine_memory_.*'          # Machine memory (use node_exporter)
+
+      # ---- Ray internal metrics (NOT in PRD) ----
+      # Keep: ray_actors, ray_finished_jobs_total, ray_node_cpu_utilization,
+      #   ray_node_mem_used/total, ray_node_disk_usage/free, ray_resources,
+      #   ray_running_jobs, ray_scheduler_tasks, ray_tasks, ray_job_duration_s,
+      #   ray_object_store_available_memory, ray_object_store_used_memory,
+      #   object_store_fallback_memory, object_store_num_local_objects,
+      #   object_store_dist
+      - '^ray_gcs_.*'                # GCS internals
+      - '^ray_grpc_.*'               # gRPC internals
+      - '^ray_object_directory_.*'   # Object directory internals
+      - '^ray_object_manager_.*'     # Object manager internals
+      - '^ray_pull_manager_.*'       # Pull manager
+      - '^ray_spill_manager_.*'      # Spill manager
+      - '^ray_internal_.*'           # Internal metrics
+      - '^ray_outbound_.*'           # Outbound heartbeats
+      - '^ray_health_check_.*'       # Health check counters
+      - '^ray_placement_group_.*'    # Placement group details
+
+      # ---- KSM metrics NOT in PRD (additional) ----
+      - '^kube_cronjob.*'            # CronJob metrics (not in PRD)
+      - '^kube_poddisruptionbudget.*' # PDB metrics (not in PRD)
+
+      # ---- Prometheus infra ----
+      - '^promhttp.*'                # Prometheus HTTP handler
+      - '^resource_scrape_error$'    # Scrape error counter
+      - '^machine_scrape_error$'     # Machine scrape error
+      - '^version_info$'             # Version info
+
+      # ---- Misc ----
+      - '^disabled.*'                # Disabled metrics counter
+      - '^hidden.*'                  # Hidden metrics counter
+      - '^python_gc.*'              # Python GC runtime
+      - '^python_info$'             # Python version info
+      - '^registered.*'             # Registered metrics counter
+      - '^target_info$'             # OpenTelemetry target info
+  # -- Journal log collection
+  journalLogs:
+    enabled: true
+    targets:
+      - matches: ['_SYSTEMD_UNIT=kubelet.service']
+        database: Logs
+        table: Kubelet
+  # -- Container log collection via static pod targets
+  # Collects logs from pods matching namespace/labels without requiring
+  # adx-mon annotations on the pods themselves.
+  containerLogs:
+    # -- Enable container log collection via static-pod-target
+    enabled: false
+    # -- Static pod targets: each entry matches pods by namespace AND/OR labels.
+    # At least one of namespace, name, or labels must be specified per entry.
+    # destination format: "Database:Table"
+    targets: []
+    # Example:
+    # targets:
+    #   - namespace: kuberay-system
+    #     labels:
+    #       app.kubernetes.io/name: kuberay-operator
+    #     destination: "Logs:SystemLogs"
+    #     parsers: ["json"]
+    #   - labels:
+    #       ray.io/is-ray-node: "yes"
+    #     destination: "Logs:ContainerLogs"
+    #     parsers: ["json"]
+  # -- OTEL log endpoint
+  otelLog:
+    enabled: true
+    # -- Attributes to lift from OTEL log body to columns
+    liftAttributes:
+      - "kusto.database"
+      - "kusto.table"
+  # -- GPU-specific scrape configuration
+  gpu:
+    # -- Enable DCGM exporter scrape target
+    dcgmScrape: true
+    # -- Kernel dmesg target for XID/ECC/NVLink errors
+    # -- Collect kernel logs via journald _TRANSPORT=kernel filter (no privilege escalation needed)
+    kernelTarget: true
+    # -- (deprecated) No longer needed — kernel logs are collected via journald
+    # kernelDeviceMount removed — kernel logs now collected via journald _TRANSPORT=kernel
+    # -- Kernel log table in ADX
+    kernelLogTable: KernelLogs
+  # -- Tolerations (includes GPU node taints)
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+    - key: sku
+      operator: Equal
+      value: gpu
+      effect: NoSchedule
+  nodeSelector: {}
+  affinity: {}
+  # -- Update strategy for DaemonSet
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: "30%"
+
+# -- Collector Singleton (Deployment - one per cluster for cluster-wide metrics)
+collectorSingleton:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/adx-mon/collector
+    tag: ""  # Same image as DaemonSet collector
+  resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 500m
+      memory: 2Gi
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  nodeSelector: {}
+  # -- Scrape targets for the singleton.
+  # The apiserver endpoint (kubernetes.default.svc/metrics) was removed because
+  # apiserver/etcd metrics are not required by the PRD and generate ~170 high-
+  # cardinality tables that dominate ADX ingestion volume.
+  scrapeTargets: []
+
+ingestor:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/adx-mon/ingestor
+    tag: ""  # Defaults to appVersion
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  # -- WAL storage directory on host
+  storageDir: /mnt/ingestor
+  # -- Max segment age before flush. Keep this above ADX's batching window; tiny
+  # segments create many queued-ingest operations and can saturate ingestion capacity.
+  maxSegmentAge: 60s
+  # -- Max disk usage for WAL in bytes (20GiB)
+  maxDiskUsage: 21474836480
+  # -- Max transfer size per batch in bytes (10MiB)
+  maxTransferSize: 10485760
+  # -- Max inbound connections
+  maxConnections: 1000
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  nodeSelector: {}
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [ingestor]
+          topologyKey: kubernetes.io/hostname
+
+# -- Alerter settings (Deployment - evaluates KQL alert rules)
+alerter:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/adx-mon/alerter
+    tag: ""  # Defaults to appVersion
+  # -- Keep the alerter singleton until upstream adds leader election or conflict-safe
+  # AlertRule status updates; multiple replicas race while writing rule status.
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 125Mi
+    limits:
+      cpu: 400m
+      memory: 1400Mi
+  # -- Webhook endpoint for alert notifications
+  alerterEndpoint: ""
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  nodeSelector: {}
+
+# -- kube-state-metrics (subchart dependency)
+# AKS does not deploy KSM by default; we include it for pod/node/quota metrics
+# and Kueue custom resource state metrics.
+kube-state-metrics:
+  enabled: true
+  # -- KSM image: dalec-built MCR image (MSFT Go + systemcrypto, runAsNonRoot compatible).
+  # MCR oss/v2 has v2.13–v2.18 with active CVE patching; no ACR mirror required.
+  image:
+    registry: mcr.microsoft.com
+    repository: oss/v2/kubernetes/kube-state-metrics
+    tag: v2.18.0
+  # -- Number of KSM shards (1 for <=5K nodes, 2-4 for larger clusters)
+  shards: 1
+  # -- Custom resource state metrics for Kueue CRDs
+  customResourceState:
+    enabled: true
+    config:
+      kind: CustomResourceStateMetrics
+      spec:
+        resources:
+          # -- ClusterQueue metrics: pending workloads, admitted workloads
+          - groupVersionKind:
+              group: kueue.x-k8s.io
+              version: v1beta1
+              kind: ClusterQueue
+            labelsFromPath:
+              name: [metadata, name]
+              cohort: [spec, cohort]
+            metrics:
+              - name: clusterqueue_pending_workloads
+                help: "Number of pending workloads in the ClusterQueue"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, pendingWorkloads]
+                    nilIsZero: true
+              - name: clusterqueue_admitted_workloads
+                help: "Number of admitted workloads in the ClusterQueue"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, admittedWorkloads]
+                    nilIsZero: true
+              - name: clusterqueue_reserving_workloads
+                help: "Number of reserving workloads in the ClusterQueue"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, reservingWorkloads]
+                    nilIsZero: true
+          # -- LocalQueue metrics: pending and admitted workloads per namespace
+          - groupVersionKind:
+              group: kueue.x-k8s.io
+              version: v1beta1
+              kind: LocalQueue
+            labelsFromPath:
+              name: [metadata, name]
+              namespace: [metadata, namespace]
+            metrics:
+              - name: localqueue_pending_workloads
+                help: "Number of pending workloads in the LocalQueue"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, pendingWorkloads]
+                    nilIsZero: true
+              - name: localqueue_admitted_workloads
+                help: "Number of admitted workloads in the LocalQueue"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, admittedWorkloads]
+                    nilIsZero: true
+              - name: localqueue_reserving_workloads
+                help: "Number of reserving workloads in the LocalQueue"
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [status, reservingWorkloads]
+                    nilIsZero: true
+          # -- Workload metrics: track which ClusterQueue admitted each workload
+          - groupVersionKind:
+              group: kueue.x-k8s.io
+              version: v1beta1
+              kind: Workload
+            labelsFromPath:
+              name: [metadata, name]
+              namespace: [metadata, namespace]
+            metrics:
+              - name: workload_info
+                help: "Info metric for Kueue workloads (labels carry admission details)"
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      clusterqueue: [status, admission, clusterQueue]
+  # -- RBAC rules for Kueue CRD access (required for custom resource state)
+  rbac:
+    extraRules:
+      - apiGroups: ["kueue.x-k8s.io"]
+        resources: ["clusterqueues", "localqueues", "workloads"]
+        verbs: ["list", "watch"]
+  # -- Metric labels to allow (reduces cardinality)
+  metricLabelsAllowlist:
+    - pods=[app.kubernetes.io/name,app.kubernetes.io/component,ray.io/is-ray-node]
+    - nodes=[node.kubernetes.io/instance-type,kubernetes.azure.com/agentpool]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  nodeSelector: {}
+  # -- Override annotations for AdxMon Collector scrape discovery
+  podAnnotations:
+    adx-mon/scrape: "true"
+    adx-mon/port: "8080"
+
+# -- CRD installation
+crds:
+  # -- Install CRDs with the chart
+  install: true
+  # -- Keep CRDs on chart uninstall
+  keep: true
+
+# -- Pre-built Function CRDs (KQL views)
+functions:
+  enabled: true
+  items:
+    gpuHealth:
+      enabled: true
+      database: Metrics
+    nodeHealth:
+      enabled: true
+      database: Metrics
+    containerMetrics:
+      enabled: true
+      database: Metrics
+    kueueMetrics:
+      enabled: true
+      database: Metrics
+    ncclErrors:
+      enabled: true
+      database: Logs
+    xidErrors:
+      enabled: true
+      database: Logs
+    trainingJobSummary:
+      enabled: true
+      database: Metrics
+    experimentMetricsDashboardRows:
+      enabled: true
+      database: Metrics
+    # -- AuditEvents() — parses KubeAuditLogs from the audit pipeline (WI-26).
+    # Safe to enable unconditionally: Kusto functions are lazy and only error at query time
+    # if the underlying table does not yet exist.
+    auditEvents:
+      enabled: true
+      database: Audit
+
+# -- Pre-built AlertRule CRDs
+alertRules:
+  enabled: true
+  items:
+    gpuXidCritical:
+      enabled: true
+      interval: 1m
+      destination: ""
+      # autoMitigateAfter: "1h"
+      # criteria:
+      #   cloud:
+      #     - AzureCloud
+    nodeNotReady:
+      enabled: true
+      interval: 1m
+      destination: ""
+      # autoMitigateAfter: "30m"
+      # criteria: {}
+    eccUncorrectable:
+      enabled: true
+      interval: 5m
+      destination: ""
+      # autoMitigateAfter: "2h"
+      # criteria: {}
+    nvlinkDown:
+      enabled: true
+      interval: 5m
+      destination: ""
+      # autoMitigateAfter: "1h"
+      # criteria: {}
+    jobFailureRate:
+      enabled: true
+      interval: 5m
+      destination: ""
+      # autoMitigateAfter: "1h"
+      # criteria: {}
+  # -- Ray-specific alert rules. Enable the group to activate all Ray alerts.
+  # Future Ray alerts (e.g., head node down, placement group stale) will be
+  # added under this section without requiring additional feature flags.
+  ray:
+    enabled: false
+    podRestart:
+      interval: 5m
+      destination: ""
+      # -- Number of restarts in the evaluation window to trigger the alert
+      restartThreshold: 3
+      # autoMitigateAfter: "1h"
+      # criteria: {}
+
+# -- SummaryRule settings (pre-aggregation rollups for cost tracking and performance)
+summaryRules:
+  enabled: true
+  items:
+    gpuUtilizationHourly:
+      enabled: true
+      interval: 1h
+      database: Metrics
+      table: GpuUtilizationHourly
+    gpuCostHourly:
+      enabled: true
+      interval: 1h
+      database: CostTracking
+      table: GpuCostHourly
+    gpuCostDaily:
+      enabled: true
+      interval: 24h
+      database: CostTracking
+      table: GpuCostDaily
+    namespaceCostMonthly:
+      enabled: true
+      interval: 24h
+      database: CostTracking
+      table: NamespaceCostMonthly
+    nodeResourcesHourly:
+      enabled: true
+      interval: 1h
+      database: Metrics
+      table: NodeResourcesHourly
+    # Optional fields (uncomment to configure):
+    # criteria:
+    #   cloud:
+    #     - AzureCloud
+
+# -- GPU rate configuration for cost calculations
+cost:
+  gpuRates:
+    # ⚠️ Per-GPU-hour rates (USD), NOT per-VM-hour.
+    # These are Azure retail VM prices divided by the number of GPUs in the SKU.
+    # The KQL query multiplies: hourly_cost = gpu_count * rate_per_gpu_hour,
+    # so using VM-level prices here would overcount by the GPU count.
+    # Override per cluster for internal transfer pricing.
+    #
+    # V100 (NC v3): 1 GPU per 6 vCPUs
+    Standard_NC6s_v3: 3.06       # 1 GPU, $3.06/VM-hr
+    Standard_NC12s_v3: 3.06      # 2 GPUs, $6.12/VM-hr ÷ 2
+    Standard_NC24s_v3: 3.06      # 4 GPUs, $12.24/VM-hr ÷ 4
+    Standard_NC24rs_v3: 3.365    # 4 GPUs, $13.46/VM-hr ÷ 4
+    # A100 (NC A100 v4): 1 GPU per 24 vCPUs
+    Standard_NC24ads_A100_v4: 3.67   # 1 GPU, $3.67/VM-hr
+    Standard_NC48ads_A100_v4: 3.675  # 2 GPUs, $7.35/VM-hr ÷ 2
+    Standard_NC96ads_A100_v4: 3.6725 # 4 GPUs, $14.69/VM-hr ÷ 4
+    # A100 (ND v4): 8 GPUs per VM
+    Standard_ND96asr_v4: 3.40        # 8 GPUs, $27.20/VM-hr ÷ 8
+    Standard_ND96amsr_A100_v4: 4.10  # 8 GPUs, $32.77/VM-hr ÷ 8 (rounded)
+    # H100 (ND v5): 8 GPUs per VM
+    Standard_ND96isr_H100_v5: 12.27  # 8 GPUs, $98.15/VM-hr ÷ 8 (rounded)
+    # A10 (NV A10 v5): 1 GPU per partition (fractional VM)
+    Standard_NV6ads_A10_v5: 0.45     # 1/6 GPU, $0.45/VM-hr
+    Standard_NV12ads_A10_v5: 0.45    # 1/3 GPU — 2 partitions, $0.90/VM-hr ÷ 2
+    Standard_NV18ads_A10_v5: 0.45    # 1/2 GPU — 3 partitions, $1.35/VM-hr ÷ 3
+    Standard_NV36ads_A10_v5: 0.45    # 1 GPU — 6 partitions, $2.70/VM-hr ÷ 6
+    Standard_NV72ads_A10_v5: 0.45    # 2 GPUs — 12 partitions, $5.40/VM-hr ÷ 12
+
+# -- Security context defaults
+podSecurityContext:
+  runAsNonRoot: false  # upstream adx-mon images run as root (no USER directive); see #133
+  supplementalGroups:
+    - 0     # read container logs (/var/log/pods/*.log is root:root 640)
+    - 23    # systemd-journal on some Debian/Ubuntu distros
+    - 101   # systemd-journal on older Azure Linux images
+    - 999   # systemd-journal on current AKS Azure Linux node images
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  # NOTE: collector and ingestor write to storageDir (WAL). Deployment templates
+  # must mount those paths as emptyDir/hostPath volumes for this to work.
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# -- Test fixture (helm-unittest only — never rendered in production)
+_test:
+  enabled: false
+
+# -- Management Commands: pre-create ADX tables to avoid 429 throttling on first deploy.
+# adx-mon auto-creates tables on first metric encounter, but 300+ concurrent TableCreate
+# commands exceed the ADX control plane limit (20/window), causing a 10-20 min data blackout.
+# These ManagementCommands use .create-merge tables (batched) to pre-create known tables.
+managementCommands:
+  precreateMetricsTables:
+    # -- Enable pre-creation of metrics tables
+    enabled: false
+    # -- Number of tables per .create-merge batch (ADX limit: ~20 commands/window)
+    batchSize: 15
+    # -- Known metrics tables (PascalCase, matching adx-mon's normalization)
+    tables:
+      # -- DCGM GPU metrics
+      - DCGMFIDEVGPUUTIL
+      - DCGMFIDEVFBUSED
+      - DCGMFIDEVFBFREE
+      - DCGMFIDEVGPUTEMP
+      - DCGMFIDEVPOWERUSAGE
+      - DCGMFIDEVCORRECTABLEREMAPPEDROWS
+      - DCGMFIDEVUNCORRECTABLEREMAPPEDROWS
+      - DCGMFIDEVROWREMAPFAILURE
+      # -- KSM: Kueue metrics
+      - KubeCustomresourceClusterqueueAdmittedWorkloads
+      - KubeCustomresourceClusterqueuePendingWorkloads
+      - KubeCustomresourceLocalqueueAdmittedWorkloads
+      - KubeCustomresourceLocalqueuePendingWorkloads
+      - KueueAdmissionAttemptsTotal
+      - KueueAdmissionWaitTimeSeconds
+      # -- Tau/Stellar experiment remote-write metrics
+      - ExperimentMetrics
+      # -- KSM: Job metrics
+      - KubeJobComplete
+      - KubeJobFailed
+      - KubeJobDurationSeconds
+      - KubeJobOwner
+      # -- KSM: Node and pod metrics
+      - KubeNodeStatusCondition
+      - KubeNodeLabels
+      - KubePodContainerResourceLimits
+      - KubePodContainerResourceRequests
+      - KubePodOwner
+      # -- Node-exporter metrics (subset used by Functions/AlertRules)
+      - NodeCpuSecondsTotal
+      - NodeMemoryMemTotalBytes
+      - NodeMemoryMemAvailableBytes
+      - NodeFilesystemSizeBytes
+      - NodeFilesystemAvailBytes
+      # -- Container metrics
+      - ContainerCpuUsageSecondsTotal
+      - ContainerMemoryWorkingSetBytes
+
+  precreateLogsTables:
+    # -- Enable pre-creation of log tables
+    enabled: false
+    # -- Known log tables
+    tables:
+      - ContainerLogs
+      - SystemLogs
+      - KernelLogs
+      - Kubelet
+      - ContainerRuntime
+
+  # -- Ingestion batching policies (controls ADX query latency)
+  ingestionBatching:
+    # -- Enable ingestion batching policy ManagementCommands
+    enabled: false
+    metrics:
+      # -- Max time before ADX seals a batch (Metrics: 15s for <30s e2e latency)
+      maxBatchingTimeSpan: "00:00:15"
+      # -- Max items per batch
+      maxNumberOfItems: 500
+      # -- Max raw data size per batch (MB)
+      maxRawDataSizeMB: 1024
+    logs:
+      # -- Max time before ADX seals a batch (Logs: 30s for <45s e2e latency)
+      maxBatchingTimeSpan: "00:00:30"
+      # -- Max items per batch
+      maxNumberOfItems: 500
+      # -- Max raw data size per batch (MB)
+      maxRawDataSizeMB: 1024
+
+  # -- Retention and caching policies per database (§12.2)
+  retentionPolicies:
+    # -- Enable retention policy ManagementCommands
+    enabled: false
+    # -- Database retention configurations
+    databases:
+      - name: Metrics
+        softDeletePeriod: 90d
+        hotCachePeriod: 14d
+      - name: Logs
+        softDeletePeriod: 90d
+        hotCachePeriod: 30d
+      - name: Audit
+        softDeletePeriod: 2555d
+        hotCachePeriod: 30d
+      - name: CostTracking
+        softDeletePeriod: 365d
+        hotCachePeriod: 90d

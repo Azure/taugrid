@@ -1,0 +1,11 @@
+apiVersion: tau.azure.com/v1alpha1
+kind: TauQuotaRequest
+metadata:
+  name: aurora-h200-burst
+  namespace: tau-platform
+spec:
+  workspace: aurora
+  resource: h200
+  requested: 32
+  reason: train-70b-checkpoint-sweep
+  mutationMode: ReportOnly

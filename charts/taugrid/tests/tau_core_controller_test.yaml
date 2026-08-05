@@ -1,0 +1,50 @@
+suite: Tau control plane subchart wiring
+templates:
+  - charts/tau-core-controller/templates/deployment.yaml
+  - charts/tau-core-controller/templates/taucluster.yaml
+tests:
+  - it: renders the controller into the platform namespace as part of TauGrid
+    template: charts/tau-core-controller/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tau-platform
+      - equal:
+          path: metadata.labels["app.kubernetes.io/part-of"]
+          value: taugrid
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-namespace=tau-platform
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[0-9a-f]{64}$
+
+  - it: accepts a mirrored image so clusters without private ACR access can install
+    template: charts/tau-core-controller/templates/deployment.yaml
+    set:
+      tau-core-controller:
+        image:
+          repository: my-registry.example.com/tau-core-controller
+          digest: ""
+          tag: v0.1.0
+          pullPolicy: IfNotPresent
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: my-registry.example.com/tau-core-controller:v0.1.0
+
+  - it: ships no cloud specific node topology mapping by default
+    template: charts/tau-core-controller/templates/taucluster.yaml
+    asserts:
+      - equal:
+          path: spec.managementMode
+          value: Reconcile
+      - equal:
+          path: spec.nodes.labelRules
+          value: []
+      - equal:
+          path: spec.queues.ownership
+          value: External

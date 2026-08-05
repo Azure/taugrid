@@ -1,0 +1,112 @@
+# Checkpoint-aware failure recovery RayJob fixture.
+# Exercises TAU_RAY_TRAIN_CONFIG_JSON with failure_config.max_failures: 2.
+# The training script fails once at step 5, then resumes from checkpoint.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: e2e-checkpoint-failure
+  namespace: {{STACK_NAMESPACE}}
+  labels:
+    kueue.x-k8s.io/queue-name: {{STACK_QUEUE}}
+spec:
+  entrypoint: python /home/ray/scripts/checkpoint_failure_train.py
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: ray-job-submitter
+        image: {{RAY_IMAGE}}
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+  rayClusterSpec:
+    rayVersion: "2.54.0"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        spec:
+          nodeSelector:
+            {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
+          tolerations:
+          - key: CriticalAddonsOnly
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: ray-head
+            image: {{RAY_IMAGE}}
+            ports:
+            - containerPort: 6379
+              name: gcs-server
+            - containerPort: 8265
+              name: dashboard
+            env:
+            - name: TAU_RAY_TRAIN_CONFIG_JSON
+              value: '{"failure_config":{"max_failures":2}}'
+            - name: TAU_DIST_BACKEND
+              value: nccl
+            - name: TAU_NUM_WORKERS
+              value: "2"
+            - name: TAU_WORLD_SIZE
+              value: "2"
+            resources:
+              limits:
+                cpu: "1"
+                memory: 2Gi
+              requests:
+                cpu: 500m
+                memory: 1Gi
+            volumeMounts:
+            - name: scripts
+              mountPath: /home/ray/scripts
+          initContainers:
+          - name: script-loader
+            image: {{RAY_IMAGE}}
+            command: ["sh", "-c", "echo \"$SCRIPT_B64\" | base64 -d > /scripts/checkpoint_failure_train.py"]
+            env:
+            - name: SCRIPT_B64
+              value: "{{CHECKPOINT_FAILURE_SCRIPT_PAYLOAD_B64}}"
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          volumes:
+          - name: scripts
+            emptyDir: {}
+    workerGroupSpecs:
+    - replicas: 2
+      minReplicas: 2
+      maxReplicas: 2
+      groupName: gpu-workers
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+          - name: ray-worker
+            image: {{RAY_IMAGE}}
+            env:
+            - name: TAU_RAY_TRAIN_CONFIG_JSON
+              value: '{"failure_config":{"max_failures":2}}'
+            - name: TAU_DIST_BACKEND
+              value: nccl
+            - name: TAU_NUM_WORKERS
+              value: "2"
+            - name: TAU_WORLD_SIZE
+              value: "2"
+            resources:
+              limits:
+                nvidia.com/gpu: 1
+                cpu: "4"
+                memory: 8Gi
+              requests:
+                nvidia.com/gpu: 1
+                cpu: "2"
+                memory: 4Gi

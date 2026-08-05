@@ -1,0 +1,150 @@
+{{- if .Values.ingestor.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-ingestor
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "ingestor") | nindent 4 }}
+spec:
+  serviceName: {{ include "adx-mon.fullname" . }}-ingestor
+  replicas: {{ .Values.ingestor.replicas }}
+  updateStrategy:
+    type: RollingUpdate
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "ingestor") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "9091"
+        adx-mon/path: /metrics
+        adx-mon/log-destination: "Logs:Ingestor"
+        adx-mon/log-parsers: json
+      labels:
+        app: ingestor
+        {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "ingestor") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "ingestor") }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ingestor
+          image: {{ include "adx-mon.image" (dict "image" .Values.ingestor.image "chart" .Chart) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /ingestor
+          args:
+            - --storage-dir={{ .Values.ingestor.storageDir }}
+            - --max-segment-age={{ .Values.ingestor.maxSegmentAge }}
+            - --max-disk-usage={{ .Values.ingestor.maxDiskUsage | int64 }}
+            - --max-transfer-size={{ .Values.ingestor.maxTransferSize | int64 }}
+            - --max-connections={{ .Values.ingestor.maxConnections | int64 }}
+            - --insecure-skip-verify
+            {{- if .Values.adx.clusterUrl }}
+            - --metrics-kusto-endpoints={{ .Values.adx.metricsDatabase }}={{ .Values.adx.clusterUrl }}
+            - --metrics-kusto-endpoints={{ .Values.adx.costTrackingDatabase }}={{ .Values.adx.clusterUrl }}
+            - --logs-kusto-endpoints={{ .Values.adx.logsDatabase }}={{ .Values.adx.clusterUrl }}
+            - --logs-kusto-endpoints={{ .Values.adx.auditDatabase }}={{ .Values.adx.clusterUrl }}
+            {{- else if .Values.adx.configMapRef }}
+            - --metrics-kusto-endpoints={{ .Values.adx.metricsDatabase }}=$(ADX_CLUSTER_URL)
+            - --metrics-kusto-endpoints={{ .Values.adx.costTrackingDatabase }}=$(ADX_CLUSTER_URL)
+            - --logs-kusto-endpoints={{ .Values.adx.logsDatabase }}=$(ADX_CLUSTER_URL)
+            - --logs-kusto-endpoints={{ .Values.adx.auditDatabase }}=$(ADX_CLUSTER_URL)
+            {{- end }}
+          env:
+            - name: GODEBUG
+              value: http2client=0
+            - name: LOG_LEVEL
+              value: INFO
+            {{- if .Values.adx.clusterUrl }}
+            - name: AZURE_RESOURCE
+              value: {{ .Values.adx.clusterUrl }}
+            {{- else if .Values.adx.configMapRef }}
+            - name: ADX_CLUSTER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.adx.configMapRef }}
+                  key: ADX_CLUSTER_URL
+            - name: AZURE_RESOURCE
+              value: $(ADX_CLUSTER_URL)
+            {{- end }}
+            {{- if .Values.adx.clientId }}
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.adx.clientId }}
+            {{- else if and .Values.adx.configMapRef (not .Values.adx.clusterUrl) }}
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.adx.configMapRef }}
+                  key: ADX_CLIENT_ID
+                  optional: true
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - containerPort: 9090
+              name: ingestor
+            - containerPort: 9091
+              name: metrics
+          # Liveness uses tcpSocket: upstream ingestor has no /healthz, and /readyz
+          # fails on transient ADX outages causing restart loops (see PR #134).
+          # tcpSocket checks the process is listening without depending on backend health.
+          # Required for AKS Automatic compatibility.
+          livenessProbe:
+            tcpSocket:
+              port: 9090
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+              scheme: HTTPS  # ingestor always serves TLS on 9090 (real or fake certs)
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.ingestor.resources | nindent 12 }}
+          volumeMounts:
+            - name: storage
+              mountPath: {{ .Values.ingestor.storageDir }}
+            - name: ca-certs
+              mountPath: /etc/ssl/certs
+              readOnly: true
+            - name: etc-pki-ca-certs
+              mountPath: /etc/pki/ca-trust/extracted
+              readOnly: true
+      {{- with .Values.ingestor.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ingestor.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ingestor.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: ca-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+        - name: storage
+          hostPath:
+            path: {{ .Values.ingestor.storageDir }}
+            type: DirectoryOrCreate
+{{- end }}

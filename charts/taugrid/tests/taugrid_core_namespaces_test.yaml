@@ -1,0 +1,19 @@
+suite: TauGrid core namespace wiring
+templates:
+  - charts/taugrid-core/templates/namespaces.yaml
+tests:
+  - it: creates no service namespace when every service is disabled
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates an enabled portal namespace on a fresh cluster
+    set:
+      taugrid-core.portal.enabled: true
+      taugrid-core.portal.namespace: portal-system
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: portal-system

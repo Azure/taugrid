@@ -1,0 +1,142 @@
+suite: ManagementCommand batching and retention policies
+templates:
+  - templates/management-commands/ingestion-batching.yaml
+  - templates/management-commands/retention-policies.yaml
+tests:
+  # --- Ingestion Batching ---
+  - it: renders ingestion batching ManagementCommands when enabled
+    template: templates/management-commands/ingestion-batching.yaml
+    set:
+      managementCommands.ingestionBatching.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - matchRegex:
+          path: spec.body
+          pattern: "ingestionbatching"
+        documentIndex: 0
+      - equal:
+          path: spec.database
+          value: "Metrics"
+        documentIndex: 0
+      - equal:
+          path: spec.database
+          value: "Logs"
+        documentIndex: 1
+
+  - it: uses configured batching time spans
+    template: templates/management-commands/ingestion-batching.yaml
+    set:
+      managementCommands.ingestionBatching.enabled: true
+      managementCommands.ingestionBatching.metrics.maxBatchingTimeSpan: "00:00:10"
+      managementCommands.ingestionBatching.logs.maxBatchingTimeSpan: "00:00:20"
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: "00:00:10"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.body
+          pattern: "00:00:20"
+        documentIndex: 1
+
+  - it: suppresses batching when disabled
+    template: templates/management-commands/ingestion-batching.yaml
+    set:
+      managementCommands.ingestionBatching.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- Retention Policies ---
+  - it: renders retention ManagementCommands for all databases when enabled
+    template: templates/management-commands/retention-policies.yaml
+    set:
+      managementCommands.retentionPolicies.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: sets correct retention for Metrics database
+    template: templates/management-commands/retention-policies.yaml
+    set:
+      managementCommands.retentionPolicies.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: "RELEASE-NAME-adx-mon-retention-metrics"
+        documentIndex: 0
+      - equal:
+          path: spec.database
+          value: "Metrics"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.body
+          pattern: "softdelete = 90d"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.body
+          pattern: "hot = 14d"
+        documentIndex: 0
+
+  - it: sets correct retention for Audit database (7 years)
+    template: templates/management-commands/retention-policies.yaml
+    set:
+      managementCommands.retentionPolicies.enabled: true
+    asserts:
+      - equal:
+          path: spec.database
+          value: "Audit"
+        documentIndex: 2
+      - matchRegex:
+          path: spec.body
+          pattern: "softdelete = 2555d"
+        documentIndex: 2
+      - matchRegex:
+          path: spec.body
+          pattern: "hot = 30d"
+        documentIndex: 2
+
+  - it: sets correct retention for CostTracking database
+    template: templates/management-commands/retention-policies.yaml
+    set:
+      managementCommands.retentionPolicies.enabled: true
+    asserts:
+      - equal:
+          path: spec.database
+          value: "CostTracking"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.body
+          pattern: "softdelete = 365d"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.body
+          pattern: "hot = 90d"
+        documentIndex: 3
+
+  - it: suppresses retention when disabled
+    template: templates/management-commands/retention-policies.yaml
+    set:
+      managementCommands.retentionPolicies.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: allows custom database retention overrides
+    template: templates/management-commands/retention-policies.yaml
+    set:
+      managementCommands.retentionPolicies.enabled: true
+      managementCommands.retentionPolicies.databases:
+        - name: Metrics
+          softDeletePeriod: 180d
+          hotCachePeriod: 7d
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "softdelete = 180d"
+      - matchRegex:
+          path: spec.body
+          pattern: "hot = 7d"

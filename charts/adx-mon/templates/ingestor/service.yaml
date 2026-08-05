@@ -1,0 +1,18 @@
+{{- if .Values.ingestor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-ingestor
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "ingestor") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "ingestor") | nindent 4 }}
+  ports:
+    - port: 443
+      targetPort: 9090
+      protocol: TCP
+      name: ingest
+{{- end }}

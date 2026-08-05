@@ -1,0 +1,105 @@
+suite: Portal browser access contract
+templates:
+  - templates/portal.yaml
+tests:
+  - it: keeps the default service cluster internal
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: accepts a declared platform-owned authenticated HTTPS proxy
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com/portal
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: rejects a direct LoadBalancer
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.service.type: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.service.type must remain ClusterIP; expose Portal only through a platform-owned authenticated HTTPS proxy"
+
+  - it: rejects an unsupported access mode
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: public
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.access.mode must be cluster-internal or authenticated-proxy
+
+  - it: rejects a proxy declaration without its browser URL
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: authenticated-proxy
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.access.mode=authenticated-proxy requires portal.access.externalURL
+
+  - it: rejects a non-HTTPS browser URL
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: http://portal.example.com/portal
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.access.externalURL must be an HTTPS URL with a host and without credentials, query, or fragment"
+
+  - it: rejects a malformed HTTPS browser URL
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: "https://:"
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.access.externalURL must be an HTTPS URL with a host and without credentials, query, or fragment"
+
+  - it: rejects credentials in the browser URL
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://user:password@portal.example.com/portal
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.access.externalURL must be an HTTPS URL with a host and without credentials, query, or fragment"
+
+  - it: rejects query parameters in the browser URL
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com/portal?token=value
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.access.externalURL must be an HTTPS URL with a host and without credentials, query, or fragment"
+
+  - it: rejects an external URL for a cluster-internal deployment
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.access.externalURL: https://portal.example.com/portal
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.access.externalURL requires portal.access.mode=authenticated-proxy

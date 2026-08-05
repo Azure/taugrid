@@ -1,0 +1,126 @@
+suite: Portal Jobs board scope modes
+templates:
+  - templates/portal.yaml
+tests:
+  - it: relies on the current binary's fail-closed default without new flags
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --jobs-scope-mode
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --namespace
+
+  - it: renders an explicit disabled mode for compatible images
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.jobs.scopeMode: disabled
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --jobs-scope-mode
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: disabled
+
+  - it: preserves the legacy jobs namespace as the Ray and Runs fallback
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.jobs.namespace: legacy-ns
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --namespace
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: legacy-ns
+
+  - it: renders exact trusted operator scopes
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.jobs.scopeMode: operator
+      portal.jobs.operatorScopes:
+        - team: team-a
+          namespace: namespace-a
+          localQueue: jobqueue
+        - team: team-b
+          namespace: namespace-b
+          localQueue: jobqueue
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: operator
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: team-a=namespace-a/jobqueue
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: team-b=namespace-b/jobqueue
+
+  - it: rejects operator mode without explicit scopes
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.jobs.scopeMode: operator
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.jobs.scopeMode=operator requires at least one portal.jobs.operatorScopes entry
+
+  - it: rejects workspace mode without a workspace directory
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.jobs.scopeMode: workspace
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.jobs.scopeMode=workspace requires portal.workspaceDirectory.enabled=true
+
+  - it: rejects duplicate namespace and LocalQueue operator scopes
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.jobs.scopeMode: operator
+      portal.jobs.operatorScopes:
+        - team: team-a
+          namespace: shared
+          localQueue: jobqueue
+        - team: team-b
+          namespace: shared
+          localQueue: jobqueue
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.jobs.operatorScopes contains duplicate namespace/LocalQueue scope shared/jobqueue
+
+  - it: accepts team-qualified workspace Jobs scopes
+    values:
+      - workspace-directory-values.yaml
+    set:
+      portal.jobs.scopeMode: workspace
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: workspace
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --workspace-directory

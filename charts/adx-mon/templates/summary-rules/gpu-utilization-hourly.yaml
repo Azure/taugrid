@@ -1,0 +1,57 @@
+{{- if and .Values.summaryRules.enabled .Values.summaryRules.items.gpuUtilizationHourly.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-gpu-utilization-hourly
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: summary-rule
+spec:
+  database: {{ .Values.summaryRules.items.gpuUtilizationHourly.database | quote }}
+  table: {{ .Values.summaryRules.items.gpuUtilizationHourly.table | quote }}
+  interval: {{ .Values.summaryRules.items.gpuUtilizationHourly.interval | quote }}
+  {{- with .Values.summaryRules.items.gpuUtilizationHourly.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  body: |
+    // Hourly GPU utilization rollup: avg/max/p95 utilization, temperature, power, memory per node+GPU.
+    // Source: DCGM Prometheus metrics in Metrics database.
+    let gpu_util = DCGMFIDEVGPUUTIL
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend gpu = tostring(labels.gpu),
+             instance = tostring(labels.instance),
+             modelName = tostring(labels.modelName),
+             namespace = tostring(labels.exported_namespace),
+             pod = tostring(labels.pod)
+    | summarize
+        avg_util = avg(Value),
+        max_util = max(Value),
+        p95_util = percentile(Value, 95)
+        by bin(Timestamp, 1h), instance, gpu, modelName;
+    let gpu_temp = DCGMFIDEVGPUTEMP
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend gpu = tostring(labels.gpu), instance = tostring(labels.instance)
+    | summarize avg_temp = avg(Value), max_temp = max(Value) by bin(Timestamp, 1h), instance, gpu;
+    let gpu_power = DCGMFIDEVPOWERUSAGE
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend gpu = tostring(labels.gpu), instance = tostring(labels.instance)
+    | summarize avg_power = avg(Value), max_power = max(Value) by bin(Timestamp, 1h), instance, gpu;
+    let gpu_mem_used = DCGMFIDEVFBUSED
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend gpu = tostring(labels.gpu), instance = tostring(labels.instance)
+    | summarize avg_mem_used = avg(Value), max_mem_used = max(Value) by bin(Timestamp, 1h), instance, gpu;
+    gpu_util
+    | join kind=leftouter gpu_temp on Timestamp, instance, gpu
+    | join kind=leftouter gpu_power on Timestamp, instance, gpu
+    | join kind=leftouter gpu_mem_used on Timestamp, instance, gpu
+    | project Timestamp, instance, gpu, modelName,
+        avg_util, max_util, p95_util,
+        avg_temp, max_temp, avg_power, max_power,
+        avg_mem_used, max_mem_used
+{{- end }}

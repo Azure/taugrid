@@ -1,0 +1,16 @@
+{{- if .Values.collectorSingleton.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-collector-singleton
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "collector-singleton") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "adx-mon.fullname" . }}-collector-singleton
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "collector-singleton") }}
+    namespace: {{ include "adx-mon.namespace" . }}
+{{- end }}

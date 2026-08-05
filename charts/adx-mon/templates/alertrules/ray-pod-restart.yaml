@@ -1,0 +1,61 @@
+{{- if and .Values.alertRules.enabled .Values.alertRules.ray.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-ray-pod-restart
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertrule
+  annotations:
+    adx-mon/sig: "Ray"
+spec:
+  database: {{ .Values.adx.metricsDatabase | quote }}
+  interval: {{ .Values.alertRules.ray.podRestart.interval | quote }}
+  {{- with .Values.alertRules.ray.podRestart.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  query: |
+    // Alert on Ray pods with excessive container restarts, which indicates
+    // liveness/readiness probe flapping or crash loops.
+    // Identifies Ray pods via the ray.io/is-ray-node label (set by KubeRay)
+    // rather than pod name, since KubeRay derives pod names from the
+    // user-supplied RayCluster name and does not add a "ray-" prefix.
+    let ray_pods = KubePodLabels
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | where labels.label_ray_io_is_ray_node == "yes"
+    | extend namespace = tostring(labels.namespace),
+             pod = tostring(labels.pod)
+    | distinct namespace, pod;
+    let restart_data = KubePodContainerStatusRestartsTotal
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.namespace),
+             pod = tostring(labels.pod),
+             container = tostring(labels.container);
+    let ray_restarts = restart_data
+    | join kind=inner ray_pods on namespace, pod;
+    let restart_rate = ray_restarts
+    | summarize min_restarts = min(Value), max_restarts = max(Value),
+                earliest = min(Timestamp), latest = max(Timestamp)
+      by namespace, pod, container
+    | extend restart_delta = max_restarts - min_restarts
+    | where restart_delta >= {{ .Values.alertRules.ray.podRestart.restartThreshold }};
+    restart_rate
+    | extend Severity = 3
+    | extend Title = strcat("Ray pod ", pod, "/", container, " restarting excessively")
+    | extend Summary = strcat("Container ", container, " in pod ", pod, " (namespace ", namespace,
+        ") had ", tostring(toint(restart_delta)), " restart(s) in the evaluation window.")
+    | extend Description = strcat("Pod ", pod, "/", container, " in namespace ", namespace,
+        " has restarted ", tostring(toint(restart_delta)), " time(s) between ",
+        format_datetime(earliest, "yyyy-MM-dd HH:mm:ss"), " and ",
+        format_datetime(latest, "yyyy-MM-dd HH:mm:ss"),
+        " UTC. This typically indicates liveness or readiness probe failures, OOM kills, or crash loops.")
+    | extend CorrelationId = strcat(namespace, "/", pod, "/", container)
+  destination: {{ .Values.alertRules.ray.podRestart.destination | default "" | quote }}
+  {{- if .Values.alertRules.ray.podRestart.autoMitigateAfter }}
+  autoMitigateAfter: {{ .Values.alertRules.ray.podRestart.autoMitigateAfter | quote }}
+  {{- end }}
+{{- end }}

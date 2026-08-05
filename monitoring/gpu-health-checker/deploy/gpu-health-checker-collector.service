@@ -1,0 +1,24 @@
+[Unit]
+Description=GPU Health Checker Collector (DCGM-based)
+Documentation=https://github.com/Azure/taugrid
+After=network.target dcgm.service
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpu-health-checker collect \
+    --config /etc/gpu-health-checker/config.yaml \
+    --db /var/run/gpu-health/health.db
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=gpu-health
+RuntimeDirectoryMode=0755
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/run/gpu-health
+
+[Install]
+WantedBy=multi-user.target

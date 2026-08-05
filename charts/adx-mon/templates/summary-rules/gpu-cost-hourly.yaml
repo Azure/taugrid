@@ -1,0 +1,65 @@
+{{- if and .Values.summaryRules.enabled .Values.summaryRules.items.gpuCostHourly.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-gpu-cost-hourly
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: summary-rule
+spec:
+  database: {{ .Values.summaryRules.items.gpuCostHourly.database | quote }}
+  table: {{ .Values.summaryRules.items.gpuCostHourly.table | quote }}
+  interval: {{ .Values.summaryRules.items.gpuCostHourly.interval | quote }}
+  {{- with .Values.summaryRules.items.gpuCostHourly.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  body: |
+    // Hourly GPU cost calculation: GPU requests × per-GPU-hour rate by namespace.
+    // GPU rates are inlined as a datatable (sourced from values.yaml cost.gpuRates).
+    // ConfigMap gpu-rates.json serves as GitOps documentation; KQL cannot read K8s resources.
+    // Cost model: allocation-based (gpu_count × rate). Utilization tracked for analysis.
+    let gpu_rates = datatable(sku:string, rate_per_gpu_hour:real) [
+    {{- range $sku, $rate := .Values.cost.gpuRates }}
+        "{{ $sku }}", {{ $rate }},
+    {{- end }}
+    ];
+    // NOTE: Allocation-based costing — a pod is billed for the full hour in which
+    // it appears, regardless of actual runtime within that hour. A 5-minute pod
+    // requesting 1 GPU is charged 1 GPU-hour. This is intentional; for fractional-
+    // hour weighting, sample coverage logic would be needed.
+    let gpu_requests = database("{{ .Values.adx.metricsDatabase }}").KubePodContainerResourceRequests
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | where tostring(labels.resource) == "nvidia_com_gpu"
+    | extend namespace = tostring(labels.namespace),
+             pod = tostring(labels.pod),
+             node = tostring(labels.node),
+             container = tostring(labels.container)
+    | summarize container_gpus = max(Value) by bin(Timestamp, 1h), namespace, pod, node, container
+    | summarize gpu_count = sum(container_gpus) by Timestamp, namespace, pod, node;
+    let node_skus = database("{{ .Values.adx.metricsDatabase }}").KubeNodeLabels
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend node = tostring(labels.node),
+             sku = tostring(labels.label_node_kubernetes_io_instance_type)
+    | summarize arg_max(Timestamp, sku) by node;
+    let gpu_util_by_pod = database("{{ .Values.adx.metricsDatabase }}").DCGMFIDEVGPUUTIL
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.exported_namespace),
+             pod = tostring(labels.pod)
+    | where isnotempty(pod)
+    | summarize avg_util = avg(Value) by bin(Timestamp, 1h), namespace, pod;
+    gpu_requests
+    | join kind=leftouter node_skus on node
+    | join kind=leftouter gpu_util_by_pod on Timestamp, namespace, pod
+    | join kind=leftouter gpu_rates on sku
+    | extend avg_util = coalesce(avg_util, 0.0),
+             sku = coalesce(sku, "unknown"),
+             rate_per_gpu_hour = coalesce(rate_per_gpu_hour, 0.0)
+    | extend hourly_cost = gpu_count * rate_per_gpu_hour
+    | project Timestamp, namespace, pod, node, sku, gpu_count, avg_util,
+        rate_per_gpu_hour, hourly_cost
+{{- end }}

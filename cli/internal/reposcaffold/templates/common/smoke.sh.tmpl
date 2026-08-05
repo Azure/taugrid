@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="${PROJECT_ROOT:-/workspace}"
+cd "$PROJECT_ROOT"
+
+exec uv run python -m {{.Package}}.smoke

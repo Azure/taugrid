@@ -1,0 +1,28 @@
+apiVersion: tau.azure.com/v1alpha1
+kind: TauCluster
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/name: tau-core-controller
+    app.kubernetes.io/part-of: taugrid
+spec:
+  # Keep this concrete Kustomize desired state aligned with values.yaml. Argo CD
+  # overlays can patch the rule list when they introduce another ResourceFlavor.
+  managementMode: Reconcile
+  deletionPolicy: Retain
+  nodes:
+    labelRules:
+      - match:
+          vmSizes:
+            - Standard_ND96amsr_A100_v4
+        labels:
+          kueue.azure.com/gpu-series: ndm-a100-v4
+      - match:
+          vmSizes:
+            - Standard_ND96isr_H200_v5
+        labels:
+          kueue.azure.com/gpu-series: nd-h200-v5
+  queues:
+    ownership: External

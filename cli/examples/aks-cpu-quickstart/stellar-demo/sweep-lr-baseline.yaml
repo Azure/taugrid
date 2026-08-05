@@ -1,0 +1,47 @@
+# Direct `tau run --config` schema (docs/tau/tau-run-config.md) -- NOT the
+# managed workflow manifest schema used by ../tau.yaml. This variant is
+# required because `run.working_dir` (needed to ship the local `tau/`
+# package containing the real Stellar SDK -- see tau/__init__.py) is only
+# supported under this schema's `engine: ray`.
+name: sweep-lr-baseline
+engine: ray
+run:
+  entrypoint: train.py
+  # Ships this whole directory (train.py + tau/) to every Ray pod so
+  # `from tau import stellar` resolves in-cluster. Ray unpacks the archive
+  # and prepends it to PYTHONPATH; the entrypoint runs as `python3 -m train`
+  # regardless of process CWD.
+  working_dir: .
+compute:
+  # CPU-only. `workers: 2` = 1 head + 1 worker pod, i.e. exactly one Ray
+  # Train worker process (see train.py) -- this keeps the post-run
+  # `kubectl cp` retrieval of /tmp/tau_stellar_demo unambiguous (README.md),
+  # unlike the sibling 5-pod ../tau.yaml demo.
+  workers: 2
+  # gpus_per_worker defaults to 1 in this schema -- must be zeroed explicitly
+  # for a CPU-only demo (unlike the managed schema's `gpus: 0`, which
+  # defaults to 0 already).
+  gpus_per_worker: 0
+  # Same OOM history as ../tau.yaml (Ray GCS + dashboard + a connecting
+  # worker exceed the 2Gi default at steady state on a real AKS cluster) --
+  # bump head memory the same way.
+  head_cpu_request: "1"
+  head_memory_request: 4Gi
+  head_memory_limit: 4Gi
+  worker_cpu_request: "2"
+  worker_memory_request: 4Gi
+  worker_memory_limit: 4Gi
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+  pip:
+    # torch is imported directly by train.py; the base Ray image does not
+    # ship it. CPU-only wheel from the default PyPI index (no CUDA extra
+    # index needed for Standard_D nodes).
+    - torch>=2.4.0
+  env:
+    # DEMO_* not TAU_* -- `tau` reserves the TAU_ prefix for its own contract
+    # and rejects the config at render time if you use it.
+    DEMO_EXPERIMENT: "lr-sweep"
+    DEMO_VARIANT: "lr-2e-3"
+    DEMO_LR: "2e-3"
+    DEMO_STEPS: "48"

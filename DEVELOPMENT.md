@@ -1,10 +1,6 @@
 # TauGrid Development Guide
 
-This guide describes the intended public development workflow for TauGrid.
-Product components are being migrated from the private AKS AI Runtime integration
-repository. Until a component is present here, its commands below describe the
-validation contract it must satisfy when migrated; they are not a claim that the
-component is already available in this repository.
+This guide describes the development workflow for TauGrid.
 
 ## Repository Layout
 
@@ -12,7 +8,9 @@ The public repository is organized by ownership and release boundary:
 
 | Path | Contents |
 | --- | --- |
-| `cli/` | Go `tau` CLI, renderers, lifecycle tools, Portal, and Stellar |
+| `cli/` | Go `tau` CLI, renderers, and lifecycle tools |
+| `core/` | Shared library linked by the CLI and the portal |
+| `portal/` | Stellar experiment tracking and the observability portal |
 | `sdk/python/` | Python authoring SDK |
 | `controllers/` | Workspace and Ray dashboard controllers |
 | `monitoring/` | GPU health and metrics components |

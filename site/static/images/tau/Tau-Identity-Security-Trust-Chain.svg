@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Identity and security: two separate trust chains</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Human access to Kubernetes is not the same thing as workload access to cloud data and secrets</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="1580" y="108" width="150" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1655" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1655" dy="0">SHIPPED</tspan></text>
+<rect x="1744" y="108" width="190" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1839" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1839" dy="0">EXPERIMENTAL</tspan></text>
+<rect x="1948" y="108" width="140" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="2018" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="2018" dy="0">FUTURE</tspan></text>
+<rect x="56" y="230" width="2088" height="410" rx="22" fill="transparent" stroke="#D13438" stroke-width="4"/>
+<text x="90" y="279" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="90" dy="0">A · RESEARCHER → KUBERNETES API</tspan></text>
+<rect x="1740" y="250" width="330" height="44" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="1905" y="274" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1905" dy="0">CURRENT TEMPORARY PATH</tspan></text>
+<rect x="96" y="344" width="330" height="210" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="394" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="148" y="398" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">USER</tspan></text>
+<text x="192" y="384" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">HUMAN IDENTITY</tspan></text>
+<text x="192" y="427" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="192" dy="0">Researcher /</tspan><tspan x="192" dy="29">Entra group</tspan></text>
+<text x="124" y="492" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="124" dy="0">Initiating person or</tspan><tspan x="124" dy="22">team identity</tspan></text>
+<rect x="516" y="344" width="330" height="210" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="568" cy="394" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="568" y="398" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="568" dy="0">AUTH</tspan></text>
+<text x="612" y="384" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="612" dy="0">CLUSTER CREDENTIAL</tspan></text>
+<text x="612" y="427" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="612" dy="0">AKS cluster-user</tspan><tspan x="612" dy="29">access</tspan></text>
+<text x="544" y="492" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="544" dy="0">Broad shared access in</tspan><tspan x="544" dy="22">current test descriptors</tspan></text>
+<rect x="936" y="344" width="330" height="210" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="988" cy="394" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="988" y="398" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="988" dy="0">API</tspan></text>
+<text x="1032" y="384" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1032" dy="0">API AUTHORIZATION</tspan></text>
+<text x="1032" y="427" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1032" dy="0">Kubernetes API</tspan><tspan x="1032" dy="29">server</tspan></text>
+<text x="964" y="492" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="964" dy="0">Evaluates the credential's</tspan><tspan x="964" dy="22">existing permissions</tspan></text>
+<rect x="1356" y="344" width="330" height="210" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1408" cy="394" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1408" y="398" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1408" dy="0">WS</tspan></text>
+<text x="1452" y="384" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1452" dy="0">WORKSPACE DEFAULTS</tspan></text>
+<text x="1452" y="427" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1452" dy="0">Namespace +</tspan><tspan x="1452" dy="29">queue routing</tspan></text>
+<text x="1384" y="491" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="1384" dy="0">TauWorkspace grants no access</tspan><tspan x="1384" dy="21">in cluster-wide mode</tspan></text>
+<rect x="1776" y="344" width="330" height="210" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1828" cy="394" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="1828" y="398" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1828" dy="0">!</tspan></text>
+<text x="1872" y="384" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1872" dy="0">BOUNDARY</tspan></text>
+<text x="1872" y="427" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1872" dy="0">Not researcher</tspan><tspan x="1872" dy="29">isolation</tspan></text>
+<text x="1804" y="491" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="1804" dy="0">Audit sees shared cluster identity,</tspan><tspan x="1804" dy="21">not the initiating human</tspan></text>
+<polyline points="426,449 516,449" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="846,449 936,449" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1266,449 1356,449" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1686,449 1776,449" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="261,344 261,300 1520,300 1520,344" fill="none" stroke="#5C2D91" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="720" y="278" width="800" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1120" y="302" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1120" dy="0">FUTURE: WORKSPACE-RBAC AUTHORIZES THE HUMAN TO ONE NAMESPACE</tspan></text>
+<rect x="56" y="690" width="2088" height="410" rx="22" fill="transparent" stroke="#038387" stroke-width="4"/>
+<text x="90" y="739" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="90" dy="0">B · WORKLOAD POD → AZURE RESOURCE</tspan></text>
+<rect x="1770" y="710" width="300" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1920" y="734" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1920" dy="0">SHIPPED AZURE PATTERN</tspan></text>
+<rect x="96" y="804" width="330" height="210" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="854" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="148" y="858" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">SA</tspan></text>
+<text x="192" y="844" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">POD IDENTITY</tspan></text>
+<text x="192" y="887" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="192" dy="0">Workspace</tspan><tspan x="192" dy="29">ServiceAccount</tspan></text>
+<text x="124" y="951" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="124" dy="0">Dedicated managed-identity</tspan><tspan x="124" dy="21">client ID annotation</tspan></text>
+<rect x="516" y="804" width="330" height="210" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="568" cy="854" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="568" y="858" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="568" dy="0">OIDC</tspan></text>
+<text x="612" y="844" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="612" dy="0">FEDERATION</tspan></text>
+<text x="612" y="887" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="612" dy="0">Projected OIDC</tspan><tspan x="612" dy="29">token</tspan></text>
+<text x="544" y="951" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="544" dy="0">AKS workload-identity webhook</tspan><tspan x="544" dy="21">provides the token</tspan></text>
+<rect x="936" y="804" width="330" height="210" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="988" cy="854" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="988" y="858" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="988" dy="0">MI</tspan></text>
+<text x="1032" y="844" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1032" dy="0">AZURE IDENTITY</tspan></text>
+<text x="1032" y="887" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1032" dy="0">User-assigned</tspan><tspan x="1032" dy="29">identity</tspan></text>
+<text x="964" y="951" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="964" dy="0">Federated credential exchanges</tspan><tspan x="964" dy="21">token for Azure access</tspan></text>
+<rect x="1356" y="804" width="750" height="210" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1408" cy="854" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1408" y="858" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1408" dy="0">AZ</tspan></text>
+<text x="1452" y="844" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1452" dy="0">LEAST-PRIVILEGE DATA PLANE</tspan></text>
+<text x="1452" y="887" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1452" dy="0">Key Vault · Blob storage · container registry</tspan></text>
+<text x="1384" y="953" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1384" dy="0">Azure RBAC limits access to</tspan><tspan x="1384" dy="23">specific secrets, data, and images</tspan></text>
+<polyline points="426,909 516,909" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="846,909 936,909" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1266,909 1356,909" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="240" y="1126" width="760" height="44" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="620" y="1150" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="620" dy="0">IAC CREATES: IDENTITY • FEDERATED CREDENTIAL • AZURE RBAC</tspan></text>
+<rect x="1040" y="1126" width="880" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1480" y="1150" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1480" dy="0">CONTROLLER RECONCILES: SERVICEACCOUNT ANNOTATION • READINESS</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Never point a workspace at a shared broad-privilege managed identity; human authorization and pod workload identity must be reviewed independently.</tspan></text>
+</svg>

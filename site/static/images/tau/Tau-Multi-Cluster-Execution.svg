@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Multi-cluster execution and data locality</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">An experimental manager/worker contract that must prove dependency parity before any-worker dispatch is safe</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="184" width="790" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="451" y="208" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="451" dy="0">EXPERIMENTAL • OPERATOR-ONLY PREFLIGHT • NOT A DEFAULT RESEARCHER PATH</tspan></text>
+<rect x="56" y="260" width="620" height="650" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4" stroke-dasharray="12 9"/>
+<text x="366" y="308" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="366" dy="0">MANAGER CLUSTER</tspan></text>
+<rect x="106" y="370" width="520" height="180" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="158" cy="420" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="158" y="424" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="158" dy="0">RUN</tspan></text>
+<text x="202" y="410" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="202" dy="0">SUBMISSION</tspan></text>
+<text x="202" y="454" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="202" dy="0">Tau → manager queue</tspan></text>
+<text x="134" y="515" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="134" dy="0">Workload intent · priority · resources</tspan><tspan x="134" dy="18">and dependency contract</tspan></text>
+<rect x="106" y="590" width="520" height="180" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="158" cy="640" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="158" y="644" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="158" dy="0">MKQ</tspan></text>
+<text x="202" y="630" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="202" dy="0">MULTIKUEUE</tspan></text>
+<text x="202" y="674" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="202" dy="0">Select a worker</tspan></text>
+<text x="134" y="735" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="134" dy="0">Choose among enabled workers using</tspan><tspan x="134" dy="18">queue policy and available capacity</tspan></text>
+<rect x="156" y="810" width="420" height="44" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="366" y="834" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="366" dy="0">CREDENTIALS ARE A PLATFORM BOUNDARY</tspan></text>
+<rect x="790" y="260" width="530" height="650" rx="22" fill="transparent" stroke="#F7630C" stroke-width="4" stroke-dasharray="12 9"/>
+<text x="1055" y="308" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1055" dy="0">DEPENDENCY PREFLIGHT</tspan></text>
+<rect x="840" y="350" width="430" height="80" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="892" cy="400" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="892" y="404" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="892" dy="0">API</tspan></text>
+<text x="936" y="390" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="936" dy="0">CHECK 1</tspan></text>
+<text x="936" y="427" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="936" dy="0">CRD / version compatibility</tspan></text>
+<rect x="840" y="450" width="430" height="80" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="892" cy="500" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="892" y="504" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="892" dy="0">PVC</tspan></text>
+<text x="936" y="490" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="936" dy="0">CHECK 2</tspan></text>
+<text x="936" y="527" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="936" dy="0">PVC + StorageClass name parity</tspan></text>
+<rect x="840" y="550" width="430" height="80" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="892" cy="600" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="892" y="604" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="892" dy="0">SA</tspan></text>
+<text x="936" y="590" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="936" dy="0">CHECK 3</tspan></text>
+<text x="936" y="627" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="936" dy="0">ServiceAccount and secret dependencies</tspan></text>
+<rect x="840" y="650" width="430" height="80" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="892" cy="700" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="892" y="704" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="892" dy="0">IMG</tspan></text>
+<text x="936" y="690" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="936" dy="0">CHECK 4</tspan></text>
+<text x="936" y="727" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="936" dy="0">Image pull and runtime availability</tspan></text>
+<rect x="840" y="750" width="430" height="80" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="892" cy="800" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="892" y="804" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="892" dy="0">DATA</tspan></text>
+<text x="936" y="790" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="936" dy="0">CHECK 5</tspan></text>
+<text x="936" y="827" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#000000"><tspan x="936" dy="0">Dataset locality and durable outputs</tspan></text>
+<rect x="870" y="850" width="370" height="44" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="1055" y="874" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1055" dy="0">FAIL CLOSED ON MISSING PARITY</tspan></text>
+<rect x="1434" y="260" width="710" height="650" rx="22" fill="transparent" stroke="#107C10" stroke-width="4" stroke-dasharray="12 9"/>
+<text x="1789" y="308" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1789" dy="0">WORKER CLUSTERS</tspan></text>
+<rect x="1484" y="360" width="280" height="200" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1536" cy="410" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1536" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1536" dy="0">A</tspan></text>
+<text x="1580" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1580" dy="0">WORKER A</tspan></text>
+<text x="1580" y="443" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1580" dy="0">GPU capacity</tspan></text>
+<text x="1512" y="504" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#000000"><tspan x="1512" dy="0">Own queue, nodes,</tspan><tspan x="1512" dy="17">storage, identity,</tspan><tspan x="1512" dy="17">and runtime</tspan></text>
+<rect x="1814" y="360" width="280" height="200" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1866" cy="410" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1866" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1866" dy="0">B</tspan></text>
+<text x="1910" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1910" dy="0">WORKER B</tspan></text>
+<text x="1910" y="443" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1910" dy="0">GPU capacity</tspan></text>
+<text x="1842" y="504" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#000000"><tspan x="1842" dy="0">May differ in region,</tspan><tspan x="1842" dy="17">GPU SKU, price,</tspan><tspan x="1842" dy="17">and pressure</tspan></text>
+<rect x="1484" y="620" width="610" height="190" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1536" cy="670" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1536" y="674" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1536" dy="0">BACK</tspan></text>
+<text x="1580" y="660" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1580" dy="0">STATUS + OUTPUT RETURN</tspan></text>
+<text x="1580" y="703" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1580" dy="0">Manager observes the remote workload</tspan></text>
+<text x="1512" y="765" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1512" dy="0">Terminal state and durable references return.</tspan><tspan x="1512" dy="18">Running pods and local scratch do not migrate.</tspan></text>
+<polyline points="676,585 790,585" fill="none" stroke="#5C2D91" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<polyline points="1320,585 1434,585" fill="none" stroke="#F7630C" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="260" y="960" width="510" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="515" y="984" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="515" dy="0">DEFERRED: AUTOMATIC DATASET REPLICATION</tspan></text>
+<rect x="800" y="960" width="850" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1225" y="984" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1225" dy="0">DECISION INPUTS: CAPACITY • DATA LOCALITY • COST • COMPATIBILITY</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">MultiKueue dispatch does not make worker dependencies portable by magic; storage, identity, images, APIs, and data must already satisfy the contract.</tspan></text>
+</svg>

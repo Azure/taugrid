@@ -1,0 +1,28 @@
+name: tau-kind-ray
+engine: ray
+entrypoint: ray_train.py
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+  env:
+    KIND_RAY_MARKER: tau-kind-ray
+compute:
+  workers: 2
+  gpus_per_worker: 0
+  head_cpu_request: "1"
+  head_memory_request: 512Mi
+  head_cpu_limit: "1"
+  head_memory_limit: 2Gi
+  worker_cpu_request: 500m
+  worker_memory_request: 256Mi
+  worker_cpu_limit: "1"
+  worker_memory_limit: 768Mi
+policy:
+  namespace: ray
+  profile: kind-cpu
+  queue: kind-cpu
+  lane: training
+  priority: default
+experiment:
+  project: Tau Local
+  name: kind-ray-smoke
+  group: local-kind

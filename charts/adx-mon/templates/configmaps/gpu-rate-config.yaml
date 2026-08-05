@@ -1,0 +1,13 @@
+{{- if .Values.cost.gpuRates }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-gpu-rates
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cost
+data:
+  gpu-rates.json: |
+    {{- .Values.cost.gpuRates | toJson | nindent 4 }}
+{{- end }}

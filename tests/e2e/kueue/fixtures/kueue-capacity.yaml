@@ -1,0 +1,33 @@
+apiVersion: ai-runtime.aks/v1alpha1
+kind: KueueCapacityInventory
+metadata:
+  name: e2e-kueue-capacity
+spec:
+  resources:
+  - flavor: default-cpu
+    resource: cpu
+    capacity: "3"
+  - flavor: e2e-stack-flavor
+    resource: cpu
+    capacity: "6"
+  - flavor: e2e-stack-flavor
+    resource: memory
+    capacity: 20Gi
+  - flavor: e2e-stack-flavor
+    resource: nvidia.com/gpu
+    capacity: "2"
+  - flavor: e2e-stack-large-gpu-flavor
+    resource: cpu
+    capacity: "96"
+  - flavor: e2e-stack-large-gpu-flavor
+    resource: memory
+    capacity: 1536Gi
+  - flavor: e2e-stack-large-gpu-flavor
+    resource: nvidia.com/gpu
+    capacity: "16"
+  # InfiniBand RDMA shared device advertised by the device plugin once
+  # enable-infiniband.sh has run. The plugin advertises rdmaHcaMax (63) per H200
+  # node; 2 nodes => 126 available. The FineWeb IB job reserves 32 (16 workers + headroom).
+  - flavor: e2e-stack-large-gpu-flavor
+    resource: rdma/rdma_shared_device_a
+    capacity: "126"

@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+
+def main() -> None:
+    output_dir = Path(os.environ.get("TAU_OUTPUT_DIR", "/tmp/{{.Package}}-smoke"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "status": "ok",
+        "project": "{{.Name}}",
+        "package": "{{.Package}}",
+        "message": "Synthetic Tau smoke path succeeded.",
+    }
+    (output_dir / "smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()

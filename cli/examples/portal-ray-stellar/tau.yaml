@@ -1,0 +1,61 @@
+# tau run --config tau.yaml
+#
+# Single RayJob that lights BOTH portal detail-page links:
+#   - "Ray dashboard"        (RayJob -> RayCluster head Service)
+#   - "Open in Experiments"  (Stellar; metrics offload writes a terminal
+#                             tau/run_status marker to Kusto on shutdown)
+#
+# Submit (offload image pinned by digest). The metrics-offload sidecar runs
+# `taugrid-portal experiment offload metrics`, a verb only the taugrid-portal
+# image installs (at /usr/local/bin/taugrid-portal); the plain `tau` image
+# does NOT contain it, so the sidecar must use a taugrid-portal image:
+#
+#   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
+#   tau run --config tau.yaml
+#
+# NOTE (namespace): this runs in `tau-default`, the canonical Tau workspace
+# namespace on both flex and eastus2. It has a Ready cluster-wide `default`
+# TauWorkspace AND a writable /data `blob-training` PVC (offload prerequisites),
+# and the deployed portal is scoped to it (portal.workloadNamespace), so the run
+# appears on the Runs list board as well as at its detail URL
+#   /portal/runs/tau-default/<run-name>
+
+name: portal-ray-stellar
+
+engine: ray
+entrypoint: train.py
+
+compute:
+  workers: 1                       # one head-only execution pod
+  gpus_per_worker: 0            # CPU-only: runs on any Kueue-admitted queue
+  head_cpu_request: "1"
+  head_memory_request: "4Gi"
+  head_cpu_limit: "2"
+  head_memory_limit: "6Gi"
+  worker_cpu_request: "500m"
+  worker_memory_request: "1Gi"
+  worker_cpu_limit: "1"
+  worker_memory_limit: "2Gi"
+
+policy:
+  workspace: default
+  namespace: tau-default
+  queue: jobqueue
+
+storage:
+  data_pvc: blob-training       # mounted at /data
+  output: /data/tau-workspaces/default/portal-ray-stellar
+
+# Stellar wiring: the offload sidecar watches immutable chunks and remote-writes rows
+# (plus a terminal tau/run_status marker) to Kusto. Path is relative to
+# storage.output.
+metrics:
+  history:
+    - metrics-history-attempt-0/*.jsonl
+  offload:
+    enabled: true
+
+experiment:
+  project: portal-demo
+  name: ray-plus-stellar
+  group: default

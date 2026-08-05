@@ -1,0 +1,68 @@
+suite: Stellar external storage contract
+templates:
+  - templates/stellar.yaml
+tests:
+  - it: rejects local mode without a pre-provisioned expstore claim
+    set:
+      stellar.enabled: true
+      stellar.source: local
+      stellar.workspace: sample
+      stellar.image.tag: pinned
+      stellar.expstore.pvcName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: stellar.expstore.pvcName must name a pre-provisioned platform-managed PVC when stellar.source=local or auto
+
+  - it: renders Kusto mode without writable storage or overlay arguments
+    set:
+      stellar.enabled: true
+      stellar.source: kusto
+      stellar.workspace: sample
+      stellar.image.tag: pinned
+      stellar.kusto.metricsFile: /tmp/metrics.json
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - isNull:
+          path: spec.template.spec.volumes
+        documentIndex: 0
+      - isNull:
+          path: spec.template.spec.containers[0].volumeMounts
+        documentIndex: 0
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --overlay-store
+        documentIndex: 0
+
+  - it: mounts the existing expstore claim for local debug mode
+    set:
+      stellar.enabled: true
+      stellar.source: local
+      stellar.workspace: sample
+      stellar.image.tag: pinned
+      stellar.expstore.pvcName: platform-expstore
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: platform-expstore
+        documentIndex: 0
+
+  - it: rejects direct browser exposure of standalone Stellar
+    set:
+      stellar.enabled: true
+      stellar.source: kusto
+      stellar.workspace: sample
+      stellar.image.tag: pinned
+      stellar.kusto.metricsFile: /tmp/metrics.json
+      stellar.service.type: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorMessage: "stellar.service.type must remain ClusterIP; use the Portal authenticated-proxy contract for researcher browser access"

@@ -1,0 +1,19 @@
+suite: CRD installation
+# NOTE: CRDs moved from templates/crds/ to crds/ (Helm v3 native CRD install directory).
+# Helm applies crds/ files before all template resources — this solves the chicken-and-egg
+# problem on first deploy to a fresh cluster. CRDs in crds/ are applied unconditionally
+# (no Go template processing). The crds.install values.yaml key is retained for documentation.
+#
+# helm-unittest does not scan crds/ so this suite uses a lightweight operator template
+# as a proxy to verify the chart renders correctly now that CRDs are pre-installed by Helm.
+templates:
+  - templates/operator/deployment.yaml
+tests:
+  - it: chart renders operator deployment (CRDs now in crds/ dir — installed before templates)
+    set:
+      adx.clusterUrl: "https://test.eastus2.kusto.windows.net"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment

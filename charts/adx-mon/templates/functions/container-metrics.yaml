@@ -1,0 +1,42 @@
+{{- if and .Values.functions.enabled .Values.functions.items.containerMetrics.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-container-metrics
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.containerMetrics.database | quote }}
+  body: |
+    // Container metrics view: CPU and memory usage by namespace, pod, container.
+    // Uses container/pod metrics from kubelet cAdvisor or kube-state-metrics.
+    .create-or-alter function ContainerMetrics () {
+      let cpu_usage = ContainerCpuUsageSecondsTotal
+      | extend namespace = tostring(Labels.namespace),
+               pod = tostring(Labels.pod),
+               container = tostring(Labels.container),
+               instance = tostring(Labels.instance);
+      let mem_working_set = ContainerMemoryWorkingSetBytes
+      | extend namespace = tostring(Labels.namespace),
+               pod = tostring(Labels.pod),
+               container = tostring(Labels.container),
+               instance = tostring(Labels.instance);
+      let cpu_limit = KubePodContainerResourceLimits
+      | where tostring(Labels.resource) == "cpu"
+      | extend namespace = tostring(Labels.namespace),
+               pod = tostring(Labels.pod),
+               container = tostring(Labels.container);
+      let mem_limit = KubePodContainerResourceLimits
+      | where tostring(Labels.resource) == "memory"
+      | extend namespace = tostring(Labels.namespace),
+               pod = tostring(Labels.pod),
+               container = tostring(Labels.container);
+      union
+        (cpu_usage     | project Timestamp, Cluster, namespace, pod, container, instance, metric="container_cpu_usage_seconds", Value),
+        (mem_working_set | project Timestamp, Cluster, namespace, pod, container, instance, metric="container_memory_working_set_bytes", Value),
+        (cpu_limit     | project Timestamp, Cluster, namespace, pod, container, instance="", metric="container_cpu_limit", Value),
+        (mem_limit     | project Timestamp, Cluster, namespace, pod, container, instance="", metric="container_memory_limit_bytes", Value)
+    }
+{{- end }}

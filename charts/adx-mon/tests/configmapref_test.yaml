@@ -1,0 +1,129 @@
+suite: adx.configMapRef support
+templates:
+  - templates/alerter/deployment.yaml
+  - templates/ingestor/statefulset.yaml
+tests:
+  # --- Alerter tests ---
+  - it: "alerter uses configMapRef when adx.clusterUrl is empty"
+    template: templates/alerter/deployment.yaml
+    set:
+      adx.configMapRef: adx-mon-cluster-config
+      adx.clusterUrl: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--kusto-endpoint=Metrics=$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--kusto-endpoint=Logs=$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADX_CLUSTER_URL
+            valueFrom:
+              configMapKeyRef:
+                name: adx-mon-cluster-config
+                key: ADX_CLUSTER_URL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_CLIENT_ID
+            valueFrom:
+              configMapKeyRef:
+                name: adx-mon-cluster-config
+                key: ADX_CLIENT_ID
+                optional: true
+
+  - it: "alerter ignores configMapRef when adx.clusterUrl is set"
+    template: templates/alerter/deployment.yaml
+    set:
+      adx.clusterUrl: "https://mytest.kusto.windows.net"
+      adx.configMapRef: adx-mon-cluster-config
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--kusto-endpoint=Metrics=https://mytest.kusto.windows.net"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADX_CLUSTER_URL
+          any: true
+
+  - it: "alerter has no kusto args when neither clusterUrl nor configMapRef set"
+    template: templates/alerter/deployment.yaml
+    set:
+      adx.clusterUrl: ""
+      adx.configMapRef: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--kusto-endpoint=Metrics=$(ADX_CLUSTER_URL)"
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--kusto-endpoint=Metrics="
+          any: true
+
+  # --- Ingestor tests ---
+  - it: "ingestor uses configMapRef when adx.clusterUrl is empty"
+    template: templates/ingestor/statefulset.yaml
+    set:
+      adx.configMapRef: adx-mon-cluster-config
+      adx.clusterUrl: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-kusto-endpoints=Metrics=$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-kusto-endpoints=CostTracking=$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--logs-kusto-endpoints=Logs=$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--logs-kusto-endpoints=Audit=$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADX_CLUSTER_URL
+            valueFrom:
+              configMapKeyRef:
+                name: adx-mon-cluster-config
+                key: ADX_CLUSTER_URL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_RESOURCE
+            value: "$(ADX_CLUSTER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_CLIENT_ID
+            valueFrom:
+              configMapKeyRef:
+                name: adx-mon-cluster-config
+                key: ADX_CLIENT_ID
+                optional: true
+
+  - it: "ingestor ignores configMapRef when adx.clusterUrl is set"
+    template: templates/ingestor/statefulset.yaml
+    set:
+      adx.clusterUrl: "https://mytest.kusto.windows.net"
+      adx.configMapRef: adx-mon-cluster-config
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-kusto-endpoints=Metrics=https://mytest.kusto.windows.net"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-kusto-endpoints=CostTracking=https://mytest.kusto.windows.net"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_RESOURCE
+            value: "https://mytest.kusto.windows.net"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADX_CLUSTER_URL
+          any: true
