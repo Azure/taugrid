@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">From contribution to release</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Match validation depth to blast radius, then publish reproducible artifacts from an annotated SemVer tag</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="290" width="290" height="330" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="108" cy="340" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="108" y="344" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="108" dy="0">1</tspan></text>
+<text x="152" y="330" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="152" dy="0">CONTRACT</tspan></text>
+<text x="152" y="372" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="152" dy="0">Name the user path</tspan></text>
+<text x="84" y="436" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="84" dy="0">Behavior · compatibility</tspan><tspan x="84" dy="19">stable outputs · retry semantics</tspan></text>
+<polyline points="346,455 406,455" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="406" y="290" width="290" height="330" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="458" cy="340" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="458" y="344" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="458" dy="0">2</tspan></text>
+<text x="502" y="330" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="502" dy="0">IMPLEMENT</tspan></text>
+<text x="502" y="372" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="502" dy="0">Change the owning layer</tspan></text>
+<text x="434" y="436" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="434" dy="0">Thin command wiring</tspan><tspan x="434" dy="19">capability package behavior</tspan></text>
+<polyline points="696,455 756,455" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="756" y="290" width="290" height="330" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="808" cy="340" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="808" y="344" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="808" dy="0">3</tspan></text>
+<text x="852" y="330" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="852" dy="0">LOCAL GATES</tspan></text>
+<text x="852" y="372" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="852" dy="0">Test the component</tspan></text>
+<text x="784" y="436" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="784" dy="0">Focused tests · full Go tests</tspan><tspan x="784" dy="19">Python tests · vet / formatting</tspan></text>
+<polyline points="1046,455 1106,455" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1106" y="290" width="290" height="330" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1158" cy="340" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1158" y="344" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1158" dy="0">4</tspan></text>
+<text x="1202" y="330" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1202" dy="0">SYSTEM GATES</tspan></text>
+<text x="1202" y="372" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1202" dy="0">Validate integration</tspan></text>
+<text x="1134" y="436" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1134" dy="0">Kind smoke for workload changes</tspan><tspan x="1134" dy="19">live cluster for runtime/telemetry</tspan></text>
+<polyline points="1396,455 1456,455" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1456" y="290" width="290" height="330" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1508" cy="340" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1508" y="344" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1508" dy="0">5</tspan></text>
+<text x="1552" y="330" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1552" dy="0">RELEASE CANDIDATE</tspan></text>
+<text x="1552" y="372" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1552" dy="0">Tag and reproduce</tspan></text>
+<text x="1484" y="436" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1484" dy="0">Annotated vX.Y.Z on main</tspan><tspan x="1484" dy="19">version parity · double build</tspan></text>
+<polyline points="1746,455 1806,455" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1806" y="290" width="290" height="330" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1858" cy="340" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1858" y="344" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1858" dy="0">6</tspan></text>
+<text x="1902" y="330" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1902" dy="0">PUBLISH + PROVE</tspan></text>
+<text x="1902" y="372" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1902" dy="0">Release artifacts</tspan></text>
+<text x="1834" y="436" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1834" dy="0">Checksums · GitHub Release</tspan><tspan x="1834" dy="19">clean bootstrap smoke</tspan></text>
+<rect x="56" y="700" width="2088" height="320" rx="22" fill="transparent" stroke="#5B6573" stroke-width="4"/>
+<text x="86" y="747" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="86" dy="0">VALIDATION DEPTH BY CHANGE</tspan></text>
+<rect x="116" y="820" width="590" height="150" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="168" cy="870" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="168" y="874" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="168" dy="0">UNIT</tspan></text>
+<text x="212" y="860" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="212" dy="0">PORTABLE INTERNAL PACKAGE</tspan></text>
+<text x="212" y="901" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" fill="#000000"><tspan x="212" dy="0">Local tests can be sufficient</tspan></text>
+<text x="144" y="937" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#000000"><tspan x="144" dy="0">fileutil · jsonlutil · expstore · importer logic</tspan><tspan x="144" dy="17">when no external contract changes</tspan></text>
+<rect x="806" y="820" width="590" height="150" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="858" cy="870" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="858" y="874" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="858" dy="0">E2E</tspan></text>
+<text x="902" y="860" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="902" dy="0">MANIFEST / RUNTIME / TELEMETRY</tspan></text>
+<text x="902" y="901" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" fill="#000000"><tspan x="902" dy="0">End-to-end evidence required</tspan></text>
+<text x="834" y="937" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#000000"><tspan x="834" dy="0">Exercise the smallest safe Kind or live-cluster path</tspan><tspan x="834" dy="17">and preserve durable evidence</tspan></text>
+<rect x="1496" y="820" width="590" height="150" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1548" cy="870" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="1548" y="874" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1548" dy="0">DOC</tspan></text>
+<text x="1592" y="860" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1592" dy="0">EVERY USER-FACING CHANGE</tspan></text>
+<text x="1592" y="901" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" fill="#000000"><tspan x="1592" dy="0">Docs and compatibility review</tspan></text>
+<text x="1524" y="937" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="400" fill="#000000"><tspan x="1524" dy="0">Update examples, maturity labels, release notes,</tspan><tspan x="1524" dy="17">and the visual contract when behavior moves</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">A green unit test is not release evidence for a change whose claim depends on Kubernetes, GPU runtime, telemetry, or cross-language packaging.</tspan></text>
+</svg>

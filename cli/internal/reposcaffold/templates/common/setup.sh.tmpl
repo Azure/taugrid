@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required. Install it from https://docs.astral.sh/uv/ and rerun this script." >&2
+  exit 2
+fi
+
+uv sync --extra dev
+uv run python -m {{.Package}}.smoke
+
+if command -v tau >/dev/null 2>&1; then
+  tau version || true
+  tau run validate --config tau/smoke.yaml
+  tau run validate --config tau/train.yaml
+  tau run validate --config tau/train-gpu.yaml
+else
+  cat >&2 <<'EOF'
+Tau CLI was not found on PATH.
+Install the Tau CLI for your platform, then rerun this script or run:
+  tau run validate --config tau/smoke.yaml
+EOF
+fi
+
+echo "Local Python setup complete."
+cat <<'EOF'
+Next steps:
+  1. Copy .env.example to .env and set IMAGE.
+  2. Run ./scripts/configure.sh to write IMAGE into Tau configs.
+  3. Build and push the image.
+  4. Run ./scripts/doctor.sh for local readiness checks.
+  5. Run tau run smoke, then tau run train.
+  6. For GPUs, see the "Run on GPUs" section in README.md (tau/train-gpu.yaml).
+EOF

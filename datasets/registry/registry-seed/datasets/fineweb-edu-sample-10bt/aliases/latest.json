@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "fineweb-edu-sample-10bt",
+  "alias": "latest",
+  "version": "v1",
+  "digest": "sha256:950588bfc951c04f90a4ef1f76c5c5e5706bb43a1b5086aa78e18c2d4ac0b418",
+  "record_path": "/data/dataset-registry/datasets/fineweb-edu-sample-10bt/v1/dataset.json",
+  "updated_at": "2026-06-02T07:51:37Z"
+}

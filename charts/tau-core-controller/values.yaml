@@ -1,0 +1,50 @@
+# Namespace that owns the controller, its RBAC, and every TauWorkspace object.
+# It is also passed to the binary as --platform-namespace.
+platformNamespace: tau-platform
+
+# app.kubernetes.io/part-of for every rendered object. The TauGrid distribution
+# leaves this as taugrid; the AKS AI Runtime ArgoCD path renders the literal
+# manifests under kustomize/ instead, which stay on taugrid.
+partOf: taugrid
+
+# Internal preview: the controller image is published to private ACR and is not
+# on MCR yet, so a consuming cluster's kubelet identity needs AcrPull on this
+# registry. Override repository/digest to run a mirrored or pre-release build.
+# Promotion to mcr.microsoft.com/aks/ai-runtime/tau-core-controller is tracked
+# by the Tau release effort.
+image:
+  repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
+  # A digest is immutable, so IfNotPresent is correct; set tag instead only for
+  # a mutable pre-release build.
+  digest: sha256:93f49562fdb9e733579af34290ad6f86e0c958a37191ba75e4590d9750b53546
+  tag: ""
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+tauCluster:
+  managementMode: Reconcile
+  deletionPolicy: Retain
+  # Node topology labels are cluster-specific desired state, so the portable
+  # distribution declares none. Add a rule in the same review that introduces
+  # the ResourceFlavor selecting on it. The AKS AI Runtime worker clusters keep
+  # their reviewed A100/H200 mapping in kustomize/taucluster.yaml.
+  #
+  # Example:
+  #   nodeLabelRules:
+  #     - match:
+  #         vmSizes: [Standard_ND96isr_H200_v5]
+  #       labels:
+  #         kueue.azure.com/gpu-series: nd-h200-v5
+  nodeLabelRules: []
+  # Helm replaces lists, so setting nodeLabelRules discards anything a parent
+  # chart declared. Use extraNodeLabelRules to append instead.
+  extraNodeLabelRules: []
+  queues:
+    ownership: External

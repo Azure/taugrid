@@ -1,0 +1,250 @@
+{
+  "plugin": "custom",
+  "pluginConfig": {
+    "invoke_interval": "60s",
+    "timeout": "10s",
+    "max_output_length": 200,
+    "concurrency": 3,
+    "enable_message_change_based_condition_update": false
+  },
+  "source": "gpu-custom-plugin-monitor",
+  "metricsReporting": true,
+  "conditions": [
+    {
+      "type": "GPUInfoProblem",
+      "reason": "GPUInfoOk",
+      "message": "GPU inventory ok (count, device files, driver, VBIOS)"
+    },
+    {
+      "type": "DcgmHealthProblem",
+      "reason": "DcgmHealthOk",
+      "message": "dcgm health ok"
+    },
+    {
+      "type": "GPUECC",
+      "reason": "GPUECCOk",
+      "message": "GPU ECC ok"
+    },
+    {
+      "type": "XIDErrors",
+      "reason": "NoXIDErrors",
+      "message": "No XID errors found"
+    },
+    {
+      "type": "NVLinkProblem",
+      "reason": "NVLinkOk",
+      "message": "NVLink ok"
+    },
+    {
+      "type": "GPUThermalProblem",
+      "reason": "GPUThermalOk",
+      "message": "GPU thermal ok"
+    },
+    {
+      "type": "GPUPCIeProblem",
+      "reason": "GPUPCIeOk",
+      "message": "GPU PCIe ok"
+    },
+    {
+      "type": "GPUThrottle",
+      "reason": "GPUThrottleOk",
+      "message": "GPU throttle ok"
+    },
+    {
+      "type": "IBLinkIssue",
+      "reason": "IBLinkOk",
+      "message": "InfiniBand link ok"
+    },
+    {
+      "type": "IBPKeyIssue",
+      "reason": "IBPKeyOk",
+      "message": "InfiniBand PKey ok"
+    },
+    {
+      "type": "IBLinkFlapping",
+      "reason": "NoIBLinkFlapping",
+      "message": "No InfiniBand link flapping detected"
+    },
+    {
+      "type": "NVMeMountMissing",
+      "reason": "NVMeMountOk",
+      "message": "NVMe mount ok"
+    },
+    {
+      "type": "TempIMEXProblem",
+      "reason": "TempIMEXOk",
+      "message": "Temp IMEX ok"
+    }
+  ],
+  "rules": [
+    {
+      "type": "temporary",
+      "reason": "GPUInfoError",
+      "path": "/opt/gpu-health-checker/check_ghc_info.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUInfoProblem",
+      "reason": "GPUInfoError",
+      "path": "/opt/gpu-health-checker/check_ghc_info.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "DcgmHealthError",
+      "path": "/opt/gpu-health-checker/check_ghc_health.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "DcgmHealthProblem",
+      "reason": "DcgmHealthError",
+      "path": "/opt/gpu-health-checker/check_ghc_health.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUECC",
+      "path": "/opt/gpu-health-checker/check_ghc_ecc.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUECC",
+      "reason": "GPUECC",
+      "path": "/opt/gpu-health-checker/check_ghc_ecc.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "XIDErrors",
+      "path": "/opt/gpu-health-checker/check_ghc_xid.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "XIDErrors",
+      "reason": "XIDErrors",
+      "path": "/opt/gpu-health-checker/check_ghc_xid.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NVLinkProblem",
+      "path": "/opt/gpu-health-checker/check_ghc_nvlink.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NVLinkProblem",
+      "reason": "NVLinkProblem",
+      "path": "/opt/gpu-health-checker/check_ghc_nvlink.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUThermalProblem",
+      "path": "/opt/gpu-health-checker/check_ghc_thermal.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUThermalProblem",
+      "reason": "GPUThermalProblem",
+      "path": "/opt/gpu-health-checker/check_ghc_thermal.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUPCIeProblem",
+      "path": "/opt/gpu-health-checker/check_ghc_pcie.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUPCIeProblem",
+      "reason": "GPUPCIeProblem",
+      "path": "/opt/gpu-health-checker/check_ghc_pcie.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUThrottle",
+      "path": "/opt/gpu-health-checker/check_ghc_clocks.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUThrottle",
+      "reason": "GPUThrottle",
+      "path": "/opt/gpu-health-checker/check_ghc_clocks.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "IBLinkIssue",
+      "path": "/custom-config/check_ib.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "IBLinkIssue",
+      "reason": "IBLinkIssue",
+      "path": "/custom-config/check_ib.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "IBPKeyIssue",
+      "path": "/custom-config/check_ib_pkeys.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "IBPKeyIssue",
+      "reason": "IBPKeyIssue",
+      "path": "/custom-config/check_ib_pkeys.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "IBLinkFlapping",
+      "path": "/custom-config/check_ib_flaps.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "IBLinkFlapping",
+      "reason": "IBLinkFlapping",
+      "path": "/custom-config/check_ib_flaps.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NVMeMountMissing",
+      "path": "/custom-config/check_nvme_mount.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NVMeMountMissing",
+      "reason": "NVMeMountMissing",
+      "path": "/custom-config/check_nvme_mount.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "TempIMEXProblem",
+      "path": "/custom-config/check_temp_imex.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "TempIMEXProblem",
+      "reason": "TempIMEXProblem",
+      "path": "/custom-config/check_temp_imex.sh",
+      "timeout": "10s"
+    }
+  ]
+}

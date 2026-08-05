@@ -1,0 +1,22 @@
+apiVersion: v2
+name: adx-mon
+description: Azure Data Explorer Monitor - observability pipeline for AKS AI Runtime
+type: application
+version: 0.3.2
+appVersion: "v0.3.0"
+kubeVersion: ">=1.28.0"
+maintainers:
+  - name: AKS AI Runtime
+    email: taugrid@microsoft.com
+keywords:
+  - monitoring
+  - observability
+  - azure-data-explorer
+  - metrics
+  - logs
+  - gpu
+dependencies:
+  - name: kube-state-metrics
+    version: "7.3.0"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: kube-state-metrics.enabled

@@ -1,0 +1,222 @@
+suite: ingestor templates
+templates:
+  - ingestor/statefulset.yaml
+  - ingestor/service.yaml
+  - ingestor/serviceaccount.yaml
+  - ingestor/clusterrole.yaml
+  - ingestor/clusterrolebinding.yaml
+
+tests:
+
+  # ── StatefulSet ──────────────────────────────────────────
+  - it: renders ingestor StatefulSet by default
+    template: ingestor/statefulset.yaml
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-ingestor
+
+  - it: does not render StatefulSet when disabled
+    template: ingestor/statefulset.yaml
+    set:
+      ingestor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: uses correct image with appVersion fallback
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/ingestor:v0.3.0
+
+  - it: sets ingestor args from values
+    template: ingestor/statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --storage-dir=/mnt/ingestor
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --max-segment-age=60s
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --insecure-skip-verify
+
+  - it: includes ADX endpoints when clusterUrl is set
+    template: ingestor/statefulset.yaml
+    set:
+      adx.clusterUrl: https://mycluster.westus2.kusto.windows.net
+      adx.metricsDatabase: Metrics
+      adx.logsDatabase: Logs
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-kusto-endpoints=Metrics=https://mycluster.westus2.kusto.windows.net
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --logs-kusto-endpoints=Logs=https://mycluster.westus2.kusto.windows.net
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --logs-kusto-endpoints=Audit=https://mycluster.westus2.kusto.windows.net
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-kusto-endpoints=CostTracking=https://mycluster.westus2.kusto.windows.net
+
+
+  - it: includes CostTracking metrics endpoint when clusterUrl is set
+    template: ingestor/statefulset.yaml
+    set:
+      adx.clusterUrl: https://mycluster.westus2.kusto.windows.net
+      adx.costTrackingDatabase: CostTracking
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-kusto-endpoints=CostTracking=https://mycluster.westus2.kusto.windows.net
+
+  - it: includes CostTracking metrics endpoint when configMapRef is set
+    template: ingestor/statefulset.yaml
+    set:
+      adx.configMapRef: adx-mon-cluster-config
+      adx.clusterUrl: ""
+      adx.costTrackingDatabase: CostTracking
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-kusto-endpoints=CostTracking=$(ADX_CLUSTER_URL)"
+
+  - it: has readiness probe on port 9090 with HTTPS scheme
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: 9090
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+
+  - it: applies pod and container security contexts
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: sets component selector labels
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: ingestor
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: ingestor
+
+  - it: uses release namespace by default
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+
+  - it: applies pod anti-affinity from values
+    template: ingestor/statefulset.yaml
+    asserts:
+      - isNotNull:
+          path: spec.template.spec.affinity.podAntiAffinity
+
+  - it: mounts storage volume from storageDir
+    template: ingestor/statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: storage
+            mountPath: /mnt/ingestor
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: storage
+            hostPath:
+              path: /mnt/ingestor
+              type: DirectoryOrCreate
+
+  # ── Service ─────────────────────────────────────────────
+  - it: renders ingestor Service
+    template: ingestor/service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 9090
+
+  - it: does not render Service when disabled
+    template: ingestor/service.yaml
+    set:
+      ingestor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── ServiceAccount ──────────────────────────────────────
+  - it: renders ingestor ServiceAccount
+    template: ingestor/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-ingestor
+
+  # ── ClusterRole ─────────────────────────────────────────
+  - it: renders ingestor ClusterRole with CRD permissions
+    template: ingestor/clusterrole.yaml
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            apiGroups: [adx-mon.azure.com]
+            resources: [functions, managementcommands, summaryrules]
+            verbs: [get, list, update, patch]
+
+  # ── ClusterRoleBinding ──────────────────────────────────
+  - it: renders ingestor ClusterRoleBinding
+    template: ingestor/clusterrolebinding.yaml
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-adx-mon-ingestor
+
+  - it: storage volume mountPath matches storageDir value
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /mnt/ingestor
+
+  - it: has tcpSocket liveness probe (HTTP /readyz unsuitable due to transient ADX failures)
+    template: ingestor/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
+          value: 9090
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 6

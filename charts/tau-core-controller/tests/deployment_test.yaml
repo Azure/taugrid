@@ -1,0 +1,54 @@
+suite: Controller deployment portability
+templates:
+  - deployment.yaml
+tests:
+  - it: pins the preview image by digest and does not re-pull it
+    set:
+      image:
+        repository: test.azurecr.io/aks/ai-runtime/tau-core-controller
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: test.azurecr.io/aks/ai-runtime/tau-core-controller@sha256:93f49562fdb9e733579af34290ad6f86e0c958a37191ba75e4590d9750b53546
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: metadata.labels["app.kubernetes.io/part-of"]
+          value: taugrid
+      - equal:
+          path: metadata.namespace
+          value: tau-platform
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-namespace=tau-platform
+
+  - it: accepts a mirrored or promoted image
+    set:
+      image:
+        repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
+        digest: ""
+        tag: v0.1.0
+        pullPolicy: IfNotPresent
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:v0.1.0
+
+  - it: keeps the platform namespace consistent between metadata and args
+    set:
+      platformNamespace: tau-system
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tau-system
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-namespace=tau-system
+
+  - it: keeps the immutable selector free of release scoped labels
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: tau-core-controller

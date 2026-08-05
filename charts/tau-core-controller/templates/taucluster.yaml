@@ -1,0 +1,19 @@
+{{- $rules := concat (.Values.tauCluster.nodeLabelRules | default list) (.Values.tauCluster.extraNodeLabelRules | default list) -}}
+apiVersion: tau.azure.com/v1alpha1
+kind: TauCluster
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    {{- include "tau-core-controller.labels" . | nindent 4 }}
+spec:
+  # Node events trigger reconciliation immediately, and a periodic resync repairs
+  # missed events or manual drift. Matching by Kubernetes' standard instance-type
+  # label works for both AKS-managed and AKS Flex nodes.
+  managementMode: {{ .Values.tauCluster.managementMode }}
+  deletionPolicy: {{ .Values.tauCluster.deletionPolicy }}
+  nodes:
+    labelRules: {{- if $rules }}{{ toYaml $rules | nindent 6 }}{{- else }} []{{- end }}
+  queues:
+{{- toYaml .Values.tauCluster.queues | nindent 4 }}

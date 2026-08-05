@@ -1,0 +1,201 @@
+{{- if .Values.lifecycleRecorder.enabled }}
+{{- $recorder := .Values.lifecycleRecorder -}}
+{{- $kusto := default dict $recorder.kusto -}}
+{{- $serviceAccount := default dict $recorder.serviceAccount -}}
+{{- $rbac := default dict $recorder.rbac -}}
+{{- $workloadIdentity := default dict $recorder.workloadIdentity -}}
+{{- $resourceName := default "tau-lifecycle-recorder" $recorder.resourceName -}}
+{{- $serviceAccountName := $serviceAccount.name -}}
+{{- if ne $recorder.image.repository "mcr.microsoft.com/aks/ai-runtime/tau" -}}
+{{- fail "lifecycleRecorder.image.repository must be mcr.microsoft.com/aks/ai-runtime/tau when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $recorder.image.digest)) -}}
+{{- fail "lifecycleRecorder.image.digest must be an immutable sha256 digest when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not $recorder.targetNamespace -}}
+{{- fail "lifecycleRecorder.targetNamespace is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- /*
+This chart does not create targetNamespace, even though the recorder's Role and
+RoleBinding render into it: it is the observed workload namespace, owned by
+tau-core-controller (from TauWorkspace) or by applications/tau-queues. Creating
+it here would make this chart a second claimant on a namespace it does not own.
+Refusing early names the value and the owner, instead of surfacing later as
+`namespaces "<name>" not found` on the Role.
+*/ -}}
+{{- if and (include "taugrid-core.apiReachable" .) (not (lookup "v1" "Namespace" "" $recorder.targetNamespace)) -}}
+{{- fail (printf "lifecycleRecorder.targetNamespace %q does not exist. This chart does not create it: it is the workload namespace owned by tau-core-controller (via TauWorkspace) or applications/tau-queues. Create it before installing, or point lifecycleRecorder.targetNamespace at an existing workload namespace." $recorder.targetNamespace) -}}
+{{- end -}}
+{{- if not $recorder.cluster -}}
+{{- fail "lifecycleRecorder.cluster is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not $kusto.endpoint -}}
+{{- fail "lifecycleRecorder.kusto.endpoint is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not $serviceAccount.create -}}
+{{- fail "lifecycleRecorder.serviceAccount.create=true is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not $serviceAccount.name -}}
+{{- fail "lifecycleRecorder.serviceAccount.name is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not $rbac.create -}}
+{{- fail "lifecycleRecorder.rbac.create=true is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- if not $workloadIdentity.enabled -}}
+{{- fail "lifecycleRecorder.workloadIdentity.enabled=true is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- $clientID := trim (default "" (index (default dict $serviceAccount.annotations) "azure.workload.identity/client-id")) -}}
+{{- if not $clientID -}}
+{{- fail "lifecycleRecorder.serviceAccount.annotations.azure.workload.identity/client-id is required when lifecycleRecorder.enabled=true" -}}
+{{- end -}}
+{{- range $protectedLabel := list "app" "app.kubernetes.io/instance" "azure.workload.identity/use" -}}
+{{- if hasKey (default dict $recorder.podLabels) $protectedLabel -}}
+{{- fail (printf "lifecycleRecorder.podLabels must not override protected label %s" $protectedLabel) -}}
+{{- end -}}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $recorder.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+  {{- with $serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $recorder.targetNamespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $recorder.targetNamespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ $recorder.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $serviceAccountName }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $resourceName }}
+  namespace: {{ $recorder.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ $resourceName }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $resourceName }}
+        {{- include "taugrid-core.labels" . | nindent 8 }}
+        azure.workload.identity/use: "true"
+        {{- with $recorder.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $serviceAccountName }}
+      {{- with $recorder.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $recorder.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $recorder.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $recorder.podSecurityContext | nindent 8 }}
+      containers:
+        - name: lifecycle-recorder
+          image: "{{ $recorder.image.repository }}@{{ $recorder.image.digest }}"
+          imagePullPolicy: {{ $recorder.image.pullPolicy }}
+          {{- with $recorder.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $recorder.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - run
+            - history
+            - record
+            - --namespace
+            - {{ $recorder.targetNamespace | quote }}
+            - --cluster
+            - {{ $recorder.cluster | quote }}
+            {{- if $recorder.workspaceId }}
+            - --workspace-id
+            - {{ $recorder.workspaceId | quote }}
+            {{- end }}
+            {{- if $recorder.resultScope }}
+            - --result-scope
+            - {{ $recorder.resultScope | quote }}
+            {{- end }}
+            - --kusto-endpoint
+            - {{ $kusto.endpoint | quote }}
+            - --kusto-database
+            - {{ default "Metrics" $kusto.database | quote }}
+            - --kusto-table
+            - {{ default "TauExpRunLifecycle" $kusto.table | quote }}
+            - --interval
+            - {{ default "30s" $recorder.interval | quote }}
+            - --ingest-timeout
+            - {{ default "2m" $recorder.ingestTimeout | quote }}
+            - --health-addr
+            - ":8081"
+          ports:
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 30
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $recorder.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $recorder.containerSecurityContext | nindent 12 }}
+{{- end }}

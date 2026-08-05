@@ -1,0 +1,319 @@
+# RayJob for the training variant of the stack integration test.
+#
+# Validates the "run Ray training jobs queued by Kueue" product claim:
+#   1. Labelled with kueue.x-k8s.io/queue-name so Kueue gates admission.
+#   2. Kueue creates a Workload and admits it once gang quota (head 1 + 2×2 CPU) is free.
+#   3. KubeRay spawns head + 2 workers; Ray Data distributes a short SGD loop over actors.
+#
+# Uses the same CPU torch wheel as the inference variant to amortize the pip install cost.
+# {{RAY_IMAGE}} / {{RAY_VERSION}} resolved by readFixture() in testcontext.go.
+#
+# The driver script is embedded directly (head-only initContainer + emptyDir at
+# /home/ray/scripts, the same mount path the ConfigMap previously used) instead
+# of mounted from a ConfigMap, matching PR1's cli/internal/payload
+# wire contract (issues #869/#871 PR3b): the TRAINING_CPU_SCRIPT_PAYLOAD_B64 /
+# TRAINING_CPU_SCRIPT_PAYLOAD_DIGEST env values set below are computed from the
+# real fixtures/training_job_cpu.py file at test time (see readFixture in
+# tests/e2e/testcontext.go), so MultiKueue's worker-cluster dispatch -- which
+# does not replicate ConfigMaps -- has everything the head pod needs inside the
+# RayJob spec it copies over.
+#
+# NOTE: this comment intentionally does NOT spell the placeholder names in
+# {{DOUBLE_BRACE}} form -- readFixture's substitution is a blind text replace
+# of every "{{NAME}}" occurrence in the file, so writing the literal token
+# here would duplicate the (potentially large) base64 payload into this
+# comment on every substitution. The duplicate text is harmless to the
+# resulting Kubernetes object (YAML comments are dropped on parse, never
+# reach the API server), but it needlessly bloats the rendered fixture size
+# measured in tests -- see TestPayloadFixturesStayUnderSizeLimits in
+# tests/e2e/stack/payload_fixtures_test.go, which sizes the parsed+
+# JSON-marshaled object rather than raw YAML bytes for exactly this reason.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: e2e-training
+  namespace: {{STACK_NAMESPACE}}
+  labels:
+    kueue.x-k8s.io/queue-name: {{STACK_QUEUE}}
+  annotations:
+    tau.azure.com/payload-digest: "{{TRAINING_CPU_SCRIPT_PAYLOAD_DIGEST}}"
+spec:
+  entrypoint: python /home/ray/scripts/training_job_cpu.py
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  runtimeEnvYAML: |
+    pip:
+      packages:
+        - torch
+      pip_install_options:
+        - --index-url
+        - https://download.pytorch.org/whl/cpu
+        - --extra-index-url
+        - https://pypi.org/simple
+      pip_check: false
+  rayClusterSpec:
+    rayVersion: "{{RAY_VERSION}}"
+    enableInTreeAutoscaling: false
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+        dashboard-host: "0.0.0.0"
+      template:
+        metadata:
+          annotations:
+            # Ray Job driver stdout lives in head-local /tmp/ray session logs,
+            # not the ray-head container stdout stream. This sidecar tails the
+            # driver log files into its own stdout so adx-mon can ship them via
+            # the existing Logs/ContainerLogs path without cluster credentials.
+            adx-mon/log-destination: "Logs:ContainerLogs"
+        spec:
+          initContainers:
+          - name: prepare-ray-tmp
+            image: {{RAY_IMAGE}}
+            command: ["/bin/sh", "-c", "mkdir -p /tmp/ray && chmod 1777 /tmp/ray"]
+            securityContext:
+              runAsUser: 0
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          - name: tau-payload
+            image: {{RAY_IMAGE}}
+            command:
+            - python3
+            - -c
+            - |
+              import base64
+              import hashlib
+              import json
+              import os
+              import sys
+
+              raw_b64 = os.environ["TAU_PAYLOAD_B64"]
+              want_digest = os.environ["TAU_PAYLOAD_DIGEST"]
+              target_dir = os.environ["TAU_PAYLOAD_TARGET_DIR"]
+
+              raw = base64.b64decode(raw_b64)
+              got_digest = hashlib.sha256(raw).hexdigest()
+              if got_digest != want_digest:
+                  sys.stderr.write(
+                      "tau-payload: integrity check failed: digest=%s want=%s\n" % (got_digest, want_digest)
+                  )
+                  sys.exit(1)
+
+              envelope = json.loads(raw)
+              files = envelope.get("files", [])
+              os.makedirs(target_dir, exist_ok=True)
+              for f in files:
+                  name = f["name"]
+                  if not name or name in (".", "..") or "/" in name or "\\" in name:
+                      sys.stderr.write("tau-payload: rejecting unsafe file name %r\n" % (name,))
+                      sys.exit(1)
+                  data = base64.b64decode(f["data"])
+                  path = os.path.join(target_dir, name)
+                  with open(path, "wb") as fh:
+                      fh.write(data)
+                  os.chmod(path, 0o644)
+
+              sys.stderr.write("tau-payload: wrote %d file(s) to %s\n" % (len(files), target_dir))
+            env:
+            - name: TAU_PAYLOAD_B64
+              value: "{{TRAINING_CPU_SCRIPT_PAYLOAD_B64}}"
+            - name: TAU_PAYLOAD_DIGEST
+              value: "{{TRAINING_CPU_SCRIPT_PAYLOAD_DIGEST}}"
+            - name: TAU_PAYLOAD_TARGET_DIR
+              value: /home/ray/scripts
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                cpu: 250m
+                memory: 128Mi
+            volumeMounts:
+            - name: script
+              mountPath: /home/ray/scripts
+          containers:
+          - name: ray-head
+            image: {{RAY_IMAGE}}
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "1"
+                memory: "4Gi"
+              limits:
+                cpu: "1"
+                memory: "4Gi"
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "rm -rf /tmp/ray/* || true"]
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+            - name: script
+              mountPath: /home/ray/scripts
+              readOnly: true
+          - name: ray-driver-log-offload
+            image: {{RAY_IMAGE}}
+            command: ["/bin/bash", "-lc", "--"]
+            args:
+            - |
+              set -euo pipefail
+              ray_root="${TAU_RAY_TMP:-/tmp/ray}"
+              poll_seconds="${TAU_RAY_LOG_POLL_SECONDS:-1}"
+              seen_paths=""
+              tail_pids=()
+              canonical_path() {
+                local path="$1"
+                local dir base
+                dir="$(cd -P "$(dirname "$path")" && pwd)"
+                base="$(basename "$path")"
+                printf '%s/%s\n' "$dir" "$base"
+              }
+              has_seen() {
+                local needle="$1"
+                local seen
+                while IFS= read -r seen; do
+                  [[ "$seen" == "$needle" ]] && return 0
+                done <<< "$seen_paths"
+                return 1
+              }
+              start_tail() {
+                local real="$1"
+                seen_paths="${seen_paths}${real}"$'\n'
+                tail -n +1 -F "$real" &
+                tail_pids+=("$!")
+              }
+              discover_logs() {
+                local entry candidate real
+                local -a roots=("$ray_root/session_latest/logs")
+                # Default contract: tail /tmp/ray/session_latest/logs/job-driver-*.log,
+                # plus concrete session_* directories so session_latest flips do not drop logs.
+                shopt -s nullglob
+                for entry in "$ray_root"/session_*/logs; do
+                  [[ -d "$entry" ]] && roots+=("$entry")
+                done
+                shopt -u nullglob
+                for entry in "${roots[@]}"; do
+                  [[ -d "$entry" ]] || continue
+                  shopt -s nullglob
+                  for candidate in "$entry"/job-driver-*.log; do
+                    [[ -f "$candidate" ]] || continue
+                    real="$(canonical_path "$candidate")"
+                    if has_seen "$real"; then
+                      continue
+                    fi
+                    start_tail "$real"
+                  done
+                  shopt -u nullglob
+                done
+              }
+              cleanup() {
+                local pid
+                for pid in "${tail_pids[@]:-}"; do
+                  kill "$pid" 2>/dev/null || true
+                done
+                wait || true
+              }
+              trap cleanup EXIT INT TERM
+              while true; do
+                discover_logs
+                sleep "$poll_seconds"
+              done
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "10m"
+                memory: "32Mi"
+              limits:
+                cpu: "100m"
+                memory: "128Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              capabilities:
+                drop:
+                - ALL
+              seccompProfile:
+                type: RuntimeDefault
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+              readOnly: true
+          volumes:
+          - name: ray-tmp
+            hostPath:
+              path: /mnt/taugrid-ray-tmp
+              type: DirectoryOrCreate
+          - name: script
+            emptyDir: {}
+    workerGroupSpecs:
+    - groupName: workers
+      replicas: 2
+      minReplicas: 2
+      maxReplicas: 2
+      rayStartParams: {}
+      template:
+        spec:
+          initContainers:
+          - name: prepare-ray-tmp
+            image: {{RAY_IMAGE}}
+            command: ["/bin/sh", "-c", "mkdir -p /tmp/ray && chmod 1777 /tmp/ray"]
+            securityContext:
+              runAsUser: 0
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          containers:
+          - name: ray-worker
+            image: {{RAY_IMAGE}}
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "2"
+                memory: "4Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "rm -rf /tmp/ray/* || true"]
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          volumes:
+          - name: ray-tmp
+            hostPath:
+              path: /mnt/taugrid-ray-tmp
+              type: DirectoryOrCreate

@@ -1,0 +1,68 @@
+suite: values-ai-runtime.yaml preset
+templates:
+  - templates/collector/configmap.yaml
+values:
+  - ../values.yaml
+  - ../values-ai-runtime.yaml
+set:
+  adx.clusterUrl: https://test.kusto.windows.net
+  adx.clientId: test-id
+tests:
+  - it: renders with ai-runtime preset applied
+    asserts:
+      - isKind:
+          of: ConfigMap
+
+  - it: does not include DCGM static target (uses annotation discovery instead)
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "9400/metrics"
+
+  - it: includes Kueue controller metrics scrape target with HTTPS
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "https://kueue-controller-manager-metrics-service"
+
+  - it: includes KubeRay operator metrics scrape target with HTTP
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "http://kuberay-operator\\.kuberay-system\\.svc:8080/metrics"
+
+  - it: includes kubelet journal log target
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "_SYSTEMD_UNIT=kubelet.service"
+
+  - it: includes containerd journal log target
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "_SYSTEMD_UNIT=containerd.service"
+
+  - it: maps containerd logs to ContainerRuntime table
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "table = 'ContainerRuntime'"
+
+  - it: enables GPU kernel target
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "_TRANSPORT=kernel"
+
+  - it: includes drop-metrics filter to reduce table cardinality
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\^go\\.\\*"
+
+  - it: drops all API server metrics
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\^apiserver\\.\\*"

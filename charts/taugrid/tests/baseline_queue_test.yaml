@@ -1,0 +1,59 @@
+suite: TauGrid portable baseline queue
+templates:
+  - baseline-queue.yaml
+tests:
+  - it: renders the portable queue contract by default
+    asserts:
+      - hasDocuments:
+          count: 7
+      - equal:
+          path: kind
+          value: Topology
+        documentIndex: 0
+      - equal:
+          path: kind
+          value: ResourceFlavor
+        documentIndex: 1
+      - equal:
+          path: spec.nodeLabels["kubernetes.io/os"]
+          value: linux
+        documentIndex: 1
+      - equal:
+          path: spec.topologyName
+          value: default-node-topology
+        documentIndex: 1
+      - equal:
+          path: kind
+          value: ClusterQueue
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: jobqueue
+        documentIndex: 2
+      - equal:
+          path: spec.namespaceSelector.matchExpressions[0].key
+          value: tau.azure.com/workspace
+        documentIndex: 2
+
+  - it: disables every baseline queue object together
+    set:
+      baselineQueue.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: applies an operator supplied queue name
+    set:
+      baselineQueue.name: research
+    asserts:
+      - equal:
+          path: metadata.name
+          value: research
+        documentIndex: 2
+
+  - it: rejects topology without a flavor node selector
+    set:
+      baselineQueue.flavor.nodeLabels: null
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.flavor.nodeLabels must contain at least one label when baselineQueue.topology.enabled is true

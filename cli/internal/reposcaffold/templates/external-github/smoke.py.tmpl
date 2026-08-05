@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+
+
+def main() -> None:
+    root = Path(os.environ.get("UPSTREAM_ROOT", "{{.UpstreamRoot}}"))
+    output_dir = Path(os.environ.get("TAU_OUTPUT_DIR", "/tmp/{{.Package}}-smoke"))
+    if not root.is_dir():
+        raise SystemExit(f"upstream root not found: {root}")
+    pinned_ref = (root / ".pinned-ref").read_text(encoding="utf-8").strip()
+    upstream_repo = (root / ".upstream-repo").read_text(encoding="utf-8").strip()
+    package_import = "{{.PackageImport}}"
+    importable = None
+    if package_import:
+        importable = importlib.util.find_spec(package_import) is not None
+        if not importable:
+            raise SystemExit(f"package is not importable: {package_import}")
+    command = os.environ.get("SMOKE_COMMAND", {{.SmokeCommandPy}})
+    completed = subprocess.run(command, cwd=root, shell=True, check=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "status": "ok",
+        "upstream_repo": upstream_repo,
+        "pinned_ref": pinned_ref,
+        "upstream_root": str(root),
+        "package_import": package_import,
+        "package_importable": importable,
+        "smoke_command": command,
+        "smoke_returncode": completed.returncode,
+    }
+    (output_dir / "smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()

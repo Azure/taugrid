@@ -1,0 +1,29 @@
+suite: GPU rate ConfigMap
+templates:
+  - configmaps/gpu-rate-config.yaml
+values:
+  - ../values.yaml
+tests:
+  - it: renders GPU rate ConfigMap with default rates
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: ConfigMap
+      - matchRegex:
+          path: data["gpu-rates.json"]
+          pattern: "Standard_NC6s_v3"
+      - matchRegex:
+          path: data["gpu-rates.json"]
+          pattern: "Standard_ND96isr_H100_v5"
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: cost
+
+  - it: does not render when gpuRates is empty
+    set:
+      cost.gpuRates: null
+    asserts:
+      - hasDocuments:
+          count: 0

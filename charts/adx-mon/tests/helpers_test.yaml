@@ -1,0 +1,228 @@
+suite: helpers and values.yaml contract
+templates:
+  - test_fixture.yaml
+
+# All tests set _test.enabled=true to render the fixture template
+
+tests:
+
+  # ── adx-mon.name ─────────────────────────────────────────────────────
+  - it: name defaults to chart name
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: data.name
+          value: adx-mon
+
+  - it: name uses nameOverride when set
+    set:
+      _test.enabled: true
+      nameOverride: my-adx
+    asserts:
+      - equal:
+          path: data.name
+          value: my-adx
+
+  # ── adx-mon.fullname ──────────────────────────────────────────────
+  - it: fullname is RELEASE-NAME-adx-mon when release name differs from chart name
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: data.fullname
+          value: RELEASE-NAME-adx-mon
+
+  - it: fullname uses fullnameOverride when set
+    set:
+      _test.enabled: true
+      fullnameOverride: custom-fullname
+    asserts:
+      - equal:
+          path: data.fullname
+          value: custom-fullname
+
+  # ── adx-mon.labels ───────────────────────────────────────────────
+  - it: labels include app.kubernetes.io/name
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: adx-mon
+
+  - it: labels include app.kubernetes.io/instance
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: labels include app.kubernetes.io/version set to chart appVersion
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "v0.3.0"
+
+  - it: labels include app.kubernetes.io/managed-by
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm
+
+  - it: labels include helm.sh/chart
+    set:
+      _test.enabled: true
+    asserts:
+      - matchRegex:
+          path: metadata.labels["helm.sh/chart"]
+          pattern: ^adx-mon-
+
+  # ── adx-mon.selectorLabels ─────────────────────────────────────────
+  - it: selectorLabels contain name and instance
+    set:
+      _test.enabled: true
+    asserts:
+      - matchRegex:
+          path: data.selectorLabels
+          pattern: "app.kubernetes.io/name: adx-mon"
+      - matchRegex:
+          path: data.selectorLabels
+          pattern: "app.kubernetes.io/instance: RELEASE-NAME"
+
+  - it: selectorLabels do NOT contain version (to avoid selector churn on upgrades)
+    set:
+      _test.enabled: true
+    asserts:
+      - notMatchRegex:
+          path: data.selectorLabels
+          pattern: "app.kubernetes.io/version"
+
+  # ── adx-mon.componentSelectorLabels ─────────────────────────────────
+  - it: componentSelectorLabels include component=operator
+    set:
+      _test.enabled: true
+    asserts:
+      - matchRegex:
+          path: data.componentSelectorLabels
+          pattern: "app.kubernetes.io/component: operator"
+
+  # ── adx-mon.componentLabels ──────────────────────────────────────────
+  - it: componentLabels include common labels plus component
+    set:
+      _test.enabled: true
+    asserts:
+      - matchRegex:
+          path: data.componentLabels
+          pattern: "app.kubernetes.io/component: operator"
+      - matchRegex:
+          path: data.componentLabels
+          pattern: "app.kubernetes.io/managed-by: Helm"
+      - matchRegex:
+          path: data.componentLabels
+          pattern: "helm.sh/chart: adx-mon-"
+      - matchRegex:
+          path: data.componentLabels
+          pattern: "app.kubernetes.io/version"
+
+  # ── adx-mon.serviceAccountName ─────────────────────────────────────
+  - it: serviceAccountName for operator includes component suffix
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: data.saOperator
+          value: RELEASE-NAME-adx-mon-operator
+
+  - it: serviceAccountName for collector includes component suffix
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: data.saCollector
+          value: RELEASE-NAME-adx-mon-collector
+
+  - it: serviceAccountName for ingestor includes component suffix
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: data.saIngestor
+          value: RELEASE-NAME-adx-mon-ingestor
+
+  # ── adx-mon.imageTag (appVersion fallback) ────────────────────────
+  - it: imageTag falls back to chart appVersion when operator.image.tag is empty
+    set:
+      _test.enabled: true
+      operator.image.tag: ""
+    asserts:
+      - equal:
+          path: data.imageTag
+          value: "v0.3.0"
+
+  - it: imageTag uses explicit tag when set
+    set:
+      _test.enabled: true
+      operator.image.tag: "v0.3.0"
+    asserts:
+      - equal:
+          path: data.imageTag
+          value: "v0.3.0"
+
+  # ── adx-mon.image (full reference) ──────────────────────────────
+  - it: image reference uses MCR default repo and appVersion tag
+    set:
+      _test.enabled: true
+    asserts:
+      - equal:
+          path: data.image
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/operator:v0.3.0
+
+  - it: image reference uses explicit tag when overridden
+    set:
+      _test.enabled: true
+      operator.image.tag: "v0.5.0"
+    asserts:
+      - equal:
+          path: data.image
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/operator:v0.5.0
+
+  - it: image reference uses custom repository when overridden
+    set:
+      _test.enabled: true
+      operator.image.repository: myregistry.io/adx-mon/operator
+      operator.image.tag: "custom"
+    asserts:
+      - equal:
+          path: data.image
+          value: myregistry.io/adx-mon/operator:custom
+
+  # ── adx-mon.namespace ────────────────────────────────────────────────
+  - it: namespace defaults to release namespace when global.namespace is empty
+    set:
+      _test.enabled: true
+      global.namespace: ""
+    asserts:
+      - equal:
+          path: data.namespace
+          value: NAMESPACE
+
+  - it: namespace uses global.namespace when set
+    set:
+      _test.enabled: true
+      global.namespace: custom-ns
+    asserts:
+      - equal:
+          path: data.namespace
+          value: custom-ns
+
+  # ── values.yaml defaults contract ───────────────────────────────────
+  - it: fixture does not render in production (default _test.enabled=false)
+    asserts:
+      - hasDocuments:
+          count: 0

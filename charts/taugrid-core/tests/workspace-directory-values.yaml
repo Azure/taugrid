@@ -1,0 +1,35 @@
+portal:
+  enabled: true
+  image:
+    tag: test
+  workspaceDirectory:
+    enabled: true
+    localCluster: local-cluster
+    endpoints:
+      - cluster: remote-cluster
+        endpoint: https://remote.portal.example
+        availability: available
+    workspaces:
+      - id: local-alpha
+        name: Local Alpha
+        cluster: local-cluster
+        team: alpha
+        namespace: team-alpha
+        localQueue: alpha-queue
+        resultScope: alpha
+        source: kusto
+        default: true
+        authorization:
+          mode: workspace-rbac
+          groups: [group-alpha]
+      - id: remote-beta
+        name: Remote Beta
+        cluster: remote-cluster
+        team: beta
+        namespace: team-beta
+        localQueue: beta-queue
+        resultScope: beta
+        source: kusto
+        authorization:
+          mode: workspace-rbac
+          users: [beta@example.com]

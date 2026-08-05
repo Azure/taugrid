@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">From infrastructure to a researcher's first run</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">A Tau-enabled repository is the final handoff—not the mechanism that provisions the platform</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="220" width="2088" height="390" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4"/>
+<text x="86" y="266" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="86" dy="0">PLATFORM OWNERSHIP · DAY 0 / DAY 1</tspan></text>
+<rect x="56" y="650" width="2088" height="390" rx="22" fill="transparent" stroke="#0078D4" stroke-width="4"/>
+<text x="86" y="696" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="86" dy="0">RESEARCHER OWNERSHIP · DAY 2</tspan></text>
+<rect x="96" y="326" width="340" height="226" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="376" rx="28" ry="28" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="148" y="380" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">1</tspan></text>
+<text x="192" y="366" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">CLOUD / IAC</tspan></text>
+<text x="192" y="411" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="192" dy="0">Provision infrastructure</tspan></text>
+<text x="124" y="476" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="124" dy="0">Cluster · network · node pools</tspan><tspan x="124" dy="25">identity · storage · registry</tspan></text>
+<polyline points="436,438 516,438" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="516" y="326" width="340" height="226" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="568" cy="376" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="568" y="380" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="568" dy="0">2</tspan></text>
+<text x="612" y="366" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="612" dy="0">PLATFORM RUNTIME</tspan></text>
+<text x="612" y="411" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="612" dy="0">Install open controllers</tspan></text>
+<text x="544" y="476" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="544" dy="0">Kueue · KubeRay</tspan><tspan x="544" dy="25">CSI / device plugins · observability</tspan></text>
+<polyline points="856,438 936,438" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="936" y="326" width="340" height="226" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="988" cy="376" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="988" y="380" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="988" dy="0">3</tspan></text>
+<text x="1032" y="366" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1032" dy="0">WORKSPACE POLICY</tspan></text>
+<text x="1032" y="411" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="1032" dy="0">Make the workspace Ready</tspan></text>
+<text x="964" y="476" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="964" dy="0">Namespace · LocalQueue · PVC</tspan><tspan x="964" dy="25">ServiceAccount / RBAC · defaults</tspan></text>
+<rect x="1356" y="716" width="340" height="226" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1408" cy="766" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="1408" y="770" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1408" dy="0">4</tspan></text>
+<text x="1452" y="756" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1452" dy="0">REPOSITORY HANDOFF</tspan></text>
+<text x="1452" y="801" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="1452" dy="0">Clone project intent</tspan></text>
+<text x="1384" y="866" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1384" dy="0">workspace.connection.yaml</tspan><tspan x="1384" dy="25">source + tau.yaml</tspan><tspan x="1384" dy="25">no committed credentials</tspan></text>
+<rect x="1776" y="716" width="340" height="226" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1828" cy="766" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1828" y="770" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1828" dy="0">5</tspan></text>
+<text x="1872" y="756" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1872" dy="0">FIRST USE</tspan></text>
+<text x="1872" y="801" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="1872" dy="0">Validate and run</tspan></text>
+<text x="1804" y="866" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1804" dy="0">inspect connection</tspan><tspan x="1804" dy="25">tau run smoke</tspan><tspan x="1804" dy="25">tau run train</tspan></text>
+<polyline points="1276,438 1526,438 1526,716" fill="none" stroke="#F7630C" stroke-width="5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1352" y="396" width="350" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1527" y="420" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1527" dy="0">READY WORKSPACE + REPOSITORY</tspan></text>
+<polyline points="1696,829 1776,829" fill="none" stroke="#0078D4" stroke-width="5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="96" y="716" width="1120" height="226" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="766" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="148" y="770" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">GO</tspan></text>
+<text x="192" y="756" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">WHAT THE RESEARCHER RECEIVES</tspan></text>
+<text x="192" y="803" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="25" font-weight="700" fill="#000000"><tspan x="192" dy="0">A usable contract, not cluster-admin work</tspan></text>
+<text x="124" y="867" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="124" dy="0">Normal cluster-user access · Ready workspace</tspan><tspan x="124" dy="26">Default queue/storage contract · runnable named configs</tspan></text>
+<rect x="760" y="1070" width="650" height="44" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="1085" y="1094" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1085" dy="0">CURRENT: CLUSTER-WIDE USER ACCESS IS NOT ISOLATION</tspan></text>
+<rect x="1430" y="1070" width="360" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1610" y="1094" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1610" dy="0">FUTURE: WORKSPACE-RBAC</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">TauWorkspace reconciles Kubernetes workspace state; Azure resources and cluster add-ons remain IaC/GitOps responsibilities.</tspan></text>
+</svg>

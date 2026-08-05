@@ -1,0 +1,386 @@
+suite: AlertRule CRD templates
+templates:
+  - alertrules/gpu-xid-critical.yaml
+  - alertrules/node-not-ready.yaml
+  - alertrules/ecc-uncorrectable.yaml
+  - alertrules/nvlink-down.yaml
+  - alertrules/job-failure-rate.yaml
+  - alertrules/ray-pod-restart.yaml
+values:
+  - ../values.yaml
+tests:
+  # --- gpu-xid-critical ---
+  - it: renders gpu-xid-critical AlertRule when enabled
+    template: alertrules/gpu-xid-critical.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: AlertRule
+      - equal:
+          path: apiVersion
+          value: adx-mon.azure.com/v1
+      - equal:
+          path: spec.database
+          value: Logs
+      - equal:
+          path: spec.interval
+          value: "1m"
+      - matchRegex:
+          path: spec.query
+          pattern: "xid_code in \\(48, 64, 79, 94\\)"
+      - matchRegex:
+          path: spec.query
+          pattern: "Severity = 2"
+      - matchRegex:
+          path: spec.query
+          pattern: "_startTime \\.\\. _endTime"
+      - equal:
+          path: spec.destination
+          value: ""
+      - equal:
+          path: metadata.annotations["adx-mon/sig"]
+          value: "GPU"
+
+  - it: does not render gpu-xid-critical when alertRules.enabled is false
+    template: alertrules/gpu-xid-critical.yaml
+    set:
+      alertRules.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render gpu-xid-critical when item is disabled
+    template: alertrules/gpu-xid-critical.yaml
+    set:
+      alertRules.items.gpuXidCritical.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sets destination on gpu-xid-critical when configured
+    template: alertrules/gpu-xid-critical.yaml
+    set:
+      alertRules.items.gpuXidCritical.destination: "https://alerts.example.com/gpu"
+    asserts:
+      - equal:
+          path: spec.destination
+          value: "https://alerts.example.com/gpu"
+
+  - it: sets autoMitigateAfter on gpu-xid-critical when configured
+    template: alertrules/gpu-xid-critical.yaml
+    set:
+      alertRules.items.gpuXidCritical.autoMitigateAfter: "2h"
+    asserts:
+      - equal:
+          path: spec.autoMitigateAfter
+          value: "2h"
+
+  - it: sets criteria on gpu-xid-critical when configured
+    template: alertrules/gpu-xid-critical.yaml
+    set:
+      alertRules.items.gpuXidCritical.criteria:
+        cloud:
+          - AzureCloud
+    asserts:
+      - equal:
+          path: spec.criteria.cloud[0]
+          value: AzureCloud
+
+  # --- node-not-ready ---
+  - it: renders node-not-ready AlertRule when enabled
+    template: alertrules/node-not-ready.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: AlertRule
+      - equal:
+          path: spec.database
+          value: Metrics
+      - equal:
+          path: spec.interval
+          value: "1m"
+      - matchRegex:
+          path: spec.query
+          pattern: "KubeNodeStatusCondition"
+      - matchRegex:
+          path: spec.query
+          pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.query
+          pattern: "Severity = 2"
+      - equal:
+          path: metadata.annotations["adx-mon/sig"]
+          value: "NodeLifecycle"
+
+  - it: does not render node-not-ready when disabled
+    template: alertrules/node-not-ready.yaml
+    set:
+      alertRules.items.nodeNotReady.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sets destination on node-not-ready when configured
+    template: alertrules/node-not-ready.yaml
+    set:
+      alertRules.items.nodeNotReady.destination: "oncall-queue"
+    asserts:
+      - equal:
+          path: spec.destination
+          value: "oncall-queue"
+
+  # --- ecc-uncorrectable ---
+  - it: renders ecc-uncorrectable AlertRule when enabled
+    template: alertrules/ecc-uncorrectable.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: AlertRule
+      - equal:
+          path: spec.database
+          value: Metrics
+      - equal:
+          path: spec.interval
+          value: "5m"
+      - matchRegex:
+          path: spec.query
+          pattern: "DCGMFIDEVROWREMAPFAILURE"
+      - matchRegex:
+          path: spec.query
+          pattern: "DCGMFIDEVUNCORRECTABLEREMAPPEDROWS"
+      - matchRegex:
+          path: spec.query
+          pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.query
+          pattern: "Severity = 2"
+
+  - it: does not render ecc-uncorrectable when disabled
+    template: alertrules/ecc-uncorrectable.yaml
+    set:
+      alertRules.items.eccUncorrectable.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- nvlink-down ---
+  - it: renders nvlink-down AlertRule when enabled
+    template: alertrules/nvlink-down.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: AlertRule
+      - equal:
+          path: spec.database
+          value: Logs
+      - equal:
+          path: spec.interval
+          value: "5m"
+      - matchRegex:
+          path: spec.query
+          pattern: "xid_code == 74"
+      - matchRegex:
+          path: spec.query
+          pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.query
+          pattern: "Severity = 3"
+
+  - it: does not render nvlink-down when disabled
+    template: alertrules/nvlink-down.yaml
+    set:
+      alertRules.items.nvlinkDown.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: overrides nvlink-down interval via values
+    template: alertrules/nvlink-down.yaml
+    set:
+      alertRules.items.nvlinkDown.interval: "10m"
+    asserts:
+      - equal:
+          path: spec.interval
+          value: "10m"
+
+  # --- job-failure-rate ---
+  - it: renders job-failure-rate AlertRule when enabled
+    template: alertrules/job-failure-rate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: AlertRule
+      - equal:
+          path: spec.database
+          value: Metrics
+      - equal:
+          path: spec.interval
+          value: "5m"
+      - matchRegex:
+          path: spec.query
+          pattern: "KubeJobFailed"
+      - matchRegex:
+          path: spec.query
+          pattern: "KubeJobComplete"
+      - matchRegex:
+          path: spec.query
+          pattern: "failure_rate > 25"
+      - matchRegex:
+          path: spec.query
+          pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.query
+          pattern: "Severity = 3"
+      - equal:
+          path: metadata.annotations["adx-mon/sig"]
+          value: "Workload"
+
+  - it: does not render job-failure-rate when disabled
+    template: alertrules/job-failure-rate.yaml
+    set:
+      alertRules.items.jobFailureRate.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render any alertrules when alertRules.enabled is false
+    set:
+      alertRules.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders correct labels on all alertrules
+    template: alertrules/gpu-xid-critical.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: alertrule
+      - exists:
+          path: metadata.labels["app.kubernetes.io/name"]
+      - exists:
+          path: metadata.labels["app.kubernetes.io/instance"]
+
+  - it: uses parse_json for label extraction in queries
+    template: alertrules/node-not-ready.yaml
+    asserts:
+      - matchRegex:
+          path: spec.query
+          pattern: "parse_json.Labels."
+
+  - it: node-not-ready scopes to active nodes in window
+    template: alertrules/node-not-ready.yaml
+    asserts:
+      - matchRegex:
+          path: spec.query
+          pattern: "active_nodes"
+      - matchRegex:
+          path: spec.query
+          pattern: "join kind=leftouter"
+
+  - it: job-failure-rate counts distinct jobs not cumulative gauges
+    template: alertrules/job-failure-rate.yaml
+    asserts:
+      - matchRegex:
+          path: spec.query
+          pattern: "arg_max"
+      - matchRegex:
+          path: spec.query
+          pattern: "dcount"
+
+  # --- ray-pod-restart ---
+  - it: does not render ray-pod-restart by default (disabled)
+    template: alertrules/ray-pod-restart.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders ray-pod-restart AlertRule when ray alerts enabled
+    template: alertrules/ray-pod-restart.yaml
+    set:
+      alertRules.ray.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: AlertRule
+      - equal:
+          path: apiVersion
+          value: adx-mon.azure.com/v1
+      - equal:
+          path: spec.database
+          value: Metrics
+      - equal:
+          path: spec.interval
+          value: "5m"
+      - matchRegex:
+          path: spec.query
+          pattern: "KubePodContainerStatusRestartsTotal"
+      - matchRegex:
+          path: spec.query
+          pattern: "KubePodLabels"
+      - matchRegex:
+          path: spec.query
+          pattern: "label_ray_io_is_ray_node.*yes"
+      - matchRegex:
+          path: spec.query
+          pattern: "join kind=inner"
+      - matchRegex:
+          path: spec.query
+          pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.query
+          pattern: "Severity = 3"
+      - equal:
+          path: metadata.annotations["adx-mon/sig"]
+          value: "Ray"
+
+  - it: does not render ray-pod-restart when alertRules.enabled is false
+    template: alertrules/ray-pod-restart.yaml
+    set:
+      alertRules.ray.enabled: true
+      alertRules.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sets destination on ray-pod-restart when configured
+    template: alertrules/ray-pod-restart.yaml
+    set:
+      alertRules.ray.enabled: true
+      alertRules.ray.podRestart.destination: "https://alerts.example.com/ray"
+    asserts:
+      - equal:
+          path: spec.destination
+          value: "https://alerts.example.com/ray"
+
+  - it: sets autoMitigateAfter on ray-pod-restart when configured
+    template: alertrules/ray-pod-restart.yaml
+    set:
+      alertRules.ray.enabled: true
+      alertRules.ray.podRestart.autoMitigateAfter: "1h"
+    asserts:
+      - equal:
+          path: spec.autoMitigateAfter
+          value: "1h"
+
+  - it: uses configurable restart threshold
+    template: alertrules/ray-pod-restart.yaml
+    set:
+      alertRules.ray.enabled: true
+      alertRules.ray.podRestart.restartThreshold: 5
+    asserts:
+      - matchRegex:
+          path: spec.query
+          pattern: "restart_delta >= 5"

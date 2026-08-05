@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "helpsteer3-preference",
+  "version": "v1",
+  "purpose": "rl",
+  "source": {
+    "kind": "huggingface",
+    "repo": "nvidia/HelpSteer3",
+    "revision": "f6d145777bcbde96137596340fab89793acd1031",
+    "config": "preference"
+  },
+  "account": "airundatasets",
+  "container": "datasets",
+  "prefix": "helpsteer3-preference/v1",
+  "files": [
+    {
+      "path": "preference/train.jsonl.gz",
+      "bytes": 106484475,
+      "sha256": "32b52e1d378f8dab1e4c9ae549da49a5d6fc0875aeafe3f9139e6053beb906bb"
+    },
+    {
+      "path": "preference/validation.jsonl.gz",
+      "bytes": 5487516,
+      "sha256": "cd0d8b6efd7869a44c1b5ff91701232062555829b3c838abfd770d7dab6c7861"
+    }
+  ],
+  "total_bytes": 111971991,
+  "digest": "sha256:667dfbdd4699b4a65468511ff258f41c9e475cefeb9cbd11f40524b941522dea",
+  "assurance": "manifest-supplied",
+  "created_at": "2026-06-02T07:51:32Z",
+  "tags": {
+    "family": "nemotron",
+    "ingest": "pending",
+    "license": "cc-by-4.0"
+  },
+  "rl": {
+    "kind": "preferences",
+    "schema": "helpsteer3-preference"
+  }
+}

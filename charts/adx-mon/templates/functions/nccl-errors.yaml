@@ -1,0 +1,32 @@
+{{- if and .Values.functions.enabled .Values.functions.items.ncclErrors.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-nccl-errors
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.ncclErrors.database | quote }}
+  body: |
+    // NCCL error view: extracts NCCL communication errors from container logs.
+    // NCCL errors indicate GPU interconnect failures (NVLink, NVSwitch, InfiniBand).
+    .create-or-alter function NcclErrors () {
+      ContainerLogs
+      | where Body has "NCCL" and (Body has "error" or Body has "WARN" or Body has "unhandled")
+      | extend namespace = tostring(Resource["k8s.namespace.name"]),
+               pod = tostring(Resource["k8s.pod.name"]),
+               container = tostring(Resource["k8s.container.name"]),
+               node = tostring(Resource["k8s.node.name"]),
+               message = tostring(Body)
+      | extend error_type = case(
+                  message has "unhandled system error", "UnhandledSystemError",
+                  message has "connection refused", "ConnectionRefused",
+                  message has "remote process exited", "RemoteProcessExited",
+                  message has "timeout", "Timeout",
+                  message has "WARN", "Warning",
+                  "Other")
+      | project Timestamp, Cluster, namespace, pod, container, node, error_type, message
+    }
+{{- end }}

@@ -1,0 +1,92 @@
+# Values used only by the managed-gpu-longhaul workflow. The release is
+# installed in an isolated namespace and targets nodes that the workflow labels
+# with ai-runtime-longhaul.gpu-monitoring=true.
+serviceAccount:
+  name: gpu-monitoring-longhaul
+
+rbac:
+  name: gpu-monitoring-longhaul
+
+configMap:
+  name: gpu-monitoring-longhaul-gpu
+
+daemonset:
+  nodeSelector:
+    ai-runtime-longhaul.gpu-monitoring: "true"
+  requireAcceleratorLabel: false
+  instanceTypeLabelKeys:
+    - node.kubernetes.io/instance-type
+    - aks.azure.com/instance-type
+
+monitors:
+  customPluginMonitor: false
+
+nodeExporter:
+  # The longhaul cluster already runs the full-stack hostNetwork node-exporter
+  # DaemonSet on :9100. A second hostNetwork pod declaring the same port cannot
+  # schedule on the same GPU node.
+  enabled: false
+
+metricsCollector:
+  scrapeInterval: "5s"
+  # Keep scraping the existing full-stack node-exporter on localhost:9100 even
+  # though this isolated gpu-monitoring overlay does not deploy its own sidecar.
+  nodeExporterScrape: true
+
+gpuSkus:
+  a100: null
+  h100: null
+  h100-nvl-1g: null
+  h100-nvl-2g: null
+  h200: null
+  gb200: null
+  spark: null
+  longhaul-a10:
+    instanceTypes:
+      - Standard_NV6ads_A10_v5
+      - standard_nv6ads_a10_v5
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+  longhaul-a100:
+    instanceTypes:
+      - Standard_NC24ads_A100_v4
+      - standard_nc24ads_a100_v4
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+  longhaul-h100:
+    instanceTypes:
+      - Standard_NC40ads_H100_v5
+      - standard_nc40ads_h100_v5
+      - Standard_NC80adis_H100_v5
+      - standard_nc80adis_h100_v5
+      - Standard_ND96isr_H100_v5
+      - standard_nd96isr_h100_v5
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor-h100.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""

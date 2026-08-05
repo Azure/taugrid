@@ -1,0 +1,21 @@
+{{- if and .Values.functions.enabled .Values.functions.items.experimentMetricsDashboardRows.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-experiment-metrics-dashboard-rows
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.experimentMetricsDashboardRows.database | quote }}
+  body: |
+    // skipvalidation keeps the optional Tau remote-write function installable
+    // before any cluster has emitted ExperimentMetrics; it must not hide schema drift.
+    .create-or-alter function with (folder = 'Tau/experiments', docstring = 'Normalize adx-mon experiment_metrics rows to the Tau dashboard metric contract.', skipvalidation = 'true') ExperimentMetricsDashboardRows()
+    {
+    ExperimentMetrics
+    | extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), ['project']=tostring(Labels['project']), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)
+    | project exported_at=Timestamp, workspace_id, cluster, source_store_id, metric_file_id, metric_file_path, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags
+    }
+{{- end }}

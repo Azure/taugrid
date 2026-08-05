@@ -1,0 +1,142 @@
+{
+ "_comment": "Trimmed capture of `kubectl get nodes -o json` from the <cluster> test cluster. DO NOT prune entries that look redundant. flex-h200-eastus2euap-6m22l advertises nvidia.com/gpu:8 alongside nvidia.com/mig-*:0 -- a MIG-capable H200 running in whole-GPU mode. That node is the only real-world proof that GPU-source precedence checks whole-GPU capacity before MIG profile keys; without it a MIG-first classifier reports the node as 0 GPUs and every other fixture still passes. See TestRealClusterFixtureRetainsMIGCapableWholeGPUNode.",
+ "items": [
+  {
+   "metadata": {
+    "labels": {
+     "accelerator": "nvidia",
+     "beta.kubernetes.io/instance-type": "Standard_ND96amsr_A100_v4",
+     "kubernetes.azure.com/accelerator": "nvidia",
+     "node.kubernetes.io/instance-type": "Standard_ND96amsr_A100_v4"
+    },
+    "name": "aks-gpu-98828081-vmss000000"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "94940m",
+     "nvidia.com/gpu": "8"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "accelerator": "nvidia",
+     "beta.kubernetes.io/instance-type": "Standard_ND96amsr_A100_v4",
+     "kubernetes.azure.com/accelerator": "nvidia",
+     "node.kubernetes.io/instance-type": "Standard_ND96amsr_A100_v4"
+    },
+    "name": "aks-gpu-98828081-vmss000001"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "94940m",
+     "nvidia.com/gpu": "8"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_D8ds_v6",
+     "node.kubernetes.io/instance-type": "Standard_D8ds_v6"
+    },
+    "name": "aks-sysd8v6250-29533222-vmss000000"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "7820m"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_D8ds_v6",
+     "node.kubernetes.io/instance-type": "Standard_D8ds_v6"
+    },
+    "name": "aks-sysd8v6250-29533222-vmss000001"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "7820m"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_D8ds_v6",
+     "node.kubernetes.io/instance-type": "Standard_D8ds_v6"
+    },
+    "name": "aks-sysd8v6250-29533222-vmss000006"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "7820m"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_D8ds_v6",
+     "node.kubernetes.io/instance-type": "Standard_D8ds_v6"
+    },
+    "name": "aks-sysd8v6250-29533222-vmss000007"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "7820m"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_D8ds_v6",
+     "node.kubernetes.io/instance-type": "Standard_D8ds_v6"
+    },
+    "name": "aks-sysd8v6250-29533222-vmss000008"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "7820m"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_ND96isr_H200_v5",
+     "node.kubernetes.io/instance-type": "Standard_ND96isr_H200_v5"
+    },
+    "name": "flex-h200-eastus2euap-6m22l"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "96",
+     "nvidia.com/gpu": "8",
+     "nvidia.com/mig-1g.18gb": "0",
+     "nvidia.com/mig-2g.35gb": "0",
+     "nvidia.com/mig-3g.71gb": "0"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "labels": {
+     "beta.kubernetes.io/instance-type": "Standard_ND96isr_H200_v5",
+     "node.kubernetes.io/instance-type": "Standard_ND96isr_H200_v5"
+    },
+    "name": "flex-h200-eastus2euap-c8r87"
+   },
+   "status": {
+    "allocatable": {
+     "cpu": "96",
+     "nvidia.com/gpu": "8"
+    }
+   }
+  }
+ ]
+}

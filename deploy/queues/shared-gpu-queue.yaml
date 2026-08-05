@@ -1,0 +1,347 @@
+# Opinionated Tau GPU queue defaults for shared test clusters.
+#
+# Shape: one ClusterQueue owns quota/fairness for the cluster GPU pool, while a
+# small set of namespace-scoped LocalQueues expose the entry points users submit
+# to: `admin`, `test-team-a`, `test-team-b`, `test-team-c`, and `backfill`.
+# This follows the Kueue pattern used by larger batch platforms: LocalQueues are
+# tenant/lane/accounting entry points; the ClusterQueue is the shared quota and
+# preemption boundary.
+#
+# Preemption policy: the ClusterQueue may preempt only lower-priority workloads
+# within the same ClusterQueue. LocalQueue choice does not grant priority by
+# itself; admin/break-glass work must also set `tau-admin-critical`, normal
+# training uses `tau-train-default`, priority training uses
+# `tau-train-priority`, and checkpointable fill work uses `tau-best-effort`
+# / `tau-elastic-low`.
+#
+# The ClusterQueue uses a within-document YAML anchor (&gpu-quota) so the
+# per-flavor quota block (cpu / memory / gpu.nvidia.com / nvidia.com/gpu)
+# appears once instead of three times. Anchors are scoped to a single YAML
+# document, so they cannot be shared across ResourceFlavor documents — the
+# toleration block on each ResourceFlavor is kept flow-style on one line to
+# compensate.
+---
+# The vNext workload namespace. Provisioned here so the new LocalQueues and the
+# blob-training /data PVC (applied separately from applications/taugrid/storage/
+# — pick Premium Blob or Lustre) all have a home.
+#
+# Pod Security: enforce=baseline is the real security floor (blocks privileged,
+# hostNetwork, host mounts, etc.). warn/audit are deliberately set to baseline
+# (not restricted) to match enforce: typical GPU training images run as root
+# and use the device plugin without restricted-level hardening
+# (runAsNonRoot / seccompProfile / dropped caps), so restricted-level warnings
+# would fire on every apply and bury real drift in noise. Raising enforce to
+# restricted here would break normal GPU jobs — keep enforce=baseline.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ray
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/audit-version: latest
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: gpu-a100-nvlink-80gb-dra
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+spec:
+  nodeLabels:
+    tau.azure.com/provider: azure
+    tau.azure.com/gpu-class: a100-nvlink-80gb
+    tau.azure.com/rentable: "true"
+  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: gpu-h100-standalone-95gb-dra
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+spec:
+  nodeLabels:
+    tau.azure.com/provider: azure
+    tau.azure.com/gpu-class: h100-standalone-95gb
+    tau.azure.com/rentable: "true"
+  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: gpu-h200-nvlink-141gb-dra
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+spec:
+  nodeLabels:
+    tau.azure.com/provider: azure
+    tau.azure.com/gpu-class: h200-nvlink-141gb
+    tau.azure.com/rentable: "true"
+  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-admin-critical
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 2000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Break-glass pod priority for platform-admin GPU work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-serve-critical
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 1500
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: High pod priority for serving/control-plane-adjacent Tau work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-train-default
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 1000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Default pod priority for Tau training work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-train-priority
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 1200
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Elevated pod priority for approved Tau priority training work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-eval-default
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 700
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Default pod priority for Tau evaluation work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-eval-priority
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 900
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Elevated pod priority for approved Tau priority evaluation work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-elastic-low
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 100
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Low pod priority for checkpointable elastic/backfill work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-diy-default
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 500
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Default pod priority for ad hoc Tau DIY jobs.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tau-sandbox-low
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 100
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Low pod priority for sandbox and interactive test work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-admin-critical
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 2000
+description: Break-glass Kueue priority for platform-admin GPU work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-serve-critical
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 1500
+description: High Kueue priority for serving/control-plane-adjacent Tau work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-train-default
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 1000
+description: Default Kueue priority for Tau training work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-train-priority
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 1200
+description: Elevated Kueue priority for approved Tau priority training work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-eval-default
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 700
+description: Default Kueue priority for Tau evaluation work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-eval-priority
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 900
+description: Elevated Kueue priority for approved Tau priority evaluation work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-best-effort
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 100
+description: Low Kueue priority for checkpointable elastic/backfill work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-diy-default
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 500
+description: Default Kueue priority for ad hoc Tau DIY jobs.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: tau-sandbox-low
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+value: 100
+description: Low Kueue priority for sandbox and interactive test work.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: tau-gpu-cq
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ray
+  queueingStrategy: BestEffortFIFO
+  preemption:
+    withinClusterQueue: LowerPriority
+  resourceGroups:
+    - coveredResources: [cpu, memory, gpu.nvidia.com, nvidia.com/gpu]
+      flavors:
+        - name: gpu-a100-nvlink-80gb-dra
+          resources: &gpu-quota
+            - { name: cpu,            nominalQuota: "10000" }
+            - { name: memory,         nominalQuota: 100Ti   }
+            - { name: gpu.nvidia.com, nominalQuota: "64"    }
+            - { name: nvidia.com/gpu, nominalQuota: "64"    }
+        - name: gpu-h100-standalone-95gb-dra
+          resources: *gpu-quota
+        - name: gpu-h200-nvlink-141gb-dra
+          resources: *gpu-quota
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: admin
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+    tau.azure.com/queue-role: admin
+spec:
+  clusterQueue: tau-gpu-cq
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: test-team-a
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+    tau.azure.com/queue-role: test-team
+spec:
+  clusterQueue: tau-gpu-cq
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: test-team-b
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+    tau.azure.com/queue-role: test-team
+spec:
+  clusterQueue: tau-gpu-cq
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: test-team-c
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+    tau.azure.com/queue-role: test-team
+spec:
+  clusterQueue: tau-gpu-cq
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: backfill
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+    tau.azure.com/queue-role: backfill
+spec:
+  clusterQueue: tau-gpu-cq

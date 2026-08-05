@@ -1,0 +1,142 @@
+# values-ai-runtime.yaml — AKS AI Runtime preset
+#
+# Applied on top of values.yaml when deployed via the AI Runtime operator
+# on GPU-enabled clusters. Enables GPU-specific telemetry, kernel error
+# monitoring, journal log collection, and Kueue controller scraping.
+#
+# Usage:
+#   helm install adx-mon charts/adx-mon/ \
+#     -f charts/adx-mon/values.yaml \
+#     -f charts/adx-mon/values-ai-runtime.yaml
+
+adx:
+  # Per-cluster ADX endpoint is provided via ConfigMap (not hardcoded).
+  # ArgoCD path: pods read from the ConfigMap at startup.
+  # EV2 path: valuesPath injects clusterUrl directly (overrides configMapRef).
+  configMapRef: adx-mon-cluster-config
+
+collector:
+  # -- Enable GPU-specific scrape targets
+  gpu:
+    dcgmScrape: true
+    kernelTarget: true
+
+  # -- Journal log targets for systemd services
+  journalLogs:
+    targets:
+      - matches: ['_SYSTEMD_UNIT=kubelet.service']
+        database: Logs
+        table: Kubelet
+      - matches: ['_SYSTEMD_UNIT=containerd.service']
+        database: Logs
+        table: ContainerRuntime
+
+  # -- Container log collection: system components and Ray training jobs
+  # Uses static-pod-target to collect logs without requiring pod annotations.
+  containerLogs:
+    enabled: true
+    targets:
+      # System components → SystemLogs table (low volume, high signal)
+      - namespace: kuberay-system
+        labels:
+          app.kubernetes.io/name: kuberay-operator
+        destination: "Logs:SystemLogs"
+        parsers: ["json"]
+
+      - namespace: kueue-system
+        labels:
+          app.kubernetes.io/name: kueue
+        destination: "Logs:SystemLogs"
+        parsers: ["json"]
+
+      # DCGM exporter pods (GPU monitoring)
+      - labels:
+          app.kubernetes.io/name: dcgm-exporter
+        destination: "Logs:SystemLogs"
+        parsers: ["json"]
+
+      # All Tau-managed Job and RayJob pods, regardless of workspace namespace
+      - labels:
+          tau.azure.com/managed-by: "tau"
+        destination: "Logs:ContainerLogs"
+        parsers: ["json"]
+
+      # All Ray head and worker pods (auto-labeled by KubeRay operator)
+      - labels:
+          ray.io/is-ray-node: "yes"
+        destination: "Logs:ContainerLogs"
+        parsers: ["json"]
+
+
+  # -- Prometheus scrape targets for scheduler components
+  prometheusScrape:
+    # -- Drop high-cardinality low-value metrics to reduce ADX table count
+    # Without filtering, ~1118 tables are created. The PRD (§F2-F5) only requires
+    # DCGM, node-exporter, cadvisor, KSM (pods/nodes/deployments/jobs), and Kueue.
+    # These filters reduce table count to ~550, eliminating apiserver, etcd,
+    # Go runtime, controller internals, and noisy KSM/node-exporter subsystems.
+    #
+    # IMPORTANT: These regexes match against RAW prometheus metric names
+    # (lowercase snake_case, e.g. "apiserver_request_duration_seconds_bucket"),
+    # NOT the PascalCase ADX table names. The PascalCase conversion happens
+    # after the drop filter is applied. Using PascalCase here will silently
+    # fail to match anything.
+    # dropMetrics: inherited from values.yaml (moved there so all overlays
+    # get the canonical list without needing to sync base-values.yaml copies).
+    extraStaticTargets:
+      # Kueue controller metrics (TLS on :8443)
+      - hostRegex: '.*'
+        url: 'https://kueue-controller-manager-metrics-service.kueue-system.svc:8443/metrics'
+        namespace: kueue-system
+        pod: kueue-controller-manager
+        container: manager
+      # KubeRay operator metrics (HTTP on :8080). This is also annotation-discovered,
+      # but keep a static target as a fallback for existing pods and overlay drift.
+      - hostRegex: '.*'
+        url: 'http://kuberay-operator.kuberay-system.svc:8080/metrics'
+        namespace: kuberay-system
+        pod: kuberay-operator
+        container: kuberay-operator
+      # NOTE: DCGM exporter is discovered via pod annotations (adx-mon/scrape=true)
+      # rather than a static target, since it uses containerPort (not hostPort).
+
+# -- Enable all pre-built Function CRDs
+functions:
+  enabled: true
+
+# -- Enable all pre-built AlertRule CRDs
+alertRules:
+  enabled: true
+
+# -- Control plane scheduling: pin operator, ingestor, alerter, collector-singleton
+# to the system node pool to avoid GPU node waste and eviction risk.
+operator:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+
+ingestor:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+
+alerter:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+
+collectorSingleton:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+
+kube-state-metrics:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+
+# -- Pre-create known ADX tables to avoid 429 throttling on first deploy.
+managementCommands:
+  precreateMetricsTables:
+    enabled: true
+  precreateLogsTables:
+    enabled: true
+  ingestionBatching:
+    enabled: true
+  retentionPolicies:
+    enabled: true

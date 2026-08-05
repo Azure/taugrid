@@ -1,0 +1,2052 @@
+{
+  "schema_version": 1,
+  "name": "common-pile-domain-balanced",
+  "version": "v1",
+  "purpose": "pretrain",
+  "source": {
+    "kind": "huggingface",
+    "repo": "common-pile/raw_v0.1_parquet",
+    "revision": "3bba1661c6fb744ccfe42b27d8ce84a3b88b5848",
+    "config": "common-pile-domain-balanced-v1"
+  },
+  "account": "airundatasets",
+  "container": "datasets",
+  "prefix": "common-pile-domain-balanced/v1",
+  "files": [
+    {
+      "path": "arxiv_abstracts/data_1.parquet",
+      "bytes": 88800897,
+      "sha256": "55483c8c7a058ddd5395fb84c23c21ad19ae738068776f7ee528f38fa3b47097",
+      "source": "arxiv_abstracts",
+      "domain": "scholarly-research",
+      "split": "test"
+    },
+    {
+      "path": "arxiv_papers/data_0.parquet",
+      "bytes": 1137559184,
+      "sha256": "4f2497be76de4b304734c85fd2feec2babdb4ae8571b14d94c9f3450b8aaaec8",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "arxiv_papers/data_1.parquet",
+      "bytes": 1012613161,
+      "sha256": "431fa87b4c11177683d48d3319e209286e5da33254e50de4249d89906b8c1138",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "arxiv_papers/data_2.parquet",
+      "bytes": 1015438744,
+      "sha256": "083c6ccf22a2b6f42d7385de1ea473a7fe842857b517da762b2f60b99f42a31a",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "arxiv_papers/data_3.parquet",
+      "bytes": 1010027308,
+      "sha256": "8dc162514b7d05d31dced2f54aa2cf64fc8295f8d3bfb6e2a07609ab8bca9904",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "arxiv_papers/data_4.parquet",
+      "bytes": 1038843901,
+      "sha256": "157d46007f0e8a4aca00e2e0978c1a851f48b322fc549522404bf41710850ec7",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "arxiv_papers/data_5.parquet",
+      "bytes": 842380609,
+      "sha256": "2dc870aa989b1294c1abdee88446577cdedefe14b6e28e075b7b5aca76f9078f",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "arxiv_papers/data_7.parquet",
+      "bytes": 62937570,
+      "sha256": "c33f866b7ecb1bf90f39c124318606f9ac9f821a62a041ffae8994cd6447293e",
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_0.parquet",
+      "bytes": 1080176257,
+      "sha256": "484b561027d3c11c529c89a9a75b134888d9e298883c8a0b7e297652a3a535a6",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_1.parquet",
+      "bytes": 1077089355,
+      "sha256": "44f2d248a0be9f3b7debd4c48f6b9d4fa820e19190450fca55eec80915743699",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_11.parquet",
+      "bytes": 1075421043,
+      "sha256": "9187c4fcb1344723e20559ee77a514369f62745f5f6dfd33d90ed264ffc6b0c0",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_12.parquet",
+      "bytes": 1064167941,
+      "sha256": "a90c1f83312a99923a09b767441e8c7d76ab86e7e931b44680098ea76934d934",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_15.parquet",
+      "bytes": 1065300584,
+      "sha256": "b78c383954512ada34182fd08cef4fab50a9d2ef00b59ba22c2faa4213fc2288",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_20.parquet",
+      "bytes": 1076285216,
+      "sha256": "f3e31553b24bdb630e39d179a3b681f36e57ad7345990a8e066af634033f9a41",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_22.parquet",
+      "bytes": 1095457182,
+      "sha256": "92b3451c6383cdb0496fab7dd19b3a6f3a8b100cf2c7418296be82e6acf9ff88",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_24.parquet",
+      "bytes": 1072309076,
+      "sha256": "8f65d6c8369a427b03ce18ba3769c1f561c0838e2fe253651fe544d72af7d5bf",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_25.parquet",
+      "bytes": 1098001172,
+      "sha256": "bcda226ccdab29fc4a5f0969acc155c21a8b18a396459c9f027b92e5cc82cd07",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_26.parquet",
+      "bytes": 1092634866,
+      "sha256": "4e4c0d92b88ce3f682d02ae523e43bf4ca76e209af19a031ffc740dcf01063cd",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_29.parquet",
+      "bytes": 1067285223,
+      "sha256": "1e9adc34c6fb8beb860845feb75a56ed7e5f1566b5ac831e3f392426676c10ac",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_3.parquet",
+      "bytes": 1094039126,
+      "sha256": "14a78eff46052fda9d823ba1807c03babf03215207bfc293e520fc7b9eaab5c5",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_30.parquet",
+      "bytes": 1088082822,
+      "sha256": "6e96b8a88ba32b452ec9c7e215c0baa51bb1595cbf66fc7b88320c3e2b11d447",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_39.parquet",
+      "bytes": 62207714,
+      "sha256": "023c06ab3cc281e5ef848390e066a0ecc135295af15b68bdded8df7cf89d2df4",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_6.parquet",
+      "bytes": 1081914734,
+      "sha256": "3cbe67a450826c92ae6c809467e46a97cdbbc9d48801a3efb1289df927b075e4",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_7.parquet",
+      "bytes": 1077243277,
+      "sha256": "90b5399f063ccc7dd8b500409afa364f9ad1e3447261c1bed7a831ebc2d27582",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_8.parquet",
+      "bytes": 1120103485,
+      "sha256": "f77ea8379bbe505ee2557757582585e918b46431a637cee2b028e41848723d3b",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "biodiversity_heritage_library/data_9.parquet",
+      "bytes": 1118851737,
+      "sha256": "0ac8fd158cf0745f3c53c71a60a4943bcf277b3f09cc99c153c49528c8a3f2ed",
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation"
+    },
+    {
+      "path": "caselaw_access_project/data_18.parquet",
+      "bytes": 541342602,
+      "sha256": "addac3a151d8a5935688d91aad83aa90ae8f175161f1be7d3e8ad1aa4336b9f6",
+      "source": "caselaw_access_project",
+      "domain": "law-and-patents",
+      "split": "validation"
+    },
+    {
+      "path": "caselaw_access_project/data_24.parquet",
+      "bytes": 183004894,
+      "sha256": "f990bb75f50213065ab0140ca83ed2eb49d4ddbb6ba03a632b4dd8ef5cb31eeb",
+      "source": "caselaw_access_project",
+      "domain": "law-and-patents",
+      "split": "validation"
+    },
+    {
+      "path": "cccc/data_15.parquet",
+      "bytes": 1138431396,
+      "sha256": "41acc9f3917083e6add788664255762ae5a2c8e5193fcbf34f8d22d8b5515a93",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_16.parquet",
+      "bytes": 1194359842,
+      "sha256": "6427441e3ba635212ad697e40807ec7f3cba2c7f1e79be5e128e7fa8bff39e1f",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_24.parquet",
+      "bytes": 1165604373,
+      "sha256": "67a84419cb877e3cb46f809c3c131b0a1ad45eb4b8c78b0d20766e35a99d4c86",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_25.parquet",
+      "bytes": 1170233209,
+      "sha256": "e3c9110e3e00f0f9a4fb60acca54681b9dc76688207fb826629e01c56909e264",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_26.parquet",
+      "bytes": 1143366946,
+      "sha256": "8cdd435c604f2cffebfbc679978b3c13b11f23c2878ed70f1aefd90979926b43",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_27.parquet",
+      "bytes": 1137173719,
+      "sha256": "50c9b2234040ac36cf8009e27a8d0c414098e978b702f23508fc63811d8bc1ce",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_29.parquet",
+      "bytes": 1158463754,
+      "sha256": "3b4361b476da51c8d18caf2ba66939c22bf68927088cef907f5e63ba2e0bb448",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_4.parquet",
+      "bytes": 1163109892,
+      "sha256": "8ba4c322862c2e37557276b84d544df493483895b0a2eb6ec088a6e7a87ea5b9",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_44.parquet",
+      "bytes": 1240154762,
+      "sha256": "b8f0e84648c044e71bd24504f215e980c9f4be33f70500970101c4101e5ddd2a",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_54.parquet",
+      "bytes": 1149646188,
+      "sha256": "1e88f8053fc3ad8f9ffd207d0788ed749bf35f6127367d0e352fb9d20c1977c1",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_55.parquet",
+      "bytes": 1138485669,
+      "sha256": "8228f345747adad1efd560bcf0d7a48a39d16e1c521448133ca073c21bab039a",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_64.parquet",
+      "bytes": 1199353420,
+      "sha256": "89f58de1086da140f6b4d299f7796d883a42f15caf2cff5bc4634825efef8756",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_65.parquet",
+      "bytes": 1133161419,
+      "sha256": "59b9d7992aef8e7b90c6e7dd60fd3cb2c7bd3d91901128adddf0e4a53bf69353",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_66.parquet",
+      "bytes": 1168405174,
+      "sha256": "d4cefe7144a777483fc6427cd8f9515921fd2c85faccc9f9624ff30977c4a479",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_67.parquet",
+      "bytes": 1218265603,
+      "sha256": "ea46316676dda2fbfe75f55f79ced07b786e174e520dee30fbf3fb8e173289ba",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_68.parquet",
+      "bytes": 1232666019,
+      "sha256": "4173a2864314523ac9ef327dff02acfd462ae471facf9dc2a8d97df2c1a30a9f",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_69.parquet",
+      "bytes": 1207677940,
+      "sha256": "d247a031e393cf785febbe060140486530ab8d35a6ec8503f95cd22d014fc325",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_70.parquet",
+      "bytes": 1246783121,
+      "sha256": "e00be60a83dfe59619f5c5eac203944c5e4db10865de300e4e677a8e78f0134a",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_71.parquet",
+      "bytes": 1232830541,
+      "sha256": "d5e8d31dc6108535746cfe22a59186a44870800298be01754702db434055915a",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_72.parquet",
+      "bytes": 1272749803,
+      "sha256": "30680a74a5afaf9301aec50e90b5802e3b50dfd0e6b4d8aeefc037c102c71e71",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_73.parquet",
+      "bytes": 1305430335,
+      "sha256": "e0d981c92343e67fa0e866ea251177abe949ea03ab168cff76ca086986648c5d",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_74.parquet",
+      "bytes": 1291129335,
+      "sha256": "5b6616f8d5f0d3be1c4b5359c0e84539a278ec4897028c2ba04e87552782a8cc",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_75.parquet",
+      "bytes": 1307780741,
+      "sha256": "6e673b66c88088f275d08767e7d783f9238173f900e30db664f1431b4467dfc8",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_76.parquet",
+      "bytes": 1355499764,
+      "sha256": "dd7ccf04df4c4fb402ba9e21111a0d84953119f2a682f0f95d54675a873070ab",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_77.parquet",
+      "bytes": 1318699659,
+      "sha256": "386cba9d54ac068fdbeb7cd2f34351e3151cee568303facc28c2469e2030c606",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_80.parquet",
+      "bytes": 247888547,
+      "sha256": "cc04a8a0f13f90a3bbe86054cf9272244540988c3417e369e89c1fc8010eddf4",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_86.parquet",
+      "bytes": 48520030,
+      "sha256": "f5bb2a9634aec9bdb14b4ef996da9770f3d1fbe6ca6b1fccb3d9d57d389c0106",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "cccc/data_9.parquet",
+      "bytes": 1116673995,
+      "sha256": "a0a4ae3fc6190075e63eb00ac12fadd9862f02921e7a77a731780b2883df99fc",
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "data_provenance_initiative/data_3.parquet",
+      "bytes": 190578316,
+      "sha256": "f4fd58f8665b3a3074572e316a21732f9712fd9acd30c5162b3ef8017f4a29e2",
+      "source": "data_provenance_initiative",
+      "domain": "civic-and-reference",
+      "split": "test"
+    },
+    {
+      "path": "doab/data_3.parquet",
+      "bytes": 811338411,
+      "sha256": "72ff1d22775b6c7f8a96b7b2d4906a47fadaf5e8895bd71f437fdd0dc7b7e78f",
+      "source": "doab",
+      "domain": "biomedical-and-biodiversity",
+      "split": "test"
+    },
+    {
+      "path": "foodista/data_0.parquet",
+      "bytes": 10340708,
+      "sha256": "80aac86646b46da1cadcb6874408f800c765dbeb103b260ff7d7f30bfa5e8417",
+      "source": "foodista",
+      "domain": "web-and-social",
+      "split": "test"
+    },
+    {
+      "path": "github_archive/data_68.parquet",
+      "bytes": 650204039,
+      "sha256": "0353fe9ff9004ea385f5abff3de1b3f1953fbe2ec7f1a984ba4b36fd10237b8a",
+      "source": "github_archive",
+      "domain": "software-and-code",
+      "split": "validation"
+    },
+    {
+      "path": "library_of_congress/data_1.parquet",
+      "bytes": 1065537555,
+      "sha256": "527ebf14b2e910b59df2f6bac7e6abdf62152e9b1cfa224996c5a18340937712",
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation"
+    },
+    {
+      "path": "library_of_congress/data_13.parquet",
+      "bytes": 663833473,
+      "sha256": "a87cfedf219c86f240a1a1db53f3901977bd0d820c1100bf894c84596056901e",
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation"
+    },
+    {
+      "path": "library_of_congress/data_2.parquet",
+      "bytes": 1073241982,
+      "sha256": "047c83cb7d83b5c50794dd9b4d2c052868a85e65b322c73a9abbc31407796537",
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation"
+    },
+    {
+      "path": "library_of_congress/data_6.parquet",
+      "bytes": 1076435711,
+      "sha256": "0a1fd4338d9ed945658f4149d3cc332cf88beaa572a68e34b20ec87e8c3da966",
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation"
+    },
+    {
+      "path": "library_of_congress/data_7.parquet",
+      "bytes": 1071171182,
+      "sha256": "ba18170333a389a32739a8b3f431bc9e32c2a214e25898aad292c970cda2c810",
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation"
+    },
+    {
+      "path": "library_of_congress/data_8.parquet",
+      "bytes": 1064456034,
+      "sha256": "ab1197d4e8cf9e9f8580d77eeae2374e91be5b83e64eb75e37192f1f933453d8",
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation"
+    },
+    {
+      "path": "libretexts/data_0.parquet",
+      "bytes": 153931019,
+      "sha256": "f1c041c60ef91876be2981028432b0cc93c9188c954d1758452126c6aae7a0f2",
+      "source": "libretexts",
+      "domain": "education-and-wikis",
+      "split": "validation"
+    },
+    {
+      "path": "news/data_1.parquet",
+      "bytes": 36104484,
+      "sha256": "640c8a0b01ee5525ab7c7b3cb617694feda9d3babf7ec745f52ea7c818934326",
+      "source": "news",
+      "domain": "web-and-social",
+      "split": "validation"
+    },
+    {
+      "path": "oercommons/data_0.parquet",
+      "bytes": 28116852,
+      "sha256": "08f914af6aa9e84fbc12d2c708e1a20e934daa7dd42e90d645673d4a29e3acda",
+      "source": "oercommons",
+      "domain": "education-and-wikis",
+      "split": "test"
+    },
+    {
+      "path": "peS2o/data_0.parquet",
+      "bytes": 1010159545,
+      "sha256": "dc338a46ab7fc06f49ee14a652ab7fbebdfc3662f806042ec22e6ed46c554ee7",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_10.parquet",
+      "bytes": 1166301548,
+      "sha256": "159f4a7c203dc409a4d5075e8b72421da99c4f70d30d3d089bfe9e8d2f940551",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_12.parquet",
+      "bytes": 1008094163,
+      "sha256": "6b06c3dc5c6bfdfb92aa348df3b23b4beebb0ec9490f1995a2eb2dc427acf082",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_13.parquet",
+      "bytes": 1007352398,
+      "sha256": "1639a9e0905cbd7ddf78cc57b734e1fa403202f137e836b0e04debeab9ecfb94",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_18.parquet",
+      "bytes": 1164220032,
+      "sha256": "7e1219a1f92ecf0b8976516c6cf78448e163949f6ca269ab32e580c4b4c1d27c",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_19.parquet",
+      "bytes": 1167570476,
+      "sha256": "33847513912689f7319cf511deb04c8d9b41f45b39b5f9e65b1179565e7ea724",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_21.parquet",
+      "bytes": 1006985891,
+      "sha256": "34e1f823194a3534c0c4da2dac860d0d070d8cd43047b49f2bbab5e3b772e18c",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_22.parquet",
+      "bytes": 1164650062,
+      "sha256": "114706eb5005f4f5009a6f0ccf1f9e8a536de72d68ffe6da4dc58078ae2cacef",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_23.parquet",
+      "bytes": 1009617814,
+      "sha256": "40b2778cd580487fa81380ef6ea749efc79d53490b62e591866a41e12338aa4c",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_24.parquet",
+      "bytes": 1008156375,
+      "sha256": "10bac8ec132df3b3bd0a4d5217b368c342c998b2c43e0fdb118c859fbd61246e",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_25.parquet",
+      "bytes": 1165028310,
+      "sha256": "8f3d441b06400bfd5c4308523798b1c5f5b5fb2fed3d746d2ddd0ed829fca931",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_26.parquet",
+      "bytes": 1168035380,
+      "sha256": "c1f5418ddad563e7f1456161fae412907b9f99e0c1b766336ea191d7318699f5",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_28.parquet",
+      "bytes": 1167405807,
+      "sha256": "8c8bd6feb563e25c4e20494c301632205d16c77c8e3e63736382bd009282e268",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_32.parquet",
+      "bytes": 1008555783,
+      "sha256": "e7cbc448c93c61c64d43626bb1ed022794fc34219466a509fb8b3ea985e42a20",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_36.parquet",
+      "bytes": 1009408463,
+      "sha256": "d29cdea3d8f431e7ac364c1bb6016d05aa0208d75eda71fad7dda1d425ef2831",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_38.parquet",
+      "bytes": 1167527763,
+      "sha256": "94f00b00253fbe4d5bb098a9d0c5b2acd9d8bd22fa040e7a10830f0e7dd7c33b",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_39.parquet",
+      "bytes": 1011627650,
+      "sha256": "0e228e3bfdff179abd1aa7914c88b9b7491aec050f1b6b64e3d9e0ba55efadde",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_4.parquet",
+      "bytes": 1007125339,
+      "sha256": "edd60059556d1b3c93410c7d941118ab64d203d4b2eb1e33a975475ba17d457f",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_41.parquet",
+      "bytes": 1167306372,
+      "sha256": "73aa81f1d6198cc0c4e335d73e7a865e62a58086cd0e8c9be60311145deed1e1",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_45.parquet",
+      "bytes": 1165295420,
+      "sha256": "df014e59becd565cd9cede7cd8a8004bc98205cd0742c980817f957664b47ec4",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_46.parquet",
+      "bytes": 1010098440,
+      "sha256": "d3cb4d35d83f86e7d08baf2005b1c598023cf73792a44a083c605dd482ed63bc",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_47.parquet",
+      "bytes": 1013072442,
+      "sha256": "a9130cb39a546fd31654ac726b931ac5d7f4240c2481894d0aed5db7e3347606",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_48.parquet",
+      "bytes": 1012864399,
+      "sha256": "aa8027b0a8312c209bf8c62bb28e496c8bd6dcccdde5f8bbe3412563793150d4",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_5.parquet",
+      "bytes": 1009411761,
+      "sha256": "381af4e31c6eba73b9a0ac9165dad70585638481b0a05ecfae7dd22fcc15d2c5",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_51.parquet",
+      "bytes": 1168297100,
+      "sha256": "34c99edce3608dc9b83bb7f89674f3efd5001d9ad92b66b2d7c31a77005250f0",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "peS2o/data_55.parquet",
+      "bytes": 368319742,
+      "sha256": "50a6f9d619ed271b6fefa0b85208cb0bec1ea6a7873a8355c3bb16c426e040a9",
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_0.parquet",
+      "bytes": 1131981172,
+      "sha256": "a48f2640ec521526d89cf140cf4a15a79c84a6a6099d31485d3ece702b8047aa",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_11.parquet",
+      "bytes": 1095267122,
+      "sha256": "ef6687bd672ba12691e894e30570fa3100041b1ac424a6b1943a56c70c3232c4",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_12.parquet",
+      "bytes": 1074040614,
+      "sha256": "a9eef47245c08effc5bb18462cf05614bfe036254c2c20dd4617279e88a54d53",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_13.parquet",
+      "bytes": 1097785470,
+      "sha256": "0396aafe112c7db9cc675dbd9f7a6b7135314d390b760ead49af5dc0d69117bb",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_14.parquet",
+      "bytes": 1131579871,
+      "sha256": "74ccdec3a8005654a19fbac4949da35ac05ea443cc76eea01e0db22615a7efb3",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_15.parquet",
+      "bytes": 1112978224,
+      "sha256": "70f57f91cee36603439507c9c2bf9204980973ae18e8524a4b0e2975cbf6634d",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_16.parquet",
+      "bytes": 1131750020,
+      "sha256": "8863ae74ce3a5b4e98f5dd5ae2b78a8d1523750e6f1f83e17e2009f1f21d8777",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_17.parquet",
+      "bytes": 1116980233,
+      "sha256": "d82ed83060508b943d4131eb9999cba4b79b2a2a1b7a92933cec1bf38c9e082d",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_18.parquet",
+      "bytes": 1149574004,
+      "sha256": "76273f680080d872c7f104dc7195311c2dd55b532682710fef582ee26e0c7248",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_19.parquet",
+      "bytes": 1111292566,
+      "sha256": "8fcb22178406521a4cdcfdbb3cd1b09e57f0c31d84e846464c06d45ce500fcdc",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_2.parquet",
+      "bytes": 1141667452,
+      "sha256": "ee608ae42b5bde35c3b45b8bd6cb9221bc62f74fbee30fa6f3eb2acf31a68797",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_20.parquet",
+      "bytes": 1147816349,
+      "sha256": "c61be945146316814b62a45188c645b2c8b5e864c35cc19dff62d71bae39b331",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_21.parquet",
+      "bytes": 1099409669,
+      "sha256": "45e4f783ccb30b403725497330f8a6e65f888e5906fed8ed615e59fbe992894c",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_22.parquet",
+      "bytes": 117734885,
+      "sha256": "8b7df4ed9496c79f74c86899a06a3ae56657423ae2ec7d74d889c0f77537db0d",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_3.parquet",
+      "bytes": 1087180329,
+      "sha256": "572a16326b24f8e57fabf2367fc0c7516d88e0b50717d4a42d9b73aeb5bd87f7",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_4.parquet",
+      "bytes": 1124879423,
+      "sha256": "6498951c46bf11006fc2bd97f3271afbf8f8b544f32781f6a12f4eb0b1162318",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_6.parquet",
+      "bytes": 1099795857,
+      "sha256": "aaf8c8213f913250442cf10c2380f2d84ae831f35e9fd2de7935a537cdb6ae15",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_7.parquet",
+      "bytes": 1140095207,
+      "sha256": "d50979d8fb38df6efc11b07ca3351e5ac10d55a3217d9a596ee6ffb666a2ace8",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_8.parquet",
+      "bytes": 1068515170,
+      "sha256": "4d7a0c401cda632069f9c8db2215e32b101b31c4164d90062f3952d459df4f8b",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pre_1929_books/data_9.parquet",
+      "bytes": 1092688005,
+      "sha256": "62d422f801864cb4518550c9a1c554e5ae2ec5084ba03e713a5fca7b3f515f07",
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train"
+    },
+    {
+      "path": "pressbooks/data_0.parquet",
+      "bytes": 255978339,
+      "sha256": "0f4f0dd742e9e0983fd3fc4b8ce0fe5f100f79cc8c64c2d5e413ede9f16248f2",
+      "source": "pressbooks",
+      "domain": "education-and-wikis",
+      "split": "test"
+    },
+    {
+      "path": "project_gutenberg/data_0.parquet",
+      "bytes": 1064445402,
+      "sha256": "9eacf5af25b44b00710bff781c62c7d797c9f4fd7b79a918c2f8a36542f3fe81",
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "project_gutenberg/data_2.parquet",
+      "bytes": 1079776560,
+      "sha256": "56fd8a3c2314ac775933b2bf746ab3ec62569286c74fb9e2214c2aa7d8279d1e",
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "project_gutenberg/data_4.parquet",
+      "bytes": 1001434083,
+      "sha256": "2e2f03778096b3e8c7170b10b8b3df91928b07c64aab081bb7c12b757e241920",
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "project_gutenberg/data_6.parquet",
+      "bytes": 1208096271,
+      "sha256": "cddb2efca9a1b1af89d66817e8eb1070234d8acbd5ca66111bfe449b0c2ed180",
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "project_gutenberg/data_7.parquet",
+      "bytes": 1219872784,
+      "sha256": "03d919755a6a1c152ea169567d16638b0b738a9ab22f6582045d342c387e9cb9",
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "project_gutenberg/data_8.parquet",
+      "bytes": 875877760,
+      "sha256": "10a09943e86378a53ed9865b477e7fc33546554d2f55e2f8ff15a790b6edf26b",
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "public_domain_review/data_0.parquet",
+      "bytes": 2732318,
+      "sha256": "25748448b6b9c05c797e7504410175ae6f0136d03414987d4ad449fdd364fcfc",
+      "source": "public_domain_review",
+      "domain": "books-and-literature",
+      "split": "test"
+    },
+    {
+      "path": "pubmed/data_1.parquet",
+      "bytes": 1082667336,
+      "sha256": "6bda7226a17d939e12f33985ba793661f0c6266bc5df5cc9a31f80ca2a8c45e0",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_16.parquet",
+      "bytes": 1075722449,
+      "sha256": "1148b254662c90c693e5c92235b376876c544e8ed281ce6d3808f8418201ad2d",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_19.parquet",
+      "bytes": 1063810230,
+      "sha256": "da39c231e07d19e04730a8ffbcd046cf53f23ca24034eb24b49e5ce3efb40659",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_2.parquet",
+      "bytes": 1106429395,
+      "sha256": "544cd4a70df014be93290d7f027bd3372d3b71e9d7415b9ead6f38839c54dd0e",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_28.parquet",
+      "bytes": 1069448386,
+      "sha256": "039e94ed544541887766e4dc4073dd4244c1832ba0813629257181149b47856d",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_3.parquet",
+      "bytes": 1064875202,
+      "sha256": "32ee16bf23c30002c572744b79cf413bf4a4c839d2f079282adcf2a20cbd9d14",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_31.parquet",
+      "bytes": 1070890050,
+      "sha256": "fef32ee3f25ab161475273a9ba64e9ce9947150eabc916df2fbdc06032bb0806",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_32.parquet",
+      "bytes": 1064860408,
+      "sha256": "0f999fa285a84c8613f3176c4b5bfb448950bc406d9df02247e6e9d4e2d30043",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_35.parquet",
+      "bytes": 780051738,
+      "sha256": "8d75ac08cfea68b1621efc527a63f212a38ad06803fefe2d9abb8547fe4016e0",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_4.parquet",
+      "bytes": 1071377118,
+      "sha256": "b479ec8438b7ffeb51f0f082719f000b5aa34f76758d876ec2a00b71a7468cbd",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_40.parquet",
+      "bytes": 605381229,
+      "sha256": "bfff3f0b9c2918ff8d73c05b6c21c5ce233f5242597136538f84bdf21e034ba6",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_6.parquet",
+      "bytes": 1068868639,
+      "sha256": "d03e7669b61fd34de156416e3163b52df9fad6b33a8f0e92c683f82ac565d671",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_8.parquet",
+      "bytes": 1076603939,
+      "sha256": "37a5dd414268e5d8a55b36d09088e07c0befbc1b75eba8f2bc3421b9cd5f8ff3",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "pubmed/data_9.parquet",
+      "bytes": 1074454310,
+      "sha256": "cd7569a36969e2d059c1f0241082c5c9b9af59808d20448e486516111198571b",
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train"
+    },
+    {
+      "path": "python_enhancement_proposals/data_0.parquet",
+      "bytes": 7343241,
+      "sha256": "131fe76a958e330960ac3d7b1cdfb4ed83f8bff2e47862c62f215ed3cb0faedb",
+      "source": "python_enhancement_proposals",
+      "domain": "software-and-code",
+      "split": "test"
+    },
+    {
+      "path": "regulations/data_0.parquet",
+      "bytes": 461913169,
+      "sha256": "634b609958dfd7971aac9c0c0bd4860bf295076c31e0e61e48148b48a78dc995",
+      "source": "regulations",
+      "domain": "law-and-patents",
+      "split": "test"
+    },
+    {
+      "path": "stackexchange/data_37.parquet",
+      "bytes": 195905749,
+      "sha256": "03eacb69a971bba118c3338b3a9b5bff72374633f8015a1db0ff0a705ec94fe9",
+      "source": "stackexchange",
+      "domain": "web-and-social",
+      "split": "validation"
+    },
+    {
+      "path": "stackv2/data_15.parquet",
+      "bytes": 4805466692,
+      "sha256": "003bd6baa585bfa3223316ba5e7d6b515d2ba6335e93edbadbaa19193badb2d4",
+      "source": "stackv2",
+      "domain": "software-and-code",
+      "split": "train"
+    },
+    {
+      "path": "stackv2/data_409.parquet",
+      "bytes": 1819598283,
+      "sha256": "ff4c632b5ed294c58172e2c6b3ae8f6d1faeba5c6f95b49717f8bcb81fa9ee76",
+      "source": "stackv2",
+      "domain": "software-and-code",
+      "split": "train"
+    },
+    {
+      "path": "stackv2/data_413.parquet",
+      "bytes": 60498187,
+      "sha256": "bf2b3ab64328d904ff78f15dcb5ef081cb3bf3f766420362e944c0f8ac7372f4",
+      "source": "stackv2",
+      "domain": "software-and-code",
+      "split": "train"
+    },
+    {
+      "path": "stackv2/data_6.parquet",
+      "bytes": 26245622859,
+      "sha256": "c9222e53a7853fc1174ed9175454d62ba47471ca67f726c17771ee0ff8965911",
+      "source": "stackv2",
+      "domain": "software-and-code",
+      "split": "train"
+    },
+    {
+      "path": "ubuntu_irc/data_1.parquet",
+      "bytes": 1144337763,
+      "sha256": "c526528994150e8153036a76f76a68a745c878c9b1c834806c06f15456767719",
+      "source": "ubuntu_irc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "ubuntu_irc/data_4.parquet",
+      "bytes": 207933144,
+      "sha256": "e01b92d9e012f3d454234adb43ba29bc824f80c2536a2a78261675e826947872",
+      "source": "ubuntu_irc",
+      "domain": "web-and-social",
+      "split": "train"
+    },
+    {
+      "path": "uk_hansard/data_0.parquet",
+      "bytes": 1183555369,
+      "sha256": "6ed52d42cc128b5a08a5ae33a69e2fb5b0ef5f7ac555bfdb69263d8abbbcc548",
+      "source": "uk_hansard",
+      "domain": "civic-and-reference",
+      "split": "validation"
+    },
+    {
+      "path": "uk_hansard/data_1.parquet",
+      "bytes": 1029419999,
+      "sha256": "e07ced1e2b2f9b694f4a6fb6589e5a98ba5bc66af80ac45aa675911ca8fe312b",
+      "source": "uk_hansard",
+      "domain": "civic-and-reference",
+      "split": "validation"
+    },
+    {
+      "path": "uk_hansard/data_2.parquet",
+      "bytes": 831644379,
+      "sha256": "2f03164cc40002f22e5680fe97c682f5c550f6903c394d08a0c3e2275062aa57",
+      "source": "uk_hansard",
+      "domain": "civic-and-reference",
+      "split": "validation"
+    },
+    {
+      "path": "usgpo/data_0.parquet",
+      "bytes": 1071469859,
+      "sha256": "61b6fbcf3296f54dd3c54abf43ee15b8a166674c3bf730e61558e19aae63ba09",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_1.parquet",
+      "bytes": 1128968755,
+      "sha256": "f6015565410618c7b34af570d49927b7feccf24e43c7bf5ac4526bac37aa6774",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_10.parquet",
+      "bytes": 1126922455,
+      "sha256": "5b20897f265e591389adcae1fb91fac8274de85432e78d23bf304b42da68d1d0",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_13.parquet",
+      "bytes": 7379571,
+      "sha256": "1fd0764c5fc509e93a036d2278d3e9986eb3c73b5c8e5ba77b7a610310a47aa9",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_16.parquet",
+      "bytes": 1093923318,
+      "sha256": "bc727909b5e6a2fde9e79d326fdd4786e0f5a1861510f9e9fe85c3a5894cabcc",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_17.parquet",
+      "bytes": 1161366549,
+      "sha256": "1a35224b6f0149687f3c7febd6d2af9008429150238dd37d5b82e881583123e8",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_19.parquet",
+      "bytes": 1330155217,
+      "sha256": "e11c8dd5ba1650bb4217c426c818e5c3a7ed525a9deddff9e678ed627cf2956a",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_2.parquet",
+      "bytes": 1036411953,
+      "sha256": "718268db2646dac3e7b1ec6906eb5984e52507c03429cc5ff4f8a055d73c7b1e",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_20.parquet",
+      "bytes": 1178509613,
+      "sha256": "61c262f2c7c4390a7889ec75240314706bf4b1fe5d469a80fd7516c0669f466c",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_3.parquet",
+      "bytes": 1087998561,
+      "sha256": "f5231415df988636f304128a9b61a186e45c4e5dc74f055065a9488ee3b0f189",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_4.parquet",
+      "bytes": 1030495666,
+      "sha256": "4d4cb1b012ab65e774f0f1ccad8125c19856c7f4caaf931668c2a8aac77faf2c",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_5.parquet",
+      "bytes": 1059627906,
+      "sha256": "1147cf3c418358d52125fda2e635e6b72b8289e4f7d46362d50d5879aaa95495",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_6.parquet",
+      "bytes": 1085293331,
+      "sha256": "2fba651f229a15f2da369d93e24c9d29061f9c2acc1d5d3df3f2f88f893a1091",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_7.parquet",
+      "bytes": 1098066454,
+      "sha256": "dab96abb70888de8df175aadb9f6d7b7e720d4141b32b87af9ebda11727084c1",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "usgpo/data_8.parquet",
+      "bytes": 1025745394,
+      "sha256": "51a5eee86152d90a7b1e60aa5b5a1f57babb638074d911b2efc8057dab45329d",
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_110.parquet",
+      "bytes": 635855225,
+      "sha256": "510de2213dafcd1b038562eff9653cf7b4072e56dd3ee670e61f8923e38aec98",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_12.parquet",
+      "bytes": 2106999675,
+      "sha256": "6dbdaada0b2c625d3ddead8f999106f409fed2bc5e5b4a37665c4aa548286828",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_15.parquet",
+      "bytes": 2127166710,
+      "sha256": "2401b0dfd3cb8567b887f05c272b83c2dfd6f1d4ddb14c35aa3b27ce836eb9f8",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_18.parquet",
+      "bytes": 2113011819,
+      "sha256": "d5cf764505ff4b8a68eb4b789eb8a898a0883374a556fce2682dbda3b5ca11c1",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_19.parquet",
+      "bytes": 2127225244,
+      "sha256": "e36d011ef38438c66fb167873fd21c003b2eac75c93c4708132e743aa2815ddc",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_21.parquet",
+      "bytes": 2131023087,
+      "sha256": "9f6966b5a4f3e62f6ff05fe057c69721b8d9fc471906762391793d6d35691888",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_34.parquet",
+      "bytes": 2141335312,
+      "sha256": "70410ef12dbed1fcaacc6b9fe9e6e45d2d3137892524ac41f737a7b43bdb1be0",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_38.parquet",
+      "bytes": 2120767266,
+      "sha256": "ba56b0f0811341d2ca2993d925f2293289c843a7ec871beb41af17ef9a6912dc",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_60.parquet",
+      "bytes": 2107261129,
+      "sha256": "2a2c41112cad050d43f344721b13aea03025718e347349f8ddce26c8f272c6e8",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_68.parquet",
+      "bytes": 2102480586,
+      "sha256": "da25995d034706912cf1d5a4c3e13933bcf6090731138de3cb75e15362429bef",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_7.parquet",
+      "bytes": 2134787897,
+      "sha256": "3d280c453a4a0d39702e7c4b67fcfe354ede81fb0cc57dd84621fd1a586cf89d",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_77.parquet",
+      "bytes": 2106376345,
+      "sha256": "3cc6fa5c21e312a80662684ea50d01cd5d73c18654fcfd1c5975249bc19b04bf",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_80.parquet",
+      "bytes": 2100515680,
+      "sha256": "d35161a27ef42c754ee7ebe5fa0a50bfdd3fdba5fb0c9c31024b7816586852e9",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_89.parquet",
+      "bytes": 2095123378,
+      "sha256": "12d4756c92a22b995261d5f2fe41860c16c6fa0aa2018dc9dd93120159d9b62a",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_91.parquet",
+      "bytes": 2103359696,
+      "sha256": "2531c825024ec2906a2dae91866213602c6cdda3e279570337a985ea73f50874",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "uspto/data_98.parquet",
+      "bytes": 2111931668,
+      "sha256": "f5e2e35b6448bccb8dbffbd732c5ac7b655a0a2ddcfc3b857b055f16f850c87e",
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_1.parquet",
+      "bytes": 1020011574,
+      "sha256": "224f57d74dce40e020a6836f9172f8c90980e0c19fbdcd9931086de13e750025",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_10.parquet",
+      "bytes": 1022513889,
+      "sha256": "f935c591fa207848d9d886ef7ad809301b4b308efca5a1d9378b798bdfe420a2",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_12.parquet",
+      "bytes": 1016223941,
+      "sha256": "ccb0a69c32babb6b72467799c3807a9c671844aa01e548ed5946c536bd3d116d",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_13.parquet",
+      "bytes": 1072316358,
+      "sha256": "3a51f21c6ddd5fe1994acd16974b505886ad4cd9ffadb94ec9b2277229b9ecc5",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_14.parquet",
+      "bytes": 1042723644,
+      "sha256": "cfd2c40d7284eea0937705e6998854f5469714cb9d0a420dd581289e939d4e93",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_15.parquet",
+      "bytes": 1016322796,
+      "sha256": "5a62c586f137c4ec8210c28f784e2d05d23c16a62ec28f1f074838f503c6f8b9",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_18.parquet",
+      "bytes": 1028896462,
+      "sha256": "dad12c34954cb6af78541dbefe2fd6c37a9354dc9ce8c71819919ff53254cf6b",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_19.parquet",
+      "bytes": 1038982525,
+      "sha256": "27d206cdc2262a1c0b1e5ff641ccb11b405101e50c2567a980234f7665ba4976",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_2.parquet",
+      "bytes": 1024848861,
+      "sha256": "fae643943e7798ad3a19b68503ac27c8caf101b0c8b5a14d8b87e602ea324d26",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_29.parquet",
+      "bytes": 175720515,
+      "sha256": "dc5536071d298958ca46c9eed82cfb85f508c20ef944823eb57ff899d8603f65",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_3.parquet",
+      "bytes": 1022188974,
+      "sha256": "40d40c417491dd09514d974770aa8a166542299b5f4c8473e3b2bf8828b5a5ea",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_31.parquet",
+      "bytes": 148273074,
+      "sha256": "dc09a9412a6098beebcdc6cc2a44fbf5aee3fefb9d2eb94750f1eec306264000",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_4.parquet",
+      "bytes": 1040405912,
+      "sha256": "7f84fad39f7ef647beb6e36d921cc6ecdf1e185574526c521f8c09371156ca91",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_5.parquet",
+      "bytes": 1026159227,
+      "sha256": "ee8cff215561a12e78350bc9ef038c21077a4655d7ca36e1d8b787ea3d4a0892",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_7.parquet",
+      "bytes": 1039563681,
+      "sha256": "5618cce45e77b1c7ed807be0965817ac3a60003d7541cdc9f628f277afa1394a",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikimedia/data_9.parquet",
+      "bytes": 1061512060,
+      "sha256": "d6f43504c4dc796a98462c2a96f4a68bb94a2940c37aebfb2bbfd89953a450ae",
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_1.parquet",
+      "bytes": 1068001747,
+      "sha256": "8a8c8e3d57686bc76e6a0b529c9a1bb2faba4a58794afd49e830c4f69fbd0473",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_15.parquet",
+      "bytes": 1062392491,
+      "sha256": "8d31c37010fb51a99aaddf86b0d637ecf159d8a3edbab725def724bb1586eee7",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_16.parquet",
+      "bytes": 1637616259,
+      "sha256": "6fe1a3dd789f13971c94cd007693a4cf281e60c8ae54899456de4f584114921b",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_17.parquet",
+      "bytes": 1343052617,
+      "sha256": "3f3380e0e4f24377a8af7aeaa773bb09303e53e6f87cafbaa5592df69a493b97",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_18.parquet",
+      "bytes": 1101457468,
+      "sha256": "35208f9e93d53f2b7cea6c9350a2d58be768f1f45025f5e5fabe7bcd83e8515c",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_19.parquet",
+      "bytes": 1754872163,
+      "sha256": "be46174f041c43813dc533f374444f15478a389b99650be558636be16d97ecf5",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_2.parquet",
+      "bytes": 1057385080,
+      "sha256": "30330384780b7c18a9e70d442eb75119e4ff29f9c2341bfc196f9cbb7ad3bbb4",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_21.parquet",
+      "bytes": 1372935985,
+      "sha256": "8b89fa24456542d0596dd4377e1713dd27f33f8a711382be02741f0f73b0b697",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_22.parquet",
+      "bytes": 1430426227,
+      "sha256": "0031cc0ed2df9c884082e3937b54af9a2e2a53d52b90895979224fdd12a4337b",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_23.parquet",
+      "bytes": 1588334832,
+      "sha256": "cb8058a32b3dbb65bf13b9b3baba532a65924e193f8428170c6401ca87ce4f5f",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_24.parquet",
+      "bytes": 1154724364,
+      "sha256": "eeb9aa811be226444500d8fd4a4c940e042684ee72b1b96f53aa8181a9116c1c",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_28.parquet",
+      "bytes": 1066727168,
+      "sha256": "cd36527290a1d54d4c2ce8de216b003135ebb76d37e91c92df18615bb32b1ed9",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_32.parquet",
+      "bytes": 1064025273,
+      "sha256": "37c023d9a12c79c84405786cc97db274365ca96072d736eb9bba6e133db6ed15",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_34.parquet",
+      "bytes": 1101198216,
+      "sha256": "24dcf0424fd543a6a1e0cebcfaa5792b62d4c0998245ff185473b0d97a56ae7d",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_35.parquet",
+      "bytes": 1134061488,
+      "sha256": "fc55622ca941edd505bfd974ed89624e48988b7314a7bbf31b08432cb8ab6b35",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_42.parquet",
+      "bytes": 1062025987,
+      "sha256": "79871391743c0e8994e61e80b5a03e1a696dd0fe36a8c7ea3fb07eed92b0e24e",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_49.parquet",
+      "bytes": 1070559776,
+      "sha256": "774fda46c0f43747a1f491c91ae152ff06528f5aff032aa222b97cfef4096c58",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_51.parquet",
+      "bytes": 1101648715,
+      "sha256": "a97b8e149dc67e33ea41d90ae644857e624b36615beb6bd89928566b2aa8fbb5",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_52.parquet",
+      "bytes": 1092947220,
+      "sha256": "2523570e6feac269f49c0e6db86421a9940bd1389aadd8e362ebb6c5e54ab333",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_54.parquet",
+      "bytes": 1073847979,
+      "sha256": "2887ea346c4b1c9bda3945f2da9bb7d7210f9117d4b3bba92163f46fd3087e50",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_56.parquet",
+      "bytes": 1124501957,
+      "sha256": "439c3da7c9a37bacb067b075fc18cd73726c26333e9d21a261abaac8744294ff",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_57.parquet",
+      "bytes": 1199228086,
+      "sha256": "01687499fe57e2914e610fe1ad32e793249fd53ff4c15b01c807f24b532d6033",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_59.parquet",
+      "bytes": 1113618501,
+      "sha256": "5577883ddd54926839d8ab040ab9a655ca230c4bfb1bdb5629423d78373c239d",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_62.parquet",
+      "bytes": 1082486494,
+      "sha256": "b71a90122e0d8f6b8f67deeeb11d1ffb1383cf40dcc52f77dea2623ccc42e835",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_63.parquet",
+      "bytes": 1074376959,
+      "sha256": "ce9c770978acfea6a5abcdaeb7b7cddf2cbcc54553ba19d78d6c7100794004bd",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_64.parquet",
+      "bytes": 1092355415,
+      "sha256": "0a7b85970ac6567bf7950fefe411d6d2c5736e1ae9ffa66b2352f6b385b41322",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_72.parquet",
+      "bytes": 851740464,
+      "sha256": "a945c849b158e854475bd673e490182fde2348b66e244b65b40abe98877a228b",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_79.parquet",
+      "bytes": 131447210,
+      "sha256": "ea9b456698260c95c6edde0d09b2f6ef0ed1711d6334a80003b3f7d17f6db5c8",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "wikiteam/data_8.parquet",
+      "bytes": 1060082179,
+      "sha256": "5be533701429a0b52ddac7d36fddf743a82fd9c493c7e208eb3d831e5e08711c",
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train"
+    },
+    {
+      "path": "youtube/data_8.parquet",
+      "bytes": 252171267,
+      "sha256": "564e85a62fdc4a58acc5bd52e95fe9df22834ee6aa3c34132eda37c4b7e6b37b",
+      "source": "youtube",
+      "domain": "web-and-social",
+      "split": "test"
+    }
+  ],
+  "total_bytes": 268624215938,
+  "digest": "sha256:0fec405224010d464ba28f33951b56d1e8f860d133b62227fd6133e9a82a17ac",
+  "assurance": "manifest-supplied",
+  "created_at": "2026-07-16T20:04:42Z",
+  "tags": {
+    "common-pile-variant": "raw-v0.1-parquet",
+    "family": "common-pile",
+    "ingest": "pending",
+    "license": "per-source-open",
+    "split-policy": "source-held-out-v1"
+  },
+  "components": [
+    {
+      "source": "arxiv_abstracts",
+      "domain": "scholarly-research",
+      "split": "test",
+      "license": "CC0-1.0",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/arxiv_abstracts"
+    },
+    {
+      "source": "arxiv_papers",
+      "domain": "scholarly-research",
+      "split": "validation",
+      "license": "CC-BY/CC-BY-SA/CC0 per paper",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/arxiv_papers"
+    },
+    {
+      "source": "peS2o",
+      "domain": "scholarly-research",
+      "split": "train",
+      "license": "CC-BY/CC-BY-SA/CC0 per paper",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/peS2o"
+    },
+    {
+      "source": "biodiversity_heritage_library",
+      "domain": "biomedical-and-biodiversity",
+      "split": "validation",
+      "license": "public domain/open license per item",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/biodiversity_heritage_library"
+    },
+    {
+      "source": "doab",
+      "domain": "biomedical-and-biodiversity",
+      "split": "test",
+      "license": "open license per book",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/doab"
+    },
+    {
+      "source": "pubmed",
+      "domain": "biomedical-and-biodiversity",
+      "split": "train",
+      "license": "CC-BY/CC-BY-SA/CC0 per paper",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/pubmed"
+    },
+    {
+      "source": "github_archive",
+      "domain": "software-and-code",
+      "split": "validation",
+      "license": "Blue Oak-approved repository license",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/github_archive"
+    },
+    {
+      "source": "python_enhancement_proposals",
+      "domain": "software-and-code",
+      "split": "test",
+      "license": "public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/python_enhancement_proposals"
+    },
+    {
+      "source": "stackv2",
+      "domain": "software-and-code",
+      "split": "train",
+      "license": "open-source repository license",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/stackv2"
+    },
+    {
+      "source": "library_of_congress",
+      "domain": "books-and-literature",
+      "split": "validation",
+      "license": "public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/library_of_congress"
+    },
+    {
+      "source": "pre_1929_books",
+      "domain": "books-and-literature",
+      "split": "train",
+      "license": "public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/pre_1929_books"
+    },
+    {
+      "source": "project_gutenberg",
+      "domain": "books-and-literature",
+      "split": "test",
+      "license": "public domain in the United States",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/project_gutenberg"
+    },
+    {
+      "source": "public_domain_review",
+      "domain": "books-and-literature",
+      "split": "test",
+      "license": "CC-BY-SA",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/public_domain_review"
+    },
+    {
+      "source": "caselaw_access_project",
+      "domain": "law-and-patents",
+      "split": "validation",
+      "license": "public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/caselaw_access_project"
+    },
+    {
+      "source": "regulations",
+      "domain": "law-and-patents",
+      "split": "test",
+      "license": "United States government public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/regulations"
+    },
+    {
+      "source": "uspto",
+      "domain": "law-and-patents",
+      "split": "train",
+      "license": "United States government public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/uspto"
+    },
+    {
+      "source": "data_provenance_initiative",
+      "domain": "civic-and-reference",
+      "split": "test",
+      "license": "open license per constituent dataset",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/data_provenance_initiative"
+    },
+    {
+      "source": "uk_hansard",
+      "domain": "civic-and-reference",
+      "split": "validation",
+      "license": "Open Parliament Licence",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/uk_hansard"
+    },
+    {
+      "source": "usgpo",
+      "domain": "civic-and-reference",
+      "split": "train",
+      "license": "United States government public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/usgpo"
+    },
+    {
+      "source": "wikimedia",
+      "domain": "civic-and-reference",
+      "split": "train",
+      "license": "CC-BY-SA",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/wikimedia"
+    },
+    {
+      "source": "libretexts",
+      "domain": "education-and-wikis",
+      "split": "validation",
+      "license": "open license per resource",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/libretexts"
+    },
+    {
+      "source": "oercommons",
+      "domain": "education-and-wikis",
+      "split": "test",
+      "license": "open license per resource",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/oercommons"
+    },
+    {
+      "source": "pressbooks",
+      "domain": "education-and-wikis",
+      "split": "test",
+      "license": "open license per book",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/pressbooks"
+    },
+    {
+      "source": "wikiteam",
+      "domain": "education-and-wikis",
+      "split": "train",
+      "license": "open license per wiki",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/wikiteam"
+    },
+    {
+      "source": "cccc",
+      "domain": "web-and-social",
+      "split": "train",
+      "license": "CC-BY/CC-BY-SA/CC0",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/cccc"
+    },
+    {
+      "source": "foodista",
+      "domain": "web-and-social",
+      "split": "test",
+      "license": "CC-BY",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/foodista"
+    },
+    {
+      "source": "news",
+      "domain": "web-and-social",
+      "split": "validation",
+      "license": "CC-BY/CC-BY-SA",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/news"
+    },
+    {
+      "source": "stackexchange",
+      "domain": "web-and-social",
+      "split": "validation",
+      "license": "CC-BY-SA",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/stackexchange"
+    },
+    {
+      "source": "ubuntu_irc",
+      "domain": "web-and-social",
+      "split": "train",
+      "license": "public domain",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/ubuntu_irc"
+    },
+    {
+      "source": "youtube",
+      "domain": "web-and-social",
+      "split": "test",
+      "license": "CC-BY",
+      "provenance": "https://huggingface.co/datasets/common-pile/raw_v0.1_parquet/tree/3bba1661c6fb744ccfe42b27d8ce84a3b88b5848/youtube"
+    }
+  ],
+  "pretrain": {
+    "tokenizer": "none",
+    "format": "parquet"
+  }
+}

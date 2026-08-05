@@ -1,0 +1,33 @@
+lifecycleRecorder:
+  enabled: true
+  namespace: tau
+  targetNamespace: ray
+  cluster: chart-test-cluster
+  workspaceId: workspace-a
+  resultScope: results-a
+  interval: 30s
+  ingestTimeout: 2m
+  kusto:
+    endpoint: https://chart-test.kusto.windows.net
+    database: Metrics
+    table: TauExpRunLifecycle
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/tau
+    digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  imagePullSecrets:
+    - name: registry-pull
+  workloadIdentity:
+    enabled: true
+  serviceAccount:
+    create: true
+    name: tau-lifecycle-recorder
+    annotations:
+      azure.workload.identity/client-id: placeholder-client-id
+  rbac:
+    create: true
+  extraEnv:
+    - name: OTEL_SERVICE_NAME
+      value: tau-lifecycle-recorder
+  extraEnvFrom:
+    - configMapRef:
+        name: tau-lifecycle-recorder-config

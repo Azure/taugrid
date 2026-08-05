@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/configure.sh --image IMAGE [--repo URL --ref REF]
+
+Updates generator-owned image/upstream values in .env.example, .env, and
+tau/*.yaml. .env is created from .env.example when it does not exist yet.
+This is intentionally narrow; if you heavily reformat the generated YAML, rerun
+the generator or update files manually.
+EOF
+}
+
+IMAGE=""
+REPO=""
+REF=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --image)
+      IMAGE="${2:-}"
+      shift 2
+      ;;
+    --repo)
+      REPO="${2:-}"
+      shift 2
+      ;;
+    --ref)
+      REF="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$IMAGE" ]]; then
+  usage >&2
+  exit 2
+fi
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+python3 - "$ROOT" "$IMAGE" "$REPO" "$REF" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+image, repo, ref = sys.argv[2:5]
+
+def replace_line(path: Path, prefix: str, value: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for idx, line in enumerate(lines):
+        if line.strip().startswith(prefix):
+            indent = line[: len(line) - len(line.lstrip())]
+            lines[idx] = f"{indent}{prefix} {value}" if prefix.endswith(":") else f"{prefix}{value}"
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return
+    raise SystemExit(f"{path}: {prefix!r} not found")
+
+def replace_env(path: Path, key: str, value: str) -> None:
+    if not value:
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for idx, line in enumerate(lines):
+        if line.startswith(key + "="):
+            lines[idx] = key + "=" + value
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return
+    lines.append(key + "=" + value)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+for rel in ("tau/smoke.yaml", "tau/train.yaml", "tau/train-gpu.yaml"):
+    replace_line(root / rel, "image:", image)
+    if repo:
+        replace_line(root / rel, "UPSTREAM_REPO:", repo)
+    if ref:
+        replace_line(root / rel, "UPSTREAM_REF:", ref)
+
+example_path = root / ".env.example"
+env_path = root / ".env"
+
+# scripts/doctor.sh and the build steps read .env, not .env.example. Keep both
+# in step so the configured value is the one the project actually uses.
+if not env_path.exists():
+    env_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    print("Created .env from .env.example")
+
+for path in (example_path, env_path):
+    replace_env(path, "IMAGE", image)
+    replace_env(path, "UPSTREAM_REPO", repo)
+    replace_env(path, "UPSTREAM_REF", ref)
+PY
+
+echo "Configured IMAGE=$IMAGE"
+if [[ -n "$REPO" ]]; then echo "Configured UPSTREAM_REPO=$REPO"; fi
+if [[ -n "$REF" ]]; then echo "Configured UPSTREAM_REF=$REF"; fi
+echo "Updated .env, .env.example, and tau/*.yaml"

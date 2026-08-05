@@ -1,0 +1,39 @@
+{{- if and .Values.alertRules.enabled .Values.alertRules.items.gpuXidCritical.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-gpu-xid-critical
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertrule
+  annotations:
+    adx-mon/sig: "GPU"
+spec:
+  database: {{ .Values.adx.logsDatabase | quote }}
+  interval: {{ .Values.alertRules.items.gpuXidCritical.interval | quote }}
+  {{- with .Values.alertRules.items.gpuXidCritical.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  query: |
+    // Alert on critical XID errors: XID 48 (DBE), 64 (fell off bus), 79 (fell off bus), 94 (contained ECC).
+    // These require immediate GPU reset or node drain.
+    KernelLogs
+    | where Timestamp between (_startTime .. _endTime)
+    | where Body has "NVRM: Xid"
+    | extend node = tostring(Resource["k8s.node.name"]),
+             message = tostring(Body)
+    | parse message with * "Xid (PCI:" pci_address "): " xid_code:int "," xid_detail
+    | where xid_code in (48, 64, 79, 94)
+    | summarize error_count = count(), xid_codes = make_set(xid_code) by node
+    | extend Severity = 2
+    | extend Title = strcat("Critical GPU XID error on node ", node)
+    | extend Summary = strcat("Node ", node, " reported ", error_count, " critical XID error(s): ", tostring(xid_codes), ". GPU reset or node drain required.")
+    | extend Description = strcat("Critical XID codes detected: ", tostring(xid_codes), ". XID 48=Double Bit ECC, 64/79=GPU fell off bus, 94=Contained ECC requiring reset.")
+    | extend CorrelationId = node
+  destination: {{ .Values.alertRules.items.gpuXidCritical.destination | default "" | quote }}
+  {{- if .Values.alertRules.items.gpuXidCritical.autoMitigateAfter }}
+  autoMitigateAfter: {{ .Values.alertRules.items.gpuXidCritical.autoMitigateAfter | quote }}
+  {{- end }}
+{{- end }}

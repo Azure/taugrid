@@ -1,0 +1,92 @@
+{{- if .Values.collectorSingleton.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-collector-singleton
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "collector-singleton") | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "collector-singleton") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "9091"
+        adx-mon/path: /metrics
+        adx-mon/log-destination: "Logs:CollectorSingleton"
+        adx-mon/log-parsers: json
+      labels:
+        {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "collector-singleton") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "collector-singleton") }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: collector
+          image: {{ include "adx-mon.image" (dict "image" .Values.collectorSingleton.image "chart" .Chart) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /collector
+          args:
+            - --config=/etc/config/config.toml
+            - --hostname=$(HOSTNAME)
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: INFO
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: GODEBUG
+              value: http2client=0
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.collectorSingleton.resources | nindent 12 }}
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /etc/ssl/certs
+              readOnly: true
+            - name: etc-pki-ca-certs
+              mountPath: /etc/pki/ca-trust/extracted
+              readOnly: true
+            - name: config-volume
+              mountPath: /etc/config
+            - name: storage
+              mountPath: /mnt/data
+      {{- with .Values.collectorSingleton.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collectorSingleton.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+        - name: config-volume
+          configMap:
+            name: {{ include "adx-mon.fullname" . }}-collector-singleton-config
+        - name: storage
+          emptyDir: {}
+{{- end }}

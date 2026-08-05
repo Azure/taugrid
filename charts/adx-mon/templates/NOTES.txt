@@ -1,0 +1,132 @@
+{{- $ns := include "adx-mon.namespace" . -}}
+{{- $adxUrl := .Values.adx.clusterUrl -}}
+{{- $adxConfigMap := .Values.adx.configMapRef -}}
+
+{{- $banner := printf "adx-mon %s installed" .Chart.AppVersion -}}
+{{- $bannerLen := len $banner -}}
+{{- $totalWidth := 64 -}}
+{{- $leftPad := div (sub $totalWidth $bannerLen) 2 -}}
+{{- $rightPad := sub $totalWidth (add $leftPad $bannerLen) -}}
+╔══════════════════════════════════════════════════════════════════╗
+║{{ repeat (int $leftPad) " " }}{{ $banner }}{{ repeat (int $rightPad) " " }}║
+╚══════════════════════════════════════════════════════════════════╝
+
+  Namespace:  {{ $ns }}
+  Release:    {{ .Release.Name }}
+  Chart:      {{ .Chart.Name }}-{{ .Chart.Version }}
+
+── ADX Configuration ──────────────────────────────────────────────
+{{- if $adxUrl }}
+  Cluster URL:           {{ $adxUrl }}
+  Metrics DB:            {{ .Values.adx.metricsDatabase }}
+  Logs DB:               {{ .Values.adx.logsDatabase }}
+  Cost Tracking DB:      {{ .Values.adx.costTrackingDatabase }}
+  Audit DB:              {{ .Values.adx.auditDatabase }}
+{{- else if $adxConfigMap }}
+  Config Source:         ConfigMap "{{ $adxConfigMap }}" (ArgoCD mode)
+  Metrics DB:            {{ .Values.adx.metricsDatabase }}
+  Logs DB:               {{ .Values.adx.logsDatabase }}
+  Cost Tracking DB:      {{ .Values.adx.costTrackingDatabase }}
+  Audit DB:              {{ .Values.adx.auditDatabase }}
+{{- else }}
+
+  ⚠️  No ADX endpoint configured!
+  Set adx.clusterUrl or adx.configMapRef in your values file.
+  Without an ADX endpoint, the ingestor will not ship telemetry.
+{{- end }}
+
+── Components ─────────────────────────────────────────────────────
+
+  {{- if .Values.operator.enabled }}
+  ✅ Operator          {{ .Values.operator.replicas }} replica(s)
+  {{- else }}
+  ⬚  Operator          disabled
+  {{- end }}
+  {{- if .Values.collector.enabled }}
+  ✅ Collector          DaemonSet (every node)
+  {{- else }}
+  ⬚  Collector          disabled
+  {{- end }}
+  {{- if .Values.collectorSingleton.enabled }}
+  ✅ Collector Singleton 1 replica (API server metrics)
+  {{- else }}
+  ⬚  Collector Singleton disabled
+  {{- end }}
+  {{- if .Values.ingestor.enabled }}
+  ✅ Ingestor           {{ .Values.ingestor.replicas }} replica(s) (StatefulSet)
+  {{- else }}
+  ⬚  Ingestor           disabled
+  {{- end }}
+  {{- if .Values.alerter.enabled }}
+  ✅ Alerter            {{ .Values.alerter.replicas }} replica(s)
+  {{- else }}
+  ⬚  Alerter            disabled
+  {{- end }}
+  {{- if index .Values "kube-state-metrics" "enabled" }}
+  ✅ kube-state-metrics  {{ index .Values "kube-state-metrics" "shards" }} shard(s)
+  {{- else }}
+  ⬚  kube-state-metrics  disabled
+  {{- end }}
+
+── CRD Resources ──────────────────────────────────────────────────
+
+  {{- if .Values.functions.enabled }}
+  Functions:           enabled (KQL views for dashboards)
+  {{- end }}
+  {{- if .Values.alertRules.enabled }}
+  AlertRules:          enabled (GPU XID, Node NotReady, ECC, NVLink, Job failures)
+  {{- end }}
+  {{- if .Values.summaryRules.enabled }}
+  SummaryRules:        enabled (cost rollups + GPU utilization)
+  {{- end }}
+  {{- if .Values.managementCommands.precreateMetricsTables.enabled }}
+  ManagementCommands:  pre-create tables enabled
+  {{- end }}
+
+── GPU Telemetry ──────────────────────────────────────────────────
+
+  {{- if .Values.collector.gpu.dcgmScrape }}
+  DCGM Exporter:       scraped via annotation discovery
+  {{- else }}
+  DCGM Exporter:       disabled
+  {{- end }}
+  {{- if .Values.collector.gpu.kernelTarget }}
+  Kernel Logs:         journald _TRANSPORT=kernel
+  {{- else }}
+  Kernel Logs:         disabled
+  {{- end }}
+
+── Audit Log Pipeline ─────────────────────────────────────────────
+
+  Database:            {{ .Values.adx.auditDatabase }}
+{{- if $adxUrl }}
+  Status:              ✅ ADX endpoint configured
+{{- else }}
+  Status:              ⚠️  Configure ADX endpoint for audit ingestion
+{{- end }}
+  Note:                The audit pipeline requires external infrastructure
+                       (Event Hub + AKS diagnostic settings + ADX data connection).
+                       See the chart README for setup instructions.
+
+── Verify Installation ────────────────────────────────────────────
+
+  # Check pod status
+  kubectl get pods -n {{ $ns }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+  # Check CRD resources
+  kubectl get functions,alertrules,summaryrules -n {{ $ns }}
+
+  # Check ManagementCommands (if enabled)
+  kubectl get managementcommands -n {{ $ns }}
+
+{{- if $adxUrl }}
+
+  # Verify ADX connectivity (from ingestor logs)
+  kubectl logs -n {{ $ns }} -l app.kubernetes.io/component=ingestor --tail=20
+
+  # Query ingested metrics (in ADX)
+  #   {{ .Values.adx.metricsDatabase }}
+  #   | .show tables | count
+{{- end }}
+
+  For full documentation, see: charts/adx-mon/README.md

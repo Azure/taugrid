@@ -1,0 +1,43 @@
+{{- if .Values.managementCommands.ingestionBatching.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-ingestion-batching
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.adx.metricsDatabase | quote }}
+  body: |
+    // Ingestion batching policy for Metrics database.
+    // 15s batching → <30s source-to-queryable latency.
+    .alter-merge database {{ .Values.adx.metricsDatabase }} policy ingestionbatching ```
+    {
+      "MaximumBatchingTimeSpan" : "{{ .Values.managementCommands.ingestionBatching.metrics.maxBatchingTimeSpan }}",
+      "MaximumNumberOfItems" : {{ .Values.managementCommands.ingestionBatching.metrics.maxNumberOfItems }},
+      "MaximumRawDataSizeMB" : {{ .Values.managementCommands.ingestionBatching.metrics.maxRawDataSizeMB }}
+    }
+    ```
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-ingestion-batching-logs
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.adx.logsDatabase | quote }}
+  body: |
+    // Ingestion batching policy for Logs database.
+    // 30s batching → <45s source-to-queryable latency.
+    .alter-merge database {{ .Values.adx.logsDatabase }} policy ingestionbatching ```
+    {
+      "MaximumBatchingTimeSpan" : "{{ .Values.managementCommands.ingestionBatching.logs.maxBatchingTimeSpan }}",
+      "MaximumNumberOfItems" : {{ .Values.managementCommands.ingestionBatching.logs.maxNumberOfItems }},
+      "MaximumRawDataSizeMB" : {{ .Values.managementCommands.ingestionBatching.logs.maxRawDataSizeMB }}
+    }
+    ```
+{{- end }}

@@ -1,0 +1,64 @@
+{{- if .Values.prewarm.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tau-prewarm-images
+  namespace: {{ .Values.prewarm.namespace }}
+  labels:
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+data:
+  images: |
+{{- range .Values.prewarm.images }}
+    {{ . }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: baked-image-prewarm
+  namespace: {{ .Values.prewarm.namespace }}
+  labels:
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: { app: baked-image-prewarm }
+  template:
+    metadata:
+      labels:
+        app: baked-image-prewarm
+        {{- include "taugrid-core.labels" . | nindent 8 }}
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  {{- range $k, $v := .Values.prewarm.nodeSelector }}
+                  - key: {{ $k }}
+                    operator: In
+                    values: [{{ $v | quote }}]
+                  {{- end }}
+      {{- with .Values.prewarm.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.prewarm.tolerations | nindent 8 }}
+      initContainers:
+        {{- range $i, $img := .Values.prewarm.images }}
+        - name: pull-{{ $i }}
+          image: {{ $img }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/true"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+        {{- end }}
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }
+      terminationGracePeriodSeconds: 5
+{{- end }}

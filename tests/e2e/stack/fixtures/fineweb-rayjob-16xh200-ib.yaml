@@ -1,0 +1,500 @@
+# FineWeb 16xH200 InfiniBand conformance RayJob: Kueue admits a 16-worker Ray
+# Train job that shards a ~1.7B GPT across all 16 H200 GPUs with FSDP, talks NCCL
+# over InfiniBand (rdma/rdma_shared_device_a + IPC_LOCK + a real /dev/shm), splits
+# 8+8 across both H200 nodes, and persists its first checkpoint.
+#
+# The driver script is embedded directly (head-only initContainer + emptyDir at
+# /script) instead of mounted from a ConfigMap, matching PR1's
+# cli/internal/payload wire contract (issues #869/#871 PR3): the
+# FINEWEB_SCRIPT_PAYLOAD_B64 / FINEWEB_SCRIPT_PAYLOAD_DIGEST env values set
+# below are computed from the real fixtures/fineweb_ray_train.py file at test
+# time (see readFixture in tests/e2e/testcontext.go), so MultiKueue's
+# worker-cluster dispatch -- which does not replicate ConfigMaps -- has
+# everything the head pod needs inside the RayJob spec it copies over.
+#
+# NOTE: this comment intentionally does NOT spell the placeholder names in
+# {{DOUBLE_BRACE}} form -- readFixture's substitution is a blind text replace
+# of every "{{NAME}}" occurrence in the file, so writing the literal token
+# here would duplicate the (potentially large) base64 payload into this
+# comment on every substitution. The duplicate text is harmless to the
+# resulting Kubernetes object (YAML comments are dropped on parse, never
+# reach the API server), but it needlessly bloats the rendered fixture size
+# measured in tests -- see TestPayloadFixturesStayUnderSizeLimits in
+# tests/e2e/stack/payload_fixtures_test.go, which sizes the parsed+
+# JSON-marshaled object rather than raw YAML bytes for exactly this reason.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: e2e-fineweb-16xh200-ib
+  namespace: {{STACK_NAMESPACE}}
+  labels:
+    kueue.x-k8s.io/queue-name: {{STACK_LARGE_GPU_QUEUE}}
+  annotations:
+    tau.azure.com/payload-digest: "{{FINEWEB_SCRIPT_PAYLOAD_DIGEST}}"
+spec:
+  entrypoint: python /script/fineweb_ray_train.py
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: ray-job-submitter
+        image: {{RAY_IMAGE}}
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+  runtimeEnvYAML: |
+    pip:
+      packages:
+        - {{FINEWEB_TORCH_SPEC}}
+        - numpy==2.1.3
+      pip_install_options:
+        - --no-cache-dir
+        - --index-url
+        - {{FINEWEB_TORCH_INDEX_URL}}
+        - --extra-index-url
+        - https://pypi.org/simple
+      pip_check: false
+    env_vars:
+      FINEWEB_DATASET_URIS: "{{FINEWEB_DATASET_URIS}}"
+      FINEWEB_DATASET_SHA256S: "{{FINEWEB_DATASET_SHA256S}}"
+      FINEWEB_DATASET_TOKEN_COUNTS: "{{FINEWEB_DATASET_TOKEN_COUNTS}}"
+      FINEWEB_MIN_TOTAL_TOKENS: "{{FINEWEB_MIN_TOTAL_TOKENS}}"
+      FINEWEB_TRAIN_WORKERS: "{{FINEWEB_TRAIN_WORKERS}}"
+      FINEWEB_TRAIN_STEPS: "{{FINEWEB_TRAIN_STEPS}}"
+      FINEWEB_CHECKPOINT_INTERVAL: "{{FINEWEB_CHECKPOINT_INTERVAL}}"
+      FINEWEB_CHECKPOINT_DIR: "{{FINEWEB_CHECKPOINT_DIR}}"
+      FINEWEB_BATCH_SIZE: "{{FINEWEB_BATCH_SIZE}}"
+      FINEWEB_BLOCK_SIZE: "{{FINEWEB_BLOCK_SIZE}}"
+      FINEWEB_VOCAB_SIZE: "{{FINEWEB_VOCAB_SIZE}}"
+      FINEWEB_N_LAYER: "{{FINEWEB_N_LAYER}}"
+      FINEWEB_N_HEAD: "{{FINEWEB_N_HEAD}}"
+      FINEWEB_N_EMBD: "{{FINEWEB_N_EMBD}}"
+      FINEWEB_REPORT_EVERY: "{{FINEWEB_REPORT_EVERY}}"
+      NCCL_IB_HCA: "{{FINEWEB_NCCL_IB_HCA}}"
+      NCCL_SOCKET_IFNAME: "{{FINEWEB_NCCL_SOCKET_IFNAME}}"
+      NCCL_DEBUG: "{{FINEWEB_NCCL_DEBUG}}"
+      TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+  rayClusterSpec:
+    rayVersion: "{{RAY_VERSION}}"
+    enableInTreeAutoscaling: false
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+        dashboard-host: "0.0.0.0"
+      template:
+        metadata:
+          annotations:
+            # Ray Job driver stdout lives in head-local /tmp/ray session logs,
+            # not the ray-head container stdout stream. This sidecar tails the
+            # driver log files into its own stdout so adx-mon can ship them via
+            # the existing Logs/ContainerLogs path without cluster credentials.
+            adx-mon/log-destination: "Logs:ContainerLogs"
+        spec:
+          initContainers:
+          - name: prepare-ray-tmp
+            image: {{RAY_IMAGE}}
+            command: ["/bin/sh", "-c", "mkdir -p /tmp/ray && chmod 1777 /tmp/ray"]
+            securityContext:
+              runAsUser: 0
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          - name: tau-payload
+            image: {{RAY_IMAGE}}
+            command:
+            - python3
+            - -c
+            - |
+              import base64
+              import hashlib
+              import json
+              import os
+              import sys
+
+              raw_b64 = os.environ["TAU_PAYLOAD_B64"]
+              want_digest = os.environ["TAU_PAYLOAD_DIGEST"]
+              target_dir = os.environ["TAU_PAYLOAD_TARGET_DIR"]
+
+              raw = base64.b64decode(raw_b64)
+              got_digest = hashlib.sha256(raw).hexdigest()
+              if got_digest != want_digest:
+                  sys.stderr.write(
+                      "tau-payload: integrity check failed: digest=%s want=%s\n" % (got_digest, want_digest)
+                  )
+                  sys.exit(1)
+
+              envelope = json.loads(raw)
+              files = envelope.get("files", [])
+              os.makedirs(target_dir, exist_ok=True)
+              for f in files:
+                  name = f["name"]
+                  if not name or name in (".", "..") or "/" in name or "\\" in name:
+                      sys.stderr.write("tau-payload: rejecting unsafe file name %r\n" % (name,))
+                      sys.exit(1)
+                  data = base64.b64decode(f["data"])
+                  path = os.path.join(target_dir, name)
+                  with open(path, "wb") as fh:
+                      fh.write(data)
+                  os.chmod(path, 0o644)
+
+              sys.stderr.write("tau-payload: wrote %d file(s) to %s\n" % (len(files), target_dir))
+            env:
+            - name: TAU_PAYLOAD_B64
+              value: "{{FINEWEB_SCRIPT_PAYLOAD_B64}}"
+            - name: TAU_PAYLOAD_DIGEST
+              value: "{{FINEWEB_SCRIPT_PAYLOAD_DIGEST}}"
+            - name: TAU_PAYLOAD_TARGET_DIR
+              value: /script
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                cpu: 250m
+                memory: 128Mi
+            volumeMounts:
+            - name: script
+              mountPath: /script
+          containers:
+          - name: ray-head
+            image: {{RAY_IMAGE}}
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+              limits:
+                cpu: "2"
+                memory: "8Gi"
+            startupProbe:
+              httpGet:
+                path: /api/version
+                port: 8265
+              periodSeconds: 10
+              timeoutSeconds: 2
+              failureThreshold: 90
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "rm -rf /tmp/ray/* || true"]
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+            - name: script
+              mountPath: /script
+              readOnly: true
+          - name: ray-driver-log-offload
+            image: {{RAY_IMAGE}}
+            command: ["/bin/bash", "-lc", "--"]
+            args:
+            - |
+              set -euo pipefail
+              ray_root="${TAU_RAY_TMP:-/tmp/ray}"
+              poll_seconds="${TAU_RAY_LOG_POLL_SECONDS:-1}"
+              seen_paths=""
+              tail_pids=()
+              canonical_path() {
+                local path="$1"
+                local dir base
+                dir="$(cd -P "$(dirname "$path")" && pwd)"
+                base="$(basename "$path")"
+                printf '%s/%s\n' "$dir" "$base"
+              }
+              has_seen() {
+                local needle="$1"
+                local seen
+                while IFS= read -r seen; do
+                  [[ "$seen" == "$needle" ]] && return 0
+                done <<< "$seen_paths"
+                return 1
+              }
+              start_tail() {
+                local real="$1"
+                seen_paths="${seen_paths}${real}"$'\n'
+                tail -n +1 -F "$real" &
+                tail_pids+=("$!")
+              }
+              discover_logs() {
+                local entry candidate real
+                local -a roots=("$ray_root/session_latest/logs")
+                # Default contract: tail /tmp/ray/session_latest/logs/job-driver-*.log,
+                # plus concrete session_* directories so session_latest flips do not drop logs.
+                shopt -s nullglob
+                for entry in "$ray_root"/session_*/logs; do
+                  [[ -d "$entry" ]] && roots+=("$entry")
+                done
+                shopt -u nullglob
+                for entry in "${roots[@]}"; do
+                  [[ -d "$entry" ]] || continue
+                  shopt -s nullglob
+                  for candidate in "$entry"/job-driver-*.log; do
+                    [[ -f "$candidate" ]] || continue
+                    real="$(canonical_path "$candidate")"
+                    if has_seen "$real"; then
+                      continue
+                    fi
+                    start_tail "$real"
+                  done
+                  shopt -u nullglob
+                done
+              }
+              cleanup() {
+                local pid
+                for pid in "${tail_pids[@]:-}"; do
+                  kill "$pid" 2>/dev/null || true
+                done
+                wait || true
+              }
+              trap cleanup EXIT INT TERM
+              while true; do
+                discover_logs
+                sleep "$poll_seconds"
+              done
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "10m"
+                memory: "32Mi"
+              limits:
+                cpu: "100m"
+                memory: "128Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              capabilities:
+                drop:
+                - ALL
+              seccompProfile:
+                type: RuntimeDefault
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+              readOnly: true
+          volumes:
+          - name: ray-tmp
+            hostPath:
+              path: /mnt/taugrid-ray-tmp
+              type: DirectoryOrCreate
+          - name: script
+            emptyDir: {}
+          nodeSelector:
+            {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
+          tolerations:
+          - key: CriticalAddonsOnly
+            operator: Exists
+            effect: NoSchedule
+    workerGroupSpecs:
+    - groupName: fineweb-workers
+      replicas: {{FINEWEB_TRAIN_WORKERS}}
+      minReplicas: {{FINEWEB_TRAIN_WORKERS}}
+      maxReplicas: {{FINEWEB_TRAIN_WORKERS}}
+      rayStartParams: {}
+      template:
+        metadata:
+          labels:
+            # Dedicated, unique label: the 8+8 topology spread and the Go
+            # placement assertion both key on this so they never match unrelated
+            # Ray worker pods.
+            e2e-test: fineweb-16xh200-ib
+        spec:
+          initContainers:
+          # The published Ray image is Azure Linux 3.0 and does NOT ship the RDMA
+          # userspace stack (libibverbs / the mlx5 verbs provider). Without it NCCL
+          # logs "Failed to open libibverbs.so[.1]" and silently falls back to the
+          # TCP socket transport ("Using network Socket"), so InfiniBand never
+          # engages no matter how the pod requests rdma/rdma_shared_device_a. This
+          # initContainer stages a glibc/ABI-matched rdma-core (libibverbs,
+          # librdmacm, the mlx5 provider, libnl, and the /etc/libibverbs.d driver
+          # configs) into a shared volume that the worker then exposes to NCCL via
+          # LD_LIBRARY_PATH + the default provider/config mount points.
+          - name: inject-ib-libs
+            image: mcr.microsoft.com/azurelinux/base/core:3.0
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              tdnf install -y libibverbs librdmacm libnl3
+              mkdir -p /ib/lib /ib/providers /ib/drivers
+              cp -aP /usr/lib/libibverbs.so* /ib/lib/
+              cp -aP /usr/lib/librdmacm.so* /ib/lib/
+              cp -aP /usr/lib/libnl-3.so.200* /ib/lib/
+              cp -aP /usr/lib/libnl-route-3.so.200* /ib/lib/
+              # Dereference (-L) the verbs providers: each provider (e.g.
+              # libmlx5-rdmav34.so) is a symlink to ../libmlx5.so.* in /usr/lib,
+              # which is OUTSIDE this copied dir. Following the symlink copies the
+              # real provider object so libibverbs can dlopen mlx5 in the worker.
+              cp -aL /usr/lib/libibverbs/* /ib/providers/
+              cp -aP /etc/libibverbs.d/* /ib/drivers/
+              ls -la /ib/lib /ib/providers /ib/drivers
+            securityContext:
+              runAsUser: 0
+            volumeMounts:
+            - name: ib-libs
+              mountPath: /ib
+          - name: prepare-ray-tmp
+            image: {{RAY_IMAGE}}
+            command: ["/bin/sh", "-c", "mkdir -p /tmp/ray && chmod 1777 /tmp/ray && mkdir -p /mnt/fineweb-ckpt && chmod 1777 /mnt/fineweb-ckpt"]
+            securityContext:
+              runAsUser: 0
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+            - name: fineweb-ckpt
+              mountPath: /mnt/fineweb-ckpt
+          containers:
+          - name: ray-worker
+            image: {{RAY_IMAGE}}
+            securityContext:
+              # Run as root so the added IPC_LOCK capability is EFFECTIVE: a
+              # non-root container gets the cap in its permitted set but the kernel
+              # clears it from the effective set on exec (Kubernetes does not set
+              # ambient capabilities), so mlock stays bound by the small default
+              # RLIMIT_MEMLOCK and InfiniBand's ibv_create_cq fails with
+              # "Cannot allocate memory". As root with CAP_IPC_LOCK, memory-region
+              # registration for IB/GPUDirect RDMA is unlimited. The proven
+              # nccl-tests IB job (scripts/infiniband) relies on the same root +
+              # IPC_LOCK combination.
+              runAsUser: 0
+              capabilities:
+                add:
+                - IPC_LOCK
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Make the injected RDMA userspace stack discoverable: libibverbs and
+            # its deps live on LD_LIBRARY_PATH, the mlx5 verbs provider is mounted
+            # at the compiled-in provider dir (/usr/lib/libibverbs), and the driver
+            # configs at the default /etc/libibverbs.d so libibverbs auto-loads
+            # mlx5. This is what lets NCCL select NET/IB instead of NET/Socket.
+            - name: LD_LIBRARY_PATH
+              value: /opt/ib/lib
+            # Make libibverbs' provider search unambiguous: load the mlx5 verbs
+            # provider from the dir we bind-mount the providers into, regardless of
+            # the path libibverbs.so was compiled with.
+            - name: IBV_DRIVERS_PATH
+              value: /usr/lib/libibverbs
+            resources:
+              requests:
+                cpu: "4"
+                memory: "48Gi"
+                nvidia.com/gpu: "1"
+                rdma/rdma_shared_device_a: "1"
+              limits:
+                cpu: "4"
+                memory: "48Gi"
+                nvidia.com/gpu: "1"
+                rdma/rdma_shared_device_a: "1"
+            startupProbe:
+              httpGet:
+                path: /api/healthz
+                port: 52365
+              periodSeconds: 10
+              timeoutSeconds: 2
+              failureThreshold: 90
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "rm -rf /tmp/ray/* || true"]
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+            - name: dshm
+              mountPath: /dev/shm
+            - name: fineweb-ckpt
+              mountPath: /mnt/fineweb-ckpt
+            # Injected RDMA userspace stack (see the inject-ib-libs initContainer):
+            # the .so libs on LD_LIBRARY_PATH, the mlx5 verbs provider at the
+            # libibverbs compiled-in provider dir, and the driver configs at the
+            # default search path so libibverbs auto-loads mlx5 for NCCL.
+            - name: ib-libs
+              mountPath: /opt/ib/lib
+              subPath: lib
+            - name: ib-libs
+              mountPath: /usr/lib/libibverbs
+              subPath: providers
+            - name: ib-libs
+              mountPath: /etc/libibverbs.d
+              subPath: drivers
+          volumes:
+          - name: ray-tmp
+            hostPath:
+              path: /mnt/taugrid-ray-tmp
+              type: DirectoryOrCreate
+          # Default 64MB /dev/shm crashes NCCL's SHM transport; a real 16Gi tmpfs
+          # is required for both the IB and TCP NCCL paths.
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+          # Checkpoint target that survives pod preStop cleanup (the ray-tmp
+          # preStop rm -rf does not touch this mount), so the first checkpoint
+          # genuinely persists on the node.
+          - name: fineweb-ckpt
+            hostPath:
+              path: /mnt/taugrid-fineweb-ckpt
+              type: DirectoryOrCreate
+          # Staged RDMA userspace stack (libibverbs/librdmacm/mlx5 provider/libnl
+          # + driver configs) populated by the inject-ib-libs initContainer, so
+          # NCCL can use InfiniBand even though the base Ray image omits rdma-core.
+          - name: ib-libs
+            emptyDir: {}
+          nodeSelector:
+            {{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}
+          # Force an even 8+8 split across the two H200 nodes. GPU capacity (8 per
+          # node) already caps pods per node at 8; this makes the split explicit
+          # and fails scheduling rather than silently packing >8 on one node.
+          topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: DoNotSchedule
+            labelSelector:
+              matchLabels:
+                e2e-test: fineweb-16xh200-ib
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: sku
+            operator: Exists
+            effect: NoSchedule

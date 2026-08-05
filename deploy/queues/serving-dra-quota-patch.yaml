@@ -1,0 +1,45 @@
+# Serving DRA quota patch for the tau cluster.
+#
+# Kueue DRA accounting reports ResourceClaimTemplate requests as
+# gpu.nvidia.com. The legacy serving-cq only covered cpu/memory, so new
+# Tau serve workloads stayed suspended with:
+#   resource gpu.nvidia.com unavailable in ClusterQueue
+#
+# This patch gives serving-cq room for the existing DRA-backed serving workload
+# plus one checkpoint-serve smoke/update, and prevents one serving workload from
+# preempting another during updates. It intentionally does not join serving-cq to
+# the research cohort.
+#
+# Apply:
+#   kubectl --context my-cluster-admin apply -f \
+#     applications/taugrid/lanes/serving-dra-quota-patch.yaml \
+#     --server-side --force-conflicts --field-manager=tau-serving-dra
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: serving-cq
+  labels:
+    tau.azure.com/managed-by: tau-serving-dra
+spec:
+  preemption:
+    reclaimWithinCohort: Never
+    borrowWithinCohort:
+      policy: Never
+    withinClusterQueue: Never
+  resourceGroups:
+    - coveredResources: [cpu, memory, gpu.nvidia.com, nvidia.com/gpu]
+      flavors:
+        - name: gpu-any
+          resources:
+            - name: cpu
+              nominalQuota: "16"
+            - name: memory
+              nominalQuota: 80Gi
+            - name: gpu.nvidia.com
+              nominalQuota: "2"
+            # Device-plugin GPU resource (tau serve default path). DRA
+            # (gpu.nvidia.com) is non-functional on the onboarded substrate;
+            # both names covered for compatibility. See profiles plan.
+            - name: nvidia.com/gpu
+              nominalQuota: "2"

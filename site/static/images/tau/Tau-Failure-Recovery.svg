@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Failure recovery and reproducibility</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Retry only verified transient failures, resume from durable checkpoints, and preserve enough evidence to explain every attempt</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="310" width="330" height="230" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="108" cy="360" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="108" y="364" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="108" dy="0">RUN</tspan></text>
+<text x="152" y="350" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="152" dy="0">IMMUTABLE INTENT</tspan></text>
+<text x="152" y="395" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="152" dy="0">Attempt 0</tspan></text>
+<text x="84" y="460" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="84" dy="0">Pinned image</tspan><tspan x="84" dy="25">checked-in config</tspan><tspan x="84" dy="25">dataset/model refs</tspan><tspan x="84" dy="25">checkpoint contract</tspan></text>
+<rect x="486" y="310" width="330" height="230" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="538" cy="360" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="538" y="364" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="538" dy="0">LIVE</tspan></text>
+<text x="582" y="350" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="582" dy="0">LIFECYCLE</tspan></text>
+<text x="582" y="395" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="582" dy="0">Wait and execute</tspan></text>
+<text x="514" y="460" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="514" dy="0">Kueue admission</tspan><tspan x="514" dy="25">pod scheduling</tspan><tspan x="514" dy="25">GPU startup</tspan><tspan x="514" dy="25">application progress</tspan></text>
+<rect x="916" y="310" width="330" height="230" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="968" cy="360" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="968" y="364" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="968" dy="0">?</tspan></text>
+<text x="1012" y="350" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1012" dy="0">TERMINAL EVIDENCE</tspan></text>
+<text x="1012" y="394" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1012" dy="0">Classify the</tspan><tspan x="1012" dy="30">outcome</tspan></text>
+<text x="944" y="460" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="944" dy="0">Completed</tspan><tspan x="944" dy="25">Preempted / Evicted</tspan><tspan x="944" dy="25">OOMKilled</tspan><tspan x="944" dy="25">non-retryable failure</tspan></text>
+<polyline points="386,425 486,425" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="816,425 916,425" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1390" y="210" width="350" height="210" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1442" cy="260" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1442" y="264" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1442" dy="0">OK</tspan></text>
+<text x="1486" y="250" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1486" dy="0">SUCCESS</tspan></text>
+<text x="1486" y="294" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1486" dy="0">Commit durable</tspan><tspan x="1486" dy="30">evidence</tspan></text>
+<text x="1418" y="356" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1418" dy="0">Checkpoint · result files</tspan><tspan x="1418" dy="19">metrics · artifacts · terminal state</tspan></text>
+<rect x="1390" y="470" width="350" height="210" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1442" cy="520" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1442" y="524" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1442" dy="0">RETRY</tspan></text>
+<text x="1486" y="510" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1486" dy="0">TRANSIENT + ALLOWED</tspan></text>
+<text x="1486" y="554" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1486" dy="0">Retry with backoff</tspan></text>
+<text x="1418" y="616" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1418" dy="0">Preempted and Evicted by default;</tspan><tspan x="1418" dy="19">bounded maximum retries</tspan></text>
+<rect x="1790" y="470" width="350" height="210" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1842" cy="520" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="1842" y="524" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1842" dy="0">OOM</tspan></text>
+<text x="1886" y="510" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1886" dy="0">OOM</tspan></text>
+<text x="1886" y="554" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1886" dy="0">Explicit opt-in only</tspan></text>
+<text x="1818" y="616" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1818" dy="0">Same resources commonly reproduce</tspan><tspan x="1818" dy="19">an OOM; change the contract</tspan></text>
+<rect x="1390" y="730" width="750" height="210" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1442" cy="780" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="1442" y="784" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1442" dy="0">STOP</tspan></text>
+<text x="1486" y="770" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1486" dy="0">PERMANENT OR EXHAUSTED</tspan></text>
+<text x="1486" y="815" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="1486" dy="0">Stop and surface the reason</tspan></text>
+<text x="1418" y="877" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="1418" dy="0">Do not turn a broken workload into a success-shaped loop.</tspan><tspan x="1418" dy="21">Preserve logs, events, status, and the last checkpoint.</tspan></text>
+<polyline points="1246,425 1320,425 1320,315 1390,315" fill="none" stroke="#107C10" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1246,425 1320,425 1320,575 1390,575" fill="none" stroke="#F7630C" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1246,425 1320,425 1320,835 1390,835" fill="none" stroke="#D13438" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1740,575 1790,575" fill="none" stroke="#D13438" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1565,680 1565,710 650,710 650,540" fill="none" stroke="#F7630C" stroke-width="5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="700" y="680" width="720" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1060" y="704" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1060" dy="0">NEXT ATTEMPT: TAU_RESUME_FROM + ATTEMPT / REASON ENV</tspan></text>
+<rect x="120" y="780" width="1050" height="180" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="172" cy="830" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="172" y="834" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="172" dy="0">DATA</tspan></text>
+<text x="216" y="820" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="216" dy="0">DURABLE RECOVERY CONTRACT</tspan></text>
+<text x="216" y="865" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="216" dy="0">Checkpoint path survives the failed pod</tspan></text>
+<text x="148" y="927" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="400" fill="#000000"><tspan x="148" dy="0">Backoff state and attempt metadata are explicit.</tspan><tspan x="148" dy="21">Without a readable checkpoint, restart is a new run—not a resume.</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Automatic retry is disabled by default; `resilience.max_retries`, retry reasons, backoff, and checkpoint path make the policy reviewable.</tspan></text>
+</svg>

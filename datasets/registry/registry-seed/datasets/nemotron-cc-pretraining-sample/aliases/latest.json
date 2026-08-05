@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "nemotron-cc-pretraining-sample",
+  "alias": "latest",
+  "version": "v1",
+  "digest": "sha256:23982d35429b9ad950512027c494a5f26dfe10bca4e10e491c0b44d0ce6589ee",
+  "record_path": "/data/dataset-registry/datasets/nemotron-cc-pretraining-sample/v1/dataset.json",
+  "updated_at": "2026-06-02T07:51:36Z"
+}

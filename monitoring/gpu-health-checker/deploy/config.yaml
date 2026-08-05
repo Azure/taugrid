@@ -1,0 +1,52 @@
+# GPU Health Checker configuration for GB200 NVL72 nodes.
+# Installed to /etc/gpu-health-checker/config.yaml
+
+expectedGPUs: 4
+gpuType: GB200
+maxFailedGPUs: 0
+
+driverVersions:
+  - "580.65.06"
+
+vbiosVersions:
+  - "97.00.B9.00.23"
+  - "97.00.B9.00.69"
+
+nvlink:
+  expectedActiveLinksPerGPU: 18
+  checkC2C: true
+  checkNVSwitch: true
+
+# Check interval matches NPD's invoke_interval (60s).
+checkInterval: 60s
+
+checks:
+  xid:
+    enabled: true
+    criticalCodes: [48, 63, 64, 68, 73, 74, 79, 94, 95]
+    warningCodes:  [56, 57, 58, 62, 65, 69, 80, 81, 92, 119, 120]
+  ecc:
+    enabled: true
+    sbeRateThreshold: 10
+    sbeRateWindow: 10m
+  nvlink:
+    enabled: true
+  thermal:
+    enabled: true
+    gpuTempWarning: 85
+    gpuTempCritical: 95
+    cpuTempWarning: 90
+    cpuTempCritical: 100
+    nvswitchTempWarning: 90
+    nvswitchTempCritical: 100
+  pcie:
+    enabled: true
+    replayRateThreshold: 5
+    replayRateWindow: 5m
+  clocks:
+    enabled: true
+  health:
+    enabled: true
+    level: 2
+  info:
+    enabled: true

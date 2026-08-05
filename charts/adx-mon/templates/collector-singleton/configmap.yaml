@@ -1,0 +1,74 @@
+{{- if .Values.collectorSingleton.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-collector-singleton-config
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "collector-singleton") | nindent 4 }}
+data:
+  config.toml: |
+    endpoint = 'https://{{ include "adx-mon.fullname" . }}-ingestor.{{ include "adx-mon.namespace" . }}.svc.cluster.local'
+    region = '{{ .Values.global.region }}'
+    insecure-skip-verify = {{ .Values.collector.insecureSkipVerify }}
+    listen-addr = ':8080'
+    max-connections = 100
+    max-batch-size = 10000
+    storage-dir = '/mnt/data'
+    {{- if .Values.collector.prometheusScrape.dropMetrics }}
+    drop-metrics = {{ .Values.collector.prometheusScrape.dropMetrics | toJson }}
+    {{- else }}
+    drop-metrics = []
+    {{- end }}
+    disable-metrics-forwarding = false
+    wal-flush-interval-ms = 1000
+
+    lift-labels = [
+      { name = 'host', column = 'Host' },
+      { name = 'cluster', column = 'Cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    lift-resources = [
+      { name = 'host', column = 'Host' },
+      { name = 'cluster', column = 'Cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    [add-labels]
+      host = '$(HOSTNAME)'
+      cluster = '{{ include "adx-mon.clusterName" . }}'
+
+    [add-attributes]
+      host = '$(HOSTNAME)'
+      cluster = '{{ include "adx-mon.clusterName" . }}'
+
+    [prometheus-scrape]
+      database = '{{ .Values.adx.metricsDatabase }}'
+      default-drop-metrics = false
+      static-scrape-target = [
+        {{- range .Values.collectorSingleton.scrapeTargets }}
+        { host-regex = '{{ .hostRegex }}', url = '{{ .url }}', namespace = '{{ .namespace }}', pod = '{{ .pod }}', container = '{{ .container }}' },
+        {{- end }}
+      ]
+      scrape-interval = 30
+      scrape-timeout = 25
+      disable-metrics-forwarding = false
+      keep-metrics = []
+      {{- if .Values.collector.prometheusScrape.dropMetrics }}
+      drop-metrics = {{ .Values.collector.prometheusScrape.dropMetrics | toJson }}
+      {{- else }}
+      drop-metrics = []
+      {{- end }}
+
+    [[prometheus-remote-write]]
+      database = '{{ .Values.adx.metricsDatabase }}'
+      path = '/receive'
+      drop-metrics = []
+      disable-metrics-forwarding = false
+      [prometheus-remote-write.add-labels]
+{{- end }}

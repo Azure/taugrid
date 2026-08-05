@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "common-pile-domain-balanced",
+  "alias": "latest",
+  "version": "v1",
+  "digest": "sha256:0fec405224010d464ba28f33951b56d1e8f860d133b62227fd6133e9a82a17ac",
+  "record_path": "/data/dataset-registry/datasets/common-pile-domain-balanced/v1/dataset.json",
+  "updated_at": "2026-07-16T20:04:42Z"
+}

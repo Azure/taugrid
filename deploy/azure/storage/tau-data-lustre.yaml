@@ -1,0 +1,84 @@
+# Optional platform storage example: Azure Managed Lustre (AMLFS)
+# =============================================================================
+# TauGrid does not apply, own, or delete these objects. A platform owner may
+# adapt this example in reviewed Helm/GitOps/IaC when AMLFS fits the workload.
+# Azure Lustre and this claim name are not required by Tau.
+#
+# This example creates a PVC named `blob-training` in `ray`. Adapt both values to
+# the target workload namespace and desired claim name. Workloads reference the
+# existing claim with `storage.data_pvc`. The current repo-owned MultiKueue
+# any-worker contract uses
+# `blob-premium-rwx`; do not mix `amlfs-rwx` on one worker with
+# `blob-premium-rwx` on another and expect parity preflight to pass.
+#
+# WHEN TO PICK THIS (Lustre)
+# -----------------------------------------------------------------------------
+# Pick AMLFS when training I/O is the bottleneck: checkpoint-heavy full
+# fine-tunes, very large shuffles, or multi-node jobs that need a SHARED
+# high-throughput POSIX scratch across all ranks. AMLFS is a real parallel
+# filesystem (RWX, POSIX, high aggregate bandwidth) — unlike blobfuse it has no
+# concurrent-write caveats. The trade-off: it is REGION-BOUND and bills on
+# provisioned size whether or not you are training, so it is the heavier default.
+#
+# IMPORTANT — REGION PINNING
+#   AMLFS lives in one region. On the cross-region <cluster> pool,
+#   place it in the region that holds the GPUs you actually schedule on, and pin
+#   jobs to that region (single-region preset) so you never mount Lustre across
+#   regions.
+#
+# PREREQUISITES (verify before applying):
+#   - Azure Managed Lustre CSI driver installed:
+#       kubectl get csidrivers | grep azurelustre.csi.azure.com
+#   - The workload namespace exists (provisioned by lanes/shared-gpu-queue.yaml).
+#   - A subnet with enough free IPs for the AMLFS cluster (dynamic provisioning
+#     creates the filesystem; consult the azurelustre-csi-driver docs for the
+#     exact parameter set your driver version expects).
+#
+# You MUST fill the REPLACE_* values below — unlike the blob default, AMLFS
+# cannot be zero-config (region, zone, and resource group are real choices with
+# cost and locality implications). The maintenance window defaults to Sunday
+# 22:00 UTC; adjust if needed. Filesystem size comes from the PVC request below.
+# =============================================================================
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: amlfs-rwx
+provisioner: azurelustre.csi.azure.com
+parameters:
+  # Required. SKU sets AMLFS throughput; must be one of AMLFS-Durable-Premium-{40,125,250,500}.
+  sku-name: AMLFS-Durable-Premium-250
+  # Required. Single availability zone, e.g. "1" — co-locate with your GPU nodes.
+  zone: REPLACE_ZONE
+  # Required maintenance window (driver creates the AMLFS cluster with this schedule).
+  maintenance-day-of-week: Sunday
+  maintenance-time-of-day-utc: "22:00"
+  # Region the AMLFS cluster is created in. MUST match the GPU region you pin jobs
+  # to. If omitted, the driver uses the AKS cluster's region.
+  location: REPLACE_REGION
+  # Resource group to hold the AMLFS cluster (must already exist). If omitted, the
+  # driver uses the AKS infrastructure (node) resource group.
+  resource-group-name: REPLACE_RG
+  # Optional: pin to an existing VNet/subnet with enough free IPs for the cluster.
+  # vnet-resource-group: REPLACE_VNET_RG
+  # vnet-name: REPLACE_VNET_NAME
+  # subnet-name: REPLACE_SUBNET_NAME
+reclaimPolicy: Retain                    # keep the AMLFS cluster + data if the PVC is deleted (default "Delete" tears it down)
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - noatime
+  - flock
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blob-training         # canonical durable /data PVC (opt-in contract name)
+  namespace: ray              # canonical workload namespace for /data PVCs
+spec:
+  accessModes:
+    - ReadWriteMany           # shared across RayJob head + workers (multi-node)
+  storageClassName: amlfs-rwx
+  resources:
+    requests:
+      storage: 4Ti            # size to your working set; AMLFS bills on provisioned size

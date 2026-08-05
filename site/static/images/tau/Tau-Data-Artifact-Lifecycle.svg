@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Data, checkpoints, models, and artifacts</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Separate immutable inputs, hot execution state, durable outputs, and experiment metadata</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="1580" y="108" width="150" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1655" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1655" dy="0">SHIPPED</tspan></text>
+<rect x="1744" y="108" width="190" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1839" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1839" dy="0">EXPERIMENTAL</tspan></text>
+<rect x="1948" y="108" width="140" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="2018" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="2018" dy="0">FUTURE</tspan></text>
+<rect x="56" y="240" width="2088" height="840" rx="22" fill="transparent" stroke="#038387" stroke-width="4"/>
+<rect x="96" y="360" width="398" height="430" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="410" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="148" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">REF</tspan></text>
+<text x="192" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">1 · INPUT REFERENCES</tspan></text>
+<text x="192" y="443" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="192" dy="0">Resolve what the</tspan><tspan x="192" dy="29">run consumes</tspan></text>
+<text x="124" y="511" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="124" dy="0">Pinned dataset name@version</tspan><tspan x="124" dy="26">content digest + provenance</tspan><tspan x="124" dy="26">checkpoint / model reference</tspan><tspan x="124" dy="26">project image and config</tspan></text>
+<polyline points="494,575 566,575" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="566" y="360" width="398" height="430" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="618" cy="410" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="618" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="618" dy="0">IO</tspan></text>
+<text x="662" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="662" dy="0">2 · MOUNT / STAGE</tspan></text>
+<text x="662" y="443" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="662" dy="0">Make bytes</tspan><tspan x="662" dy="29">available</tspan></text>
+<text x="594" y="511" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="594" dy="0">Durable /data PVC or object store</tspan><tspan x="594" dy="26">optional local NVMe scratch</tspan><tspan x="594" dy="26">workload identity for access</tspan><tspan x="594" dy="26">data-plane choice stays explicit</tspan></text>
+<polyline points="964,575 1036,575" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1036" y="360" width="398" height="430" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1088" cy="410" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1088" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1088" dy="0">GPU</tspan></text>
+<text x="1132" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1132" dy="0">3 · EXECUTE</tspan></text>
+<text x="1132" y="443" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1132" dy="0">Model and data</tspan><tspan x="1132" dy="29">make progress</tspan></text>
+<text x="1064" y="511" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1064" dy="0">Read immutable inputs</tspan><tspan x="1064" dy="26">write bounded hot state</tspan><tspan x="1064" dy="26">emit metrics history</tspan><tspan x="1064" dy="26">checkpoint during the run</tspan></text>
+<polyline points="1434,575 1506,575" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1506" y="360" width="398" height="430" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1558" cy="410" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1558" y="414" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1558" dy="0">OUT</tspan></text>
+<text x="1602" y="400" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1602" dy="0">4 · DURABLE OUTPUTS</tspan></text>
+<text x="1602" y="443" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1602" dy="0">Preserve reusable</tspan><tspan x="1602" dy="29">evidence</tspan></text>
+<text x="1534" y="511" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="400" fill="#000000"><tspan x="1534" dy="0">Checkpoints and result files</tspan><tspan x="1534" dy="26">artifact metadata + digests</tspan><tspan x="1534" dy="26">model registry record</tspan><tspan x="1534" dy="26">expstore run packet</tspan></text>
+<rect x="100" y="830" width="540" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="370" y="854" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="370" dy="0">IMPLEMENTING: DATASET REGISTRY CONTROL PLANE</tspan></text>
+<rect x="680" y="830" width="500" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="930" y="854" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="930" dy="0">SHIPPED: PVC / OBJECT-STORE REFERENCES</tspan></text>
+<rect x="1220" y="830" width="520" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1480" y="854" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1480" dy="0">SHIPPED: CHECKPOINT + ARTIFACT CONTRACTS</tspan></text>
+<rect x="260" y="910" width="1680" height="120" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="3" filter="url(#shadow)"/>
+<text x="288" y="950" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="288" dy="0">BOUNDARY</tspan></text>
+<text x="288" y="992" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="288" dy="0">Tau catalogs and wires data; it does not tokenize, transform, replicate, or choose the production throughput tier for you.</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Reproducibility comes from pinned references, immutable content digests, durable checkpoints, and run metadata—not from a mutable path alone.</tspan></text>
+</svg>

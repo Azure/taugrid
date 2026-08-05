@@ -1,0 +1,234 @@
+suite: kube-state-metrics subchart configuration
+templates:
+  - charts/kube-state-metrics/templates/crs-configmap.yaml
+  - charts/kube-state-metrics/templates/deployment.yaml
+  - charts/kube-state-metrics/templates/role.yaml
+
+tests:
+
+  # ── CRS ConfigMap ─────────────────────────────────────────────────
+
+  - it: renders CRS ConfigMap when customResourceState is enabled
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: metadata.name
+          pattern: ".*-kube-state-metrics-customresourcestate-config$"
+
+  - it: CRS ConfigMap contains ClusterQueue metrics
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "clusterqueue_pending_workloads"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "clusterqueue_admitted_workloads"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "clusterqueue_reserving_workloads"
+
+  - it: CRS ConfigMap contains LocalQueue metrics
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "localqueue_pending_workloads"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "localqueue_admitted_workloads"
+
+  - it: CRS ConfigMap contains Workload info metric
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "workload_info"
+
+  - it: CRS ConfigMap targets kueue.x-k8s.io API group
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "kueue\\.x-k8s\\.io"
+
+  - it: CRS ConfigMap contains CustomResourceStateMetrics kind
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "kind: CustomResourceStateMetrics"
+
+  - it: does not render CRS ConfigMap when customResourceState is disabled
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    set:
+      kube-state-metrics:
+        customResourceState:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── Deployment ────────────────────────────────────────────────────
+
+  - it: renders KSM Deployment with dalec MCR image
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "mcr\\.microsoft\\.com/oss/v2/kubernetes/kube-state-metrics:v2\\.18\\.0"
+
+  - it: KSM image can be overridden (e.g. to a custom ACR tag)
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    set:
+      kube-state-metrics:
+        image:
+          registry: myacr.azurecr.io
+          repository: mirror/kube-state-metrics
+          tag: v2.18.0-1
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "myacr\\.azurecr\\.io/mirror/kube-state-metrics:v2\\.18\\.0-1"
+
+  - it: KSM Deployment mounts CRS config volume
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: customresourcestate-config
+            mountPath: /etc/customresourcestate
+            readOnly: true
+
+  - it: KSM Deployment passes --custom-resource-state-config-file flag
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--custom-resource-state-config-file=/etc/customresourcestate/config.yaml"
+
+  - it: KSM pod has adx-mon scrape annotations
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/scrape"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/port"]
+          value: "8080"
+
+  - it: KSM Deployment has correct resource requests and limits
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 2Gi
+
+  - it: KSM Deployment has CriticalAddonsOnly toleration
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: CriticalAddonsOnly
+            operator: Exists
+
+  # ── RBAC ──────────────────────────────────────────────────────────
+
+  - it: KSM Role includes Kueue CRD RBAC rules
+    template: charts/kube-state-metrics/templates/role.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - kueue.x-k8s.io
+            resources:
+              - clusterqueues
+              - localqueues
+              - workloads
+            verbs:
+              - list
+              - watch
+
+  # ── Sharding ──────────────────────────────────────────────────────
+
+  - it: defaults to 1 replica (no sharding)
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  # ── CRS disabled — Deployment omits CRS config ────────────────────
+
+  - it: KSM Deployment omits CRS flag and volume when customResourceState is disabled
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    set:
+      kube-state-metrics:
+        customResourceState:
+          enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--custom-resource-state-config-file=/etc/customresourcestate/config.yaml"
+
+  # ── ClusterQueue cohort label ─────────────────────────────────────
+
+  - it: CRS ConfigMap includes cohort label for ClusterQueue
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "cohort"
+
+  # ── LocalQueue reserving workloads ────────────────────────────────
+
+  - it: CRS ConfigMap contains LocalQueue reserving workloads metric
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "localqueue_reserving_workloads"
+
+  # ── Label path assertions ─────────────────────────────────────────
+
+  - it: CRS ConfigMap includes namespace label path for LocalQueue and Workload
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "namespace:\\s*\\n\\s*- metadata\\s*\\n\\s*- namespace"
+
+  - it: CRS ConfigMap includes clusterqueue label on workload_info
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "clusterqueue:\\s*\\n\\s*- status\\s*\\n\\s*- admission\\s*\\n\\s*- clusterQueue"
+
+  # ── Readiness probe port (v2.18.0+ fix) ──────────────────────────
+
+  - it: KSM readiness probe targets telemetry port (metrics / 8081) not metrics port (http / 8080)
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: metrics

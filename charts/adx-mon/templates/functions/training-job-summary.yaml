@@ -1,0 +1,53 @@
+{{- if and .Values.functions.enabled .Values.functions.items.trainingJobSummary.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-training-job-summary
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.trainingJobSummary.database | quote }}
+  body: |
+    // Training job summary view: completion rates, duration, GPU-hours per job.
+    // Uses kube-state-metrics job/pod metrics and DCGM GPU utilization.
+    // NOTE: gpu_requests_per_pod is pod-scoped (not job-scoped). Resolving
+    // pod-to-job ownership requires a join through KubePodOwner; prefer doing
+    // that in dashboard queries (WI-17) rather than in this materialized view.
+    .create-or-alter function TrainingJobSummary () {
+      let job_complete = KubeJobComplete
+      | where Value == 1
+      | extend cluster=tostring(column_ifexists("Cluster", "")),
+               namespace = tostring(Labels.namespace),
+               job_name = tostring(Labels.job_name);
+      let job_failed = KubeJobFailed
+      | where Value == 1
+      | extend cluster=tostring(column_ifexists("Cluster", "")),
+               namespace = tostring(Labels.namespace),
+               job_name = tostring(Labels.job_name);
+      let job_duration = KubeJobDurationSeconds
+      | extend cluster=tostring(column_ifexists("Cluster", "")),
+               namespace = tostring(Labels.namespace),
+               job_name = tostring(Labels.job_name);
+      let job_owner = KubeJobOwner
+      | extend cluster=tostring(column_ifexists("Cluster", "")),
+               namespace = tostring(Labels.namespace),
+               job_name = tostring(Labels.job_name),
+               owner_kind = tostring(Labels.owner_kind),
+               owner_name = tostring(Labels.owner_name);
+      let gpu_per_pod = KubePodContainerResourceRequests
+      | where tostring(Labels.resource) == "nvidia_com_gpu"
+      | extend cluster=tostring(column_ifexists("Cluster", "")),
+               namespace = tostring(Labels.namespace),
+               pod = tostring(Labels.pod),
+               gpu_count = Value;
+      union
+        (job_complete | project Timestamp, Cluster=cluster, namespace, name=job_name, scope="job", metric="job_completed", Value, owner_kind="", owner_name=""),
+        (job_failed   | project Timestamp, Cluster=cluster, namespace, name=job_name, scope="job", metric="job_failed", Value, owner_kind="", owner_name=""),
+        (job_duration | project Timestamp, Cluster=cluster, namespace, name=job_name, scope="job", metric="job_duration_seconds", Value, owner_kind="", owner_name=""),
+        (job_owner    | project Timestamp, Cluster=cluster, namespace, name=job_name, scope="job", metric="job_owner", Value,
+                        owner_kind, owner_name),
+        (gpu_per_pod  | project Timestamp, Cluster=cluster, namespace, name=pod, scope="pod", metric="gpu_requests_per_pod", Value, owner_kind="", owner_name="")
+    }
+{{- end }}

@@ -1,0 +1,33 @@
+artifacts:
+  checkpoint: best/model.safetensors
+compute:
+  gpus: 2
+  worker_cpus: 12
+  worker_memory_limit: 96Gi
+  workers: 3
+eval: {}
+name: train-model
+policy:
+  gpu_class: any
+  namespace: export-ns
+  queue: priority-queue
+run:
+  entrypoint: tau_py_wrapper.py
+  workload_kind: rayjob
+runtime:
+  env:
+  - name: MODE
+    value: train
+  pip:
+  - torch==2.4.0
+schema_version: 1
+storage:
+  data_pvc: durable-data
+  mounts:
+  - mountPath: /models
+    name: model-cache
+    pvc: model-cache
+    readOnly: true
+workflow:
+  extra_scripts:
+  - tau_user_module.py:tau_user_module.py

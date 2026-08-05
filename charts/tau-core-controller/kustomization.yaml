@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Kustomize consumes the literal manifests under kustomize/. templates/ is the
+# Helm surface for the charts/taugrid distribution and is not parseable here.
+# Keep the two in sync; images/tau-core-controller/api/v1alpha1 asserts the
+# shared invariants (image digest, RBAC rules, node label rules).
+resources:
+  - kustomize/namespace.yaml
+  - crds/tau.azure.com_clusters.yaml
+  - crds/tau.azure.com_workspaces.yaml
+  - crds/tau.azure.com_quotarequests.yaml
+  - kustomize/serviceaccount.yaml
+  - kustomize/rbac.yaml
+  - templates/quota-approval-policy.yaml
+  - kustomize/deployment.yaml
+  - kustomize/taucluster.yaml

@@ -1,0 +1,51 @@
+schema_version: 1
+name: aks-gpu-quickstart
+run:
+  entrypoint: train.py
+  workload_kind: rayjob
+resource_naming:
+  # Read by cli/internal/manifest. Routing is decided by
+  # runconfig.rawLooksLikeManagedWorkflow: schema_version present AND no
+  # `engine` key -> managed-workflow projection (non-strict); otherwise the
+  # strict KnownFields decoder. workload_kind plays no part in that choice.
+  # This key is load-bearing, not decorative: `tau` restates manifest.go's
+  # defaultResourcePrefix, so the default-valued render looks identical whether
+  # the key is read or ignored. Perturb the value to tell the difference --
+  # TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing does exactly that.
+  prefix: tau
+compute:
+  # One A100. Note that tau gives the Ray *head* pod `gpus` GPUs as well, so
+  # `workers: 1` means one GPU pod in total -- exactly one
+  # Standard_NC24ads_A100_v4 node, which is what this quickstart provisions.
+  # Raising workers to 2 requests a second A100 and therefore a second node; it
+  # still fits the 50 vCPU quota (2 x 24) but doubles the hourly cost, so the
+  # default stays at the smallest configuration that proves the platform works.
+  gpus: 1
+  workers: 1
+  # The NC24ads node is 24 vCPU / 220 GiB. Leave headroom for the kubelet, the
+  # GPU device plugin, and system DaemonSets rather than claiming all of it.
+  cpus: 16
+  memory: 64Gi
+runtime:
+  # CUDA build of the canonical Ray image. The CPU quickstart's plain
+  # py3.12-ray2.54.0 tag ships no CUDA runtime and cannot see the device.
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+  pip:
+    # The default PyPI torch wheel bundles its own CUDA runtime libraries, so no
+    # extra index URL is needed; it only requires a recent enough host driver,
+    # which the AKS GPU node image provides.
+    - torch>=2.4.0
+  env:
+    # Ray runs the driver and the Ray Train controller with num_gpus=0 and, by
+    # default, "overrides" the accelerator visible-devices variable for those
+    # processes -- it sets CUDA_VISIBLE_DEVICES to the empty string, which means
+    # "no devices" to CUDA. That empty value then reaches the training worker,
+    # so torch reports no GPU and the NCCL process group fails with
+    # "ProcessGroupNCCL is only supported with GPUs, no GPUs found!" even though
+    # the pod holds a healthy A100 (nvidia-smi -L lists it). This is the opt-out
+    # Ray itself names in the warning it prints alongside the failure.
+    - name: RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO
+      value: "0"
+# Hardware: NVIDIA A100 80GB (Standard_NC24ads_A100_v4).
+# Proves: device identity, TF32 tensor-core throughput, and on-device
+# convergence -- see README.md for what each check actually demonstrates.

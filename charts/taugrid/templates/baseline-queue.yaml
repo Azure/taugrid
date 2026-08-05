@@ -1,0 +1,100 @@
+{{- if .Values.baselineQueue.enabled }}
+{{- if and .Values.baselineQueue.topology.enabled (empty .Values.baselineQueue.flavor.nodeLabels) }}
+{{- fail "baselineQueue.flavor.nodeLabels must contain at least one label when baselineQueue.topology.enabled is true" }}
+{{- end }}
+{{- if .Values.baselineQueue.topology.enabled }}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: {{ .Values.baselineQueue.topology.name }}
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+spec:
+  levels:
+    - nodeLabel: kubernetes.io/hostname
+---
+{{- end }}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: {{ .Values.baselineQueue.flavor.name }}
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.baselineQueue.flavor.nodeLabels }}
+  nodeLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.baselineQueue.flavor.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .Values.baselineQueue.topology.enabled }}
+  topologyName: {{ .Values.baselineQueue.topology.name }}
+  {{- end }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: {{ .Values.baselineQueue.name }}
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    {{- toYaml .Values.baselineQueue.namespaceSelector | nindent 4 }}
+  queueingStrategy: BestEffortFIFO
+  preemption:
+    withinClusterQueue: LowerPriority
+  resourceGroups:
+    - coveredResources:
+        {{- range .Values.baselineQueue.resources }}
+        - {{ .name }}
+        {{- end }}
+      flavors:
+        - name: {{ .Values.baselineQueue.flavor.name }}
+          resources:
+            {{- range .Values.baselineQueue.resources }}
+            - name: {{ .name }}
+              nominalQuota: {{ .nominalQuota | quote }}
+            {{- end }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: taugrid-default
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+value: 1000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Default pod priority for TauGrid workloads.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: taugrid-priority
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+value: 1200
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: Elevated pod priority for approved TauGrid workloads.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: taugrid-default
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+value: 1000
+description: Default Kueue admission priority for TauGrid workloads.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: taugrid-priority
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+value: 1200
+description: Elevated Kueue admission priority for approved TauGrid workloads.
+{{- end }}

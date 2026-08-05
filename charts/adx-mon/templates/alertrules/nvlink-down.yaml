@@ -1,0 +1,39 @@
+{{- if and .Values.alertRules.enabled .Values.alertRules.items.nvlinkDown.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-nvlink-down
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertrule
+  annotations:
+    adx-mon/sig: "GPU"
+spec:
+  database: {{ .Values.adx.logsDatabase | quote }}
+  interval: {{ .Values.alertRules.items.nvlinkDown.interval | quote }}
+  {{- with .Values.alertRules.items.nvlinkDown.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  query: |
+    // Alert on NVLink failures from kernel dmesg logs.
+    // XID 74 = NVLink error. NVLink failures degrade multi-GPU training performance.
+    KernelLogs
+    | where Timestamp between (_startTime .. _endTime)
+    | where Body has "NVRM: Xid"
+    | extend node = tostring(Resource["k8s.node.name"]),
+             message = tostring(Body)
+    | parse message with * "Xid (PCI:" pci_address "): " xid_code:int "," xid_detail
+    | where xid_code == 74
+    | summarize error_count = count(), pci_addresses = make_set(pci_address) by node
+    | extend Severity = 3
+    | extend Title = strcat("NVLink errors detected on node ", node)
+    | extend Summary = strcat("Node ", node, " reported ", error_count, " NVLink error(s) (XID 74) from GPUs at PCI: ", tostring(pci_addresses), ". Multi-GPU training may be degraded.")
+    | extend Description = strcat("NVLink (XID 74) errors on PCI addresses: ", tostring(pci_addresses), ". This impacts GPU-to-GPU communication bandwidth and may cause training job failures.")
+    | extend CorrelationId = node
+  destination: {{ .Values.alertRules.items.nvlinkDown.destination | default "" | quote }}
+  {{- if .Values.alertRules.items.nvlinkDown.autoMitigateAfter }}
+  autoMitigateAfter: {{ .Values.alertRules.items.nvlinkDown.autoMitigateAfter | quote }}
+  {{- end }}
+{{- end }}

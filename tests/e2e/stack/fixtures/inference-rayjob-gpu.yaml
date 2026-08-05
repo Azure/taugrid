@@ -1,0 +1,383 @@
+# GPU variant of the stack integration RayJob.
+#
+# Flow:
+#   1. Labelled with kueue.x-k8s.io/queue-name so Kueue gates admission.
+#   2. Kueue creates a Workload and admits it once head (1 CPU) + 1 worker
+#      (2 CPU + 1 GPU) quota is available.
+#   3. KubeRay spawns head (CPU-only, on the system pool) + 1 worker on a GPU
+#      node; Ray Data runs image classification on the GPU.
+#
+# Uses the custom Ray image built from images/ray/. {{RAY_IMAGE}} is resolved at
+# test time from the RAY_E2E_IMAGE env var, which CI sets to the image pushed to
+# the PR-scoped ACR. {{RAY_VERSION}} follows RAY_E2E_VERSION, the image tag, or
+# the images/ray/Makefile fallback.
+#
+# The driver script is embedded directly (head-only initContainer + emptyDir at
+# /script) instead of mounted from a ConfigMap, matching PR1's
+# cli/internal/payload wire contract (issues #869/#871 PR3): the
+# INFERENCE_SCRIPT_PAYLOAD_B64 / INFERENCE_SCRIPT_PAYLOAD_DIGEST env values set
+# below are computed from the real fixtures/inference_job.py file at test time
+# (see readFixture in tests/e2e/testcontext.go), so MultiKueue's
+# worker-cluster dispatch -- which does not replicate ConfigMaps -- has
+# everything the head pod needs inside the RayJob spec it copies over.
+#
+# NOTE: this comment intentionally does NOT spell the placeholder names in
+# {{DOUBLE_BRACE}} form -- readFixture's substitution is a blind text replace
+# of every "{{NAME}}" occurrence in the file, so writing the literal token
+# here would duplicate the (potentially large) base64 payload into this
+# comment on every substitution. The duplicate text is harmless to the
+# resulting Kubernetes object (YAML comments are dropped on parse, never
+# reach the API server), but it needlessly bloats the rendered fixture size
+# measured in tests -- see TestPayloadFixturesStayUnderSizeLimits in
+# tests/e2e/stack/payload_fixtures_test.go, which sizes the parsed+
+# JSON-marshaled object rather than raw YAML bytes for exactly this reason.
+#
+# This fixture is the cheapest first live canary for #871's manager-only
+# cutover (single GPU worker, small payload) -- see PR3 description.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: e2e-inference-gpu
+  namespace: {{STACK_NAMESPACE}}
+  labels:
+    kueue.x-k8s.io/queue-name: {{STACK_QUEUE}}
+  annotations:
+    tau.azure.com/payload-digest: "{{INFERENCE_SCRIPT_PAYLOAD_DIGEST}}"
+spec:
+  entrypoint: python /script/inference_job.py
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: ray-job-submitter
+        image: {{RAY_IMAGE}}
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "200Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+  runtimeEnvYAML: |
+    pip:
+      packages:
+        # {{TORCH_SPEC}} / {{TORCH_INDEX_URL}} are substituted by readFixture from
+        # the TORCH_SPEC and TORCH_INDEX_URL env vars. The hourly conformance
+        # workflow sets per-SKU values because A10 (managed GPU experience,
+        # driver 550.x/CUDA 12.4) and A100/H100 (flex ubuntu-hpc) ship different
+        # driver versions and thus need different CUDA wheels.
+        - {{TORCH_SPEC}}
+      pip_install_options:
+        - --no-cache-dir
+        - --index-url
+        - {{TORCH_INDEX_URL}}
+        - --extra-index-url
+        - https://pypi.org/simple
+      pip_check: false
+  rayClusterSpec:
+    rayVersion: "{{RAY_VERSION}}"
+    enableInTreeAutoscaling: false
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"            # Don't schedule Ray tasks on head; Kueue still counts its K8s CPU requests.
+        dashboard-host: "0.0.0.0"
+      template:
+        metadata:
+          annotations:
+            # Ray Job driver stdout lives in head-local /tmp/ray session logs,
+            # not the ray-head container stdout stream. This sidecar tails the
+            # driver log files into its own stdout so adx-mon can ship them via
+            # the existing Logs/ContainerLogs path without cluster credentials.
+            adx-mon/log-destination: "Logs:ContainerLogs"
+        spec:
+          initContainers:
+          - name: prepare-ray-tmp
+            image: {{RAY_IMAGE}}
+            command: ["/bin/sh", "-c", "mkdir -p /tmp/ray && chmod 1777 /tmp/ray"]
+            securityContext:
+              runAsUser: 0
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          - name: tau-payload
+            image: {{RAY_IMAGE}}
+            command:
+            - python3
+            - -c
+            - |
+              import base64
+              import hashlib
+              import json
+              import os
+              import sys
+
+              raw_b64 = os.environ["TAU_PAYLOAD_B64"]
+              want_digest = os.environ["TAU_PAYLOAD_DIGEST"]
+              target_dir = os.environ["TAU_PAYLOAD_TARGET_DIR"]
+
+              raw = base64.b64decode(raw_b64)
+              got_digest = hashlib.sha256(raw).hexdigest()
+              if got_digest != want_digest:
+                  sys.stderr.write(
+                      "tau-payload: integrity check failed: digest=%s want=%s\n" % (got_digest, want_digest)
+                  )
+                  sys.exit(1)
+
+              envelope = json.loads(raw)
+              files = envelope.get("files", [])
+              os.makedirs(target_dir, exist_ok=True)
+              for f in files:
+                  name = f["name"]
+                  if not name or name in (".", "..") or "/" in name or "\\" in name:
+                      sys.stderr.write("tau-payload: rejecting unsafe file name %r\n" % (name,))
+                      sys.exit(1)
+                  data = base64.b64decode(f["data"])
+                  path = os.path.join(target_dir, name)
+                  with open(path, "wb") as fh:
+                      fh.write(data)
+                  os.chmod(path, 0o644)
+
+              sys.stderr.write("tau-payload: wrote %d file(s) to %s\n" % (len(files), target_dir))
+            env:
+            - name: TAU_PAYLOAD_B64
+              value: "{{INFERENCE_SCRIPT_PAYLOAD_B64}}"
+            - name: TAU_PAYLOAD_DIGEST
+              value: "{{INFERENCE_SCRIPT_PAYLOAD_DIGEST}}"
+            - name: TAU_PAYLOAD_TARGET_DIR
+              value: /script
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                cpu: 250m
+                memory: 128Mi
+            volumeMounts:
+            - name: script
+              mountPath: /script
+          containers:
+          - name: ray-head
+            image: {{RAY_IMAGE}}
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "1"
+                memory: "4Gi"
+              limits:
+                cpu: "1"
+                memory: "4Gi"
+            startupProbe:
+              httpGet:
+                path: /api/version
+                port: 8265
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 60
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "rm -rf /tmp/ray/* || true"]
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+            - name: script
+              mountPath: /script
+              readOnly: true
+          - name: ray-driver-log-offload
+            image: {{RAY_IMAGE}}
+            command: ["/bin/bash", "-lc", "--"]
+            args:
+            - |
+              set -euo pipefail
+              ray_root="${TAU_RAY_TMP:-/tmp/ray}"
+              poll_seconds="${TAU_RAY_LOG_POLL_SECONDS:-1}"
+              seen_paths=""
+              tail_pids=()
+              canonical_path() {
+                local path="$1"
+                local dir base
+                dir="$(cd -P "$(dirname "$path")" && pwd)"
+                base="$(basename "$path")"
+                printf '%s/%s\n' "$dir" "$base"
+              }
+              has_seen() {
+                local needle="$1"
+                local seen
+                while IFS= read -r seen; do
+                  [[ "$seen" == "$needle" ]] && return 0
+                done <<< "$seen_paths"
+                return 1
+              }
+              start_tail() {
+                local real="$1"
+                seen_paths="${seen_paths}${real}"$'\n'
+                tail -n +1 -F "$real" &
+                tail_pids+=("$!")
+              }
+              discover_logs() {
+                local entry candidate real
+                local -a roots=("$ray_root/session_latest/logs")
+                # Default contract: tail /tmp/ray/session_latest/logs/job-driver-*.log,
+                # plus concrete session_* directories so session_latest flips do not drop logs.
+                shopt -s nullglob
+                for entry in "$ray_root"/session_*/logs; do
+                  [[ -d "$entry" ]] && roots+=("$entry")
+                done
+                shopt -u nullglob
+                for entry in "${roots[@]}"; do
+                  [[ -d "$entry" ]] || continue
+                  shopt -s nullglob
+                  for candidate in "$entry"/job-driver-*.log; do
+                    [[ -f "$candidate" ]] || continue
+                    real="$(canonical_path "$candidate")"
+                    if has_seen "$real"; then
+                      continue
+                    fi
+                    start_tail "$real"
+                  done
+                  shopt -u nullglob
+                done
+              }
+              cleanup() {
+                local pid
+                for pid in "${tail_pids[@]:-}"; do
+                  kill "$pid" 2>/dev/null || true
+                done
+                wait || true
+              }
+              trap cleanup EXIT INT TERM
+              while true; do
+                discover_logs
+                sleep "$poll_seconds"
+              done
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "10m"
+                memory: "32Mi"
+              limits:
+                cpu: "100m"
+                memory: "128Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              capabilities:
+                drop:
+                - ALL
+              seccompProfile:
+                type: RuntimeDefault
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+              readOnly: true
+          volumes:
+          - name: ray-tmp
+            hostPath:
+              path: /mnt/taugrid-ray-tmp
+              type: DirectoryOrCreate
+          - name: script
+            emptyDir: {}
+    workerGroupSpecs:
+    - groupName: workers
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams: {}
+      template:
+        metadata:
+          annotations:
+            # Ship this worker's stdout off-node to the Logs/ContainerLogs Kusto
+            # table via adx-mon. KubeRay deletes a crashed worker and recreates it
+            # under a new name, so kubelet loses the crash output (`kubectl logs
+            # --previous` only covers a restart within a surviving pod). Shipping
+            # it while the pod runs preserves the failure reason for post-mortem.
+            adx-mon/log-destination: "Logs:ContainerLogs"
+        spec:
+          initContainers:
+          - name: prepare-ray-tmp
+            image: {{RAY_IMAGE}}
+            command: ["/bin/sh", "-c", "mkdir -p /tmp/ray && chmod 1777 /tmp/ray"]
+            securityContext:
+              runAsUser: 0
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          containers:
+          - name: ray-worker
+            image: {{RAY_IMAGE}}
+            env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            resources:
+              requests:
+                cpu: "2"
+                memory: "4Gi"
+                nvidia.com/gpu: "1"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+                nvidia.com/gpu: "1"
+            startupProbe:
+              httpGet:
+                path: /api/healthz
+                port: 52365
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 60
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "rm -rf /tmp/ray/* || true"]
+            volumeMounts:
+            - name: ray-tmp
+              mountPath: /tmp/ray
+              subPathExpr: $(POD_NAME)
+          volumes:
+          - name: ray-tmp
+            hostPath:
+              path: /mnt/taugrid-ray-tmp
+              type: DirectoryOrCreate
+          nodeSelector:
+            {{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: sku
+            operator: Exists
+            effect: NoSchedule

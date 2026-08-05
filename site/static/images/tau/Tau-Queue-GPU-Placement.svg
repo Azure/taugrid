@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">From Tau intent to a GPU node</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Kueue decides when quota may be used; Kubernetes decides where admitted pods can run</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="300" width="290" height="300" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="108" cy="350" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="108" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="108" dy="0">1</tspan></text>
+<text x="152" y="340" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="152" dy="0">TAU INTENT</tspan></text>
+<text x="152" y="383" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="152" dy="0">Run config</tspan></text>
+<text x="84" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="84" dy="0">GPU count / class</tspan><tspan x="84" dy="22">priority · topology</tspan><tspan x="84" dy="22">queue or workspace default</tspan></text>
+<polyline points="346,450 406,450" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="406" y="300" width="290" height="300" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="458" cy="350" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="458" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="458" dy="0">2</tspan></text>
+<text x="502" y="340" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="502" dy="0">NAMESPACE</tspan></text>
+<text x="502" y="383" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="502" dy="0">LocalQueue</tspan></text>
+<text x="434" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="434" dy="0">Researcher-facing queue</tspan><tspan x="434" dy="22">points to a ClusterQueue</tspan></text>
+<polyline points="696,450 756,450" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="756" y="300" width="290" height="300" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="808" cy="350" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="808" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="808" dy="0">3</tspan></text>
+<text x="852" y="340" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="852" dy="0">SHARED QUOTA</tspan></text>
+<text x="852" y="383" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="852" dy="0">ClusterQueue</tspan></text>
+<text x="784" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="784" dy="0">Cohorts · quota</tspan><tspan x="784" dy="22">borrowing · priority</tspan><tspan x="784" dy="22">preemption policy</tspan></text>
+<polyline points="1046,450 1106,450" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1106" y="300" width="290" height="300" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1158" cy="350" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1158" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1158" dy="0">4</tspan></text>
+<text x="1202" y="340" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1202" dy="0">PLACEMENT CLASS</tspan></text>
+<text x="1202" y="383" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1202" dy="0">ResourceFlavor</tspan></text>
+<text x="1134" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1134" dy="0">GPU SKU / labels</tspan><tspan x="1134" dy="22">resource name</tspan><tspan x="1134" dy="22">topology constraints</tspan></text>
+<polyline points="1396,450 1456,450" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1456" y="300" width="290" height="300" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1508" cy="350" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1508" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1508" dy="0">5</tspan></text>
+<text x="1552" y="340" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1552" dy="0">ADMISSION</tspan></text>
+<text x="1552" y="383" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1552" dy="0">Kueue Workload</tspan></text>
+<text x="1484" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1484" dy="0">Wait until quota and</tspan><tspan x="1484" dy="22">policy permit admission</tspan></text>
+<polyline points="1746,450 1806,450" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1806" y="300" width="290" height="300" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1858" cy="350" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1858" y="354" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1858" dy="0">6</tspan></text>
+<text x="1902" y="340" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1902" dy="0">SCHEDULING</tspan></text>
+<text x="1902" y="383" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1902" dy="0">Pod → GPU node</tspan></text>
+<text x="1834" y="448" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="400" fill="#000000"><tspan x="1834" dy="0">Scheduler matches</tspan><tspan x="1834" dy="22">resources, labels, taints,</tspan><tspan x="1834" dy="22">and available devices</tspan></text>
+<rect x="56" y="670" width="2088" height="380" rx="22" fill="transparent" stroke="#D13438" stroke-width="4"/>
+<text x="86" y="718" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="86" dy="0">WHY A RUN MAY STILL BE WAITING</tspan></text>
+<rect x="100" y="790" width="450" height="180" rx="22" fill="#FDE7E9" stroke="#D13438" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="152" cy="840" rx="28" ry="28" fill="#FDE7E9" stroke="#D13438" stroke-width="2"/>
+<text x="152" y="844" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="152" dy="0">KQ</tspan></text>
+<text x="196" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="196" dy="0">NO ADMISSION QUOTA</tspan></text>
+<text x="196" y="873" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="196" dy="0">Kueue wait</tspan></text>
+<text x="128" y="923" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="128" dy="0">Requested flavor/resource quota</tspan><tspan x="128" dy="18">is unavailable or held by</tspan><tspan x="128" dy="18">higher-priority work</tspan></text>
+<rect x="610" y="790" width="450" height="180" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="662" cy="840" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="662" y="844" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="662" dy="0">P</tspan></text>
+<text x="706" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="706" dy="0">POLICY ORDERING</tspan></text>
+<text x="706" y="873" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="706" dy="0">Priority / preemption</tspan></text>
+<text x="638" y="923" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="638" dy="0">Work is behind admitted jobs</tspan><tspan x="638" dy="18">or cannot preempt under policy</tspan></text>
+<rect x="1120" y="790" width="450" height="180" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1172" cy="840" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1172" y="844" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1172" dy="0">POD</tspan></text>
+<text x="1216" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1216" dy="0">ADMITTED, NOT SCHEDULED</tspan></text>
+<text x="1216" y="873" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1216" dy="0">Kubernetes wait</tspan></text>
+<text x="1148" y="923" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1148" dy="0">Labels, taints, topology,</tspan><tspan x="1148" dy="18">claims, or allocatable capacity</tspan><tspan x="1148" dy="18">do not match</tspan></text>
+<rect x="1630" y="790" width="450" height="180" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1682" cy="840" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1682" y="844" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1682" dy="0">APP</tspan></text>
+<text x="1726" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1726" dy="0">SCHEDULED, NOT USEFUL</tspan></text>
+<text x="1726" y="873" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1726" dy="0">Application wait</tspan></text>
+<text x="1658" y="923" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1658" dy="0">Running still needs CUDA,</tspan><tspan x="1658" dy="18">model progress, and durable outputs</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Queue admission, pod scheduling, GPU allocation, and application progress are separate proofs; never collapse them into one status.</tspan></text>
+</svg>

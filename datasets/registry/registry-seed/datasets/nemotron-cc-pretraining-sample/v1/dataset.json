@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "name": "nemotron-cc-pretraining-sample",
+  "version": "v1",
+  "purpose": "pretrain",
+  "source": {
+    "kind": "huggingface",
+    "repo": "nvidia/Nemotron-Pretraining-Dataset-sample",
+    "revision": "3ad096e6394e487bb4f778733300da85275bb449"
+  },
+  "account": "airundatasets",
+  "container": "datasets",
+  "prefix": "nemotron-cc-pretraining-sample/v1",
+  "files": [
+    {
+      "path": "Nemotron-CC-Diverse-QA/part_000000.parquet",
+      "bytes": 3398234,
+      "sha256": "9bea118d0dd7724fbb6c13b1a3ecb4d744d69d1e5a1eca1457f438834fe16ea4"
+    },
+    {
+      "path": "Nemotron-CC-High-Quality-Synthetic/part_000000.parquet",
+      "bytes": 4712119,
+      "sha256": "88295e1a51048d5fcb56223bf61e9cd9bf1f3444380dfa599a15809eeaeae985"
+    },
+    {
+      "path": "Nemotron-CC-High-Quality/part_000000.parquet",
+      "bytes": 1389592,
+      "sha256": "7a9447d76806aa0a3199d211e0a556dbf8b8018da9f5860b601a0b0333a86025"
+    },
+    {
+      "path": "Nemotron-CC-MATH/part_0000.parquet",
+      "bytes": 1746193,
+      "sha256": "11653c872e46b5cc542660b2ad236c21c184dc97d2d416ffb5e7218aa315706b"
+    },
+    {
+      "path": "Nemotron-CC-Translated-Diverse-QA/part_000000.parquet",
+      "bytes": 32523472,
+      "sha256": "835851141069310879d95d49363d1c96e280a552ac4d4b53a6dc83c30e9e34a2"
+    },
+    {
+      "path": "Nemotron-Code-Metadata/part_000000.parquet",
+      "bytes": 70155,
+      "sha256": "779f449d227008926164738a3007f8f81b514f95edb40a5dcfa4d42078f95b62"
+    },
+    {
+      "path": "Nemotron-SFT-Code/part_000000.parquet",
+      "bytes": 465074,
+      "sha256": "2e713732c9b41233df627c0451c2f30cd95c682ffe7dd86d418b953afcc92afe"
+    },
+    {
+      "path": "Nemotron-SFT-General/part_000000.parquet",
+      "bytes": 705789,
+      "sha256": "028fd598a578d2c570aa44eea5c540c39af6844a0686730aaed24b6567526207"
+    },
+    {
+      "path": "Nemotron-SFT-MATH/part_000000.parquet",
+      "bytes": 1263082,
+      "sha256": "75961a414c0b0bc601e7a8e80612a7dbfbf7ca8a4fdecf2b6f41f1fd422922fa"
+    },
+    {
+      "path": "Nemotron-Synthetic-Code/part_000000.parquet",
+      "bytes": 1192138,
+      "sha256": "b25ccdb1152441aac14d48770c1214451cc1ad32bc00860e37624a2b008e73b8"
+    }
+  ],
+  "total_bytes": 47465848,
+  "digest": "sha256:23982d35429b9ad950512027c494a5f26dfe10bca4e10e491c0b44d0ce6589ee",
+  "assurance": "manifest-supplied",
+  "created_at": "2026-06-02T07:51:30Z",
+  "tags": {
+    "corpus": "nemotron-cc",
+    "family": "nemotron",
+    "ingest": "pending",
+    "license": "nvidia-data-agreement"
+  },
+  "pretrain": {
+    "tokenizer": "none",
+    "format": "parquet"
+  }
+}

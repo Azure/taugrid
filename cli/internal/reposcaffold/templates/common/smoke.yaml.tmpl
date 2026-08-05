@@ -1,0 +1,22 @@
+name: {{.RunName}}-smoke
+engine: job
+entrypoint: ../scripts/smoke.sh
+runtime:
+  image: {{.Image}}
+  env:
+    PROJECT_PACKAGE: {{.Package}}
+{{if .HasUpstream}}    UPSTREAM_REPO: {{.UpstreamRepo}}
+    UPSTREAM_REF: {{.UpstreamRef}}
+    UPSTREAM_ROOT: {{.UpstreamRoot}}
+{{end}}compute:
+  gpus: 0
+  cpu_request: "1"
+  memory_request: 4Gi
+  cpu_limit: "2"
+  memory_limit: 8Gi
+policy:
+  disable_default_priorities: true
+experiment:
+  project: {{.Title}}
+  title: {{.Title}} smoke
+  group: tau-python-onboarding

@@ -1,0 +1,45 @@
+---
+# Namespace for Kueue e2e tests.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-kueue
+---
+# ResourceFlavor — represents a type of hardware in the cluster.
+# No node labels needed for CPU-only testing.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: default-cpu
+spec: {}
+---
+# ClusterQueue — defines how much of each resource flavor can be consumed.
+# 3 CPU quota creates artificial scarcity for gang scheduling tests:
+#   - "blocked" job: 2 pods × 2 CPU = 4 CPU > 3 → NOT admitted (exceeds capacity)
+#   - "fits" job:    2 pods × 1 CPU = 2 CPU ≤ 3 → admitted (leaves 1 CPU free)
+#   - "pending" job: 2 pods × 1 CPU = 2 CPU ≤ 3 → NOT admitted (only 1 CPU unused)
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: e2e-cluster-queue
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+  - coveredResources:
+    - "cpu"
+    flavors:
+    - name: default-cpu
+      resources:
+      - name: "cpu"
+        nominalQuota: 3
+  queueingStrategy: BestEffortFIFO
+---
+# LocalQueue — entry point for workloads in the e2e-kueue namespace.
+# Jobs must have label kueue.x-k8s.io/queue-name: e2e-queue to be managed.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: e2e-queue
+  namespace: e2e-kueue
+spec:
+  clusterQueue: e2e-cluster-queue

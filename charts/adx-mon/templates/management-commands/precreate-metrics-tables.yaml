@@ -1,0 +1,44 @@
+{{- if .Values.managementCommands.precreateMetricsTables.enabled }}
+{{- $tables := .Values.managementCommands.precreateMetricsTables.tables }}
+{{- $batchSize := .Values.managementCommands.precreateMetricsTables.batchSize | default 15 }}
+{{- $batches := list }}
+{{- $current := list }}
+{{- range $i, $table := $tables }}
+{{-   $current = append $current $table }}
+{{-   if eq (mod (add1 $i) $batchSize) 0 }}
+{{-     $batches = append $batches $current }}
+{{-     $current = list }}
+{{-   end }}
+{{- end }}
+{{- if $current }}
+{{-   $batches = append $batches $current }}
+{{- end }}
+{{- range $batchIdx, $batch := $batches }}
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" $ }}-precreate-metrics-{{ $batchIdx }}
+  namespace: {{ include "adx-mon.namespace" $ }}
+  labels:
+    {{- include "adx-mon.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ $.Values.adx.metricsDatabase | quote }}
+  body: |
+    // Pre-create metrics tables to avoid 429 throttling on first deploy.
+    // Batch {{ add1 $batchIdx }} of {{ len $batches }} ({{ len $batch }} tables).
+    // Schema: standard metrics tables include the default metrics schema plus
+    // lifted identity columns from collector lift-labels. .create-merge also
+    // adds these columns to existing tables during upgrades.
+    // ExperimentMetrics uses the normalized Prometheus remote-write schema.
+    .create-merge tables
+    {{- range $i, $table := $batch }}
+      {{- if eq $table "ExperimentMetrics" }}
+      {{ $table }} (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real, Container: string, Namespace: string, Pod: string, Cluster: string, Host: string){{ if lt $i (sub (len $batch) 1) }},{{ end }}
+      {{- else }}
+      {{ $table }} (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real, Container: string, Namespace: string, Pod: string, Cluster: string, Host: string){{ if lt $i (sub (len $batch) 1) }},{{ end }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

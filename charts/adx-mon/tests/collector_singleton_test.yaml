@@ -1,0 +1,167 @@
+suite: collector singleton templates
+templates:
+  - collector-singleton/deployment.yaml
+  - collector-singleton/configmap.yaml
+  - collector-singleton/serviceaccount.yaml
+  - collector-singleton/clusterrole.yaml
+  - collector-singleton/clusterrolebinding.yaml
+
+tests:
+
+  - it: renders collector-singleton Deployment by default
+    template: collector-singleton/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-collector-singleton
+
+  - it: does not render when disabled
+    template: collector-singleton/deployment.yaml
+    set:
+      collectorSingleton.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: uses collectorSingleton image
+    template: collector-singleton/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/collector:v0.3.0
+
+  - it: has exactly 1 replica
+    template: collector-singleton/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: uses emptyDir for storage (not hostPath)
+    template: collector-singleton/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: storage
+            emptyDir: {}
+
+  - it: sets component labels
+    template: collector-singleton/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: collector-singleton
+
+  - it: uses collectorSingleton tolerations (not operator)
+    template: collector-singleton/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: CriticalAddonsOnly
+            operator: Exists
+
+  - it: renders ConfigMap without API server scrape target
+    template: collector-singleton/configmap.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: "kubernetes.default.svc/metrics"
+
+  # Singleton keeps the FULL drop-list (apiserver flood protection intact) —
+  # the DaemonSet carve-out for the controller-runtime dashboard families (#953)
+  # must NOT leak into the singleton.
+  - it: config.toml keeps the full controller-runtime family drops
+    template: collector-singleton/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^controller_runtime\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^workqueue\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^leader_election\.\*"'
+
+  # ray_object_store_* is recovered globally (Gap 2 / #954): the singleton renders
+  # the same narrowed drop-list — store recovered, directory/manager kept dropped.
+  - it: config.toml recovers ray_object_store_* but keeps directory/manager dropped
+    template: collector-singleton/configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^ray_object_store'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^ray_object_directory_\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^ray_object_manager_\.\*"'
+
+  - it: config.toml lifts cluster metadata into ADX columns for metrics and logs
+    template: collector-singleton/configmap.yaml
+    set:
+      global.clusterName: test-cluster
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\{ name = 'cluster', column = 'Cluster' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\{ name = 'host', column = 'Host' \\}"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[add-labels\\][\\s\\S]*cluster = 'test-cluster'"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "\\[add-attributes\\][\\s\\S]*cluster = 'test-cluster'"
+
+  - it: does not render ConfigMap when disabled
+    template: collector-singleton/configmap.yaml
+    set:
+      collectorSingleton.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders ServiceAccount
+    template: collector-singleton/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-collector-singleton
+
+  - it: renders ClusterRole with node metrics access
+    template: collector-singleton/clusterrole.yaml
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            nonResourceURLs: ["/metrics"]
+            verbs: [get]
+
+  - it: renders ClusterRoleBinding
+    template: collector-singleton/clusterrolebinding.yaml
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-adx-mon-collector-singleton
+
+  - it: renders insecure-skip-verify from collector.insecureSkipVerify
+    template: collector-singleton/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "insecure-skip-verify = true"

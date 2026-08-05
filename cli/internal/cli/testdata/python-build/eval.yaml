@@ -1,0 +1,27 @@
+compute:
+  gpus: 1
+  worker_cpus: 12
+  worker_memory_limit: 96Gi
+eval:
+  cpu_workers: 7
+  upstream: train-model
+name: eval-model
+policy:
+  gpu_class: any
+  namespace: export-ns
+run:
+  entrypoint: tau_py_wrapper.py
+  workload_kind: rayjob-eval
+runtime:
+  env:
+  - name: MODE
+    value: eval
+  pip:
+  - torch==2.4.0
+schema_version: 1
+storage:
+  data_pvc: durable-data
+workflow:
+  extra_scripts:
+  - tau_user_module.py:tau_user_module.py
+  upstream_checkpoint: /data/checkpoints/finetunes/train-model/artifacts/best/model.safetensors

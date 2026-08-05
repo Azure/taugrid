@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Training to serving: intended lifecycle</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">A future UX that connects durable training evidence to a project-owned serving application</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="184" width="620" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="366" y="208" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="366" dy="0">FUTURE UX • DESIGN DIRECTION • NOT A SHIPPED QUICKSTART</tspan></text>
+<rect x="56" y="250" width="2088" height="770" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4" stroke-dasharray="12 9"/>
+<rect x="96" y="390" width="350" height="330" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="148" cy="440" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="148" y="444" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="148" dy="0">1</tspan></text>
+<text x="192" y="430" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="192" dy="0">TRAIN</tspan></text>
+<text x="192" y="474" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="192" dy="0">Successful run</tspan></text>
+<text x="124" y="539" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="124" dy="0">Model code + data</tspan><tspan x="124" dy="23">produce a durable checkpoint</tspan></text>
+<polyline points="446,555 506,555" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="506" y="390" width="350" height="330" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="558" cy="440" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="558" y="444" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="558" dy="0">2</tspan></text>
+<text x="602" y="430" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="602" dy="0">REGISTER</tspan></text>
+<text x="602" y="474" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="602" dy="0">Select evidence</tspan></text>
+<text x="534" y="539" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="534" dy="0">Checkpoint / model reference</tspan><tspan x="534" dy="23">metric and provenance metadata</tspan></text>
+<polyline points="856,555 916,555" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="916" y="390" width="350" height="330" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="968" cy="440" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="968" y="444" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="968" dy="0">3</tspan></text>
+<text x="1012" y="430" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1012" dy="0">PACKAGE</tspan></text>
+<text x="1012" y="474" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1012" dy="0">Project Serve app</tspan></text>
+<text x="944" y="539" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="944" dy="0">Image contents · import path</tspan><tspan x="944" dy="23">request schema · model env</tspan></text>
+<polyline points="1266,555 1326,555" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="1326" y="390" width="350" height="330" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1378" cy="440" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1378" y="444" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1378" dy="0">4</tspan></text>
+<text x="1422" y="430" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1422" dy="0">DEPLOY</tspan></text>
+<text x="1422" y="474" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1422" dy="0">Tau serving contract</tspan></text>
+<text x="1354" y="539" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1354" dy="0">Mount checkpoint · inject model path</tspan><tspan x="1354" dy="23">render RayService or Deployment</tspan></text>
+<polyline points="1676,555 1736,555" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="1736" y="390" width="350" height="330" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1788" cy="440" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1788" y="444" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1788" dy="0">5</tspan></text>
+<text x="1832" y="430" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1832" dy="0">OPERATE</tspan></text>
+<text x="1832" y="474" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1832" dy="0">Endpoint lifecycle</tspan></text>
+<text x="1764" y="539" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1764" dy="0">Observe health and logs</tspan><tspan x="1764" dy="23">compare version · roll back</tspan></text>
+<rect x="210" y="760" width="780" height="190" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="262" cy="810" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="262" y="814" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="262" dy="0">APP</tspan></text>
+<text x="306" y="800" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="306" dy="0">PROJECT OWNS</tspan></text>
+<text x="306" y="843" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="306" dy="0">Serving implementation</tspan></text>
+<text x="238" y="906" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="238" dy="0">Framework code · image dependencies · import path</tspan><tspan x="238" dy="19">request/response schema · model-specific environment</tspan></text>
+<rect x="1210" y="760" width="780" height="190" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" stroke-dasharray="12 9" filter="url(#shadow)"/>
+<ellipse cx="1262" cy="810" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1262" y="814" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1262" dy="0">TAU</tspan></text>
+<text x="1306" y="800" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1306" dy="0">TAU TARGET OWNERSHIP</tspan></text>
+<text x="1306" y="843" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="1306" dy="0">Policy-aware deployment</tspan></text>
+<text x="1238" y="906" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1238" dy="0">Profile · Kueue metadata · GPU resources · checkpoint mount</tspan><tspan x="1238" dy="19">SAMPLE_MODEL_PATH · lifecycle surface</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Do not describe `tau serve deploy` flags in the design document as generally available until the CLI contract and quickstart are released and validated.</tspan></text>
+</svg>

@@ -1,0 +1,16 @@
+name: tau-kind-smoke
+engine: job
+entrypoint: train.sh
+compute:
+  gpus: 0
+runtime:
+  image: bash:5.2
+policy:
+  namespace: ray
+  queue: kind-cpu
+  lane: training
+  priority: default
+experiment:
+  project: Tau Local
+  name: kind-smoke
+  group: local-kind

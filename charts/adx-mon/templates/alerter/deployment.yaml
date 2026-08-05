@@ -1,0 +1,121 @@
+{{- if .Values.alerter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-alerter
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "alerter") | nindent 4 }}
+spec:
+  replicas: {{ .Values.alerter.replicas }}
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "alerter") | nindent 6 }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        adx-mon/log-destination: "Logs:Alerter"
+        adx-mon/log-parsers: json
+        adx-mon/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+        prometheus.io/scrape: "true"
+      labels:
+        {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "alerter") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "alerter") }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: alerter
+          image: {{ include "adx-mon.image" (dict "image" .Values.alerter.image "chart" .Chart) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /alerter
+          args:
+            - --port=8080
+            {{- if .Values.alerter.alerterEndpoint }}
+            - --alerter-address={{ .Values.alerter.alerterEndpoint }}
+            {{- end }}
+            {{- if .Values.adx.clusterUrl }}
+            - --kusto-endpoint={{ .Values.adx.metricsDatabase }}={{ .Values.adx.clusterUrl }}
+            - --kusto-endpoint={{ .Values.adx.logsDatabase }}={{ .Values.adx.clusterUrl }}
+            - --kusto-endpoint={{ .Values.adx.costTrackingDatabase }}={{ .Values.adx.clusterUrl }}
+            {{- else if .Values.adx.configMapRef }}
+            - --kusto-endpoint={{ .Values.adx.metricsDatabase }}=$(ADX_CLUSTER_URL)
+            - --kusto-endpoint={{ .Values.adx.logsDatabase }}=$(ADX_CLUSTER_URL)
+            - --kusto-endpoint={{ .Values.adx.costTrackingDatabase }}=$(ADX_CLUSTER_URL)
+            {{- end }}
+          env:
+            - name: GODEBUG
+              value: http2client=0
+            {{- if and .Values.adx.configMapRef (not .Values.adx.clusterUrl) }}
+            - name: ADX_CLUSTER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.adx.configMapRef }}
+                  key: ADX_CLUSTER_URL
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.adx.configMapRef }}
+                  key: ADX_CLIENT_ID
+                  optional: true
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          # Alerter has no /healthz or /readyz; /metrics is the only HTTP endpoint.
+          # Track upstream health endpoint as follow-up. See PR #134.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.alerter.resources | nindent 12 }}
+          volumeMounts:
+            - name: ca-certs
+              mountPath: /etc/ssl/certs
+              readOnly: true
+            - name: etc-pki-ca-certs
+              mountPath: /etc/pki/ca-trust/extracted
+              readOnly: true
+      {{- with .Values.alerter.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.alerter.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: ca-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: DirectoryOrCreate
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+{{- end }}

@@ -1,0 +1,14 @@
+schema: tau.workspace.connection.v1
+workspace: {{.Workspace}}
+cluster:
+  provider: azure
+  resourceID: {{.AKSResourceID}}
+  contextName: {{.AKSCluster}}
+identity:
+  tenantID: {{.AzureTenantID}}
+authorization:
+  mode: cluster-wide
+requirements:
+  minTauVersion: {{.MinTauVersion}}
+network:
+  privateCluster: false

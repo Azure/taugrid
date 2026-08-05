@@ -1,0 +1,58 @@
+# AKS AI Runtime test-cluster overlay for taugrid-core.
+#
+# Apply together with values.yaml after publishing or selecting a real Tau image
+# tag for the cluster:
+#
+#   # Keep the existing taugrid-core release name during the package rename.
+#   helm upgrade --install taugrid-core ./taugrid-core \
+#     --namespace tau --create-namespace \
+#     -f values-test-clusters.yaml \
+#     --set stellar.image.tag=<pinned-tau-image-tag> \
+#     --set stellar.kusto.queryCommand=/usr/local/bin/query-kusto \
+#     --set stellar.serviceAccount.create=true \
+#     --set stellar.serviceAccount.name=tau-stellar \
+#
+# The service is intentionally CPU-only and pinned to AKS system nodes. It
+# defaults to stateless, read-only ADX/Kusto dashboards and does not mount a
+# writable PVC unless stellar.source is explicitly changed to local/auto for
+# manual debugging.
+stellar:
+  enabled: false
+  # Stellar control-plane resources run in `tau`; researcher workloads and
+  # blob-training /data storage stay in the `ray` workload namespace.
+  namespace: tau
+  serviceName: tau-stellar
+  source: kusto
+  discovery:
+    allowedProjects: []
+    featuredProjects: []
+    since: 90d
+    maxSince: 365d
+    legacyProjectScope: false
+  kusto:
+    ingestion: remote-write
+    project: ""
+    since: ""
+    targetSince: 365d
+    queryCommand: ""
+    queryArgs:
+      - --endpoint={endpoint}
+      - --database={database}
+      - --query={query}
+  service:
+    type: ClusterIP
+    # Standalone Stellar has no login boundary. It is operator-debug-only; use
+    # the unified Portal behind its authenticated HTTPS proxy for researcher
+    # browser access and acceptance evidence.
+    annotations: {}
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    port: 80
+    targetPort: 8080
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+  resources:
+    requests: { cpu: "250m", memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+  expstore:
+    pvcName: tau-stellar-expstore

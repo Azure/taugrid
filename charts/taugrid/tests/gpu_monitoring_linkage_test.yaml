@@ -1,0 +1,55 @@
+suite: GPU monitoring follows the Tau control plane
+templates:
+  - charts/gpu-monitoring/templates/daemonset.yaml
+tests:
+  # A cluster running Tau workloads must not be able to end up with no GPU
+  # health signal by default. gpu-monitoring carries no condition key of its own
+  # in values.yaml, so Helm falls through to components.tauCoreController.
+  # The disabled quadrants cannot be expressed here (helm-unittest cannot select
+  # a template belonging to a disabled subchart) and are covered by
+  # TestTauGridChartLinksGPUMonitoringToController in the cli module.
+  - it: installs GPU monitoring by default alongside the Tau core controller
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  - it: can be enabled explicitly without the Tau core controller
+    set:
+      components.tauCoreController.enabled: false
+      components.gpuMonitoring.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  # Externally-joined GPU nodes never receive kubernetes.azure.com/accelerator,
+  # so requiring it would silently leave them unmonitored by the distribution.
+  - it: does not require the AKS-managed accelerator label
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - notContains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: kubernetes.azure.com/accelerator
+          any: true
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_ND96isr_H200_v5
+          any: true
+
+  - it: lands in the release namespace
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+      - equal:
+          path: metadata.labels["gpu-sku"]
+          value: h200

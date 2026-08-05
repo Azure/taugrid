@@ -1,0 +1,41 @@
+{{- if and .Values.functions.enabled .Values.functions.items.nodeHealth.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-node-health
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.nodeHealth.database | quote }}
+  body: |
+    // Node health view: CPU, memory, disk utilization per node.
+    // Uses node-exporter metrics stored in the Metrics database.
+    .create-or-alter function NodeHealth () {
+      let cpu_seconds = NodeCpuSecondsTotal
+      | where tostring(Labels.mode) == "idle"
+      | extend instance = tostring(Labels.instance),
+               cpu = tostring(Labels.cpu);
+      let mem_total = NodeMemoryMemTotalBytes
+      | extend instance = tostring(Labels.instance);
+      let mem_available = NodeMemoryMemAvailableBytes
+      | extend instance = tostring(Labels.instance);
+      let fs_size = NodeFilesystemSizeBytes
+      | where tostring(Labels.fstype) in ("ext4", "xfs")
+      | extend instance = tostring(Labels.instance),
+               mountpoint = tostring(Labels.mountpoint),
+               device = tostring(Labels.device);
+      let fs_avail = NodeFilesystemAvailBytes
+      | where tostring(Labels.fstype) in ("ext4", "xfs")
+      | extend instance = tostring(Labels.instance),
+               mountpoint = tostring(Labels.mountpoint),
+               device = tostring(Labels.device);
+      union
+        (cpu_seconds  | project Timestamp, Cluster, instance, metric="node_cpu_idle_seconds", dimension=cpu, Value),
+        (mem_total    | project Timestamp, Cluster, instance, metric="node_memory_total_bytes", dimension="", Value),
+        (mem_available | project Timestamp, Cluster, instance, metric="node_memory_available_bytes", dimension="", Value),
+        (fs_size      | project Timestamp, Cluster, instance, metric="node_filesystem_size_bytes", dimension=mountpoint, Value),
+        (fs_avail     | project Timestamp, Cluster, instance, metric="node_filesystem_avail_bytes", dimension=mountpoint, Value)
+    }
+{{- end }}

@@ -1,0 +1,47 @@
+{{- if and .Values.alertRules.enabled .Values.alertRules.items.nodeNotReady.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-node-not-ready
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertrule
+  annotations:
+    adx-mon/sig: "NodeLifecycle"
+spec:
+  database: {{ .Values.adx.metricsDatabase | quote }}
+  interval: {{ .Values.alertRules.items.nodeNotReady.interval | quote }}
+  {{- with .Values.alertRules.items.nodeNotReady.criteria }}
+  criteria:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  query: |
+    // Alert on nodes in NotReady state.
+    // Only considers nodes that KSM actively reported on in this window
+    // to avoid false positives on decommissioned nodes.
+    let all_reports = KubeNodeStatusCondition
+    | where Timestamp between (_startTime .. _endTime)
+    | extend labels = parse_json(Labels)
+    | extend node = tostring(labels.node),
+             condition = tostring(labels.condition),
+             status = tostring(labels.status);
+    let active_nodes = all_reports | distinct node;
+    let last_ready = all_reports
+    | where condition == "Ready" and status == "true"
+    | summarize last_ready_ts = max(Timestamp) by node;
+    active_nodes
+    | join kind=leftouter last_ready on node
+    | where isnull(last_ready_ts) or last_ready_ts < _endTime - 3m
+    | extend Severity = 2
+    | extend Title = strcat("Node ", node, " is NotReady")
+    | extend Summary = strcat("Node ", node, iff(isnull(last_ready_ts),
+        " has not reported Ready=true in the evaluation window.",
+        strcat(" last reported Ready at ", format_datetime(last_ready_ts, "yyyy-MM-dd HH:mm:ss"), " UTC.")))
+    | extend Description = strcat("Node ", node, " is actively reported by KSM but has not been in Ready state for more than 3 minutes before the evaluation window end.")
+    | extend CorrelationId = node
+  destination: {{ .Values.alertRules.items.nodeNotReady.destination | default "" | quote }}
+  {{- if .Values.alertRules.items.nodeNotReady.autoMitigateAfter }}
+  autoMitigateAfter: {{ .Values.alertRules.items.nodeNotReady.autoMitigateAfter | quote }}
+  {{- end }}
+{{- end }}

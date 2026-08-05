@@ -1,0 +1,157 @@
+# {{.Title}}
+
+This repository is a Tau-ready Python research workspace. It uses `uv` for local Python setup, builds a container image for Tau jobs, and keeps workspace access/quota in `TauWorkspace` instead of committed configs.
+
+Generated from the standalone `tau-gen` workflow, also available as `tau workspace init-repo`.
+
+## Tau authoring strategy
+
+This scaffold intentionally starts with plain Python entrypoints and checked-in
+direct Tau configs because repository targets are its initial reusable unit.
+Choose the equally supported Python handle path when the project becomes a
+code-centric library with local/remote execution, dynamic handle construction,
+multi-file staging, or a stable managed one-train-to-one-eval contract. Serving
+uses a separately submitted `tau.serve(...)` handle. See the
+[Tau config resolution](https://github.com/Azure/taugrid/blob/main/site/content/en/docs/concepts/config-resolution.md).
+
+## First cluster job
+
+{{if .HasWorkspaceConnection}}The platform connection is checked in at `tau/workspace.connection.yaml`. It
+contains no credential or kubeconfig.
+
+```bash
+tau run smoke
+tau run train
+```
+
+On first use, Tau confirms the destination, uses your Azure sign-in to obtain
+AKS cluster-user credentials, writes an isolated kubeconfig outside this
+repository, verifies the workspace and `cluster-wide` authorization mode, and
+submits a cheap CPU smoke through Kueue. Tau warns that this temporary mode can
+access the entire cluster; the workspace supplies defaults but is not an
+authorization boundary. You do not need a preconfigured kube context, a
+namespace, a queue name, or `--config`.
+{{else}}This scaffold is not bound to a Tau workspace yet. Ask the project/platform
+owner to add `tau/workspace.connection.yaml`; do not commit kubeconfigs,
+tokens, namespace names, or queue names.
+{{end}}
+
+## Local setup
+
+This step is local-only: it does not log into Azure, change kube context, or submit cluster work.
+
+```bash
+cp .env.example .env
+$EDITOR .env
+./scripts/setup.sh
+uv run python -m {{.Package}}.smoke
+```
+
+## Configure image and upstream values
+
+```bash
+source ./.env
+{{if .HasUpstream}}./scripts/configure.sh --image "$IMAGE" --repo "$UPSTREAM_REPO" --ref "$UPSTREAM_REF"
+{{else}}./scripts/configure.sh --image "$IMAGE"
+{{end}}
+```
+
+This writes `.env`, `.env.example`, and `tau/*.yaml` together, so the value you
+configure is the value `scripts/doctor.sh` and the build steps read back.
+
+## Build and push the runtime image
+
+```bash
+source ./.env
+docker build -f images/train.Dockerfile -t "$IMAGE" .
+docker push "$IMAGE"
+```
+
+## Run on GPUs
+
+`tau run smoke` and `tau run train` are both CPU-only on purpose: they verify
+the onboarding path before the platform has committed GPU capacity. Neither one
+proves a GPU works.
+
+`tau/train-gpu.yaml` is the GPU counterpart:
+
+```bash
+tau run --config tau/train-gpu.yaml --dry-run=client   # inspect the rendered pod
+tau run train-gpu                                       # submit
+```
+
+`policy.shape` is the field that requests GPUs — `1x` renders
+`nvidia.com/gpu: 1`, `8x` requests a full node. Everything else about the config
+matches `tau/train.yaml`.
+
+Three things are platform-owned, so ask before assuming them:
+
+| Need | Confirm with |
+|---|---|
+| GPU capacity and quota in your queue | `tau workspace status {{.Workspace}}` |
+| Which GPU classes exist (to set `policy.gpu_class`) | ask the platform owner |
+| The `/data` PVC, if you uncomment `storage.data_pvc` | `tau workspace check {{.Workspace}}` |
+
+If a GPU pod stays `Pending`, it is almost always queue quota, a `gpu_class`
+that matches no node, or a missing PVC — not the config itself.
+
+## Validate project-specific configs
+
+```bash
+tau run validate --config tau/smoke.yaml
+tau run validate --config tau/train.yaml
+```
+
+`tau run smoke` is the reserved platform onboarding smoke. To run this
+repository's project-specific smoke config, use
+`tau run --config tau/smoke.yaml`.
+
+## What each step actually proves
+
+These are different checks, and they fail for different reasons. Run them in
+order; each one adds exactly one new thing that can break.
+
+| Command | Proves | Does not prove |
+|---|---|---|
+| `tau run smoke` | Workspace, queue admission, and pod execution work. Runs a public base image and a trivial command. | Nothing about your image, GPUs, or storage. |
+| `tau run --config tau/smoke.yaml` | Your container image pulls and runs. This is where private-registry (ACR) pull problems surface. | That your training code works. |
+| `tau run train` | Your training entrypoint runs on CPU. | Anything GPU-specific. |
+| `tau run train-gpu` | Your code runs on a real GPU. | Durable `/data` storage, unless you enable `storage.data_pvc`. |
+
+A green `tau run smoke` therefore does not mean "my code works" — it means the
+platform is reachable. If `tau run smoke` passes but
+`tau run --config tau/smoke.yaml` fails, suspect the image or registry
+credentials, not the cluster.
+
+## Files
+
+| Path | Purpose |
+|---|---|
+| `AGENTS.md` | Repo-local instructions for humans and coding agents. |
+| `.env.example` | Optional ACR and image settings for project image publication. |
+| `pyproject.toml` | Python project and `uv` configuration. |
+| `src/{{.Package}}/` | Local smoke and train Python entrypoints. |
+{{if .HasWorkspaceConnection}}| `tau/workspace.connection.yaml` | Non-secret Tau/AKS workspace connection metadata. |{{end}}
+| `tau/smoke.yaml` | Cheap CPU-sized Tau smoke config. |
+| `tau/train.yaml` | Initial direct training config (no managed `schema_version`). |
+| `tau/train-gpu.yaml` | GPU counterpart of `tau/train.yaml`. |
+| `images/train.Dockerfile` | Runtime image build contract. |
+| `scripts/setup.sh` | Local `uv` and Tau CLI readiness setup. |
+| `scripts/setup-azure.sh` | Optional Azure/ACR helper for project image publication; not required to submit the onboarding smoke. |
+| `scripts/doctor.sh` | Local readiness checks. |
+
+{{if .HasUpstream}}
+## Upstream repository
+
+This scaffold bakes a pinned upstream checkout into the image:
+
+- repo: `{{.UpstreamRepo}}`
+- ref: `{{.UpstreamRef}}`
+- image path: `{{.UpstreamRoot}}`
+
+Prefer a commit SHA over a mutable branch before real training. Update `{{.TrainCommand}}` in `tau/train.yaml` when you replace the scaffold with real training.
+{{else}}
+## Next training edits
+
+Replace `src/{{.Package}}/train.py` with real training code, then update `tau/train.yaml` if you need an existing platform-provided data PVC, secret references, runtime env, or a different command. Tau only mounts the configured claim; ask the platform owner to create or change storage.
+{{end}}

@@ -1,0 +1,49 @@
+suite: TauGrid AKS dependency defaults
+templates:
+  - charts/kueue/templates/manager/manager-config.yaml
+  - charts/kueue/templates/manager/manager.yaml
+  - charts/kuberay-operator/templates/configmap.yaml
+  - charts/kuberay-operator/templates/deployment.yaml
+tests:
+  - it: keeps Kueue integrations and AKS DRA mapping
+    template: charts/kueue/templates/manager/manager-config.yaml
+    asserts:
+      - matchRegex:
+          path: data["controller_manager_config.yaml"]
+          pattern: "ray.io/rayjob"
+      - matchRegex:
+          path: data["controller_manager_config.yaml"]
+          pattern: "deviceClassMappings:"
+      - matchRegex:
+          path: data["controller_manager_config.yaml"]
+          pattern: "gpu.nvidia.com"
+
+  - it: uses the pinned MCR Kueue image
+    template: charts/kueue/templates/manager/manager.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/oss/v2/kueue/kueue:v0.18.2
+
+  - it: configures the AKS KubeRay container defaults
+    template: charts/kuberay-operator/templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "RAY_DATA_DISABLE_PROGRESS_BARS"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "RAY_metric_cardinality_level"
+
+  - it: uses the pinned MCR KubeRay image and scrape annotations
+    template: charts/kuberay-operator/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/oss/v2/kuberay/operator:v1.6.2
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/scrape"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/port"]
+          value: "8080"

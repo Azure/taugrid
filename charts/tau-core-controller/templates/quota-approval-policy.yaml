@@ -1,0 +1,72 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tau-quota-approval-guard
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["tau.azure.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["quotarequests"]
+  variables:
+    - name: platformActor
+      expression: >
+        "tau-platform-admins" in request.userInfo.groups ||
+        "system:masters" in request.userInfo.groups ||
+        request.userInfo.username == "system:serviceaccount:argocd:argocd-application-controller"
+  validations:
+    - expression: >
+        variables.platformActor ||
+        (
+          (
+            has(object.metadata.annotations) &&
+            "tau.azure.com/approved" in object.metadata.annotations ?
+            object.metadata.annotations["tau.azure.com/approved"] :
+            ""
+          ) == (
+            request.operation == "UPDATE" &&
+            has(oldObject.metadata.annotations) &&
+            "tau.azure.com/approved" in oldObject.metadata.annotations ?
+            oldObject.metadata.annotations["tau.azure.com/approved"] :
+            ""
+          ) &&
+          (
+            has(object.metadata.annotations) &&
+            "tau.azure.com/rejected" in object.metadata.annotations ?
+            object.metadata.annotations["tau.azure.com/rejected"] :
+            ""
+          ) == (
+            request.operation == "UPDATE" &&
+            has(oldObject.metadata.annotations) &&
+            "tau.azure.com/rejected" in oldObject.metadata.annotations ?
+            oldObject.metadata.annotations["tau.azure.com/rejected"] :
+            ""
+          ) &&
+          (
+            has(object.metadata.annotations) &&
+            "tau.azure.com/reviewed-by" in object.metadata.annotations ?
+            object.metadata.annotations["tau.azure.com/reviewed-by"] :
+            ""
+          ) == (
+            request.operation == "UPDATE" &&
+            has(oldObject.metadata.annotations) &&
+            "tau.azure.com/reviewed-by" in oldObject.metadata.annotations ?
+            oldObject.metadata.annotations["tau.azure.com/reviewed-by"] :
+            ""
+          )
+        )
+      message: "TauQuotaRequest quota decision annotations are platform-owned."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tau-quota-approval-guard
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  policyName: tau-quota-approval-guard
+  validationActions: ["Deny"]

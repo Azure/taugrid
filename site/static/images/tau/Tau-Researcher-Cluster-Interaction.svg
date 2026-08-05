@@ -1,0 +1,211 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">How a researcher interacts with a Tau-enabled AKS cluster</title>
+  <desc id="desc">Three-lane journey from repository handoff and Tau submission through Kueue and KubeRay execution to status, Stellar, durable outputs, and iteration.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#0078D4"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#107C10"/>
+    </marker>
+    <style>
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 15px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .lane-title { font: 700 17px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .lane-note { font: 400 11px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .stage { font: 700 10px "Segoe UI", Arial, sans-serif; letter-spacing: 0.5px; }
+      .box-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .body { font: 400 12px "Segoe UI", Arial, sans-serif; fill: #334155; }
+      .cmd { font: 600 11px "SFMono-Regular", Consolas, monospace; fill: #0f172a; }
+      .badge { font: 700 10px "Segoe UI", Arial, sans-serif; fill: #ffffff; }
+      .arrow-label { font: 600 10px "Segoe UI", Arial, sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#ffffff"/>
+  <text x="40" y="48" class="title">How a researcher interacts with a Tau-enabled AKS cluster</text>
+  <text x="40" y="77" class="subtitle">The repository is the front door. Tau resolves workspace defaults, Kueue controls admission, KubeRay runs distributed work, and durable results feed the next iteration.</text>
+
+  <rect x="40" y="100" width="1520" height="58" rx="12" fill="#E8F0FE" stroke="#0078D4" stroke-width="2"/>
+  <circle cx="72" cy="129" r="17" fill="#0078D4"/>
+  <text x="72" y="133" text-anchor="middle" class="badge">DAY 2</text>
+  <text x="102" y="124" class="box-title">Researcher boundary</text>
+  <text x="102" y="143" class="body">No Azure provisioning, namespace or queue creation, cluster-admin credentials, or hand-authored Kubernetes YAML. The platform hands off a Ready workspace and a Tau-enabled repository.</text>
+
+  <!-- Researcher lane -->
+  <rect x="40" y="185" width="1520" height="260" rx="16" fill="#F8FBFF" stroke="#0078D4" stroke-width="2"/>
+  <text x="62" y="214" class="lane-title">1 · Researcher workstation</text>
+  <text x="62" y="233" class="lane-note">Normal source control, Python/Ray code, Tau config, and lifecycle commands</text>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="260" width="255" height="145" rx="14" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+    <circle cx="98" cy="289" r="18" fill="#0078D4"/><text x="98" y="293" text-anchor="middle" class="badge">REPO</text>
+    <text x="126" y="283" class="stage" fill="#0078D4">1 · PLATFORM HANDOFF</text>
+    <text x="92" y="315" class="box-title">Open the project repo</text>
+    <text x="92" y="338" class="body">• Entra group membership</text>
+    <text x="92" y="357" class="body">• tau/workspace.connection.yaml</text>
+    <text x="92" y="376" class="body">• source + tau/train.yaml</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="370" y="260" width="255" height="145" rx="14" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+    <circle cx="398" cy="289" r="18" fill="#0078D4"/><text x="398" y="293" text-anchor="middle" class="badge">DEV</text>
+    <text x="426" y="283" class="stage" fill="#0078D4">2 · AUTHOR + CHECK</text>
+    <text x="392" y="315" class="box-title">Edit code and run intent</text>
+    <text x="392" y="339" class="cmd">tau workspace connection inspect</text>
+    <text x="392" y="360" class="cmd">tau run train --dry-run=client</text>
+    <text x="392" y="382" class="body">Verify image, GPU count, /data, queue</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="670" y="260" width="255" height="145" rx="14" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+    <circle cx="698" cy="289" r="18" fill="#0078D4"/><text x="698" y="293" text-anchor="middle" class="badge">CLI</text>
+    <text x="726" y="283" class="stage" fill="#0078D4">3 · SUBMIT</text>
+    <text x="692" y="315" class="box-title">Use the small Tau surface</text>
+    <text x="692" y="340" class="cmd">tau run smoke</text>
+    <text x="692" y="361" class="cmd">tau run train</text>
+    <text x="692" y="382" class="body">No workspace, context, queue, or YAML flags</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="970" y="260" width="255" height="145" rx="14" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+    <circle cx="998" cy="289" r="18" fill="#5C2D91"/><text x="998" y="293" text-anchor="middle" class="badge">LIVE</text>
+    <text x="1026" y="283" class="stage" fill="#5C2D91">4 · OBSERVE + CONTROL</text>
+    <text x="992" y="315" class="box-title">Follow real progress</text>
+    <text x="992" y="339" class="cmd">tau run status NAME --watch</text>
+    <text x="992" y="360" class="cmd">tau run logs NAME</text>
+    <text x="992" y="381" class="cmd">tau run list | cancel NAME</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1270" y="260" width="255" height="145" rx="14" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+    <circle cx="1298" cy="289" r="18" fill="#107C10"/><text x="1298" y="293" text-anchor="middle" class="badge">NEXT</text>
+    <text x="1326" y="283" class="stage" fill="#107C10">5 · RETRIEVE + ITERATE</text>
+    <text x="1292" y="315" class="box-title">Use durable evidence</text>
+    <text x="1292" y="340" class="cmd">tau run get NAME</text>
+    <text x="1292" y="361" class="body">Compare in Stellar; read checkpoints</text>
+    <text x="1292" y="382" class="body">Update code/config and submit again</text>
+  </g>
+
+  <path d="M325 333 H370" stroke="#0078D4" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+  <path d="M625 333 H670" stroke="#0078D4" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+  <path d="M1225 333 H1270" stroke="#107C10" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
+
+  <!-- Control plane lane -->
+  <rect x="40" y="475" width="1520" height="220" rx="16" fill="#FFFCF5" stroke="#D97706" stroke-width="2"/>
+  <text x="62" y="504" class="lane-title">2 · Tau and cluster control plane</text>
+  <text x="62" y="523" class="lane-note">Pre-existing platform policy resolves the command into an admitted Job or RayJob</text>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="548" width="255" height="112" rx="14" fill="#F3F2F1" stroke="#64748B" stroke-width="2"/>
+    <circle cx="98" cy="576" r="18" fill="#64748B"/><text x="98" y="580" text-anchor="middle" class="badge">READY</text>
+    <text x="126" y="570" class="stage" fill="#475569">PRE-EXISTING PLATFORM</text>
+    <text x="92" y="603" class="box-title">TauWorkspace is Ready</text>
+    <text x="92" y="625" class="body">Namespace · LocalQueue · PVC · SA/RBAC</text>
+    <text x="92" y="644" class="body">Defaults: output root, scratch, priority</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="370" y="548" width="255" height="112" rx="14" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+    <circle cx="398" cy="576" r="18" fill="#F7630C"/><text x="398" y="580" text-anchor="middle" class="badge">TAU</text>
+    <text x="426" y="570" class="stage" fill="#C2410C">RESOLVE</text>
+    <text x="392" y="603" class="box-title">Discover connection + defaults</text>
+    <text x="392" y="625" class="body">First use obtains cluster-user credentials</text>
+    <text x="392" y="644" class="body">Checks workspace, queue, authorization</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="670" y="548" width="255" height="112" rx="14" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+    <circle cx="698" cy="576" r="18" fill="#F7630C"/><text x="698" y="580" text-anchor="middle" class="badge">YAML</text>
+    <text x="726" y="570" class="stage" fill="#C2410C">RENDER + APPLY</text>
+    <text x="692" y="603" class="box-title">Tau creates workload intent</text>
+    <text x="692" y="625" class="body">Kubernetes Job or KubeRay RayJob</text>
+    <text x="692" y="644" class="body">Queue labels · resources · mounts · identity</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="970" y="548" width="255" height="112" rx="14" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+    <circle cx="998" cy="576" r="18" fill="#5C2D91"/><text x="998" y="580" text-anchor="middle" class="badge">KQ</text>
+    <text x="1026" y="570" class="stage" fill="#5C2D91">ADMIT + ORCHESTRATE</text>
+    <text x="992" y="603" class="box-title">Kueue → KubeRay</text>
+    <text x="992" y="625" class="body">Wait for quota/capacity when needed</text>
+    <text x="992" y="644" class="body">Create Ray cluster only after admission</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1270" y="548" width="255" height="112" rx="14" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+    <circle cx="1298" cy="576" r="18" fill="#5C2D91"/><text x="1298" y="580" text-anchor="middle" class="badge">API</text>
+    <text x="1326" y="570" class="stage" fill="#5C2D91">STATUS SURFACE</text>
+    <text x="1292" y="603" class="box-title">Tau reads cluster state</text>
+    <text x="1292" y="625" class="body">Admission · scheduling · pods · events</text>
+    <text x="1292" y="644" class="body">Driver logs · terminal state · artifacts</text>
+  </g>
+
+  <path d="M325 604 H370" stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <path d="M625 604 H670" stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <path d="M925 604 H970" stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <path d="M1225 604 H1270" stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <path d="M798 405 V500 H498 V548" stroke="#0078D4" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+  <text x="640" y="492" class="arrow-label">command starts resolution</text>
+  <path d="M1398 548 V470 H1098 V405" stroke="#5C2D91" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <text x="1218" y="462" class="arrow-label">status / logs</text>
+
+  <!-- Execution lane -->
+  <rect x="40" y="725" width="1520" height="215" rx="16" fill="#F7FFF8" stroke="#107C10" stroke-width="2"/>
+  <text x="62" y="754" class="lane-title">3 · Workload execution, data, and experiment evidence</text>
+  <text x="62" y="773" class="lane-note">A run is successful only when the intended GPU work progresses and durable evidence survives the workload</text>
+
+  <g filter="url(#shadow)">
+    <rect x="370" y="800" width="255" height="105" rx="14" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+    <circle cx="398" cy="828" r="18" fill="#107C10"/><text x="398" y="832" text-anchor="middle" class="badge">NS</text>
+    <text x="426" y="822" class="stage" fill="#107C10">WORKSPACE NAMESPACE</text>
+    <text x="392" y="855" class="box-title">Head, worker, or Job pods</text>
+    <text x="392" y="877" class="body">Workspace ServiceAccount · secrets · /data</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="670" y="800" width="255" height="105" rx="14" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+    <circle cx="698" cy="828" r="18" fill="#107C10"/><text x="698" y="832" text-anchor="middle" class="badge">GPU</text>
+    <text x="726" y="822" class="stage" fill="#107C10">REAL EXECUTION</text>
+    <text x="692" y="855" class="box-title">Model + data make progress</text>
+    <text x="692" y="877" class="body">GPU allocation · CUDA process · checkpoints</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="970" y="800" width="255" height="105" rx="14" fill="#D8F3F5" stroke="#0C8599" stroke-width="2"/>
+    <circle cx="998" cy="828" r="18" fill="#0C8599"/><text x="998" y="832" text-anchor="middle" class="badge">DATA</text>
+    <text x="1026" y="822" class="stage" fill="#0C8599">DURABLE OUTPUTS</text>
+    <text x="992" y="855" class="box-title">Shared /data storage</text>
+    <text x="992" y="877" class="body">Checkpoints · model artifacts · result files</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1270" y="800" width="255" height="105" rx="14" fill="#D8F3F5" stroke="#0C8599" stroke-width="2"/>
+    <circle cx="1298" cy="828" r="18" fill="#0C8599"/><text x="1298" y="832" text-anchor="middle" class="badge">EXP</text>
+    <text x="1326" y="822" class="stage" fill="#0C8599">EXPERIMENT VIEW</text>
+    <text x="1292" y="855" class="box-title">Stellar + metrics</text>
+    <text x="1292" y="877" class="body">Compare runs, curves, labels, and artifacts</text>
+  </g>
+
+  <path d="M1098 660 V785 H340 V852 H370" stroke="#107C10" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="743" y="770" width="210" height="19" rx="5" fill="#ffffff"/>
+  <text x="848" y="783" text-anchor="middle" class="arrow-label">admitted workload creates pods</text>
+  <path d="M625 852 H670" stroke="#107C10" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
+  <path d="M925 852 H970" stroke="#107C10" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
+  <path d="M1225 852 H1270" stroke="#0C8599" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <path d="M1398 800 H1540 V430 H1398 V405" stroke="#0C8599" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
+  <rect x="1440" y="410" width="70" height="19" rx="5" fill="#ffffff"/>
+  <text x="1475" y="423" text-anchor="middle" class="arrow-label">results</text>
+
+  <path d="M1398 260 V205 H498 V260" stroke="#107C10" stroke-width="2.5" stroke-dasharray="8 7" fill="none" marker-end="url(#arrow-green)"/>
+  <text x="875" y="198" text-anchor="middle" class="arrow-label">feedback loop: evidence → code/config → next run</text>
+
+  <rect x="40" y="956" width="1520" height="28" rx="8" fill="#FFF4CE" stroke="#F7630C"/>
+  <text x="800" y="975" text-anchor="middle" class="body">Current test descriptors may use cluster-wide authorization: workspace selection supplies routing/defaults, not researcher isolation. Managed Entra workspace-RBAC remains the target boundary.</text>
+</svg>

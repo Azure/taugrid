@@ -1,0 +1,20 @@
+{{- if .Values.managementCommands.retentionPolicies.enabled }}
+{{- range .Values.managementCommands.retentionPolicies.databases }}
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" $ }}-retention-{{ .name | lower }}
+  namespace: {{ include "adx-mon.namespace" $ }}
+  labels:
+    {{- include "adx-mon.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .name | quote }}
+  body: |
+    // Retention policy for {{ .name }} database.
+    // SoftDeletePeriod={{ .softDeletePeriod }}, HotCachePeriod={{ .hotCachePeriod }}.
+    .alter-merge database {{ .name }} policy retention softdelete = {{ .softDeletePeriod }} recoverability = disabled
+    .alter database {{ .name }} policy caching hot = {{ .hotCachePeriod }}
+{{- end }}
+{{- end }}

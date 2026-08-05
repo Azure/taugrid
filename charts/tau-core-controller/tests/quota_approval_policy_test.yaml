@@ -1,0 +1,36 @@
+suite: TauQuotaRequest decision authorization
+templates:
+  - quota-approval-policy.yaml
+tests:
+  - it: denies researcher-supplied quota decisions
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+        documentIndex: 0
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: quotarequests
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: tau.azure.com/approved
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: tau.azure.com/rejected
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: tau.azure.com/reviewed-by
+        documentIndex: 0
+      - equal:
+          path: spec.policyName
+          value: tau-quota-approval-guard
+        documentIndex: 1
+      - contains:
+          path: spec.validationActions
+          content: Deny
+        documentIndex: 1

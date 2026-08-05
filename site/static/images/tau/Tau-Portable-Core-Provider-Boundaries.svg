@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">Portable core versus provider integrations</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Tau's open contract is Kubernetes-native; cloud services enter through explicit adapters and reference architectures</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="56" y="220" width="2088" height="820" rx="22" fill="transparent" stroke="#5B6573" stroke-width="4"/>
+<text x="84" y="265" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="21" font-weight="700" fill="#000000"><tspan x="84" dy="0">OPEN-SOURCE SYSTEM BOUNDARY</tspan></text>
+<rect x="116" y="310" width="820" height="640" rx="22" fill="transparent" stroke="#0078D4" stroke-width="5"/>
+<text x="526" y="360" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="700" fill="#000000"><tspan x="526" dy="0">PORTABLE TAU CORE</tspan></text>
+<rect x="166" y="430" width="330" height="150" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="218" cy="480" rx="28" ry="28" fill="#CFE4FA" stroke="#0078D4" stroke-width="2"/>
+<text x="218" y="484" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="218" dy="0">CFG</tspan></text>
+<text x="262" y="470" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="262" dy="0">AUTHOR</tspan></text>
+<text x="262" y="512" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="262" dy="0">Repository contract</tspan></text>
+<text x="194" y="554" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="194" dy="0">tau.yaml · Python SDK</tspan><tspan x="194" dy="19">validation · dry-run</tspan></text>
+<rect x="556" y="430" width="330" height="150" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="608" cy="480" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="608" y="484" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="608" dy="0">RUN</tspan></text>
+<text x="652" y="470" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="652" dy="0">EXECUTE</tspan></text>
+<text x="652" y="512" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="652" dy="0">Open workload intent</tspan></text>
+<text x="584" y="554" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="584" dy="0">Kubernetes Job</tspan><tspan x="584" dy="19">KubeRay RayJob</tspan></text>
+<rect x="166" y="650" width="330" height="150" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="218" cy="700" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="218" y="704" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="218" dy="0">EXP</tspan></text>
+<text x="262" y="690" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="262" dy="0">PRESERVE</tspan></text>
+<text x="262" y="732" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="262" dy="0">Local-first evidence</tspan></text>
+<text x="194" y="774" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="194" dy="0">expstore · JSONL</tspan><tspan x="194" dy="19">artifacts · checkpoints</tspan></text>
+<rect x="556" y="650" width="330" height="150" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="608" cy="700" rx="28" ry="28" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="608" y="704" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="608" dy="0">LIVE</tspan></text>
+<text x="652" y="690" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="652" dy="0">OPERATE</tspan></text>
+<text x="652" y="732" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="652" dy="0">Lifecycle contracts</tspan></text>
+<text x="584" y="774" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="584" dy="0">status · logs · retry</tspan><tspan x="584" dy="19">resume · compare</tspan></text>
+<rect x="270" y="850" width="500" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="520" y="874" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="520" dy="0">NO AZURE REQUIRED</tspan></text>
+<rect x="1000" y="310" width="520" height="640" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4"/>
+<text x="1260" y="358" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1260" dy="0">KUBERNETES INTEGRATIONS</tspan></text>
+<rect x="1050" y="430" width="420" height="140" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1102" cy="480" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1102" y="484" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1102" dy="0">KQ</tspan></text>
+<text x="1146" y="470" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1146" dy="0">ADMISSION</tspan></text>
+<text x="1146" y="512" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1146" dy="0">Kueue</tspan></text>
+<text x="1078" y="554" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1078" dy="0">Queues, quota, priority, ResourceFlavor</tspan></text>
+<rect x="1050" y="610" width="420" height="140" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1102" cy="660" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1102" y="664" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1102" dy="0">RAY</tspan></text>
+<text x="1146" y="650" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1146" dy="0">ORCHESTRATION</tspan></text>
+<text x="1146" y="692" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#000000"><tspan x="1146" dy="0">KubeRay</tspan></text>
+<text x="1078" y="734" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="14" font-weight="400" fill="#000000"><tspan x="1078" dy="0">RayJob and Ray cluster lifecycle</tspan></text>
+<rect x="1050" y="790" width="420" height="110" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1102" cy="840" rx="28" ry="28" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1102" y="844" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1102" dy="0">K8S</tspan></text>
+<text x="1146" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1146" dy="0">PLATFORM CONTRACT</tspan></text>
+<text x="1146" y="869" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1146" dy="0">Storage · identity · devices</tspan></text>
+<text x="1078" y="888" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="10" font-weight="400" fill="#000000"><tspan x="1078" dy="0">CSI / PVC · ServiceAccount / RBAC · GPU plugin</tspan></text>
+<rect x="1584" y="310" width="500" height="640" rx="22" fill="transparent" stroke="#F7630C" stroke-width="4" stroke-dasharray="12 9"/>
+<text x="1834" y="358" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1834" dy="0">AZURE REFERENCE ADAPTERS</tspan></text>
+<rect x="1634" y="430" width="400" height="120" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1686" cy="480" rx="28" ry="28" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+<text x="1686" y="484" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1686" dy="0">ID</tspan></text>
+<text x="1730" y="470" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1730" dy="0">IDENTITY</tspan></text>
+<text x="1730" y="510" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1730" dy="0">AKS + workload identity</tspan></text>
+<text x="1662" y="533" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1662" dy="0">OIDC · managed identity · Key Vault</tspan></text>
+<rect x="1634" y="590" width="400" height="120" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1686" cy="640" rx="28" ry="28" fill="#D8F3F2" stroke="#038387" stroke-width="2"/>
+<text x="1686" y="644" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1686" dy="0">AZ</tspan></text>
+<text x="1730" y="630" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1730" dy="0">DATA</tspan></text>
+<text x="1730" y="670" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1730" dy="0">Blob + ACR</tspan></text>
+<text x="1662" y="693" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1662" dy="0">Durable object data and image distribution</tspan></text>
+<rect x="1634" y="750" width="400" height="120" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<ellipse cx="1686" cy="800" rx="28" ry="28" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2"/>
+<text x="1686" y="804" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1686" dy="0">ADX</tspan></text>
+<text x="1730" y="790" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1730" dy="0">ANALYTICS</tspan></text>
+<text x="1730" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1730" dy="0">adx-mon + ADX/Kusto</tspan></text>
+<text x="1662" y="853" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="400" fill="#000000"><tspan x="1662" dy="0">Optional fleet telemetry projection</tspan></text>
+<rect x="1644" y="890" width="380" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1834" y="914" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1834" dy="0">REFERENCE, NOT CORE</tspan></text>
+<polyline points="936,630 1000,630" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<polyline points="1520,630 1584,630" fill="none" stroke="#4B5A70" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">A provider integration should implement a boundary—not leak cloud-specific credentials, storage semantics, or telemetry assumptions into the portable contract.</tspan></text>
+</svg>

@@ -1,0 +1,154 @@
+{{- if .Values.collector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-collector-config
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "collector") | nindent 4 }}
+data:
+  config.toml: |
+    # Ingestor URL to send collected telemetry.
+    endpoint = 'https://{{ include "adx-mon.fullname" . }}-ingestor.{{ include "adx-mon.namespace" . }}.svc.cluster.local'
+
+    # Region is a location identifier
+    region = '{{ .Values.global.region }}'
+
+    # Skip TLS verification.
+    insecure-skip-verify = {{ .Values.collector.insecureSkipVerify }}
+
+    # Address to listen on for endpoints.
+    listen-addr = ':8080'
+
+    # Maximum number of connections to accept.
+    max-connections = {{ .Values.collector.maxConnections }}
+
+    # Maximum number of samples to send in a single batch.
+    max-batch-size = {{ .Values.collector.maxBatchSize }}
+
+    # Storage directory for the WAL.
+    storage-dir = '/mnt/data'
+
+    # Regexes of metrics to drop from all sources.
+    # DaemonSet uses the narrowed drop-list (dropMetrics minus scrapeDropMetricsExclude).
+    drop-metrics = {{ include "adx-mon.collectorScrapeDropMetrics" . }}
+
+    # Disable metrics forwarding to endpoints.
+    disable-metrics-forwarding = false
+
+    # WAL flush interval in milliseconds.
+    wal-flush-interval-ms = {{ .Values.collector.walFlushIntervalMs }}
+
+    lift-labels = [
+      { name = 'host', column = 'Host' },
+      { name = 'cluster', column = 'Cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    lift-resources = [
+      { name = 'host', column = 'Host' },
+      { name = 'cluster', column = 'Cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+      { name = 'label.tau.azure.com/workspace', column = 'Workspace' },
+      { name = 'annotation.tau.azure.com/stellar-project-value', column = 'Project' },
+      { name = 'annotation.tau.azure.com/stellar-experiment-id', column = 'ExperimentId' },
+      { name = 'annotation.tau.azure.com/stellar-group-value', column = 'RunGroupId' },
+      { name = 'label.tau.azure.com/run-id', column = 'RunId' },
+    ]
+
+    [add-labels]
+      host = '$(HOSTNAME)'
+      cluster = '{{ include "adx-mon.clusterName" . }}'
+
+    [add-attributes]
+      host = '$(HOSTNAME)'
+      cluster = '{{ include "adx-mon.clusterName" . }}'
+
+    {{- if .Values.collector.prometheusScrape.enabled }}
+    [prometheus-scrape]
+      database = '{{ .Values.adx.metricsDatabase }}'
+      default-drop-metrics = false
+      static-scrape-target = [
+        { host-regex = '.*', url = 'http://$(HOSTNAME):{{ .Values.collector.hostPort }}/metrics', namespace = '{{ include "adx-mon.namespace" . }}', pod = '{{ include "adx-mon.fullname" . }}-collector', container = 'collector' },
+        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/cadvisor', namespace = 'kube-system', pod = 'kubelet', container = 'cadvisor' },
+        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/resource', namespace = 'kube-system', pod = 'kubelet', container = 'resource' },
+        {{- range .Values.collector.prometheusScrape.extraStaticTargets }}
+        { host-regex = '{{ .hostRegex }}', url = '{{ .url }}', namespace = '{{ .namespace }}', pod = '{{ .pod }}', container = '{{ .container }}' },
+        {{- end }}
+      ]
+      scrape-interval = {{ .Values.collector.prometheusScrape.scrapeIntervalSeconds }}
+      scrape-timeout = {{ .Values.collector.prometheusScrape.scrapeTimeoutSeconds }}
+      disable-metrics-forwarding = false
+      {{- if .Values.collector.prometheusScrape.keepMetrics }}
+      keep-metrics = {{ .Values.collector.prometheusScrape.keepMetrics | toJson }}
+      {{- else }}
+      keep-metrics = []
+      {{- end }}
+      drop-metrics = {{ include "adx-mon.collectorScrapeDropMetrics" . }}
+    {{- end }}
+
+    {{- if .Values.collector.gpu.dcgmScrape }}
+    # DCGM exporter GPU metrics scrape target (added by adx-mon pod annotation discovery)
+    # The DCGM exporter pods are expected to have adx-mon/scrape=true annotation.
+    {{- end }}
+
+
+
+    [[prometheus-remote-write]]
+      database = '{{ .Values.adx.metricsDatabase }}'
+      path = '/receive'
+      drop-metrics = []
+      disable-metrics-forwarding = false
+      [prometheus-remote-write.add-labels]
+
+    {{- if .Values.collector.otelLog.enabled }}
+    [otel-log]
+      lift-attributes = {{ .Values.collector.otelLog.liftAttributes | toJson }}
+    {{- end }}
+
+
+    {{- if or .Values.collector.journalLogs.enabled .Values.collector.containerLogs.enabled }}
+    [[host-log]]
+      disable-kube-discovery = {{ not .Values.collector.containerLogs.enabled }}
+      parsers = ['json']
+      {{- if .Values.collector.journalLogs.enabled }}
+      journal-target = [
+        {{- range .Values.collector.journalLogs.targets }}
+        { matches = {{ .matches | toJson }}, database = '{{ .database }}', table = '{{ .table }}' },
+        {{- end }}
+        {{- if .Values.collector.gpu.kernelTarget }}
+        { matches = ["_TRANSPORT=kernel"], database = '{{ .Values.adx.logsDatabase }}', table = '{{ .Values.collector.gpu.kernelLogTable }}' },
+        {{- end }}
+      ]
+      {{- end }}
+      {{- if .Values.collector.containerLogs.enabled }}
+      {{- range .Values.collector.containerLogs.targets }}
+      {{- if and (not .namespace) (not .name) (not .labels) }}
+      {{- fail "collector.containerLogs.targets: each entry must specify at least one of namespace, name, or labels" }}
+      {{- end }}
+      {{- if not .destination }}
+      {{- fail "collector.containerLogs.targets: each entry must specify destination" }}
+      {{- end }}
+    [[host-log.static-pod-target]]
+        {{- if .namespace }}
+        namespace = '{{ .namespace }}'
+        {{- end }}
+        {{- if .name }}
+        name = '{{ .name }}'
+        {{- end }}
+        destination = '{{ .destination }}'
+        parsers = {{ .parsers | default (list "json") | toJson }}
+        {{- if .labels }}
+        [host-log.static-pod-target.label-targets]
+          {{- range $key, $value := .labels }}
+          {{ $key | quote }} = {{ $value | quote }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+  <rect width="2200" height="1300" fill="#FFFFFF"/>
+  <text x="56" y="72" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000"><tspan x="56" dy="0">What can I do with Tau today?</tspan></text>
+<text x="58" y="122" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="400" fill="#4B5A70"><tspan x="58" dy="0">Shipped capabilities organized around the lifecycle—not the package tree</tspan></text>
+<polyline points="56,164 2144,164" fill="none" stroke="#0078D4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="1580" y="108" width="150" height="44" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="2"/>
+<text x="1655" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1655" dy="0">SHIPPED</tspan></text>
+<rect x="1744" y="108" width="190" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1839" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1839" dy="0">EXPERIMENTAL</tspan></text>
+<rect x="1948" y="108" width="140" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="2018" y="132" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="2018" dy="0">FUTURE</tspan></text>
+<rect x="56" y="250" width="498" height="800" rx="22" fill="transparent" stroke="#0078D4" stroke-width="4"/>
+<ellipse cx="115" cy="307" rx="31" ry="31" fill="#CFE4FA" stroke="#0078D4" stroke-width="3"/>
+<text x="115" y="312" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="115" dy="0">1</tspan></text>
+<text x="164" y="308" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="164" dy="0">CONNECT + AUTHOR</tspan></text>
+<rect x="80" y="370" width="450" height="180" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<text x="108" y="410" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="108" dy="0">SHIPPED · 1</tspan></text>
+<text x="108" y="459" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="108" dy="0">Workspace connection</tspan></text>
+<text x="108" y="520" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="108" dy="0">Discover a credential-free repository descriptor</tspan></text>
+<rect x="80" y="580" width="450" height="180" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<text x="108" y="620" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="108" dy="0">SHIPPED · 2</tspan></text>
+<text x="108" y="669" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="108" dy="0">Config-first runs</tspan></text>
+<text x="108" y="730" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="108" dy="0">Check in tau.yaml; validate, explain, and dry-run</tspan></text>
+<rect x="80" y="790" width="450" height="180" rx="22" fill="#CFE4FA" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+<text x="108" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="108" dy="0">SHIPPED · 3</tspan></text>
+<text x="108" y="879" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="108" dy="0">Python SDK</tspan></text>
+<text x="108" y="940" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="108" dy="0">Optional managed-workflow sugar for stable contracts</tspan></text>
+<rect x="586" y="250" width="498" height="800" rx="22" fill="transparent" stroke="#F7630C" stroke-width="4"/>
+<ellipse cx="645" cy="307" rx="31" ry="31" fill="#FFF4CE" stroke="#F7630C" stroke-width="3"/>
+<text x="645" y="312" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="645" dy="0">2</tspan></text>
+<text x="694" y="308" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="694" dy="0">RUN WORKLOADS</tspan></text>
+<rect x="610" y="370" width="450" height="180" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<text x="638" y="410" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="638" dy="0">SHIPPED · 1</tspan></text>
+<text x="638" y="459" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="638" dy="0">Job</tspan></text>
+<text x="638" y="520" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="638" dy="0">Single Kubernetes workload for scripts and utilities</tspan></text>
+<rect x="610" y="580" width="450" height="180" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<text x="638" y="620" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="638" dy="0">SHIPPED · 2</tspan></text>
+<text x="638" y="669" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="638" dy="0">RayJob / Ray Train</tspan></text>
+<text x="638" y="730" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="638" dy="0">Distributed training with Kueue admission</tspan></text>
+<rect x="610" y="790" width="450" height="180" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+<text x="638" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="638" dy="0">SHIPPED · 3</tspan></text>
+<text x="638" y="879" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="638" dy="0">Evaluation paths</tspan></text>
+<text x="638" y="940" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="638" dy="0">CPU workers and GPU-head evaluation contracts</tspan></text>
+<rect x="1116" y="250" width="498" height="800" rx="22" fill="transparent" stroke="#5C2D91" stroke-width="4"/>
+<ellipse cx="1175" cy="307" rx="31" ry="31" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3"/>
+<text x="1175" y="312" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1175" dy="0">3</tspan></text>
+<text x="1224" y="308" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1224" dy="0">OBSERVE + RECOVER</tspan></text>
+<rect x="1140" y="370" width="450" height="180" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<text x="1168" y="410" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1168" dy="0">SHIPPED · 1</tspan></text>
+<text x="1168" y="459" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1168" dy="0">Lifecycle control</tspan></text>
+<text x="1168" y="520" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1168" dy="0">status · logs · list · get · cancel</tspan></text>
+<rect x="1140" y="580" width="450" height="180" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<text x="1168" y="620" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1168" dy="0">SHIPPED · 2</tspan></text>
+<text x="1168" y="669" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1168" dy="0">Retry + resume</tspan></text>
+<text x="1168" y="730" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1168" dy="0">Classify failure, back off, and restart from checkpoints</tspan></text>
+<rect x="1140" y="790" width="450" height="180" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+<text x="1168" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1168" dy="0">SHIPPED · 3</tspan></text>
+<text x="1168" y="879" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1168" dy="0">Profile</tspan></text>
+<text x="1168" y="940" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1168" dy="0">Rank-scoped Nsight Systems artifact workflow</tspan></text>
+<rect x="1646" y="250" width="498" height="800" rx="22" fill="transparent" stroke="#038387" stroke-width="4"/>
+<ellipse cx="1705" cy="307" rx="31" ry="31" fill="#D8F3F2" stroke="#038387" stroke-width="3"/>
+<text x="1705" y="312" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1705" dy="0">4</tspan></text>
+<text x="1754" y="308" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" fill="#000000"><tspan x="1754" dy="0">PRESERVE + OPERATE</tspan></text>
+<rect x="1670" y="370" width="450" height="180" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<text x="1698" y="410" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1698" dy="0">SHIPPED · 1</tspan></text>
+<text x="1698" y="459" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1698" dy="0">Stellar + expstore</tspan></text>
+<text x="1698" y="520" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1698" dy="0">Local-first runs, metrics, comparisons, and overlays</tspan></text>
+<rect x="1670" y="580" width="450" height="180" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<text x="1698" y="620" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1698" dy="0">SHIPPED · 2</tspan></text>
+<text x="1698" y="669" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1698" dy="0">Data + artifacts</tspan></text>
+<text x="1698" y="730" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1698" dy="0">PVC/object-store inputs and durable output references</tspan></text>
+<rect x="1670" y="790" width="450" height="180" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+<text x="1698" y="830" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1698" dy="0">SHIPPED · 3</tspan></text>
+<text x="1698" y="879" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#000000"><tspan x="1698" dy="0">Platform validation</tspan></text>
+<text x="1698" y="940" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1698" dy="0">Workspace, queue, node, topology, and storage checks</tspan></text>
+<rect x="210" y="1082" width="390" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="405" y="1106" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="405" dy="0">EXPERIMENTAL: TAUWORKSPACE</tspan></text>
+<rect x="620" y="1082" width="360" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="800" y="1106" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="800" dy="0">EXPERIMENTAL: MULTIKUEUE</tspan></text>
+<rect x="1000" y="1082" width="320" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1160" y="1106" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1160" dy="0">FUTURE: SERVING UX</tspan></text>
+<rect x="1340" y="1082" width="440" height="44" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="2" stroke-dasharray="12 9"/>
+<text x="1560" y="1106" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1560" dy="0">FUTURE: WORKSPACE USER AUTH</tspan></text>
+<rect x="56" y="1214" width="2088" height="54" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+<text x="1100" y="1245" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="400" fill="#000000"><tspan x="1100" dy="0">Capability status reflects the current repository; experimental and future items are intentionally separated from shipped user contracts.</tspan></text>
+</svg>

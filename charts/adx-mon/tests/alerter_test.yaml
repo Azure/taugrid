@@ -1,0 +1,158 @@
+suite: alerter templates
+templates:
+  - alerter/deployment.yaml
+  - alerter/serviceaccount.yaml
+  - alerter/clusterrole.yaml
+  - alerter/clusterrolebinding.yaml
+
+tests:
+
+  - it: renders alerter Deployment by default
+    template: alerter/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-alerter
+
+  - it: does not render when disabled
+    template: alerter/deployment.yaml
+    set:
+      alerter.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: uses correct image
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/alerter:v0.3.0
+
+  - it: uses correct binary path
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command[0]
+          value: /alerter
+
+  - it: defaults to a singleton to avoid AlertRule status update races
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: includes alerter-address and kusto-endpoint when set
+    template: alerter/deployment.yaml
+    set:
+      alerter.alerterEndpoint: https://webhook.example.com
+      adx.clusterUrl: https://mycluster.westus2.kusto.windows.net
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --alerter-address=https://webhook.example.com
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-endpoint=Metrics=https://mycluster.westus2.kusto.windows.net
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-endpoint=Logs=https://mycluster.westus2.kusto.windows.net
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-endpoint=CostTracking=https://mycluster.westus2.kusto.windows.net
+
+
+  - it: includes CostTracking kusto endpoint when clusterUrl is set
+    template: alerter/deployment.yaml
+    set:
+      adx.clusterUrl: https://mycluster.westus2.kusto.windows.net
+      adx.costTrackingDatabase: CostTracking
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-endpoint=CostTracking=https://mycluster.westus2.kusto.windows.net
+
+  - it: applies security contexts
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: sets component labels
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: alerter
+
+  - it: sets adx-mon scrape annotations
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/scrape"]
+          value: "true"
+
+  - it: renders ServiceAccount
+    template: alerter/serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-adx-mon-alerter
+
+  - it: renders ClusterRole with alertrules permissions
+    template: alerter/clusterrole.yaml
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            apiGroups: [adx-mon.azure.com]
+            resources: [alertrules]
+            verbs: [get, list, update, patch]
+
+  - it: renders ClusterRoleBinding
+    template: alerter/clusterrolebinding.yaml
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-adx-mon-alerter
+
+  - it: uses /metrics for liveness and readiness probes
+    template: alerter/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /metrics
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /metrics
+
+  - it: hostPath volumes use DirectoryOrCreate type
+    template: alerter/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-certs
+            hostPath:
+              path: /etc/ssl/certs
+              type: DirectoryOrCreate
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: etc-pki-ca-certs
+            hostPath:
+              path: /etc/pki/ca-trust/extracted
+              type: DirectoryOrCreate

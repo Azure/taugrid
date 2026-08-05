@@ -1,0 +1,22 @@
+{{- if .Values.managementCommands.precreateLogsTables.enabled }}
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-precreate-logs
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.adx.logsDatabase | quote }}
+  body: |
+    // Pre-create log tables to avoid 429 throttling on first deploy.
+    // Schema: default native log schema plus lifted identity columns from
+    // collector lift-resources. .create-merge also adds these columns to
+    // existing tables during upgrades.
+    .create-merge tables
+    {{- range $i, $table := .Values.managementCommands.precreateLogsTables.tables }}
+      {{ $table }} (Timestamp: datetime, ObservedTimestamp: datetime, TraceId: string, SpanId: string, SeverityText: string, SeverityNumber: int, Body: dynamic, Resource: dynamic, Attributes: dynamic, Container: string, Namespace: string, Pod: string, Cluster: string, Host: string, Workspace: string, Project: string, ExperimentId: string, RunGroupId: string, RunId: string){{ if lt $i (sub (len $.Values.managementCommands.precreateLogsTables.tables) 1) }},{{ end }}
+    {{- end }}
+{{- end }}

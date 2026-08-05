@@ -1,0 +1,21 @@
+{{- if .Values.alerter.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-alerter
+  labels:
+    {{- include "adx-mon.componentLabels" (dict "root" . "component" "alerter") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [adx-mon.azure.com]
+    resources: [alertrules]
+    verbs: [get, list, update, patch]
+  - apiGroups: [adx-mon.azure.com]
+    resources: [alertrules/status]
+    verbs: [update, patch]
+  - apiGroups: [adx-mon.azure.com]
+    resources: [alertrules/finalizers]
+    verbs: [get, update, delete]
+{{- end }}

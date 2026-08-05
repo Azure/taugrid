@@ -1,0 +1,43 @@
+# Agent instructions for {{.Name}}
+
+This repo is a Tau Python research workspace scaffold. Keep local research code and cluster policy separate.
+
+## Tau workspace model
+
+- `TauWorkspace` owns access, queue, namespace, and status; it does not own storage.
+- This repo owns Python source, local `uv` setup, image build context, Tau run configs, and experiment-specific data/PVC/secret references.
+- `tau/workspace.connection.yaml` is the non-secret platform handoff. Do **not** add `policy.workspace` to `tau/*.yaml`.
+- The current descriptor uses explicit `cluster-wide` authorization. Treat the workspace as submission defaults, not an access boundary.
+- The researcher path is `tau run smoke`, then `tau run train`.
+- Do not commit workspace-derived namespace, queue policy, kubeconfig, or identity credentials.
+- If named runs or descriptor discovery are unavailable, upgrade Tau rather than changing committed configs.
+
+## Setup source of truth
+
+- Copy `.env.example` to `.env` only for optional image/ACR settings.
+- Never commit `.env`, credentials, kubeconfigs, tokens, private dataset paths, or secret values.
+- Tau owns first-use workspace authentication and isolated AKS credentials. `scripts/setup-azure.sh` is optional and only assists ACR image publication.
+- Use `uv sync` for Python setup. Do not add ad-hoc virtualenv or pip bootstrap unless the project deliberately changes this contract.
+
+## Validation
+
+Run these before claiming the scaffold or generated configs are ready:
+
+```bash
+uv run python -m {{.Package}}.smoke
+tau run validate --config tau/smoke.yaml
+tau run validate --config tau/train.yaml
+bash -n scripts/*.sh
+```
+
+## Hard boundaries
+
+- Do not provision Azure infrastructure from this repo.
+- Do not create, resize, or delete StorageClasses, PVCs, PVs, CSI configuration, or cloud storage from this repo; only reference platform-provided claims.
+- Do not edit cluster CRDs, controllers, Kueue queues, or TauWorkspace definitions from this repo.
+- Do not commit secrets or `.env`.
+- Do not hardcode workspace policy into committed Tau configs.
+- Do not hardcode workspace-owned namespace or queue policy into committed Tau configs.
+- Keep smoke cheap, CPU-sized, public/synthetic, and free of private data.
+- Put dataset paths, secret references, PVC names, image names, and experiment-specific values in run configs, `.env`, or README prompts, not in TauWorkspace.
+- Ask before changing the checked-in workspace descriptor, ACR, or image values.
