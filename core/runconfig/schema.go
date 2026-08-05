@@ -66,9 +66,9 @@ var fieldCatalog = map[string]FieldInfo{
 	"runtime.env_kv":     {Status: statusWorkflowOnly, Description: "Key Vault-backed environment variables as a map from env var name to secret-name or vault/secret-name. Direct job/ray configs reject this field; it needs the managed workflow path (workflow.file, or an SDK manifest with schema_version), plus --tenant-id, --workload-identity-client-id, and a pod ServiceAccount from --service-account or policy.workspace. Bare secret names also need --key-vault.", Notes: "All entries must resolve to the same vault: one SecretProviderClass is rendered per workload."},
 
 	"compute":                       {Status: statusSupported, Description: "Workload sizing and dispatch hints."},
-	"compute.workers":               {Status: statusSupported, Description: "Total Ray execution-pod count, including the head. A value of 1 is head-only; N > 1 renders the head plus N-1 worker pods.", Default: "1"},
+	"compute.workers":               {Status: statusSupported, Description: "Ray execution-pod count. Direct GPU runs render N dedicated GPU workers plus a CPU-only head. CPU-only and managed workflow RayJobs preserve the total-pod contract: one head plus N-1 workers.", Default: "1"},
 	"compute.gpus":                  {Status: statusSupported, Description: "Pod-level GPU count for direct Job execution. Set 0 explicitly for a CPU Job."},
-	"compute.gpus_per_worker":       {Status: statusSupported, Description: "GPU count per Ray execution pod, including the head. Not valid for direct Job execution.", Default: "1"},
+	"compute.gpus_per_worker":       {Status: statusSupported, Description: "GPU count per dedicated worker in a direct Ray run; its head remains CPU-only. Not valid for direct Job execution.", Default: "1"},
 	"compute.cpu_workers":           {Status: statusSupported, Description: "CPU eval worker count."},
 	"compute.workload_kind":         {Status: statusSupported, Description: "Workload kind selector.", Values: []string{"job", "rayjob", "ray-train", "ray_train"}},
 	"compute.gpu_resource_mode":     {Status: statusSupported, Description: "GPU resource mode forwarded to workflow rendering when supported.", Values: []string{"device-plugin", "nvidia", "dra", "mig"}},

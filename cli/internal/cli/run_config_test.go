@@ -726,8 +726,11 @@ experiment:
 			t.Fatalf("config ray dry-run leaked secret ref %q:\n%s", leaked, rendered)
 		}
 	}
-	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 1 {
-		t.Fatalf("single-pod config ray dry-run serviceAccountName count=%d want 1:\n%s", got, rendered)
+	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 2 {
+		t.Fatalf("GPU config ray dry-run serviceAccountName count=%d want head + worker (2):\n%s", got, rendered)
+	}
+	if !strings.Contains(rendered, "kubernetes.azure.com/mode: system") {
+		t.Fatalf("GPU config ray dry-run must pin its CPU head to the system pool:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "azure.workload.identity/use") {
 		t.Fatalf("non-workspace RayJob should not gain the Azure workload identity label:\n%s", rendered)
