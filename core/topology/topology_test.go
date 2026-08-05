@@ -94,8 +94,8 @@ func TestBuild_AnyGPUClassDoesNotPinNodeSelector(t *testing.T) {
 	if plan.QueueName != SharedGPUQueueName {
 		t.Fatalf("queue=%q want %q", plan.QueueName, SharedGPUQueueName)
 	}
-	if _, ok := plan.Labels[LabelGPUClass]; ok {
-		t.Fatalf("Tau-specific gpu class label should be omitted: %v", plan.Labels)
+	if got := plan.Labels[LabelGPUClass]; got != GPUClassAny {
+		t.Fatalf("gpu class label=%q want %q", got, GPUClassAny)
 	}
 	if len(plan.NodeSelector) != 0 {
 		t.Fatalf("gpuClass=any should not add node selector: %v", plan.NodeSelector)
@@ -248,6 +248,20 @@ func TestBuildNormalizesLegacyGPUClassBeforeRendering(t *testing.T) {
 	}
 	if got := plan.Labels[LabelGPUClass]; got != GPUClassA10080GB {
 		t.Fatalf("legacy alias rendered label %q, want %q", got, GPUClassA10080GB)
+	}
+}
+
+func TestResolveGPUClassUsesProfileAndExplicitOverride(t *testing.T) {
+	p := profile.Profile{
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": "a100-nvlink-80gb"},
+		},
+	}
+	if got, deprecated := ResolveGPUClass(p, ""); got != GPUClassA10080GB || !deprecated {
+		t.Fatalf("profile class = %q deprecated=%v, want %q true", got, deprecated, GPUClassA10080GB)
+	}
+	if got, deprecated := ResolveGPUClass(p, GPUClassAny); got != GPUClassAny || deprecated {
+		t.Fatalf("override class = %q deprecated=%v, want %q false", got, deprecated, GPUClassAny)
 	}
 }
 

@@ -1146,15 +1146,9 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 	}
 }
 
-func TestRunConfigRejectsQueueAutoAsScopedLimitation(t *testing.T) {
-	err := executeTauConfigError(t, `name: auto-queue
-engine: ray
-entrypoint: train.py
-policy:
-  queue: auto
-`)
-	if err == nil || !strings.Contains(err.Error(), "policy.queue: auto") || !strings.Contains(err.Error(), "not supported by this focused run --config slice") {
-		t.Fatalf("expected explicit policy.queue auto limitation, got %v", err)
+func TestRunConfigAcceptsQueueAutoForLiveResolution(t *testing.T) {
+	if err := validateRunDispatchOptions(runDispatchOptions{queue: "auto"}); err != nil {
+		t.Fatalf("policy.queue auto should reach live queue discovery: %v", err)
 	}
 }
 

@@ -1,6 +1,62 @@
 {{- if .Values.baselineQueue.enabled }}
-{{- if and .Values.baselineQueue.topology.enabled (empty .Values.baselineQueue.flavor.nodeLabels) }}
-{{- fail "baselineQueue.flavor.nodeLabels must contain at least one label when baselineQueue.topology.enabled is true" }}
+{{- if and .Values.baselineQueue.gpu.enabled (empty .Values.baselineQueue.gpu.flavors) }}
+{{- fail "baselineQueue.gpu.flavors must contain at least one flavor when baselineQueue.gpu.enabled is true" }}
+{{- end }}
+{{- if and .Values.baselineQueue.gpu.enabled (or (hasKey .Values.baselineQueue.flavor.nodeLabels "tau.azure.com/gpu-class") (hasKey .Values.baselineQueue.flavor.nodeLabels "kueue.azure.com/gpu-series") (hasKey .Values.baselineQueue.flavor.nodeLabels "tau.azure.com/gpu-series")) }}
+{{- fail "baselineQueue.flavor is the CPU/memory flavor and must not set GPU class or series labels; move GPU placement labels to baselineQueue.gpu.flavors before upgrading" }}
+{{- end }}
+{{- if .Values.baselineQueue.gpu.enabled }}
+{{- range $toleration := .Values.baselineQueue.flavor.tolerations }}
+{{- $operator := default "Equal" $toleration.operator }}
+{{- if or (and (eq $operator "Exists") (empty $toleration.key)) (eq $toleration.key "nvidia.com/gpu") (and (eq $toleration.key "sku") (or (eq $operator "Exists") (eq (default "" $toleration.value) "gpu"))) }}
+{{- fail "baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading" }}
+{{- end }}
+{{- range $gpuFlavor := $.Values.baselineQueue.gpu.flavors }}
+{{- range $taint := $gpuFlavor.nodeTaints }}
+{{- $keyMatches := or (empty $toleration.key) (eq $toleration.key $taint.key) }}
+{{- $effectMatches := or (empty $toleration.effect) (eq $toleration.effect $taint.effect) }}
+{{- $valueMatches := or (eq $operator "Exists") (and (eq $operator "Equal") (eq (default "" $toleration.value) (default "" $taint.value))) }}
+{{- if and $keyMatches $effectMatches $valueMatches }}
+{{- fail "baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.baselineQueue.gpu.enabled }}
+{{- range $resource := .Values.baselineQueue.resources }}
+{{- if has $resource.name $.Values.baselineQueue.gpu.coveredResources }}
+{{- fail (printf "resource %s appears in both baselineQueue.resources and baselineQueue.gpu.coveredResources; remove GPU resources from baselineQueue.resources before upgrading" $resource.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
+{{- if and $.Values.baselineQueue.gpu.enabled $.Values.baselineQueue.topology.enabled (empty $gpuFlavor.nodeLabels) }}
+{{- fail (printf "baselineQueue.gpu.flavors[%s].nodeLabels must contain at least one label when baselineQueue.topology.enabled is true" $gpuFlavor.name) }}
+{{- end }}
+{{- if $.Values.baselineQueue.gpu.enabled }}
+{{- if empty $gpuFlavor.nodeTaints }}
+{{- fail (printf "baselineQueue.gpu.flavors[%s].nodeTaints must contain at least one GPU admission taint so CPU-only workloads cannot fall through to GPU quota" $gpuFlavor.name) }}
+{{- end }}
+{{- range $taint := $gpuFlavor.nodeTaints }}
+{{- range $toleration := $gpuFlavor.tolerations }}
+{{- $keyMatches := or (empty $toleration.key) (eq $toleration.key $taint.key) }}
+{{- $effectMatches := or (empty $toleration.effect) (eq $toleration.effect $taint.effect) }}
+{{- $operator := default "Equal" $toleration.operator }}
+{{- $valueMatches := or (eq $operator "Exists") (and (eq $operator "Equal") (eq (default "" $toleration.value) (default "" $taint.value))) }}
+{{- if and $keyMatches $effectMatches $valueMatches }}
+{{- fail (printf "baselineQueue.gpu.flavors[%s] toleration for nodeTaint %s would make GPU quota eligible for CPU-only workloads; Tau GPU pods already carry GPU-node tolerations" $gpuFlavor.name $taint.key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $resourceNames := list }}
+{{- range $resource := $gpuFlavor.resources }}
+{{- $resourceNames = append $resourceNames $resource.name }}
+{{- end }}
+{{- if not (deepEqual $resourceNames $.Values.baselineQueue.gpu.coveredResources) }}
+{{- fail (printf "baselineQueue.gpu.flavors[%s].resources names and order must exactly match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if .Values.baselineQueue.topology.enabled }}
 apiVersion: kueue.x-k8s.io/v1beta2
@@ -29,10 +85,34 @@ spec:
   tolerations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if .Values.baselineQueue.topology.enabled }}
-  topologyName: {{ .Values.baselineQueue.topology.name }}
+---
+{{- if .Values.baselineQueue.gpu.enabled }}
+{{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: {{ $gpuFlavor.name }}
+  labels:
+    {{- include "taugrid.labels" $ | nindent 4 }}
+spec:
+  {{- with $gpuFlavor.nodeLabels }}
+  nodeLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $gpuFlavor.nodeTaints }}
+  nodeTaints:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $gpuFlavor.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if $.Values.baselineQueue.topology.enabled }}
+  topologyName: {{ $.Values.baselineQueue.topology.name }}
   {{- end }}
 ---
+{{- end }}
+{{- end }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
@@ -50,6 +130,11 @@ spec:
         {{- range .Values.baselineQueue.resources }}
         - {{ .name }}
         {{- end }}
+        {{- if .Values.baselineQueue.gpu.enabled }}
+        {{- range .Values.baselineQueue.gpu.coveredResources }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
       flavors:
         - name: {{ .Values.baselineQueue.flavor.name }}
           resources:
@@ -57,6 +142,26 @@ spec:
             - name: {{ .name }}
               nominalQuota: {{ .nominalQuota | quote }}
             {{- end }}
+            {{- if .Values.baselineQueue.gpu.enabled }}
+            {{- range .Values.baselineQueue.gpu.coveredResources }}
+            - name: {{ . }}
+              nominalQuota: "0"
+            {{- end }}
+            {{- end }}
+        {{- if .Values.baselineQueue.gpu.enabled }}
+        {{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
+        - name: {{ $gpuFlavor.name }}
+          resources:
+            {{- range $.Values.baselineQueue.resources }}
+            - name: {{ .name }}
+              nominalQuota: {{ .nominalQuota | quote }}
+            {{- end }}
+            {{- range $gpuFlavor.resources }}
+            - name: {{ .name }}
+              nominalQuota: {{ .nominalQuota | quote }}
+            {{- end }}
+        {{- end }}
+        {{- end }}
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass

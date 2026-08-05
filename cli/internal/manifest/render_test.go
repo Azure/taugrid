@@ -1576,12 +1576,61 @@ runtime:
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
+
 	s := string(out)
 	if !strings.Contains(s, "namespace: my-ns") {
 		t.Error("Job namespace should be overridden")
 	}
 	if strings.Contains(s, "namespace: tau") {
 		t.Error("default namespace should be replaced, not duplicated")
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsGPUClassSelectorForAny(t *testing.T) {
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyOptions: topology.Options{GPUClass: topology.GPUClassAny},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
+	p := profile.Profile{
+		Name: "profile-h100",
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
+		},
+	}
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyProfile: &p,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected profile gpu class selector error, got %v", err)
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsClassSelectorForProfileAny(t *testing.T) {
+	p := profile.Profile{
+		Name: "profile-any",
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": topology.GPUClassAny},
+		},
+	}
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyProfile: &p,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected profile gpu_class any selector error, got %v", err)
 	}
 }
 

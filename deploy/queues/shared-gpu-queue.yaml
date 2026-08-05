@@ -14,12 +14,17 @@
 # `tau-train-priority`, and checkpointable fill work uses `tau-best-effort`
 # / `tau-elastic-low`.
 #
-# The ClusterQueue uses a within-document YAML anchor (&gpu-quota) so the
-# per-flavor quota block (cpu / memory / gpu.nvidia.com / nvidia.com/gpu)
-# appears once instead of three times. Anchors are scoped to a single YAML
-# document, so they cannot be shared across ResourceFlavor documents — the
-# toleration block on each ResourceFlavor is kept flow-style on one line to
-# compensate.
+# CPU, memory, and GPU resources share one Kueue resource group because they
+# are tied to one node pool. The generic flavor has zero GPU quota, so CPU-only
+# workloads select it while GPU workloads select one class-labeled flavor for
+# every requested resource.
+#
+# Upgrade safety: the v2 flavor names below are intentional. Kueue flavor
+# selectors, taints, and topology are immutable while a flavor is in use.
+# Before applying this desired state to an existing queue, stop submissions,
+# set the ClusterQueue to HoldAndDrain, explicitly cancel pending workload
+# owners, and wait for reserving/admitted workloads to reach zero. Resume only
+# after these replacement flavors exist and the ClusterQueue references them.
 ---
 # The vNext workload namespace. Provisioned here so the new LocalQueues and the
 # blob-training /data PVC (applied separately from applications/taugrid/storage/
@@ -48,7 +53,17 @@ metadata:
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: gpu-a100-80gb-dra
+  name: tau-system
+  labels:
+    tau.azure.com/managed-by: tau-shared-gpu
+spec:
+  nodeLabels:
+    kubernetes.io/os: linux
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: tau-gpu-a100-80gb-v2
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
@@ -65,12 +80,12 @@ spec:
     tau.azure.com/provider: azure
     tau.azure.com/gpu-class: a100-80gb
     tau.azure.com/rentable: "true"
-  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+  nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: gpu-h100-95gb-dra
+  name: tau-gpu-h100-95gb-v2
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
@@ -78,12 +93,12 @@ spec:
     tau.azure.com/provider: azure
     tau.azure.com/gpu-class: h100-95gb
     tau.azure.com/rentable: "true"
-  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+  nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: gpu-h200-141gb-dra
+  name: tau-gpu-h200-141gb-v2
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
@@ -91,7 +106,7 @@ spec:
     tau.azure.com/provider: azure
     tau.azure.com/gpu-class: h200-141gb
     tau.azure.com/rentable: "true"
-  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
+  nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
@@ -289,15 +304,21 @@ spec:
   resourceGroups:
     - coveredResources: [cpu, memory, gpu.nvidia.com, nvidia.com/gpu]
       flavors:
-        - name: gpu-a100-80gb-dra
+        - name: tau-system
+          resources:
+            - { name: cpu,    nominalQuota: "10000" }
+            - { name: memory, nominalQuota: 100Ti   }
+            - { name: gpu.nvidia.com, nominalQuota: "0" }
+            - { name: nvidia.com/gpu, nominalQuota: "0" }
+        - name: tau-gpu-a100-80gb-v2
           resources: &gpu-quota
             - { name: cpu,            nominalQuota: "10000" }
             - { name: memory,         nominalQuota: 100Ti   }
             - { name: gpu.nvidia.com, nominalQuota: "64"    }
             - { name: nvidia.com/gpu, nominalQuota: "64"    }
-        - name: gpu-h100-95gb-dra
+        - name: tau-gpu-h100-95gb-v2
           resources: *gpu-quota
-        - name: gpu-h200-141gb-dra
+        - name: tau-gpu-h200-141gb-v2
           resources: *gpu-quota
 ---
 apiVersion: kueue.x-k8s.io/v1beta2

@@ -245,11 +245,10 @@ func (cq ClusterQueue) MaxGPUCapacity(flavor, resourceName string) (int64, bool)
 // ResourceFlavor node labels, so this function cannot do that matching
 // itself; see queueresolve.gpuClassAllowedFlavors for the exact-match
 // resolution this depends on.
-func (cq ClusterQueue) BestGPUFlavorFor(allowedFlavors map[string]bool, nodeSelector map[string]string, resourceName string) (string, int64, bool) {
+func (cq ClusterQueue) BestGPUFlavorFor(allowedFlavors map[string]bool, resourceName string) (string, int64, bool) {
 	type candidate struct {
-		name  string
-		cap   int64
-		score int
+		name string
+		cap  int64
 	}
 	var candidates []candidate
 	for _, rg := range cq.Spec.ResourceGroups {
@@ -261,23 +260,13 @@ func (cq ClusterQueue) BestGPUFlavorFor(allowedFlavors map[string]bool, nodeSele
 			if !ok || cap <= 0 {
 				continue
 			}
-			score := 1
-			for _, value := range SelectorValues(nodeSelector) {
-				value = strings.ToLower(value)
-				if value != "" && strings.Contains(strings.ToLower(f.Name), value) {
-					score += 10
-				}
-			}
-			candidates = append(candidates, candidate{name: f.Name, cap: cap, score: score})
+			candidates = append(candidates, candidate{name: f.Name, cap: cap})
 		}
 	}
 	if len(candidates) == 0 {
 		return "", 0, false
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].score != candidates[j].score {
-			return candidates[i].score > candidates[j].score
-		}
 		if candidates[i].cap != candidates[j].cap {
 			return candidates[i].cap > candidates[j].cap
 		}

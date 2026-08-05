@@ -81,7 +81,7 @@ func TestWorkspaceQueueValidationKeepsOnlyPresetTopologyContract(t *testing.T) {
 	if got.Preset != nil {
 		t.Fatal("workspace validation retained preset queue ownership")
 	}
-	if got.TopologyName != "default-node-topology" || got.TopologyCapabilityFlavor != "preset-flavor" {
+	if got.TopologyName != "default-node-topology" {
 		t.Fatalf("workspace validation policy = %+v", got)
 	}
 	if !got.CatalogTopologyContract {
@@ -91,11 +91,11 @@ func TestWorkspaceQueueValidationKeepsOnlyPresetTopologyContract(t *testing.T) {
 		t.Fatal("non-workspace preset validation must be preserved")
 	}
 	preset.Preset.ResourceFlavor = ""
-	if got := queueValidationPolicyFor(preset, true); !got.CatalogTopologyContract || got.TopologyCapabilityFlavor != "" {
+	if got := queueValidationPolicyFor(preset, true); !got.CatalogTopologyContract {
 		t.Fatalf("flavorless workspace TAS policy = %+v", got)
 	}
 	preset.Preset.TopologyName = ""
-	if got := queueValidationPolicyFor(preset, true); got.CatalogTopologyContract || got.TopologyCapabilityFlavor != "" {
+	if got := queueValidationPolicyFor(preset, true); got.CatalogTopologyContract {
 		t.Fatalf("topology-free workspace preset retained capability flavor: %+v", got)
 	}
 }

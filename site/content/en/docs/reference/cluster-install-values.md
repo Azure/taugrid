@@ -35,41 +35,61 @@ Production operators should replace them with deliberate capacity policy.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `baselineQueue.enabled` | bool | `true` | Create the ClusterQueue, LocalQueue, ResourceFlavor, and Topology |
+| `baselineQueue.enabled` | bool | `true` | Create the ClusterQueue, LocalQueue, ResourceFlavors, and Topology |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (DNS label) |
 | `baselineQueue.namespaceSelector` | object | `matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]` | Namespaces that receive the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
 | `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.flavor.name` | string | `taugrid-default` | ResourceFlavor name |
-| `baselineQueue.flavor.nodeLabels` | map | `{kubernetes.io/os: linux}` | Node selector labels |
-| `baselineQueue.flavor.tolerations` | list | `[]` | Tolerations injected at admission (see below) |
-| `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti, nvidia.com/gpu: 1000 | Admission quota |
+| `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory flavor; keep GPU labels and tolerations out |
+| `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti | CPU/memory admission quota |
+| `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
+| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resources covered by the node-resource group |
+| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu` | GPU flavors and per-flavor quotas |
 
-The generic `taugrid-default` flavor intentionally has no
-`tau.azure.com/gpu-class` node label. It supports `gpu_class: any` only.
-Class-specific pools must label the ResourceFlavor and matching nodes with one
-of `a100-80gb`, `h100-95gb`, or `h200-141gb`; Tau matches the label exactly and
-does not infer hardware from the ResourceFlavor name.
+CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives
+one node flavor across all of its requested resources. `taugrid-default-cpu` has
+zero GPU quota, while the generic `taugrid-default-gpu` has CPU/memory plus GPU
+quota and supports `gpu_class: any` on a fresh install. When hardware is known,
+replace the GPU flavor list with class-specific flavors and label matching nodes
+with `a100-80gb`, `h100-95gb`, or `h200-141gb`.
+Only GPU flavors carry `topologyName`. They provide the pod set's single TAS
+flavor for Tau's explicit placement policy, while the CPU/memory flavor remains
+non-TAS so CPU-only jobs without placement annotations can be admitted.
+For upgrades with saved legacy values, remove GPU resources from
+`baselineQueue.resources` and move all GPU class/series labels and GPU-node
+tolerations out of `baselineQueue.flavor` before adding their replacements
+under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's
+`nodeTaints`. TauGrid fails template rendering if the old mixed values would
+duplicate GPU coverage or constrain CPU-only admission.
+Do not keep the generic GPU flavor beside class-specific flavors: exact class
+quota must not fall back to an unlabeled ResourceFlavor.
 
-### `baselineQueue.flavor.tolerations`
+### `baselineQueue.gpu.flavors`
 
-When the cluster uses GPU taints (e.g., `sku=gpu:NoSchedule`), Kueue excludes
-tainted nodes while assigning flavors, and the workload is never admitted —
-`couldn't assign flavors to pod set` with a `taint` exclusion count. Kueue
-unions a pod set's own tolerations with the flavor's before filtering nodes, so
-a workload that already carries matching tolerations is admitted either way;
-Tau injects the `sku=gpu` and `nvidia.com/gpu` tolerations into the GPU
-workloads it renders. Set this field so workloads Tau does not render are
-admitted too.
+Declare GPU-node taints (for example `sku=gpu:NoSchedule`) in each GPU flavor's
+`nodeTaints`. This makes the flavor ineligible for CPU-only pods if generic CPU
+quota is exhausted. Tau injects `sku=gpu` and `nvidia.com/gpu` tolerations into
+GPU workloads, so those workloads remain eligible. Do not repeat a matching
+taint under the flavor's `tolerations`: Kueue would then automatically tolerate
+it for every pod and remove the CPU-isolation guard.
 
 ```yaml
 # taugrid-values.yaml
 baselineQueue:
-  flavor:
-    tolerations:
-      - key: sku
-        value: gpu
-        effect: NoSchedule
+  gpu:
+    flavors:
+      - name: a100-pool
+        nodeLabels:
+          kubernetes.io/os: linux
+          tau.azure.com/gpu-class: a100-80gb
+        nodeTaints:
+          - key: sku
+            value: gpu
+            effect: NoSchedule
+        tolerations: []
+        resources:
+          - name: nvidia.com/gpu
+            nominalQuota: "1"
 ```
 
 ## Sub-Chart Pass-Through
@@ -88,14 +108,21 @@ The remaining top-level keys pass values directly to embedded sub-charts:
 ```yaml
 # taugrid-values.yaml — H200 cluster with GPU taints
 baselineQueue:
-  flavor:
-    nodeLabels:
-      kubernetes.io/os: linux
-      tau.azure.com/gpu-series: h200
-    tolerations:
-      - key: sku
-        value: gpu
-        effect: NoSchedule
+  gpu:
+    flavors:
+      - name: h200-pool
+        nodeLabels:
+          kubernetes.io/os: linux
+          tau.azure.com/gpu-series: h200
+          tau.azure.com/gpu-class: h200-141gb
+        nodeTaints:
+          - key: sku
+            value: gpu
+            effect: NoSchedule
+        tolerations: []
+        resources:
+          - name: nvidia.com/gpu
+            nominalQuota: "8"
 
 tau-core-controller:
   tauCluster:
@@ -104,6 +131,10 @@ tau-core-controller:
         targetLabel: tau.azure.com/gpu-series
         mappings:
           Standard_ND96isr_H200_v5: h200
+      - sourceLabel: node.kubernetes.io/instance-type
+        targetLabel: tau.azure.com/gpu-class
+        mappings:
+          Standard_ND96isr_H200_v5: h200-141gb
 ```
 
 ## See Also

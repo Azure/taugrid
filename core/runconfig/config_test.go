@@ -398,6 +398,38 @@ func TestJSONSchemaDurationRendersAsString(t *testing.T) {
 	}
 }
 
+func TestJSONSchemaAcceptsDeprecatedGPUClassAliases(t *testing.T) {
+	raw, err := JSONSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	props := schema["properties"].(map[string]any)
+	policy := props["policy"].(map[string]any)["properties"].(map[string]any)
+	gpuClass := policy["gpu_class"].(map[string]any)
+	choices, ok := gpuClass["oneOf"].([]any)
+	if !ok || len(choices) != 2 {
+		t.Fatalf("gpu_class oneOf = %#v, want canonical and deprecated choices", gpuClass["oneOf"])
+	}
+	deprecated := choices[1].(map[string]any)
+	if deprecated["deprecated"] != true {
+		t.Fatalf("deprecated gpu_class aliases are not marked deprecated: %#v", deprecated)
+	}
+	got := deprecated["enum"].([]any)
+	want := []string{"a100-nvlink-80gb", "h100-standalone-95gb", "h200-nvlink-141gb"}
+	if len(got) != len(want) {
+		t.Fatalf("deprecated aliases = %#v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("deprecated alias[%d] = %v, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestParseResilienceConfig(t *testing.T) {
 	cfg, err := parse([]byte(`name: retry-test
 engine: job

@@ -20,22 +20,21 @@ type RawRunner interface {
 // ValidationOptions describes the resolved queue/lane selection a run path is
 // about to hand to Kubernetes.
 type ValidationOptions struct {
-	Namespace                string
-	QueueName                string
-	Preset                   *topology.ResolvedPreset
-	Team                     string
-	Lane                     string
-	GPUClass                 string
-	ClusterQueue             string
-	ResourceFlavor           string
-	TopologyName             string
-	TopologyCapabilityFlavor string
-	CatalogTopologyContract  bool
-	TopologyRequest          bool
-	NodeSelector             map[string]string
-	PodTolerations           [][]kueueapi.Toleration
-	GPUCount                 int
-	GPUResourceName          string
+	Namespace               string
+	QueueName               string
+	Preset                  *topology.ResolvedPreset
+	Team                    string
+	Lane                    string
+	GPUClass                string
+	ClusterQueue            string
+	ResourceFlavor          string
+	TopologyName            string
+	CatalogTopologyContract bool
+	TopologyRequest         bool
+	NodeSelector            map[string]string
+	PodTolerations          [][]kueueapi.Toleration
+	GPUCount                int
+	GPUResourceName         string
 }
 
 // ValidationReport is the read-only queue topology observed from the cluster.
@@ -51,22 +50,21 @@ type ValidationReport struct {
 }
 
 type validationTarget struct {
-	Namespace                string
-	QueueName                string
-	Preset                   *topology.ResolvedPreset
-	Team                     string
-	Lane                     string
-	GPUClass                 string
-	ClusterQueue             string
-	ResourceFlavor           string
-	TopologyName             string
-	TopologyCapabilityFlavor string
-	CatalogTopologyContract  bool
-	TopologyRequest          bool
-	NodeSelector             map[string]string
-	PodTolerations           [][]kueueapi.Toleration
-	GPUCount                 int
-	GPUResourceName          string
+	Namespace               string
+	QueueName               string
+	Preset                  *topology.ResolvedPreset
+	Team                    string
+	Lane                    string
+	GPUClass                string
+	ClusterQueue            string
+	ResourceFlavor          string
+	TopologyName            string
+	CatalogTopologyContract bool
+	TopologyRequest         bool
+	NodeSelector            map[string]string
+	PodTolerations          [][]kueueapi.Toleration
+	GPUCount                int
+	GPUResourceName         string
 }
 
 // ValidateSelection checks the selected LocalQueue and its backing Kueue
@@ -112,45 +110,47 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 	}
 	policyTopologyContract := target.CatalogTopologyContract
 	if policyTopologyContract {
-		capabilityFlavor := target.TopologyCapabilityFlavor
-		if capabilityFlavor == "" {
-			capabilityFlavor = findCatalogTopologyFlavor(cq, target)
+		capabilityFlavor, err := findCatalogTopologyFlavor(ctx, r, cq, target)
+		if err != nil {
+			return report, err
 		}
 		if capabilityFlavor == "" {
 			return report, fmt.Errorf(
-				"ClusterQueue %q does not provide topology %q through any catalogued ResourceFlavor with quota for resource %q that matches the rendered node selector; choose a topology-capable workspace queue or ask the platform owner to update its ResourceFlavors",
-				target.ClusterQueue, target.TopologyName, target.GPUResourceName)
-		}
-		if !cq.HasResourceFlavor(capabilityFlavor) {
-			return report, fmt.Errorf(
-				"ClusterQueue %q does not provide topology %q because it does not include policy ResourceFlavor %q; choose a topology-capable workspace queue or ask the platform owner to update its ResourceFlavors",
-				target.ClusterQueue, target.TopologyName, capabilityFlavor)
-		}
-		if series, ok := topology.ManagedGPUSeriesForFlavor(capabilityFlavor); ok {
-			if selected := strings.TrimSpace(target.NodeSelector[topology.ManagedGPUSeriesLabel]); selected != "" && selected != series {
-				return report, fmt.Errorf(
-					"ClusterQueue %q topology ResourceFlavor %q requires %s=%q, but the rendered workload selects %q",
-					target.ClusterQueue, capabilityFlavor, topology.ManagedGPUSeriesLabel, series, selected)
-			}
+				"ClusterQueue %q does not provide topology %q through any ResourceFlavor with quota for resource %q that matches gpu_class %q and the rendered pod constraints; choose a topology-capable workspace queue or ask the platform owner to update its ResourceFlavors",
+				target.ClusterQueue, target.TopologyName, target.GPUResourceName, target.GPUClass)
 		}
 		target.ResourceFlavor = capabilityFlavor
 		report.ResourceFlavor = capabilityFlavor
 		report.TopologyName = target.TopologyName
-		if target.GPUClass != "" && target.GPUClass != topology.GPUClassAny {
-			rf, err := getResourceFlavor(ctx, r, capabilityFlavor)
-			if err != nil {
-				return report, fmt.Errorf("ResourceFlavor %q selected for gpu_class %q was not found (%s); ask the platform owner to inspect the ClusterQueue and ResourceFlavor", capabilityFlavor, target.GPUClass, err)
-			}
-			if err := validateResourceFlavor(rf, target); err != nil {
-				return report, err
-			}
-		}
 		if target.GPUCount > 0 && !target.TopologyRequest {
 			return report, missingTopologyIntentError(target.ClusterQueue, []string{capabilityFlavor})
 		}
 	}
-	if err := validateQueueTopologyIntent(ctx, r, cq, target); err != nil {
-		return report, err
+	if !policyTopologyContract &&
+		target.ResourceFlavor == "" &&
+		target.GPUCount > 0 &&
+		target.GPUResourceName != "" {
+		if err := validateQueueTopologyIntent(ctx, r, cq, target); err != nil {
+			return report, err
+		}
+		allowedFlavors, err := gpuClassAllowedFlavors(
+			ctx, r, cq, target.GPUClass, target.GPUResourceName, target.NodeSelector, target.PodTolerations, target.TopologyRequest)
+		if err != nil {
+			return report, err
+		}
+		flavor, _, ok := cq.BestGPUFlavorFor(allowedFlavors, target.GPUResourceName)
+		if !ok {
+			if target.GPUClass == "" || target.GPUClass == topology.GPUClassAny {
+				return report, fmt.Errorf(
+					"ClusterQueue %q has no GPU quota flavor for resource %q compatible with the rendered pod selectors, tolerations, and topology policy; choose another queue or ask the platform owner to repair its ResourceFlavors",
+					target.ClusterQueue, target.GPUResourceName)
+			}
+			return report, fmt.Errorf(
+				"ClusterQueue %q has no compatible GPU quota flavor with exact node label %s=%q for resource %q and the rendered pod constraints; choose another queue or ask the platform owner to label a matching ResourceFlavor and GPU nodes",
+				target.ClusterQueue, topology.NodeLabelGPUClass, target.GPUClass, target.GPUResourceName)
+		}
+		target.ResourceFlavor = flavor
+		report.ResourceFlavor = flavor
 	}
 	if target.ResourceFlavor != "" {
 		if !cq.HasResourceFlavor(target.ResourceFlavor) {
@@ -183,21 +183,34 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 	return report, nil
 }
 
-func findCatalogTopologyFlavor(cq kueueapi.ClusterQueue, target validationTarget) string {
+func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) (string, error) {
 	var fitting []string
 	fallback := ""
 	var fallbackCapacity int64
+	seen := map[string]bool{}
+	var unreadable []string
 	for _, group := range cq.Spec.ResourceGroups {
 		for _, flavor := range group.Flavors {
-			series, known := topology.ManagedGPUSeriesForFlavor(flavor.Name)
-			if !known {
+			if seen[flavor.Name] {
 				continue
 			}
+			seen[flavor.Name] = true
 			capacity, ok := cq.MaxGPUCapacity(flavor.Name, target.GPUResourceName)
 			if !ok || capacity <= 0 {
 				continue
 			}
-			if selected := strings.TrimSpace(target.NodeSelector[topology.ManagedGPUSeriesLabel]); selected != "" && selected != series {
+			rf, err := getResourceFlavor(ctx, r, flavor.Name)
+			if err != nil {
+				unreadable = append(unreadable, fmt.Sprintf("%s (%s)", flavor.Name, err))
+				continue
+			}
+			if strings.TrimSpace(rf.Spec.TopologyName) != target.TopologyName ||
+				!resourceFlavorMatchesNodeSelector(rf, target.NodeSelector) ||
+				!resourceFlavorMatchesPodTolerations(rf, target.PodTolerations) {
+				continue
+			}
+			if target.GPUClass != "" && target.GPUClass != topology.GPUClassAny &&
+				strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) != target.GPUClass {
 				continue
 			}
 			if int64(target.GPUCount) <= capacity {
@@ -212,31 +225,38 @@ func findCatalogTopologyFlavor(cq kueueapi.ClusterQueue, target validationTarget
 	}
 	sort.Strings(fitting)
 	if len(fitting) > 0 {
-		return fitting[0]
+		return fitting[0], nil
 	}
-	return fallback
+	if fallback != "" {
+		return fallback, nil
+	}
+	if len(unreadable) > 0 {
+		return "", fmt.Errorf(
+			"cannot resolve topology %q in ClusterQueue %q because ResourceFlavor capabilities could not be read: %s",
+			target.TopologyName, target.ClusterQueue, strings.Join(unreadable, ", "))
+	}
+	return "", nil
 }
 
 func (o ValidationOptions) resolve() validationTarget {
 	ns := strings.TrimSpace(o.Namespace)
 	gpuClass, _ := topology.NormalizeGPUClass(o.GPUClass)
 	target := validationTarget{
-		Namespace:                ns,
-		QueueName:                strings.TrimSpace(o.QueueName),
-		Preset:                   o.Preset,
-		Team:                     strings.TrimSpace(o.Team),
-		Lane:                     strings.TrimSpace(o.Lane),
-		GPUClass:                 gpuClass,
-		ClusterQueue:             strings.TrimSpace(o.ClusterQueue),
-		ResourceFlavor:           strings.TrimSpace(o.ResourceFlavor),
-		TopologyName:             strings.TrimSpace(o.TopologyName),
-		TopologyCapabilityFlavor: strings.TrimSpace(o.TopologyCapabilityFlavor),
-		CatalogTopologyContract:  o.CatalogTopologyContract,
-		TopologyRequest:          o.TopologyRequest,
-		NodeSelector:             o.NodeSelector,
-		PodTolerations:           o.PodTolerations,
-		GPUCount:                 o.GPUCount,
-		GPUResourceName:          strings.TrimSpace(o.GPUResourceName),
+		Namespace:               ns,
+		QueueName:               strings.TrimSpace(o.QueueName),
+		Preset:                  o.Preset,
+		Team:                    strings.TrimSpace(o.Team),
+		Lane:                    strings.TrimSpace(o.Lane),
+		GPUClass:                gpuClass,
+		ClusterQueue:            strings.TrimSpace(o.ClusterQueue),
+		ResourceFlavor:          strings.TrimSpace(o.ResourceFlavor),
+		TopologyName:            strings.TrimSpace(o.TopologyName),
+		CatalogTopologyContract: o.CatalogTopologyContract,
+		TopologyRequest:         o.TopologyRequest,
+		NodeSelector:            o.NodeSelector,
+		PodTolerations:          o.PodTolerations,
+		GPUCount:                o.GPUCount,
+		GPUResourceName:         strings.TrimSpace(o.GPUResourceName),
 	}
 	if o.Preset != nil {
 		target.Namespace = topology.PresetLocalQueueNamespace(ns, *o.Preset)
@@ -324,16 +344,20 @@ func getResourceFlavor(ctx context.Context, r RawRunner, name string) (kueueapi.
 // flavor named "nd-h200-v5" (or one that happens to contain "h100" in its
 // name, e.g. a mislabeled "legacy-h100-pool") only satisfies
 // gpu_class: h200-141gb if its spec.nodeLabels carries that exact value.
-// An empty class or "any" returns (nil, nil), meaning every GPU-quota flavor
-// in the queue is allowed (BestGPUFlavorFor treats a nil map as unfiltered).
-// A non-nil, possibly-empty map means the class was specific and only the
-// named flavors qualify -- an empty map correctly yields "no matching GPU
-// quota found" rather than silently falling back to any flavor.
-func gpuClassAllowedFlavors(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, gpuClass, resourceName string) (map[string]bool, error) {
+// "any" skips only the class-label equality check. Every candidate is still
+// read and checked against the rendered selectors, tolerations, and topology
+// request. A non-nil, possibly-empty map is always returned so callers never
+// bypass ResourceFlavor validation.
+func gpuClassAllowedFlavors(
+	ctx context.Context,
+	r RawRunner,
+	cq kueueapi.ClusterQueue,
+	gpuClass, resourceName string,
+	nodeSelector map[string]string,
+	podTolerations [][]kueueapi.Toleration,
+	topologyRequest bool,
+) (map[string]bool, error) {
 	class, _ := topology.NormalizeGPUClass(strings.TrimSpace(gpuClass))
-	if class == "" || class == topology.GPUClassAny {
-		return nil, nil
-	}
 	allowed := map[string]bool{}
 	seen := map[string]bool{}
 	var unreadable []string
@@ -351,7 +375,12 @@ func gpuClassAllowedFlavors(ctx context.Context, r RawRunner, cq kueueapi.Cluste
 				unreadable = append(unreadable, f.Name)
 				continue
 			}
-			if strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) == class {
+			classMatches := class == "" || class == topology.GPUClassAny ||
+				strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) == class
+			topologyMatches := (strings.TrimSpace(rf.Spec.TopologyName) != "") == topologyRequest
+			if classMatches && topologyMatches &&
+				resourceFlavorMatchesNodeSelector(rf, nodeSelector) &&
+				resourceFlavorMatchesPodTolerations(rf, podTolerations) {
 				allowed[f.Name] = true
 			}
 		}
@@ -367,6 +396,8 @@ type AutoSelectOptions struct {
 	GPUCount        int
 	GPUClass        string
 	NodeSelector    map[string]string
+	PodTolerations  [][]kueueapi.Toleration
+	TopologyRequest bool
 	GPUResourceName string
 }
 
@@ -401,12 +432,13 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 			candidates = append(candidates, QueueCandidate{QueueName: name, ClusterQueue: cqName, Reason: "ClusterQueue not readable"})
 			continue
 		}
-		allowedFlavors, err := gpuClassAllowedFlavors(ctx, r, cq, gpuClass, opts.GPUResourceName)
+		allowedFlavors, err := gpuClassAllowedFlavors(
+			ctx, r, cq, gpuClass, opts.GPUResourceName, opts.NodeSelector, opts.PodTolerations, opts.TopologyRequest)
 		if err != nil {
 			candidates = append(candidates, QueueCandidate{QueueName: name, ClusterQueue: cqName, Reason: err.Error()})
 			continue
 		}
-		flavor, maxGPU, ok := cq.BestGPUFlavorFor(allowedFlavors, opts.NodeSelector, opts.GPUResourceName)
+		flavor, maxGPU, ok := cq.BestGPUFlavorFor(allowedFlavors, opts.GPUResourceName)
 		c := QueueCandidate{
 			QueueName:      name,
 			ClusterQueue:   cqName,
@@ -427,7 +459,7 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 			candidates = append(candidates, c)
 			continue
 		}
-		c.Score = queueFitScore(c, opts)
+		c.Score = 100
 		c.Reason = "fits requested GPU count"
 		candidates = append(candidates, c)
 	}
@@ -478,24 +510,6 @@ func listLocalQueues(ctx context.Context, r RawRunner, namespace string) (kueuea
 	return items, nil
 }
 
-// queueFitScore ranks candidates that already passed the exact gpu_class
-// filter in gpuClassAllowedFlavors (which restricted BestGPUFlavorFor's
-// candidate set upstream). It only tie-breaks on an explicit
-// --node-selector's values against the flavor name, a separate, generic
-// preference signal unrelated to gpu_class matching.
-func queueFitScore(c QueueCandidate, opts AutoSelectOptions) int {
-	score := 100
-	if selector := strings.Join(kueueapi.SelectorValues(opts.NodeSelector), " "); selector != "" {
-		flavor := strings.ToLower(c.ResourceFlavor)
-		for _, value := range strings.Fields(strings.ToLower(selector)) {
-			if value != "" && strings.Contains(flavor, value) {
-				score += 10
-			}
-		}
-	}
-	return score
-}
-
 func validateOptionalTopologyLabels(kind, name string, labels map[string]string, target validationTarget) error {
 	for _, check := range []struct {
 		key  string
@@ -533,6 +547,12 @@ func validateResourceFlavor(rf kueueapi.ResourceFlavor, target validationTarget)
 		if got != target.TopologyName {
 			return fmt.Errorf("ResourceFlavor %q topologyName=%q, but preset %s expects %q", target.ResourceFlavor, got, presetName(target), target.TopologyName)
 		}
+	}
+	if target.GPUCount > 0 && !resourceFlavorMatchesNodeSelector(rf, target.NodeSelector) {
+		return fmt.Errorf("ResourceFlavor %q node labels conflict with the rendered workload node selector", rf.Metadata.Name)
+	}
+	if target.GPUCount > 0 && !resourceFlavorMatchesPodTolerations(rf, target.PodTolerations) {
+		return fmt.Errorf("ResourceFlavor %q node taints are not tolerated by the rendered GPU pods or the ResourceFlavor", rf.Metadata.Name)
 	}
 	return nil
 }
@@ -666,10 +686,19 @@ func podToleratesTaint(tolerations []kueueapi.Toleration, taint kueueapi.Taint) 
 }
 
 func validateResourceFlavorTopologyIntent(rf kueueapi.ResourceFlavor, target validationTarget) error {
-	if target.GPUCount <= 0 ||
-		target.GPUResourceName == "" ||
-		target.TopologyRequest ||
-		strings.TrimSpace(rf.Spec.TopologyName) == "" {
+	if target.GPUCount <= 0 || target.GPUResourceName == "" {
+		return nil
+	}
+	hasTopology := strings.TrimSpace(rf.Spec.TopologyName) != ""
+	if target.TopologyRequest {
+		if hasTopology {
+			return nil
+		}
+		return fmt.Errorf(
+			"GPU request sets policy.topology, but ResourceFlavor %q in ClusterQueue %q does not support TopologyAwareScheduling; choose a topology-capable queue or ask the platform owner to set spec.topologyName",
+			rf.Metadata.Name, target.ClusterQueue)
+	}
+	if !hasTopology {
 		return nil
 	}
 	return missingTopologyIntentError(target.ClusterQueue, []string{target.ResourceFlavor})

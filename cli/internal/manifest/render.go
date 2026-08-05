@@ -758,12 +758,8 @@ func buildSchedulingMetadata(opts RenderOptions) (schedulingMetadata, error) {
 	if err != nil {
 		return schedulingMetadata{}, err
 	}
-	if required := plan.NodeSelector[topology.NodeLabelGPUClass]; required != "" {
-		if selected := strings.TrimSpace(opts.NodeSelector[topology.NodeLabelGPUClass]); selected != "" && selected != required {
-			return schedulingMetadata{}, fmt.Errorf(
-				"gpu_class %q requires %s=%q, but the workload node selector uses %q",
-				opts.TopologyOptions.GPUClass, topology.NodeLabelGPUClass, required, selected)
-		}
+	if err := topology.ValidateGPUClassNodeSelector(plan.Labels[workloadmeta.LabelGPUClass], opts.NodeSelector); err != nil {
+		return schedulingMetadata{}, err
 	}
 	nodeSelector := mergeStringMaps(plan.NodeSelector, opts.NodeSelector)
 

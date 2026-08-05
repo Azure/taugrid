@@ -85,6 +85,42 @@ func NormalizeGPUClass(v string) (canonical string, deprecatedAlias bool) {
 	return normalized, false
 }
 
+func IsSupportedGPUClass(v string) bool {
+	canonical, _ := NormalizeGPUClass(v)
+	switch canonical {
+	case GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) error {
+	canonical, _ := NormalizeGPUClass(gpuClass)
+	selected := strings.TrimSpace(selector[workloadmeta.NodeLabelGPUClass])
+	if selected == "" || canonical == "" {
+		return nil
+	}
+	if canonical == GPUClassAny {
+		return fmt.Errorf("gpu_class %q is unconstrained and cannot be combined with node selector %s=%q", canonical, workloadmeta.NodeLabelGPUClass, selected)
+	}
+	if selected != canonical {
+		return fmt.Errorf("gpu_class %q requires %s=%q, but the workload node selector uses %q", canonical, workloadmeta.NodeLabelGPUClass, canonical, selected)
+	}
+	return nil
+}
+
+// ResolveGPUClass returns the effective canonical gpu_class after applying an
+// explicit override to a profile's topology contract.
+func ResolveGPUClass(p profile.Profile, override string) (string, bool) {
+	raw, _ := asMap(p.Spec["topology"])
+	gpuClass := stringFrom(raw, "gpuClass", "gpuFlavor", "flavor")
+	if override != "" {
+		gpuClass = override
+	}
+	return NormalizeGPUClass(gpuClass)
+}
+
 // Options are caller-provided overrides. They are intentionally strings so the
 // CLI can pass flags through directly; Build normalizes and validates them.
 type Options struct {
@@ -159,9 +195,11 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 		NodeSelector: map[string]string{},
 		QueueName:    spec.queueName(),
 	}
-	if spec.gpuClass != "" && spec.gpuClass != GPUClassAny {
+	if spec.gpuClass != "" {
 		plan.Labels[LabelGPUClass] = spec.gpuClass
-		plan.NodeSelector[workloadmeta.NodeLabelGPUClass] = spec.gpuClass
+		if spec.gpuClass != GPUClassAny {
+			plan.NodeSelector[workloadmeta.NodeLabelGPUClass] = spec.gpuClass
+		}
 	}
 	if spec.workloadPriorityClassName != "" {
 		plan.Labels[workloadPriorityLabel] = spec.workloadPriorityClassName

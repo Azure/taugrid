@@ -13,6 +13,26 @@
           "minLength": 1,
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         },
+        "flavor": {
+          "type": "object",
+          "required": [
+            "name",
+            "nodeLabels",
+            "tolerations"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nodeLabels": {
+              "type": "object"
+            },
+            "tolerations": {
+              "type": "array"
+            }
+          }
+        },
         "resources": {
           "type": "array",
           "minItems": 1,
@@ -41,11 +61,91 @@
               }
             }
           }
+        },
+        "gpu": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "coveredResources",
+            "flavors"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "coveredResources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "flavors": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "nodeLabels",
+                  "nodeTaints",
+                  "tolerations",
+                  "resources"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "nodeLabels": {
+                    "type": "object"
+                  },
+                  "nodeTaints": {
+                    "type": "array",
+                    "minItems": 1
+                  },
+                  "tolerations": {
+                    "type": "array"
+                  },
+                  "resources": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "nominalQuota"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nominalQuota": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "number",
+                              "minimum": 0
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "required": [
         "enabled",
         "name",
+        "flavor",
+        "gpu",
         "resources"
       ]
     }

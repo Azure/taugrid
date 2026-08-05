@@ -439,7 +439,6 @@ runtime:
 	for _, forbidden := range []string{
 		"kueue.x-k8s.io/podset-required-topology",
 		"kueue.x-k8s.io/podset-preferred-topology",
-		workloadmeta.LabelGPUClass + ":",
 		workloadmeta.AnnotationResourceFlavor + ":",
 	} {
 		if strings.Contains(rendered, forbidden) {

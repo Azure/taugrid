@@ -1042,6 +1042,83 @@ func TestRender_RejectsConflictingGPUClassNodeSelector(t *testing.T) {
 	}
 }
 
+func TestRender_RejectsGPUClassSelectorForAny(t *testing.T) {
+	_, err := Render(trainProfile(), Options{
+		Name:      "train-any-conflict",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		GPUClass:  runtopology.GPUClassAny,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestRender_RejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
+	p := trainProfile()
+	p.Spec["topology"] = map[string]any{"gpuClass": runtopology.GPUClassH10095GB}
+	_, err := Render(p, Options{
+		Name:      "train-profile-conflict",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected profile gpu class selector error, got %v", err)
+	}
+}
+
+func TestRender_RejectsClassSelectorForProfileAny(t *testing.T) {
+	p := trainProfile()
+	p.Spec["topology"] = map[string]any{"gpuClass": runtopology.GPUClassAny}
+	_, err := Render(p, Options{
+		Name:      "train-profile-any-conflict",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected profile gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestRender_ClearNodeSelectorPreservesGPUClassContract(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:              "train-clear-selector",
+		Namespace:         "tau",
+		Command:           []string{"true"},
+		QueueName:         "jobqueue",
+		GPUClass:          runtopology.GPUClassA10080GB,
+		ClearNodeSelector: true,
+		NodeSelector:      map[string]string{"rack": "r1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseYAML(t, out)
+	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	nodeSelector := pod["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
+		t.Fatalf("gpu class selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	}
+	if nodeSelector["rack"] != "r1" {
+		t.Fatalf("caller selector missing: %v", nodeSelector)
+	}
+	if _, ok := nodeSelector[workloadmeta.LabelLane]; ok {
+		t.Fatalf("profile selector survived clear_node_selector: %v", nodeSelector)
+	}
+}
+
 func TestRender_EmbeddedPresetTASContract(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1161,8 +1238,8 @@ func TestRender_GPUClassAnyClearsProfileGPUSelectorAndDefaultPriorities(t *testi
 	if labels["kueue.x-k8s.io/queue-name"] != "dev" {
 		t.Fatalf("queue label=%v want dev", labels["kueue.x-k8s.io/queue-name"])
 	}
-	if _, ok := labels[workloadmeta.LabelGPUClass]; ok {
-		t.Fatalf("Tau metadata label should be omitted: %v", labels)
+	if labels[workloadmeta.LabelGPUClass] != runtopology.GPUClassAny {
+		t.Fatalf("gpu class label=%v want %s", labels, runtopology.GPUClassAny)
 	}
 	if _, ok := labels["kueue.x-k8s.io/priority-class"]; ok {
 		t.Fatalf("default workload priority should be omitted: %v", labels)
@@ -1174,6 +1251,9 @@ func TestRender_GPUClassAnyClearsProfileGPUSelectorAndDefaultPriorities(t *testi
 	nodeSelector := pod["nodeSelector"].(map[string]any)
 	if nodeSelector["agentpool"] != "h200pool" {
 		t.Fatalf("non-GPU selectors should remain: %v", nodeSelector)
+	}
+	if _, ok := nodeSelector[workloadmeta.LabelGPUClass]; ok {
+		t.Fatalf("gpu_class any should remove the class selector: %v", nodeSelector)
 	}
 }
 

@@ -71,35 +71,53 @@ should replace this with deliberate capacity policy.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, and ResourceFlavor |
+| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, ResourceFlavors, and Topology |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (must be a valid DNS label) |
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
 | `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.flavor.name` | string | `taugrid-default` | ResourceFlavor name |
-| `baselineQueue.flavor.nodeLabels` | map | `{kubernetes.io/os: linux}` | Node selector labels for the flavor |
-| `baselineQueue.flavor.tolerations` | list | `[]` | Tolerations applied to workloads admitted through this flavor (critical for GPU taints) |
-| `baselineQueue.resources` | list | see below | Resource quotas for admission control |
+| `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
+| `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
+| `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
+| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resource names covered by the node-resource group |
+| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu` | GPU ResourceFlavors and per-flavor quotas |
 
-The default `taugrid-default` flavor is intentionally generic: it does not set
-`tau.azure.com/gpu-class`. It can admit `gpu_class: any`, but Tau will reject it
-for a specific class instead of guessing from the ResourceFlavor name.
-Production GPU pools should give both the ResourceFlavor `spec.nodeLabels` and
-matching nodes one canonical class:
+CPU, memory, and GPU are in one Kueue ResourceGroup because they are all tied to
+the selected node pool. The CPU flavor `taugrid-default-cpu` has no GPU selector,
+no GPU taint toleration, and zero GPU quota. Each GPU flavor receives the same
+CPU/memory quota plus its declared GPU quota, so a GPU pod set receives one
+flavor across all requested resources. The fresh-install GPU flavor
+`taugrid-default-gpu` is unlabeled and supports `gpu_class: any` only. Once
+hardware is known, replace the entire GPU flavor list with class-labeled
+flavors; do not retain the generic GPU flavor alongside them.
+
+When topology is enabled, only GPU flavors carry `topologyName`. Tau GPU
+workloads with an explicit `topology` policy carry Kueue's required, preferred,
+or unconstrained TAS annotation. The CPU/memory flavor remains non-TAS so
+CPU-only workloads without a placement policy can be admitted. Kueue rejects a
+pod set assigned more than one TAS flavor.
 
 ```yaml
 baselineQueue:
-  flavor:
-    name: ndm-a100-v4 # platform-owned; Tau does not parse this name
-    nodeLabels:
-      tau.azure.com/gpu-class: a100-80gb
+  gpu:
+    flavors:
+      - name: a100-pool # platform-owned; Tau does not parse this name
+        nodeLabels:
+          kubernetes.io/os: linux
+          kueue.azure.com/gpu-series: nc24ads-a100-v4
+          tau.azure.com/gpu-class: a100-80gb
+        nodeTaints:
+          - {key: sku, value: gpu, effect: NoSchedule}
+        tolerations: []
+        resources:
+          - {name: nvidia.com/gpu, nominalQuota: "1"}
 ```
 
 Canonical classes are `a100-80gb`, `h100-95gb`, and `h200-141gb`. Placement and
 interconnect requirements remain separate (`independent`,
 `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`).
 
-Default resources:
+Default queue values:
 
 ```yaml
 resources:
@@ -107,33 +125,59 @@ resources:
     nominalQuota: "100000"
   - name: memory
     nominalQuota: 100Ti
-  - name: nvidia.com/gpu
-    nominalQuota: "1000"
+gpu:
+  coveredResources: [nvidia.com/gpu]
+  flavors:
+    - name: taugrid-default-gpu
+      nodeLabels: {kubernetes.io/os: linux}
+      nodeTaints: [{key: sku, value: gpu, effect: NoSchedule}]
+      tolerations: []
+      resources:
+        - {name: nvidia.com/gpu, nominalQuota: "1000"}
 ```
 
 These quotas bound concurrent Kueue admission; Kubernetes scheduling still
 enforces the cluster's real capacity.
 
-**`baselineQueue.flavor.tolerations`** — When the cluster uses GPU taints
-(e.g., `sku=gpu:NoSchedule`), admitted workloads need matching tolerations.
-Set this field so Kueue's ResourceFlavor injects tolerations at admission time:
+Upgrades from chart 0.2.0 create the replacement CPU flavor
+`taugrid-default-cpu` instead of mutating the old mixed `taugrid-default`
+flavor. Stop submissions, hold and drain the ClusterQueue, explicitly cancel
+pending workload owners, then replace `spec.resourceGroups` with one group
+where the CPU flavor has zero GPU quota and GPU flavors carry CPU, memory, and
+GPU quota.
+Do not patch a GPU class onto the old sole flavor: that selector would also
+apply to CPU-only admission. ResourceFlavor fields may be immutable or protected
+while referenced, so replacement names are the safe migration path.
+
+Before running `helm upgrade`, also update saved values: remove GPU resources
+from `baselineQueue.resources`, move every GPU class/series label and GPU-node
+toleration out of `baselineQueue.flavor`, and declare GPU admission taints under
+`baselineQueue.gpu.flavors[].nodeTaints`. The chart fails rendering rather than
+emitting a duplicate or CPU-constraining resource contract when legacy mixed
+values remain.
+
+**`baselineQueue.gpu.flavors[].nodeTaints`** — Declare the taints associated
+with GPU nodes (for example `sku=gpu:NoSchedule`). Kueue then prevents CPU-only
+pods from falling through to GPU quota if generic CPU quota is exhausted.
+Tau-rendered GPU pods already tolerate `sku=gpu` and `nvidia.com/gpu` taints:
 
 ```yaml
 baselineQueue:
-  flavor:
-    tolerations:
-      - key: sku
-        value: gpu
-        effect: NoSchedule
+  gpu:
+    flavors:
+      - name: a100-pool
+        # nodeLabels and resources omitted here
+        nodeTaints:
+          - key: sku
+            value: gpu
+            effect: NoSchedule
+        tolerations: []
 ```
 
-Without this, Kueue excludes tainted nodes while assigning flavors and the
-workload is never admitted, reporting `couldn't assign flavors to pod set`
-with a `taint` exclusion count. Kueue unions a pod set's own tolerations with
-the flavor's before filtering nodes, so a workload that already carries
-matching tolerations is admitted either way — Tau injects the `sku=gpu` and
-`nvidia.com/gpu` tolerations into the GPU workloads it renders. Set this field
-so workloads Tau does not render are admitted too.
+Do not repeat an admission taint under the same flavor's `tolerations`; Kueue
+would treat it as automatically tolerated and make the GPU flavor eligible for
+CPU-only admission. Workloads not rendered by Tau must declare their own
+matching pod tolerations.
 
 ### `kueue`
 
@@ -212,14 +256,21 @@ use `--set components.gpuMonitoring.enabled=false` there.
 ```yaml
 # taugrid-values.yaml
 baselineQueue:
-  flavor:
-    nodeLabels:
-      kubernetes.io/os: linux
-      tau.azure.com/gpu-series: h200
-    tolerations:
-      - key: sku
-        value: gpu
-        effect: NoSchedule
+  gpu:
+    flavors:
+      - name: h200-pool
+        nodeLabels:
+          kubernetes.io/os: linux
+          tau.azure.com/gpu-series: h200
+          tau.azure.com/gpu-class: h200-141gb
+        nodeTaints:
+          - key: sku
+            value: gpu
+            effect: NoSchedule
+        tolerations: []
+        resources:
+          - name: nvidia.com/gpu
+            nominalQuota: "8"
 
 tau-core-controller:
   tauCluster:
@@ -228,6 +279,10 @@ tau-core-controller:
         targetLabel: tau.azure.com/gpu-series
         mappings:
           Standard_ND96isr_H200_v5: h200
+      - sourceLabel: node.kubernetes.io/instance-type
+        targetLabel: tau.azure.com/gpu-class
+        mappings:
+          Standard_ND96isr_H200_v5: h200-141gb
 ```
 
 ## Requirements
