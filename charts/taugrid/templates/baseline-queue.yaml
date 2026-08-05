@@ -31,9 +31,6 @@
 {{- end }}
 {{- end }}
 {{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
-{{- if and $.Values.baselineQueue.gpu.enabled $.Values.baselineQueue.topology.enabled (empty $gpuFlavor.nodeLabels) }}
-{{- fail (printf "baselineQueue.gpu.flavors[%s].nodeLabels must contain at least one label when baselineQueue.topology.enabled is true" $gpuFlavor.name) }}
-{{- end }}
 {{- if $.Values.baselineQueue.gpu.enabled }}
 {{- if empty $gpuFlavor.nodeTaints }}
 {{- fail (printf "baselineQueue.gpu.flavors[%s].nodeTaints must contain at least one GPU admission taint so CPU-only workloads cannot fall through to GPU quota" $gpuFlavor.name) }}
@@ -53,8 +50,8 @@
 {{- range $resource := $gpuFlavor.resources }}
 {{- $resourceNames = append $resourceNames $resource.name }}
 {{- end }}
-{{- if not (deepEqual $resourceNames $.Values.baselineQueue.gpu.coveredResources) }}
-{{- fail (printf "baselineQueue.gpu.flavors[%s].resources names and order must exactly match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
+{{- if not (deepEqual (sortAlpha $resourceNames) (sortAlpha $.Values.baselineQueue.gpu.coveredResources)) }}
+{{- fail (printf "baselineQueue.gpu.flavors[%s].resource names must match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
 {{- end }}
 {{- end }}
 {{- end }}

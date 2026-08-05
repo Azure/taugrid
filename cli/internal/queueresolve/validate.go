@@ -385,7 +385,7 @@ func gpuClassAllowedFlavors(
 			}
 		}
 	}
-	if len(unreadable) > 0 {
+	if len(allowed) == 0 && len(unreadable) > 0 {
 		return nil, fmt.Errorf("ResourceFlavor(s) %s could not be read while matching gpu_class=%q", strings.Join(unreadable, ", "), class)
 	}
 	return allowed, nil

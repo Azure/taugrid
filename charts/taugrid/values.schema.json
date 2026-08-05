@@ -16,9 +16,7 @@
         "flavor": {
           "type": "object",
           "required": [
-            "name",
-            "nodeLabels",
-            "tolerations"
+            "name"
           ],
           "properties": {
             "name": {
@@ -86,9 +84,7 @@
                 "type": "object",
                 "required": [
                   "name",
-                  "nodeLabels",
                   "nodeTaints",
-                  "tolerations",
                   "resources"
                 ],
                 "properties": {

@@ -252,7 +252,54 @@ tests:
               nominalQuota: "1"
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.gpu.flavors[malformed-gpu].resources names and order must exactly match baselineQueue.gpu.coveredResources
+          errorMessage: baselineQueue.gpu.flavors[malformed-gpu].resource names must match baselineQueue.gpu.coveredResources
+
+  - it: accepts topology-capable GPU flavors without optional labels or tolerations
+    set:
+      baselineQueue.gpu.flavors:
+        - name: resource-only-gpu
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+    asserts:
+      - notExists:
+          path: spec.nodeLabels
+        documentIndex: 2
+      - equal:
+          path: spec.topologyName
+          value: default-node-topology
+        documentIndex: 2
+      - notExists:
+          path: spec.tolerations
+        documentIndex: 2
+
+  - it: accepts GPU flavor resources in a different order
+    set:
+      baselineQueue.gpu.coveredResources:
+        - nvidia.com/gpu
+        - gpu.nvidia.com
+      baselineQueue.gpu.flavors:
+        - name: dual-mode-gpu
+          nodeLabels: {}
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          tolerations: []
+          resources:
+            - name: gpu.nvidia.com
+              nominalQuota: "1"
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+    asserts:
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].name
+          value: dual-mode-gpu
+        documentIndex: 3
 
   - it: rejects a flavor toleration that bypasses its GPU admission taint
     set:

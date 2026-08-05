@@ -904,6 +904,41 @@ func TestSelectQueueNormalizesLegacyGPUClassAliasBeforeMatching(t *testing.T) {
 	}
 }
 
+func TestSelectQueueUsesCompatibleFlavorWhenAnotherIsUnreadable(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"stale-reference","resources":[{"name":"nvidia.com/gpu","nominalQuota":"64"}]},
+					{"name":"usable-a100","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "usable-a100", "-o", "json"): resourceFlavorObject(
+				"usable-a100", topology.GPUClassA10080GB, "", ""),
+		},
+		errors: map[string]error{
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "stale-reference", "-o", "json"): fmt.Errorf("not found"),
+		},
+	}
+
+	selected, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        1,
+		GPUClass:        topology.GPUClassA10080GB,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("SelectQueue: %v; candidates=%+v", err, candidates)
+	}
+	if selected.ResourceFlavor != "usable-a100" {
+		t.Fatalf("selected=%+v, want usable-a100", selected)
+	}
+}
+
 func TestValidateSelectionAnyChoosesCompatibleFlavor(t *testing.T) {
 	runner := &validationFakeRunner{
 		outputs: map[string]string{
