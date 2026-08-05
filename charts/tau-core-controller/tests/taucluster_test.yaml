@@ -2,7 +2,7 @@ suite: TauCluster topology reconciliation
 templates:
   - taucluster.yaml
 tests:
-  - it: enables continuous node reconciliation without cluster-specific rules
+  - it: reconciles the reviewed AKS GPU label catalog by default
     asserts:
       - equal:
           path: spec.managementMode
@@ -10,14 +10,32 @@ tests:
       - equal:
           path: spec.deletionPolicy
           value: Retain
-      - equal:
+      - lengthEqual:
           path: spec.nodes.labelRules
-          value: []
+          count: 4
+      - equal:
+          path: spec.nodes.labelRules[0].match.vmSizes[0]
+          value: Standard_NC24ads_A100_v4
+      - equal:
+          path: spec.nodes.labelRules[0].labels["kueue.azure.com/gpu-series"]
+          value: nc24ads-a100-v4
+      - equal:
+          path: spec.nodes.labelRules[0].labels["tau.azure.com/gpu-class"]
+          value: a100-80gb
+      - equal:
+          path: spec.nodes.labelRules[2].labels["tau.azure.com/gpu-class"]
+          value: h100-95gb
+      - equal:
+          path: spec.nodes.labelRules[3].labels["kueue.azure.com/gpu-series"]
+          value: nd-h200-v5
+      - equal:
+          path: spec.nodes.labelRules[3].labels["tau.azure.com/gpu-class"]
+          value: h200-141gb
       - equal:
           path: spec.queues.ownership
           value: External
 
-  - it: appends a platform supplied mapping to the reviewed catalog
+  - it: replaces the catalog and appends a platform supplied mapping
     set:
       tauCluster.nodeLabelRules:
         - match:

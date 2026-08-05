@@ -78,6 +78,7 @@ spec:
   # tau.azure.com/gpu-series-style node labels, not through gpu-class.
   nodeLabels:
     tau.azure.com/provider: azure
+    kueue.azure.com/gpu-series: ndm-a100-v4
     tau.azure.com/gpu-class: a100-80gb
     tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
@@ -91,6 +92,7 @@ metadata:
 spec:
   nodeLabels:
     tau.azure.com/provider: azure
+    kueue.azure.com/gpu-series: nc-h100-v5
     tau.azure.com/gpu-class: h100-95gb
     tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
@@ -104,6 +106,7 @@ metadata:
 spec:
   nodeLabels:
     tau.azure.com/provider: azure
+    kueue.azure.com/gpu-series: nd-h200-v5
     tau.azure.com/gpu-class: h200-141gb
     tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]

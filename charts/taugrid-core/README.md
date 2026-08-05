@@ -50,8 +50,9 @@ resourceFlavors:
 
 Keep placement/interconnect in workload topology (`independent`,
 `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`), not in the
-class label. Matching nodes must be labeled separately; this chart does not
-mutate Nodes.
+class label. The sibling `tau-core-controller` chart continuously derives class
+and series labels for its reviewed AKS GPU VM-size catalog. Install an
+equivalent node-label reconciler when deploying this services chart alone.
 
 ## What this chart does NOT install
 

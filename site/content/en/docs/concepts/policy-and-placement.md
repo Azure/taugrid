@@ -71,18 +71,27 @@ kubectl wait --for=jsonpath='{.status.pendingWorkloads}'=0 \
   "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
 ```
 
-After the queue is empty, label matching nodes. For standard Azure series:
+After the queue is empty, upgrade the Tau controller chart so its reviewed
+VM-size catalog reconciles both labels. Add custom hardware through
+`extraNodeLabelRules`; do not depend on pre-existing node labels:
 
-```bash
-kubectl label nodes -l kueue.azure.com/gpu-series=ndm-a100-v4 \
-  tau.azure.com/gpu-class=a100-80gb --overwrite
-kubectl label nodes -l kueue.azure.com/gpu-series=nd-h200-v5 \
-  tau.azure.com/gpu-class=h200-141gb --overwrite
+CPU-only clusters and GPU pools scaled to zero remain ready when no catalog
+entry currently matches.
+
+```yaml
+tau-core-controller:
+  tauCluster:
+    extraNodeLabelRules:
+      - match:
+          vmSizes: [Standard_Custom_H200_v5]
+        labels:
+          kueue.azure.com/gpu-series: custom-h200-v5
+          tau.azure.com/gpu-class: h200-141gb
 ```
 
-Use the same pattern for H100 (`h100-95gb`). Create replacement ResourceFlavors
-with new names rather than patching referenced objects: Kueue may protect or
-reject changes to immutable/in-use flavor fields.
+Wait for the singleton `TauCluster` to report `NodesReady`, then create
+replacement ResourceFlavors with new names rather than patching referenced
+objects: Kueue may protect or reject changes to immutable/in-use flavor fields.
 
 Verify the exact contract before submitting specific-class work:
 

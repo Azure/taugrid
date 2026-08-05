@@ -154,9 +154,10 @@ tau-core-controller:
     repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
   tauCluster:
-    # Node topology labels are cluster-specific. Declare a rule here only
-    # alongside the ResourceFlavor that selects on it.
-    nodeLabelRules: []
+    # Inherits the controller chart's reviewed AKS GPU VM-size catalog, which
+    # reconciles gpu-class and gpu-series labels from instance-type. Append
+    # cluster-specific hardware without replacing that catalog.
+    extraNodeLabelRules: []
 
 # TauGrid services are opt-in. Fresh installs start with only the workload
 # control plane and pull no mutable third-party images.

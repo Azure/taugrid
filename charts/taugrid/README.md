@@ -212,7 +212,24 @@ for the complete reference.
 |---|---|---|---|
 | `tau-core-controller.platformNamespace` | string | `tau-platform` | Namespace where TauWorkspace CRs live |
 | `tau-core-controller.image.repository` | string | `aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller` | Controller image |
-| `tau-core-controller.tauCluster.nodeLabelRules` | list | `[]` | Node topology label reconciliation rules |
+| `tau-core-controller.tauCluster.nodeLabelRules` | list | reviewed AKS GPU catalog | VM-size rules that reconcile GPU class and series labels |
+| `tau-core-controller.tauCluster.extraNodeLabelRules` | list | `[]` | Additional cluster-specific GPU label rules |
+
+The controller watches the standard `node.kubernetes.io/instance-type` label
+and continuously reconciles both label contracts on current and future nodes:
+
+| AKS VM size | `kueue.azure.com/gpu-series` | `tau.azure.com/gpu-class` |
+|---|---|---|
+| `Standard_NC24ads_A100_v4` | `nc24ads-a100-v4` | `a100-80gb` |
+| `Standard_ND96amsr_A100_v4` | `ndm-a100-v4` | `a100-80gb` |
+| `Standard_NC40ads_H100_v5` | `nc-h100-v5` | `h100-95gb` |
+| `Standard_ND96isr_H200_v5` | `nd-h200-v5` | `h200-141gb` |
+
+CPU-only clusters and GPU pools scaled to zero remain ready when no catalog
+entry currently matches.
+
+Set `nodeLabelRules` only to replace this catalog. Use
+`extraNodeLabelRules` to append another reviewed VM-size mapping.
 
 ### `taugrid-core`
 
@@ -261,7 +278,7 @@ baselineQueue:
       - name: h200-pool
         nodeLabels:
           kubernetes.io/os: linux
-          tau.azure.com/gpu-series: h200
+          kueue.azure.com/gpu-series: nd-h200-v5
           tau.azure.com/gpu-class: h200-141gb
         nodeTaints:
           - key: sku
@@ -271,19 +288,10 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "8"
-
-tau-core-controller:
-  tauCluster:
-    nodeLabelRules:
-      - sourceLabel: node.kubernetes.io/instance-type
-        targetLabel: tau.azure.com/gpu-series
-        mappings:
-          Standard_ND96isr_H200_v5: h200
-      - sourceLabel: node.kubernetes.io/instance-type
-        targetLabel: tau.azure.com/gpu-class
-        mappings:
-          Standard_ND96isr_H200_v5: h200-141gb
 ```
+
+The default Tau controller rule for `Standard_ND96isr_H200_v5` supplies both
+labels used by this ResourceFlavor.
 
 ## Requirements
 
