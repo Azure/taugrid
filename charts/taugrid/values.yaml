@@ -31,6 +31,11 @@ baselineQueue:
     name: default-node-topology
   flavor:
     name: taugrid-default
+    # This baseline flavor is intentionally generic. Without
+    # tau.azure.com/gpu-class it can satisfy gpu_class: any, but it will not
+    # satisfy a specific class such as a100-80gb. Production GPU pools should
+    # define class-specific ResourceFlavors whose spec.nodeLabels and matching
+    # nodes carry the same canonical tau.azure.com/gpu-class value.
     nodeLabels:
       kubernetes.io/os: linux
     tolerations: []

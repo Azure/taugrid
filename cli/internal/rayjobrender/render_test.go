@@ -252,6 +252,34 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	}
 }
 
+func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "ray-a100",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			GPUClass:  "a100-nvlink-80gb",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rayjob := decodeDocs(t, out)[0]
+	labels := rayjob["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels[workloadmeta.LabelGPUClass] != topology.GPUClassA10080GB {
+		t.Fatalf("gpu class label=%v want %s", labels, topology.GPUClassA10080GB)
+	}
+	head := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)["headGroupSpec"].(map[string]any)
+	nodeSelector := head["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != topology.GPUClassA10080GB {
+		t.Fatalf("gpu class selector=%v want %s", nodeSelector, topology.GPUClassA10080GB)
+	}
+}
+
 func TestRenderSingleRayExecutionPodUsesHeadOnly(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "ray-single",

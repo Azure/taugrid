@@ -963,7 +963,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 		Mode:      "fixed",
 		Topology:  "single-node-nvlink",
 		Shape:     "8xa100-80gb",
-		GPUClass:  "a100-nvlink-80gb",
+		GPUClass:  "a100-80gb",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -977,8 +977,13 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	if labels[workloadmeta.LabelManagedBy] != "tau" {
 		t.Fatalf("managed workload marker = %v, want tau", labels[workloadmeta.LabelManagedBy])
 	}
+	if labels[workloadmeta.LabelGPUClass] != runtopology.GPUClassA10080GB {
+		t.Fatalf("gpu class metadata label=%v want %s", labels[workloadmeta.LabelGPUClass], runtopology.GPUClassA10080GB)
+	}
 	for key := range labels {
-		if strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelManagedBy {
+		if strings.HasPrefix(key, workloadmeta.Domain) &&
+			key != workloadmeta.LabelManagedBy &&
+			key != workloadmeta.LabelGPUClass {
 			t.Fatalf("Tau metadata label should be omitted: %s", key)
 		}
 	}
@@ -990,6 +995,50 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	podAnnotations := templateMeta["annotations"].(map[string]any)
 	if podAnnotations["kueue.x-k8s.io/podset-required-topology"] != "kubernetes.io/hostname" {
 		t.Fatalf("pod topology annotation missing: %v", podAnnotations)
+	}
+	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	nodeSelector := pod["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
+		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	}
+}
+
+func TestRender_LegacyGPUClassAliasRendersCanonicalContract(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:      "train-a100-legacy",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		GPUClass:  "a100-nvlink-80gb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := parseYAML(t, out)
+	labels := m["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels[workloadmeta.LabelGPUClass] != runtopology.GPUClassA10080GB {
+		t.Fatalf("gpu class label=%v want %s", labels, runtopology.GPUClassA10080GB)
+	}
+	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	nodeSelector := pod["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
+		t.Fatalf("gpu class selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	}
+}
+
+func TestRender_RejectsConflictingGPUClassNodeSelector(t *testing.T) {
+	_, err := Render(trainProfile(), Options{
+		Name:      "train-conflict",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		GPUClass:  runtopology.GPUClassA10080GB,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassH10095GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected conflicting gpu class selector error, got %v", err)
 	}
 }
 
@@ -1090,7 +1139,7 @@ func TestRender_GPUClassAnyClearsProfileGPUSelectorAndDefaultPriorities(t *testi
 	p := trainProfile()
 	sched := p.Spec["scheduling"].(map[string]any)
 	sched["nodeSelector"] = map[string]any{
-		workloadmeta.LabelGPUClass: "h200-nvlink-141gb",
+		workloadmeta.LabelGPUClass: "h200-141gb",
 		"agentpool":                "h200pool",
 	}
 
@@ -1139,7 +1188,7 @@ func TestRender_ElasticRequiresCheckpoint(t *testing.T) {
 		Lane:      "elastic",
 		Mode:      "elastic",
 		Topology:  "independent",
-		GPUClass:  "h100-standalone-95gb",
+		GPUClass:  "h100-95gb",
 	})
 	if err == nil || !strings.Contains(err.Error(), "checkpoint") {
 		t.Fatalf("expected checkpoint error, got %v", err)
@@ -1160,7 +1209,7 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 		Lane:      "elastic",
 		Mode:      "elastic",
 		Topology:  "independent",
-		GPUClass:  "h100-standalone-95gb",
+		GPUClass:  "h100-95gb",
 		Shape:     "1xh100-95gb",
 	})
 	if err != nil {
@@ -1177,10 +1226,9 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 	}
 	spec := m["spec"].(map[string]any)
 	pod := spec["template"].(map[string]any)["spec"].(map[string]any)
-	if nodeSelector, ok := pod["nodeSelector"].(map[string]any); ok {
-		if _, ok := nodeSelector[workloadmeta.LabelGPUClass]; ok {
-			t.Fatalf("Tau node selector should be omitted: %v", nodeSelector)
-		}
+	nodeSelector := pod["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassH10095GB {
+		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassH10095GB)
 	}
 	if pod["priorityClassName"] != "taugrid-default" {
 		t.Fatalf("pod priority=%v", pod["priorityClassName"])

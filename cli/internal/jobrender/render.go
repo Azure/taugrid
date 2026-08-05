@@ -650,6 +650,11 @@ func isPythonShebang(shebang string) bool {
 // shelling out to kubectl with rendered YAML is the contract; we don't
 // need typed objects for V0.
 func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv map[string]string, topologyPlan topology.Plan, storagePlan storagePlan, gpuPlan profile.GPUSchedulingPlan, storageContract profile.StorageContract, hasStorageContract bool) (map[string]any, error) {
+	if required := topologyPlan.NodeSelector[topology.NodeLabelGPUClass]; required != "" {
+		if selected := strings.TrimSpace(o.NodeSelector[topology.NodeLabelGPUClass]); selected != "" && selected != required {
+			return nil, fmt.Errorf("gpu_class %q requires %s=%q, but the workload node selector uses %q", o.GPUClass, topology.NodeLabelGPUClass, required, selected)
+		}
+	}
 	labels := map[string]any{}
 	for k, v := range o.Labels {
 		if k != "" && v != "" {
@@ -1224,7 +1229,7 @@ func profileNodeSelector(raw any, topologyPlan topology.Plan) map[string]any {
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
-	return strings.HasPrefix(key, workloadmeta.Domain)
+	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
 }
 
 func isTauDefaultPriorityClass(name string) bool {

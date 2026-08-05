@@ -60,7 +60,7 @@ Requires cluster-admin or equivalent RBAC to create privileged pods.`,
 	}
 
 	cmd.Flags().StringVar(&spec.KubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVar(&spec.GPUClass, "gpu-class", "", fmt.Sprintf("filter nodes by %s label value (e.g. h200-nvlink-141gb)", workloadmeta.NodeLabelGPUClass))
+	cmd.Flags().StringVar(&spec.GPUClass, "gpu-class", "", fmt.Sprintf("filter nodes by %s label value (e.g. h200-141gb)", workloadmeta.NodeLabelGPUClass))
 	cmd.Flags().StringVar(&spec.Selector, "selector", "", "custom node label selector (alternative to --gpu-class)")
 	cmd.Flags().IntVar(&spec.MinHealthy, "min-healthy", 0, "fail if fewer than N nodes are healthy")
 	cmd.Flags().StringVar(&timeoutStr, "timeout", "2m", "per-pod validation timeout")

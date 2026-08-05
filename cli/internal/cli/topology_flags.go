@@ -148,6 +148,12 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, p
 	if changed("disable-default-priorities") {
 		o.DisableDefaultPriorities = f.disableDefaultPriorities
 	}
+	if canonical, deprecated := runtopology.NormalizeGPUClass(o.GPUClass); deprecated {
+		warnings = append(warnings, fmt.Sprintf(
+			"warning: gpu_class %q is deprecated; use %q instead (placement and interconnect belong in policy.topology)",
+			o.GPUClass, canonical))
+		o.GPUClass = canonical
+	}
 	if !workspaceQueueResolved {
 		if warning, err := f.reconcilePresetQueueTeamOverride(o, preset, changed("queue"), changed("team")); err != nil {
 			return nil, err

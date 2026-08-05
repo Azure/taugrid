@@ -341,6 +341,11 @@ func validateRayTrainConfigOptions(configs map[string]any) error {
 }
 
 func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest string) (map[string]any, error) {
+	if required := plan.NodeSelector[topology.NodeLabelGPUClass]; required != "" {
+		if selected := strings.TrimSpace(o.NodeSelector[topology.NodeLabelGPUClass]); selected != "" && selected != required {
+			return nil, fmt.Errorf("gpu_class %q requires %s=%q, but the workload node selector uses %q", o.TopologyOptions.GPUClass, topology.NodeLabelGPUClass, required, selected)
+		}
+	}
 	image := o.Image
 	if image == "" {
 		if o.GPUsPerWorker > 0 {
@@ -806,7 +811,7 @@ func runtimeEnvYAML(pkgs []string, projectArchive []byte) string {
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
-	return strings.HasPrefix(key, workloadmeta.Domain)
+	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
 }
 
 func resources(o Options, containerName string) map[string]any {

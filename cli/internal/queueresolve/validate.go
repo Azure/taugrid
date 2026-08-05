@@ -136,6 +136,15 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		target.ResourceFlavor = capabilityFlavor
 		report.ResourceFlavor = capabilityFlavor
 		report.TopologyName = target.TopologyName
+		if target.GPUClass != "" && target.GPUClass != topology.GPUClassAny {
+			rf, err := getResourceFlavor(ctx, r, capabilityFlavor)
+			if err != nil {
+				return report, fmt.Errorf("ResourceFlavor %q selected for gpu_class %q was not found (%s); ask the platform owner to inspect the ClusterQueue and ResourceFlavor", capabilityFlavor, target.GPUClass, err)
+			}
+			if err := validateResourceFlavor(rf, target); err != nil {
+				return report, err
+			}
+		}
 		if target.GPUCount > 0 && !target.TopologyRequest {
 			return report, missingTopologyIntentError(target.ClusterQueue, []string{capabilityFlavor})
 		}
@@ -210,13 +219,14 @@ func findCatalogTopologyFlavor(cq kueueapi.ClusterQueue, target validationTarget
 
 func (o ValidationOptions) resolve() validationTarget {
 	ns := strings.TrimSpace(o.Namespace)
+	gpuClass, _ := topology.NormalizeGPUClass(o.GPUClass)
 	target := validationTarget{
 		Namespace:                ns,
 		QueueName:                strings.TrimSpace(o.QueueName),
 		Preset:                   o.Preset,
 		Team:                     strings.TrimSpace(o.Team),
 		Lane:                     strings.TrimSpace(o.Lane),
-		GPUClass:                 strings.TrimSpace(o.GPUClass),
+		GPUClass:                 gpuClass,
 		ClusterQueue:             strings.TrimSpace(o.ClusterQueue),
 		ResourceFlavor:           strings.TrimSpace(o.ResourceFlavor),
 		TopologyName:             strings.TrimSpace(o.TopologyName),
@@ -241,7 +251,7 @@ func (o ValidationOptions) resolve() validationTarget {
 			target.Lane = o.Preset.Options.Lane
 		}
 		if target.GPUClass == "" {
-			target.GPUClass = o.Preset.Options.GPUClass
+			target.GPUClass, _ = topology.NormalizeGPUClass(o.Preset.Options.GPUClass)
 		}
 		if target.QueueName == presetQueue {
 			if target.ClusterQueue == "" {
@@ -306,6 +316,52 @@ func getResourceFlavor(ctx context.Context, r RawRunner, name string) (kueueapi.
 	return item, nil
 }
 
+// gpuClassAllowedFlavors resolves which of a ClusterQueue's GPU-quota
+// ResourceFlavors satisfy an exact researcher gpu_class request.
+//
+// gpu_class is a Kueue ResourceFlavor node-label contract
+// (tau.azure.com/gpu-class), never a ResourceFlavor *name* heuristic: a
+// flavor named "nd-h200-v5" (or one that happens to contain "h100" in its
+// name, e.g. a mislabeled "legacy-h100-pool") only satisfies
+// gpu_class: h200-141gb if its spec.nodeLabels carries that exact value.
+// An empty class or "any" returns (nil, nil), meaning every GPU-quota flavor
+// in the queue is allowed (BestGPUFlavorFor treats a nil map as unfiltered).
+// A non-nil, possibly-empty map means the class was specific and only the
+// named flavors qualify -- an empty map correctly yields "no matching GPU
+// quota found" rather than silently falling back to any flavor.
+func gpuClassAllowedFlavors(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, gpuClass, resourceName string) (map[string]bool, error) {
+	class, _ := topology.NormalizeGPUClass(strings.TrimSpace(gpuClass))
+	if class == "" || class == topology.GPUClassAny {
+		return nil, nil
+	}
+	allowed := map[string]bool{}
+	seen := map[string]bool{}
+	var unreadable []string
+	for _, rg := range cq.Spec.ResourceGroups {
+		for _, f := range rg.Flavors {
+			if seen[f.Name] {
+				continue
+			}
+			seen[f.Name] = true
+			if cap, ok := cq.MaxGPUCapacity(f.Name, resourceName); !ok || cap <= 0 {
+				continue
+			}
+			rf, err := getResourceFlavor(ctx, r, f.Name)
+			if err != nil {
+				unreadable = append(unreadable, f.Name)
+				continue
+			}
+			if strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) == class {
+				allowed[f.Name] = true
+			}
+		}
+	}
+	if len(unreadable) > 0 {
+		return nil, fmt.Errorf("ResourceFlavor(s) %s could not be read while matching gpu_class=%q", strings.Join(unreadable, ", "), class)
+	}
+	return allowed, nil
+}
+
 type AutoSelectOptions struct {
 	Namespace       string
 	GPUCount        int
@@ -328,6 +384,7 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 	if ns == "" {
 		ns = topology.DefaultLocalQueueNamespace
 	}
+	gpuClass, _ := topology.NormalizeGPUClass(opts.GPUClass)
 	lqs, err := listLocalQueues(ctx, r, ns)
 	if err != nil {
 		return QueueCandidate{}, nil, fmt.Errorf("list LocalQueues in namespace %q for policy.queue=auto: %w", ns, err)
@@ -344,7 +401,12 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 			candidates = append(candidates, QueueCandidate{QueueName: name, ClusterQueue: cqName, Reason: "ClusterQueue not readable"})
 			continue
 		}
-		flavor, maxGPU, ok := cq.BestGPUFlavorFor(opts.GPUClass, opts.NodeSelector, opts.GPUResourceName)
+		allowedFlavors, err := gpuClassAllowedFlavors(ctx, r, cq, gpuClass, opts.GPUResourceName)
+		if err != nil {
+			candidates = append(candidates, QueueCandidate{QueueName: name, ClusterQueue: cqName, Reason: err.Error()})
+			continue
+		}
+		flavor, maxGPU, ok := cq.BestGPUFlavorFor(allowedFlavors, opts.NodeSelector, opts.GPUResourceName)
 		c := QueueCandidate{
 			QueueName:      name,
 			ClusterQueue:   cqName,
@@ -352,7 +414,11 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 			GPUMax:         maxGPU,
 		}
 		if !ok {
-			c.Reason = "no matching GPU quota found"
+			if gpuClass != "" && gpuClass != topology.GPUClassAny {
+				c.Reason = fmt.Sprintf("no GPU quota flavor has %s=%q", topology.NodeLabelGPUClass, gpuClass)
+			} else {
+				c.Reason = "no matching GPU quota found"
+			}
 			candidates = append(candidates, c)
 			continue
 		}
@@ -390,6 +456,11 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 		return candidates[i].QueueName < candidates[j].QueueName
 	})
 	if len(fits) == 0 {
+		if gpuClass != "" && gpuClass != topology.GPUClassAny {
+			return QueueCandidate{}, candidates, fmt.Errorf(
+				"no visible LocalQueue in namespace %q provides gpu_class %q with enough quota for %d requested GPU(s)",
+				ns, gpuClass, opts.GPUCount)
+		}
 		return QueueCandidate{}, candidates, fmt.Errorf("no visible LocalQueue in namespace %q can fit %d requested GPU(s)", ns, opts.GPUCount)
 	}
 	return fits[0], candidates, nil
@@ -407,13 +478,13 @@ func listLocalQueues(ctx context.Context, r RawRunner, namespace string) (kueuea
 	return items, nil
 }
 
+// queueFitScore ranks candidates that already passed the exact gpu_class
+// filter in gpuClassAllowedFlavors (which restricted BestGPUFlavorFor's
+// candidate set upstream). It only tie-breaks on an explicit
+// --node-selector's values against the flavor name, a separate, generic
+// preference signal unrelated to gpu_class matching.
 func queueFitScore(c QueueCandidate, opts AutoSelectOptions) int {
 	score := 100
-	gpuClass := strings.TrimSpace(opts.GPUClass)
-	family := strings.ToLower(kueueapi.GPUClassFamily(gpuClass))
-	if family != "" && gpuClass != topology.GPUClassAny && strings.Contains(strings.ToLower(c.ResourceFlavor), family) {
-		score += 20
-	}
 	if selector := strings.Join(kueueapi.SelectorValues(opts.NodeSelector), " "); selector != "" {
 		flavor := strings.ToLower(c.ResourceFlavor)
 		for _, value := range strings.Fields(strings.ToLower(selector)) {
@@ -449,6 +520,14 @@ func validateOptionalTopologyLabels(kind, name string, labels map[string]string,
 }
 
 func validateResourceFlavor(rf kueueapi.ResourceFlavor, target validationTarget) error {
+	if target.GPUClass != "" && target.GPUClass != topology.GPUClassAny {
+		got := strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass])
+		if got != target.GPUClass {
+			return fmt.Errorf(
+				"ResourceFlavor %q has %s=%q, but gpu_class %q requires an exact node-label match; ask the platform owner to label the ResourceFlavor and matching GPU nodes",
+				rf.Metadata.Name, topology.NodeLabelGPUClass, got, target.GPUClass)
+		}
+	}
 	if target.TopologyName != "" {
 		got := strings.TrimSpace(rf.Spec.TopologyName)
 		if got != target.TopologyName {
@@ -521,6 +600,11 @@ func compatibleGPUFlavorNames(cq kueueapi.ClusterQueue, target validationTarget)
 }
 
 func resourceFlavorMatchesNodeSelector(rf kueueapi.ResourceFlavor, selector map[string]string) bool {
+	if selected := strings.TrimSpace(selector[topology.NodeLabelGPUClass]); selected != "" {
+		if strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) != selected {
+			return false
+		}
+	}
 	for key, flavorValue := range rf.Spec.NodeLabels {
 		if selectedValue, ok := selector[key]; ok && selectedValue != flavorValue {
 			return false

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -56,7 +57,7 @@ func RenderRunProfile(s Snapshot, c CostProfile) string {
 	row("team", firstNonEmpty(label(s, workloadmeta.LabelTeam), "not declared"))
 	row("lane", firstNonEmpty(label(s, workloadmeta.LabelLane), "not declared"))
 	row("topology", firstNonEmpty(label(s, workloadmeta.LabelTopology), "not declared"))
-	row("gpu_class", firstNonEmpty(label(s, workloadmeta.LabelGPUClass), "not declared"))
+	row("gpu_class", firstNonEmpty(canonicalGPUClassLabel(label(s, workloadmeta.LabelGPUClass)), "not declared"))
 	row("gpu_count", firstNonEmpty(annotationOrDefault(s, experiment.AnnotationGPUCount, ""), label(s, workloadmeta.AnnotationGPUCount), "not declared"))
 	row("dra_claim_template", annotationOrDefault(s, experiment.AnnotationDRAClaim, "not declared"))
 	row("storage_mounts", annotationOrDefault(s, experiment.AnnotationStorageMounts, "not declared"))
@@ -86,6 +87,7 @@ func RenderRunProfile(s Snapshot, c CostProfile) string {
 	if v := annotationOrDefault(s, workloadmeta.AnnotationResultArtifacts, ""); v != "" {
 		row("artifacts", v)
 	}
+
 	if v := annotationOrDefault(s, workloadmeta.AnnotationResultNote, ""); v != "" {
 		row("note", v)
 	}
@@ -94,6 +96,14 @@ func RenderRunProfile(s Snapshot, c CostProfile) string {
 	}
 	_ = tw.Flush()
 	return b.String()
+}
+
+func canonicalGPUClassLabel(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return ""
+	}
+	canonical, _ := topology.NormalizeGPUClass(v)
+	return canonical
 }
 
 func queueWait(s Snapshot) string {

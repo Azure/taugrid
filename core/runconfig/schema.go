@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 type FieldStatus string
@@ -94,7 +96,7 @@ var fieldCatalog = map[string]FieldInfo{
 	"policy.queue":                      {Status: statusSupported, Description: "Explicit Kueue LocalQueue name. With presets, Tau infers policy.team from queue names like sample-training when policy.team is omitted.", Notes: "The value auto is currently rejected in this focused run config slice."},
 	"policy.team":                       {Status: statusSupported, Description: "Tau team that owns the quota slice (e.g. research, experimental). Used by managed workflow preset inference; defaults to the TAU_TEAM environment variable."},
 	"policy.lane":                       {Status: statusSupported, Description: "Advanced/operator override: Tau lane.", Values: []string{"eval", "training", "large-memory", "elastic"}},
-	"policy.gpu_class":                  {Status: statusSupported, Description: "Advanced/operator override: protected GPU class.", Values: []string{"any", "h100-standalone-95gb", "a100-nvlink-80gb", "h200-nvlink-141gb"}},
+	"policy.gpu_class":                  {Status: statusSupported, Description: "Hardware-only GPU class matched exactly through the ResourceFlavor/node label " + workloadmeta.LabelGPUClass + ".", Values: []string{"any", "a100-80gb", "h100-95gb", "h200-141gb"}, Notes: "any is unconstrained and renders no class selector. Legacy *-nvlink-* and *-standalone-* spellings are deprecated aliases; express placement/interconnect with policy.topology."},
 	"policy.mode":                       {Status: statusSupported, Description: "Advanced/operator override: admission mode.", Values: []string{"fixed", "elastic"}},
 	"policy.topology":                   {Status: statusSupported, Description: "Explicit placement semantics. Connected GPU preflight requires this when every compatible queue flavor uses TopologyAwareScheduling; offline validation cannot infer live flavor capabilities.", Values: []string{"independent", "single-node-nvlink", "multi-node-nccl", "elastic-workers"}},
 	"policy.shape":                      {Status: statusSupported, Description: "Advanced/operator override: workload shape, e.g. 8xa100-80gb."},

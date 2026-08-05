@@ -333,7 +333,7 @@ func recordADXFixture(t *testing.T, ctx context.Context, store *Store) {
 			PodUID:           "pod-uid",
 			RayJob:           "ray-seed-1",
 			ResourceClaims:   `[{"name":"claim-a"}]`,
-			GPUClass:         "a100-nvlink-80gb",
+			GPUClass:         "a100-80gb",
 			GPUCount:         &gpuCount,
 			NodeNames:        `["node-a"]`,
 			Mounts:           `[{"source":"pvc","path":"/data"}]`,

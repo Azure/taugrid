@@ -230,7 +230,22 @@ func (cq ClusterQueue) MaxGPUCapacity(flavor, resourceName string) (int64, bool)
 	return 0, false
 }
 
-func (cq ClusterQueue) BestGPUFlavorFor(gpuClass string, nodeSelector map[string]string, resourceName string) (string, int64, bool) {
+// BestGPUFlavorFor returns the ResourceFlavor with the highest GPU capacity
+// among this ClusterQueue's GPU-quota flavors that also satisfy the caller's
+// gpu_class constraint.
+//
+// allowedFlavors is the caller-resolved allow-list of ResourceFlavor names
+// that satisfy the request: nil means no gpu_class filter applies (for
+// example gpu_class: any, or no gpu_class requested at all) and every
+// GPU-quota flavor is a candidate; a non-nil map (even an empty one) means
+// only the named flavors qualify. Callers must resolve allowedFlavors by
+// comparing each candidate ResourceFlavor's spec.nodeLabels against the
+// tau.azure.com/gpu-class contract -- never by matching a substring of the
+// flavor's own name. A ClusterQueue's JSON representation does not carry
+// ResourceFlavor node labels, so this function cannot do that matching
+// itself; see queueresolve.gpuClassAllowedFlavors for the exact-match
+// resolution this depends on.
+func (cq ClusterQueue) BestGPUFlavorFor(allowedFlavors map[string]bool, nodeSelector map[string]string, resourceName string) (string, int64, bool) {
 	type candidate struct {
 		name  string
 		cap   int64
@@ -239,15 +254,14 @@ func (cq ClusterQueue) BestGPUFlavorFor(gpuClass string, nodeSelector map[string
 	var candidates []candidate
 	for _, rg := range cq.Spec.ResourceGroups {
 		for _, f := range rg.Flavors {
+			if allowedFlavors != nil && !allowedFlavors[f.Name] {
+				continue
+			}
 			cap, ok := gpuCapacityForFlavor(f, resourceName)
 			if !ok || cap <= 0 {
 				continue
 			}
 			score := 1
-			family := strings.ToLower(GPUClassFamily(gpuClass))
-			if family != "" && strings.Contains(strings.ToLower(f.Name), family) {
-				score += 20
-			}
 			for _, value := range SelectorValues(nodeSelector) {
 				value = strings.ToLower(value)
 				if value != "" && strings.Contains(strings.ToLower(f.Name), value) {
@@ -320,13 +334,6 @@ func (cq ClusterQueue) StatusGPU(statuses []FlavorStatus, flavor string) (total,
 		}
 	}
 	return 0, 0, false
-}
-
-func GPUClassFamily(gpuClass string) string {
-	if i := strings.Index(gpuClass, "-"); i > 0 {
-		return gpuClass[:i]
-	}
-	return gpuClass
 }
 
 func SelectorValues(m map[string]string) []string {

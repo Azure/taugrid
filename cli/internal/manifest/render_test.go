@@ -1514,7 +1514,7 @@ runtime:
 			Mode:      "fixed",
 			Placement: "single-node-nvlink",
 			Shape:     "8xa100-80gb",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
 		},
 		Labels: map[string]string{
@@ -1542,6 +1542,12 @@ runtime:
 		}
 	}
 	job := unmarshalLast(t, out)
+	if got := dig(job, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Job gpu class label=%v want %s", got, topology.GPUClassA10080GB)
+	}
+	if got := dig(job, "spec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Job gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	for key, want := range map[string]string{
 		workloadmeta.AnnotationStellarExperimentID: "presettrain:exact",
 		workloadmeta.AnnotationWorkspaceID:         "sample",
@@ -2678,7 +2684,7 @@ runtime:
 			Mode:      "fixed",
 			Placement: "single-node-nvlink",
 			Shape:     "8xa100-80gb",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
 		},
 		Labels: map[string]string{
@@ -2706,6 +2712,12 @@ runtime:
 		}
 	}
 	rj := unmarshalLast(t, out)
+	if got := dig(rj, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("RayJob gpu class label=%v want %s", got, topology.GPUClassA10080GB)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Ray head gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	// Topology placement is single-node-nvlink → kueue podset-required
 	// annotation must reach the head pod template metadata (PodSet annotation
 	// for Kueue's TAS).

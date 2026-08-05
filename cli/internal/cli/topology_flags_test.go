@@ -566,6 +566,24 @@ func TestTopologyFlagsApplyToPreservesOverrideWarningOrder(t *testing.T) {
 	}
 }
 
+func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
+	flags := topologyFlags{gpuClass: "a100-nvlink-80gb"}
+	var opts jobrender.Options
+
+	warnings, err := flags.applyWithChanged(&opts, nil, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.GPUClass != runtopology.GPUClassA10080GB {
+		t.Fatalf("GPUClass=%q want %q", opts.GPUClass, runtopology.GPUClassA10080GB)
+	}
+	if len(warnings) != 1 ||
+		!strings.Contains(warnings[0], `"a100-nvlink-80gb"`) ||
+		!strings.Contains(warnings[0], `"`+runtopology.GPUClassA10080GB+`"`) {
+		t.Fatalf("warnings=%#v", warnings)
+	}
+}
+
 func TestTopologyFlagsQueueOverrideDisablesPresetTASContract(t *testing.T) {
 	dispatch := runDispatchOptions{queue: "sample-training"}
 	flags := runJobTopologyFlags(dispatch)

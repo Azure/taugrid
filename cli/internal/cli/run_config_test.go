@@ -689,7 +689,7 @@ storage:
 policy:
   namespace: ray
   queue: team-a
-  gpu_class: h200-nvlink-141gb
+  gpu_class: h200-141gb
   priority: priority
   disable_default_priorities: true
 experiment:

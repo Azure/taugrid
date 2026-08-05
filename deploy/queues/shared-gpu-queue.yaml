@@ -48,39 +48,48 @@ metadata:
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: gpu-a100-nvlink-80gb-dra
+  name: gpu-a100-80gb-dra
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
+  # tau.azure.com/gpu-class is the exact researcher-facing gpu_class contract:
+  # Tau matches a workload's gpu_class request to a ResourceFlavor by this
+  # node label's value alone, never by parsing/guessing from the
+  # ResourceFlavor's own name (metadata.name above is an arbitrary platform
+  # identifier and may be renamed freely without affecting gpu_class
+  # resolution, as long as this label stays accurate). Interconnect/placement
+  # (NVLink, same-host, multi-node) is expressed separately through a
+  # workload's spec.topology.placement + this flavor's spec.topologyName /
+  # tau.azure.com/gpu-series-style node labels, not through gpu-class.
   nodeLabels:
     tau.azure.com/provider: azure
-    tau.azure.com/gpu-class: a100-nvlink-80gb
+    tau.azure.com/gpu-class: a100-80gb
     tau.azure.com/rentable: "true"
   tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: gpu-h100-standalone-95gb-dra
+  name: gpu-h100-95gb-dra
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
   nodeLabels:
     tau.azure.com/provider: azure
-    tau.azure.com/gpu-class: h100-standalone-95gb
+    tau.azure.com/gpu-class: h100-95gb
     tau.azure.com/rentable: "true"
   tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: gpu-h200-nvlink-141gb-dra
+  name: gpu-h200-141gb-dra
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
   nodeLabels:
     tau.azure.com/provider: azure
-    tau.azure.com/gpu-class: h200-nvlink-141gb
+    tau.azure.com/gpu-class: h200-141gb
     tau.azure.com/rentable: "true"
   tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
 ---
@@ -280,15 +289,15 @@ spec:
   resourceGroups:
     - coveredResources: [cpu, memory, gpu.nvidia.com, nvidia.com/gpu]
       flavors:
-        - name: gpu-a100-nvlink-80gb-dra
+        - name: gpu-a100-80gb-dra
           resources: &gpu-quota
             - { name: cpu,            nominalQuota: "10000" }
             - { name: memory,         nominalQuota: 100Ti   }
             - { name: gpu.nvidia.com, nominalQuota: "64"    }
             - { name: nvidia.com/gpu, nominalQuota: "64"    }
-        - name: gpu-h100-standalone-95gb-dra
+        - name: gpu-h100-95gb-dra
           resources: *gpu-quota
-        - name: gpu-h200-nvlink-141gb-dra
+        - name: gpu-h200-141gb-dra
           resources: *gpu-quota
 ---
 apiVersion: kueue.x-k8s.io/v1beta2

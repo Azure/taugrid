@@ -29,6 +29,30 @@ Wraps the resources we wrote and want to ship as one helm release:
 > AKS-managed and AKS Flex nodes, including nodes that join after installation.
 > The Tau CLI never writes Node labels.
 
+## GPU class ResourceFlavors
+
+`gpu_class` is a stable hardware-only API with three canonical values:
+`a100-80gb`, `h100-95gb`, and `h200-141gb`. `any` is explicit unconstrained
+selection. For a specific class, Tau renders
+`tau.azure.com/gpu-class=<class>` and Kueue must see the same exact value in the
+selected ResourceFlavor's `spec.nodeLabels` and on matching GPU nodes.
+ResourceFlavor names such as `ndm-a100-v4` and `nd-h200-v5` remain
+platform-owned identifiers; Tau never infers a class from those names.
+
+```yaml
+resourceFlavors:
+  enabled: true
+  items:
+    - name: nd-h200-v5
+      nodeLabels:
+        tau.azure.com/gpu-class: h200-141gb
+```
+
+Keep placement/interconnect in workload topology (`independent`,
+`single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`), not in the
+class label. Matching nodes must be labeled separately; this chart does not
+mutate Nodes.
+
 ## What this chart does NOT install
 
 This chart deliberately does not vendor or wrap upstream OSS charts.

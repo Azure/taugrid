@@ -24,7 +24,7 @@ func TestRunDataMapsRunProfileToStoreRecords(t *testing.T) {
 	record, err := RunData(status.Snapshot{
 		Name:          "train-001",
 		Namespace:     "ray",
-		Labels:        map[string]string{workloadmeta.LabelRunID: "train-001", workloadmeta.LabelWorkloadKind: "job", workloadmeta.LabelProfile: "research-train-gpu", "kueue.x-k8s.io/queue-name": "training-queue", workloadmeta.LabelTeam: "research", workloadmeta.LabelLane: "training", workloadmeta.LabelGPUClass: "a100-nvlink-80gb"},
+		Labels:        map[string]string{workloadmeta.LabelRunID: "train-001", workloadmeta.LabelWorkloadKind: "job", workloadmeta.LabelProfile: "research-train-gpu", "kueue.x-k8s.io/queue-name": "training-queue", workloadmeta.LabelTeam: "research", workloadmeta.LabelLane: "training", workloadmeta.LabelGPUClass: "a100-80gb"},
 		Annotations:   map[string]string{workloadmeta.AnnotationCaptureVersion: "v1alpha1", workloadmeta.AnnotationNamespace: "ray", workloadmeta.AnnotationTauCommand: "tau submit train-001", workloadmeta.AnnotationImageDigest: "sha256:abc", workloadmeta.AnnotationCodeSHA: "abc123", workloadmeta.AnnotationConfigHash: "config123", workloadmeta.AnnotationGPUCount: "8", workloadmeta.AnnotationStorageMounts: `[{"source":"pvc","path":"/data"}]`, workloadmeta.AnnotationResultPath: "/data/runs/train-001"},
 		JobFound:      true,
 		JobCreatedAt:  created,

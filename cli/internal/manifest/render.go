@@ -758,6 +758,13 @@ func buildSchedulingMetadata(opts RenderOptions) (schedulingMetadata, error) {
 	if err != nil {
 		return schedulingMetadata{}, err
 	}
+	if required := plan.NodeSelector[topology.NodeLabelGPUClass]; required != "" {
+		if selected := strings.TrimSpace(opts.NodeSelector[topology.NodeLabelGPUClass]); selected != "" && selected != required {
+			return schedulingMetadata{}, fmt.Errorf(
+				"gpu_class %q requires %s=%q, but the workload node selector uses %q",
+				opts.TopologyOptions.GPUClass, topology.NodeLabelGPUClass, required, selected)
+		}
+	}
 	nodeSelector := mergeStringMaps(plan.NodeSelector, opts.NodeSelector)
 
 	lane := opts.TopologyOptions.Lane
@@ -1002,7 +1009,7 @@ func withoutGeneratedTauMetadata(values map[string]string) map[string]string {
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
-	return strings.HasPrefix(key, workloadmeta.Domain)
+	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
 }
 
 func renderStorageMounts(mounts []StorageMount, indent int) string {

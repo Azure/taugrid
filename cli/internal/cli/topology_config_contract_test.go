@@ -96,7 +96,7 @@ func TestTopologyKnobsAreReachableFromConfig(t *testing.T) {
 			Mode:                     "fixed",
 			Topology:                 "single-node-nvlink",
 			Shape:                    "8xa100-80gb",
-			GPUClass:                 "a100-nvlink-80gb",
+			GPUClass:                 "a100-80gb",
 			Queue:                    "research-training",
 			PriorityTier:             "priority",
 			WorkloadPriorityClass:    "taugrid-priority",

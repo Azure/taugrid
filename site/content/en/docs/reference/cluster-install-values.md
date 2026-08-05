@@ -45,6 +45,12 @@ Production operators should replace them with deliberate capacity policy.
 | `baselineQueue.flavor.tolerations` | list | `[]` | Tolerations injected at admission (see below) |
 | `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti, nvidia.com/gpu: 1000 | Admission quota |
 
+The generic `taugrid-default` flavor intentionally has no
+`tau.azure.com/gpu-class` node label. It supports `gpu_class: any` only.
+Class-specific pools must label the ResourceFlavor and matching nodes with one
+of `a100-80gb`, `h100-95gb`, or `h200-141gb`; Tau matches the label exactly and
+does not infer hardware from the ResourceFlavor name.
+
 ### `baselineQueue.flavor.tolerations`
 
 When the cluster uses GPU taints (e.g., `sku=gpu:NoSchedule`), Kueue excludes

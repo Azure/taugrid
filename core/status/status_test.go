@@ -1504,7 +1504,7 @@ func TestRenderRunProfile(t *testing.T) {
 		"research",
 		"azure.research.training.xl",
 		"single-node-nvlink",
-		"a100-nvlink-80gb",
+		"a100-80gb",
 		"30m00s (finished)",
 		"1 pod(s) x 1 x h100 = 1 GPU(s)",
 		"$3.49 total",

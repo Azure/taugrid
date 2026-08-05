@@ -81,6 +81,24 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.flavor.tolerations` | list | `[]` | Tolerations applied to workloads admitted through this flavor (critical for GPU taints) |
 | `baselineQueue.resources` | list | see below | Resource quotas for admission control |
 
+The default `taugrid-default` flavor is intentionally generic: it does not set
+`tau.azure.com/gpu-class`. It can admit `gpu_class: any`, but Tau will reject it
+for a specific class instead of guessing from the ResourceFlavor name.
+Production GPU pools should give both the ResourceFlavor `spec.nodeLabels` and
+matching nodes one canonical class:
+
+```yaml
+baselineQueue:
+  flavor:
+    name: ndm-a100-v4 # platform-owned; Tau does not parse this name
+    nodeLabels:
+      tau.azure.com/gpu-class: a100-80gb
+```
+
+Canonical classes are `a100-80gb`, `h100-95gb`, and `h200-141gb`. Placement and
+interconnect requirements remain separate (`independent`,
+`single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`).
+
 Default resources:
 
 ```yaml
