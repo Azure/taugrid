@@ -191,7 +191,7 @@ spec:
       mode: fixed
       placement: single-node-nvlink
       shape: 2xh200-141gb
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: jobqueue
       clusterQueue: tau-cq
       topologyName: default-node-topology
@@ -208,7 +208,7 @@ spec:
       mode: fixed
       placement: single-node-nvlink
       shape: 4xh200-141gb
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: jobqueue
       clusterQueue: tau-cq
       topologyName: default-node-topology
@@ -225,7 +225,7 @@ spec:
       mode: fixed
       placement: single-node-nvlink
       shape: 8xh200-141gb
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: jobqueue
       clusterQueue: tau-cq
       topologyName: default-node-topology
@@ -243,7 +243,7 @@ spec:
       placement: multi-node-nccl
       shape: 8xh200-141gb
       workers: 2
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: jobqueue
       clusterQueue: tau-cq
       topologyName: default-node-topology

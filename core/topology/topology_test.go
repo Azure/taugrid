@@ -22,7 +22,7 @@ func topologyProfile() profile.Profile {
 				"lane":                      "training",
 				"mode":                      "fixed",
 				"placement":                 "single-node-nvlink",
-				"gpuClass":                  "a100-nvlink-80gb",
+				"gpuClass":                  GPUClassA10080GB,
 				"shape":                     "8xa100-80gb",
 				"workloadPriorityClassName": "taugrid-batch",
 			},
@@ -41,8 +41,11 @@ func TestBuild_ProtectedNVLinkPlan(t *testing.T) {
 	if plan.Labels[workloadPriorityLabel] != "taugrid-batch" {
 		t.Fatalf("missing workload priority label: %v", plan.Labels)
 	}
-	if len(plan.NodeSelector) != 0 {
-		t.Fatalf("Tau should not add node selectors: %v", plan.NodeSelector)
+	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
+		t.Fatalf("gpu class selector=%q want %q", got, GPUClassA10080GB)
+	}
+	if got := plan.Labels[LabelGPUClass]; got != GPUClassA10080GB {
+		t.Fatalf("gpu class label=%q want %q", got, GPUClassA10080GB)
 	}
 	if plan.PodPriorityClassName != DefaultTrainPodPriority {
 		t.Fatalf("training pod priority=%q want %q", plan.PodPriorityClassName, DefaultTrainPodPriority)
@@ -66,9 +69,12 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 		t.Fatalf("DRA plan should omit Kueue TAS annotations: %v", plan.Annotations)
 	}
 	for key := range plan.Labels {
-		if strings.HasPrefix(key, workloadmeta.Domain) {
+		if strings.HasPrefix(key, workloadmeta.Domain) && key != LabelGPUClass {
 			t.Fatalf("Tau-specific topology labels should be omitted: %v", plan.Labels)
 		}
+	}
+	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
+		t.Fatalf("DRA gpu class selector=%q want %q", got, GPUClassA10080GB)
 	}
 	if plan.Labels[workloadPriorityLabel] != "taugrid-batch" {
 		t.Fatalf("missing workload priority label: %v", plan.Labels)
@@ -88,8 +94,8 @@ func TestBuild_AnyGPUClassDoesNotPinNodeSelector(t *testing.T) {
 	if plan.QueueName != SharedGPUQueueName {
 		t.Fatalf("queue=%q want %q", plan.QueueName, SharedGPUQueueName)
 	}
-	if _, ok := plan.Labels[LabelGPUClass]; ok {
-		t.Fatalf("Tau-specific gpu class label should be omitted: %v", plan.Labels)
+	if got := plan.Labels[LabelGPUClass]; got != GPUClassAny {
+		t.Fatalf("gpu class label=%q want %q", got, GPUClassAny)
 	}
 	if len(plan.NodeSelector) != 0 {
 		t.Fatalf("gpuClass=any should not add node selector: %v", plan.NodeSelector)
@@ -131,7 +137,7 @@ func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 		Lane:      "elastic",
 		Mode:      "elastic",
 		Placement: "independent",
-		GPUClass:  "h100-standalone-95gb",
+		GPUClass:  GPUClassH10095GB,
 		Shape:     "1xh100-95gb",
 	})
 	if err != nil {
@@ -159,7 +165,7 @@ func TestBuild_ElasticRequiresCheckpoint(t *testing.T) {
 		Lane:      "elastic",
 		Mode:      "elastic",
 		Placement: "independent",
-		GPUClass:  "h100-standalone-95gb",
+		GPUClass:  GPUClassH10095GB,
 	})
 	if err == nil || !strings.Contains(err.Error(), "checkpoint") {
 		t.Fatalf("expected checkpoint error, got %v", err)
@@ -172,7 +178,7 @@ func TestBuild_DeniesH200Elastic(t *testing.T) {
 		Lane:            "elastic",
 		Mode:            "elastic",
 		Placement:       "independent",
-		GPUClass:        "h200-nvlink-141gb",
+		GPUClass:        GPUClassH200141GB,
 		CheckpointEvery: "15m",
 	})
 	if err == nil || !strings.Contains(err.Error(), "h200") {
@@ -186,7 +192,7 @@ func TestBuild_DeniesH200OutsideLargeMemory(t *testing.T) {
 		Lane:      "training",
 		Mode:      "fixed",
 		Placement: "single-node-nvlink",
-		GPUClass:  "h200-nvlink-141gb",
+		GPUClass:  GPUClassH200141GB,
 		Shape:     "8xh200-141gb",
 	})
 	if err == nil || !strings.Contains(err.Error(), "lane=large-memory") {
@@ -194,16 +200,68 @@ func TestBuild_DeniesH200OutsideLargeMemory(t *testing.T) {
 	}
 }
 
-func TestBuild_DeniesStandaloneNVLink(t *testing.T) {
-	_, err := Build(topologyProfile(), Options{
-		Team:      "research",
-		Lane:      "training",
-		Mode:      "fixed",
-		Placement: "single-node-nvlink",
-		GPUClass:  "h100-standalone-95gb",
-	})
-	if err == nil || !strings.Contains(err.Error(), "single-node-nvlink") {
-		t.Fatalf("expected topology mismatch error, got %v", err)
+func TestBuild_H100ClassDoesNotConstrainPlacement(t *testing.T) {
+	for _, placement := range []string{"single-node-nvlink", "multi-node-nccl"} {
+		t.Run(placement, func(t *testing.T) {
+			if _, err := Build(topologyProfile(), Options{
+				Team:      "research",
+				Lane:      "training",
+				Mode:      "fixed",
+				Placement: placement,
+				GPUClass:  GPUClassH10095GB,
+			}); err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestNormalizeGPUClassLegacyAliases(t *testing.T) {
+	for legacy, want := range map[string]string{
+		"a100-nvlink-80gb":     GPUClassA10080GB,
+		"h100-standalone-95gb": GPUClassH10095GB,
+		"h200-nvlink-141gb":    GPUClassH200141GB,
+	} {
+		got, deprecated := NormalizeGPUClass(legacy)
+		if got != want || !deprecated {
+			t.Errorf("NormalizeGPUClass(%q)=(%q,%t), want (%q,true)", legacy, got, deprecated, want)
+		}
+	}
+	for _, canonical := range []string{GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB} {
+		got, deprecated := NormalizeGPUClass(canonical)
+		if got != canonical || deprecated {
+			t.Errorf("NormalizeGPUClass(%q)=(%q,%t), want (%q,false)", canonical, got, deprecated, canonical)
+		}
+	}
+}
+
+func TestBuildNormalizesLegacyGPUClassBeforeRendering(t *testing.T) {
+	p := topologyProfile()
+	p.Spec["topology"].(map[string]any)["gpuClass"] = "a100-nvlink-80gb"
+
+	plan, err := Build(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
+		t.Fatalf("legacy alias rendered selector %q, want %q", got, GPUClassA10080GB)
+	}
+	if got := plan.Labels[LabelGPUClass]; got != GPUClassA10080GB {
+		t.Fatalf("legacy alias rendered label %q, want %q", got, GPUClassA10080GB)
+	}
+}
+
+func TestResolveGPUClassUsesProfileAndExplicitOverride(t *testing.T) {
+	p := profile.Profile{
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": "a100-nvlink-80gb"},
+		},
+	}
+	if got, deprecated := ResolveGPUClass(p, ""); got != GPUClassA10080GB || !deprecated {
+		t.Fatalf("profile class = %q deprecated=%v, want %q true", got, deprecated, GPUClassA10080GB)
+	}
+	if got, deprecated := ResolveGPUClass(p, GPUClassAny); got != GPUClassAny || deprecated {
+		t.Fatalf("override class = %q deprecated=%v, want %q false", got, deprecated, GPUClassAny)
 	}
 }
 

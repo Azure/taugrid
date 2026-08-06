@@ -132,11 +132,13 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 
 	gpuDemand := rayRequestedGPUCount(o.workers, o.gpusPerWorker)
 	p := resourceProfileForRender(resolvedProfileName, preset, topo.resourceProfileOptions(), gpuDemand)
+	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
 	var runner *kube.Runner
 	if o.dryRun != "client" {
 		runner = kube.New(kubeContext)
 	}
-	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &namespace, &topologyHolder, o.dryRun, "rayjobs.ray.io")
+	allowImplicitAuto := preset == nil && resolvedProfileName == ""
+	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &namespace, &topologyHolder, o.dryRun, "rayjobs.ray.io", allowImplicitAuto)
 	if err == nil && o.dryRun == "client" && strings.TrimSpace(namespace) == "" {
 		// Namespace resolution needs a live cluster, so an offline client
 		// dry-run cannot have one. Substitute a self-describing placeholder
@@ -158,11 +160,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		}
 	}
 	warnings = append(warnings, resolveWarnings...)
-	autoWarnings, err := topo.resolveAutoQueue(ctx, runner, namespace, &topologyHolder, preset, gpuDemand, nodeSelector, o.dryRun, preset == nil && resolvedProfileName == "")
-	if err != nil {
-		return err
-	}
-	warnings = append(warnings, autoWarnings...)
+	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, o.dryRun)
 
 	capture, err := buildRayCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.script, o.workers, o.gpusPerWorker, dataPVC)
 	if err != nil {
@@ -219,66 +217,80 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		return err
 	}
 
-	rendered, err := rayjobrender.Render(rayjobrender.Options{
-		Name:               name,
-		Namespace:          namespace,
-		ServiceAccountName: o.serviceAccountName,
-		ScriptName:         scriptName,
-		Script:             scriptBytes,
-		ProjectArchive:     projectArchive,
-		Image:              o.image,
-		Workers:            o.workers,
-		GPUsPerWorker:      o.gpusPerWorker,
-		Launcher:           o.launcher,
-		GPUResourceMode:    normalizedGPUResourceMode,
-		MIGProfile:         o.migProfile,
-		RuntimePip:         o.runtimePip,
-		Env:                env,
-		EnvSecrets:         envSecrets,
-		RedactSecrets:      o.dryRun == "client",
-		DataPVC:            dataPVC,
-		Profile:            p,
-		TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),
-		NodeSelector:       nodeSelector,
-		Labels:             labels,
-		Annotations:        annotations,
-		OutputDir:          outputDir,
-		ArtifactPublish:    artifactPublication,
-		CheckpointArtifact: o.checkpointArtifact,
-		MetricsOffload:     metricsRuntime,
-		Resources: rayjobrender.Resources{
-			CPURequest:    o.cpuRequest,
-			MemoryRequest: o.memoryRequest,
-			CPULimit:      o.cpuLimit,
-			MemoryLimit:   o.memoryLimit,
-			Head: rayjobrender.ResourceOverrides{
-				CPURequest:    o.headCPURequest,
-				MemoryRequest: o.headMemoryRequest,
-				CPULimit:      o.headCPULimit,
-				MemoryLimit:   o.headMemoryLimit,
+	renderRayJob := func() ([]byte, error) {
+		return rayjobrender.Render(rayjobrender.Options{
+			Name:               name,
+			Namespace:          namespace,
+			ServiceAccountName: o.serviceAccountName,
+			ScriptName:         scriptName,
+			Script:             scriptBytes,
+			ProjectArchive:     projectArchive,
+			Image:              o.image,
+			Workers:            o.workers,
+			GPUsPerWorker:      o.gpusPerWorker,
+			Launcher:           o.launcher,
+			GPUResourceMode:    normalizedGPUResourceMode,
+			MIGProfile:         o.migProfile,
+			RuntimePip:         o.runtimePip,
+			Env:                env,
+			EnvSecrets:         envSecrets,
+			RedactSecrets:      o.dryRun == "client",
+			DataPVC:            dataPVC,
+			Profile:            p,
+			TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),
+			NodeSelector:       nodeSelector,
+			Labels:             labels,
+			Annotations:        annotations,
+			OutputDir:          outputDir,
+			ArtifactPublish:    artifactPublication,
+			CheckpointArtifact: o.checkpointArtifact,
+			MetricsOffload:     metricsRuntime,
+			Resources: rayjobrender.Resources{
+				CPURequest:    o.cpuRequest,
+				MemoryRequest: o.memoryRequest,
+				CPULimit:      o.cpuLimit,
+				MemoryLimit:   o.memoryLimit,
+				Head: rayjobrender.ResourceOverrides{
+					CPURequest:    o.headCPURequest,
+					MemoryRequest: o.headMemoryRequest,
+					CPULimit:      o.headCPULimit,
+					MemoryLimit:   o.headMemoryLimit,
+				},
+				Worker: rayjobrender.ResourceOverrides{
+					CPURequest:    o.workerCPURequest,
+					MemoryRequest: o.workerMemoryRequest,
+					CPULimit:      o.workerCPULimit,
+					MemoryLimit:   o.workerMemoryLimit,
+				},
 			},
-			Worker: rayjobrender.ResourceOverrides{
-				CPURequest:    o.workerCPURequest,
-				MemoryRequest: o.workerMemoryRequest,
-				CPULimit:      o.workerCPULimit,
-				MemoryLimit:   o.workerMemoryLimit,
-			},
-		},
 
-		TuneMetric:              o.tuneMetric,
-		TuneMode:                o.tuneMode,
-		TuneNumSamples:          o.tuneNumSamples,
-		TuneMaxConcurrentTrials: o.tuneMaxConcurrentTrials,
-		TuneParamSpace:          o.tuneParamSpace,
+			TuneMetric:              o.tuneMetric,
+			TuneMode:                o.tuneMode,
+			TuneNumSamples:          o.tuneNumSamples,
+			TuneMaxConcurrentTrials: o.tuneMaxConcurrentTrials,
+			TuneParamSpace:          o.tuneParamSpace,
 
-		AllowNCCLOverride: o.allowNCCLOverride,
+			AllowNCCLOverride: o.allowNCCLOverride,
 
-		RayTrainConfig:        rayTrainConfigForRender(o),
-		AzureWorkloadIdentity: o.azureWorkloadIdentity,
-	})
+			RayTrainConfig:        rayTrainConfigForRender(o),
+			AzureWorkloadIdentity: o.azureWorkloadIdentity,
+		})
+	}
+	rendered, err := renderRayJob()
 	if err != nil {
 		return fmt.Errorf("render: %w", err)
 	}
+	autoWarnings, err := topo.resolveAutoQueueFromManifest(ctx, runner, namespace, &topologyHolder, rendered, o.dryRun, explicitAuto, implicitAuto)
+	if err != nil {
+		return err
+	}
+	if explicitAuto || implicitAuto {
+		rendered, err = renderRayJob()
+		if err != nil {
+			return fmt.Errorf("render: %w", err)
+		}
+	}
+	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
 		if err := validateRenderedQueue(ctx, runner, namespace, rendered, topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
 			return err

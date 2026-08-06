@@ -3,11 +3,11 @@ package queueresolve
 import (
 	"context"
 	"fmt"
-	"github.com/Azure/taugrid/core/kueueapi"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Azure/taugrid/core/kueueapi"
 	"github.com/Azure/taugrid/core/topology"
 )
 
@@ -40,12 +40,12 @@ func g5A100Preset() *topology.ResolvedPreset {
 			Name:           "azure.research.training.l",
 			Namespace:      "ray",
 			ClusterQueue:   "tau-cq",
-			ResourceFlavor: "gpu",
+			ResourceFlavor: "ndm-a100-v4",
 		},
 		Options: topology.Options{
 			Team:      "training",
 			Lane:      "training",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  topology.GPUClassA10080GB,
 			QueueName: "team-b",
 		},
 	}
@@ -57,12 +57,12 @@ func g5H200Preset() *topology.ResolvedPreset {
 			Name:           "azure.research.large-memory.xl",
 			Namespace:      "ray",
 			ClusterQueue:   "tau-cq",
-			ResourceFlavor: "gpu",
+			ResourceFlavor: "nd-h200-v5",
 		},
 		Options: topology.Options{
 			Team:      "research",
 			Lane:      "large-memory",
-			GPUClass:  "h200-nvlink-141gb",
+			GPUClass:  topology.GPUClassH200141GB,
 			QueueName: "team-a",
 		},
 	}
@@ -79,19 +79,26 @@ func g5ValidationRunner() *validationFakeRunner {
 				topology.LabelTeam: "research",
 				topology.LabelLane: "large-memory",
 			}),
-			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): clusterQueueObject("tau-cq", "gpu", nil),
-			validationKey("get", "resourceflavor.kueue.x-k8s.io", "gpu", "-o", "json"):  resourceFlavorObject("gpu", "", "", "sku-specific-taint"),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"ndm-a100-v4","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "ndm-a100-v4", "-o", "json"): resourceFlavorObject("ndm-a100-v4", topology.GPUClassA10080GB, "", "sku-specific-taint"),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):  resourceFlavorObject("nd-h200-v5", topology.GPUClassH200141GB, "", "sku-specific-taint"),
 		},
 		errors: map[string]error{},
 	}
 }
 
-func TestValidateSelectionAcceptsG5GenericFlavorWithRenderedGPUSelector(t *testing.T) {
+func TestValidateSelectionAcceptsExactGPUClassFlavorLabel(t *testing.T) {
 	runner := g5ValidationRunner()
 
 	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
 		Preset:       g5H200Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: "h200-nvlink-141gb"},
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB},
 	})
 	if err != nil {
 		t.Fatalf("ValidateSelection: %v", err)
@@ -99,7 +106,7 @@ func TestValidateSelectionAcceptsG5GenericFlavorWithRenderedGPUSelector(t *testi
 	if report.Namespace != "ray" ||
 		report.QueueName != "team-a" ||
 		report.ClusterQueue != "tau-cq" ||
-		report.ResourceFlavor != "gpu" ||
+		report.ResourceFlavor != "nd-h200-v5" ||
 		report.Preset != "azure.research.large-memory.xl" {
 		t.Fatalf("report did not preserve resolved queue topology: %+v", report)
 	}
@@ -113,10 +120,137 @@ func TestValidateSelectionAcceptsG5GenericFlavorWithRenderedGPUSelector(t *testi
 	wantCalls := [][]string{
 		{"-n", "ray", "get", "localqueue.kueue.x-k8s.io", "team-a", "-o", "json"},
 		{"get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"},
-		{"get", "resourceflavor.kueue.x-k8s.io", "gpu", "-o", "json"},
+		{"get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCalls) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestValidateSelectionRejectsUnlabeledFlavorForSpecificGPUClass(t *testing.T) {
+	runner := g5ValidationRunner()
+	runner.outputs[validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json")] =
+		resourceFlavorObject("nd-h200-v5", "", "", "")
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Preset:       g5H200Preset(),
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB},
+	})
+	if err == nil || !strings.Contains(err.Error(), topology.NodeLabelGPUClass) || !strings.Contains(err.Error(), "exact node-label match") {
+		t.Fatalf("expected exact gpu class label error, got %v", err)
+	}
+}
+
+func TestValidateSelectionExplicitQueueResolvesExactGPUClassFlavor(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "tau-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"looks-like-h200","resources":[{"name":"nvidia.com/gpu","nominalQuota":"64"}]},
+					{"name":"opaque-a100","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "looks-like-h200", "-o", "json"): resourceFlavorObject("looks-like-h200", topology.GPUClassH10095GB, "", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "opaque-a100", "-o", "json"):     resourceFlavorObject("opaque-a100", topology.GPUClassA10080GB, "", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:       "ray",
+		QueueName:       "jobqueue",
+		GPUClass:        topology.GPUClassA10080GB,
+		NodeSelector:    map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
+		GPUCount:        1,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("ValidateSelection: %v", err)
+	}
+	if report.ResourceFlavor != "opaque-a100" {
+		t.Fatalf("ResourceFlavor=%q, want opaque-a100 exact-label match", report.ResourceFlavor)
+	}
+}
+
+func TestValidateSelectionExplicitQueueRejectsUnavailableGPUClass(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "tau-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"):              clusterQueueObjectWithGPU("tau-cq", "misleading-a100-name", 8, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "misleading-a100-name", "-o", "json"): resourceFlavorObject(
+				"misleading-a100-name", topology.GPUClassH10095GB, "", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:       "ray",
+		QueueName:       "jobqueue",
+		GPUClass:        topology.GPUClassA10080GB,
+		NodeSelector:    map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
+		GPUCount:        1,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no compatible GPU quota flavor with exact node label") {
+		t.Fatalf("expected explicit queue unavailable-class error, got %v", err)
+	}
+}
+
+func TestValidateSelectionExplicitQueueRejectsFlavorConstraintConflicts(t *testing.T) {
+	tests := []struct {
+		name          string
+		flavor        string
+		nodeSelector  map[string]string
+		podToleration [][]kueueapi.Toleration
+	}{
+		{
+			name: "conflicting node label",
+			flavor: resourceFlavorObjectWithLabels(
+				"a100-pool",
+				map[string]string{
+					topology.NodeLabelGPUClass: topology.GPUClassA10080GB,
+					"agentpool":                "gpu",
+				},
+				"",
+				"",
+			),
+			nodeSelector: map[string]string{
+				topology.NodeLabelGPUClass: topology.GPUClassA10080GB,
+				"agentpool":                "system",
+			},
+		},
+		{
+			name:         "untolerated node taint",
+			flavor:       resourceFlavorObject("a100-pool", topology.GPUClassA10080GB, "", "dedicated"),
+			nodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &validationFakeRunner{
+				outputs: map[string]string{
+					validationKey("-n", "ray", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "tau-cq", nil),
+					validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"):              clusterQueueObjectWithGPU("tau-cq", "a100-pool", 8, 0, nil),
+					validationKey("get", "resourceflavor.kueue.x-k8s.io", "a100-pool", "-o", "json"):         tc.flavor,
+				},
+				errors: map[string]error{},
+			}
+
+			_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+				Namespace:       "ray",
+				QueueName:       "jobqueue",
+				GPUClass:        topology.GPUClassA10080GB,
+				NodeSelector:    tc.nodeSelector,
+				PodTolerations:  tc.podToleration,
+				GPUCount:        1,
+				GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+			})
+			if err == nil || !strings.Contains(err.Error(), "rendered pod constraints") {
+				t.Fatalf("expected incompatible flavor rejection, got %v", err)
+			}
+		})
 	}
 }
 
@@ -134,7 +268,7 @@ func TestValidateSelectionChecksA100AndH200QueuesIndependently(t *testing.T) {
 		{
 			name:         "a100-training",
 			preset:       g5A100Preset(),
-			gpuClass:     "a100-nvlink-80gb",
+			gpuClass:     topology.GPUClassA10080GB,
 			queue:        "team-b",
 			clusterQ:     "tau-cq",
 			expectedTeam: "training",
@@ -142,7 +276,7 @@ func TestValidateSelectionChecksA100AndH200QueuesIndependently(t *testing.T) {
 		{
 			name:         "h200-research",
 			preset:       g5H200Preset(),
-			gpuClass:     "h200-nvlink-141gb",
+			gpuClass:     topology.GPUClassH200141GB,
 			queue:        "team-a",
 			clusterQ:     "tau-cq",
 			expectedTeam: "research",
@@ -172,7 +306,7 @@ func TestValidateSelectionRejectsClusterQueueDrift(t *testing.T) {
 
 	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
 		Preset:       g5A100Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: "a100-nvlink-80gb"},
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
 	})
 	if err == nil || !strings.Contains(err.Error(), `points to ClusterQueue "other-cq"`) || !strings.Contains(err.Error(), `expects "tau-cq"`) {
 		t.Fatalf("expected ClusterQueue drift error, got %v", err)
@@ -190,7 +324,7 @@ func TestValidateSelectionRejectsTeamLabelDrift(t *testing.T) {
 
 	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
 		Preset:       g5A100Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: "a100-nvlink-80gb"},
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
 	})
 	if err == nil || !strings.Contains(err.Error(), topology.LabelTeam) || !strings.Contains(err.Error(), "research") {
 		t.Fatalf("expected team label drift error, got %v", err)
@@ -205,7 +339,7 @@ func TestValidateSelectionReportsMissingLocalQueueWithPresetContext(t *testing.T
 
 	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
 		Preset:       g5A100Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: "a100-nvlink-80gb"},
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
 	})
 	if err == nil {
 		t.Fatal("expected missing LocalQueue error")
@@ -246,6 +380,7 @@ func TestValidateSelectionRejectsTopologyFreeWorkspaceQueue(t *testing.T) {
 		outputs: map[string]string{
 			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
 			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):              clusterQueueObjectWithGPU("workspace-cq", "workspace-gpu", 8, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "workspace-gpu", "-o", "json"):           resourceFlavorObject("workspace-gpu", "", "", ""),
 		},
 		errors: map[string]error{},
 	}
@@ -423,6 +558,7 @@ func TestValidateSelectionAcceptsTopologyCapableWorkspaceQueue(t *testing.T) {
 		outputs: map[string]string{
 			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
 			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):              clusterQueueObjectWithGPU("workspace-cq", "nd-h200-v5", 8, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):              resourceFlavorObject("nd-h200-v5", "", "default-node-topology", ""),
 		},
 		errors: map[string]error{},
 	}
@@ -455,6 +591,8 @@ func TestValidateSelectionChoosesTopologyFlavorThatFits(t *testing.T) {
 					{"name":"ndm-a100-v4","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}
 				]}]}
 			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):  resourceFlavorObject("nd-h200-v5", "", "default-node-topology", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "ndm-a100-v4", "-o", "json"): resourceFlavorObject("ndm-a100-v4", "", "default-node-topology", ""),
 		},
 		errors: map[string]error{},
 	}
@@ -487,6 +625,8 @@ func TestValidateSelectionReportsLargestTopologyFlavorWhenNoneFit(t *testing.T) 
 					{"name":"ndm-a100-v4","resources":[{"name":"nvidia.com/gpu","nominalQuota":"4"}]}
 				]}]}
 			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):  resourceFlavorObject("nd-h200-v5", "", "default-node-topology", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "ndm-a100-v4", "-o", "json"): resourceFlavorObject("ndm-a100-v4", "", "default-node-topology", ""),
 		},
 		errors: map[string]error{},
 	}
@@ -510,6 +650,12 @@ func TestValidateSelectionRejectsTopologyFlavorWithConflictingNodeLabels(t *test
 		outputs: map[string]string{
 			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
 			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):              clusterQueueObjectWithGPU("workspace-cq", "nd-h200-v5", 8, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): resourceFlavorObjectWithLabels(
+				"nd-h200-v5",
+				map[string]string{topology.ManagedGPUSeriesLabel: "nd-h200-v5"},
+				"default-node-topology",
+				"",
+			),
 		},
 		errors: map[string]error{},
 	}
@@ -529,6 +675,70 @@ func TestValidateSelectionRejectsTopologyFlavorWithConflictingNodeLabels(t *test
 	}
 }
 
+func TestValidateSelectionMatchesTopologyFlavorByExactGPUClassLabel(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"looks-like-a100","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"arbitrary-pool","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "looks-like-a100", "-o", "json"): resourceFlavorObject("looks-like-a100", topology.GPUClassH200141GB, "default-node-topology", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "arbitrary-pool", "-o", "json"):  resourceFlavorObject("arbitrary-pool", topology.GPUClassA10080GB, "default-node-topology", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		TopologyRequest:         true,
+		GPUClass:                topology.GPUClassA10080GB,
+		NodeSelector:            map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("ValidateSelection: %v", err)
+	}
+	if report.ResourceFlavor != "arbitrary-pool" {
+		t.Fatalf("ResourceFlavor = %q, want exact-label arbitrary-pool", report.ResourceFlavor)
+	}
+}
+
+func TestValidateSelectionAllowsGenericNamedTopologyFlavorForAny(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):              clusterQueueObjectWithGPU("workspace-cq", "taugrid-default", 8, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "taugrid-default", "-o", "json"):         resourceFlavorObject("taugrid-default", "", "default-node-topology", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		TopologyRequest:         true,
+		GPUClass:                topology.GPUClassAny,
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("ValidateSelection: %v", err)
+	}
+	if report.ResourceFlavor != "taugrid-default" {
+		t.Fatalf("ResourceFlavor = %q, want taugrid-default", report.ResourceFlavor)
+	}
+}
+
 func TestSelectQueueChoosesVisibleQueueThatFitsShape(t *testing.T) {
 	runner := &validationFakeRunner{
 		outputs: map[string]string{
@@ -538,6 +748,10 @@ func TestSelectQueueChoosesVisibleQueueThatFitsShape(t *testing.T) {
 				]}`,
 			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): clusterQueueObjectWithGPU("tau-cq", "gpu", 2, 2, nil),
 			validationKey("get", "clusterqueue.kueue.x-k8s.io", "gpu-cq", "-o", "json"): clusterQueueObjectWithGPU("gpu-cq", "h200-managed", 16, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "gpu", "-o", "json"): resourceFlavorObjectWithLabels(
+				"gpu", map[string]string{"agentpool": "otherpool"}, "", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "h200-managed", "-o", "json"): resourceFlavorObjectWithLabels(
+				"h200-managed", map[string]string{"agentpool": "h200pool"}, "", ""),
 		},
 		errors: map[string]error{},
 	}
@@ -573,6 +787,8 @@ func TestSelectQueueFiltersByGPUResourceMode(t *testing.T) {
 				"metadata":{"name":"tau-dra-cq"},
 				"spec":{"resourceGroups":[{"flavors":[{"name":"nd-h200-v5-dra","resources":[{"name":"gpu.nvidia.com","nominalQuota":"16"}]}]}]}
 			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):     resourceFlavorObject("nd-h200-v5", "", "", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5-dra", "-o", "json"): resourceFlavorObject("nd-h200-v5-dra", "", "", ""),
 		},
 		errors: map[string]error{},
 	}
@@ -596,12 +812,210 @@ func TestSelectQueueFiltersByGPUResourceMode(t *testing.T) {
 	}
 }
 
-func localQueueObject(name, clusterQueue string, labels map[string]string) string {
-	return fmt.Sprintf(`{"metadata":{"name":%q,"namespace":"ray","labels":%s},"spec":{"clusterQueue":%q}}`, name, labelsJSON(labels), clusterQueue)
+func TestSelectQueueMatchesGPUClassByExactResourceFlavorLabel(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"misleading-h200-pool","resources":[{"name":"nvidia.com/gpu","nominalQuota":"64"}]},
+					{"name":"opaque-platform-flavor","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "misleading-h200-pool", "-o", "json"):   resourceFlavorObject("misleading-h200-pool", topology.GPUClassA10080GB, "", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "opaque-platform-flavor", "-o", "json"): resourceFlavorObject("opaque-platform-flavor", topology.GPUClassH200141GB, "", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	selected, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        8,
+		GPUClass:        topology.GPUClassH200141GB,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("SelectQueue: %v; candidates=%+v", err, candidates)
+	}
+	if selected.ResourceFlavor != "opaque-platform-flavor" {
+		t.Fatalf("selected=%+v, want exact-label flavor opaque-platform-flavor", selected)
+	}
 }
 
-func clusterQueueObject(name, flavor string, labels map[string]string) string {
-	return clusterQueueObjectWithGPU(name, flavor, 8, 0, labels)
+func TestSelectQueueRejectsMisleadingAndUnlabeledFlavors(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"h100-95gb-by-name-only","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"taugrid-default","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "h100-95gb-by-name-only", "-o", "json"): resourceFlavorObject("h100-95gb-by-name-only", topology.GPUClassA10080GB, "", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "taugrid-default", "-o", "json"):        resourceFlavorObject("taugrid-default", "", "", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        1,
+		GPUClass:        topology.GPUClassH10095GB,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil || !strings.Contains(err.Error(), `gpu_class "h100-95gb"`) {
+		t.Fatalf("expected unavailable gpu_class error, got %v; candidates=%+v", err, candidates)
+	}
+	if len(candidates) != 1 || !strings.Contains(candidates[0].Reason, topology.NodeLabelGPUClass) {
+		t.Fatalf("candidate reason should report exact label miss: %+v", candidates)
+	}
+}
+
+func TestSelectQueueNormalizesLegacyGPUClassAliasBeforeMatching(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"):        clusterQueueObjectWithGPU("tau-cq", "ndm-a100-v4", 8, 0, nil),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "ndm-a100-v4", "-o", "json"): resourceFlavorObject("ndm-a100-v4", topology.GPUClassA10080GB, "", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	selected, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        1,
+		GPUClass:        "a100-nvlink-80gb",
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("SelectQueue legacy alias: %v; candidates=%+v", err, candidates)
+	}
+	if selected.ResourceFlavor != "ndm-a100-v4" {
+		t.Fatalf("selected=%+v, want canonical-label flavor ndm-a100-v4", selected)
+	}
+}
+
+func TestSelectQueueUsesCompatibleFlavorWhenAnotherIsUnreadable(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"stale-reference","resources":[{"name":"nvidia.com/gpu","nominalQuota":"64"}]},
+					{"name":"usable-a100","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "usable-a100", "-o", "json"): resourceFlavorObject(
+				"usable-a100", topology.GPUClassA10080GB, "", ""),
+		},
+		errors: map[string]error{
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "stale-reference", "-o", "json"): fmt.Errorf("not found"),
+		},
+	}
+
+	selected, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        1,
+		GPUClass:        topology.GPUClassA10080GB,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("SelectQueue: %v; candidates=%+v", err, candidates)
+	}
+	if selected.ResourceFlavor != "usable-a100" {
+		t.Fatalf("selected=%+v, want usable-a100", selected)
+	}
+}
+
+func TestValidateSelectionAnyChoosesCompatibleFlavor(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"misleading-h200-pool","resources":[{"name":"nvidia.com/gpu","nominalQuota":"64"}]},
+					{"name":"opaque-compatible","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "misleading-h200-pool", "-o", "json"): resourceFlavorObjectWithLabels(
+				"misleading-h200-pool", map[string]string{"agentpool": "wrongpool"}, "default-node-topology", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "opaque-compatible", "-o", "json"): resourceFlavorObjectWithLabels(
+				"opaque-compatible", map[string]string{"agentpool": "gpupool"}, "default-node-topology", "nvidia.com/gpu"),
+		},
+		errors: map[string]error{},
+	}
+
+	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:       "workspace",
+		QueueName:       "jobqueue",
+		TopologyRequest: true,
+		GPUClass:        topology.GPUClassAny,
+		NodeSelector:    map[string]string{"agentpool": "gpupool"},
+		PodTolerations: [][]kueueapi.Toleration{{
+			{Key: "nvidia.com/gpu", Operator: "Exists", Effect: "NoSchedule"},
+		}},
+		GPUCount:        1,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("ValidateSelection any: %v", err)
+	}
+	if report.ResourceFlavor != "opaque-compatible" {
+		t.Fatalf("ResourceFlavor = %q, want opaque-compatible", report.ResourceFlavor)
+	}
+}
+
+func TestSelectQueueDoesNotRankFlavorNames(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"east-small","resources":[{"name":"nvidia.com/gpu","nominalQuota":"4"}]},
+					{"name":"opaque-large","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "east-small", "-o", "json"): resourceFlavorObjectWithLabels(
+				"east-small", map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB, "topology.kubernetes.io/zone": "east"}, "", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "opaque-large", "-o", "json"): resourceFlavorObjectWithLabels(
+				"opaque-large", map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB, "topology.kubernetes.io/zone": "east"}, "", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	selected, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        8,
+		GPUClass:        topology.GPUClassA10080GB,
+		NodeSelector:    map[string]string{"topology.kubernetes.io/zone": "east"},
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatalf("SelectQueue: %v; candidates=%+v", err, candidates)
+	}
+	if selected.ResourceFlavor != "opaque-large" {
+		t.Fatalf("selected=%+v, want highest-capacity compatible opaque-large", selected)
+	}
+}
+
+func localQueueObject(name, clusterQueue string, labels map[string]string) string {
+	return fmt.Sprintf(`{"metadata":{"name":%q,"namespace":"ray","labels":%s},"spec":{"clusterQueue":%q}}`, name, labelsJSON(labels), clusterQueue)
 }
 
 func clusterQueueObjectWithGPU(name, flavor string, nominal, borrowing int64, labels map[string]string) string {
@@ -616,10 +1030,14 @@ func clusterQueueObjectWithGPU(name, flavor string, nominal, borrowing int64, la
 }
 
 func resourceFlavorObject(name, gpuClass, topologyName, taintKey string) string {
-	nodeLabel := ""
+	labels := map[string]string{}
 	if gpuClass != "" {
-		nodeLabel = fmt.Sprintf(`"%s":%q`, topology.NodeLabelGPUClass, gpuClass)
+		labels[topology.NodeLabelGPUClass] = gpuClass
 	}
+	return resourceFlavorObjectWithLabels(name, labels, topologyName, taintKey)
+}
+
+func resourceFlavorObjectWithLabels(name string, labels map[string]string, topologyName, taintKey string) string {
 	topologyField := ""
 	if topologyName != "" {
 		topologyField = fmt.Sprintf(`,"topologyName":%q`, topologyName)
@@ -628,7 +1046,7 @@ func resourceFlavorObject(name, gpuClass, topologyName, taintKey string) string 
 	if taintKey != "" {
 		taints = fmt.Sprintf(`,"nodeTaints":[{"key":%q,"effect":"NoSchedule"}]`, taintKey)
 	}
-	return fmt.Sprintf(`{"metadata":{"name":%q},"spec":{"nodeLabels":{%s}%s%s}}`, name, nodeLabel, topologyField, taints)
+	return fmt.Sprintf(`{"metadata":{"name":%q},"spec":{"nodeLabels":%s%s%s}}`, name, labelsJSON(labels), topologyField, taints)
 }
 
 func labelsJSON(labels map[string]string) string {

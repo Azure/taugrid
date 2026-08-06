@@ -689,7 +689,7 @@ storage:
 policy:
   namespace: ray
   queue: team-a
-  gpu_class: h200-nvlink-141gb
+  gpu_class: h200-141gb
   priority: priority
   disable_default_priorities: true
 experiment:
@@ -1146,15 +1146,9 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 	}
 }
 
-func TestRunConfigRejectsQueueAutoAsScopedLimitation(t *testing.T) {
-	err := executeTauConfigError(t, `name: auto-queue
-engine: ray
-entrypoint: train.py
-policy:
-  queue: auto
-`)
-	if err == nil || !strings.Contains(err.Error(), "policy.queue: auto") || !strings.Contains(err.Error(), "not supported by this focused run --config slice") {
-		t.Fatalf("expected explicit policy.queue auto limitation, got %v", err)
+func TestRunConfigAcceptsQueueAutoForLiveResolution(t *testing.T) {
+	if err := validateRunDispatchOptions(runDispatchOptions{queue: "auto"}); err != nil {
+		t.Fatalf("policy.queue auto should reach live queue discovery: %v", err)
 	}
 }
 

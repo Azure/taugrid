@@ -330,7 +330,7 @@ func LoadPolicy(path string) (Policy, error) {
 			Mode:                      normalizeLabelValue(raw.Mode),
 			Placement:                 normalizeLabelValue(raw.Placement),
 			Shape:                     normalizeLabelValue(raw.Shape),
-			GPUClass:                  normalizeLabelValue(raw.GPUClass),
+			GPUClass:                  canonicalGPUClass(raw.GPUClass),
 			QueueName:                 normalizeLabelValue(raw.QueueName),
 			ClusterQueue:              normalizeLabelValue(raw.ClusterQueue),
 			Namespace:                 normalizeLabelValue(raw.Namespace),
@@ -358,6 +358,17 @@ func LoadPolicy(path string) (Policy, error) {
 		pol.Presets[preset.Name] = preset
 	}
 	return pol, nil
+}
+
+// canonicalGPUClass normalizes a policy-declared gpuClass value to its
+// canonical spelling, silently accepting legacy aliases. Presets are
+// platform-authored (not a live per-request researcher input), so this
+// migrates them without a warning; a warning is emitted instead when a
+// researcher supplies a legacy alias directly via CLI flag, run config, or
+// profile spec.topology.gpuClass (see contract.normalize in topology.go).
+func canonicalGPUClass(v string) string {
+	canonical, _ := NormalizeGPUClass(v)
+	return canonical
 }
 
 // resolvePolicyPath finds the platform policy catalog.

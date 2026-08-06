@@ -34,7 +34,7 @@ spec:
       mode: fixed
       placement: single-node-nvlink
       shape: 8xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: research-training
       clusterQueue: team-research-reserved-cq
       namespace: ray
@@ -74,6 +74,31 @@ spec:
 	}
 }
 
+func TestLoadPolicyNormalizesLegacyGPUClassAlias(t *testing.T) {
+	path := writePolicy(t, `apiVersion: tau.azure.com/v1alpha1
+kind: TopologyPolicy
+metadata: { name: test-azure }
+spec:
+  presets:
+    azure.research.training.l:
+      team: research
+      lane: training
+      mode: fixed
+      placement: independent
+      shape: 1xa100-80gb
+      gpuClass: a100-nvlink-80gb
+      queue: jobqueue
+      clusterQueue: tau-cq
+`)
+	got, err := ResolvePreset(path, "azure.research.training.l")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Options.GPUClass != GPUClassA10080GB {
+		t.Fatalf("GPUClass=%q want %q", got.Options.GPUClass, GPUClassA10080GB)
+	}
+}
+
 func TestLoadPolicyDefaultsPriorityByLane(t *testing.T) {
 	path := writePolicy(t, `apiVersion: tau.azure.com/v1alpha1
 kind: TopologyPolicy
@@ -87,7 +112,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 1xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: research-eval
       clusterQueue: team-research-reserved-cq
       resourceFlavor: gpu-a100-nvlink-80gb
@@ -117,7 +142,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 1xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: research-training
       clusterQueue: team-research-reserved-cq
       resourceFlavor: gpu-a100-nvlink-80gb-dra
@@ -154,7 +179,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 1xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: research-training
       clusterQueue: team-research-reserved-cq
       resourceFlavor: gpu-a100-nvlink-80gb-dra
@@ -165,7 +190,7 @@ spec:
       mode: fixed
       placement: single-node-nvlink
       shape: 8xh200-141gb
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: research-large-memory
       clusterQueue: team-research-reserved-cq
       resourceFlavor: gpu-h200-nvlink-141gb
@@ -206,7 +231,7 @@ spec:
       mode: fixed
       placement: single-node-nvlink
       shape: 8xh200-141gb
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: research-large-memory
       clusterQueue: team-research-reserved-cq
       resourceFlavor: gpu-h200-nvlink-141gb
@@ -256,7 +281,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 1xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: research-training
       clusterQueue: team-research-reserved-cq
 `)
@@ -478,7 +503,7 @@ spec:
       placement: single-node-nvlink
       shape: 8xh200-141gb
       workers: 2
-      gpuClass: h200-nvlink-141gb
+      gpuClass: h200-141gb
       queue: test-large-memory
       clusterQueue: team-test-reserved-cq
       namespace: ray
@@ -570,7 +595,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 2xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: test-training
       clusterQueue: team-test-reserved-cq
       namespace: ray
@@ -583,7 +608,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 2xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: test-training-reclaim
       clusterQueue: team-test-reclaim-cq
       namespace: ray
@@ -615,7 +640,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 2xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: test-training
       clusterQueue: team-test-reserved-cq
       namespace: ray
@@ -645,7 +670,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 2xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: test-training
       clusterQueue: team-test-reserved-cq
       namespace: ray
@@ -657,7 +682,7 @@ spec:
       mode: fixed
       placement: independent
       shape: 2xa100-80gb
-      gpuClass: a100-nvlink-80gb
+      gpuClass: a100-80gb
       queue: test-training
       clusterQueue: team-test-reserved-cq
       namespace: ray

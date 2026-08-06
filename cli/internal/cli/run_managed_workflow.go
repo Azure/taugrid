@@ -323,6 +323,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	if resolvedProfileName != "" || preset != nil {
 		p := resourceProfileForRender(resolvedProfileName, preset, topo.resourceProfileOptions(), m.Compute.GPUs)
 		topologyProfile = &p
+		topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
 	}
 	var kvSpec *kvspec.Spec
 	if len(m.Runtime.EnvKV) > 0 || o.keyVault != "" {
@@ -354,7 +355,8 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	if dryRun != "client" {
 		r = kube.New(kubeContext)
 	}
-	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, r, namespaceExplicit, &namespace, &topologyHolder, dryRun, workloadKindK8sResource(workloadKind))
+	allowImplicitAuto := preset == nil && resolvedProfileName == ""
+	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, r, namespaceExplicit, &namespace, &topologyHolder, dryRun, workloadKindK8sResource(workloadKind), allowImplicitAuto)
 	if err == nil {
 		namespace, err = requireWorkloadNamespace(namespace)
 	}
@@ -383,11 +385,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 			return err
 		}
 	}
-	autoWarnings, err := topo.resolveAutoQueue(ctx, r, namespace, &topologyHolder, preset, managedWorkflowGPUDemand(m, workloadKind), nodeSelector, dryRun, preset == nil && resolvedProfileName == "")
-	if err != nil {
-		return err
-	}
-	warnings = append(warnings, autoWarnings...)
+	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, dryRun)
 	capture := buildManagedWorkflowCaptureMetadata(ctx, captureCommand, m, raw, namespace, workloadKind)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
@@ -401,34 +399,48 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 		jobSecret.OwnerKind = workloadKindToK8sKind(workloadKind)
 	}
 
-	rendered, err := manifest.Render(manifest.RenderOptions{
-		Manifest:           m,
-		ManifestRaw:        raw,
-		ManifestFilename:   filepath.Base(manifestPath),
-		Namespace:          namespace,
-		SmokePairs:         o.smokePairs,
-		ExtraScripts:       extras,
-		TopologyProfile:    topologyProfile,
-		TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),
-		ProfileName:        resolvedProfileName,
-		Labels:             labels,
-		Annotations:        annotations,
-		WorkloadKind:       workloadKind,
-		GPUResourceMode:    gpuResourceMode,
-		MIGProfile:         o.migProfile,
-		NodeSelector:       nodeSelector,
-		MainScript:         mainScriptBytes,
-		UpstreamCheckpoint: o.upstreamCheckpoint,
-		JobSecret:          jobSecret,
-		RedactSecrets:      dryRun == "client",
-		Profile:            profileOptions,
-		MetricsOffload:     metricsOffloadOptions,
-		KVSpec:             kvSpec,
-		ServiceAccountName: o.serviceAccountName,
-	})
+	renderManagedWorkflow := func() ([]byte, error) {
+		return manifest.Render(manifest.RenderOptions{
+			Manifest:           m,
+			ManifestRaw:        raw,
+			ManifestFilename:   filepath.Base(manifestPath),
+			Namespace:          namespace,
+			SmokePairs:         o.smokePairs,
+			ExtraScripts:       extras,
+			TopologyProfile:    topologyProfile,
+			TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),
+			ProfileName:        resolvedProfileName,
+			Labels:             labels,
+			Annotations:        annotations,
+			WorkloadKind:       workloadKind,
+			GPUResourceMode:    gpuResourceMode,
+			MIGProfile:         o.migProfile,
+			NodeSelector:       nodeSelector,
+			MainScript:         mainScriptBytes,
+			UpstreamCheckpoint: o.upstreamCheckpoint,
+			JobSecret:          jobSecret,
+			RedactSecrets:      dryRun == "client",
+			Profile:            profileOptions,
+			MetricsOffload:     metricsOffloadOptions,
+			KVSpec:             kvSpec,
+			ServiceAccountName: o.serviceAccountName,
+		})
+	}
+	rendered, err := renderManagedWorkflow()
 	if err != nil {
 		return fmt.Errorf("render: %w", err)
 	}
+	autoWarnings, err := topo.resolveAutoQueueFromManifest(ctx, r, namespace, &topologyHolder, rendered, dryRun, explicitAuto, implicitAuto)
+	if err != nil {
+		return err
+	}
+	if explicitAuto || implicitAuto {
+		rendered, err = renderManagedWorkflow()
+		if err != nil {
+			return fmt.Errorf("render: %w", err)
+		}
+	}
+	warnings = append(warnings, autoWarnings...)
 	if dryRun != "client" {
 		if err := validateRenderedQueue(ctx, r, namespace, rendered, topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
 			return err

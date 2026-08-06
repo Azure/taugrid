@@ -115,7 +115,7 @@ func TestQuantityBug17_KubernetesNormalizedGPUQuota(t *testing.T) {
 		t.Errorf("MaxGPUCapacity = %d, want 1000", maxCap)
 	}
 
-	flavorName, flavorCap, ok := cq.BestGPUFlavorFor("", nil, GPUResourceDevicePlugin)
+	flavorName, flavorCap, ok := cq.BestGPUFlavorFor(nil, GPUResourceDevicePlugin)
 	if !ok {
 		t.Fatal("BestGPUFlavorFor returned ok=false, want true")
 	}

@@ -21,11 +21,14 @@ func applyWorkspaceDefaults(o runDispatchOptions, w tauworkspace.Workspace, runN
 	}
 	o.namespace = workspaceNamespace
 	workspaceQueue := firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue)
-	if o.queue != "" && o.queue != workspaceQueue {
+	queueAuto := strings.EqualFold(strings.TrimSpace(o.queue), "auto")
+	if o.queue != "" && !queueAuto && o.queue != workspaceQueue {
 		return o, fmt.Errorf("queue %q conflicts with TauWorkspace %q LocalQueue %q", o.queue, w.Metadata.Name, workspaceQueue)
 	}
-	o.queue = workspaceQueue
-	o.workspaceQueueResolved = workspaceQueue != ""
+	if !queueAuto {
+		o.queue = workspaceQueue
+		o.workspaceQueueResolved = workspaceQueue != ""
+	}
 	if o.priorityTier == "" {
 		o.priorityTier = workspacePriorityTier(w.Spec.Defaults.Priority)
 	}

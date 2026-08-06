@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/core/envspec"
+	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -95,6 +96,9 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	}
 	if labels[workloadmeta.LabelManagedBy] != "tau" {
 		t.Fatalf("managed workload admission label=%v, want tau", labels[workloadmeta.LabelManagedBy])
+	}
+	if labels[workloadmeta.LabelGPUClass] != topology.GPUClassAny {
+		t.Fatalf("gpu class label=%v, want any", labels[workloadmeta.LabelGPUClass])
 	}
 	if labels[workloadmeta.LabelJob] != "ray-smoke" || labels["run_id"] != "ray-run-1" {
 		t.Fatalf("caller metadata labels missing: %v", labels)
@@ -249,6 +253,102 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	}
 	if probe := workerContainer["livenessProbe"].(map[string]any); fmt.Sprint(probe["tcpSocket"].(map[string]any)["port"]) != "52365" {
 		t.Fatalf("worker livenessProbe should be TCP socket on agent port: %v", probe)
+	}
+}
+
+func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "ray-a100",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			GPUClass:  "a100-nvlink-80gb",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rayjob := decodeDocs(t, out)[0]
+	labels := rayjob["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels[workloadmeta.LabelGPUClass] != topology.GPUClassA10080GB {
+		t.Fatalf("gpu class label=%v want %s", labels, topology.GPUClassA10080GB)
+	}
+	head := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)["headGroupSpec"].(map[string]any)
+	nodeSelector := head["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != topology.GPUClassA10080GB {
+		t.Fatalf("gpu class selector=%v want %s", nodeSelector, topology.GPUClassA10080GB)
+	}
+}
+
+func TestRenderRejectsGPUClassSelectorForAny(t *testing.T) {
+	_, err := Render(Options{
+		Name:          "ray-any-conflict",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			GPUClass:  topology.GPUClassAny,
+		},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestRenderRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
+	_, err := Render(Options{
+		Name:          "ray-profile-conflict",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		Profile: profile.Profile{
+			Spec: map[string]any{
+				"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
+			},
+		},
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected profile gpu class selector error, got %v", err)
+	}
+}
+
+func TestRenderRejectsClassSelectorForProfileAny(t *testing.T) {
+	_, err := Render(Options{
+		Name:          "ray-profile-any-conflict",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		Profile: profile.Profile{
+			Spec: map[string]any{
+				"topology": map[string]any{"gpuClass": topology.GPUClassAny},
+			},
+		},
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected profile gpu_class any selector error, got %v", err)
 	}
 }
 

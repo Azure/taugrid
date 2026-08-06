@@ -32,7 +32,7 @@ func TestValidateFinetuneStorageNodeCompatibilityRejectsPinnedIncompatibleGPU(t 
 		runner,
 		"ray",
 		manifest,
-		map[string]string{workloadmeta.LabelGPUClass: "a100-nvlink-80gb"},
+		map[string]string{workloadmeta.LabelGPUClass: "a100-80gb"},
 	)
 	if err == nil {
 		t.Fatalf("expected incompatible PVC/GPU selector to fail")
@@ -41,7 +41,7 @@ func TestValidateFinetuneStorageNodeCompatibilityRejectsPinnedIncompatibleGPU(t 
 	for _, want := range []string{
 		`storage.data_pvc "lustre-research"`,
 		`azurelustre.csi.azure.com`,
-		workloadmeta.LabelGPUClass + `=a100-nvlink-80gb`,
+		workloadmeta.LabelGPUClass + `=a100-80gb`,
 		`flex-a100-scus-01000001`,
 		`driver is registered on non-matching node(s): aks-a10-38546571-vmss000000`,
 		`--node-selector/--gpu-class/--preset`,
@@ -178,7 +178,7 @@ func fakeStorageCompatibilityRunner() *fakeKubeRawRunner {
 					"metadata": {
 						"name": "flex-a100-scus-01000001",
 						"labels": {
-							"` + workloadmeta.LabelGPUClass + `": "a100-nvlink-80gb",
+							"` + workloadmeta.LabelGPUClass + `": "a100-80gb",
 							"nvidia.com/gpu.count": "1"
 						}
 					},

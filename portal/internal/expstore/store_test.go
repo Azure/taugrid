@@ -693,7 +693,7 @@ func TestRecordRunDataWritesSQLiteAndJSONLMirrors(t *testing.T) {
 			KueueWorkload:    "seed-1-workload",
 			PodUID:           "pod-uid",
 			ResourceClaims:   "claim-a",
-			GPUClass:         "a100-nvlink-80gb",
+			GPUClass:         "a100-80gb",
 			GPUCount:         &gpuCount,
 			NodeNames:        "node-a",
 			Mounts:           `[{"source":"pvc","path":"/data"}]`,

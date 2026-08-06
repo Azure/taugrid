@@ -1504,7 +1504,7 @@ func TestRenderRunProfile(t *testing.T) {
 		"research",
 		"azure.research.training.xl",
 		"single-node-nvlink",
-		"a100-nvlink-80gb",
+		"a100-80gb",
 		"30m00s (finished)",
 		"1 pod(s) x 1 x h100 = 1 GPU(s)",
 		"$3.49 total",
@@ -1517,6 +1517,38 @@ func TestRenderRunProfile(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("run profile missing %q:\n%s", want, out)
 		}
+
+	}
+}
+
+func TestExperimentRunProfileGPUClassContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		label     string
+		costType  string
+		wantClass string
+	}{
+		{name: "legacy alias", label: "h100-standalone-95gb", wantClass: "h100-95gb"},
+		{name: "explicit any", label: "any", wantClass: "any"},
+		{name: "missing label does not infer from cost", costType: "h100", wantClass: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			labels := map[string]string{workloadmeta.LabelRunID: "run-1"}
+			if tc.label != "" {
+				labels[workloadmeta.LabelGPUClass] = tc.label
+			}
+			record, err := ExperimentRunProfile(
+				Snapshot{Name: "run-1", Namespace: "ray", JobFound: true, Labels: labels},
+				CostProfile{GPUType: tc.costType},
+				ExperimentRunDataOptions{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.GPUClass != tc.wantClass {
+				t.Fatalf("GPUClass = %q, want %q", record.GPUClass, tc.wantClass)
+			}
+		})
 	}
 }
 

@@ -21,10 +21,10 @@ func testPolicy() topology.Policy {
 				Mode:           "fixed",
 				Placement:      "independent",
 				Shape:          "1xa100-80gb",
-				GPUClass:       "a100-nvlink-80gb",
+				GPUClass:       "a100-80gb",
 				QueueName:      "research-training",
 				ClusterQueue:   "team-research-reserved-cq",
-				ResourceFlavor: "gpu-a100-nvlink-80gb-dra",
+				ResourceFlavor: "gpu-a100-80gb-dra",
 				Workers:        1,
 			},
 			"azure.research.training.xl": {
@@ -34,10 +34,10 @@ func testPolicy() topology.Policy {
 				Mode:           "fixed",
 				Placement:      "single-node-nvlink",
 				Shape:          "8xa100-80gb",
-				GPUClass:       "a100-nvlink-80gb",
+				GPUClass:       "a100-80gb",
 				QueueName:      "research-training",
 				ClusterQueue:   "team-research-reserved-cq",
-				ResourceFlavor: "gpu-a100-nvlink-80gb-dra",
+				ResourceFlavor: "gpu-a100-80gb-dra",
 				Workers:        1,
 			},
 			"azure.research.large-memory.xl": {
@@ -47,10 +47,10 @@ func testPolicy() topology.Policy {
 				Mode:           "fixed",
 				Placement:      "single-node-nvlink",
 				Shape:          "8xh200-141gb",
-				GPUClass:       "h200-nvlink-141gb",
+				GPUClass:       "h200-141gb",
 				QueueName:      "research-large-memory",
 				ClusterQueue:   "team-research-reserved-cq",
-				ResourceFlavor: "gpu-h200-nvlink-141gb-dra",
+				ResourceFlavor: "gpu-h200-141gb-dra",
 				Workers:        1,
 			},
 		},
@@ -69,7 +69,7 @@ func TestBuildSnapshotMapsA100PressureAndH200Headroom(t *testing.T) {
 		t.Fatalf("groups=%d want 2: %#v", len(snap.Groups), snap.Groups)
 	}
 
-	a100 := findGroup(t, snap, "a100-nvlink-80gb")
+	a100 := findGroup(t, snap, "a100-80gb")
 	if a100.Pending != 2 || a100.Admitted != 2 || a100.Reserving != 0 {
 		t.Fatalf("a100 queue counts wrong: %#v", a100)
 	}
@@ -86,7 +86,7 @@ func TestBuildSnapshotMapsA100PressureAndH200Headroom(t *testing.T) {
 		t.Fatalf("gpu request=%d want 8", a100.PendingWorkloads[0].GPURequested)
 	}
 
-	h200 := findGroup(t, snap, "h200-nvlink-141gb")
+	h200 := findGroup(t, snap, "h200-141gb")
 	if h200.Pending != 0 || h200.Admitted != 0 {
 		t.Fatalf("h200 queue counts wrong: %#v", h200)
 	}
@@ -110,7 +110,7 @@ func TestBuildSnapshotFiltersNormalizeInput(t *testing.T) {
 	if len(snap.Groups) != 1 {
 		t.Fatalf("groups=%d want 1: %#v", len(snap.Groups), snap.Groups)
 	}
-	if snap.Groups[0].GPUClass != "h200-nvlink-141gb" || snap.Groups[0].Lane != "large-memory" {
+	if snap.Groups[0].GPUClass != "h200-141gb" || snap.Groups[0].Lane != "large-memory" {
 		t.Fatalf("wrong filtered group: %#v", snap.Groups[0])
 	}
 	if len(snap.Hints) != 0 {
@@ -127,12 +127,12 @@ func TestSnapshotCarriesHintsAndPendingWorkloads(t *testing.T) {
 	for _, g := range snap.Groups {
 		classes[g.GPUClass] = g
 	}
-	for _, want := range []string{"a100-nvlink-80gb", "h200-nvlink-141gb"} {
+	for _, want := range []string{"a100-80gb", "h200-141gb"} {
 		if _, ok := classes[want]; !ok {
 			t.Fatalf("missing GPU class %q in groups: %#v", want, snap.Groups)
 		}
 	}
-	if got := classes["a100-nvlink-80gb"].GPUReserved; got != 16 {
+	if got := classes["a100-80gb"].GPUReserved; got != 16 {
 		t.Fatalf("a100 GPUReserved=%d want 16", got)
 	}
 	if len(snap.Hints) == 0 {
@@ -173,7 +173,7 @@ func TestSnapshotJSONIsMachineReadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"gpuClass":"a100-nvlink-80gb"`, `"gpuHeadroom":8`, `"pendingWorkloads"`} {
+	for _, want := range []string{`"gpuClass":"a100-80gb"`, `"gpuHeadroom":8`, `"pendingWorkloads"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("missing %s in JSON: %s", want, raw)
 		}
@@ -223,11 +223,11 @@ const clusterQueuesJSON = `{
             "coveredResources": ["gpu.nvidia.com"],
             "flavors": [
               {
-                "name": "gpu-a100-nvlink-80gb-dra",
+                "name": "gpu-a100-80gb-dra",
                 "resources": [{"name": "gpu.nvidia.com", "nominalQuota": "16"}]
               },
               {
-                "name": "gpu-h200-nvlink-141gb-dra",
+                "name": "gpu-h200-141gb-dra",
                 "resources": [{"name": "gpu.nvidia.com", "nominalQuota": "8"}]
               }
             ]
@@ -236,12 +236,12 @@ const clusterQueuesJSON = `{
       },
       "status": {
         "flavorsReservation": [
-          {"name": "gpu-a100-nvlink-80gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "16", "borrowed": "0"}]},
-          {"name": "gpu-h200-nvlink-141gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "0", "borrowed": "0"}]}
+          {"name": "gpu-a100-80gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "16", "borrowed": "0"}]},
+          {"name": "gpu-h200-141gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "0", "borrowed": "0"}]}
         ],
         "flavorsUsage": [
-          {"name": "gpu-a100-nvlink-80gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "16", "borrowed": "0"}]},
-          {"name": "gpu-h200-nvlink-141gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "0", "borrowed": "0"}]}
+          {"name": "gpu-a100-80gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "16", "borrowed": "0"}]},
+          {"name": "gpu-h200-141gb-dra", "resources": [{"name": "gpu.nvidia.com", "total": "0", "borrowed": "0"}]}
         ]
       }
     }
@@ -286,7 +286,7 @@ const workloadsJSON = `{
         "labels": {
           "` + workloadmeta.LabelTeam + `": "research",
           "` + workloadmeta.LabelLane + `": "training",
-          "` + workloadmeta.LabelGPUClass + `": "a100-nvlink-80gb",
+          "` + workloadmeta.LabelGPUClass + `": "a100-80gb",
           "` + workloadmeta.LabelPreset + `": "azure.research.training.l"
         }
       },

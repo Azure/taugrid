@@ -27,16 +27,20 @@ var catalog = []struct {
 	{"baselineQueue.namespaceSelector", fieldInfo{"object", "{matchExpressions: [{key: " + workloadmeta.LabelWorkspace + ", operator: Exists}]}", "Which namespaces receive the LocalQueue"}},
 	{"baselineQueue.topology.enabled", fieldInfo{"bool", "true", "Create a Topology object for hostname-level scheduling"}},
 	{"baselineQueue.topology.name", fieldInfo{"string", "default-node-topology", "Topology object name"}},
-	{"baselineQueue.flavor.name", fieldInfo{"string", "taugrid-default", "ResourceFlavor name"}},
-	{"baselineQueue.flavor.nodeLabels", fieldInfo{"map", "{kubernetes.io/os: linux}", "Node selector labels for the flavor"}},
-	{"baselineQueue.flavor.tolerations", fieldInfo{"list", "[]", "Tolerations injected into workloads admitted through this flavor (critical for GPU taints)"}},
-	{"baselineQueue.resources", fieldInfo{"list", "cpu:100000, memory:100Ti, nvidia.com/gpu:1000", "Resource quotas bounding Kueue admission"}},
+	{"baselineQueue.flavor.name", fieldInfo{"string", "taugrid-default-cpu", "CPU/memory ResourceFlavor name"}},
+	{"baselineQueue.flavor.nodeLabels", fieldInfo{"map", "{kubernetes.io/os: linux}", "CPU/memory flavor node selector labels"}},
+	{"baselineQueue.flavor.tolerations", fieldInfo{"list", "[]", "CPU/memory flavor tolerations; keep GPU taint tolerations out of this flavor"}},
+	{"baselineQueue.resources", fieldInfo{"list", "cpu:100000, memory:100Ti", "CPU/memory quotas bounding Kueue admission"}},
+	{"baselineQueue.gpu.enabled", fieldInfo{"bool", "true", "Add GPU resources and flavors to the node-resource group"}},
+	{"baselineQueue.gpu.coveredResources", fieldInfo{"list", "nvidia.com/gpu", "GPU resource names covered by the node-resource group"}},
+	{"baselineQueue.gpu.flavors", fieldInfo{"list", "taugrid-default-gpu (generic)", "GPU ResourceFlavors and per-flavor quotas; replace the generic flavor with exact class-labeled flavors when hardware is known"}},
 
 	{"kueue.*", fieldInfo{"", "", "Pass-through to the embedded Kueue chart (v0.18)"}},
 	{"kuberay-operator.*", fieldInfo{"", "", "Pass-through to the embedded KubeRay chart (v1.6)"}},
 	{"tau-core-controller.platformNamespace", fieldInfo{"string", "tau-platform", "Namespace for TauWorkspace CRs"}},
 	{"tau-core-controller.image.repository", fieldInfo{"string", "aksairuntime.azurecr.io/.../tau-core-controller", "Controller image repository"}},
-	{"tau-core-controller.tauCluster.nodeLabelRules", fieldInfo{"list", "[]", "Node topology label reconciliation rules"}},
+	{"tau-core-controller.tauCluster.nodeLabelRules", fieldInfo{"list", "reviewed AKS GPU catalog", "VM-size rules that reconcile gpu-class and gpu-series Node labels"}},
+	{"tau-core-controller.tauCluster.extraNodeLabelRules", fieldInfo{"list", "[]", "Additional cluster-specific GPU label reconciliation rules"}},
 	{"taugrid-core.prewarm.enabled", fieldInfo{"bool", "false", "GPU image pre-pull DaemonSet"}},
 	{"taugrid-core.stellar.enabled", fieldInfo{"bool", "false", "Stellar experiment dashboard"}},
 	{"taugrid-core.lifecycleRecorder.enabled", fieldInfo{"bool", "false", "Run lifecycle recorder"}},
@@ -63,17 +67,24 @@ func ReferenceMarkdown() string {
 		fmt.Fprintf(&sb, "| `%s` | %s | %s | %s |\n",
 			entry.Path, typStr, defStr, entry.Description)
 	}
-	sb.WriteString("\n## Key: baselineQueue.flavor.tolerations\n\n")
-	sb.WriteString("When the cluster uses GPU taints (e.g., sku=gpu:NoSchedule), Kueue excludes\n")
-	sb.WriteString("tainted nodes while assigning flavors and the workload is never admitted. Tau\n")
-	sb.WriteString("injects the sku=gpu and nvidia.com/gpu tolerations into the GPU workloads it\n")
-	sb.WriteString("renders, and Kueue unions those with the flavor's; set this field so workloads\n")
-	sb.WriteString("Tau does not render are admitted too.\n\n")
+	sb.WriteString("\n## Key: baselineQueue.gpu.flavors\n\n")
+	sb.WriteString("Declare GPU node taints on GPU flavors so CPU-only pods cannot consume GPU\n")
+	sb.WriteString("quota when generic CPU quota is exhausted. Tau GPU pods already tolerate the\n")
+	sb.WriteString("standard sku=gpu and nvidia.com/gpu taints. Do not repeat a matching taint in\n")
+	sb.WriteString("the flavor tolerations, because Kueue would bypass that admission guard.\n\n")
 	sb.WriteString("  baselineQueue:\n")
-	sb.WriteString("    flavor:\n")
-	sb.WriteString("      tolerations:\n")
-	sb.WriteString("        - key: sku\n")
-	sb.WriteString("          value: gpu\n")
-	sb.WriteString("          effect: NoSchedule\n")
+	sb.WriteString("    gpu:\n")
+	sb.WriteString("      flavors:\n")
+	sb.WriteString("        - name: a100-pool\n")
+	sb.WriteString("          nodeLabels:\n")
+	fmt.Fprintf(&sb, "            %s: a100-80gb\n", workloadmeta.LabelGPUClass)
+	sb.WriteString("          nodeTaints:\n")
+	sb.WriteString("            - key: sku\n")
+	sb.WriteString("              value: gpu\n")
+	sb.WriteString("              effect: NoSchedule\n")
+	sb.WriteString("          tolerations: []\n")
+	sb.WriteString("          resources:\n")
+	sb.WriteString("            - name: nvidia.com/gpu\n")
+	sb.WriteString("              nominalQuota: \"1\"\n")
 	return sb.String()
 }

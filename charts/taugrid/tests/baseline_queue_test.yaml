@@ -5,7 +5,7 @@ tests:
   - it: renders the portable queue contract by default
     asserts:
       - hasDocuments:
-          count: 7
+          count: 8
       - equal:
           path: kind
           value: Topology
@@ -18,22 +18,73 @@ tests:
           path: spec.nodeLabels["kubernetes.io/os"]
           value: linux
         documentIndex: 1
+      - notExists:
+          path: spec.topologyName
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: taugrid-default-gpu
+        documentIndex: 2
+      - notExists:
+          path: spec.nodeLabels["tau.azure.com/gpu-class"]
+        documentIndex: 2
+      - equal:
+          path: spec.nodeTaints[0]
+          value:
+            key: sku
+            value: gpu
+            effect: NoSchedule
+        documentIndex: 2
+      - notExists:
+          path: spec.tolerations
+        documentIndex: 2
       - equal:
           path: spec.topologyName
           value: default-node-topology
-        documentIndex: 1
+        documentIndex: 2
       - equal:
           path: kind
           value: ClusterQueue
-        documentIndex: 2
+        documentIndex: 3
       - equal:
           path: metadata.name
           value: jobqueue
-        documentIndex: 2
+        documentIndex: 3
       - equal:
           path: spec.namespaceSelector.matchExpressions[0].key
           value: tau.azure.com/workspace
-        documentIndex: 2
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].coveredResources
+          value:
+            - cpu
+            - memory
+            - nvidia.com/gpu
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].flavors[0].name
+          value: taugrid-default-cpu
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].flavors[0].resources[2]
+          value:
+            name: nvidia.com/gpu
+            nominalQuota: "0"
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].name
+          value: taugrid-default-gpu
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].resources
+          value:
+            - name: cpu
+              nominalQuota: "100000"
+            - name: memory
+              nominalQuota: 100Ti
+            - name: nvidia.com/gpu
+              nominalQuota: "1000"
+        documentIndex: 3
 
   - it: disables every baseline queue object together
     set:
@@ -49,11 +100,225 @@ tests:
       - equal:
           path: metadata.name
           value: research
+        documentIndex: 3
+
+  - it: renders a class-labeled GPU flavor without constraining the CPU flavor
+    set:
+      baselineQueue.gpu.flavors:
+        - name: a100-pool
+          nodeLabels:
+            kubernetes.io/os: linux
+            tau.azure.com/gpu-class: a100-80gb
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          tolerations: []
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+    asserts:
+      - notExists:
+          path: spec.nodeLabels["tau.azure.com/gpu-class"]
+        documentIndex: 1
+      - equal:
+          path: spec.nodeLabels["tau.azure.com/gpu-class"]
+          value: a100-80gb
+        documentIndex: 2
+      - equal:
+          path: spec.topologyName
+          value: default-node-topology
+        documentIndex: 2
+      - equal:
+          path: spec.resourceGroups[0].coveredResources
+          value:
+            - cpu
+            - memory
+            - nvidia.com/gpu
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].name
+          value: a100-pool
+        documentIndex: 3
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].resources[2]
+          value:
+            name: nvidia.com/gpu
+            nominalQuota: "1"
+        documentIndex: 3
+
+  - it: renders a CPU-only resource group when GPU admission is disabled
+    set:
+      baselineQueue.gpu.enabled: false
+      baselineQueue.gpu.coveredResources: []
+      baselineQueue.gpu.flavors: []
+    asserts:
+      - hasDocuments:
+          count: 7
+      - equal:
+          path: kind
+          value: ClusterQueue
+        documentIndex: 2
+      - equal:
+          path: spec.resourceGroups
+          value:
+            - coveredResources:
+                - cpu
+                - memory
+              flavors:
+                - name: taugrid-default-cpu
+                  resources:
+                    - name: cpu
+                      nominalQuota: "100000"
+                    - name: memory
+                      nominalQuota: 100Ti
         documentIndex: 2
 
-  - it: rejects topology without a flavor node selector
+  - it: rejects legacy mixed CPU and GPU resource values during upgrade
     set:
-      baselineQueue.flavor.nodeLabels: null
+      baselineQueue.resources:
+        - name: cpu
+          nominalQuota: "100000"
+        - name: memory
+          nominalQuota: 100Ti
+        - name: nvidia.com/gpu
+          nominalQuota: "1000"
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.flavor.nodeLabels must contain at least one label when baselineQueue.topology.enabled is true
+          errorMessage: resource nvidia.com/gpu appears in both baselineQueue.resources and baselineQueue.gpu.coveredResources; remove GPU resources from baselineQueue.resources before upgrading
+
+  - it: rejects a GPU class label on the CPU flavor
+    set:
+      baselineQueue.flavor.nodeLabels:
+        kubernetes.io/os: linux
+        tau.azure.com/gpu-class: a100-80gb
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not set GPU class or series labels; move GPU placement labels to baselineQueue.gpu.flavors before upgrading
+
+  - it: rejects legacy GPU series placement on the CPU flavor
+    set:
+      baselineQueue.flavor.nodeLabels:
+        kubernetes.io/os: linux
+        kueue.azure.com/gpu-series: ndm-a100-v4
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not set GPU class or series labels; move GPU placement labels to baselineQueue.gpu.flavors before upgrading
+
+  - it: rejects legacy GPU taint toleration on the CPU flavor
+    set:
+      baselineQueue.flavor.tolerations:
+        - key: sku
+          operator: Equal
+          value: gpu
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading
+
+  - it: rejects an Exists GPU toleration on the CPU flavor
+    set:
+      baselineQueue.flavor.tolerations:
+        - key: sku
+          operator: Exists
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading
+
+  - it: rejects a wildcard toleration on the CPU flavor
+    set:
+      baselineQueue.flavor.tolerations:
+        - key: ""
+          operator: Exists
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading
+
+  - it: rejects GPU flavor resources that differ from coveredResources
+    set:
+      baselineQueue.gpu.flavors:
+        - name: malformed-gpu
+          nodeLabels:
+            kubernetes.io/os: linux
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          tolerations: []
+          resources:
+            - name: gpu.nvidia.com
+              nominalQuota: "1"
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.gpu.flavors[malformed-gpu].resource names must match baselineQueue.gpu.coveredResources
+
+  - it: accepts topology-capable GPU flavors without optional labels or tolerations
+    set:
+      baselineQueue.gpu.flavors:
+        - name: resource-only-gpu
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+    asserts:
+      - notExists:
+          path: spec.nodeLabels
+        documentIndex: 2
+      - equal:
+          path: spec.topologyName
+          value: default-node-topology
+        documentIndex: 2
+      - notExists:
+          path: spec.tolerations
+        documentIndex: 2
+
+  - it: accepts GPU flavor resources in a different order
+    set:
+      baselineQueue.gpu.coveredResources:
+        - nvidia.com/gpu
+        - gpu.nvidia.com
+      baselineQueue.gpu.flavors:
+        - name: dual-mode-gpu
+          nodeLabels: {}
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          tolerations: []
+          resources:
+            - name: gpu.nvidia.com
+              nominalQuota: "1"
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+    asserts:
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].name
+          value: dual-mode-gpu
+        documentIndex: 3
+
+  - it: rejects a flavor toleration that bypasses its GPU admission taint
+    set:
+      baselineQueue.gpu.flavors:
+        - name: unsafe-gpu
+          nodeLabels:
+            kubernetes.io/os: linux
+          nodeTaints:
+            - key: sku
+              value: gpu
+              effect: NoSchedule
+          tolerations:
+            - key: sku
+              operator: Equal
+              value: gpu
+              effect: NoSchedule
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: "1"
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.gpu.flavors[unsafe-gpu] toleration for nodeTaint sku would make GPU quota eligible for CPU-only workloads; Tau GPU pods already carry GPU-node tolerations

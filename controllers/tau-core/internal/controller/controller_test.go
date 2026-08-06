@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -39,6 +40,7 @@ func TestTauClusterObserveModeUpdatesStatusWithoutMutatingResources(t *testing.T
 					Match: tauv1alpha1.TauNodeMatch{VMSizes: []string{"Standard_ND96isr_H200_v5"}},
 					Labels: map[string]string{
 						"kueue.azure.com/gpu-series": "nd-h200-v5",
+						labelkeys.LabelGPUClass:      "h200-141gb",
 					},
 				}},
 			},
@@ -100,6 +102,9 @@ func TestTauClusterObserveModeUpdatesStatusWithoutMutatingResources(t *testing.T
 	if _, ok := unchanged.Labels["kueue.azure.com/gpu-series"]; ok {
 		t.Fatal("Observe mode changed the node topology label")
 	}
+	if _, ok := unchanged.Labels[labelkeys.LabelGPUClass]; ok {
+		t.Fatal("Observe mode changed the node GPU class label")
+	}
 
 	before := got.Status
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -129,12 +134,14 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 						Match: tauv1alpha1.TauNodeMatch{VMSizes: []string{"Standard_ND96amsr_A100_v4"}},
 						Labels: map[string]string{
 							"kueue.azure.com/gpu-series": "ndm-a100-v4",
+							labelkeys.LabelGPUClass:      "a100-80gb",
 						},
 					},
 					{
 						Match: tauv1alpha1.TauNodeMatch{VMSizes: []string{"Standard_ND96isr_H200_v5"}},
 						Labels: map[string]string{
 							"kueue.azure.com/gpu-series": "nd-h200-v5",
+							labelkeys.LabelGPUClass:      "h200-141gb",
 						},
 					},
 				},
@@ -207,12 +214,27 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 			t.Fatalf("Node %q gpu-series = %q, want %q", name, got, want)
 		}
 	}
+	for name, want := range map[string]string{
+		nativeNode.Name: "a100-80gb",
+		flexNode.Name:   "h200-141gb",
+	} {
+		var node corev1.Node
+		if err := baseClient.Get(ctx, client.ObjectKey{Name: name}, &node); err != nil {
+			t.Fatalf("Get Node %q: %v", name, err)
+		}
+		if got := node.Labels[labelkeys.LabelGPUClass]; got != want {
+			t.Fatalf("Node %q gpu-class = %q, want %q", name, got, want)
+		}
+	}
 	var unchangedCPU corev1.Node
 	if err := baseClient.Get(ctx, client.ObjectKey{Name: cpuNode.Name}, &unchangedCPU); err != nil {
 		t.Fatalf("Get CPU Node: %v", err)
 	}
 	if _, ok := unchangedCPU.Labels["kueue.azure.com/gpu-series"]; ok {
 		t.Fatal("unmatched CPU Node received a GPU-series label")
+	}
+	if _, ok := unchangedCPU.Labels[labelkeys.LabelGPUClass]; ok {
+		t.Fatal("unmatched CPU Node received a GPU-class label")
 	}
 
 	recordingClient.mutations = nil
@@ -224,7 +246,56 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 	}
 }
 
-func TestTauClusterReconcileRejectsConflictingNodeLabelRules(t *testing.T) {
+func TestTauClusterNoMatchingNodesIsReady(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			ManagementMode: tauv1alpha1.ClusterManagementModeReconcile,
+			Nodes: tauv1alpha1.TauClusterNodesSpec{
+				LabelRules: []tauv1alpha1.TauNodeLabelRule{{
+					Match:  tauv1alpha1.TauNodeMatch{VMSizes: []string{"Standard_ND96isr_H200_v5"}},
+					Labels: map[string]string{labelkeys.LabelGPUClass: "h200-141gb"},
+				}},
+			},
+		},
+	}
+	cpuNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name:   "system-cpu",
+		Labels: map[string]string{azureVMSizeLabel: "Standard_D8ds_v6"},
+	}}
+	baseClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, cpuNode).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	recordingClient := &resourceMutationRecordingClient{Client: baseClient}
+	reconciler := &TauClusterReconciler{Client: recordingClient}
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: cluster.Name}, cluster); err != nil {
+		t.Fatalf("Get TauCluster: %v", err)
+	}
+	nodesReady := findCondition(cluster.Status.Conditions, tauv1alpha1.ConditionNodesReady)
+	if nodesReady == nil || nodesReady.Status != metav1.ConditionTrue || nodesReady.Reason != "NoMatchingNodes" {
+		t.Fatalf("NodesReady = %#v", nodesReady)
+	}
+	assertCondition(t, cluster.Status.Conditions, tauv1alpha1.ConditionReady, metav1.ConditionTrue)
+	if cluster.Status.Phase != tauv1alpha1.ClusterPhaseReady {
+		t.Fatalf("phase = %q, want %q", cluster.Status.Phase, tauv1alpha1.ClusterPhaseReady)
+	}
+	if cluster.Status.Nodes != (tauv1alpha1.TauClusterSectionStatus{}) {
+		t.Fatalf("node status = %#v", cluster.Status.Nodes)
+	}
+	if len(recordingClient.mutations) != 0 {
+		t.Fatalf("CPU-only reconcile mutated cluster resources: %v", recordingClient.mutations)
+	}
+}
+
+func TestTauClusterReconcileRejectsConflictingRulesWithoutMatchingNodes(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	cluster := &tauv1alpha1.TauCluster{
@@ -243,13 +314,9 @@ func TestTauClusterReconcileRejectsConflictingNodeLabelRules(t *testing.T) {
 			}},
 		},
 	}
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-		Name:   "h200",
-		Labels: map[string]string{azureVMSizeLabel: "Standard_ND96isr_H200_v5"},
-	}}
 	baseClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(cluster, node).
+		WithObjects(cluster).
 		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
 		Build()
 	recordingClient := &resourceMutationRecordingClient{Client: baseClient}

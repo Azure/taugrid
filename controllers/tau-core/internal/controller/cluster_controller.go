@@ -138,6 +138,15 @@ func (r *TauClusterReconciler) reconcileNodeLabels(
 			reconciliationFailed: true,
 		}, nil
 	}
+	if err := validateNodeLabelRuleConflicts(rules); err != nil {
+		message := "conflicting node label rules: " + err.Error()
+		return nodeReconcileState{
+			nodesCondition:       condition(tauv1alpha1.ConditionNodesReady, metav1.ConditionFalse, "ConflictingNodeLabelRules", message, generation),
+			driftCondition:       condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "NodeLabelRuleConflict", message, generation),
+			ownershipCondition:   condition(tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionTrue, "ConflictingNodeLabelRules", message, generation),
+			reconciliationFailed: true,
+		}, nil
+	}
 
 	var nodes corev1.NodeList
 	listOptions := []client.ListOption{}
@@ -211,7 +220,7 @@ func (r *TauClusterReconciler) reconcileNodeLabels(
 		state.driftCondition = condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "NodeLabelDrift", message, generation)
 		state.reconciliationFailed = true
 	case state.status.Observed == 0:
-		state.nodesCondition = condition(tauv1alpha1.ConditionNodesReady, metav1.ConditionFalse, "NoMatchingNodes", "no nodes match the configured VM-size rules", generation)
+		state.nodesCondition = condition(tauv1alpha1.ConditionNodesReady, metav1.ConditionTrue, "NoMatchingNodes", "no nodes currently match the configured VM-size rules; no node labels need reconciliation", generation)
 		state.driftCondition = condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionFalse, "NoNodeLabelDrift", "no matching nodes were discovered", generation)
 	case state.status.Drifted > 0:
 		message := fmt.Sprintf("%d of %d matching nodes need topology label reconciliation", state.status.Drifted, state.status.Observed)
@@ -248,6 +257,39 @@ func validateNodeLabelRules(rules []tauv1alpha1.TauNodeLabelRule) error {
 		}
 	}
 	return nil
+}
+
+func validateNodeLabelRuleConflicts(rules []tauv1alpha1.TauNodeLabelRule) error {
+	for i := range rules {
+		for j := i + 1; j < len(rules); j++ {
+			if !vmSizeRulesOverlap(rules[i].Match.VMSizes, rules[j].Match.VMSizes) {
+				continue
+			}
+			keys := make([]string, 0, len(rules[i].Labels))
+			for key := range rules[i].Labels {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if right, ok := rules[j].Labels[key]; ok && right != rules[i].Labels[key] {
+					return fmt.Errorf("rules %d and %d assign different values for %q (%q and %q)", i, j, key, rules[i].Labels[key], right)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func vmSizeRulesOverlap(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return true
+	}
+	for _, vmSize := range left {
+		if slices.Contains(right, vmSize) {
+			return true
+		}
+	}
+	return false
 }
 
 func desiredNodeLabels(node *corev1.Node, rules []tauv1alpha1.TauNodeLabelRule) (map[string]string, bool, error) {

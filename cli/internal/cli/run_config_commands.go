@@ -99,9 +99,6 @@ func newRunExplainConfigCmd() *cobra.Command {
 }
 
 func validateRunDispatchOptions(o runDispatchOptions) error {
-	if strings.EqualFold(strings.TrimSpace(o.queue), "auto") {
-		return fmt.Errorf("policy.queue: auto requires live queue discovery and is not supported by this focused run --config slice")
-	}
 	// Only the direct engines execute run.entrypoint. Managed workflows embed
 	// run.main_script at /script/train.py and always invoke python3 on that, so
 	// their entrypoint is not what the launcher runs.

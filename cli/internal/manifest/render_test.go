@@ -1514,7 +1514,7 @@ runtime:
 			Mode:      "fixed",
 			Placement: "single-node-nvlink",
 			Shape:     "8xa100-80gb",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
 		},
 		Labels: map[string]string{
@@ -1542,6 +1542,12 @@ runtime:
 		}
 	}
 	job := unmarshalLast(t, out)
+	if got := dig(job, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Job gpu class label=%v want %s", got, topology.GPUClassA10080GB)
+	}
+	if got := dig(job, "spec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Job gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	for key, want := range map[string]string{
 		workloadmeta.AnnotationStellarExperimentID: "presettrain:exact",
 		workloadmeta.AnnotationWorkspaceID:         "sample",
@@ -1570,12 +1576,61 @@ runtime:
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
+
 	s := string(out)
 	if !strings.Contains(s, "namespace: my-ns") {
 		t.Error("Job namespace should be overridden")
 	}
 	if strings.Contains(s, "namespace: tau") {
 		t.Error("default namespace should be replaced, not duplicated")
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsGPUClassSelectorForAny(t *testing.T) {
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyOptions: topology.Options{GPUClass: topology.GPUClassAny},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
+	p := profile.Profile{
+		Name: "profile-h100",
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
+		},
+	}
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyProfile: &p,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected profile gpu class selector error, got %v", err)
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsClassSelectorForProfileAny(t *testing.T) {
+	p := profile.Profile{
+		Name: "profile-any",
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": topology.GPUClassAny},
+		},
+	}
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyProfile: &p,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected profile gpu_class any selector error, got %v", err)
 	}
 }
 
@@ -2678,7 +2733,7 @@ runtime:
 			Mode:      "fixed",
 			Placement: "single-node-nvlink",
 			Shape:     "8xa100-80gb",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
 		},
 		Labels: map[string]string{
@@ -2706,6 +2761,12 @@ runtime:
 		}
 	}
 	rj := unmarshalLast(t, out)
+	if got := dig(rj, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("RayJob gpu class label=%v want %s", got, topology.GPUClassA10080GB)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Ray head gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	// Topology placement is single-node-nvlink → kueue podset-required
 	// annotation must reach the head pod template metadata (PodSet annotation
 	// for Kueue's TAS).

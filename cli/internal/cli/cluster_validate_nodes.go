@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	klabels "k8s.io/apimachinery/pkg/labels"
 
 	"github.com/Azure/taugrid/core/kube"
+	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -60,23 +62,37 @@ Requires cluster-admin or equivalent RBAC to create privileged pods.`,
 	}
 
 	cmd.Flags().StringVar(&spec.KubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVar(&spec.GPUClass, "gpu-class", "", fmt.Sprintf("filter nodes by %s label value (e.g. h200-nvlink-141gb)", workloadmeta.NodeLabelGPUClass))
+	cmd.Flags().StringVar(&spec.GPUClass, "gpu-class", "", fmt.Sprintf("filter nodes by %s label value (e.g. h200-141gb)", workloadmeta.NodeLabelGPUClass))
 	cmd.Flags().StringVar(&spec.Selector, "selector", "", "custom node label selector (alternative to --gpu-class)")
 	cmd.Flags().IntVar(&spec.MinHealthy, "min-healthy", 0, "fail if fewer than N nodes are healthy")
 	cmd.Flags().StringVar(&timeoutStr, "timeout", "2m", "per-pod validation timeout")
 	return cmd
 }
 
-func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec validateNodesSpec, out, _ io.Writer) error {
+func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec validateNodesSpec, out, errOut io.Writer) error {
 	selector := spec.Selector
 	if spec.GPUClass != "" {
-		selector = workloadmeta.NodeLabelGPUClass + "=" + spec.GPUClass
+		gpuClass, deprecated := topology.NormalizeGPUClass(spec.GPUClass)
+		if !topology.IsSupportedGPUClass(gpuClass) {
+			return fmt.Errorf("unsupported --gpu-class %q; use any, a100-80gb, h100-95gb, or h200-141gb", spec.GPUClass)
+		}
+		if deprecated {
+			fmt.Fprintf(errOut, "warning: gpu_class %q is deprecated; use %q instead\n", spec.GPUClass, gpuClass)
+		}
+		if gpuClass == topology.GPUClassAny {
+			if selectorReferencesGPUClass(selector) {
+				return fmt.Errorf("--gpu-class any is unconstrained and cannot be combined with a --selector that references %s", workloadmeta.NodeLabelGPUClass)
+			}
+		} else {
+			selector = workloadmeta.NodeLabelGPUClass + "=" + gpuClass
+		}
 	}
 
 	fmt.Fprintf(out, "discovering GPU nodes")
 	if selector != "" {
 		fmt.Fprintf(out, " (selector: %s)", selector)
 	}
+
 	fmt.Fprintln(out, "...")
 
 	// One node fetch feeds both the GPU inventory and the stranded-node report,
@@ -135,6 +151,23 @@ func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec va
 		}
 	}
 	return nil
+}
+
+func selectorReferencesGPUClass(selector string) bool {
+	parsed, err := klabels.Parse(selector)
+	if err != nil {
+		return strings.Contains(selector, workloadmeta.NodeLabelGPUClass)
+	}
+	requirements, selectable := parsed.Requirements()
+	if !selectable {
+		return false
+	}
+	for _, requirement := range requirements {
+		if requirement.Key() == workloadmeta.NodeLabelGPUClass {
+			return true
+		}
+	}
+	return false
 }
 
 // gpuSource records how a node's GPUs reach the scheduler. Researchers submit

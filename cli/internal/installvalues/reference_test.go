@@ -10,7 +10,7 @@ func TestReferenceMarkdownContainsCriticalFields(t *testing.T) {
 
 	required := []string{
 		"baselineQueue.enabled",
-		"baselineQueue.flavor.tolerations",
+		"baselineQueue.gpu.flavors",
 		"baselineQueue.name",
 		"components.kueue.enabled",
 		"tau-core-controller.tauCluster.nodeLabelRules",
@@ -27,5 +27,19 @@ func TestReferenceMarkdownIsMarkdownTable(t *testing.T) {
 	md := ReferenceMarkdown()
 	if !strings.Contains(md, "| Field | Type | Default | Description |") {
 		t.Error("ReferenceMarkdown() missing table header")
+	}
+}
+
+func TestReferenceMarkdownGPUExamplePassesQueueSafetyContract(t *testing.T) {
+	md := ReferenceMarkdown()
+	for _, required := range []string{
+		"nodeTaints:",
+		"tolerations: []",
+		"name: nvidia.com/gpu",
+		`nominalQuota: "1"`,
+	} {
+		if !strings.Contains(md, required) {
+			t.Errorf("ReferenceMarkdown() GPU example missing %q", required)
+		}
 	}
 }
