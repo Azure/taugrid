@@ -52,7 +52,7 @@ TauGrid is built on open Kubernetes-native components:
 
 - A Kubernetes cluster (1.28+) with GPU nodes
 - `kubectl` configured for your cluster
-- Helm 3 or Helm 4
+- Helm 3.0 or later
 
 ### Install TauGrid
 
