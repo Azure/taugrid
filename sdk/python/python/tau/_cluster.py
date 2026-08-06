@@ -1735,7 +1735,9 @@ def main():
         ", smoke_pairs=" + str(ctx.smoke_pairs) + ")",
         flush=True,
     )
-    if ctx.workers > 1:
+    # Managed RayJobs set TAU_NUM_WORKERS and always execute user code through
+    # dedicated Ray Train workers. Plain Jobs omit it and execute locally.
+    if os.environ.get("TAU_NUM_WORKERS"):
         _run_multi_node(handle, ctx)
         _finalize_train_artifacts(ctx)
         _finalize_ray_worker_profiles(ctx)

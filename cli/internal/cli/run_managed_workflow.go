@@ -33,9 +33,10 @@ type runManagedWorkflowRequest struct {
 // managedWorkflowGPUDemand reports the total number of GPUs a managed workflow
 // asks Kueue to admit at once, which is what the quota preflight must compare
 // against a queue's capacity. It is not the per-pod count: a training RayJob
-// renders a GPU head plus (workers-1) GPU worker replicas, so its demand is
-// workers x gpus. Eval renders exactly one GPU pod (its workers are CPU-only)
-// and a plain Job is a single pod, so both stay at the per-pod count.
+// renders workers dedicated GPU worker replicas plus a CPU-only control head,
+// so its demand is workers x gpus. Eval renders one dedicated GPU worker and
+// CPU fanout workers; a plain Job is a single pod, so both stay at the
+// per-execution-pod count.
 func managedWorkflowGPUDemand(m *manifest.Manifest, workloadKind string) int {
 	if m == nil || m.Compute.GPUs <= 0 {
 		return 0

@@ -33,6 +33,8 @@ const (
 	SharedDRAQueueName          = "jobqueue-dra"
 	sharedDRAClusterQueueName   = "tau-dra-cq"
 	ManagedGPUSeriesLabel       = "kueue.azure.com/gpu-series"
+	AKSNodePoolModeLabel        = "kubernetes.azure.com/mode"
+	AKSSystemNodePoolMode       = "system"
 	GPUClassAny                 = "any"
 	LabelTeam                   = workloadmeta.LabelTeam
 	LabelLane                   = workloadmeta.LabelLane
@@ -40,6 +42,26 @@ const (
 	LabelShape                  = workloadmeta.LabelShape
 	AnnotationTopologyQueue     = workloadmeta.AnnotationTopologyQueue
 )
+
+// SystemNodeSelector returns the AKS placement contract for control-plane pods.
+func SystemNodeSelector() map[string]string {
+	return map[string]string{AKSNodePoolModeLabel: AKSSystemNodePoolMode}
+}
+
+// WithoutKueueTopologyAnnotations copies annotations while removing pod-set
+// topology requests that apply to execution workers but not control-plane pods.
+func WithoutKueueTopologyAnnotations(annotations map[string]string) map[string]string {
+	out := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		switch key {
+		case requiredTopologyAnnotation, preferredTopologyAnnotation, unconstrainedTopologyAnnot:
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
 
 var labelValueRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$`)
 

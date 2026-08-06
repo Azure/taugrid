@@ -14,8 +14,8 @@ through the Go CLI for normal use, or `python -m tau.cli ...` for local SDK
 debugging.
 
 Eval workloads use `@tau.eval(...)` (a separate decorator) which dispatches
-to the `rayjob-eval` workload kind: 1 GPU head pod for a Ray actor + N CPU
-worker pods for ray.remote fanout tasks.
+to the `rayjob-eval` workload kind: a CPU-only system head, 1 GPU worker for
+a Ray actor, and N CPU worker pods for ray.remote fanout tasks.
 
 Training uses `@tau.train`, eval uses `@tau.eval`, and online inference uses
 `tau.serve(...)`. Project-owned YAML/TOML can be loaded with

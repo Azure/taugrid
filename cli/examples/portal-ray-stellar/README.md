@@ -76,8 +76,8 @@ The deployed portal is scoped to `tau-default` (`portal.workloadNamespace` in
 each cluster's `applications/taugrid-portal` overlay), so the run appears on the
 Runs list board as well as at the detail URL above.
 
-`compute.workers` counts total execution pods, including the head. For the
-multi-node acceptance pass, set it to `2` or greater and use a distinct
+`compute.workers` counts dedicated execution pods; Tau adds a separate
+CPU-only system head. For the multi-node acceptance pass, set it to `2` or greater and use a distinct
 workload name/output directory. The driver reads `TAU_NUM_WORKERS`, uses a
 strict-spread placement group, and only worker 0 publishes metrics. Confirm pod
 node names separately when distinct physical hosts are required.

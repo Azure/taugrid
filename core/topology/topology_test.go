@@ -30,6 +30,34 @@ func topologyProfile() profile.Profile {
 	}
 }
 
+func TestSystemNodeSelector(t *testing.T) {
+	selector := SystemNodeSelector()
+	if got := selector[AKSNodePoolModeLabel]; got != AKSSystemNodePoolMode {
+		t.Fatalf("system selector=%v, want %s=%s", selector, AKSNodePoolModeLabel, AKSSystemNodePoolMode)
+	}
+}
+
+func TestWithoutKueueTopologyAnnotations(t *testing.T) {
+	annotations := map[string]string{
+		requiredTopologyAnnotation:         hostnameTopology,
+		preferredTopologyAnnotation:        "topology.kubernetes.io/zone",
+		unconstrainedTopologyAnnot:         "true",
+		workloadmeta.AnnotationWorkspaceID: "workspace-123",
+	}
+	filtered := WithoutKueueTopologyAnnotations(annotations)
+	for _, key := range []string{requiredTopologyAnnotation, preferredTopologyAnnotation, unconstrainedTopologyAnnot} {
+		if _, ok := filtered[key]; ok {
+			t.Errorf("filtered annotations retained %q: %v", key, filtered)
+		}
+	}
+	if got := filtered[workloadmeta.AnnotationWorkspaceID]; got != "workspace-123" {
+		t.Errorf("non-topology annotation=%q, want workspace-123", got)
+	}
+	if got := annotations[requiredTopologyAnnotation]; got != hostnameTopology {
+		t.Errorf("input annotations mutated: %v", annotations)
+	}
+}
+
 func TestBuild_ProtectedNVLinkPlan(t *testing.T) {
 	plan, err := Build(topologyProfile(), Options{})
 	if err != nil {

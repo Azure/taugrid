@@ -344,7 +344,7 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 	}
 }
 
-func TestRenderCPUOnlyPlacementContractUnchanged(t *testing.T) {
+func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "ray-cpu",
 		Namespace:     "tau",
@@ -365,15 +365,23 @@ func TestRenderCPUOnlyPlacementContractUnchanged(t *testing.T) {
 	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
 	headTemplate := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)
 	headSpec := headTemplate["spec"].(map[string]any)
-	if got := headSpec["nodeSelector"].(map[string]any)["workload"]; got != "cpu" {
-		t.Fatalf("CPU head selector=%v, want workload=cpu", headSpec["nodeSelector"])
+	if got := headSpec["nodeSelector"].(map[string]any)[topology.AKSNodePoolModeLabel]; got != topology.AKSSystemNodePoolMode {
+		t.Fatalf("CPU head selector=%v, want system pool", headSpec["nodeSelector"])
 	}
-	if got := headTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)["kueue.x-k8s.io/podset-unconstrained-topology"]; got != "true" {
-		t.Fatalf("CPU head topology annotation=%v, want true", got)
+	if _, ok := headTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)["kueue.x-k8s.io/podset-unconstrained-topology"]; ok {
+		t.Fatalf("CPU head retained workload topology: %v", headTemplate["metadata"])
 	}
 	groups := cluster["workerGroupSpecs"].([]any)
-	if len(groups) != 1 || groups[0].(map[string]any)["replicas"] != 1 {
-		t.Fatalf("CPU workerGroupSpecs=%v, want legacy head + one worker", groups)
+	if len(groups) != 1 || groups[0].(map[string]any)["replicas"] != 2 {
+		t.Fatalf("CPU workerGroupSpecs=%v, want two dedicated workers", groups)
+	}
+	workerTemplate := groups[0].(map[string]any)["template"].(map[string]any)
+	workerSpec := workerTemplate["spec"].(map[string]any)
+	if got := workerSpec["nodeSelector"].(map[string]any)["workload"]; got != "cpu" {
+		t.Fatalf("CPU worker selector=%v, want workload=cpu", workerSpec["nodeSelector"])
+	}
+	if got := workerTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)["kueue.x-k8s.io/podset-unconstrained-topology"]; got != "true" {
+		t.Fatalf("CPU worker topology annotation=%v, want true", got)
 	}
 }
 

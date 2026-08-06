@@ -13,7 +13,7 @@ policy and value head on the GPU; Tau owns the cluster contract:
 
 - H200 scheduling through a checked-in `tau.yaml`,
 - Kueue admission via the `dev` GPU LocalQueue,
-- a RayJob with one GPU head pod,
+- a RayJob with a CPU-only system head and one GPU execution worker,
 - durable JSON/JSONL metrics under `/data/examples/pufferlib-gpu-rl/`.
 
 The task is synthetic so it is safe to run repeatedly, but it is intentionally

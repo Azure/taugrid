@@ -100,9 +100,8 @@ type Options struct {
 	// embedding only ScriptName.
 	ProjectArchive []byte
 	Image          string
-	// Workers is the execution-pod count. GPU runs render this many dedicated
-	// workers plus a CPU-only head; CPU-only runs preserve the legacy contract
-	// where the head participates and N workers render one head plus N-1 workers.
+	// Workers is the execution-worker count. RayJobs add a separate control-only
+	// head on the system pool.
 	Workers         int
 	GPUsPerWorker   int
 	Launcher        string
@@ -412,20 +411,14 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		"labels":      podLabels,
 		"annotations": podAnnotations,
 	}
-	headPodAnnotations := stringMapFromAnyMap(podAnnotations)
-	if o.GPUsPerWorker > 0 {
-		removeKueueTopologyAnnotations(headPodAnnotations)
-	}
+	headPodAnnotations := topology.WithoutKueueTopologyAnnotations(stringMapFromAnyMap(podAnnotations))
 	headPodMetadata := map[string]any{
 		"labels":      podLabels,
 		"annotations": raylogoffload.HeadPodAnnotations(headPodAnnotations),
 	}
 
 	workerNodeSelector := mergeSelectors(plan.NodeSelector, o.NodeSelector)
-	headNodeSelector := workerNodeSelector
-	if o.GPUsPerWorker > 0 {
-		headNodeSelector = map[string]string{"kubernetes.azure.com/mode": "system"}
-	}
+	headNodeSelector := topology.SystemNodeSelector()
 	headPod, err := buildPodSpec(o, image, "ray-head", headNodeSelector, plan.PodPriorityClassName, encodedPayload, payloadDigest, true)
 	if err != nil {
 		return nil, err
@@ -435,21 +428,10 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		return nil, err
 	}
 
-	headGPUs := o.GPUsPerWorker
-	workerReplicas := o.Workers - 1
-	if o.GPUsPerWorker > 0 {
-		// GPU RayJobs are heterogeneous Kueue pod sets: the head is control-only
-		// on the system pool, while every declared execution pod is a GPU worker.
-		// CPU-only RayJobs retain the legacy head-participates contract.
-		headGPUs = 0
-		workerReplicas = o.Workers
-	}
 	headStartParams := map[string]any{
 		"dashboard-host": "0.0.0.0",
-		"num-gpus":       fmt.Sprintf("%d", headGPUs),
-	}
-	if o.GPUsPerWorker > 0 {
-		headStartParams["num-cpus"] = "0"
+		"num-cpus":       "0",
+		"num-gpus":       "0",
 	}
 	head := map[string]any{
 		"rayStartParams": headStartParams,
@@ -459,11 +441,11 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		},
 	}
 	workers := []any{}
-	if workerReplicas > 0 {
+	if o.Workers > 0 {
 		workers = append(workers, map[string]any{
-			"replicas":    workerReplicas,
-			"minReplicas": workerReplicas,
-			"maxReplicas": workerReplicas,
+			"replicas":    o.Workers,
+			"minReplicas": o.Workers,
+			"maxReplicas": o.Workers,
 			"groupName":   o.Name + "-w",
 			"rayStartParams": map[string]any{
 				"num-gpus": fmt.Sprintf("%d", o.GPUsPerWorker),
@@ -586,7 +568,7 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 	if priorityClass != "" {
 		pod["priorityClassName"] = priorityClass
 	}
-	if isHead && o.GPUsPerWorker > 0 {
+	if isHead {
 		pod["tolerations"] = []any{
 			map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
 		}
@@ -872,12 +854,6 @@ func resources(o Options, containerName string) map[string]any {
 		"requests": requests,
 		"limits":   limits,
 	}
-}
-
-func removeKueueTopologyAnnotations(annotations map[string]string) {
-	delete(annotations, "kueue.x-k8s.io/podset-required-topology")
-	delete(annotations, "kueue.x-k8s.io/podset-preferred-topology")
-	delete(annotations, "kueue.x-k8s.io/podset-unconstrained-topology")
 }
 
 func applyResourceOverrides(requests, limits map[string]any, overrides ResourceOverrides) {

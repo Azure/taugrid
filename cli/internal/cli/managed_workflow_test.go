@@ -1272,20 +1272,25 @@ runtime:
 	if err := yaml.Unmarshal([]byte(rendered), &rayJob); err != nil {
 		t.Fatalf("decode rendered RayJob: %v\n%s", err, rendered)
 	}
-	podSetAnnotations := []map[string]string{rayJob.Spec.RayClusterSpec.HeadGroupSpec.Template.Metadata.Annotations}
-	for _, worker := range rayJob.Spec.RayClusterSpec.WorkerGroupSpecs {
-		podSetAnnotations = append(podSetAnnotations, worker.Template.Metadata.Annotations)
-	}
-	if len(podSetAnnotations) != 2 {
-		t.Fatalf("rendered RayJob pod sets=%d want head and worker", len(podSetAnnotations))
-	}
-	for i, annotations := range podSetAnnotations {
-		if got := annotations["kueue.x-k8s.io/podset-unconstrained-topology"]; got != "true" {
-			t.Errorf("pod set %d unconstrained TAS annotation=%q want true; annotations=%v", i, got, annotations)
+	headAnnotations := rayJob.Spec.RayClusterSpec.HeadGroupSpec.Template.Metadata.Annotations
+	for _, key := range []string{
+		"kueue.x-k8s.io/podset-unconstrained-topology",
+		"kueue.x-k8s.io/podset-preferred-topology",
+		"kueue.x-k8s.io/podset-required-topology",
+	} {
+		if _, ok := headAnnotations[key]; ok {
+			t.Errorf("control head retained workload topology annotation %q: %v", key, headAnnotations)
 		}
-		if value, ok := annotations["kueue.x-k8s.io/podset-preferred-topology"]; ok {
-			t.Errorf("pod set %d requests undeclared preferred topology %q", i, value)
-		}
+	}
+	if len(rayJob.Spec.RayClusterSpec.WorkerGroupSpecs) != 1 {
+		t.Fatalf("rendered RayJob worker groups=%d want 1", len(rayJob.Spec.RayClusterSpec.WorkerGroupSpecs))
+	}
+	workerAnnotations := rayJob.Spec.RayClusterSpec.WorkerGroupSpecs[0].Template.Metadata.Annotations
+	if got := workerAnnotations["kueue.x-k8s.io/podset-unconstrained-topology"]; got != "true" {
+		t.Errorf("worker unconstrained TAS annotation=%q want true; annotations=%v", got, workerAnnotations)
+	}
+	if value, ok := workerAnnotations["kueue.x-k8s.io/podset-preferred-topology"]; ok {
+		t.Errorf("worker requests undeclared preferred topology %q", value)
 	}
 }
 

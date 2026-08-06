@@ -1452,8 +1452,7 @@ runtime:
 	}
 	// Worker pods get a script-only payload initContainer (never manifest):
 	// the tau-py SDK wrapper's ray.train.torch.TorchTrainer path re-reads
-	// /script/<trainer-filename> from each worker's own local disk whenever
-	// ctx.workers > 1, regardless of GPU count, so CPU-only multi-worker
+	// /script/<trainer-filename> from each worker's own local disk, so CPU-only
 	// jobs need the script embedded on workers too. The manifest stays
 	// head-only: it's parsed once, before any worker actor is spawned.
 	workerInitContainers := podSpecInitContainers(t, workerSpec)
@@ -2156,11 +2155,11 @@ runtime:
 		"kind: RayJob",
 		"apiVersion: ray.io/v1",
 		"shutdownAfterJobFinishes: true",
-		"workerGroupSpecs: []",
+		"groupName: tau-rjbasic-w",
 		`nvidia.com/gpu: "2"`,
 		"--smoke-pairs 4",
 		"--manifest /manifest/rjbasic.yaml",
-		"torchrun --standalone --nproc_per_node=2",
+		"runtimeEnvYAML",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered RayJob output missing %q", want)
@@ -2201,8 +2200,20 @@ runtime:
 	if !ok || len(cl) == 0 {
 		t.Fatalf("headGroupSpec containers missing or empty: %T = %v", containers, containers)
 	}
-	if got := dig(cl[0], "resources", "limits", "nvidia.com/gpu"); got != "2" {
-		t.Errorf("head container resources.limits[nvidia.com/gpu] = %v, want 2", got)
+	if got := dig(cl[0], "resources", "limits", "nvidia.com/gpu"); got != nil {
+		t.Errorf("head container must not request GPUs, got %v", got)
+	}
+	if got := dig(headSpec, "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
+		t.Errorf("head node selector = %v, want system pool", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "rayStartParams", "num-gpus"); got != "0" {
+		t.Errorf("head num-gpus = %v, want 0", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "replicas"); got != 1 {
+		t.Errorf("worker replicas = %v, want 1", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec", "containers", 0, "resources", "limits", "nvidia.com/gpu"); got != "2" {
+		t.Errorf("worker GPU limit = %v, want 2", got)
 	}
 	assertSocketProbe(t, "rayjob head", cl[0].(map[string]any), "8265")
 	assertEnvVar(t, "rayjob head", cl[0].(map[string]any), "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/rjbasic/metrics-history.jsonl")
@@ -2213,8 +2224,7 @@ runtime:
 	if !strings.Contains(entry, "/script/train.py") {
 		t.Errorf("spec.entrypoint missing trainer invocation: %q", entry)
 	}
-	// The head pod's script payload initContainer must actually embed
-	// train.py; workers get neither initContainer.
+	// The head pod's script payload initContainer must actually embed train.py.
 	scriptIC := containerByName(t, podSpecInitContainers(t, headSpec), scriptPayloadInitContainerName)
 	files := decodePayloadFiles(t, scriptIC)
 	if _, ok := files["train.py"]; !ok {
@@ -2284,7 +2294,7 @@ storage:
 	}
 }
 
-func TestRenderRayJobProfileRequiresMultipleWorkers(t *testing.T) {
+func TestRenderRayJobProfileSupportsOneDedicatedWorker(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
 name: rjprofileone
@@ -2300,7 +2310,7 @@ storage:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	_, err = Render(RenderOptions{
+	out, err := Render(RenderOptions{
 		Manifest:         m,
 		ManifestRaw:      raw,
 		ManifestFilename: "rjprofileone.yaml",
@@ -2313,8 +2323,18 @@ storage:
 			Duration: time.Minute,
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "compute.workers > 1") {
-		t.Fatalf("expected multi-worker profile error, got %v", err)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	rj := unmarshalLast(t, out)
+	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "replicas"); got != 1 {
+		t.Fatalf("worker replicas = %v, want 1", got)
+	}
+	worker := rayJobWorkerContainer(t, rj)
+	assertEnvVar(t, "single-worker profile", worker, "TAU_PROFILE_MODE", "nsys")
+	assertEnvVar(t, "single-worker profile", worker, "TAU_PROFILE_WORLD_SIZE", "8")
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
+		t.Fatalf("profiled RayJob head node selector = %v, want system pool", got)
 	}
 }
 
@@ -2350,7 +2370,8 @@ runtime:
 			Shape:     "cpu-ray-5-pod",
 			QueueName: "cpu-training-ray",
 		},
-		MainScript: []byte("# trainer\n"),
+		NodeSelector: map[string]string{"workload": "cpu"},
+		MainScript:   []byte("# trainer\n"),
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -2359,10 +2380,10 @@ runtime:
 	for _, want := range []string{
 		"kueue.x-k8s.io/queue-name: cpu-training-ray",
 		"image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0",
-		`num-cpus: "1"`,
+		`num-cpus: "0"`,
 		`num-cpus: "2"`,
 		"workerGroupSpecs:",
-		"replicas: 4",
+		"replicas: 5",
 		"--manifest /manifest/cpu-interest.yaml",
 		`ray.io/overwrite-container-cmd: "true"`,
 		`python3 -m pip install --quiet --no-cache-dir "ray[default]==2.40.0"`,
@@ -2394,8 +2415,17 @@ runtime:
 	if headClaims != nil {
 		t.Fatalf("CPU RayJob head must not request DRA claims, got %v", headClaims)
 	}
-	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "replicas"); got != 4 {
-		t.Errorf("worker replicas = %v, want 4", got)
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
+		t.Errorf("CPU RayJob head node selector = %v, want system pool", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", "workload"); got != nil {
+		t.Errorf("CPU RayJob head retained workload selector: %v", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "replicas"); got != 5 {
+		t.Errorf("worker replicas = %v, want 5", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec", "nodeSelector", "workload"); got != "cpu" {
+		t.Errorf("CPU worker selector = %v, want cpu", got)
 	}
 	workerContainers := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec", "containers")
 	wcl, ok := workerContainers.([]any)
@@ -2410,8 +2440,7 @@ runtime:
 	}
 	// CPU-only RayJob workers get a script-only payload initContainer (never
 	// manifest): the tau-py SDK wrapper's ray.train.torch.TorchTrainer path
-	// re-reads /script/<trainer-filename> from each worker's own local disk
-	// whenever ctx.workers > 1, regardless of GPU count. The manifest stays
+	// re-reads /script/<trainer-filename> from each worker's own local disk. The manifest stays
 	// head-only — it's parsed once, before any worker actor is spawned.
 	workerSpec := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec")
 	workerInitContainers := podSpecInitContainers(t, workerSpec)
@@ -2643,12 +2672,19 @@ runtime:
 	if strings.Contains(s, "resourceClaimTemplateName: full-gpu") {
 		t.Error("single-gpu RayJob default should not require the DRA full-gpu claim")
 	}
-	if !strings.Contains(s, `if [ "1" -le "1" ]; then`) {
-		t.Errorf("expected GPUS=1 substitution into bash conditional in RayJob entrypoint; got snippet:\n%s", s)
-	}
 	rj := unmarshalLast(t, out)
-	if got, _ := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "rayStartParams", "num-gpus").(string); got != "1" {
-		t.Errorf("headGroupSpec.rayStartParams.num-gpus = %q, want \"1\"", got)
+	entry, _ := dig(rj, "spec", "entrypoint").(string)
+	if strings.Contains(entry, "torchrun --") {
+		t.Errorf("RayJob head must not execute GPU work via torchrun; got:\n%s", entry)
+	}
+	if !strings.Contains(entry, "python3 /script/train.py") {
+		t.Errorf("RayJob head must invoke the SDK driver; got:\n%s", entry)
+	}
+	if got, _ := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "rayStartParams", "num-gpus").(string); got != "0" {
+		t.Errorf("headGroupSpec.rayStartParams.num-gpus = %q, want \"0\"", got)
+	}
+	if got, _ := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "rayStartParams", "num-gpus").(string); got != "1" {
+		t.Errorf("workerGroupSpec.rayStartParams.num-gpus = %q, want \"1\"", got)
 	}
 }
 
@@ -2689,6 +2725,9 @@ runtime:
 			workloadmeta.AnnotationStellarExperimentID: "rjpreset:exact",
 			workloadmeta.AnnotationWorkspaceID:         "sample",
 		},
+		NodeSelector: map[string]string{
+			topology.ManagedGPUSeriesLabel: "nd-h200-v5",
+		},
 		WorkloadKind: WorkloadKindRayJob,
 		MainScript:   []byte("# trainer\n"),
 	})
@@ -2699,19 +2738,35 @@ runtime:
 	for _, want := range []string{
 		"kueue.x-k8s.io/queue-name: research-training",
 		`nvidia.com/gpu: "8"`,
-		"torchrun --standalone --nproc_per_node=8",
+		"runtimeEnvYAML",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered RayJob preset output missing %q", want)
 		}
 	}
 	rj := unmarshalLast(t, out)
-	// Topology placement is single-node-nvlink → kueue podset-required
-	// annotation must reach the head pod template metadata (PodSet annotation
-	// for Kueue's TAS).
-	tas := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology")
+	// The control head is topology-free; the execution worker keeps the
+	// single-node NVLink placement request.
+	if tas := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); tas != nil {
+		t.Errorf("control head retained workload topology: %v", tas)
+	}
+	tas := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology")
 	if tas != "kubernetes.io/hostname" {
-		t.Errorf("kueue podset-required-topology annotation missing on head pod template: %v", tas)
+		t.Errorf("kueue podset-required-topology annotation missing on worker pod template: %v", tas)
+	}
+	headSpec := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+	if got := dig(headSpec, "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
+		t.Errorf("head node selector = %v, want system pool", got)
+	}
+	if got := dig(headSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != nil {
+		t.Errorf("head retained GPU-series selector: %v", got)
+	}
+	workerSpec := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec")
+	if got := dig(workerSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != "nd-h200-v5" {
+		t.Errorf("worker GPU-series selector = %v, want nd-h200-v5", got)
+	}
+	if got := fmt.Sprint(dig(workerSpec, "tolerations")); !strings.Contains(got, "nvidia.com/gpu") || !strings.Contains(got, "sku") {
+		t.Errorf("worker GPU tolerations missing: %v", got)
 	}
 	for key, want := range map[string]string{
 		workloadmeta.AnnotationStellarExperimentID: "rjpreset:exact",
@@ -2933,7 +2988,12 @@ runtime:
 	if image := rayJobHeadContainer(t, rj)["image"]; image != defaultRayJobImage {
 		t.Fatalf("RayJob runtime.rdma should keep the canonical MCR Ray image, got %v", image)
 	}
-	assertRDMAContainer(t, "rayjob head", rayJobHeadContainer(t, rj), "rdma/rdma_shared_device_a", "1")
+	if got := dig(rayJobHeadContainer(t, rj), "resources", "requests", "rdma/rdma_shared_device_a"); got != nil {
+		t.Fatalf("control head must not request RDMA, got %v", got)
+	}
+	if got := dig(rayJobHeadContainer(t, rj), "securityContext"); got != nil {
+		t.Fatalf("control head must not carry RDMA security context, got %v", got)
+	}
 	assertRDMAContainer(t, "rayjob worker", rayJobWorkerContainer(t, rj), "rdma/rdma_shared_device_a", "1")
 	assertSocketProbe(t, "rayjob head", rayJobHeadContainer(t, rj), "8265")
 	assertSocketProbe(t, "rayjob worker", rayJobWorkerContainer(t, rj), "52365")
@@ -3083,14 +3143,14 @@ runtime:
 		"kind: RayJob",
 		// workerGroupSpecs is no longer the empty-list literal.
 		"groupName: tau-rjmulti-w",
-		// Worker pod count = workers - 1 (head is rank 0 trainer).
-		"replicas: 1",
-		"minReplicas: 1",
-		"maxReplicas: 1",
+		// compute.workers counts dedicated execution workers.
+		"replicas: 2",
+		"minReplicas: 2",
+		"maxReplicas: 2",
 		// Worker rayStartParams.num-gpus must equal per-pod GPU count for
 		// Ray's resource view to match the device-plugin allocation.
 		`num-gpus: "8"`,
-		// Worker pod must request its own nvidia.com/gpu, identical to head.
+		// Worker pods request workload GPUs; the control head does not.
 		`nvidia.com/gpu: "8"`,
 	} {
 		if !strings.Contains(s, want) {
@@ -3110,20 +3170,19 @@ runtime:
 	if !strings.Contains(entry, "python3 /script/train.py") {
 		t.Errorf("multi-node spec.entrypoint must invoke python3 /script/train.py; got:\n%s", entry)
 	}
-	// Both pod sets (head + worker) must request and limit the same nvidia.com/gpu count.
-	if c := strings.Count(s, `nvidia.com/gpu: "8"`); c != 4 {
-		t.Errorf("expected 4 nvidia.com/gpu entries (request+limit for head+worker), got %d", c)
+	if c := strings.Count(s, `nvidia.com/gpu: "8"`); c != 2 {
+		t.Errorf("expected 2 nvidia.com/gpu entries (request+limit for workers), got %d", c)
 	}
 
 	// Structural assertions on the parsed RayJob.
 	wgs := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs")
 	wgsList, ok := wgs.([]any)
 	if !ok || len(wgsList) != 1 {
-		t.Fatalf("workerGroupSpecs must be a 1-element list (1 worker group for 2 pods total), got %T = %v", wgs, wgs)
+		t.Fatalf("workerGroupSpecs must be a 1-element execution group, got %T = %v", wgs, wgs)
 	}
 	wg := wgsList[0]
-	if got := dig(wg, "replicas"); got != 1 {
-		t.Errorf("workerGroup.replicas = %v, want 1", got)
+	if got := dig(wg, "replicas"); got != 2 {
+		t.Errorf("workerGroup.replicas = %v, want 2", got)
 	}
 	if got := dig(wg, "rayStartParams", "num-gpus"); got != "8" {
 		t.Errorf("workerGroup.rayStartParams.num-gpus = %v, want \"8\" (must match GPUS for DRA)", got)
@@ -3141,7 +3200,7 @@ runtime:
 		t.Fatalf("worker containers missing or empty: %T", workerContainers)
 	}
 	if got := dig(wcl[0], "resources", "limits", "nvidia.com/gpu"); got != "8" {
-		t.Errorf("worker container resources.limits[nvidia.com/gpu] = %v, want 8 (matches head)", got)
+		t.Errorf("worker container resources.limits[nvidia.com/gpu] = %v, want 8", got)
 	}
 	// GPU multi-node workers pull python deps via spec.runtimeEnvYAML
 	// (checked below), but the trainer script itself is re-read from local
@@ -3213,19 +3272,19 @@ runtime:
 	}
 	rj := unmarshalLast(t, out)
 	headResources := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "containers", 0, "resources")
-	if got := dig(headResources, "requests", "nvidia.com/gpu"); got != "2" {
-		t.Errorf("head requests nvidia.com/gpu = %v, want \"2\"", got)
+	if got := dig(headResources, "requests", "nvidia.com/gpu"); got != nil {
+		t.Errorf("head requests nvidia.com/gpu = %v, want nil", got)
 	}
-	if got := dig(headResources, "limits", "nvidia.com/gpu"); got != "2" {
-		t.Errorf("head limits nvidia.com/gpu = %v, want \"2\"", got)
+	if got := dig(headResources, "limits", "nvidia.com/gpu"); got != nil {
+		t.Errorf("head limits nvidia.com/gpu = %v, want nil", got)
 	}
 
 	wgs, ok := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs").([]any)
 	if !ok || len(wgs) != 1 {
 		t.Fatalf("workerGroupSpecs must be a 1-element list, got %T = %v", wgs, wgs)
 	}
-	if got := dig(wgs[0], "replicas"); got != 2 {
-		t.Errorf("workerGroup.replicas = %v, want 2", got)
+	if got := dig(wgs[0], "replicas"); got != 3 {
+		t.Errorf("workerGroup.replicas = %v, want 3", got)
 	}
 	if got := dig(wgs[0], "rayStartParams", "num-gpus"); got != "2" {
 		t.Errorf("workerGroup.rayStartParams.num-gpus = %v, want \"2\"", got)
@@ -3298,7 +3357,7 @@ runtime:
 	}
 }
 
-func TestRenderRayJobEvalProducesGPUHeadAndCPUWorkers(t *testing.T) {
+func TestRenderRayJobEvalProducesSystemHeadGPUActorAndCPUWorkers(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
 name: eval-smoke
@@ -3322,6 +3381,13 @@ runtime:
 		WorkloadKind:       WorkloadKindRayJobEval,
 		MainScript:         []byte("# stub wrapper\n"),
 		UpstreamCheckpoint: "/data/checkpoints/train-fullft/last.safetensors",
+		TopologyOptions: topology.Options{
+			Placement: "single-node-nvlink",
+			QueueName: "jobqueue",
+		},
+		NodeSelector: map[string]string{
+			topology.ManagedGPUSeriesLabel: "nd-h200-v5",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -3332,7 +3398,8 @@ runtime:
 		manifestPayloadInitContainerName,
 		"name: tau-eval-smoke",
 		"ttlSecondsAfterFinished: 15",
-		// Head pod pins one GPU via DRA — the actor lives here.
+		// A dedicated worker pod hosts the GPU actor.
+		"groupName: tau-eval-smoke-gpu",
 		`num-gpus: "1"`,
 		`nvidia.com/gpu: "1"`,
 		// CPU worker group pinned to 4 replicas via static gang admission.
@@ -3342,8 +3409,7 @@ runtime:
 		"maxReplicas: 4",
 		`num-cpus: "1"`,
 		`num-gpus: "0"`,
-		// TAU_UPSTREAM_CHECKPOINT propagated to the head AND the CPU workers.
-		// (We can grep both occurrences below; this just checks at least one.)
+		// TAU_UPSTREAM_CHECKPOINT propagates to all Ray pod groups.
 		`name: TAU_UPSTREAM_CHECKPOINT, value: "/data/checkpoints/train-fullft/last.safetensors"`,
 		// runtimeEnvYAML must propagate Sample deps to CPU worker pods
 		// — they don't run the head's pip install.
@@ -3355,31 +3421,48 @@ runtime:
 		}
 	}
 
-	// Both head and worker pods should expose TAU_UPSTREAM_CHECKPOINT
-	// as an env var (matched specifically — the var name also appears in
-	// template comments). Either pod could read it (e.g. a CPU worker
-	// loading per-IC metadata from the checkpoint dir).
+	// Head, GPU worker, and CPU worker pods expose the upstream checkpoint.
 	envVarPattern := `name: TAU_UPSTREAM_CHECKPOINT, value:`
-	if c := strings.Count(s, envVarPattern); c != 2 {
-		t.Errorf("expected TAU_UPSTREAM_CHECKPOINT env on both head and worker (2 occurrences of %q), got %d", envVarPattern, c)
+	if c := strings.Count(s, envVarPattern); c != 3 {
+		t.Errorf("expected TAU_UPSTREAM_CHECKPOINT env on all three pod groups (3 occurrences of %q), got %d", envVarPattern, c)
 	}
 
-	// CPU workers MUST NOT carry GPU plumbing. The whole point of
-	// rayjob-eval is decoupled GPU+CPU — if a CPU worker pod claims a
-	// DRA GPU, it'll be unschedulable and stall the entire workload.
 	rj := unmarshalLast(t, out)
 	wgs := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs")
 	wgsList, ok := wgs.([]any)
-	if !ok || len(wgsList) != 1 {
-		t.Fatalf("workerGroupSpecs must be a single CPU group, got %T = %v", wgs, wgs)
+	if !ok || len(wgsList) != 2 {
+		t.Fatalf("workerGroupSpecs must contain GPU and CPU execution groups, got %T = %v", wgs, wgs)
 	}
-	wg := wgsList[0]
-	workerSpec := dig(wg, "template", "spec")
-	if workerSpec == nil {
-		t.Fatalf("workerGroup.template.spec missing")
+	gpuGroup := wgsList[0]
+	cpuGroup := wgsList[1]
+	if got := dig(gpuGroup, "replicas"); got != 1 {
+		t.Errorf("GPU worker replicas = %v, want 1", got)
 	}
-	if claims := dig(workerSpec, "resourceClaims"); claims != nil {
+	gpuWorkerSpec := dig(gpuGroup, "template", "spec")
+	if got := dig(gpuWorkerSpec, "containers", 0, "resources", "limits", "nvidia.com/gpu"); got != "1" {
+		t.Errorf("GPU worker limit = %v, want 1", got)
+	}
+	if got := dig(gpuWorkerSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != "nd-h200-v5" {
+		t.Errorf("GPU worker selector = %v, want nd-h200-v5", got)
+	}
+	if got := dig(gpuGroup, "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); got != "kubernetes.io/hostname" {
+		t.Errorf("GPU worker topology = %v, want kubernetes.io/hostname", got)
+	}
+	if got := dig(cpuGroup, "replicas"); got != 4 {
+		t.Errorf("CPU worker replicas = %v, want 4", got)
+	}
+	cpuWorkerSpec := dig(cpuGroup, "template", "spec")
+	if cpuWorkerSpec == nil {
+		t.Fatalf("CPU workerGroup.template.spec missing")
+	}
+	if claims := dig(cpuWorkerSpec, "resourceClaims"); claims != nil {
 		t.Errorf("CPU worker pod must NOT have resourceClaims (no GPU); got: %v", claims)
+	}
+	if got := dig(cpuWorkerSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != nil {
+		t.Errorf("CPU worker retained GPU-series selector: %v", got)
+	}
+	if got := dig(cpuGroup, "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); got != nil {
+		t.Errorf("CPU worker retained GPU topology: %v", got)
 	}
 	// CPU workers run plain ray.remote score tasks against the head's
 	// actor; Ray's own runtime_env working_dir mechanism ships them the
@@ -3387,7 +3470,7 @@ runtime:
 	// script-only payload initContainer (never manifest) — the same
 	// mechanism the two Ray Train templates' workers use. /manifest stays
 	// head-only: it's parsed once, before any worker actor is spawned.
-	workerInitContainers := podSpecInitContainers(t, workerSpec)
+	workerInitContainers := podSpecInitContainers(t, cpuWorkerSpec)
 	if len(workerInitContainers) != 1 {
 		t.Fatalf("eval CPU worker pod should have exactly 1 payload initContainer (script only), got %d: %v", len(workerInitContainers), workerInitContainers)
 	}
@@ -3398,6 +3481,15 @@ runtime:
 		}
 	}
 	headSpec := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+	if got := dig(headSpec, "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
+		t.Errorf("eval head node selector = %v, want system pool", got)
+	}
+	if got := dig(headSpec, "containers", 0, "resources", "limits", "nvidia.com/gpu"); got != nil {
+		t.Errorf("eval head must not request GPUs, got %v", got)
+	}
+	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); got != nil {
+		t.Errorf("eval head retained GPU topology: %v", got)
+	}
 	headInitContainers := podSpecInitContainers(t, headSpec)
 	scriptIC := containerByName(t, headInitContainers, scriptPayloadInitContainerName)
 	if _, ok := decodePayloadFiles(t, scriptIC)["train.py"]; !ok {
@@ -3405,17 +3497,23 @@ runtime:
 	}
 	containerByName(t, headInitContainers, manifestPayloadInitContainerName)
 	head := rayJobHeadContainer(t, rj)
-	worker := rayJobWorkerContainer(t, rj)
-	assertSocketProbe(t, "eval rayjob head", head, "8265")
-	assertSocketProbe(t, "eval rayjob worker", worker, "52365")
-	assertEnvVar(t, "eval rayjob head", head, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/eval-smoke/metrics-history.jsonl")
-	assertEnvVar(t, "eval rayjob worker", worker, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/eval-smoke/metrics-history.jsonl")
-	// Worker container resources must not carry a 'claims' entry pointing at a GPU.
-	containers, ok := dig(workerSpec, "containers").([]any)
-	if !ok || len(containers) != 1 {
-		t.Fatalf("expected exactly 1 worker container, got %T = %v", containers, containers)
+	gpuWorkerContainers, ok := dig(gpuWorkerSpec, "containers").([]any)
+	if !ok || len(gpuWorkerContainers) != 1 {
+		t.Fatalf("expected exactly 1 GPU worker container, got %T = %v", gpuWorkerContainers, gpuWorkerContainers)
 	}
-	if cclaims := dig(containers[0], "resources", "claims"); cclaims != nil {
+	gpuWorker := gpuWorkerContainers[0].(map[string]any)
+	cpuWorkerContainers, ok := dig(cpuWorkerSpec, "containers").([]any)
+	if !ok || len(cpuWorkerContainers) != 1 {
+		t.Fatalf("expected exactly 1 CPU worker container, got %T = %v", cpuWorkerContainers, cpuWorkerContainers)
+	}
+	cpuWorker := cpuWorkerContainers[0].(map[string]any)
+	assertSocketProbe(t, "eval rayjob head", head, "8265")
+	assertSocketProbe(t, "eval rayjob GPU worker", gpuWorker, "52365")
+	assertSocketProbe(t, "eval rayjob CPU worker", cpuWorker, "52365")
+	assertEnvVar(t, "eval rayjob head", head, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/eval-smoke/metrics-history.jsonl")
+	assertEnvVar(t, "eval rayjob GPU worker", gpuWorker, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/eval-smoke/metrics-history.jsonl")
+	assertEnvVar(t, "eval rayjob CPU worker", cpuWorker, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/eval-smoke/metrics-history.jsonl")
+	if cclaims := dig(cpuWorker, "resources", "claims"); cclaims != nil {
 		t.Errorf("CPU worker container must NOT request a DRA claim (no GPU); got: %v", cclaims)
 	}
 
@@ -3435,7 +3533,7 @@ runtime:
 
 func TestRenderRayJobEvalRequiresCPUWorkers(t *testing.T) {
 	// rayjob-eval without cpu_workers is incoherent — the whole shape
-	// is "1 GPU head + N CPU workers". If you don't want CPU workers,
+	// is "system head + 1 GPU actor worker + N CPU workers". If you don't want CPU workers,
 	// just submit as a normal rayjob (which the manifest already
 	// supports for single-GPU work).
 	raw := []byte(`
