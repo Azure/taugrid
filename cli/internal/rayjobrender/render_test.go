@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/core/envspec"
+	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -95,6 +96,9 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	}
 	if labels[workloadmeta.LabelManagedBy] != "tau" {
 		t.Fatalf("managed workload admission label=%v, want tau", labels[workloadmeta.LabelManagedBy])
+	}
+	if labels[workloadmeta.LabelGPUClass] != topology.GPUClassAny {
+		t.Fatalf("gpu class label=%v, want any", labels[workloadmeta.LabelGPUClass])
 	}
 	if labels[workloadmeta.LabelJob] != "ray-smoke" || labels["run_id"] != "ray-run-1" {
 		t.Fatalf("caller metadata labels missing: %v", labels)
@@ -252,6 +256,102 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	}
 }
 
+func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "ray-a100",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			GPUClass:  "a100-nvlink-80gb",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rayjob := decodeDocs(t, out)[0]
+	labels := rayjob["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels[workloadmeta.LabelGPUClass] != topology.GPUClassA10080GB {
+		t.Fatalf("gpu class label=%v want %s", labels, topology.GPUClassA10080GB)
+	}
+	workers := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)["workerGroupSpecs"].([]any)
+	nodeSelector := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"].(map[string]any)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != topology.GPUClassA10080GB {
+		t.Fatalf("worker gpu class selector=%v want %s", nodeSelector, topology.GPUClassA10080GB)
+	}
+}
+
+func TestRenderRejectsGPUClassSelectorForAny(t *testing.T) {
+	_, err := Render(Options{
+		Name:          "ray-any-conflict",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			GPUClass:  topology.GPUClassAny,
+		},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestRenderRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
+	_, err := Render(Options{
+		Name:          "ray-profile-conflict",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		Profile: profile.Profile{
+			Spec: map[string]any{
+				"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
+			},
+		},
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected profile gpu class selector error, got %v", err)
+	}
+}
+
+func TestRenderRejectsClassSelectorForProfileAny(t *testing.T) {
+	_, err := Render(Options{
+		Name:          "ray-profile-any-conflict",
+		Namespace:     "ray",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		Profile: profile.Profile{
+			Spec: map[string]any{
+				"topology": map[string]any{"gpuClass": topology.GPUClassAny},
+			},
+		},
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected profile gpu_class any selector error, got %v", err)
+	}
+}
+
 func TestRenderSingleGPUWorkerUsesCPUHead(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "ray-single",
@@ -305,12 +405,9 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 	if got := head["rayStartParams"].(map[string]any)["num-cpus"]; got != "0" {
 		t.Fatalf("head num-cpus=%v, want 0 for a control-only head", got)
 	}
-	headSelector := headSpec["nodeSelector"].(map[string]any)
-	if got := headSelector["kubernetes.azure.com/mode"]; got != "system" {
-		t.Fatalf("head system selector=%v, want system", got)
-	}
-	if _, ok := headSelector[topology.ManagedGPUSeriesLabel]; ok {
-		t.Fatalf("head retained GPU selector: %v", headSelector)
+	assertPortableSystemAffinity(t, headSpec)
+	if selector := headSpec["nodeSelector"]; selector != nil {
+		t.Fatalf("head retained GPU selector: %v", selector)
 	}
 	headAnnotations := headTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if _, ok := headAnnotations["kueue.x-k8s.io/podset-required-topology"]; ok {
@@ -365,9 +462,7 @@ func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
 	headTemplate := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)
 	headSpec := headTemplate["spec"].(map[string]any)
-	if got := headSpec["nodeSelector"].(map[string]any)[topology.AKSNodePoolModeLabel]; got != topology.AKSSystemNodePoolMode {
-		t.Fatalf("CPU head selector=%v, want system pool", headSpec["nodeSelector"])
-	}
+	assertPortableSystemAffinity(t, headSpec)
 	if _, ok := headTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)["kueue.x-k8s.io/podset-unconstrained-topology"]; ok {
 		t.Fatalf("CPU head retained workload topology: %v", headTemplate["metadata"])
 	}
@@ -941,6 +1036,21 @@ func asYAML(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func assertPortableSystemAffinity(t *testing.T, podSpec map[string]any) {
+	t.Helper()
+	affinity := asYAML(t, podSpec["affinity"])
+	for _, want := range []string{
+		"key: " + topology.AKSNodePoolModeLabel,
+		"operator: In",
+		"- " + topology.AKSSystemNodePoolMode,
+		"operator: DoesNotExist",
+	} {
+		if !strings.Contains(affinity, want) {
+			t.Fatalf("head affinity missing %q:\n%s", want, affinity)
+		}
+	}
 }
 
 func containerByName(t *testing.T, containers []any, name string) map[string]any {

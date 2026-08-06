@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 func TestParseValidationOutput(t *testing.T) {
@@ -259,6 +261,90 @@ func TestRunClusterValidateNodesFailsMinHealthyWhenNoNodes(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "only 0 healthy nodes") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunClusterValidateNodesAnyDoesNotAddClassSelector(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "nodes", "-o", "json"): `{"items":[]}`,
+		},
+		errors: map[string]error{},
+	}
+	err := runClusterValidateNodes(
+		context.Background(),
+		runner,
+		validateNodesSpec{GPUClass: "any"},
+		&strings.Builder{},
+		&strings.Builder{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range runner.calls {
+		if containsString(call, "-l") {
+			t.Fatalf("gpu_class any added a node selector: %v", call)
+		}
+	}
+}
+
+func TestRunClusterValidateNodesAnyRejectsClassSelector(t *testing.T) {
+	runner := &fakeRawRunner{outputs: map[string]string{}, errors: map[string]error{}}
+	err := runClusterValidateNodes(
+		context.Background(),
+		runner,
+		validateNodesSpec{
+			GPUClass: "any",
+			Selector: workloadmeta.NodeLabelGPUClass + " in (a100-80gb,h100-95gb)",
+		},
+		&strings.Builder{},
+		&strings.Builder{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("conflicting class selector queried cluster: %v", runner.calls)
+	}
+}
+
+func TestRunClusterValidateNodesNormalizesLegacyGPUClass(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "nodes", "-o", "json", "-l", workloadmeta.NodeLabelGPUClass+"=a100-80gb"): `{"items":[]}`,
+		},
+		errors: map[string]error{},
+	}
+	var errOut strings.Builder
+	err := runClusterValidateNodes(
+		context.Background(),
+		runner,
+		validateNodesSpec{GPUClass: "a100-nvlink-80gb"},
+		&strings.Builder{},
+		&errOut,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut.String(), `use "a100-80gb" instead`) {
+		t.Fatalf("missing legacy warning: %q", errOut.String())
+	}
+}
+
+func TestRunClusterValidateNodesRejectsUnknownGPUClassBeforeQuery(t *testing.T) {
+	runner := &fakeRawRunner{outputs: map[string]string{}, errors: map[string]error{}}
+	err := runClusterValidateNodes(
+		context.Background(),
+		runner,
+		validateNodesSpec{GPUClass: "a100"},
+		&strings.Builder{},
+		&strings.Builder{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported --gpu-class") {
+		t.Fatalf("expected unsupported class error, got %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("invalid class queried cluster: %v", runner.calls)
 	}
 }
 

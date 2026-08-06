@@ -35,17 +35,56 @@ const (
 	ManagedGPUSeriesLabel       = "kueue.azure.com/gpu-series"
 	AKSNodePoolModeLabel        = "kubernetes.azure.com/mode"
 	AKSSystemNodePoolMode       = "system"
-	GPUClassAny                 = "any"
-	LabelTeam                   = workloadmeta.LabelTeam
-	LabelLane                   = workloadmeta.LabelLane
-	LabelGPUClass               = workloadmeta.LabelGPUClass
-	LabelShape                  = workloadmeta.LabelShape
-	AnnotationTopologyQueue     = workloadmeta.AnnotationTopologyQueue
+	// GPUClassAny is explicit unconstrained hardware selection: it renders no
+	// class selector and lets Kueue admit against any available GPU flavor.
+	GPUClassAny = "any"
+	// GPUClassA10080GB, GPUClassH10095GB, and GPUClassH200141GB are the
+	// canonical, hardware-only gpu_class values. They name capacity/memory
+	// only ("80gb", "95gb", "141gb"); interconnect/placement concerns
+	// (NVLink, same-host, multi-node) belong solely to spec.topology.placement
+	// and must never be re-encoded into a gpu_class name. Each canonical value
+	// is also the exact tau.azure.com/gpu-class node-label/ResourceFlavor
+	// contract Tau uses to select a Kueue ResourceFlavor -- resolution must
+	// match this value exactly and never by matching a substring of a
+	// ResourceFlavor's own name.
+	GPUClassA10080GB        = "a100-80gb"
+	GPUClassH10095GB        = "h100-95gb"
+	GPUClassH200141GB       = "h200-141gb"
+	LabelTeam               = workloadmeta.LabelTeam
+	LabelLane               = workloadmeta.LabelLane
+	LabelGPUClass           = workloadmeta.LabelGPUClass
+	LabelShape              = workloadmeta.LabelShape
+	AnnotationTopologyQueue = workloadmeta.AnnotationTopologyQueue
 )
 
-// SystemNodeSelector returns the AKS placement contract for control-plane pods.
-func SystemNodeSelector() map[string]string {
-	return map[string]string{AKSNodePoolModeLabel: AKSSystemNodePoolMode}
+// SystemNodeAffinity requires AKS control pods to use the system pool while
+// preserving portability to clusters whose nodes do not carry the AKS label.
+func SystemNodeAffinity() map[string]any {
+	return map[string]any{
+		"nodeAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+				"nodeSelectorTerms": []any{
+					map[string]any{
+						"matchExpressions": []any{
+							map[string]any{
+								"key":      AKSNodePoolModeLabel,
+								"operator": "In",
+								"values":   []any{AKSSystemNodePoolMode},
+							},
+						},
+					},
+					map[string]any{
+						"matchExpressions": []any{
+							map[string]any{
+								"key":      AKSNodePoolModeLabel,
+								"operator": "DoesNotExist",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 // WithoutKueueTopologyAnnotations copies annotations while removing pod-set
@@ -64,6 +103,70 @@ func WithoutKueueTopologyAnnotations(annotations map[string]string) map[string]s
 }
 
 var labelValueRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$`)
+
+// legacyGPUClassAliases maps pre-canonical gpu_class spellings -- which
+// folded interconnect/placement terms (NVLink, standalone) into the
+// hardware name -- to their canonical, hardware-only replacement. These
+// aliases exist only for one compatibility window: NormalizeGPUClass accepts
+// them as input so existing profiles/configs/presets keep working, but every
+// validation, rendering, status, and explain surface operates on the
+// canonical value, and no new aliases should be added here.
+var legacyGPUClassAliases = map[string]string{
+	"a100-nvlink-80gb":     GPUClassA10080GB,
+	"h100-standalone-95gb": GPUClassH10095GB,
+	"h200-nvlink-141gb":    GPUClassH200141GB,
+}
+
+// NormalizeGPUClass maps a researcher-supplied gpu_class value (from a CLI
+// flag, run config, preset, or profile spec.topology.gpuClass) to its
+// canonical hardware-only spelling. It returns the canonical value and
+// whether the input was a deprecated legacy alias that should be migrated.
+// Unrecognized values (including "any" and already-canonical values) are
+// returned unchanged with deprecatedAlias=false; callers still run the
+// result through validEnum to reject truly invalid classes.
+func NormalizeGPUClass(v string) (canonical string, deprecatedAlias bool) {
+	normalized := normalizeLabelValue(v)
+	if mapped, ok := legacyGPUClassAliases[normalized]; ok {
+		return mapped, true
+	}
+	return normalized, false
+}
+
+func IsSupportedGPUClass(v string) bool {
+	canonical, _ := NormalizeGPUClass(v)
+	switch canonical {
+	case GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) error {
+	canonical, _ := NormalizeGPUClass(gpuClass)
+	selected := strings.TrimSpace(selector[workloadmeta.NodeLabelGPUClass])
+	if selected == "" || canonical == "" {
+		return nil
+	}
+	if canonical == GPUClassAny {
+		return fmt.Errorf("gpu_class %q is unconstrained and cannot be combined with node selector %s=%q", canonical, workloadmeta.NodeLabelGPUClass, selected)
+	}
+	if selected != canonical {
+		return fmt.Errorf("gpu_class %q requires %s=%q, but the workload node selector uses %q", canonical, workloadmeta.NodeLabelGPUClass, canonical, selected)
+	}
+	return nil
+}
+
+// ResolveGPUClass returns the effective canonical gpu_class after applying an
+// explicit override to a profile's topology contract.
+func ResolveGPUClass(p profile.Profile, override string) (string, bool) {
+	raw, _ := asMap(p.Spec["topology"])
+	gpuClass := stringFrom(raw, "gpuClass", "gpuFlavor", "flavor")
+	if override != "" {
+		gpuClass = override
+	}
+	return NormalizeGPUClass(gpuClass)
+}
 
 // Options are caller-provided overrides. They are intentionally strings so the
 // CLI can pass flags through directly; Build normalizes and validates them.
@@ -134,9 +237,16 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	}
 
 	plan := Plan{
-		Labels:      map[string]string{},
-		Annotations: map[string]string{},
-		QueueName:   spec.queueName(),
+		Labels:       map[string]string{},
+		Annotations:  map[string]string{},
+		NodeSelector: map[string]string{},
+		QueueName:    spec.queueName(),
+	}
+	if spec.gpuClass != "" {
+		plan.Labels[LabelGPUClass] = spec.gpuClass
+		if spec.gpuClass != GPUClassAny {
+			plan.NodeSelector[workloadmeta.NodeLabelGPUClass] = spec.gpuClass
+		}
 	}
 	if spec.workloadPriorityClassName != "" {
 		plan.Labels[workloadPriorityLabel] = spec.workloadPriorityClassName
@@ -274,7 +384,7 @@ func (c *contract) normalize() {
 	c.mode = normalizeLabelValue(c.mode)
 	c.placement = normalizeLabelValue(c.placement)
 	c.shape = normalizeLabelValue(c.shape)
-	c.gpuClass = normalizeLabelValue(c.gpuClass)
+	c.gpuClass, _ = NormalizeGPUClass(c.gpuClass)
 	c.queue = normalizeLabelValue(c.queue)
 	c.podPriorityClassName = normalizeLabelValue(c.podPriorityClassName)
 	c.workloadPriorityClassName = normalizeLabelValue(c.workloadPriorityClassName)
@@ -366,7 +476,7 @@ func (c contract) validate(profileName string) error {
 		}
 	}
 	if c.gpuClass != "" {
-		if err := validEnum("gpuClass", c.gpuClass, GPUClassAny, "h100-standalone-95gb", "a100-nvlink-80gb", "h200-nvlink-141gb"); err != nil {
+		if err := validEnum("gpuClass", c.gpuClass, GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB); err != nil {
 			return fmt.Errorf("profile %q topology: %w", profileName, err)
 		}
 	}
@@ -394,8 +504,8 @@ func (c contract) validate(profileName string) error {
 		if !c.hasCheckpoint {
 			return fmt.Errorf("profile %q topology: mode=elastic requires checkpoint/restart semantics (policy.checkpointOnPreempt=true or topology.checkpointEvery)", profileName)
 		}
-		if c.gpuClass == "h200-nvlink-141gb" {
-			return fmt.Errorf("profile %q topology: elastic jobs cannot request scarce h200-nvlink-141gb", profileName)
+		if c.gpuClass == GPUClassH200141GB {
+			return fmt.Errorf("profile %q topology: elastic jobs cannot request scarce %s", profileName, GPUClassH200141GB)
 		}
 		if c.placement != "" && c.placement != "independent" && c.placement != "elastic-workers" {
 			return fmt.Errorf("profile %q topology: mode=elastic must use independent or elastic-workers placement, got %q", profileName, c.placement)
@@ -404,17 +514,11 @@ func (c contract) validate(profileName string) error {
 	if c.lane == "elastic" && c.mode != "elastic" {
 		return fmt.Errorf("profile %q topology: lane=elastic must use mode=elastic", profileName)
 	}
-	if c.lane == "eval" && c.gpuClass == "h200-nvlink-141gb" {
-		return fmt.Errorf("profile %q topology: eval lane cannot request scarce h200-nvlink-141gb", profileName)
+	if c.lane == "eval" && c.gpuClass == GPUClassH200141GB {
+		return fmt.Errorf("profile %q topology: eval lane cannot request scarce %s", profileName, GPUClassH200141GB)
 	}
-	if c.gpuClass == "h200-nvlink-141gb" && c.lane != "" && c.lane != "large-memory" {
-		return fmt.Errorf("profile %q topology: h200-nvlink-141gb is reserved for lane=large-memory, got lane=%q", profileName, c.lane)
-	}
-	if c.placement == "single-node-nvlink" && c.gpuClass == "h100-standalone-95gb" {
-		return fmt.Errorf("profile %q topology: h100-standalone-95gb cannot satisfy single-node-nvlink placement", profileName)
-	}
-	if c.placement == "multi-node-nccl" && c.gpuClass == "h100-standalone-95gb" {
-		return fmt.Errorf("profile %q topology: h100-standalone-95gb cannot satisfy multi-node-nccl placement", profileName)
+	if c.gpuClass == GPUClassH200141GB && c.lane != "" && c.lane != "large-memory" {
+		return fmt.Errorf("profile %q topology: %s is reserved for lane=large-memory, got lane=%q", profileName, GPUClassH200141GB, c.lane)
 	}
 	return nil
 }

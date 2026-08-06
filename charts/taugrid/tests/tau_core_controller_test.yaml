@@ -36,15 +36,27 @@ tests:
           path: spec.template.spec.containers[0].image
           value: my-registry.example.com/tau-core-controller:v0.1.0
 
-  - it: ships no cloud specific node topology mapping by default
+  - it: ships automatic class and series mappings for reviewed AKS GPU SKUs
     template: charts/tau-core-controller/templates/taucluster.yaml
     asserts:
       - equal:
           path: spec.managementMode
           value: Reconcile
-      - equal:
+      - lengthEqual:
           path: spec.nodes.labelRules
-          value: []
+          count: 4
+      - equal:
+          path: spec.nodes.labelRules[0].match.vmSizes[0]
+          value: Standard_NC24ads_A100_v4
+      - equal:
+          path: spec.nodes.labelRules[0].labels["kueue.azure.com/gpu-series"]
+          value: nc24ads-a100-v4
+      - equal:
+          path: spec.nodes.labelRules[0].labels["tau.azure.com/gpu-class"]
+          value: a100-80gb
+      - equal:
+          path: spec.nodes.labelRules[3].labels["tau.azure.com/gpu-class"]
+          value: h200-141gb
       - equal:
           path: spec.queues.ownership
           value: External

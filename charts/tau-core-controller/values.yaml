@@ -16,7 +16,7 @@ image:
   repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
   # A digest is immutable, so IfNotPresent is correct; set tag instead only for
   # a mutable pre-release build.
-  digest: sha256:93f49562fdb9e733579af34290ad6f86e0c958a37191ba75e4590d9750b53546
+  digest: sha256:6ef8473f89bf0d27dae303aef37b6846915d59b3a4203cdad2f6753875ef10ea
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -31,18 +31,35 @@ resources:
 tauCluster:
   managementMode: Reconcile
   deletionPolicy: Retain
-  # Node topology labels are cluster-specific desired state, so the portable
-  # distribution declares none. Add a rule in the same review that introduces
-  # the ResourceFlavor selecting on it. The AKS AI Runtime worker clusters keep
-  # their reviewed A100/H200 mapping in kustomize/taucluster.yaml.
-  #
-  # Example:
-  #   nodeLabelRules:
-  #     - match:
-  #         vmSizes: [Standard_ND96isr_H200_v5]
-  #       labels:
-  #         kueue.azure.com/gpu-series: nd-h200-v5
-  nodeLabelRules: []
+  # Tau owns these derived labels. AKS supplies node.kubernetes.io/instance-type;
+  # the controller continuously reconciles the stable researcher class and the
+  # platform series on matching current and future nodes. CPU-only clusters and
+  # GPU pools scaled to zero remain ready when none of these rules match.
+  nodeLabelRules:
+    - match:
+        vmSizes:
+          - Standard_NC24ads_A100_v4
+      labels:
+        kueue.azure.com/gpu-series: nc24ads-a100-v4
+        tau.azure.com/gpu-class: a100-80gb
+    - match:
+        vmSizes:
+          - Standard_ND96amsr_A100_v4
+      labels:
+        kueue.azure.com/gpu-series: ndm-a100-v4
+        tau.azure.com/gpu-class: a100-80gb
+    - match:
+        vmSizes:
+          - Standard_NC40ads_H100_v5
+      labels:
+        kueue.azure.com/gpu-series: nc-h100-v5
+        tau.azure.com/gpu-class: h100-95gb
+    - match:
+        vmSizes:
+          - Standard_ND96isr_H200_v5
+      labels:
+        kueue.azure.com/gpu-series: nd-h200-v5
+        tau.azure.com/gpu-class: h200-141gb
   # Helm replaces lists, so setting nodeLabelRules discards anything a parent
   # chart declared. Use extraNodeLabelRules to append instead.
   extraNodeLabelRules: []

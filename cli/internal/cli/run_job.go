@@ -230,13 +230,15 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.workspaceQueueResolved {
 		makeWorkspaceQueueAuthoritative(&opts)
 	}
+	opts.GPUClass, _ = runtopology.ResolveGPUClass(p, opts.GPUClass)
 	warnings = append(warnings, topoWarnings...)
 
 	var runner *kube.Runner
 	if o.dryRun != "client" {
 		runner = kube.New(kubeContext)
 	}
-	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &ns, &opts, o.dryRun, "jobs.batch")
+	allowImplicitAuto := preset == nil && resolvedProfileName == ""
+	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &ns, &opts, o.dryRun, "jobs.batch", allowImplicitAuto)
 	if err != nil {
 		return err
 	}
@@ -266,6 +268,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	opts.Namespace = ns
 	request.Options.namespace = ns
 	warnings = append(warnings, resolveWarnings...)
+	explicitAuto, implicitAuto := prepareAutoQueueRender(&opts, preset, allowImplicitAuto, o.dryRun)
 	if o.dryRun != "client" {
 		if err := secretpreflight.ValidateRequiredEnv(ctx, runner, ns, envSecrets); err != nil {
 			return err
@@ -320,6 +323,17 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if err != nil {
 		return err
 	}
+	autoWarnings, err := topo.resolveAutoQueueFromManifest(ctx, runner, ns, &opts, manifest, o.dryRun, explicitAuto, implicitAuto)
+	if err != nil {
+		return err
+	}
+	if explicitAuto || implicitAuto {
+		manifest, err = jobrender.Render(p, opts)
+		if err != nil {
+			return err
+		}
+	}
+	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
 		if err := validateRenderedQueue(ctx, kube.New(kubeContext), ns, manifest, opts, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
 			return err
@@ -412,9 +426,8 @@ func queueValidationPolicyFor(preset *runtopology.ResolvedPreset, workspaceQueue
 		return queueValidationPolicy{}
 	}
 	return queueValidationPolicy{
-		TopologyName:             preset.Preset.TopologyName,
-		TopologyCapabilityFlavor: preset.Preset.ResourceFlavor,
-		CatalogTopologyContract:  true,
+		TopologyName:            preset.Preset.TopologyName,
+		CatalogTopologyContract: true,
 	}
 }
 

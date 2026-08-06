@@ -1513,7 +1513,7 @@ runtime:
 			Mode:      "fixed",
 			Placement: "single-node-nvlink",
 			Shape:     "8xa100-80gb",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
 		},
 		Labels: map[string]string{
@@ -1541,6 +1541,12 @@ runtime:
 		}
 	}
 	job := unmarshalLast(t, out)
+	if got := dig(job, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Job gpu class label=%v want %s", got, topology.GPUClassA10080GB)
+	}
+	if got := dig(job, "spec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Job gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	for key, want := range map[string]string{
 		workloadmeta.AnnotationStellarExperimentID: "presettrain:exact",
 		workloadmeta.AnnotationWorkspaceID:         "sample",
@@ -1569,12 +1575,61 @@ runtime:
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
+
 	s := string(out)
 	if !strings.Contains(s, "namespace: my-ns") {
 		t.Error("Job namespace should be overridden")
 	}
 	if strings.Contains(s, "namespace: tau") {
 		t.Error("default namespace should be replaced, not duplicated")
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsGPUClassSelectorForAny(t *testing.T) {
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyOptions: topology.Options{GPUClass: topology.GPUClassAny},
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected gpu_class any selector error, got %v", err)
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
+	p := profile.Profile{
+		Name: "profile-h100",
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
+		},
+	}
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyProfile: &p,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
+		t.Fatalf("expected profile gpu class selector error, got %v", err)
+	}
+}
+
+func TestBuildSchedulingMetadataRejectsClassSelectorForProfileAny(t *testing.T) {
+	p := profile.Profile{
+		Name: "profile-any",
+		Spec: map[string]any{
+			"topology": map[string]any{"gpuClass": topology.GPUClassAny},
+		},
+	}
+	_, err := buildSchedulingMetadata(RenderOptions{
+		TopologyProfile: &p,
+		NodeSelector: map[string]string{
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
+		t.Fatalf("expected profile gpu_class any selector error, got %v", err)
 	}
 }
 
@@ -1887,6 +1942,24 @@ func rayJobWorkerContainer(t *testing.T, workload map[string]any) map[string]any
 		t.Fatalf("RayJob worker container has unexpected type: %T", containers[0])
 	}
 	return container
+}
+
+func assertPortableSystemAffinity(t *testing.T, podSpec any) {
+	t.Helper()
+	affinity, err := yaml.Marshal(dig(podSpec, "affinity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"key: " + topology.AKSNodePoolModeLabel,
+		"operator: In",
+		"- " + topology.AKSSystemNodePoolMode,
+		"operator: DoesNotExist",
+	} {
+		if !strings.Contains(string(affinity), want) {
+			t.Fatalf("head affinity missing %q:\n%s", want, affinity)
+		}
+	}
 }
 
 func assertRDMAContainer(t *testing.T, label string, container map[string]any, resourceName string, count string) {
@@ -2203,9 +2276,7 @@ runtime:
 	if got := dig(cl[0], "resources", "limits", "nvidia.com/gpu"); got != nil {
 		t.Errorf("head container must not request GPUs, got %v", got)
 	}
-	if got := dig(headSpec, "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
-		t.Errorf("head node selector = %v, want system pool", got)
-	}
+	assertPortableSystemAffinity(t, headSpec)
 	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "rayStartParams", "num-gpus"); got != "0" {
 		t.Errorf("head num-gpus = %v, want 0", got)
 	}
@@ -2333,9 +2404,7 @@ storage:
 	worker := rayJobWorkerContainer(t, rj)
 	assertEnvVar(t, "single-worker profile", worker, "TAU_PROFILE_MODE", "nsys")
 	assertEnvVar(t, "single-worker profile", worker, "TAU_PROFILE_WORLD_SIZE", "8")
-	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
-		t.Fatalf("profiled RayJob head node selector = %v, want system pool", got)
-	}
+	assertPortableSystemAffinity(t, dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec"))
 }
 
 func TestRenderCPURayJobProducesCPUOnlyGang(t *testing.T) {
@@ -2415,9 +2484,7 @@ runtime:
 	if headClaims != nil {
 		t.Fatalf("CPU RayJob head must not request DRA claims, got %v", headClaims)
 	}
-	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
-		t.Errorf("CPU RayJob head node selector = %v, want system pool", got)
-	}
+	assertPortableSystemAffinity(t, dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec"))
 	if got := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector", "workload"); got != nil {
 		t.Errorf("CPU RayJob head retained workload selector: %v", got)
 	}
@@ -2714,7 +2781,7 @@ runtime:
 			Mode:      "fixed",
 			Placement: "single-node-nvlink",
 			Shape:     "8xa100-80gb",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
 		},
 		Labels: map[string]string{
@@ -2745,6 +2812,9 @@ runtime:
 		}
 	}
 	rj := unmarshalLast(t, out)
+	if got := dig(rj, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("RayJob gpu class label=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	// The control head is topology-free; the execution worker keeps the
 	// single-node NVLink placement request.
 	if tas := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); tas != nil {
@@ -2755,13 +2825,13 @@ runtime:
 		t.Errorf("kueue podset-required-topology annotation missing on worker pod template: %v", tas)
 	}
 	headSpec := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
-	if got := dig(headSpec, "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
-		t.Errorf("head node selector = %v, want system pool", got)
-	}
-	if got := dig(headSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != nil {
-		t.Errorf("head retained GPU-series selector: %v", got)
+	if got := dig(headSpec, "nodeSelector"); got != nil {
+		t.Errorf("head retained workload node selector: %v", got)
 	}
 	workerSpec := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec")
+	if got := dig(workerSpec, "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
+		t.Errorf("Ray worker gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	}
 	if got := dig(workerSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != "nd-h200-v5" {
 		t.Errorf("worker GPU-series selector = %v, want nd-h200-v5", got)
 	}
@@ -3481,9 +3551,7 @@ runtime:
 		}
 	}
 	headSpec := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
-	if got := dig(headSpec, "nodeSelector", topology.AKSNodePoolModeLabel); got != topology.AKSSystemNodePoolMode {
-		t.Errorf("eval head node selector = %v, want system pool", got)
-	}
+	assertPortableSystemAffinity(t, headSpec)
 	if got := dig(headSpec, "containers", 0, "resources", "limits", "nvidia.com/gpu"); got != nil {
 		t.Errorf("eval head must not request GPUs, got %v", got)
 	}

@@ -110,7 +110,7 @@ func ExperimentRunProfile(s Snapshot, c CostProfile, opts ExperimentRunDataOptio
 		KueueWorkload:    cleanProfileValue(workloadNames(s)),
 		PodUID:           cleanProfileValue(podUIDs(s)),
 		ResourceClaims:   cleanProfileValue(resourceClaims(s)),
-		GPUClass:         cleanProfileValue(firstNonEmpty(label(s, workloadmeta.LabelGPUClass), c.GPUType)),
+		GPUClass:         cleanProfileValue(canonicalGPUClassLabel(label(s, workloadmeta.LabelGPUClass))),
 		GPUCount:         runProfileGPUCount(s, c),
 		NodeNames:        cleanProfileValue(nodesSummary(s)),
 		Mounts:           cleanProfileValue(annotationOrDefault(s, experiment.AnnotationStorageMounts, "")),

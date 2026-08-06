@@ -13,6 +13,7 @@ const Domain = "tau.azure.com/"
 const (
 	LabelWorkspace  = "tau.azure.com/workspace"
 	LabelLocalQueue = "tau.azure.com/local-queue"
+	LabelGPUClass   = "tau.azure.com/gpu-class"
 
 	AnnotationApproved    = "tau.azure.com/approved"
 	AnnotationRejected    = "tau.azure.com/rejected"

@@ -1747,7 +1747,7 @@ func TestHostedStellarLoadsMetricRichStoreOverLocalPort(t *testing.T) {
 			t.Fatalf("snapshot missing %s metric %s: %+v", tc.card, tc.metric, snapshot.Cards)
 		}
 	}
-	if !runSystemValue(snapshot, "ablation-seed-1", "GPU class", "a100-nvlink-80gb") {
+	if !runSystemValue(snapshot, "ablation-seed-1", "GPU class", "a100-80gb") {
 		t.Fatalf("run systems did not include GPU class: %+v", snapshot.Runs)
 	}
 	if len(snapshot.Compare.EventMarkers) == 0 {
@@ -2467,7 +2467,7 @@ func recordMetricRichRun(t *testing.T, ctx context.Context, store *expstore.Stor
 			LocalQueue:       "training-queue",
 			ClusterQueue:     "gpu-a100",
 			KueueWorkload:    runID + "-workload",
-			GPUClass:         "a100-nvlink-80gb",
+			GPUClass:         "a100-80gb",
 			GPUCount:         &gpuCount,
 			NodeNames:        "node-a",
 			QueueWaitSeconds: &queueWait,

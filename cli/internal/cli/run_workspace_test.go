@@ -46,6 +46,21 @@ func TestApplyWorkspaceDefaultsFillsPolicyFields(t *testing.T) {
 	}
 }
 
+func TestApplyWorkspaceDefaultsPreservesAutoQueueForDiscovery(t *testing.T) {
+	o := defaultRunDispatchOptions()
+	o.queue = "auto"
+	got, err := applyWorkspaceDefaults(o, readyWorkspace(), "smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.queue != "auto" {
+		t.Fatalf("queue = %q, want auto sentinel", got.queue)
+	}
+	if got.workspaceQueueResolved {
+		t.Fatal("auto queue must not be marked as the authoritative workspace queue")
+	}
+}
+
 func TestApplyWorkspaceDefaultsUsesWorkspaceNameAsDefaultNamespace(t *testing.T) {
 	w := readyWorkspace()
 	w.Spec.Target.Namespace = ""

@@ -755,6 +755,9 @@ func buildSchedulingMetadata(opts RenderOptions) (schedulingMetadata, error) {
 	if err != nil {
 		return schedulingMetadata{}, err
 	}
+	if err := topology.ValidateGPUClassNodeSelector(plan.Labels[workloadmeta.LabelGPUClass], opts.NodeSelector); err != nil {
+		return schedulingMetadata{}, err
+	}
 	nodeSelector := mergeStringMaps(plan.NodeSelector, opts.NodeSelector)
 
 	lane := opts.TopologyOptions.Lane
@@ -999,7 +1002,7 @@ func withoutGeneratedTauMetadata(values map[string]string) map[string]string {
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
-	return strings.HasPrefix(key, workloadmeta.Domain)
+	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
 }
 
 func renderStorageMounts(mounts []StorageMount, indent int) string {
@@ -1597,12 +1600,15 @@ func rayJobBlocks(s schedulingMetadata, runtimeEnv []envspec.Var, mounts []Stora
 		}
 	}
 	headAnnotations := topology.WithoutKueueTopologyAnnotations(s.PodAnnotations)
-	systemSelector := topology.SystemNodeSelector()
+	systemAffinityBlock, err := renderYAMLBlock(map[string]any{"affinity": topology.SystemNodeAffinity()}, 10)
+	if err != nil {
+		return workloadBlocks{}, fmt.Errorf("render system node affinity: %w", err)
+	}
 	b := workloadBlocks{
 		JobLabels:                      s.JobLabels,
 		JobAnnotationsBlock:            s.JobAnnotationsBlock,
 		PodMetadataBlock:               renderPodMetadata(s.PodLabels, raylogoffload.HeadPodAnnotations(headAnnotations), 8),
-		NodeSelectorBlock:              renderMapSection("nodeSelector", systemSelector, 10),
+		NodeSelectorBlock:              systemAffinityBlock,
 		PodPriorityClassBlock:          renderPodPriorityClassAt(s.PodPriorityClassName, 10),
 		ServiceAccountBlock:            renderServiceAccountName(s.ServiceAccountName, 10),
 		WorkerPodMetadataBlock:         renderPodMetadata(s.PodLabels, s.PodAnnotations, 10),

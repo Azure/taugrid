@@ -190,8 +190,8 @@ type Options struct {
 	ArtifactPublish artifactpublish.Runtime
 
 	// NodeSelector is a run-time placement override merged after profile and
-	// topology selectors. ClearNodeSelector drops profile/topology selectors
-	// before NodeSelector is applied.
+	// topology selectors. ClearNodeSelector drops profile selectors before the
+	// protected topology contract and NodeSelector are applied.
 	NodeSelector      map[string]string
 	ClearNodeSelector bool
 
@@ -650,6 +650,9 @@ func isPythonShebang(shebang string) bool {
 // shelling out to kubectl with rendered YAML is the contract; we don't
 // need typed objects for V0.
 func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv map[string]string, topologyPlan topology.Plan, storagePlan storagePlan, gpuPlan profile.GPUSchedulingPlan, storageContract profile.StorageContract, hasStorageContract bool) (map[string]any, error) {
+	if err := topology.ValidateGPUClassNodeSelector(topologyPlan.Labels[workloadmeta.LabelGPUClass], o.NodeSelector); err != nil {
+		return nil, err
+	}
 	labels := map[string]any{}
 	for k, v := range o.Labels {
 		if k != "" && v != "" {
@@ -731,6 +734,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if topologyPlan.PodPriorityClassName != "" {
 		pod["priorityClassName"] = topologyPlan.PodPriorityClassName
 	}
+	if o.ClearNodeSelector {
+		delete(pod, "nodeSelector")
+	}
 	if len(topologyPlan.NodeSelector) > 0 {
 		selector := map[string]any{}
 		if existing, ok := pod["nodeSelector"].(map[string]any); ok {
@@ -744,9 +750,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			}
 		}
 		pod["nodeSelector"] = selector
-	}
-	if o.ClearNodeSelector {
-		delete(pod, "nodeSelector")
 	}
 	if len(o.NodeSelector) > 0 {
 		selector := map[string]any{}
@@ -1224,7 +1227,7 @@ func profileNodeSelector(raw any, topologyPlan topology.Plan) map[string]any {
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
-	return strings.HasPrefix(key, workloadmeta.Domain)
+	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
 }
 
 func isTauDefaultPriorityClass(name string) bool {

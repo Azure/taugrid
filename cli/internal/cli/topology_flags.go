@@ -118,6 +118,7 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, p
 	override("gpu-class", f.gpuClass, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.GPUClass }), func(v string) { o.GPUClass = v })
 	override("queue", f.queue, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.QueueName }), func(v string) { o.QueueName = v })
 	if preset != nil && !workspaceQueueResolved && changed("queue") &&
+		!strings.EqualFold(strings.TrimSpace(o.QueueName), "auto") &&
 		strings.TrimSpace(o.QueueName) != strings.TrimSpace(preset.Options.QueueName) {
 		o.DisableKueueTopologyAnnotations = true
 		delete(o.Annotations, workloadmeta.AnnotationKueueTopology)
@@ -148,7 +149,13 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, p
 	if changed("disable-default-priorities") {
 		o.DisableDefaultPriorities = f.disableDefaultPriorities
 	}
-	if !workspaceQueueResolved {
+	if canonical, deprecated := runtopology.NormalizeGPUClass(o.GPUClass); deprecated {
+		warnings = append(warnings, fmt.Sprintf(
+			"warning: gpu_class %q is deprecated; use %q instead (placement and interconnect belong in policy.topology)",
+			o.GPUClass, canonical))
+		o.GPUClass = canonical
+	}
+	if !workspaceQueueResolved && !strings.EqualFold(strings.TrimSpace(o.QueueName), "auto") {
 		if warning, err := f.reconcilePresetQueueTeamOverride(o, preset, changed("queue"), changed("team")); err != nil {
 			return nil, err
 		} else if warning != "" {
@@ -190,17 +197,31 @@ func mergeNodeSelectors(base, required map[string]string) (map[string]string, er
 	return base, nil
 }
 
-func (f topologyFlags) resolveAutoQueue(ctx context.Context, r kubeRawRunner, namespace string, o *jobrender.Options, preset *runtopology.ResolvedPreset, gpuCount int, nodeSelector map[string]string, dryRun string, allowImplicit bool) ([]string, error) {
-	queueName := strings.TrimSpace(o.QueueName)
-	explicitAuto := strings.EqualFold(queueName, "auto")
-	implicitAuto := allowImplicit && queueName == "" && preset == nil
-	if !explicitAuto && !implicitAuto {
-		return nil, nil
+func prepareAutoQueueRender(o *jobrender.Options, preset *runtopology.ResolvedPreset, allowImplicit bool, dryRun string) (bool, bool) {
+	if o == nil {
+		return false, false
 	}
-	if gpuCount <= 0 {
-		if explicitAuto {
-			return nil, fmt.Errorf("--queue=auto requires a positive GPU request")
-		}
+	explicit := strings.EqualFold(strings.TrimSpace(o.QueueName), "auto")
+	implicit := dryRun != "client" && allowImplicit && strings.TrimSpace(o.QueueName) == "" && preset == nil
+	if implicit {
+		// Render a valid provisional manifest, then select from its effective
+		// scheduling contract and render once more with the selected queue.
+		o.QueueName = "auto"
+	}
+	return explicit, implicit
+}
+
+func (f topologyFlags) resolveAutoQueueFromManifest(
+	ctx context.Context,
+	r kubeRawRunner,
+	namespace string,
+	o *jobrender.Options,
+	rendered []byte,
+	dryRun string,
+	explicitAuto bool,
+	implicitAuto bool,
+) ([]string, error) {
+	if o == nil || (!explicitAuto && !implicitAuto) {
 		return nil, nil
 	}
 	if dryRun == "client" {
@@ -209,12 +230,37 @@ func (f topologyFlags) resolveAutoQueue(ctx context.Context, r kubeRawRunner, na
 		}
 		return nil, nil
 	}
+	if r == nil {
+		return nil, fmt.Errorf("automatic queue selection requires cluster access")
+	}
+
+	contract, err := renderedQueueContractFromManifest(rendered)
+	if err != nil {
+		return nil, fmt.Errorf("read rendered scheduling contract for automatic queue selection: %w", err)
+	}
+	if contract.GPUCount <= 0 {
+		if explicitAuto {
+			return nil, fmt.Errorf("--queue=auto requires a positive GPU request")
+		}
+		return nil, nil
+	}
+	gpuResourceName := strings.TrimSpace(contract.GPUResourceName)
+	if gpuResourceName == "" {
+		gpuResourceName = "nvidia.com/gpu"
+	}
+	gpuClass := strings.TrimSpace(contract.GPUClass)
+	if gpuClass == "" {
+		gpuClass = runtopology.GPUClassAny
+	}
+
 	selected, candidates, err := queueresolve.SelectQueue(ctx, r, queueresolve.AutoSelectOptions{
 		Namespace:       namespace,
-		GPUCount:        gpuCount,
-		GPUClass:        o.GPUClass,
-		NodeSelector:    nodeSelector,
-		GPUResourceName: o.GPUResourceName,
+		GPUCount:        contract.GPUCount,
+		GPUClass:        gpuClass,
+		NodeSelector:    contract.NodeSelector,
+		PodTolerations:  contract.PodTolerations,
+		TopologyRequest: contract.TopologyRequest,
+		GPUResourceName: gpuResourceName,
 	})
 	if err != nil {
 		prefix := "policy.queue: auto"
@@ -224,15 +270,21 @@ func (f topologyFlags) resolveAutoQueue(ctx context.Context, r kubeRawRunner, na
 		return nil, fmt.Errorf("%s: %w%s", prefix, err, formatQueueCandidates(candidates))
 	}
 	o.QueueName = selected.QueueName
-	return []string{fmt.Sprintf("selected queue %s -> %s/%s for %d GPU(s)", selected.QueueName, selected.ClusterQueue, selected.ResourceFlavor, gpuCount)}, nil
+	return []string{fmt.Sprintf("selected queue %s -> %s/%s for %d GPU(s)", selected.QueueName, selected.ClusterQueue, selected.ResourceFlavor, contract.GPUCount)}, nil
 }
 
-func resolveAccessibleQueueNamespace(ctx context.Context, r kubeRawRunner, namespaceExplicit bool, namespace *string, o *jobrender.Options, dryRun, workloadResource string) ([]string, error) {
+func resolveAccessibleQueueNamespace(ctx context.Context, r kubeRawRunner, namespaceExplicit bool, namespace *string, o *jobrender.Options, dryRun, workloadResource string, preserveImplicitAuto bool) ([]string, error) {
 	if namespaceExplicit || dryRun == "client" || r == nil {
 		return nil, nil
 	}
+	queueName := strings.TrimSpace(o.QueueName)
+	explicitAuto := strings.EqualFold(queueName, "auto")
+	preserveQueue := explicitAuto || preserveImplicitAuto && queueName == ""
+	if explicitAuto {
+		queueName = ""
+	}
 	selected, candidates, err := queueresolve.ResolveAccessibleQueue(ctx, r, queueresolve.ResolveAccessibleQueueOptions{
-		QueueName:        o.QueueName,
+		QueueName:        queueName,
 		Team:             o.Team,
 		WorkloadResource: workloadResource,
 	})
@@ -240,7 +292,7 @@ func resolveAccessibleQueueNamespace(ctx context.Context, r kubeRawRunner, names
 		return nil, fmt.Errorf("resolve queue namespace: %w%s", err, formatAccessibleQueueCandidates(candidates))
 	}
 	*namespace = selected.Namespace
-	if strings.TrimSpace(o.QueueName) == "" || strings.EqualFold(strings.TrimSpace(o.QueueName), "auto") {
+	if strings.TrimSpace(o.QueueName) == "" && !preserveQueue {
 		o.QueueName = selected.QueueName
 	}
 	return []string{fmt.Sprintf("resolved queue %s/%s via Kubernetes RBAC", selected.Namespace, selected.QueueName)}, nil
@@ -301,6 +353,7 @@ type kubeRawRunner interface {
 
 type renderedQueueContract struct {
 	QueueName       string
+	GPUClass        string
 	GPUCount        int
 	GPUResourceName string
 	NodeSelector    map[string]string
@@ -309,10 +362,9 @@ type renderedQueueContract struct {
 }
 
 type queueValidationPolicy struct {
-	Preset                   *runtopology.ResolvedPreset
-	TopologyName             string
-	TopologyCapabilityFlavor string
-	CatalogTopologyContract  bool
+	Preset                  *runtopology.ResolvedPreset
+	TopologyName            string
+	CatalogTopologyContract bool
 }
 
 func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string, manifest []byte, opts jobrender.Options, policy queueValidationPolicy) error {
@@ -335,29 +387,33 @@ func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace strin
 	if contract.GPUResourceName != "" {
 		gpuResourceName = contract.GPUResourceName
 	}
+	gpuClass := opts.GPUClass
+	if contract.GPUClass != "" {
+		gpuClass = contract.GPUClass
+	}
 	validationOpts := queueresolve.ValidationOptions{
-		Namespace:                namespace,
-		QueueName:                queueName,
-		Preset:                   policy.Preset,
-		Team:                     opts.Team,
-		Lane:                     opts.Lane,
-		GPUClass:                 opts.GPUClass,
-		NodeSelector:             nodeSelector,
-		PodTolerations:           contract.PodTolerations,
-		GPUCount:                 contract.GPUCount,
-		GPUResourceName:          gpuResourceName,
-		TopologyRequest:          contract.TopologyRequest,
-		TopologyName:             policy.TopologyName,
-		TopologyCapabilityFlavor: policy.TopologyCapabilityFlavor,
-		CatalogTopologyContract:  policy.CatalogTopologyContract,
+		Namespace:               namespace,
+		QueueName:               queueName,
+		Preset:                  policy.Preset,
+		Team:                    opts.Team,
+		Lane:                    opts.Lane,
+		GPUClass:                gpuClass,
+		NodeSelector:            nodeSelector,
+		PodTolerations:          contract.PodTolerations,
+		GPUCount:                contract.GPUCount,
+		GPUResourceName:         gpuResourceName,
+		TopologyRequest:         contract.TopologyRequest,
+		TopologyName:            policy.TopologyName,
+		CatalogTopologyContract: policy.CatalogTopologyContract,
 	}
 	_, err = queueresolve.ValidateSelection(ctx, r, validationOpts)
 	if err != nil && contract.GPUCount > 0 {
 		_, candidates, selectErr := queueresolve.SelectQueue(ctx, r, queueresolve.AutoSelectOptions{
 			Namespace:       namespace,
 			GPUCount:        contract.GPUCount,
-			GPUClass:        opts.GPUClass,
+			GPUClass:        gpuClass,
 			NodeSelector:    nodeSelector,
+			PodTolerations:  contract.PodTolerations,
 			GPUResourceName: gpuResourceName,
 		})
 		if selectErr == nil || len(candidates) > 0 {
@@ -403,11 +459,16 @@ func renderedQueueContractFromManifest(manifest []byte) (renderedQueueContract, 
 		}
 		collectRenderedGPUTolerations(obj, &out.PodTolerations)
 
+		meta, _ := obj["metadata"].(map[string]any)
+		labels, _ := meta["labels"].(map[string]any)
 		if out.QueueName == "" {
-			meta, _ := obj["metadata"].(map[string]any)
-			labels, _ := meta["labels"].(map[string]any)
 			if queueName, _ := labels[runtopology.QueueLabel].(string); strings.TrimSpace(queueName) != "" {
 				out.QueueName = strings.TrimSpace(queueName)
+			}
+		}
+		if out.GPUClass == "" {
+			if gpuClass, _ := labels[workloadmeta.LabelGPUClass].(string); strings.TrimSpace(gpuClass) != "" {
+				out.GPUClass, _ = runtopology.NormalizeGPUClass(gpuClass)
 			}
 		}
 		if kind, _ := obj["kind"].(string); kind == "RayJob" {
@@ -519,6 +580,10 @@ func collectRenderedGPUResourceNames(v any, names map[string]struct{}) {
 		for key, child := range x {
 			if isRenderedGPUResource(key) {
 				names[key] = struct{}{}
+				continue
+			}
+			if key == "resourceClaimTemplateName" && gpuCountFromClaimName(fmt.Sprint(child)) > 0 {
+				names[runqueue.GPUResource] = struct{}{}
 				continue
 			}
 			collectRenderedGPUResourceNames(child, names)

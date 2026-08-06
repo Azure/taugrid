@@ -689,7 +689,7 @@ storage:
 policy:
   namespace: ray
   queue: team-a
-  gpu_class: h200-nvlink-141gb
+  gpu_class: h200-141gb
   priority: priority
   disable_default_priorities: true
 experiment:
@@ -729,8 +729,15 @@ experiment:
 	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 2 {
 		t.Fatalf("GPU config ray dry-run serviceAccountName count=%d want head + worker (2):\n%s", got, rendered)
 	}
-	if !strings.Contains(rendered, "kubernetes.azure.com/mode: system") {
-		t.Fatalf("GPU config ray dry-run must pin its CPU head to the system pool:\n%s", rendered)
+	for _, want := range []string{
+		"key: kubernetes.azure.com/mode",
+		"operator: In",
+		"- system",
+		"operator: DoesNotExist",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("GPU config ray dry-run must give its CPU head portable system affinity; missing %q:\n%s", want, rendered)
+		}
 	}
 	if strings.Contains(rendered, "azure.workload.identity/use") {
 		t.Fatalf("non-workspace RayJob should not gain the Azure workload identity label:\n%s", rendered)
@@ -1149,15 +1156,9 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 	}
 }
 
-func TestRunConfigRejectsQueueAutoAsScopedLimitation(t *testing.T) {
-	err := executeTauConfigError(t, `name: auto-queue
-engine: ray
-entrypoint: train.py
-policy:
-  queue: auto
-`)
-	if err == nil || !strings.Contains(err.Error(), "policy.queue: auto") || !strings.Contains(err.Error(), "not supported by this focused run --config slice") {
-		t.Fatalf("expected explicit policy.queue auto limitation, got %v", err)
+func TestRunConfigAcceptsQueueAutoForLiveResolution(t *testing.T) {
+	if err := validateRunDispatchOptions(runDispatchOptions{queue: "auto"}); err != nil {
+		t.Fatalf("policy.queue auto should reach live queue discovery: %v", err)
 	}
 }
 

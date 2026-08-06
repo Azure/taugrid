@@ -1864,9 +1864,9 @@ def test_cluster_wrapper_includes_multi_node_helpers():
     assert '"duration": str(active_seconds)' not in src
     assert (
         "_run_multi_node(handle, ctx)\n"
-        "        _finalize_train_artifacts(ctx)\n"
         "        _finalize_ray_worker_profiles(ctx)"
     ) in src
+    assert "_finalize_train_artifacts(worker_ctx)" in src
     # Managed RayJobs use dedicated workers even when compute.workers=1.
     assert 'if os.environ.get("TAU_NUM_WORKERS"):' in src
 

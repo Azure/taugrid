@@ -341,6 +341,9 @@ func validateRayTrainConfigOptions(configs map[string]any) error {
 }
 
 func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest string) (map[string]any, error) {
+	if err := topology.ValidateGPUClassNodeSelector(plan.Labels[workloadmeta.LabelGPUClass], o.NodeSelector); err != nil {
+		return nil, err
+	}
 	image := o.Image
 	if image == "" {
 		if o.GPUsPerWorker > 0 {
@@ -418,11 +421,11 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	}
 
 	workerNodeSelector := mergeSelectors(plan.NodeSelector, o.NodeSelector)
-	headNodeSelector := topology.SystemNodeSelector()
-	headPod, err := buildPodSpec(o, image, "ray-head", headNodeSelector, plan.PodPriorityClassName, encodedPayload, payloadDigest, true)
+	headPod, err := buildPodSpec(o, image, "ray-head", nil, plan.PodPriorityClassName, encodedPayload, payloadDigest, true)
 	if err != nil {
 		return nil, err
 	}
+	headPod["affinity"] = topology.SystemNodeAffinity()
 	workerPod, err := buildPodSpec(o, image, "ray-worker", workerNodeSelector, plan.PodPriorityClassName, encodedPayload, payloadDigest, false)
 	if err != nil {
 		return nil, err
@@ -814,7 +817,7 @@ func runtimeEnvYAML(pkgs []string, projectArchive []byte) string {
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
-	return strings.HasPrefix(key, workloadmeta.Domain)
+	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
 }
 
 func resources(o Options, containerName string) map[string]any {

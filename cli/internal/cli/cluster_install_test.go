@@ -31,7 +31,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	out, err := runCluster(t, "install",
 		"--context", "aks-dev",
 		"--values", "cluster.yaml",
-		"--set", "baselineQueue.resources[2].nominalQuota=8",
+		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
 		"--set-string", "kuberay-operator.labels.environment=dev")
 	if err != nil {
 		t.Fatalf("install errored: %v\n%s", err, out)
@@ -46,7 +46,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		"--create-namespace",
 		"--dependency-update",
 		"--values", "cluster.yaml",
-		"--set", "baselineQueue.resources[2].nominalQuota=8",
+		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
 		"--set-string", "kuberay-operator.labels.environment=dev",
 	}
 	if !reflect.DeepEqual(got, want) {

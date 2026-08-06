@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -141,6 +142,7 @@ func TestValidateRenderedQueueAcceptsExplicitTopologyOnTASOnlyFlavor(t *testing.
 				outputs: map[string]string{
 					fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): `{"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"workspace-cq"}}`,
 					fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):              `{"metadata":{"name":"workspace-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}]}]}}`,
+					fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):              `{"metadata":{"name":"nd-h200-v5"},"spec":{"topologyName":"default-node-topology"}}`,
 				},
 				errors: map[string]error{},
 			}
@@ -377,6 +379,7 @@ spec:
 					outputs: map[string]string{
 						fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "workspace-jobqueue", "-o", "json"): `{"metadata":{"name":"workspace-jobqueue"},"spec":{"clusterQueue":"workspace-cq"}}`,
 						fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):                        `{"metadata":{"name":"workspace-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"` + queueFlavor + `","resources":[{"name":"` + workloadCase.resourceName + `","nominalQuota":"8"}]}]}]}}`,
+						fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", queueFlavor, "-o", "json"):                         `{"metadata":{"name":"` + queueFlavor + `"},"spec":{"topologyName":"` + tc.topologyName + `"}}`,
 					},
 					errors: map[string]error{},
 				}
@@ -464,6 +467,8 @@ spec:
 						{"name":"a100-plain","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
 						{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
 					]}]}}`,
+					fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "a100-plain", "-o", "json"): `{"metadata":{"name":"a100-plain"},"spec":{"nodeLabels":{"kueue.azure.com/gpu-series":"ndm-a100-v4"}}}`,
+					fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): `{"metadata":{"name":"nd-h200-v5"},"spec":{"nodeLabels":{"kueue.azure.com/gpu-series":"nd-h200-v5"},"topologyName":"default-node-topology"}}`,
 				},
 				errors: map[string]error{},
 			}
@@ -498,6 +503,7 @@ func TestValidateRenderedWorkspaceQueueCountsIndexedJobGPUDemand(t *testing.T) {
 		outputs: map[string]string{
 			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "workspace-jobqueue", "-o", "json"): `{"metadata":{"name":"workspace-jobqueue"},"spec":{"clusterQueue":"workspace-cq"}}`,
 			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):                        `{"metadata":{"name":"workspace-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"):                        `{"metadata":{"name":"nd-h200-v5"},"spec":{"topologyName":"default-node-topology"}}`,
 		},
 		errors: map[string]error{},
 	}
@@ -566,6 +572,24 @@ func TestTopologyFlagsApplyToPreservesOverrideWarningOrder(t *testing.T) {
 	}
 }
 
+func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
+	flags := topologyFlags{gpuClass: "a100-nvlink-80gb"}
+	var opts jobrender.Options
+
+	warnings, err := flags.applyWithChanged(&opts, nil, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.GPUClass != runtopology.GPUClassA10080GB {
+		t.Fatalf("GPUClass=%q want %q", opts.GPUClass, runtopology.GPUClassA10080GB)
+	}
+	if len(warnings) != 1 ||
+		!strings.Contains(warnings[0], `"a100-nvlink-80gb"`) ||
+		!strings.Contains(warnings[0], `"`+runtopology.GPUClassA10080GB+`"`) {
+		t.Fatalf("warnings=%#v", warnings)
+	}
+}
+
 func TestTopologyFlagsQueueOverrideDisablesPresetTASContract(t *testing.T) {
 	dispatch := runDispatchOptions{queue: "sample-training"}
 	flags := runJobTopologyFlags(dispatch)
@@ -616,16 +640,164 @@ func TestTopologyFlagsMatchingQueuePreservesPresetTASContract(t *testing.T) {
 	}
 }
 
+func TestTopologyFlagsAutoQueuePreservesPresetTASContract(t *testing.T) {
+	dispatch := runDispatchOptions{queue: "auto"}
+	flags := runJobTopologyFlags(dispatch)
+	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
+	preset := &runtopology.ResolvedPreset{
+		Preset: runtopology.Preset{Name: "azure.research.training.l"},
+		Options: runtopology.Options{
+			QueueName: "jobqueue",
+			Placement: "independent",
+		},
+		Annotations: map[string]string{
+			workloadmeta.AnnotationKueueTopology: "default-node-topology",
+		},
+	}
+	var opts jobrender.Options
+	if _, err := flags.applyWithChanged(&opts, preset, changed); err != nil {
+		t.Fatal(err)
+	}
+	if opts.QueueName != "auto" {
+		t.Fatalf("queue = %q, want auto sentinel", opts.QueueName)
+	}
+	if opts.DisableKueueTopologyAnnotations {
+		t.Fatal("auto queue disabled preset TAS annotations before discovery")
+	}
+	if got := opts.Annotations[workloadmeta.AnnotationKueueTopology]; got != "default-node-topology" {
+		t.Fatalf("auto queue removed preset topology metadata %q", got)
+	}
+}
+
 func TestResolveAutoQueueRequiresLiveDiscoveryForExplicitAuto(t *testing.T) {
 	opts := jobrender.Options{QueueName: "auto"}
-	_, err := (topologyFlags{}).resolveAutoQueue(context.Background(), nil, "ray", &opts, nil, 1, nil, "client", false)
+	_, err := (topologyFlags{}).resolveAutoQueueFromManifest(context.Background(), nil, "ray", &opts, nil, "client", true, false)
 	if err == nil || !strings.Contains(err.Error(), "requires live Kueue queue discovery") {
 		t.Fatalf("expected explicit auto queue to reject client dry-run, got %v", err)
 	}
 
 	opts = jobrender.Options{}
-	if warnings, err := (topologyFlags{}).resolveAutoQueue(context.Background(), nil, "ray", &opts, nil, 1, nil, "client", true); err != nil || len(warnings) != 0 {
+	if warnings, err := (topologyFlags{}).resolveAutoQueueFromManifest(context.Background(), nil, "ray", &opts, nil, "client", false, true); err != nil || len(warnings) != 0 {
 		t.Fatalf("implicit auto should not block client dry-run, warnings=%v err=%v", warnings, err)
+	}
+}
+
+func TestResolveAccessibleQueueNamespacePreservesAutoSentinel(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "namespaces", "-l", "kueue.x-k8s.io/default-local-queue", "-o", "json"): `{"items":[{
+				"metadata":{"name":"workspace","labels":{"kueue.x-k8s.io/default-local-queue":"jobqueue"}}
+			}]}`,
+			fakeRawKey("auth", "can-i", "create", "jobs.batch", "-n", "workspace"):                      "yes",
+			fakeRawKey("auth", "can-i", "get", "localqueues.kueue.x-k8s.io", "-n", "workspace"):         "yes",
+			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): `{"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"jobqueue"}}`,
+		},
+		errors: map[string]error{},
+	}
+	namespace := ""
+	opts := jobrender.Options{QueueName: "auto"}
+	if _, err := resolveAccessibleQueueNamespace(context.Background(), runner, false, &namespace, &opts, "", "jobs.batch", false); err != nil {
+		t.Fatal(err)
+	}
+	if namespace != "workspace" {
+		t.Fatalf("namespace = %q, want workspace", namespace)
+	}
+	if opts.QueueName != "auto" {
+		t.Fatalf("queue = %q, want auto sentinel preserved for capacity discovery", opts.QueueName)
+	}
+
+	namespace = ""
+	opts = jobrender.Options{}
+	if _, err := resolveAccessibleQueueNamespace(context.Background(), runner, false, &namespace, &opts, "", "jobs.batch", true); err != nil {
+		t.Fatal(err)
+	}
+	if opts.QueueName != "" {
+		t.Fatalf("implicit auto queue = %q, want empty sentinel preserved for capacity discovery", opts.QueueName)
+	}
+}
+
+func TestResolveAutoQueueUsesRenderedSchedulingContract(t *testing.T) {
+	const migResource = "nvidia.com/mig-1g.10gb"
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "workspace", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[{
+				"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"jobqueue"}
+			}]}`,
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): fmt.Sprintf(`{
+				"metadata":{"name":"jobqueue"},
+				"spec":{"resourceGroups":[{"coveredResources":["%s"],"flavors":[{"name":"opaque-a100","resources":[{"name":"%s","nominalQuota":"1"}]}]}]}
+			}`, migResource, migResource),
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "opaque-a100", "-o", "json"): fmt.Sprintf(`{
+				"metadata":{"name":"opaque-a100"},
+				"spec":{
+					"nodeLabels":{"%s":"a100-80gb","nvidia.com/mig.config":"all-1g.10gb"},
+					"nodeTaints":[{"key":"sku","value":"gpu","effect":"NoSchedule"}],
+					"topologyName":"default-node-topology"
+				}
+			}`, workloadmeta.LabelGPUClass),
+		},
+		errors: map[string]error{},
+	}
+	opts := jobrender.Options{QueueName: "auto"}
+	rendered := []byte(fmt.Sprintf(`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: auto
+    %s: a100-80gb
+spec:
+  template:
+    metadata:
+      annotations:
+        kueue.x-k8s.io/podset-unconstrained-topology: "true"
+    spec:
+      nodeSelector:
+        nvidia.com/mig.config: all-1g.10gb
+      tolerations:
+        - key: sku
+          value: gpu
+          effect: NoSchedule
+      containers:
+        - name: worker
+          resources:
+            limits:
+              %s: 1
+`, workloadmeta.LabelGPUClass, migResource))
+	warnings, err := (topologyFlags{}).resolveAutoQueueFromManifest(
+		context.Background(), runner, "workspace", &opts, rendered, "", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.QueueName != "jobqueue" {
+		t.Fatalf("queue = %q, want jobqueue", opts.QueueName)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "opaque-a100") {
+		t.Fatalf("warnings = %v, want selected flavor", warnings)
+	}
+}
+
+func TestRenderedQueueContractReadsCanonicalGPUClassMetadata(t *testing.T) {
+	contract, err := renderedQueueContractFromManifest([]byte(fmt.Sprintf(`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: jobqueue
+    %s: a100-nvlink-80gb
+spec:
+  template:
+    spec:
+      containers:
+        - resources:
+            limits:
+              nvidia.com/gpu: 1
+`, workloadmeta.LabelGPUClass)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.GPUClass != runtopology.GPUClassA10080GB {
+		t.Fatalf("GPUClass=%q, want %q", contract.GPUClass, runtopology.GPUClassA10080GB)
 	}
 }
 
@@ -739,5 +911,11 @@ spec:
 	}
 	if contract.GPUCount != 17 {
 		t.Fatalf("DRA GPU count = %d, want 17", contract.GPUCount)
+	}
+	if contract.GPUResourceName != "gpu.nvidia.com" {
+		t.Fatalf("DRA GPU resource = %q, want gpu.nvidia.com", contract.GPUResourceName)
+	}
+	if contract.TopologyRequest {
+		t.Fatal("DRA manifest without TAS annotations reported a topology request")
 	}
 }
