@@ -319,6 +319,10 @@ func Render(s Snapshot) string {
 			b.WriteString("  (none — manager view only; worker-cluster pods are not visible here)\n")
 		} else if rayJobStatusSucceeded(rj) {
 			b.WriteString("  (none — RayCluster pods cleaned up after successful completion)\n")
+		} else if rayJobStatusFailed(rj) && s.PodsObserved {
+			b.WriteString("  (none — RayCluster pods cleaned up after terminal failure)\n")
+		} else if rayJobStatusFailed(rj) {
+			b.WriteString("  (none — pod state unavailable for failed RayJob)\n")
 		} else {
 			b.WriteString("  (none — workload is suspended or not yet admitted)\n")
 		}

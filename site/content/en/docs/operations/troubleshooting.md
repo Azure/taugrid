@@ -315,6 +315,19 @@ summaries, and artifacts -- that outlive the pod. `tau run get <run-name>`
 fetches a specific durable result artifact (`--artifact NAME`) when the run's
 config declared a `storage.output` path.
 
+After KubeRay deletes a terminal RayJob's head pod, read the driver output from
+the central log offload by supplying the explicit ADX identity:
+
+```bash
+tau run logs <run-name> \
+  --kusto-cluster <Logs.ContainerLogs Cluster value> \
+  --kusto-endpoint <adx-endpoint> \
+  --kusto-database <logs-database>
+```
+
+Tau requires the exact `Cluster` value instead of guessing from the kube
+context, whose name is not a stable observability identity.
+
 **What success proves:** The driver log shows expected progress (loss
 decreasing, steps advancing, checkpoints written), and that progress is
 mirrored into the durable experiment record. Neither queue admission (layer

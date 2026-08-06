@@ -196,6 +196,95 @@ func TestRunLogsCommand_FoundRayJobWithJobIDOmitsStartupHint(t *testing.T) {
 	}
 }
 
+func TestRunLogsCommand_TerminalLocalRayJobFallsBackToADXAfterPodCleanup(t *testing.T) {
+	var out bytes.Buffer
+	var gotQuery kustoLogsQuery
+	err := runLogsCommandWithHooks(context.Background(), &out, nil, "train-001", runLogsOptions{
+		Namespace:     "ray",
+		Tail:          2,
+		KustoCluster:  "aks-ai-runtime-eastus2",
+		KustoEndpoint: "https://adx.example",
+		KustoDatabase: "Logs",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				Name:      "train-001",
+				Namespace: "ray",
+				RayJob: status.RayJob{
+					Found:               true,
+					Name:                "train-001",
+					JobID:               "raysubmit_abc123",
+					RayClusterName:      "train-001-cluster",
+					JobDeploymentStatus: "Complete",
+					JobStatus:           "SUCCEEDED",
+				},
+			}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("head pod not found for RayJob train-001")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("batch/v1 fallback must not run for a terminal RayJob")
+			return "", nil
+		},
+		queryADXLogs: func(_ context.Context, spec kustoLogsQuery) ([]kustoquery.Row, error) {
+			gotQuery = spec
+			return []kustoquery.Row{
+				{"Timestamp": "2026-08-06T17:00:01Z", "Body": "line-1"},
+				{"Timestamp": "2026-08-06T17:00:02Z", "Body": "line-2"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected terminal local ADX fallback to succeed, got %v", err)
+	}
+	for _, want := range []string{
+		"| where Cluster == @'aks-ai-runtime-eastus2'",
+		"| where Namespace == @'ray'",
+		"| where Pod startswith @'train-001-cluster-head'",
+	} {
+		if !strings.Contains(gotQuery.Query, want) {
+			t.Fatalf("terminal local query missing %q:\n%s", want, gotQuery.Query)
+		}
+	}
+	if got := out.String(); got != "line-1\nline-2\n" {
+		t.Fatalf("unexpected terminal local logs output: %q", got)
+	}
+}
+
+func TestRunLogsCommand_TerminalLocalRayJobRequiresExplicitADXCluster(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "train-001", runLogsOptions{
+		Namespace:     "ray",
+		KustoEndpoint: "https://adx.example",
+		KustoDatabase: "Logs",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				Name:      "train-001",
+				Namespace: "ray",
+				RayJob: status.RayJob{
+					Found:               true,
+					Name:                "train-001",
+					JobID:               "raysubmit_abc123",
+					RayClusterName:      "train-001-cluster",
+					JobDeploymentStatus: "Failed",
+				},
+			}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("head pod not found for RayJob train-001")
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing local ADX cluster metadata to fail")
+	}
+	for _, want := range []string{"local pod logs unavailable", "--kusto-cluster"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("terminal local fallback error %q missing %q", err.Error(), want)
+		}
+	}
+}
+
 func TestRunLogsCommand_ManagerMultiKueueUsesADXAnnotationAndTail(t *testing.T) {
 	var out bytes.Buffer
 	var gotQuery kustoLogsQuery

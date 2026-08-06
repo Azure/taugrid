@@ -80,7 +80,23 @@ func podLifecyclePhases(s Snapshot) []Phase {
 		containerStartPhase(s),
 		readyPhase(s),
 	}
-	if !rayJobStatusSucceeded(snapshotRayJob(s)) {
+	rj := snapshotRayJob(s)
+	if rayJobStatusFailed(rj) && len(s.Pods) == 0 {
+		detail := "pod state unavailable after terminal RayJob failure"
+		if s.PodsObserved {
+			detail = "RayJob failed; post-run RayCluster teardown removed pod evidence"
+		}
+		for i := range phases {
+			if phases[i].Status == phaseWarning {
+				continue
+			}
+			phases[i].Status = phaseSkipped
+			phases[i].Detail = detail
+			phases[i].Hint = ""
+		}
+		return phases
+	}
+	if !rayJobStatusSucceeded(rj) {
 		return phases
 	}
 	for i := range phases {
