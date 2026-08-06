@@ -52,7 +52,7 @@ TauGrid is built on open Kubernetes-native components:
 
 - A Kubernetes cluster (1.28+) with GPU nodes
 - `kubectl` configured for your cluster
-- Helm 3.x
+- Helm 3 or Helm 4
 
 ### Install TauGrid
 
@@ -85,9 +85,29 @@ tau status
 tau logs <job-name>
 ```
 
+## Container Images
+
+TauGrid first-party images are published under the following MCR repositories:
+
+| Component | Image repository |
+|---|---|
+| Tau | `mcr.microsoft.com/aks/ai-runtime/tau` |
+| TauGrid Portal | `mcr.microsoft.com/aks/ai-runtime/taugrid-portal` |
+| Tau core controller | `mcr.microsoft.com/aks/ai-runtime/tau-core-controller` |
+
+Use the versioned tag or immutable digest documented by each release rather than a mutable `latest` tag.
+
 ## Documentation
 
 Full documentation is available at [https://azure.github.io/taugrid](https://azure.github.io/taugrid).
+
+## Telemetry
+
+TauGrid does not send telemetry to Microsoft by default. Platform operators can explicitly enable optional observability components and configure destinations such as Azure Data Explorer. To prevent remote telemetry export, keep those integrations disabled and do not configure a remote telemetry endpoint. Local Kubernetes logs, events, and metrics remain under the cluster operator's control.
+
+## Third-Party Software
+
+TauGrid integrates third-party open-source software including Kubernetes, Kueue, KubeRay, Ray, Node Problem Detector, and Prometheus components. These projects remain under their respective licenses. Exact dependency versions are recorded in the repository's module manifests, Helm chart metadata and lock files, and container build definitions.
 
 ## Contributing
 
