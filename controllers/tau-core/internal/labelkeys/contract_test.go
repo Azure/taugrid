@@ -20,8 +20,6 @@ import (
 // than a third module or a controller dependency in the CLI.
 const cliMetadataPath = "../../../../core/workloadmeta/metadata.go"
 
-const applicationReadmePath = "../../../../applications/tau-core-controller/README.md"
-
 var tauTokenRe = regexp.MustCompile(regexp.QuoteMeta(Domain) + `[A-Za-z0-9._-]*`)
 
 // sharedKeys contains only keys that cross the module boundary. Controller-only

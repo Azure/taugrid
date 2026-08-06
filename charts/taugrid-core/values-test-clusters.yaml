@@ -1,4 +1,4 @@
-# AKS AI Runtime test-cluster overlay for taugrid-core.
+# Managed test-cluster overlay for taugrid-core.
 #
 # Apply together with values.yaml after publishing or selecting a real Tau image
 # tag for the cluster:

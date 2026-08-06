@@ -38,7 +38,7 @@ var catalog = []struct {
 	{"kueue.*", fieldInfo{"", "", "Pass-through to the embedded Kueue chart (v0.18)"}},
 	{"kuberay-operator.*", fieldInfo{"", "", "Pass-through to the embedded KubeRay chart (v1.6)"}},
 	{"tau-core-controller.platformNamespace", fieldInfo{"string", "tau-platform", "Namespace for TauWorkspace CRs"}},
-	{"tau-core-controller.image.repository", fieldInfo{"string", "aksairuntime.azurecr.io/.../tau-core-controller", "Controller image repository"}},
+	{"tau-core-controller.image.repository", fieldInfo{"string", "configured staging repository", "Controller image repository"}},
 	{"tau-core-controller.tauCluster.nodeLabelRules", fieldInfo{"list", "reviewed AKS GPU catalog", "VM-size rules that reconcile gpu-class and gpu-series Node labels"}},
 	{"tau-core-controller.tauCluster.extraNodeLabelRules", fieldInfo{"list", "[]", "Additional cluster-specific GPU label reconciliation rules"}},
 	{"taugrid-core.prewarm.enabled", fieldInfo{"bool", "false", "GPU image pre-pull DaemonSet"}},

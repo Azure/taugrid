@@ -31,7 +31,7 @@ const (
 	AnnotationClusterName   = "tau.azure.com/cluster-name"
 
 	// MultiKueue activation keys. These are owned by the activation tooling in
-	// applications/tau-queues/activation, not by the CLI, so they are declared
+	// platform queue activation, not by the CLI, so they are declared
 	// here rather than cross-checked against workloadmeta.
 	LabelActivationRun              = "tau.azure.com/activation-run"
 	LabelActivationScope            = "tau.azure.com/activation-scope"

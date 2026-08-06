@@ -1,4 +1,4 @@
-apiVersion: ai-runtime.aks/v1alpha1
+apiVersion: tau.azure.com/v1alpha1
 kind: KueueCapacityInventory
 metadata:
   name: e2e-kueue-capacity

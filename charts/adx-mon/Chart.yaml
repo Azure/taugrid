@@ -1,12 +1,12 @@
 apiVersion: v2
 name: adx-mon
-description: Azure Data Explorer Monitor - observability pipeline for AKS AI Runtime
+description: Azure Data Explorer Monitor - observability pipeline for GPU-enabled Kubernetes
 type: application
 version: 0.3.2
 appVersion: "v0.3.0"
 kubeVersion: ">=1.28.0"
 maintainers:
-  - name: AKS AI Runtime
+  - name: TauGrid maintainers
     email: taugrid@microsoft.com
 keywords:
   - monitoring

@@ -293,7 +293,7 @@ STELLAR_TAG="098cdf4a"
 
 # Preflight: fail here, not 5 minutes into a rollout.
 az acr manifest show-metadata \
-  "aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal:${STELLAR_TAG}" \
+  "<staging-image-repository>:${STELLAR_TAG}" \
   --query digest -o tsv \
   || { echo "portal tag '$STELLAR_TAG' does not resolve; pick a current one"; exit 1; }
 

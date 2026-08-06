@@ -13,7 +13,7 @@ tau cluster install --version 0.2.0 --values taugrid-values.yaml
 Or with Helm directly:
 
 ```bash
-helm upgrade --install taugrid oci://aksairuntime.azurecr.io/unlisted/aks/ai-runtime/helm/taugrid \
+helm upgrade --install taugrid <private-oci-chart-reference> \
   --version 0.2.0 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
@@ -211,7 +211,7 @@ for the complete reference.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `tau-core-controller.platformNamespace` | string | `tau-platform` | Namespace where TauWorkspace CRs live |
-| `tau-core-controller.image.repository` | string | `aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller` | Controller image |
+| `tau-core-controller.image.repository` | string | configured staging repository | Controller image |
 | `tau-core-controller.tauCluster.nodeLabelRules` | list | reviewed AKS GPU catalog | VM-size rules that reconcile GPU class and series labels |
 | `tau-core-controller.tauCluster.extraNodeLabelRules` | list | `[]` | Additional cluster-specific GPU label rules |
 
