@@ -4,21 +4,14 @@ from __future__ import annotations
 
 import inspect
 import json
-import os
-import shutil
-import subprocess
-import sys
 import textwrap
-import types
 from pathlib import Path
 
 import pytest
 import yaml
 
 import tau
-from tau import cli as tau_cli
 from tau import workloads as _workloads  # for testing internal helpers + Ctx
-from tau._cluster import CLUSTER_WRAPPER_TEMPLATE, render_wrapper
 
 
 def _write_python(path: Path, source: str) -> None:

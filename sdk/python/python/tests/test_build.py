@@ -162,7 +162,7 @@ def test_build_is_byte_stable_and_records_final_train_eval_intent(
     assert eval_config["workflow"]["upstream_checkpoint"] == expected_checkpoint
 
     golden_dir = (
-        Path(__file__).parents[3]
+        Path(__file__).parents[4]
         / "cli"
         / "internal"
         / "cli"
