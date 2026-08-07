@@ -144,6 +144,10 @@ kuberay-operator:
       - name: RAY_metric_cardinality_level
         value: recommended
 
+gpu-monitoring:
+  daemonset:
+    requireAcceleratorLabel: false
+
 tau-core-controller:
   platformNamespace: tau-platform
   image:
