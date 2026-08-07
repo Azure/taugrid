@@ -17,10 +17,10 @@ type Sample struct {
 
 // Snapshot captures all in-memory state for persistence across restarts.
 type Snapshot struct {
-	History    map[string][]Sample   `json:"history"`
-	Pending    map[string]time.Time  `json:"pending"`
-	LastStatus map[string]string     `json:"lastStatus"`
-	SavedAt    time.Time             `json:"savedAt"`
+	History    map[string][]Sample  `json:"history"`
+	Pending    map[string]time.Time `json:"pending"`
+	LastStatus map[string]string    `json:"lastStatus"`
+	SavedAt    time.Time            `json:"savedAt"`
 }
 
 const stateFile = "state.json"

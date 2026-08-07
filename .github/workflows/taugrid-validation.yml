@@ -1,0 +1,129 @@
+name: TauGrid Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: taugrid-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  AI_RUNTIME_E2E: "0"
+  GOFLAGS: -mod=readonly
+  GOTOOLCHAIN: local
+
+jobs:
+  go:
+    name: Go / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Core
+            module: core
+            linter: staticcheck
+            race: false
+          - name: CLI
+            module: cli
+            linter: staticcheck
+            race: false
+          - name: Portal
+            module: portal
+            linter: staticcheck
+            race: false
+          - name: Tau core controller
+            module: controllers/tau-core
+            linter: none
+            race: true
+          - name: GPU health checker
+            module: monitoring/gpu-health-checker
+            linter: golangci-lint
+            race: false
+          - name: GPU metrics collector
+            module: monitoring/gpu-metrics-collector
+            linter: golangci-lint
+            race: true
+          - name: Portable end-to-end tests
+            module: tests/e2e
+            linter: none
+            race: false
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Set up Python
+        if: matrix.module == 'portal' || matrix.module == 'tests/e2e'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.x
+
+      - name: Verify module dependencies
+        run: go mod verify
+
+      - name: Build
+        run: go build ./...
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "${unformatted}" ]]; then
+            printf 'The following files need gofmt:\n%s\n' "${unformatted}" >&2
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run Staticcheck
+        if: matrix.linter == 'staticcheck'
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+
+      - name: Run golangci-lint
+        if: matrix.linter == 'golangci-lint'
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          working-directory: ${{ matrix.module }}
+
+      - name: Test
+        if: matrix.race == false
+        run: go test -count=1 ./...
+
+      - name: Test with race detector
+        if: matrix.race == true
+        run: go test -race -count=1 ./...
+
+  required:
+    name: Required
+    if: always()
+    needs:
+      - go
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check validation result
+        env:
+          GO_RESULT: ${{ needs.go.result }}
+        run: test "${GO_RESULT}" = success

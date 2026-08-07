@@ -381,14 +381,3 @@ func patchSecretOwnerRef(ctx context.Context, r *kube.Runner, namespace string, 
 	}
 	return nil
 }
-
-func cleanupJobSecret(ctx context.Context, r *kube.Runner, namespace, name string) error {
-	_, err := r.Raw(ctx, []string{
-		"delete", "secret", name, "-n", namespace,
-		"--ignore-not-found=true",
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("delete generated secret: %w", err)
-	}
-	return nil
-}
