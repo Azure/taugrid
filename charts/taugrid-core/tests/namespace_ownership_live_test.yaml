@@ -137,7 +137,7 @@ tests:
             labels:
               app.kubernetes.io/managed-by: Helm
             annotations:
-              meta.helm.sh/release-name: taugrid-core
+              meta.helm.sh/release-name: taugrid-core-legacy
               meta.helm.sh/release-namespace: tau-system
     asserts:
       - hasDocuments:

@@ -1,0 +1,124 @@
+name: Validate Helm charts
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - charts/**
+  workflow_dispatch:
+
+concurrency:
+  group: ci-helm-charts-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect changed charts
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find.outputs.matrix }}
+      has-charts: ${{ steps.find.outputs.has-charts }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Find changed chart directories
+        id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [[ -z "$BASE_SHA" ]]; then
+            BASE_SHA=$(git merge-base HEAD origin/main)
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "${BASE_SHA}...HEAD")
+          CHANGED_DIRS=$(printf '%s\n' "${CHANGED_FILES}" \
+            | grep '^charts/' \
+            | cut -d/ -f1-2 \
+            | sort -u || true)
+
+          # Charts to validate = changed chart directories that contain a Chart.yaml.
+          CHART_LIST=$(
+            printf '%s\n' "${CHANGED_DIRS}" | while IFS= read -r dir; do
+              [[ -n "$dir" && -f "${dir}/Chart.yaml" ]] && echo "$dir"
+            done | sort -u
+          )
+
+          # Build a JSON matrix. Each chart is validated against every supported
+          # Helm version, so emit one leg per (chart, helm-version).
+          MATRIX_JSON="[]"
+          while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            for hv in 3.18.6 4.2.0; do
+              MATRIX_JSON=$(echo "$MATRIX_JSON" | jq -c --arg d "$dir" --arg h "$hv" \
+                '. + [{"chart": $d, "helm_version": $h}]')
+            done
+          done <<< "$CHART_LIST"
+
+          echo "Charts to validate: ${MATRIX_JSON}"
+          echo "matrix={\"include\":${MATRIX_JSON}}" >> "$GITHUB_OUTPUT"
+          if [[ "$(echo "$MATRIX_JSON" | jq 'length')" -gt 0 ]]; then
+            echo "has-charts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-charts=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  validate:
+    name: Validate chart
+    needs: detect
+    if: needs.detect.outputs.has-charts == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v${{ matrix.helm_version }}
+
+      - name: Build chart dependencies
+        run: helm dependency build "${{ matrix.chart }}"
+
+      - name: Lint chart
+        run: helm lint "${{ matrix.chart }}"
+
+      - name: Install helm-unittest
+        run: |
+          if [[ "${{ matrix.helm_version }}" == 3.* ]]; then
+            helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.1
+          else
+            helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.1 --verify=false
+          fi
+
+      - name: Run unit tests
+        run: |
+          if ls "${{ matrix.chart }}"/tests/*_test.yaml >/dev/null 2>&1; then
+            helm unittest "${{ matrix.chart }}"
+          else
+            echo "No unit tests found, skipping"
+          fi
+
+      - name: Validate template rendering
+        run: |
+          # Render with default values.
+          helm template test "${{ matrix.chart }}" > /dev/null
+
+          # Render with any bundled example/test values files, if present.
+          if ls "${{ matrix.chart }}"/examples/*.yaml >/dev/null 2>&1; then
+            for values in "${{ matrix.chart }}"/examples/*.yaml; do
+              echo "Testing with $(basename "$values")"
+              helm template test "${{ matrix.chart }}" -f "$values" > /dev/null
+            done
+          fi
