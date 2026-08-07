@@ -7,6 +7,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 7 * * 1"
   workflow_dispatch:
 
 concurrency:
@@ -82,6 +84,9 @@ jobs:
       - name: Verify module dependencies
         run: go mod verify
 
+      - name: Scan for Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
       - name: Build
         run: go build ./...
 
@@ -116,14 +121,32 @@ jobs:
         if: matrix.race == true
         run: go test -race -count=1 ./...
 
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
   required:
     name: Required
     if: always()
     needs:
+      - dependency-review
       - go
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
         env:
+          DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
           GO_RESULT: ${{ needs.go.result }}
-        run: test "${GO_RESULT}" = success
+        run: |
+          test "${GO_RESULT}" = success
+          test "${DEPENDENCY_REVIEW_RESULT}" = success || test "${DEPENDENCY_REVIEW_RESULT}" = skipped
