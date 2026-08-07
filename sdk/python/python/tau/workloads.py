@@ -9,7 +9,6 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import tempfile
 import warnings
 from dataclasses import dataclass, field
