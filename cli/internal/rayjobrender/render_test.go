@@ -128,8 +128,8 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	if len(workers) != 1 {
 		t.Fatalf("workerGroupSpecs=%v", workers)
 	}
-	if got := workers[0].(map[string]any)["replicas"]; got != 1 {
-		t.Fatalf("worker replicas=%v want 1 for two total execution pods", got)
+	if got := workers[0].(map[string]any)["replicas"]; got != 2 {
+		t.Fatalf("worker replicas=%v want 2 dedicated GPU workers", got)
 	}
 	head := cluster["headGroupSpec"].(map[string]any)
 	tpl := head["template"].(map[string]any)
@@ -278,10 +278,10 @@ func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
 	if labels[workloadmeta.LabelGPUClass] != topology.GPUClassA10080GB {
 		t.Fatalf("gpu class label=%v want %s", labels, topology.GPUClassA10080GB)
 	}
-	head := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)["headGroupSpec"].(map[string]any)
-	nodeSelector := head["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"].(map[string]any)
+	workers := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)["workerGroupSpecs"].([]any)
+	nodeSelector := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"].(map[string]any)
 	if nodeSelector[workloadmeta.NodeLabelGPUClass] != topology.GPUClassA10080GB {
-		t.Fatalf("gpu class selector=%v want %s", nodeSelector, topology.GPUClassA10080GB)
+		t.Fatalf("worker gpu class selector=%v want %s", nodeSelector, topology.GPUClassA10080GB)
 	}
 }
 
@@ -352,7 +352,7 @@ func TestRenderRejectsClassSelectorForProfileAny(t *testing.T) {
 	}
 }
 
-func TestRenderSingleRayExecutionPodUsesHeadOnly(t *testing.T) {
+func TestRenderSingleGPUWorkerUsesCPUHead(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "ray-single",
 		Namespace:     "tau",
@@ -367,12 +367,116 @@ func TestRenderSingleRayExecutionPodUsesHeadOnly(t *testing.T) {
 
 	rayjob := decodeDocs(t, out)[0]
 	cluster := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
-	if groups := cluster["workerGroupSpecs"].([]any); len(groups) != 0 {
-		t.Fatalf("workerGroupSpecs=%v want none for one total execution pod", groups)
+	groups := cluster["workerGroupSpecs"].([]any)
+	if len(groups) != 1 || groups[0].(map[string]any)["replicas"] != 1 {
+		t.Fatalf("workerGroupSpecs=%v want one dedicated GPU worker", groups)
 	}
 	head := cluster["headGroupSpec"].(map[string]any)
-	if got := head["rayStartParams"].(map[string]any)["num-gpus"]; got != "1" {
-		t.Fatalf("head num-gpus=%v want 1 because the head participates in execution", got)
+	if got := head["rayStartParams"].(map[string]any)["num-gpus"]; got != "0" {
+		t.Fatalf("head num-gpus=%v want 0 for a CPU-only head", got)
+	}
+}
+
+func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "ray-h200",
+		Namespace:     "taugrid-default",
+		ScriptName:    "train.py",
+		Script:        []byte("print('train')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		NodeSelector: map[string]string{
+			topology.ManagedGPUSeriesLabel: "nd-h200-v5",
+		},
+		TopologyOptions: topology.Options{
+			Placement: "single-node-nvlink",
+			GPUClass:  "h200-nvlink-141gb",
+			QueueName: "jobqueue",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	head := cluster["headGroupSpec"].(map[string]any)
+	headTemplate := head["template"].(map[string]any)
+	headSpec := headTemplate["spec"].(map[string]any)
+	if got := head["rayStartParams"].(map[string]any)["num-cpus"]; got != "0" {
+		t.Fatalf("head num-cpus=%v, want 0 for a control-only head", got)
+	}
+	assertPortableSystemAffinity(t, headSpec)
+	if selector := headSpec["nodeSelector"]; selector != nil {
+		t.Fatalf("head retained GPU selector: %v", selector)
+	}
+	headAnnotations := headTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if _, ok := headAnnotations["kueue.x-k8s.io/podset-required-topology"]; ok {
+		t.Fatalf("head retained GPU topology annotation: %v", headAnnotations)
+	}
+	headResources := headSpec["containers"].([]any)[0].(map[string]any)["resources"]
+	if strings.Contains(asYAML(t, headResources), "nvidia.com/") {
+		t.Fatalf("head retained GPU resources:\n%s", asYAML(t, headResources))
+	}
+	headTolerations := asYAML(t, headSpec["tolerations"])
+	if !strings.Contains(headTolerations, "CriticalAddonsOnly") || strings.Contains(headTolerations, "nvidia.com/gpu") {
+		t.Fatalf("head tolerations should target only the system pool:\n%s", headTolerations)
+	}
+
+	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)
+	workerTemplate := worker["template"].(map[string]any)
+	workerSpec := workerTemplate["spec"].(map[string]any)
+	workerSelector := workerSpec["nodeSelector"].(map[string]any)
+	if got := workerSelector[topology.ManagedGPUSeriesLabel]; got != "nd-h200-v5" {
+		t.Fatalf("worker GPU selector=%v, want nd-h200-v5", got)
+	}
+	workerAnnotations := workerTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := workerAnnotations["kueue.x-k8s.io/podset-required-topology"]; got != "kubernetes.io/hostname" {
+		t.Fatalf("worker topology annotation=%v, want hostname", got)
+	}
+	workerYAML := asYAML(t, workerSpec)
+	for _, want := range []string{"nvidia.com/gpu", "key: sku", "value: gpu", "kueue.azure.com/gpu-series"} {
+		if !strings.Contains(workerYAML, want) {
+			t.Fatalf("worker placement missing %q:\n%s", want, workerYAML)
+		}
+	}
+}
+
+func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "ray-cpu",
+		Namespace:     "tau",
+		ScriptName:    "train.py",
+		Script:        []byte("print('cpu')\n"),
+		Workers:       2,
+		GPUsPerWorker: 0,
+		NodeSelector:  map[string]string{"workload": "cpu"},
+		TopologyOptions: topology.Options{
+			Placement: "independent",
+			QueueName: "cpu-queue",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headTemplate := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)
+	headSpec := headTemplate["spec"].(map[string]any)
+	assertPortableSystemAffinity(t, headSpec)
+	if _, ok := headTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)["kueue.x-k8s.io/podset-unconstrained-topology"]; ok {
+		t.Fatalf("CPU head retained workload topology: %v", headTemplate["metadata"])
+	}
+	groups := cluster["workerGroupSpecs"].([]any)
+	if len(groups) != 1 || groups[0].(map[string]any)["replicas"] != 2 {
+		t.Fatalf("CPU workerGroupSpecs=%v, want two dedicated workers", groups)
+	}
+	workerTemplate := groups[0].(map[string]any)["template"].(map[string]any)
+	workerSpec := workerTemplate["spec"].(map[string]any)
+	if got := workerSpec["nodeSelector"].(map[string]any)["workload"]; got != "cpu" {
+		t.Fatalf("CPU worker selector=%v, want workload=cpu", workerSpec["nodeSelector"])
+	}
+	if got := workerTemplate["metadata"].(map[string]any)["annotations"].(map[string]any)["kueue.x-k8s.io/podset-unconstrained-topology"]; got != "true" {
+		t.Fatalf("CPU worker topology annotation=%v, want true", got)
 	}
 }
 
@@ -934,6 +1038,21 @@ func asYAML(t *testing.T, v any) string {
 	return string(data)
 }
 
+func assertPortableSystemAffinity(t *testing.T, podSpec map[string]any) {
+	t.Helper()
+	affinity := asYAML(t, podSpec["affinity"])
+	for _, want := range []string{
+		"key: " + topology.AKSNodePoolModeLabel,
+		"operator: In",
+		"- " + topology.AKSSystemNodePoolMode,
+		"operator: DoesNotExist",
+	} {
+		if !strings.Contains(affinity, want) {
+			t.Fatalf("head affinity missing %q:\n%s", want, affinity)
+		}
+	}
+}
+
 func containerByName(t *testing.T, containers []any, name string) map[string]any {
 	t.Helper()
 	for _, container := range containers {
@@ -1237,8 +1356,8 @@ func TestRenderMIGUsesCorrectResourceName(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	s := string(out)
-	if c := strings.Count(s, "nvidia.com/mig-1g.18gb"); c < 2 {
-		t.Errorf("expected nvidia.com/mig-1g.18gb on both head and worker (got %d occurrences):\n%s", c, s)
+	if c := strings.Count(s, "nvidia.com/mig-1g.18gb"); c != 2 {
+		t.Errorf("expected nvidia.com/mig-1g.18gb only in worker requests and limits (got %d occurrences):\n%s", c, s)
 	}
 	if strings.Contains(s, `nvidia.com/gpu: `) {
 		t.Errorf("rendered output should not contain nvidia.com/gpu resource request in MIG mode:\n%s", s)

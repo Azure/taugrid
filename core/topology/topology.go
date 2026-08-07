@@ -33,6 +33,8 @@ const (
 	SharedDRAQueueName          = "jobqueue-dra"
 	sharedDRAClusterQueueName   = "tau-dra-cq"
 	ManagedGPUSeriesLabel       = "kueue.azure.com/gpu-series"
+	AKSNodePoolModeLabel        = "kubernetes.azure.com/mode"
+	AKSSystemNodePoolMode       = "system"
 	// GPUClassAny is explicit unconstrained hardware selection: it renders no
 	// class selector and lets Kueue admit against any available GPU flavor.
 	GPUClassAny = "any"
@@ -54,6 +56,51 @@ const (
 	LabelShape              = workloadmeta.LabelShape
 	AnnotationTopologyQueue = workloadmeta.AnnotationTopologyQueue
 )
+
+// SystemNodeAffinity requires AKS control pods to use the system pool while
+// preserving portability to clusters whose nodes do not carry the AKS label.
+func SystemNodeAffinity() map[string]any {
+	return map[string]any{
+		"nodeAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+				"nodeSelectorTerms": []any{
+					map[string]any{
+						"matchExpressions": []any{
+							map[string]any{
+								"key":      AKSNodePoolModeLabel,
+								"operator": "In",
+								"values":   []any{AKSSystemNodePoolMode},
+							},
+						},
+					},
+					map[string]any{
+						"matchExpressions": []any{
+							map[string]any{
+								"key":      AKSNodePoolModeLabel,
+								"operator": "DoesNotExist",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// WithoutKueueTopologyAnnotations copies annotations while removing pod-set
+// topology requests that apply to execution workers but not control-plane pods.
+func WithoutKueueTopologyAnnotations(annotations map[string]string) map[string]string {
+	out := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		switch key {
+		case requiredTopologyAnnotation, preferredTopologyAnnotation, unconstrainedTopologyAnnot:
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
 
 var labelValueRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$`)
 

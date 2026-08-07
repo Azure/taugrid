@@ -251,4 +251,4 @@ spec:
       resourceFlavor: nd-h200-v5
       workloadPriorityClassName: tau-default
       podPriorityClassName: tau-default
-      explain: "16-GPU multi-node training across two 8xH200 nodes. Renders as a RayJob with 1 head + 1 worker pod (each requesting a full node of nvidia.com/gpu); Kueue admits the workload as a gang through the shared GPU queue. Requires the tau-py SDK (--main-script) — embedded reference trainer is single-node only."
+      explain: "16-GPU multi-node training across two dedicated 8xH200 execution workers plus a CPU-only system head. Each worker requests a full node of nvidia.com/gpu; Kueue admits the workload as a gang through the shared GPU queue. Requires the tau-py SDK (--main-script) — embedded reference trainer is single-node only."

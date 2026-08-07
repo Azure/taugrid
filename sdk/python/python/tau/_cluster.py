@@ -1231,7 +1231,10 @@ def _run_multi_node(handle, ctx):
         })
         if ctx_payload.get("manifest_path") is None:
             worker_ctx.manifest_path = None
-        return _run_profiled_worker(lambda: worker_handle._fn(worker_ctx))
+
+        result = _run_profiled_worker(lambda: worker_handle._fn(worker_ctx))
+        _finalize_train_artifacts(worker_ctx)
+        return result
 
     # Apply execution.configs overrides from TAU_RAY_TRAIN_CONFIG_JSON.
     torch_config_kwargs = {"backend": dist_backend}
@@ -1735,9 +1738,10 @@ def main():
         ", smoke_pairs=" + str(ctx.smoke_pairs) + ")",
         flush=True,
     )
-    if ctx.workers > 1:
+    # Managed RayJobs set TAU_NUM_WORKERS and always execute user code through
+    # dedicated Ray Train workers. Plain Jobs omit it and execute locally.
+    if os.environ.get("TAU_NUM_WORKERS"):
         _run_multi_node(handle, ctx)
-        _finalize_train_artifacts(ctx)
         _finalize_ray_worker_profiles(ctx)
     else:
         dist_to_destroy = _maybe_init_single_pod_distributed()

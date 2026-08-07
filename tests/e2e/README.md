@@ -79,8 +79,8 @@ Without `AI_RUNTIME_E2E=1`, all tests are skipped.
 The Tau Python SDK entrypoint smoke submits a CPU RayJob through
 `tau.train(entrypoint=...)` and verifies a staged pure-Python/PyTorch-shaped
 module/optimizer loop runs with sibling helper imports, without importing Tau or
-writing subprocess wrappers. It defaults to a single Ray head pod to keep the
-flex smoke cheap; set
+writing subprocess wrappers. It defaults to one CPU-only system head plus one
+execution worker to keep the flex smoke cheap; set
 `TAU_PY_ENTRYPOINT_WORKERS=2` only when the selected `RAY_E2E_IMAGE` already has
 `torch` available, or set `TAU_PY_ENTRYPOINT_RUNTIME_PIP` to a JSON list that
 installs it for the Ray Train worker path.
@@ -88,8 +88,9 @@ installs it for the Ray Train worker path.
 The Tau Python SDK GPU entrypoint golden test is gated separately by
 `E2E_TAU_PY_ENTRYPOINT_GPU=1` + `E2E_GPU=1`. It installs the configured CUDA
 Torch wheel, submits a pure PyTorch file through Tau, requests
-`nvidia.com/gpu: 1`, asserts the Ray head pod lands on the selected GPU node, and
-the user entrypoint fails unless `torch.cuda.is_available()` is true.
+`nvidia.com/gpu: 1`, asserts the Ray head lands on the system pool and the
+execution worker lands on the selected GPU node, and the user entrypoint fails
+unless `torch.cuda.is_available()` is true.
 
 ### Gang Scheduling Tests (Kueue)
 

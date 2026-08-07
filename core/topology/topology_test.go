@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,6 +28,37 @@ func topologyProfile() profile.Profile {
 				"workloadPriorityClassName": "taugrid-batch",
 			},
 		},
+	}
+}
+
+func TestSystemNodeAffinitySupportsAKSAndPortableClusters(t *testing.T) {
+	affinity := SystemNodeAffinity()
+	rendered := fmt.Sprint(affinity)
+	for _, want := range []string{AKSNodePoolModeLabel, AKSSystemNodePoolMode, "In", "DoesNotExist"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("system affinity missing %q: %v", want, affinity)
+		}
+	}
+}
+
+func TestWithoutKueueTopologyAnnotations(t *testing.T) {
+	annotations := map[string]string{
+		requiredTopologyAnnotation:         hostnameTopology,
+		preferredTopologyAnnotation:        "topology.kubernetes.io/zone",
+		unconstrainedTopologyAnnot:         "true",
+		workloadmeta.AnnotationWorkspaceID: "workspace-123",
+	}
+	filtered := WithoutKueueTopologyAnnotations(annotations)
+	for _, key := range []string{requiredTopologyAnnotation, preferredTopologyAnnotation, unconstrainedTopologyAnnot} {
+		if _, ok := filtered[key]; ok {
+			t.Errorf("filtered annotations retained %q: %v", key, filtered)
+		}
+	}
+	if got := filtered[workloadmeta.AnnotationWorkspaceID]; got != "workspace-123" {
+		t.Errorf("non-topology annotation=%q, want workspace-123", got)
+	}
+	if got := annotations[requiredTopologyAnnotation]; got != hostnameTopology {
+		t.Errorf("input annotations mutated: %v", annotations)
 	}
 }
 

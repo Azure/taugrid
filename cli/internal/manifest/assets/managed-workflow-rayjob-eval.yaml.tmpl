@@ -1,14 +1,15 @@
 # Sample eval RayJob template for decoupled GPU+CPU eval.
 #
 # Renders a RayJob shaped for the "Ray actor + tasks" eval pattern:
-#   - 1 GPU head pod (holds the model Inferencer Ray actor).
+#   - 1 control-only head pod on the system pool.
+#   - 1 GPU worker pod (holds the model Inferencer Ray actor).
 #   - N CPU worker pods (run ray.remote score tasks in parallel, each
 #     calling actor.forward.remote(batch) over the actor's GPU).
 #
 # This template exists separately from managed-workflow-rayjob.yaml.tmpl
 # because the cluster shape is fundamentally different: training wants a
-# fleet of GPU pods (head + GPU workers), eval wants exactly ONE GPU pod
-# plus CPU fanout. The GPU pod's role is also different — in training it
+# fleet of GPU workers, eval wants exactly ONE GPU worker plus CPU fanout.
+# The GPU pod's role is also different — in training it
 # runs the trainer process; in eval it just holds the actor and replies
 # to forward() RPCs from CPU workers. No GPU on workers, no NCCL env, no
 # torchrun.
@@ -29,7 +30,7 @@
 #   ${MANIFEST_NAME}        basename of manifest YAML (rendered into
 #                           /manifest via the embedded manifest payload)
 #   ${SMOKE_PAIRS}          int; 0 = use full dataset (passed to user fn)
-#   ${GPUS}                 int; head-pod GPU count (1..8). Most evals
+#   ${GPUS}                 int; GPU-worker count (1..8). Most evals
 #                           want 1 (one Inferencer actor per GPU).
 #   ${CPU_WORKERS}          int; CPU worker pod replicas (1..N).
 #   ${UPSTREAM_CHECKPOINT}  optional path; rendered into env as
@@ -66,7 +67,7 @@ metadata:
     kueue.x-k8s.io/queue-name: ${QUEUE_NAME}
 ${JOB_LABELS}${JOB_ANNOTATIONS_BLOCK}
 spec:
-  # Kueue admits by flipping suspend=false once head + CPU worker pod
+  # Kueue admits by flipping suspend=false once head + GPU + CPU worker pod
   # sets all have capacity (gang admission). For eval that means waiting
   # until both 1 A100 AND ${CPU_WORKERS} CPU pods are reservable in the
   # eval lane queue — usually instant since the eval lane is small.
@@ -155,7 +156,8 @@ ${STORAGE_PREFLIGHT}
     headGroupSpec:
       rayStartParams:
         dashboard-host: "0.0.0.0"
-        num-gpus: "${GPUS}"
+        num-cpus: "0"
+        num-gpus: "0"
       template:
 ${POD_METADATA_BLOCK}
         spec:
@@ -163,8 +165,7 @@ ${POD_METADATA_BLOCK}
 ${NODE_SELECTOR_BLOCK}
 ${POD_PRIORITY_CLASS_BLOCK}${SERVICE_ACCOUNT_BLOCK}
           tolerations:
-            - { effect: NoSchedule, key: sku, operator: Equal, value: gpu }
-            - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
+            - { effect: NoSchedule, key: CriticalAddonsOnly, operator: Exists }
 ${PAYLOAD_INIT_CONTAINERS_HEAD}          containers:
             - name: ray-head
               image: ${IMAGE}
@@ -186,29 +187,9 @@ ${PAYLOAD_INIT_CONTAINERS_HEAD}          containers:
                 # (a pathlib.Path) for the user fn to consume.
                 - { name: TAU_UPSTREAM_CHECKPOINT, value: "${UPSTREAM_CHECKPOINT}" }
 ${RUNTIME_ENV_HEAD}
-{{if .RDMAEnabled}}              securityContext:
-                runAsUser: 0
-                runAsGroup: 0
-                allowPrivilegeEscalation: false
-                seccompProfile:
-                  type: RuntimeDefault
-                capabilities:
-                  drop:
-                    - ALL
-                  add:
-                    - IPC_LOCK
-                    - SYS_RESOURCE
-                    - DAC_OVERRIDE
-{{end}}
-              resources:{{if .UseDRA}}
-                claims:
-                  - name: gpu
-                requests: { cpu: "${CPUS}", memory: "${MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else if .UseDevicePlugin}}
-                requests: { cpu: "${CPUS}", memory: "${MEMORY}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else}}
-                requests: { cpu: "${CPUS}", memory: "${MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{end}}
+              resources:
+                requests: { cpu: "${CONTROL_CPUS}", memory: "${CONTROL_MEMORY}" }
+                limits:   { cpu: "${CONTROL_CPU_LIMIT}", memory: "${CONTROL_MEMORY_LIMIT}" }
               volumeMounts:
                 - { name: script,   mountPath: /script,   readOnly: true }
                 - { name: manifest, mountPath: /manifest, readOnly: true }
@@ -262,10 +243,6 @@ ${EXTRA_VOLUME_MOUNTS_HEAD}
                 - { name: data, mountPath: /data }
 {{end}}
 ${DRIVER_LOG_OFFLOAD_SIDECAR}
-{{if .UseDRA}}          resourceClaims:
-            - name: gpu
-              resourceClaimTemplateName: ${CLAIM}
-{{end}}
           volumes:
             - name: script
               emptyDir: {}
@@ -280,28 +257,24 @@ ${DRIVER_LOG_OFFLOAD_SIDECAR}
               emptyDir: { medium: Memory, sizeLimit: 4Gi }
 ${EXTRA_VOLUMES_HEAD}
     workerGroupSpecs:
-      # CPU-only worker pods. Each one registers num-cpus=1 with Ray and
-      # zero GPUs, so ray.remote(num_cpus=1) tasks land here while the
-      # ray.remote(num_gpus=1) actor lands on the head. Replicas =
-      # ${CPU_WORKERS}; minReplicas == maxReplicas because we want
-      # static gang admission via Kueue (not autoscale).
-      - replicas: ${CPU_WORKERS}
-        minReplicas: ${CPU_WORKERS}
-        maxReplicas: ${CPU_WORKERS}
-        groupName: ${RESOURCE_NAME}-cpu
+      # The Inferencer actor requests a GPU, so Ray places it on this dedicated
+      # execution worker rather than on the system head.
+      - replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        groupName: ${RESOURCE_NAME}-gpu
         rayStartParams:
-          num-cpus: "${WORKER_CPUS}"
-          num-gpus: "0"
+          num-gpus: "${GPUS}"
         template:
 ${WORKER_POD_METADATA_BLOCK}
           spec:
             restartPolicy: Never
 ${WORKER_NODE_SELECTOR_BLOCK}${WORKER_POD_PRIORITY_CLASS_BLOCK}${WORKER_SERVICE_ACCOUNT_BLOCK}
-            # CPU pool tolerations only — no GPU taints to tolerate.
-            # The default node selector (set by the eval preset) pins
-            # us to the cpu agent pool.
+            tolerations:
+              - { effect: NoSchedule, key: sku, operator: Equal, value: gpu }
+              - { effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }
 ${PAYLOAD_INIT_CONTAINERS_WORKER}            containers:
-              - name: ray-worker
+              - name: ray-gpu-worker
                 image: ${IMAGE}
                 env:
                   - { name: HF_HOME, value: "/tmp/hf" }
@@ -329,9 +302,78 @@ ${RUNTIME_ENV_WORKER}
                       - SYS_RESOURCE
                       - DAC_OVERRIDE
 {{end}}
+                resources:{{if .UseDRA}}
+                  claims:
+                    - name: gpu
+                  requests: { cpu: "${CPUS}", memory: "${MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else if .UseDevicePlugin}}
+                  requests: { cpu: "${CPUS}", memory: "${MEMORY}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else}}
+                  requests: { cpu: "${CPUS}", memory: "${MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  limits:   { cpu: "${CPU_LIMIT}", memory: "${MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{end}}
+                volumeMounts:
+                  - { name: script, mountPath: /script, readOnly: true }
+                  - { name: data, mountPath: /data }
+                  - { name: tau-hot, mountPath: /mnt }
+${EXTRA_VOLUME_MOUNTS_WORKER}
+                readinessProbe:
+                  exec:
+                    command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 52365), 2).close()"]
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                livenessProbe:
+                  exec:
+                    command: ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 52365), 2).close()"]
+                  initialDelaySeconds: 30
+                  periodSeconds: 20
+{{if .UseDRA}}            resourceClaims:
+              - name: gpu
+                resourceClaimTemplateName: ${CLAIM}
+{{end}}
+            volumes:
+              - name: script
+                emptyDir: {}
+              - name: data{{if .DataPVC}}
+                persistentVolumeClaim: { claimName: ${DATA_PVC} }{{else}}
+                emptyDir: {}{{end}}
+              - name: tau-hot
+                emptyDir: {}
+${EXTRA_VOLUMES_WORKER}
+      # CPU-only worker pods. Each one registers num-cpus=1 with Ray and
+      # zero GPUs, so ray.remote(num_cpus=1) tasks land here while the
+      # ray.remote(num_gpus=1) actor lands on the GPU worker. Replicas =
+      # ${CPU_WORKERS}; minReplicas == maxReplicas because we want
+      # static gang admission via Kueue (not autoscale).
+      - replicas: ${CPU_WORKERS}
+        minReplicas: ${CPU_WORKERS}
+        maxReplicas: ${CPU_WORKERS}
+        groupName: ${RESOURCE_NAME}-cpu
+        rayStartParams:
+          num-cpus: "${WORKER_CPUS}"
+          num-gpus: "0"
+        template:
+${CPU_WORKER_POD_METADATA_BLOCK}
+          spec:
+            restartPolicy: Never
+${CPU_WORKER_NODE_SELECTOR_BLOCK}${CPU_WORKER_POD_PRIORITY_CLASS_BLOCK}${CPU_WORKER_SERVICE_ACCOUNT_BLOCK}
+${PAYLOAD_INIT_CONTAINERS_WORKER}            containers:
+              - name: ray-worker
+                image: ${IMAGE}
+                env:
+                  - { name: HF_HOME, value: "/tmp/hf" }
+                  - { name: GIT_PYTHON_REFRESH, value: "quiet" }
+                  - { name: TAU_DATA_DIR, value: "/data" }
+                  - { name: TAU_HOT_DIR, value: "/mnt" }
+                  - { name: TAU_DATASETS_DIR, value: "/mnt/datasets" }
+                  - { name: TAU_CHECKPOINTS_DIR, value: "/mnt/checkpoints" }
+                  - { name: TAU_DURABLE_DATASETS_DIR, value: "/data/datasets" }
+                  - { name: TAU_DURABLE_CHECKPOINTS_DIR, value: "/data/checkpoints" }
+                  - { name: TAU_METRICS_HISTORY, value: "/data/checkpoints/finetunes/${NAME}/metrics-history.jsonl" }
+                  - { name: TAU_UPSTREAM_CHECKPOINT, value: "${UPSTREAM_CHECKPOINT}" }
+${RUNTIME_ENV_WORKER}
                 resources:
-                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}" }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}" }
                 volumeMounts:
                   - { name: script,   mountPath: /script,   readOnly: true }
                   - { name: data,     mountPath: /data }

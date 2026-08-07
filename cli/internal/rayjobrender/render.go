@@ -100,8 +100,8 @@ type Options struct {
 	// embedding only ScriptName.
 	ProjectArchive []byte
 	Image          string
-	// Workers is the total execution-pod count. The head participates in
-	// execution, so N workers render one head plus N-1 worker pods.
+	// Workers is the execution-worker count. RayJobs add a separate control-only
+	// head on the system pool.
 	Workers         int
 	GPUsPerWorker   int
 	Launcher        string
@@ -414,37 +414,41 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		"labels":      podLabels,
 		"annotations": podAnnotations,
 	}
+	headPodAnnotations := topology.WithoutKueueTopologyAnnotations(stringMapFromAnyMap(podAnnotations))
 	headPodMetadata := map[string]any{
 		"labels":      podLabels,
-		"annotations": raylogoffload.HeadPodAnnotations(stringMapFromAnyMap(podAnnotations)),
+		"annotations": raylogoffload.HeadPodAnnotations(headPodAnnotations),
 	}
 
-	nodeSelector := mergeSelectors(plan.NodeSelector, o.NodeSelector)
-	headPod, err := buildPodSpec(o, image, "ray-head", nodeSelector, plan.PodPriorityClassName, encodedPayload, payloadDigest, true)
+	workerNodeSelector := mergeSelectors(plan.NodeSelector, o.NodeSelector)
+	headPod, err := buildPodSpec(o, image, "ray-head", nil, plan.PodPriorityClassName, encodedPayload, payloadDigest, true)
 	if err != nil {
 		return nil, err
 	}
-	workerPod, err := buildPodSpec(o, image, "ray-worker", nodeSelector, plan.PodPriorityClassName, encodedPayload, payloadDigest, false)
+	headPod["affinity"] = topology.SystemNodeAffinity()
+	workerPod, err := buildPodSpec(o, image, "ray-worker", workerNodeSelector, plan.PodPriorityClassName, encodedPayload, payloadDigest, false)
 	if err != nil {
 		return nil, err
 	}
 
+	headStartParams := map[string]any{
+		"dashboard-host": "0.0.0.0",
+		"num-cpus":       "0",
+		"num-gpus":       "0",
+	}
 	head := map[string]any{
-		"rayStartParams": map[string]any{
-			"dashboard-host": "0.0.0.0",
-			"num-gpus":       fmt.Sprintf("%d", o.GPUsPerWorker),
-		},
+		"rayStartParams": headStartParams,
 		"template": map[string]any{
 			"metadata": headPodMetadata,
 			"spec":     headPod,
 		},
 	}
 	workers := []any{}
-	if o.Workers > 1 {
+	if o.Workers > 0 {
 		workers = append(workers, map[string]any{
-			"replicas":    o.Workers - 1,
-			"minReplicas": o.Workers - 1,
-			"maxReplicas": o.Workers - 1,
+			"replicas":    o.Workers,
+			"minReplicas": o.Workers,
+			"maxReplicas": o.Workers,
 			"groupName":   o.Name + "-w",
 			"rayStartParams": map[string]any{
 				"num-gpus": fmt.Sprintf("%d", o.GPUsPerWorker),
@@ -567,7 +571,11 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 	if priorityClass != "" {
 		pod["priorityClassName"] = priorityClass
 	}
-	if o.GPUsPerWorker > 0 {
+	if isHead {
+		pod["tolerations"] = []any{
+			map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
+		}
+	} else if o.GPUsPerWorker > 0 {
 		pod["tolerations"] = []any{
 			map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},
 			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
@@ -814,19 +822,18 @@ func isGeneratedTauMetadataKey(key string) bool {
 
 func resources(o Options, containerName string) map[string]any {
 	requests := map[string]any{
-		"cpu":    "8",
-		"memory": "64Gi",
+		"cpu":    "2",
+		"memory": "8Gi",
 	}
 	limits := map[string]any{
-		"cpu":    "16",
-		"memory": "128Gi",
+		"cpu":    "4",
+		"memory": "16Gi",
 	}
-	if o.GPUsPerWorker == 0 {
-		requests["cpu"] = "2"
-		requests["memory"] = "8Gi"
-		limits["cpu"] = "4"
-		limits["memory"] = "16Gi"
-	} else {
+	if o.GPUsPerWorker > 0 && containerName == "ray-worker" {
+		requests["cpu"] = "8"
+		requests["memory"] = "64Gi"
+		limits["cpu"] = "16"
+		limits["memory"] = "128Gi"
 		gpuResource := "nvidia.com/gpu"
 		if o.GPUResourceMode == "mig" && o.MIGProfile != "" {
 			gpuResource = "nvidia.com/mig-" + o.MIGProfile

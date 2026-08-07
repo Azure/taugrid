@@ -457,9 +457,6 @@ func Render(opts RenderOptions) ([]byte, error) {
 		if opts.Manifest.IsCPUOnly() {
 			return nil, fmt.Errorf("--profiler nsys requires compute.gpus > 0")
 		}
-		if opts.Manifest.Compute.Workers <= 1 {
-			return nil, fmt.Errorf("--profiler nsys requires compute.workers > 1 so Ray Train worker processes can be launched under Nsight Systems")
-		}
 		if dataPVC == "" {
 			return nil, fmt.Errorf("--profiler nsys requires storage.data_pvc or --data-pvc so profile artifacts survive Ray pod cleanup")
 		}
@@ -560,15 +557,15 @@ func Render(opts RenderOptions) ([]byte, error) {
 		// Eval-specific guards: cpu_workers must be set (the whole point of
 		// rayjob-eval is the CPU fanout — without it, just use rayjob);
 		// multi-node training shape (compute.workers > 1) is incoherent for
-		// an eval (eval is always 1 GPU pod + N CPU pods, not N GPU pods).
+		// an eval (eval is always 1 GPU worker + N CPU workers, not N GPU workers).
 		if opts.Manifest.Compute.GPUs <= 0 {
-			return nil, fmt.Errorf("workload kind %q requires compute.gpus > 0 for the eval head pod; use @tau.train/--workload-kind=rayjob for CPU-only work", kind)
+			return nil, fmt.Errorf("workload kind %q requires compute.gpus > 0 for the eval GPU worker; use @tau.train/--workload-kind=rayjob for CPU-only work", kind)
 		}
 		if opts.Manifest.Eval.CPUWorkers <= 0 {
-			return nil, fmt.Errorf("workload kind %q requires eval.cpu_workers > 0 in the manifest (or --cpu-workers on the CLI); the eval RayJob shape is 1 GPU head + N CPU worker pods", kind)
+			return nil, fmt.Errorf("workload kind %q requires eval.cpu_workers > 0 in the manifest (or --cpu-workers on the CLI); the eval RayJob shape is a system head, 1 GPU actor worker, and N CPU worker pods", kind)
 		}
 		if opts.Manifest.IsMultiNode() {
-			return nil, fmt.Errorf("workload kind %q cannot be multi-node (compute.workers=%d); eval is single-GPU-head + CPU-worker fanout", kind, opts.Manifest.Compute.Workers)
+			return nil, fmt.Errorf("workload kind %q cannot be multi-node (compute.workers=%d); eval has one GPU actor worker plus CPU-worker fanout", kind, opts.Manifest.Compute.Workers)
 		}
 		image := opts.Manifest.RuntimeImage()
 		if image == "" {
@@ -1259,11 +1256,13 @@ type containerResourceSizing struct {
 }
 
 type workloadResourceSizing struct {
-	Head   containerResourceSizing
-	Worker containerResourceSizing
+	Control containerResourceSizing
+	Head    containerResourceSizing
+	Worker  containerResourceSizing
 }
 
 func resourceSizingFor(m *Manifest, kind string) workloadResourceSizing {
+	control := resourcesWithDefaults(0, 0, "", "", 2, 4, "8Gi", "16Gi")
 	switch {
 	case m.IsCPUOnly():
 		head := resourcesWithDefaults(
@@ -1276,7 +1275,7 @@ func resourceSizingFor(m *Manifest, kind string) workloadResourceSizing {
 			m.Compute.WorkerMemory, m.Compute.WorkerMemoryLimit,
 			head.CPUs, head.CPULimit, head.Memory, head.MemoryLimit,
 		)
-		return workloadResourceSizing{Head: head, Worker: worker}
+		return workloadResourceSizing{Control: control, Head: head, Worker: worker}
 	case kind == WorkloadKindRayJobEval:
 		head := resourcesWithDefaults(
 			m.Compute.CPUs, m.Compute.CPULimit,
@@ -1288,7 +1287,7 @@ func resourceSizingFor(m *Manifest, kind string) workloadResourceSizing {
 			m.Compute.WorkerMemory, m.Compute.WorkerMemoryLimit,
 			1, 2, "4Gi", "8Gi",
 		)
-		return workloadResourceSizing{Head: head, Worker: worker}
+		return workloadResourceSizing{Control: control, Head: head, Worker: worker}
 	default:
 		head := resourcesWithDefaults(
 			m.Compute.CPUs, m.Compute.CPULimit,
@@ -1304,7 +1303,7 @@ func resourceSizingFor(m *Manifest, kind string) workloadResourceSizing {
 			m.Compute.WorkerMemory, m.Compute.WorkerMemoryLimit,
 			workerDefault.CPUs, workerDefault.CPULimit, workerDefault.Memory, workerDefault.MemoryLimit,
 		)
-		return workloadResourceSizing{Head: head, Worker: worker}
+		return workloadResourceSizing{Control: control, Head: head, Worker: worker}
 	}
 }
 
@@ -1376,8 +1375,8 @@ func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePai
 // spec.template. We re-render those blocks at the deeper indents instead of
 // reusing the Job-indented strings.
 //
-// `workers` is the total pod count (1 = single-node head only; >1 = head +
-// (workers-1) worker pods, gang-admitted by Kueue).
+// `workers` is the execution-worker count. A separate control-only head is
+// always rendered on the system node pool.
 func buildRayJob(name, resourceName, namespace, manifestName string, gpus, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runtimeRDMAConfig, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffload)
 	if err != nil {
@@ -1408,8 +1407,8 @@ func buildRayJob(name, resourceName, namespace, manifestName string, gpus, worke
 	})
 }
 
-// buildRayJobCPU renders a CPU-only RayJob. `workers` is the total pod count:
-// 1 head + (workers-1) Ray worker pods, matching the GPU RayJob convention.
+// buildRayJobCPU renders a CPU-only RayJob with a system head and `workers`
+// dedicated CPU execution workers.
 func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, resources workloadResourceSizing, rdma runtimeRDMAConfig, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffloadRuntime{})
 	if err != nil {
@@ -1436,8 +1435,8 @@ func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers 
 	})
 }
 
-// buildRayJobEval renders the eval RayJob template (1 GPU head + N CPU
-// worker pods, no GPU on workers, no DRA on workers, no NCCL env). Used
+// buildRayJobEval renders the eval RayJob template (system control head,
+// 1 GPU actor worker, and N CPU fanout workers). Used
 // by the tau-py @tau.eval decorator to spin up Ray actor + ray.remote
 // fanout patterns.
 //
@@ -1463,7 +1462,7 @@ func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, c
 		MIGProfile:         migProfile,
 		Resources:          resources,
 		Image:              image,
-		Workers:            1, // eval head is always single-pod (CPU workers in a separate group)
+		Workers:            1, // one dedicated GPU worker plus CPU eval workers
 		CPUWorkers:         cpuWorkers,
 		SmokePairs:         smokePairs,
 		UpstreamCheckpoint: upstreamCheckpoint,
@@ -1485,36 +1484,37 @@ func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, c
 // at the deeper indent the workerGroupSpec needs (template lives one
 // level deeper under the worker group than under headGroupSpec).
 type workloadBlocks struct {
-	JobLabels                   string
-	JobAnnotationsBlock         string
-	PodMetadataBlock            string
-	NodeSelectorBlock           string
-	PodPriorityClassBlock       string
-	ServiceAccountBlock         string
-	WorkerPodMetadataBlock      string
-	WorkerNodeSelectorBlock     string
-	WorkerPodPriorityClassBlock string
-	WorkerServiceAccountBlock   string
-	RuntimeEnvJob               string
-	RuntimeEnvHead              string
-	RuntimeEnvWorker            string
-	ExtraVolumeMountsJob        string
-	ExtraVolumeMountsHead       string
-	ExtraVolumeMountsWorker     string
-	ExtraVolumesJob             string
-	ExtraVolumesHead            string
-	ExtraVolumesWorker          string
-	DriverLogOffloadSidecar     string
-	DriverLogCompletionSetup    string
+	JobLabels                      string
+	JobAnnotationsBlock            string
+	PodMetadataBlock               string
+	NodeSelectorBlock              string
+	PodPriorityClassBlock          string
+	ServiceAccountBlock            string
+	WorkerPodMetadataBlock         string
+	WorkerNodeSelectorBlock        string
+	WorkerPodPriorityClassBlock    string
+	WorkerServiceAccountBlock      string
+	CPUWorkerPodMetadataBlock      string
+	CPUWorkerNodeSelectorBlock     string
+	CPUWorkerPodPriorityClassBlock string
+	CPUWorkerServiceAccountBlock   string
+	RuntimeEnvJob                  string
+	RuntimeEnvHead                 string
+	RuntimeEnvWorker               string
+	ExtraVolumeMountsJob           string
+	ExtraVolumeMountsHead          string
+	ExtraVolumeMountsWorker        string
+	ExtraVolumesJob                string
+	ExtraVolumesHead               string
+	ExtraVolumesWorker             string
+	DriverLogOffloadSidecar        string
+	DriverLogCompletionSetup       string
 	// PayloadInitContainers is the rendered `initContainers:` block (script
 	// + manifest payload decode/verify) for the head/single pod only.
 	// WorkerPayloadInitContainers is the script-only variant (see
 	// workerScriptPayloadInitContainersYAML), always populated for RayJob
 	// callers — every RayJob worker pod template (Ray Train GPU/CPU
-	// workers and eval CPU workers alike) substitutes it in. It is simply
-	// unused (never substituted) by any RayJob rendered with Workers==1 or
-	// by rayjob-eval's head-only single-pod path, since those templates'
-	// worker sections are gated out entirely at the {{if}} level.
+	// workers and eval GPU/CPU workers alike) substitutes it in.
 	PayloadInitContainers       string
 	WorkerPayloadInitContainers string
 }
@@ -1599,25 +1599,34 @@ func rayJobBlocks(s schedulingMetadata, runtimeEnv []envspec.Var, mounts []Stora
 			return workloadBlocks{}, fmt.Errorf("render metrics offload sentinel init container: %w", err)
 		}
 	}
+	headAnnotations := topology.WithoutKueueTopologyAnnotations(s.PodAnnotations)
+	systemAffinityBlock, err := renderYAMLBlock(map[string]any{"affinity": topology.SystemNodeAffinity()}, 10)
+	if err != nil {
+		return workloadBlocks{}, fmt.Errorf("render system node affinity: %w", err)
+	}
 	b := workloadBlocks{
-		JobLabels:                   s.JobLabels,
-		JobAnnotationsBlock:         s.JobAnnotationsBlock,
-		PodMetadataBlock:            renderPodMetadata(s.PodLabels, raylogoffload.HeadPodAnnotations(s.PodAnnotations), 8),
-		NodeSelectorBlock:           renderMapSection("nodeSelector", s.NodeSelector, 10),
-		PodPriorityClassBlock:       renderPodPriorityClassAt(s.PodPriorityClassName, 10),
-		ServiceAccountBlock:         renderServiceAccountName(s.ServiceAccountName, 10),
-		WorkerPodMetadataBlock:      renderPodMetadata(s.PodLabels, s.PodAnnotations, 10),
-		WorkerNodeSelectorBlock:     renderMapSection("nodeSelector", s.NodeSelector, 12),
-		WorkerPodPriorityClassBlock: renderPodPriorityClassAt(s.PodPriorityClassName, 12),
-		WorkerServiceAccountBlock:   renderServiceAccountName(s.ServiceAccountName, 12),
-		RuntimeEnvHead:              envspec.RenderYAML(runtimeEnv, 16),
-		RuntimeEnvWorker:            envspec.RenderYAML(runtimeEnv, 18),
-		ExtraVolumeMountsHead:       appendYAMLBlock(renderStorageMounts(mounts, 16), headMountBlock),
-		ExtraVolumeMountsWorker:     renderStorageMounts(mounts, 18),
-		ExtraVolumesHead:            appendYAMLBlock(renderStorageVolumes(mounts, 12), headVolumeBlock),
-		ExtraVolumesWorker:          renderStorageVolumes(mounts, 14),
-		DriverLogOffloadSidecar:     driverSidecarBlock,
-		DriverLogCompletionSetup:    yamlLiteralBlock(raylogoffload.CompletionSetupScript, 4),
+		JobLabels:                      s.JobLabels,
+		JobAnnotationsBlock:            s.JobAnnotationsBlock,
+		PodMetadataBlock:               renderPodMetadata(s.PodLabels, raylogoffload.HeadPodAnnotations(headAnnotations), 8),
+		NodeSelectorBlock:              systemAffinityBlock,
+		PodPriorityClassBlock:          renderPodPriorityClassAt(s.PodPriorityClassName, 10),
+		ServiceAccountBlock:            renderServiceAccountName(s.ServiceAccountName, 10),
+		WorkerPodMetadataBlock:         renderPodMetadata(s.PodLabels, s.PodAnnotations, 10),
+		WorkerNodeSelectorBlock:        renderMapSection("nodeSelector", s.NodeSelector, 12),
+		WorkerPodPriorityClassBlock:    renderPodPriorityClassAt(s.PodPriorityClassName, 12),
+		WorkerServiceAccountBlock:      renderServiceAccountName(s.ServiceAccountName, 12),
+		CPUWorkerPodMetadataBlock:      renderPodMetadata(s.PodLabels, headAnnotations, 10),
+		CPUWorkerNodeSelectorBlock:     "",
+		CPUWorkerPodPriorityClassBlock: renderPodPriorityClassAt(s.PodPriorityClassName, 12),
+		CPUWorkerServiceAccountBlock:   renderServiceAccountName(s.ServiceAccountName, 12),
+		RuntimeEnvHead:                 envspec.RenderYAML(runtimeEnv, 16),
+		RuntimeEnvWorker:               envspec.RenderYAML(runtimeEnv, 18),
+		ExtraVolumeMountsHead:          appendYAMLBlock(renderStorageMounts(mounts, 16), headMountBlock),
+		ExtraVolumeMountsWorker:        renderStorageMounts(mounts, 18),
+		ExtraVolumesHead:               appendYAMLBlock(renderStorageVolumes(mounts, 12), headVolumeBlock),
+		ExtraVolumesWorker:             renderStorageVolumes(mounts, 14),
+		DriverLogOffloadSidecar:        driverSidecarBlock,
+		DriverLogCompletionSetup:       yamlLiteralBlock(raylogoffload.CompletionSetupScript, 4),
 		// indent 10 matches all three RayJob templates'
 		// headGroupSpec.template.spec.containers/volumes key indent.
 		PayloadInitContainers: initContainersBlock(10, prepareRayTmpBlock+payloadInitContainerItemsYAML(image, embeds, 10, true)+metricsOffloadInitBlock),
@@ -1697,28 +1706,32 @@ func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
 	}
 	src := string(raw)
 	for k, v := range map[string]string{
-		"${NAME}":                "{{.Name}}",
-		"${RESOURCE_NAME}":       "{{.ResourceName}}",
-		"${MANIFEST_NAME}":       "{{.ManifestName}}",
-		"${SMOKE_PAIRS}":         "{{.SmokePairs}}",
-		"${GPUS}":                "{{.GPUs}}",
-		"${CPUS}":                "{{.CPUs}}",
-		"${CPU_LIMIT}":           "{{.CPULimit}}",
-		"${WORKER_CPUS}":         "{{.WorkerCPUs}}",
-		"${WORKER_CPU_LIMIT}":    "{{.WorkerCPULimit}}",
-		"${MEMORY}":              "{{.Memory}}",
-		"${MEMORY_LIMIT}":        "{{.MemoryLimit}}",
-		"${WORKER_MEMORY}":       "{{.WorkerMemory}}",
-		"${WORKER_MEMORY_LIMIT}": "{{.WorkerMemoryLimit}}",
-		"${IMAGE}":               "{{.Image}}",
-		"${WORKERS}":             "{{.Workers}}",
-		"${CPU_WORKERS}":         "{{.CPUWorkers}}",
-		"${CLAIM}":               "{{.Claim}}",
-		"${PROFILE_NAME}":        "{{.ProfileName}}",
-		"${LANE_LABEL}":          "{{.LaneLabel}}",
-		"${QUEUE_NAME}":          "{{.QueueName}}",
-		"${UPSTREAM_CHECKPOINT}": "{{.UpstreamCheckpoint}}",
-		"${DATA_PVC}":            "{{.DataPVC}}",
+		"${NAME}":                 "{{.Name}}",
+		"${RESOURCE_NAME}":        "{{.ResourceName}}",
+		"${MANIFEST_NAME}":        "{{.ManifestName}}",
+		"${SMOKE_PAIRS}":          "{{.SmokePairs}}",
+		"${GPUS}":                 "{{.GPUs}}",
+		"${CONTROL_CPUS}":         "{{.ControlCPUs}}",
+		"${CONTROL_CPU_LIMIT}":    "{{.ControlCPULimit}}",
+		"${CONTROL_MEMORY}":       "{{.ControlMemory}}",
+		"${CONTROL_MEMORY_LIMIT}": "{{.ControlMemoryLimit}}",
+		"${CPUS}":                 "{{.CPUs}}",
+		"${CPU_LIMIT}":            "{{.CPULimit}}",
+		"${WORKER_CPUS}":          "{{.WorkerCPUs}}",
+		"${WORKER_CPU_LIMIT}":     "{{.WorkerCPULimit}}",
+		"${MEMORY}":               "{{.Memory}}",
+		"${MEMORY_LIMIT}":         "{{.MemoryLimit}}",
+		"${WORKER_MEMORY}":        "{{.WorkerMemory}}",
+		"${WORKER_MEMORY_LIMIT}":  "{{.WorkerMemoryLimit}}",
+		"${IMAGE}":                "{{.Image}}",
+		"${WORKERS}":              "{{.Workers}}",
+		"${CPU_WORKERS}":          "{{.CPUWorkers}}",
+		"${CLAIM}":                "{{.Claim}}",
+		"${PROFILE_NAME}":         "{{.ProfileName}}",
+		"${LANE_LABEL}":           "{{.LaneLabel}}",
+		"${QUEUE_NAME}":           "{{.QueueName}}",
+		"${UPSTREAM_CHECKPOINT}":  "{{.UpstreamCheckpoint}}",
+		"${DATA_PVC}":             "{{.DataPVC}}",
 	} {
 		src = strings.ReplaceAll(src, k, v)
 	}
@@ -1732,6 +1745,10 @@ func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
 	src = strings.ReplaceAll(src, "${WORKER_NODE_SELECTOR_BLOCK}", "{{.WorkerNodeSelectorBlock}}")
 	src = strings.ReplaceAll(src, "${WORKER_POD_PRIORITY_CLASS_BLOCK}", "{{.WorkerPodPriorityClassBlock}}")
 	src = strings.ReplaceAll(src, "${WORKER_SERVICE_ACCOUNT_BLOCK}", "{{.WorkerServiceAccountBlock}}")
+	src = strings.ReplaceAll(src, "${CPU_WORKER_POD_METADATA_BLOCK}", "{{.CPUWorkerPodMetadataBlock}}")
+	src = strings.ReplaceAll(src, "${CPU_WORKER_NODE_SELECTOR_BLOCK}", "{{.CPUWorkerNodeSelectorBlock}}")
+	src = strings.ReplaceAll(src, "${CPU_WORKER_POD_PRIORITY_CLASS_BLOCK}", "{{.CPUWorkerPodPriorityClassBlock}}")
+	src = strings.ReplaceAll(src, "${CPU_WORKER_SERVICE_ACCOUNT_BLOCK}", "{{.CPUWorkerServiceAccountBlock}}")
 	src = strings.ReplaceAll(src, "${RUNTIME_ENV_JOB}", "{{.RuntimeEnvJob}}")
 	src = strings.ReplaceAll(src, "${RUNTIME_ENV_HEAD}", "{{.RuntimeEnvHead}}")
 	src = strings.ReplaceAll(src, "${RUNTIME_ENV_WORKER}", "{{.RuntimeEnvWorker}}")
@@ -1796,65 +1813,73 @@ func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, map[string]any{
-		"Name":                        in.Name,
-		"Namespace":                   in.Namespace,
-		"ResourceName":                in.ResourceName,
-		"ManifestName":                in.ManifestName,
-		"SmokePairs":                  in.SmokePairs,
-		"GPUs":                        in.GPUs,
-		"HasGPU":                      in.GPUs > 0,
-		"GPUResourceMode":             gpuResourceMode,
-		"GPUResourceName":             gpuResourceName,
-		"UseDRA":                      useDRA,
-		"UseDevicePlugin":             useDevicePlugin,
-		"CPUs":                        in.Resources.Head.CPUs,
-		"CPULimit":                    in.Resources.Head.CPULimit,
-		"Memory":                      in.Resources.Head.Memory,
-		"MemoryLimit":                 in.Resources.Head.MemoryLimit,
-		"WorkerCPUs":                  in.Resources.Worker.CPUs,
-		"WorkerCPULimit":              in.Resources.Worker.CPULimit,
-		"WorkerMemory":                in.Resources.Worker.Memory,
-		"WorkerMemoryLimit":           in.Resources.Worker.MemoryLimit,
-		"Image":                       in.Image,
-		"Workers":                     workers,
-		"WorkerReplicas":              workers - 1,
-		"CPUWorkers":                  in.CPUWorkers,
-		"Claim":                       Claim(in.GPUs),
-		"ProfileName":                 in.Scheduling.ProfileName,
-		"LaneLabel":                   in.Scheduling.LaneLabel,
-		"QueueName":                   in.Scheduling.QueueName,
-		"UpstreamCheckpoint":          in.UpstreamCheckpoint,
-		"DataPVC":                     in.DataPVC,
-		"RuntimePip":                  pip,
-		"RDMAEnabled":                 in.RDMA.Enabled,
-		"RDMAResourceName":            in.RDMA.ResourceName,
-		"RDMACount":                   in.RDMA.Count,
-		"PipPackages":                 shellQuotePipPackages(pip),
-		"JobLabels":                   in.Blocks.JobLabels,
-		"JobAnnotationsBlock":         in.Blocks.JobAnnotationsBlock,
-		"PodMetadataBlock":            in.Blocks.PodMetadataBlock,
-		"NodeSelectorBlock":           in.Blocks.NodeSelectorBlock,
-		"PodPriorityClassBlock":       in.Blocks.PodPriorityClassBlock,
-		"ServiceAccountBlock":         in.Blocks.ServiceAccountBlock,
-		"WorkerPodMetadataBlock":      in.Blocks.WorkerPodMetadataBlock,
-		"WorkerNodeSelectorBlock":     in.Blocks.WorkerNodeSelectorBlock,
-		"WorkerPodPriorityClassBlock": in.Blocks.WorkerPodPriorityClassBlock,
-		"WorkerServiceAccountBlock":   in.Blocks.WorkerServiceAccountBlock,
-		"RuntimeEnvJob":               in.Blocks.RuntimeEnvJob,
-		"RuntimeEnvHead":              in.Blocks.RuntimeEnvHead,
-		"RuntimeEnvWorker":            in.Blocks.RuntimeEnvWorker,
-		"ExtraVolumeMountsJob":        in.Blocks.ExtraVolumeMountsJob,
-		"ExtraVolumeMountsHead":       in.Blocks.ExtraVolumeMountsHead,
-		"ExtraVolumeMountsWorker":     in.Blocks.ExtraVolumeMountsWorker,
-		"ExtraVolumesJob":             in.Blocks.ExtraVolumesJob,
-		"ExtraVolumesHead":            in.Blocks.ExtraVolumesHead,
-		"ExtraVolumesWorker":          in.Blocks.ExtraVolumesWorker,
-		"DriverLogOffloadSidecar":     in.Blocks.DriverLogOffloadSidecar,
-		"DriverLogCompletionSetup":    in.Blocks.DriverLogCompletionSetup,
-		"PayloadInitContainers":       in.Blocks.PayloadInitContainers,
-		"WorkerPayloadInitContainers": in.Blocks.WorkerPayloadInitContainers,
-		"MetricsOffload":              in.MetricsOffload.templateData(),
-		"StoragePreflight":            storageprobe.IndentedScript(storagePreflightIndent(in.Asset)),
+		"Name":                           in.Name,
+		"Namespace":                      in.Namespace,
+		"ResourceName":                   in.ResourceName,
+		"ManifestName":                   in.ManifestName,
+		"SmokePairs":                     in.SmokePairs,
+		"GPUs":                           in.GPUs,
+		"HasGPU":                         in.GPUs > 0,
+		"GPUResourceMode":                gpuResourceMode,
+		"GPUResourceName":                gpuResourceName,
+		"UseDRA":                         useDRA,
+		"UseDevicePlugin":                useDevicePlugin,
+		"ControlCPUs":                    in.Resources.Control.CPUs,
+		"ControlCPULimit":                in.Resources.Control.CPULimit,
+		"ControlMemory":                  in.Resources.Control.Memory,
+		"ControlMemoryLimit":             in.Resources.Control.MemoryLimit,
+		"CPUs":                           in.Resources.Head.CPUs,
+		"CPULimit":                       in.Resources.Head.CPULimit,
+		"Memory":                         in.Resources.Head.Memory,
+		"MemoryLimit":                    in.Resources.Head.MemoryLimit,
+		"WorkerCPUs":                     in.Resources.Worker.CPUs,
+		"WorkerCPULimit":                 in.Resources.Worker.CPULimit,
+		"WorkerMemory":                   in.Resources.Worker.Memory,
+		"WorkerMemoryLimit":              in.Resources.Worker.MemoryLimit,
+		"Image":                          in.Image,
+		"Workers":                        workers,
+		"WorkerReplicas":                 workers,
+		"CPUWorkers":                     in.CPUWorkers,
+		"Claim":                          Claim(in.GPUs),
+		"ProfileName":                    in.Scheduling.ProfileName,
+		"LaneLabel":                      in.Scheduling.LaneLabel,
+		"QueueName":                      in.Scheduling.QueueName,
+		"UpstreamCheckpoint":             in.UpstreamCheckpoint,
+		"DataPVC":                        in.DataPVC,
+		"RuntimePip":                     pip,
+		"RDMAEnabled":                    in.RDMA.Enabled,
+		"RDMAResourceName":               in.RDMA.ResourceName,
+		"RDMACount":                      in.RDMA.Count,
+		"PipPackages":                    shellQuotePipPackages(pip),
+		"JobLabels":                      in.Blocks.JobLabels,
+		"JobAnnotationsBlock":            in.Blocks.JobAnnotationsBlock,
+		"PodMetadataBlock":               in.Blocks.PodMetadataBlock,
+		"NodeSelectorBlock":              in.Blocks.NodeSelectorBlock,
+		"PodPriorityClassBlock":          in.Blocks.PodPriorityClassBlock,
+		"ServiceAccountBlock":            in.Blocks.ServiceAccountBlock,
+		"WorkerPodMetadataBlock":         in.Blocks.WorkerPodMetadataBlock,
+		"WorkerNodeSelectorBlock":        in.Blocks.WorkerNodeSelectorBlock,
+		"WorkerPodPriorityClassBlock":    in.Blocks.WorkerPodPriorityClassBlock,
+		"WorkerServiceAccountBlock":      in.Blocks.WorkerServiceAccountBlock,
+		"CPUWorkerPodMetadataBlock":      in.Blocks.CPUWorkerPodMetadataBlock,
+		"CPUWorkerNodeSelectorBlock":     in.Blocks.CPUWorkerNodeSelectorBlock,
+		"CPUWorkerPodPriorityClassBlock": in.Blocks.CPUWorkerPodPriorityClassBlock,
+		"CPUWorkerServiceAccountBlock":   in.Blocks.CPUWorkerServiceAccountBlock,
+		"RuntimeEnvJob":                  in.Blocks.RuntimeEnvJob,
+		"RuntimeEnvHead":                 in.Blocks.RuntimeEnvHead,
+		"RuntimeEnvWorker":               in.Blocks.RuntimeEnvWorker,
+		"ExtraVolumeMountsJob":           in.Blocks.ExtraVolumeMountsJob,
+		"ExtraVolumeMountsHead":          in.Blocks.ExtraVolumeMountsHead,
+		"ExtraVolumeMountsWorker":        in.Blocks.ExtraVolumeMountsWorker,
+		"ExtraVolumesJob":                in.Blocks.ExtraVolumesJob,
+		"ExtraVolumesHead":               in.Blocks.ExtraVolumesHead,
+		"ExtraVolumesWorker":             in.Blocks.ExtraVolumesWorker,
+		"DriverLogOffloadSidecar":        in.Blocks.DriverLogOffloadSidecar,
+		"DriverLogCompletionSetup":       in.Blocks.DriverLogCompletionSetup,
+		"PayloadInitContainers":          in.Blocks.PayloadInitContainers,
+		"WorkerPayloadInitContainers":    in.Blocks.WorkerPayloadInitContainers,
+		"MetricsOffload":                 in.MetricsOffload.templateData(),
+		"StoragePreflight":               storageprobe.IndentedScript(storagePreflightIndent(in.Asset)),
 		"ArtifactFinalize": artifactindex.IndentedScript(artifactindex.Config{
 			Artifact:     in.CheckpointArtifact,
 			Run:          in.Name,
