@@ -67,6 +67,10 @@ python -m ruff check .    # lint (ruff 0.16.1)
 helm lint charts/<chart>
 helm dependency build charts/<chart>
 helm template test charts/<chart> --namespace taugrid-system >/dev/null
+
+# Unit tests require the helm-unittest plugin (not built into Helm):
+helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.1  # Helm 3
+helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.1 --verify=false  # Helm 4
 helm unittest charts/<chart>  # if tests/ exist
 ```
 
