@@ -61,10 +61,11 @@ type managedConfigProjection struct {
 		EnvKV map[string]string `yaml:"env_kv"`
 	} `yaml:"runtime"`
 	Storage struct {
-		DataPVC   string `yaml:"data_pvc"`
-		ResultPVC string `yaml:"result_pvc"`
-		Output    string `yaml:"output"`
-		Publish   string `yaml:"publish"`
+		DataPVC     string       `yaml:"data_pvc"`
+		ResultPVC   string       `yaml:"result_pvc"`
+		Output      string       `yaml:"output"`
+		Publish     string       `yaml:"publish"`
+		ImageAssets []ImageAsset `yaml:"image_assets"`
 	} `yaml:"storage"`
 }
 
@@ -151,12 +152,13 @@ type Policy struct {
 }
 
 type Storage struct {
-	DataPVC   string   `yaml:"data_pvc"`
-	ResultPVC string   `yaml:"result_pvc"`
-	Output    string   `yaml:"output"`
-	Publish   string   `yaml:"publish"`
-	Volumes   []string `yaml:"volumes"`
-	Mounts    []string `yaml:"mounts"`
+	DataPVC     string       `yaml:"data_pvc"`
+	ResultPVC   string       `yaml:"result_pvc"`
+	Output      string       `yaml:"output"`
+	Publish     string       `yaml:"publish"`
+	Volumes     []string     `yaml:"volumes"`
+	Mounts      []string     `yaml:"mounts"`
+	ImageAssets []ImageAsset `yaml:"image_assets"`
 
 	// Checkpoint names the file or directory, relative to the run's
 	// checkpoint directory, that this run produces as its servable model
@@ -166,6 +168,13 @@ type Storage struct {
 	// researcher to pass an absolute --checkpoint path. Optional; when
 	// empty, no artifact index is written and nothing else changes.
 	Checkpoint string `yaml:"checkpoint"`
+}
+
+type ImageAsset struct {
+	Name       string `yaml:"name"`
+	Image      string `yaml:"image"`
+	SourcePath string `yaml:"source_path"`
+	MountPath  string `yaml:"mount_path"`
 }
 
 type Profiler struct {
@@ -330,10 +339,11 @@ func (p managedConfigProjection) config() Config {
 		Compute: p.Compute,
 		Policy:  p.Policy,
 		Storage: Storage{
-			DataPVC:   p.Storage.DataPVC,
-			ResultPVC: p.Storage.ResultPVC,
-			Output:    p.Storage.Output,
-			Publish:   p.Storage.Publish,
+			DataPVC:     p.Storage.DataPVC,
+			ResultPVC:   p.Storage.ResultPVC,
+			Output:      p.Storage.Output,
+			Publish:     p.Storage.Publish,
+			ImageAssets: append([]ImageAsset{}, p.Storage.ImageAssets...),
 		},
 		Profiler:   p.Profiler,
 		Metrics:    p.Metrics,
@@ -369,12 +379,72 @@ func (s Storage) Validate() error {
 	if err := s.ValidateCheckpoint(); err != nil {
 		return err
 	}
+	if err := s.ValidateImageAssets(); err != nil {
+		return err
+	}
 	switch s.Publish {
 	case "", "staged":
 		return nil
 	default:
 		return fmt.Errorf("storage.publish must be one of: staged")
 	}
+}
+
+var (
+	imageAssetNameRE   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	imageAssetDigestRE = regexp.MustCompile(`@sha256:[a-f0-9]{64}$`)
+)
+
+func (s Storage) ValidateImageAssets() error {
+	if len(s.ImageAssets) > 8 {
+		return fmt.Errorf("storage.image_assets supports at most 8 entries")
+	}
+	names := map[string]struct{}{}
+	mounts := map[string]struct{}{}
+	for i, asset := range s.ImageAssets {
+		field := fmt.Sprintf("storage.image_assets[%d]", i)
+		if asset.Name == "" || len(asset.Name) > 50 || !imageAssetNameRE.MatchString(asset.Name) {
+			return fmt.Errorf("%s.name must be a lowercase DNS label no longer than 50 characters", field)
+		}
+		if _, ok := names[asset.Name]; ok {
+			return fmt.Errorf("storage.image_assets name %q is declared more than once", asset.Name)
+		}
+		names[asset.Name] = struct{}{}
+		if !imageAssetDigestRE.MatchString(asset.Image) {
+			return fmt.Errorf("%s.image must be pinned by an @sha256:<64 lowercase hex> digest", field)
+		}
+		if err := validateImageAssetPath(field+".source_path", asset.SourcePath); err != nil {
+			return err
+		}
+		if asset.SourcePath == "/tau-asset" || strings.HasPrefix(asset.SourcePath, "/tau-asset/") {
+			return fmt.Errorf("%s.source_path %q is hidden by Tau's staging volume", field, asset.SourcePath)
+		}
+		if err := validateImageAssetPath(field+".mount_path", asset.MountPath); err != nil {
+			return err
+		}
+		for _, reserved := range []string{"/data", "/mnt", "/script", "/manifest", "/dev/shm", "/var/run/tau"} {
+			if asset.MountPath == reserved || strings.HasPrefix(asset.MountPath, reserved+"/") {
+				return fmt.Errorf("%s.mount_path %q overlaps Tau-reserved path %s", field, asset.MountPath, reserved)
+			}
+		}
+		if _, ok := mounts[asset.MountPath]; ok {
+			return fmt.Errorf("storage.image_assets mount_path %q is declared more than once", asset.MountPath)
+		}
+		for mount := range mounts {
+			if strings.HasPrefix(asset.MountPath, mount+"/") || strings.HasPrefix(mount, asset.MountPath+"/") {
+				return fmt.Errorf("storage.image_assets mount paths %q and %q overlap", mount, asset.MountPath)
+			}
+		}
+		mounts[asset.MountPath] = struct{}{}
+	}
+	return nil
+}
+
+func validateImageAssetPath(field, value string) error {
+	if value == "" || !strings.HasPrefix(value, "/") || value == "/" || path.Clean(value) != value {
+		return fmt.Errorf("%s must be a clean absolute path below /", field)
+	}
+	return nil
 }
 
 // ValidateCheckpoint enforces that storage.checkpoint stays inside the run's
@@ -535,6 +605,14 @@ func (r Runtime) ValidateReservedEnvKeys(allowNCCLOverride bool) error {
 // clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
 	engine = strings.ToLower(strings.TrimSpace(engine))
+	if len(c.Storage.ImageAssets) > 0 {
+		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
+			return fmt.Errorf("storage.image_assets requires direct Job dispatch and cannot be used with workflow.file")
+		}
+		if engine != "job" {
+			return fmt.Errorf("storage.image_assets requires engine: job")
+		}
+	}
 
 	var launcher string
 	if c.Execution.Launcher != nil {

@@ -75,10 +75,30 @@ func TestRunListRegistersDurableHistoryFlags(t *testing.T) {
 	cmd := newRunListCmd()
 	for _, name := range []string{
 		"kusto-endpoint", "kusto-database", "kusto-query-command", "kusto-query-arg",
-		"kusto-table", "kusto-cluster", "kusto-workspace-id", "history-limit", "output",
+		"kusto-table", "kusto-cluster", "kusto-workspace-id", "history-limit", "output", "include-external",
 	} {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Fatalf("missing --%s", name)
+		}
+	}
+}
+
+func TestWriteRunListShowsSourceOnlyForExternalListing(t *testing.T) {
+	snapshot := runs.Snapshot{
+		HistoryState: "live-only",
+		Total:        2,
+		Runs: []runs.Run{
+			{Name: "managed", Kind: "Job", Status: "Running", Age: "1m", Source: "tau"},
+			{Name: "raw", Kind: "Job", Status: "Pending", Age: "2m", Source: "external"},
+		},
+	}
+	var table, warnings bytes.Buffer
+	if err := writeRunList(&table, &warnings, "tau-default", "table", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"SOURCE", "tau", "external"} {
+		if !strings.Contains(table.String(), want) {
+			t.Fatalf("table %q missing %q", table.String(), want)
 		}
 	}
 }

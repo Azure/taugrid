@@ -54,6 +54,101 @@ func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsDigestPinnedImageAssetForDirectJob(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	cfg, err := parse([]byte(`name: asset-staging
+engine: job
+entrypoint: generate.py
+storage:
+  image_assets:
+    - name: pinned-reference-assets
+      image: example.azurecr.io/reference-assets@sha256:`+digest+`
+      source_path: /opt/source-assets
+      mount_path: /opt/reference
+`), "tau.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Storage.ImageAssets) != 1 || cfg.Storage.ImageAssets[0].Name != "pinned-reference-assets" {
+		t.Fatalf("image assets = %+v", cfg.Storage.ImageAssets)
+	}
+	if err := cfg.ValidateExecution("job"); err != nil {
+		t.Fatalf("validate job execution: %v", err)
+	}
+}
+
+func TestImageAssetsFailClosed(t *testing.T) {
+	digest := strings.Repeat("b", 64)
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "mutable image",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "example.azurecr.io/reference-assets:latest",
+				SourcePath: "/opt/reference", MountPath: "/opt/reference",
+			}}}},
+			want: "pinned",
+		},
+		{
+			name: "reserved mount",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
+				SourcePath: "/opt/reference", MountPath: "/data/reference",
+			}}}},
+			want: "Tau-reserved",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.cfg.ValidateDirect(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+
+	cfg := Config{Storage: Storage{ImageAssets: []ImageAsset{{
+		Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
+		SourcePath: "/opt/reference", MountPath: "/opt/reference",
+	}}}}
+	if err := cfg.ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "engine: job") {
+		t.Fatalf("ray error = %v", err)
+	}
+	cfg.Engine = "job"
+	cfg.Workflow.File = "workflow.yaml"
+	if err := cfg.ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "workflow.file") {
+		t.Fatalf("workflow error = %v", err)
+	}
+
+	managed, err := parse([]byte(`schema_version: 1
+name: managed
+run:
+  workload_kind: job
+storage:
+  image_assets:
+    - name: reference
+      image: example.azurecr.io/reference-assets@sha256:`+digest+`
+      source_path: /opt/reference
+      mount_path: /opt/reference
+`), "managed.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "direct Job dispatch") {
+		t.Fatalf("managed workflow error = %v", err)
+	}
+
+	hidden := Config{Storage: Storage{ImageAssets: []ImageAsset{{
+		Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
+		SourcePath: "/tau-asset/reference", MountPath: "/opt/reference",
+	}}}}
+	if err := hidden.ValidateDirect(); err == nil || !strings.Contains(err.Error(), "hidden") {
+		t.Fatalf("hidden source error = %v", err)
+	}
+}
+
 func TestParseKeepsManagedManifestPassThrough(t *testing.T) {
 	cfg, err := parse([]byte(`schema_version: 1
 name: managed

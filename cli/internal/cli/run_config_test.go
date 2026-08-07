@@ -1649,6 +1649,7 @@ func TestRunConfigAcceptsRayTrainLauncher(t *testing.T) {
 	if err := os.WriteFile(script, []byte("print('train')\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: ray-train-explicit
 engine: ray
@@ -1669,6 +1670,52 @@ execution:
 	}
 	if !strings.Contains(rendered, "name: ray-train-explicit") {
 		t.Fatalf("expected name ray-train-explicit, got:\n%s", rendered)
+	}
+}
+
+func TestRunConfigDryRunStagesDigestPinnedImageAsset(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "generate.py"), []byte("print('generate')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("c", 64)
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: external-batch-job
+engine: job
+entrypoint: generate.py
+runtime:
+  image: example.azurecr.io/workload:latest
+compute:
+  gpus: 0
+policy:
+  namespace: tau-default
+  queue: research-training
+storage:
+  image_assets:
+    - name: pinned-reference-assets
+      image: example.azurecr.io/reference-assets@sha256:`+digest+`
+      source_path: /opt/source-assets
+      mount_path: /opt/reference
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	for _, want := range []string{
+		"kind: Job",
+		"suspend: true",
+		"kueue.x-k8s.io/queue-name: research-training",
+		"name: tau-asset-pinned-reference-assets",
+		"example.azurecr.io/reference-assets@sha256:" + digest,
+		"- /opt/source-assets/.",
+		"mountPath: /opt/reference",
+		"readOnly: true",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("image asset dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "kind: ConfigMap") {
+		t.Fatalf("image asset dry-run must remain self-contained:\n%s", rendered)
 	}
 }
 
