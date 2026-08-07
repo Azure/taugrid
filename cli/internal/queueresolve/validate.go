@@ -111,7 +111,7 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 	}
 	policyTopologyContract := target.CatalogTopologyContract
 	if policyTopologyContract {
-		capabilityFlavor, err := findCatalogTopologyFlavor(ctx, r, cq, target)
+		capabilityFlavor, compatibleFlavors, err := findCatalogTopologyFlavor(ctx, r, cq, target)
 		if err != nil {
 			return report, err
 		}
@@ -124,13 +124,14 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		report.ResourceFlavor = capabilityFlavor
 		report.TopologyName = target.TopologyName
 		if target.GPUCount > 0 && !target.TopologyRequest {
-			rf, err := getResourceFlavor(ctx, r, capabilityFlavor)
-			if err != nil {
-				return report, fmt.Errorf("ResourceFlavor %q selected for topology %q could not be read (%s)", capabilityFlavor, target.TopologyName, err)
-			}
-			required, err := requiredTopologyForFlavor(rf, target.ClusterQueue)
+			required, missingMetadata, err := consistentRequiredTopology(compatibleFlavors, target.ClusterQueue)
 			if err != nil {
 				return report, err
+			}
+			if len(missingMetadata) > 0 {
+				return report, fmt.Errorf(
+					"compatible ResourceFlavors for topology %q in ClusterQueue %q are missing managed resource metadata annotation %s (%s); ask the platform owner to set the required Topology level (for example kubernetes.io/hostname)",
+					target.TopologyName, target.ClusterQueue, topology.RequiredTopologyAnnotation, strings.Join(missingMetadata, ", "))
 			}
 			report.RequiredTopology = required
 			target.TopologyRequest = true
@@ -202,8 +203,8 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 	return report, nil
 }
 
-func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) (string, error) {
-	var fitting []string
+func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) (string, []kueueapi.ResourceFlavor, error) {
+	var fitting []kueueapi.ResourceFlavor
 	fallback := ""
 	var fallbackCapacity int64
 	seen := map[string]bool{}
@@ -233,7 +234,7 @@ func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.Clu
 				continue
 			}
 			if int64(target.GPUCount) <= capacity {
-				fitting = append(fitting, flavor.Name)
+				fitting = append(fitting, rf)
 				continue
 			}
 			if fallback == "" || capacity > fallbackCapacity || capacity == fallbackCapacity && flavor.Name < fallback {
@@ -242,19 +243,21 @@ func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.Clu
 			}
 		}
 	}
-	sort.Strings(fitting)
+	sort.Slice(fitting, func(i, j int) bool {
+		return fitting[i].Metadata.Name < fitting[j].Metadata.Name
+	})
 	if len(fitting) > 0 {
-		return fitting[0], nil
+		return fitting[0].Metadata.Name, fitting, nil
 	}
 	if fallback != "" {
-		return fallback, nil
+		return fallback, nil, nil
 	}
 	if len(unreadable) > 0 {
-		return "", fmt.Errorf(
+		return "", nil, fmt.Errorf(
 			"cannot resolve topology %q in ClusterQueue %q because ResourceFlavor capabilities could not be read: %s",
 			target.TopologyName, target.ClusterQueue, strings.Join(unreadable, ", "))
 	}
-	return "", nil
+	return "", nil, nil
 }
 
 func (o ValidationOptions) resolve() validationTarget {
@@ -612,9 +615,7 @@ func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.C
 	if len(flavors) == 0 {
 		return "", nil
 	}
-	var tasOnly []string
-	var missingMetadata []string
-	requiredTopology := ""
+	var tasOnly []kueueapi.ResourceFlavor
 	var unreadable []string
 	for _, name := range flavors {
 		rf, err := getResourceFlavor(ctx, r, name)
@@ -631,24 +632,16 @@ func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.C
 		if strings.TrimSpace(rf.Spec.TopologyName) == "" {
 			return "", nil
 		}
-		required, err := requiredTopologyForFlavor(rf, target.ClusterQueue)
-		if err != nil {
-			missingMetadata = append(missingMetadata, name)
-			tasOnly = append(tasOnly, name)
-			continue
-		}
-		if requiredTopology != "" && requiredTopology != required {
-			return "", fmt.Errorf(
-				"compatible ResourceFlavors in ClusterQueue %q require conflicting %s values (%q and %q); ask the platform owner to split the queue or make its managed flavor metadata consistent",
-				target.ClusterQueue, topology.RequiredTopologyAnnotation, requiredTopology, required)
-		}
-		requiredTopology = required
-		tasOnly = append(tasOnly, name)
+		tasOnly = append(tasOnly, rf)
 	}
 	if len(unreadable) > 0 {
 		return "", fmt.Errorf(
 			"cannot determine whether GPU request without policy.topology is compatible with ClusterQueue %q because ResourceFlavor capabilities could not be read: %s; grant read access to ResourceFlavors or ask the platform owner to inspect the queue",
 			target.ClusterQueue, strings.Join(unreadable, ", "))
+	}
+	requiredTopology, missingMetadata, err := consistentRequiredTopology(tasOnly, target.ClusterQueue)
+	if err != nil {
+		return "", err
 	}
 	if len(missingMetadata) > 0 {
 		return "", fmt.Errorf(
@@ -659,6 +652,26 @@ func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.C
 		return "", nil
 	}
 	return requiredTopology, nil
+}
+
+func consistentRequiredTopology(flavors []kueueapi.ResourceFlavor, clusterQueue string) (string, []string, error) {
+	requiredTopology := ""
+	var missingMetadata []string
+	for _, rf := range flavors {
+		required := strings.TrimSpace(rf.Metadata.Annotations[topology.RequiredTopologyAnnotation])
+		if required == "" {
+			missingMetadata = append(missingMetadata, rf.Metadata.Name)
+			continue
+		}
+		if requiredTopology != "" && requiredTopology != required {
+			return "", nil, fmt.Errorf(
+				"compatible ResourceFlavors in ClusterQueue %q require conflicting %s values (%q and %q); ask the platform owner to split the queue or make its managed flavor metadata consistent",
+				clusterQueue, topology.RequiredTopologyAnnotation, requiredTopology, required)
+		}
+		requiredTopology = required
+	}
+	sort.Strings(missingMetadata)
+	return requiredTopology, missingMetadata, nil
 }
 
 func compatibleGPUFlavorNames(cq kueueapi.ClusterQueue, target validationTarget) []string {
