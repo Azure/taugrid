@@ -1149,6 +1149,10 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`storage.image_assets.name` | direct-only",
+		"`storage.image_assets.image` | direct-only",
+		"`storage.image_assets.source_path` | direct-only",
+		"`storage.image_assets.mount_path` | direct-only",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("explain-config missing %q:\n%s", want, out)

@@ -67,6 +67,46 @@ func TestRenderKubectlDiagnosticHintsUsesRayPodNamesAndCurrentLogs(t *testing.T)
 	}
 }
 
+func TestRenderKubectlDiagnosticHintsPrefersCurrentFailureOverPreviousAttempt(t *testing.T) {
+	exitCode := int32(1)
+	lastExitCode := int32(2)
+	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "restarted-worker", RestartCount: 1, LastExitCode: &lastExitCode,
+			}, {
+				Name: "failed-worker", ExitCode: &exitCode,
+			}},
+		}},
+	})
+	if !strings.Contains(got, "'logs' 'external-batch-pod' '-c' 'failed-worker' '--timestamps=true'") {
+		t.Fatalf("hints must target current failed container: %q", got)
+	}
+	if strings.Contains(got, "'--previous'") {
+		t.Fatalf("hints must not request previous logs while a current failure exists: %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsUsesCurrentLogsForRestartedFinalFailure(t *testing.T) {
+	exitCode := int32(1)
+	lastExitCode := int32(2)
+	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "failed-worker", RestartCount: 1, ExitCode: &exitCode, LastExitCode: &lastExitCode,
+			}},
+		}},
+	})
+	if !strings.Contains(got, "'logs' 'external-batch-pod' '-c' 'failed-worker' '--timestamps=true'") {
+		t.Fatalf("hints must target current failed container: %q", got)
+	}
+	if strings.Contains(got, "'--previous'") {
+		t.Fatalf("hints must not request previous logs for a final current failure: %q", got)
+	}
+}
+
 func TestRenderKubectlDiagnosticHintsWithoutPodsStaysSelectorBased(t *testing.T) {
 	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{})
 	if !strings.Contains(got, "'logs' '-l' 'job-name=external-batch-job' '--all-containers=true'") {

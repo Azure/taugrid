@@ -226,11 +226,20 @@ func diagnosticPodSelector(name string, snap status.Snapshot) string {
 func firstDiagnosticContainer(snap status.Snapshot) (string, string, bool, bool) {
 	for _, pod := range snap.Pods {
 		for _, container := range pod.InitContainers {
-			if containerNeedsPrevious(container) {
-				return pod.Name, container.Name, true, true
-			}
 			if container.ExitCode != nil && *container.ExitCode != 0 {
 				return pod.Name, container.Name, false, true
+			}
+		}
+		for _, container := range pod.Containers {
+			if container.ExitCode != nil && *container.ExitCode != 0 {
+				return pod.Name, container.Name, false, true
+			}
+		}
+	}
+	for _, pod := range snap.Pods {
+		for _, container := range pod.InitContainers {
+			if containerNeedsPrevious(container) {
+				return pod.Name, container.Name, true, true
 			}
 		}
 		for _, container := range pod.Containers {

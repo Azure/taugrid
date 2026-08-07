@@ -93,10 +93,34 @@ func TestImageAssetsFailClosed(t *testing.T) {
 			want: "pinned",
 		},
 		{
+			name: "missing image name",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "@sha256:" + digest,
+				SourcePath: "/opt/reference", MountPath: "/opt/reference",
+			}}}},
+			want: "complete lowercase OCI image reference",
+		},
+		{
+			name: "invalid image name",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "https://example.azurecr.io/reference-assets@sha256:" + digest,
+				SourcePath: "/opt/reference", MountPath: "/opt/reference",
+			}}}},
+			want: "complete lowercase OCI image reference",
+		},
+		{
 			name: "reserved mount",
 			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
 				Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
 				SourcePath: "/opt/reference", MountPath: "/data/reference",
+			}}}},
+			want: "Tau-reserved",
+		},
+		{
+			name: "parent of reserved mount",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
+				SourcePath: "/opt/reference", MountPath: "/var",
 			}}}},
 			want: "Tau-reserved",
 		},
@@ -441,6 +465,23 @@ func TestFieldCatalogCoversConfigFields(t *testing.T) {
 		}
 		if strings.TrimSpace(info.Description) == "" {
 			t.Fatalf("missing field description for %s", path)
+		}
+	}
+}
+
+func TestConfigFieldPathsIncludeStructSliceChildren(t *testing.T) {
+	paths := map[string]bool{}
+	for _, path := range configFieldPaths() {
+		paths[path] = true
+	}
+	for _, want := range []string{
+		"storage.image_assets.name",
+		"storage.image_assets.image",
+		"storage.image_assets.source_path",
+		"storage.image_assets.mount_path",
+	} {
+		if !paths[want] {
+			t.Fatalf("config field paths missing %s", want)
 		}
 	}
 }

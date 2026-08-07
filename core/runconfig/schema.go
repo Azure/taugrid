@@ -282,6 +282,9 @@ func fieldPaths(t reflect.Type, prefix string) []string {
 		}
 		paths = append(paths, path)
 		ft := deref(field.Type)
+		if ft.Kind() == reflect.Slice {
+			ft = deref(ft.Elem())
+		}
 		if ft.Kind() == reflect.Struct && ft.PkgPath() == reflect.TypeOf(Config{}).PkgPath() && ft != reflect.TypeOf(Duration{}) {
 			paths = append(paths, fieldPaths(ft, path)...)
 		}

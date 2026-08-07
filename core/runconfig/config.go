@@ -391,8 +391,9 @@ func (s Storage) Validate() error {
 }
 
 var (
-	imageAssetNameRE   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	imageAssetDigestRE = regexp.MustCompile(`@sha256:[a-f0-9]{64}$`)
+	imageAssetNameRE      = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	imageAssetDigestRE    = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	imageAssetReferenceRE = regexp.MustCompile(`^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
 )
 
 func (s Storage) ValidateImageAssets() error {
@@ -410,8 +411,9 @@ func (s Storage) ValidateImageAssets() error {
 			return fmt.Errorf("storage.image_assets name %q is declared more than once", asset.Name)
 		}
 		names[asset.Name] = struct{}{}
-		if !imageAssetDigestRE.MatchString(asset.Image) {
-			return fmt.Errorf("%s.image must be pinned by an @sha256:<64 lowercase hex> digest", field)
+		imageName, digest, ok := strings.Cut(asset.Image, "@")
+		if !ok || !imageAssetReferenceRE.MatchString(imageName) || !imageAssetDigestRE.MatchString(digest) {
+			return fmt.Errorf("%s.image must be a complete lowercase OCI image reference pinned by an @sha256:<64 lowercase hex> digest", field)
 		}
 		if err := validateImageAssetPath(field+".source_path", asset.SourcePath); err != nil {
 			return err
@@ -423,7 +425,7 @@ func (s Storage) ValidateImageAssets() error {
 			return err
 		}
 		for _, reserved := range []string{"/data", "/mnt", "/script", "/manifest", "/dev/shm", "/var/run/tau"} {
-			if asset.MountPath == reserved || strings.HasPrefix(asset.MountPath, reserved+"/") {
+			if imageAssetPathsOverlap(asset.MountPath, reserved) {
 				return fmt.Errorf("%s.mount_path %q overlaps Tau-reserved path %s", field, asset.MountPath, reserved)
 			}
 		}
@@ -431,13 +433,17 @@ func (s Storage) ValidateImageAssets() error {
 			return fmt.Errorf("storage.image_assets mount_path %q is declared more than once", asset.MountPath)
 		}
 		for mount := range mounts {
-			if strings.HasPrefix(asset.MountPath, mount+"/") || strings.HasPrefix(mount, asset.MountPath+"/") {
+			if imageAssetPathsOverlap(asset.MountPath, mount) {
 				return fmt.Errorf("storage.image_assets mount paths %q and %q overlap", mount, asset.MountPath)
 			}
 		}
 		mounts[asset.MountPath] = struct{}{}
 	}
 	return nil
+}
+
+func imageAssetPathsOverlap(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
 func validateImageAssetPath(field, value string) error {
