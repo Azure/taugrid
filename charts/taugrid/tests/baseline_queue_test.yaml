@@ -43,6 +43,10 @@ tests:
           value: default-node-topology
         documentIndex: 2
       - equal:
+          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
+          value: kubernetes.io/hostname
+        documentIndex: 2
+      - equal:
           path: kind
           value: ClusterQueue
         documentIndex: 3

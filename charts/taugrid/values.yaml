@@ -29,6 +29,9 @@ baselineQueue:
   topology:
     enabled: true
     name: default-node-topology
+    # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
+    # templates after queue resolution.
+    requiredLevel: kubernetes.io/hostname
   flavor:
     # New identity avoids mutating the topologyName of the chart 0.2.0
     # taugrid-default ResourceFlavor, which Kueue treats as immutable.

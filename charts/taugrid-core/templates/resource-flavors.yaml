@@ -5,6 +5,9 @@ own flavor objects. Most clusters manage these through lane manifests/GitOps.
 {{- $resourceFlavors := default dict .Values.resourceFlavors -}}
 {{- if (default false $resourceFlavors.enabled) }}
 {{- range (default list $resourceFlavors.items) }}
+{{- if ne (empty .topologyName) (empty .requiredTopology) }}
+{{- fail (printf "resourceFlavors.items[%s] must set topologyName and requiredTopology together" .name) }}
+{{- end }}
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
@@ -15,6 +18,15 @@ metadata:
     {{- with .labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+  {{- if or .annotations .requiredTopology }}
+  annotations:
+    {{- with (omit (default dict .annotations) "kueue.x-k8s.io/podset-required-topology") }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .requiredTopology }}
+    kueue.x-k8s.io/podset-required-topology: {{ . | quote }}
+    {{- end }}
+  {{- end }}
 spec:
   {{- with .nodeLabels }}
   nodeLabels:
@@ -23,6 +35,13 @@ spec:
   {{- with .tolerations }}
   tolerations:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .nodeTaints }}
+  nodeTaints:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .topologyName }}
+  topologyName: {{ . }}
   {{- end }}
 {{- end }}
 {{- end }}

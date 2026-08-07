@@ -337,8 +337,9 @@ func SelectorValues(m map[string]string) []string {
 
 type ResourceFlavor struct {
 	Metadata struct {
-		Name   string            `json:"name"`
-		Labels map[string]string `json:"labels"`
+		Name        string            `json:"name"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeLabels   map[string]string `json:"nodeLabels"`

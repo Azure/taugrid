@@ -954,6 +954,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 		"preemptable":         true,
 		"checkpointOnPreempt": true,
 	}
+
 	out, err := Render(p, Options{
 		Name:      "train-a100",
 		Namespace: "tau",
@@ -987,6 +988,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 			t.Fatalf("Tau metadata label should be omitted: %s", key)
 		}
 	}
+
 	annotations := meta["annotations"].(map[string]any)
 	if annotations["kueue.x-k8s.io/podset-required-topology"] != "kubernetes.io/hostname" {
 		t.Fatalf("job topology annotation missing: %v", annotations)
@@ -1000,6 +1002,23 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	nodeSelector := pod["nodeSelector"].(map[string]any)
 	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
 		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	}
+}
+
+func TestRender_ResourceFlavorRequiredTopologyWithoutUserPlacement(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:             "managed-tas",
+		Namespace:        "tau",
+		Command:          []string{"true"},
+		QueueName:        "jobqueue",
+		RequiredTopology: "kubernetes.io/hostname",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := parseYAML(t, out)
+	if got := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)[runtopology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
+		t.Fatalf("pod required topology=%v, want kubernetes.io/hostname", got)
 	}
 }
 

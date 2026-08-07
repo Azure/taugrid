@@ -95,6 +95,7 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if plan.Annotations[requiredTopologyAnnotation] != "" ||
 		plan.Annotations[preferredTopologyAnnotation] != "" ||
 		plan.Annotations[unconstrainedTopologyAnnot] != "" {
@@ -105,11 +106,36 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 			t.Fatalf("Tau-specific topology labels should be omitted: %v", plan.Labels)
 		}
 	}
+
 	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
 		t.Fatalf("DRA gpu class selector=%q want %q", got, GPUClassA10080GB)
 	}
 	if plan.Labels[workloadPriorityLabel] != "taugrid-batch" {
 		t.Fatalf("missing workload priority label: %v", plan.Labels)
+	}
+}
+
+func TestBuild_ResourceFlavorRequiredTopology(t *testing.T) {
+	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
+		QueueName:        SharedGPUQueueName,
+		RequiredTopology: hostnameTopology,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Annotations[RequiredTopologyAnnotation]; got != hostnameTopology {
+		t.Fatalf("required topology annotation=%q, want %q", got, hostnameTopology)
+	}
+}
+
+func TestBuild_ResourceFlavorRequiredTopologyRejectsConflictingPlacement(t *testing.T) {
+	_, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
+		QueueName:        SharedGPUQueueName,
+		Placement:        "independent",
+		RequiredTopology: hostnameTopology,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicts with placement=independent") {
+		t.Fatalf("expected managed topology conflict, got %v", err)
 	}
 }
 

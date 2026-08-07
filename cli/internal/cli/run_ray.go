@@ -292,7 +292,8 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
-		if err := validateRenderedQueue(ctx, runner, namespace, rendered, topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
+		rendered, err = prepareGeneratedQueueTopology(ctx, runner, namespace, rendered, &topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved), renderRayJob)
+		if err != nil {
 			return err
 		}
 	}
