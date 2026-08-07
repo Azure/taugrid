@@ -1,0 +1,65 @@
+name: TauGrid Docs Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**/*.md"
+      - "site/**"
+      - ".github/workflows/taugrid-docs-validation.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.md"
+      - "site/**"
+      - ".github/workflows/taugrid-docs-validation.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: taugrid-docs-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: |
+            cli/go.sum
+            site/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          check-latest: true
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Build and check documentation
+        run: make -C site check
+
+  required:
+    name: Required
+    if: always()
+    needs:
+      - docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check validation result
+        env:
+          DOCS_RESULT: ${{ needs.docs.result }}
+        run: test "${DOCS_RESULT}" = success
