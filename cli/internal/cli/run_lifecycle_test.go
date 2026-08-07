@@ -107,6 +107,24 @@ func TestRenderKubectlDiagnosticHintsUsesCurrentLogsForRestartedFinalFailure(t *
 	}
 }
 
+func TestRenderKubectlDiagnosticHintsOmitsExecForTerminalContainer(t *testing.T) {
+	exitCode := int32(1)
+	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "failed-worker", State: "terminated", ExitCode: &exitCode,
+			}},
+		}},
+	})
+	if !strings.Contains(got, "'logs' 'external-batch-pod' '-c' 'failed-worker' '--timestamps=true'") {
+		t.Fatalf("terminal hints must retain current logs: %q", got)
+	}
+	if strings.Contains(got, "'exec'") {
+		t.Fatalf("terminal hints must not emit an unusable exec command: %q", got)
+	}
+}
+
 func TestRenderKubectlDiagnosticHintsWithoutPodsStaysSelectorBased(t *testing.T) {
 	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{})
 	if !strings.Contains(got, "'logs' '-l' 'job-name=external-batch-job' '--all-containers=true'") {

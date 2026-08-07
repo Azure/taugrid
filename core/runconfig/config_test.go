@@ -77,6 +77,18 @@ storage:
 	}
 }
 
+func TestImageAssetsAcceptIPv6Registry(t *testing.T) {
+	cfg := Config{Storage: Storage{ImageAssets: []ImageAsset{{
+		Name:       "reference",
+		Image:      "[2001:db8::1]:5000/reference-assets@sha256:" + strings.Repeat("a", 64),
+		SourcePath: "/opt/source-assets",
+		MountPath:  "/opt/reference",
+	}}}}
+	if err := cfg.ValidateDirect(); err != nil {
+		t.Fatalf("validate IPv6 registry image: %v", err)
+	}
+}
+
 func TestImageAssetsFailClosed(t *testing.T) {
 	digest := strings.Repeat("b", 64)
 	tests := []struct {
@@ -121,6 +133,14 @@ func TestImageAssetsFailClosed(t *testing.T) {
 			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
 				Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
 				SourcePath: "/opt/reference", MountPath: "/var",
+			}}}},
+			want: "Tau-reserved",
+		},
+		{
+			name: "launcher tmp mount",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
+				SourcePath: "/opt/reference", MountPath: "/tmp",
 			}}}},
 			want: "Tau-reserved",
 		},

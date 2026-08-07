@@ -271,11 +271,6 @@ func firstRunnableContainer(snap status.Snapshot) (string, string, bool) {
 			}
 		}
 	}
-	for _, pod := range snap.Pods {
-		if len(pod.Containers) > 0 {
-			return pod.Name, pod.Containers[0].Name, true
-		}
-	}
 	return "", "", false
 }
 

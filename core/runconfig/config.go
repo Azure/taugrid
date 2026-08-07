@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
 )
 
@@ -391,9 +392,8 @@ func (s Storage) Validate() error {
 }
 
 var (
-	imageAssetNameRE      = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	imageAssetDigestRE    = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	imageAssetReferenceRE = regexp.MustCompile(`^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+	imageAssetNameRE   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	imageAssetDigestRE = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 )
 
 func (s Storage) ValidateImageAssets() error {
@@ -411,8 +411,9 @@ func (s Storage) ValidateImageAssets() error {
 			return fmt.Errorf("storage.image_assets name %q is declared more than once", asset.Name)
 		}
 		names[asset.Name] = struct{}{}
-		imageName, digest, ok := strings.Cut(asset.Image, "@")
-		if !ok || !imageAssetReferenceRE.MatchString(imageName) || !imageAssetDigestRE.MatchString(digest) {
+		named, err := reference.ParseNormalizedNamed(asset.Image)
+		digested, pinned := named.(reference.Digested)
+		if err != nil || !pinned || asset.Image != strings.ToLower(asset.Image) || !imageAssetDigestRE.MatchString(digested.Digest().String()) {
 			return fmt.Errorf("%s.image must be a complete lowercase OCI image reference pinned by an @sha256:<64 lowercase hex> digest", field)
 		}
 		if err := validateImageAssetPath(field+".source_path", asset.SourcePath); err != nil {
@@ -424,7 +425,7 @@ func (s Storage) ValidateImageAssets() error {
 		if err := validateImageAssetPath(field+".mount_path", asset.MountPath); err != nil {
 			return err
 		}
-		for _, reserved := range []string{"/data", "/mnt", "/script", "/manifest", "/dev/shm", "/var/run/tau"} {
+		for _, reserved := range []string{"/data", "/mnt", "/script", "/manifest", "/tmp", "/dev/shm", "/var/run/tau"} {
 			if imageAssetPathsOverlap(asset.MountPath, reserved) {
 				return fmt.Errorf("%s.mount_path %q overlaps Tau-reserved path %s", field, asset.MountPath, reserved)
 			}
