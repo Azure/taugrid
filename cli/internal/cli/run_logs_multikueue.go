@@ -22,6 +22,7 @@ type runLogsOptions struct {
 	Namespace     string
 	Follow        bool
 	Tail          int
+	KustoCluster  string
 	KustoEndpoint string
 	KustoDatabase string
 }
@@ -77,6 +78,14 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 	if snapErr == nil && snap.RayJob.Found && !snap.JobFound {
 		logs, err := hooks.rayJobLogs(ctx, r, opts.Namespace, name, opts.Follow)
 		if err != nil {
+			if localRayJobTerminal(snap.RayJob) {
+				centralLogs, centralErr := localTerminalRayJobLogs(ctx, name, opts, snap, hooks)
+				if centralErr == nil {
+					_, centralErr = io.WriteString(out, centralLogs)
+					return centralErr
+				}
+				return fmt.Errorf("read logs for terminal RayJob %s: local pod logs unavailable: %w; central log fallback failed: %v", name, err, centralErr)
+			}
 			// Distinguish "not ready yet" from "no logs". Terse on purpose:
 			// `tau run status` already renders the startup phases.
 			hint := ""
@@ -169,21 +178,14 @@ func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name stri
 		if rayClusterName == "" {
 			return "", fmt.Errorf("RayJob %s has not reported its mirrored RayCluster name yet; wait for `tau run status %s` to show the worker-side RayCluster before reading manager-side logs", name, name)
 		}
-		if opts.Tail == 0 {
-			return "", nil
-		}
-		rows, err := hooks.queryADXLogs(ctx, kustoLogsQuery{
-			Endpoint: strings.TrimSpace(opts.KustoEndpoint),
-			Database: strings.TrimSpace(opts.KustoDatabase),
-			Query:    buildMultiKueueRayDriverLogsQuery(adxCluster, opts.Namespace, rayClusterName, opts.Tail),
-		})
+		logs, err := centralRayDriverLogs(ctx, name, adxCluster, rayClusterName, opts, hooks)
 		if err != nil {
 			return "", fmt.Errorf("query ADX Logs.ContainerLogs for RayJob %s on worker %s: %w", name, worker, err)
 		}
-		if len(rows) == 0 {
+		if logs == "" && opts.Tail != 0 {
 			return "", fmt.Errorf("no manager-side driver logs were found in ADX for RayJob %s on worker %s yet; wait for the %s sidecar to ingest logs and try again", name, worker, raylogoffload.SidecarContainerName)
 		}
-		return formatCentralLogRows(rows, opts.Tail), nil
+		return logs, nil
 	}
 	state := snap.MultiKueueState()
 	switch state {
@@ -196,6 +198,65 @@ func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name stri
 	default:
 		return "", fmt.Errorf("RayJob %s does not have an unambiguous selected MultiKueue worker yet; run `tau run status %s` to inspect manager-side placement", name, name)
 	}
+}
+
+func localRayJobTerminal(rj status.RayJob) bool {
+	for _, state := range []string{rj.JobDeploymentStatus, rj.JobStatus} {
+		switch strings.ToUpper(strings.TrimSpace(state)) {
+		case "COMPLETE", "FAILED", "SUCCEEDED", "STOPPED":
+			return true
+		}
+	}
+	return !rj.FinishedAt.IsZero()
+}
+
+func localTerminalRayJobLogs(ctx context.Context, name string, opts runLogsOptions, snap status.Snapshot, hooks runLogsHooks) (string, error) {
+	if opts.Follow {
+		return "", fmt.Errorf("--follow is not supported after a RayJob's head pod is deleted; tau queries ADX and does not implement cursor-based polling or de-duplication for centrally offloaded driver logs")
+	}
+	missing := make([]string, 0, 3)
+	if strings.TrimSpace(opts.KustoCluster) == "" {
+		missing = append(missing, "--kusto-cluster")
+	}
+	if strings.TrimSpace(opts.KustoEndpoint) == "" {
+		missing = append(missing, "--kusto-endpoint")
+	}
+	if strings.TrimSpace(opts.KustoDatabase) == "" {
+		missing = append(missing, "--kusto-database")
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("head pod was deleted and terminal local RayJob logs require %s to query ADX Logs.ContainerLogs", strings.Join(missing, ", "))
+	}
+	rayClusterName := strings.TrimSpace(snap.RayJob.RayClusterName)
+	if rayClusterName == "" {
+		return "", fmt.Errorf("RayJob %s has no recorded RayCluster name for the ADX pod-prefix query", name)
+	}
+	logs, err := centralRayDriverLogs(ctx, name, opts.KustoCluster, rayClusterName, opts, hooks)
+	if err != nil {
+		return "", err
+	}
+	if logs == "" && opts.Tail != 0 {
+		return "", fmt.Errorf("no centrally offloaded driver logs were found in ADX for terminal RayJob %s", name)
+	}
+	return logs, nil
+}
+
+func centralRayDriverLogs(ctx context.Context, name, clusterName, rayClusterName string, opts runLogsOptions, hooks runLogsHooks) (string, error) {
+	if opts.Follow {
+		return "", fmt.Errorf("--follow is not supported for centrally offloaded RayJob logs")
+	}
+	if opts.Tail == 0 {
+		return "", nil
+	}
+	rows, err := hooks.queryADXLogs(ctx, kustoLogsQuery{
+		Endpoint: strings.TrimSpace(opts.KustoEndpoint),
+		Database: strings.TrimSpace(opts.KustoDatabase),
+		Query:    buildMultiKueueRayDriverLogsQuery(clusterName, opts.Namespace, rayClusterName, opts.Tail),
+	})
+	if err != nil {
+		return "", fmt.Errorf("query ADX Logs.ContainerLogs for RayJob %s: %w", name, err)
+	}
+	return formatCentralLogRows(rows, opts.Tail), nil
 }
 
 func localJobLogs(ctx context.Context, r kubeRawRunner, namespace, name string, follow bool, tail int) (string, error) {

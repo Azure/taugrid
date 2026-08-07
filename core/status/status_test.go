@@ -1305,6 +1305,85 @@ func TestRenderRayJobFailureBeforeCompletionRemainsVisible(t *testing.T) {
 	}
 }
 
+func TestRenderFailedRayJobAfterPodCleanupDoesNotLookPending(t *testing.T) {
+	finished := mustTime("2026-08-06T17:00:00Z")
+	out := Render(Snapshot{
+		Name:         "failed-train",
+		Namespace:    "ray",
+		PodsObserved: true,
+		RayJob: RayJob{
+			Found:               true,
+			Name:                "failed-train",
+			RayClusterName:      "failed-train-cluster",
+			JobDeploymentStatus: "Failed",
+			JobStatus:           "FAILED",
+			FinishedAt:          finished,
+			Reason:              "AppFailed",
+			Message:             "entrypoint exited with code 1",
+		},
+		Workloads: []Workload{{
+			Name:     "rayjob-failed-train",
+			Queue:    "jobqueue",
+			Admitted: true,
+			Phase:    "Finished",
+			Reason:   "Failed",
+		}},
+	})
+
+	for _, want := range []string{
+		"status:    Failed",
+		"[!]  RayCluster",
+		"[-]  Pod scheduling",
+		"RayJob failed; post-run RayCluster teardown removed pod evidence",
+		"[!]  RayJob status",
+		"[x]  Compute release",
+		"(none — RayCluster pods cleaned up after terminal failure)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("failed terminal RayJob output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"no pods observed yet",
+		"no ResourceClaims requested",
+		"no init containers",
+		"waiting for pods",
+		"workload is suspended or not yet admitted",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("failed terminal RayJob output retained pending message %q:\n%s", unwanted, out)
+		}
+	}
+}
+
+func TestRenderFailedRayJobWithUnavailablePodStateDoesNotInferLifecycle(t *testing.T) {
+	out := Render(Snapshot{
+		Name:      "failed-train",
+		Namespace: "ray",
+		RayJob: RayJob{
+			Found:               true,
+			Name:                "failed-train",
+			RayClusterName:      "failed-train-cluster",
+			JobDeploymentStatus: "Failed",
+			JobStatus:           "FAILED",
+		},
+	})
+	for _, want := range []string{
+		"[-]  Pod scheduling",
+		"pod state unavailable after terminal RayJob failure",
+		"(none — pod state unavailable for failed RayJob)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("failed RayJob with unavailable pod state missing %q:\n%s", want, out)
+		}
+	}
+	for _, unsupported := range []string{"no pods observed yet", "no ResourceClaims requested", "no init containers", "waiting for pods"} {
+		if strings.Contains(out, unsupported) {
+			t.Fatalf("failed RayJob with unavailable pod state inferred %q:\n%s", unsupported, out)
+		}
+	}
+}
+
 func TestStartupFailedStopsOnCurrentImagePullFailure(t *testing.T) {
 	snap := Snapshot{
 		Pods: []Pod{{

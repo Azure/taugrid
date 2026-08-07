@@ -160,6 +160,7 @@ func newRunLogsCmd() *cobra.Command {
 		connection    runLifecycleConnectionFlags
 		follow        bool
 		tail          int
+		kustoCluster  string
 		kustoEndpoint string
 		kustoDatabase string
 	)
@@ -192,6 +193,7 @@ Examples:
 				Namespace:     ns,
 				Follow:        follow,
 				Tail:          tail,
+				KustoCluster:  kustoCluster,
 				KustoEndpoint: kustoEndpoint,
 				KustoDatabase: kustoDatabase,
 			}, runLogsHooks{})
@@ -199,8 +201,9 @@ Examples:
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream new logs")
 	cmd.Flags().IntVar(&tail, "tail", 200, "lines from end (-1 = all)")
-	cmd.Flags().StringVar(&kustoEndpoint, "kusto-endpoint", "", "ADX endpoint for manager-side MultiKueue RayJob logs")
-	cmd.Flags().StringVar(&kustoDatabase, "kusto-database", "", "ADX database for manager-side MultiKueue RayJob logs")
+	cmd.Flags().StringVar(&kustoCluster, "kusto-cluster", "", "cluster identifier in ADX Logs.ContainerLogs for terminal local RayJob logs")
+	cmd.Flags().StringVar(&kustoEndpoint, "kusto-endpoint", "", "ADX endpoint for centrally offloaded RayJob logs")
+	cmd.Flags().StringVar(&kustoDatabase, "kusto-database", "", "ADX database for centrally offloaded RayJob logs")
 	connection.add(cmd)
 	return cmd
 }
