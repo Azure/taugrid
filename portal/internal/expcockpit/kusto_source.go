@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +15,7 @@ import (
 
 	"github.com/Azure/taugrid/core/expkusto"
 	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/portal/internal/expstore"
 	"github.com/Azure/taugrid/portal/internal/portalbin"
 )
@@ -1055,17 +1056,14 @@ func (s KustoSource) executeKustoQueryCommand(ctx context.Context, query string)
 	endpoint := firstNonEmptyString(s.Endpoint, expkusto.DefaultEndpoint)
 	database := firstNonEmptyString(s.Database, expkusto.DefaultDatabase)
 	args, queryInArgs := expandKustoCommandArgs(s.QueryArgs, endpoint, database, query)
-	cmd := exec.CommandContext(ctx, s.QueryCommand, args...)
+	var stdin io.Reader
 	if !queryInArgs {
-		cmd.Stdin = strings.NewReader(query)
+		stdin = strings.NewReader(query)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, stderr, err := kustoquery.RunCommand(ctx, s.QueryCommand, args, stdin)
 	if err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail != "" {
-			return nil, fmt.Errorf("execute Kusto query command: %w: %s", err, detail)
+		if stderr != "" {
+			return nil, fmt.Errorf("execute Kusto query command: %w: %s", err, stderr)
 		}
 		return nil, fmt.Errorf("execute Kusto query command: %w", err)
 	}
