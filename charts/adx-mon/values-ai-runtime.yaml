@@ -1,8 +1,8 @@
-# values-ai-runtime.yaml — AKS AI Runtime preset
+# values-ai-runtime.yaml - GPU cluster preset
 #
-# Applied on top of values.yaml when deployed via the AI Runtime operator
-# on GPU-enabled clusters. Enables GPU-specific telemetry, kernel error
-# monitoring, journal log collection, and Kueue controller scraping.
+# Applied on top of values.yaml for GPU-enabled clusters. Enables GPU-specific
+# telemetry, kernel error monitoring, journal log collection, and Kueue
+# controller scraping.
 #
 # Usage:
 #   helm install adx-mon charts/adx-mon/ \

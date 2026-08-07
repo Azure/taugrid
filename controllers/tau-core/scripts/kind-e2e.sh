@@ -9,8 +9,7 @@ set -euo pipefail
 #
 #   1. Build the current controller image and install it (Deployment and RBAC)
 #      plus the v0.5 tau.azure.com CRDs
-#      from the same manifests ArgoCD would apply
-#      (applications/tau-core-controller/base, via `kubectl apply -k`).
+#      from the chart's Kustomize manifests via `kubectl apply -k`.
 #   2. Prove topology labels reconcile on an existing native-style Node, a newly
 #      joined Flex-style Node, and subsequent label drift.
 #   3. Apply a native TauWorkspace as platform desired state.
@@ -41,7 +40,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONTROLLER_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${CONTROLLER_DIR}/../.." && pwd)"
 TAU_DIR="${REPO_ROOT}/cli"
-APP_BASE_DIR="${REPO_ROOT}/applications/tau-core-controller/base"
+APP_BASE_DIR="${REPO_ROOT}/charts/tau-core-controller/kustomize"
 
 CLUSTER_NAME="${TAU_CORE_KIND_CLUSTER_NAME:-tau-core-e2e}"
 KUBE_CONTEXT="${TAU_CORE_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"
@@ -180,7 +179,7 @@ for want in \
     exit 1
   fi
 done
-if grep -q "aksairuntime.azurecr.io" <<<"${rendered_deployment}"; then
+if grep -q "azurecr.io" <<<"${rendered_deployment}"; then
   echo "local-image deployment rewrite still references the private ACR digest" >&2
   exit 1
 fi
@@ -229,8 +228,7 @@ kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 # LocalQueue is served in BOTH v1beta1 and v1beta2: the controller's own
 # queueStatus()/clusterQueueGPUQuota() (internal/controller/workspace_controller.go)
 # get LocalQueue/ClusterQueue at v1beta1, while reconciliation applies
-# LocalQueue at v1beta2 (matching the real production Kueue chart in
-# applications/tau-queues/base/localqueues.yaml). Both
+# LocalQueue at v1beta2 (matching the production Kueue API). Both
 # schemas are intentionally x-kubernetes-preserve-unknown-fields so the
 # default "None" conversion strategy is a lossless passthrough between them.
 cat >"${SCRATCH_DIR}/mock-kueue-crds.yaml" <<'YAML'

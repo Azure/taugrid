@@ -18,13 +18,13 @@
 {{- /*
 This chart does not create targetNamespace, even though the recorder's Role and
 RoleBinding render into it: it is the observed workload namespace, owned by
-tau-core-controller (from TauWorkspace) or by applications/tau-queues. Creating
+tau-core-controller (from TauWorkspace) or by platform-managed queue policy. Creating
 it here would make this chart a second claimant on a namespace it does not own.
 Refusing early names the value and the owner, instead of surfacing later as
 `namespaces "<name>" not found` on the Role.
 */ -}}
 {{- if and (include "taugrid-core.apiReachable" .) (not (lookup "v1" "Namespace" "" $recorder.targetNamespace)) -}}
-{{- fail (printf "lifecycleRecorder.targetNamespace %q does not exist. This chart does not create it: it is the workload namespace owned by tau-core-controller (via TauWorkspace) or applications/tau-queues. Create it before installing, or point lifecycleRecorder.targetNamespace at an existing workload namespace." $recorder.targetNamespace) -}}
+{{- fail (printf "lifecycleRecorder.targetNamespace %q does not exist. This chart does not create it: it is the workload namespace owned by tau-core-controller (via TauWorkspace) or platform-managed queue policy. Create it before installing, or point lifecycleRecorder.targetNamespace at an existing workload namespace." $recorder.targetNamespace) -}}
 {{- end -}}
 {{- if not $recorder.cluster -}}
 {{- fail "lifecycleRecorder.cluster is required when lifecycleRecorder.enabled=true" -}}

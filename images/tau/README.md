@@ -76,10 +76,10 @@ MCR enablement and cutover steps:
    `teams/aks/ai-runtime/tau.yaml`, modeled after
    [`teams/aks/ai-runtime/gpu-metrics-collector.yaml`](https://github.com/microsoft/mcr/blob/main/teams/aks/ai-runtime/gpu-metrics-collector.yaml)
    from [microsoft/mcr#4921](https://github.com/microsoft/mcr/pull/4921).
-2. Use the same AKS AI Runtime backing registry pattern as gpu-metrics-collector:
+2. Use the existing AKS image publishing pattern for gpu-metrics-collector:
    same subscription/resource group/registry/contact/security group fields, with
-   repo name `unlisted/aks/ai-runtime/tau`. The `unlisted` repo name controls
-   MAR discovery/onboarding; the external pull reference is still
+   repo name `unlisted/aks/ai-runtime/tau`. The `unlisted` repo name controls MAR
+   discovery/onboarding; the external pull reference is still
    `mcr.microsoft.com/aks/ai-runtime/tau:<tag>`.
 3. Confirm the promoted short-SHA tag can be pulled from
    `mcr.microsoft.com/aks/ai-runtime/tau`.

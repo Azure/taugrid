@@ -202,7 +202,7 @@ lifecycleRecorder:
   #
   # The recorder's Role and RoleBinding render here, but this chart never
   # creates this namespace: it is the workload namespace, owned by
-  # tau-core-controller (from TauWorkspace) or by applications/tau-queues.
+  # tau-core-controller (from TauWorkspace) or by platform-managed queue policy.
   # Installing against a namespace that does not exist fails with a message
   # naming this value rather than an apply-time `namespaces "<name>" not found`.
   targetNamespace: ""

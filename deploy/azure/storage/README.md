@@ -76,11 +76,10 @@ kubectl apply -f applications/taugrid/storage/tau-data-lustre.yaml
 kubectl -n ray get pvc blob-training
 ```
 
-The AKS AI Runtime test clusters use the overlay-gated
-`applications/tau-storage` ArgoCD app. Other platform owners create the chosen
-claim in every workload namespace that needs it. The TauGrid distribution does
-not choose a backend, copy these examples into a cluster, or delete storage on
-uninstall.
+Managed test clusters may use an overlay-gated storage application. Other
+platform owners create the chosen claim in every workload namespace that needs
+it. The TauGrid distribution does not choose a backend, copy these examples into
+a cluster, or delete storage on uninstall.
 
 ## Example prerequisites
 

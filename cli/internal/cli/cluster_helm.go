@@ -126,7 +126,7 @@ func wrapTauGridChartError(chart, version, diagnostics string, err error) error 
 		return err
 	}
 	return fmt.Errorf(
-		"cannot resolve default TauGrid OCI chart %s version %s; verify that this version is published and Helm can authenticate to aksairuntime.azurecr.io, or pass --chart <reference-or-local-path>: %w",
+		"cannot resolve default TauGrid OCI chart %s version %s; verify that this version is published and Helm can access the registry, or pass --chart <reference-or-local-path>: %w",
 		chart,
 		version,
 		err,
@@ -148,8 +148,7 @@ func isHelmChartResolutionError(diagnostics string, err error) bool {
 		}
 	}
 
-	registryContext := strings.Contains(message, "aksairuntime.azurecr.io") ||
-		strings.Contains(message, "oci://") ||
+	registryContext := strings.Contains(message, "oci://") ||
 		strings.Contains(message, "registry")
 	if !registryContext {
 		return false

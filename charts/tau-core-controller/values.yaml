@@ -3,8 +3,8 @@
 platformNamespace: tau-platform
 
 # app.kubernetes.io/part-of for every rendered object. The TauGrid distribution
-# leaves this as taugrid; the AKS AI Runtime ArgoCD path renders the literal
-# manifests under kustomize/ instead, which stay on taugrid.
+# leaves this as taugrid; GitOps paths rendering the literal manifests under
+# kustomize/ should keep the same value.
 partOf: taugrid
 
 # Internal preview: the controller image is published to private ACR and is not

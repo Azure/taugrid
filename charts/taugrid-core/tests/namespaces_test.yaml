@@ -64,7 +64,7 @@ tests:
       lifecycleRecorder.targetNamespace: ns-recorder-target
     asserts:
       # The recorder renders a Role and RoleBinding into targetNamespace, but
-      # that namespace belongs to tau-core-controller or applications/tau-queues.
+      # that namespace belongs to tau-core-controller or platform queue policy.
       # lifecycle-recorder.yaml refuses to install when it is absent rather than
       # creating it here; only lifecycleRecorder.namespace is this chart's.
       - hasDocuments:

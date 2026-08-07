@@ -65,11 +65,10 @@ enables Helm's watcher, and Tau translates this compatibility flag to Helm 4's
 `--rollback-on-failure`. `--timeout` bounds each Helm operation and Tau's
 readiness report.
 
-The compiled chart default is the private OCI reference
-`oci://aksairuntime.azurecr.io/unlisted/aks/ai-runtime/helm/taugrid`. The
-requested version must be published and Helm must be authenticated to that
-registry. If either condition is false, Tau reports the exact chart and version
-and asks the operator to pass an accessible `--chart` reference or local path.
+The compiled chart default is a private OCI reference. The requested version
+must be published and Helm must be able to access that registry. If either
+condition is false, Tau reports the exact chart and version and asks the
+operator to pass an accessible `--chart` reference or local path.
 
 `uninstall` runs in two Helm phases. Helm's own uninstall order deletes
 Deployments before custom resources, so removing the release in one pass would

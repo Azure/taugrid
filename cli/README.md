@@ -141,9 +141,7 @@ and `--pvc-uid`. This is an operator handoff requiring permissions to read those
 resources and create `TauWorkspace` objects, not researcher self-service.
 
 See
-[`applications/tau-core-controller/README.md`](../applications/tau-core-controller/README.md)
-and
-[`docs/design/researcher-onboarding-tau-enabled-clusters.md`](../../docs/design/researcher-onboarding-tau-enabled-clusters.md)
+[`docs/design/researcher-onboarding-tau-enabled-clusters.md`](../docs/design/researcher-onboarding-tau-enabled-clusters.md)
 for controller ownership and why `workspace-rbac` — not `cluster-wide` — is
 the actual isolation release gate.
 

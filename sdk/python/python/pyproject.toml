@@ -9,7 +9,7 @@ description = "Python-first Tau SDK. Researchers write Python; the Go tau CLI re
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Azure AI Runtime" }]
+authors = [{ name = "TauGrid maintainers" }]
 dependencies = [
     "PyYAML>=6.0.3",
     "tomli>=2.0; python_version < '3.11'",

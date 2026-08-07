@@ -44,7 +44,7 @@ independent Applications:
 | KubeRay operator | Required for RayJob and RayService workloads. | TauGrid dependency or the platform's pinned ArgoCD Application |
 | GPU drivers and device plugin | Required for GPU workloads. | Your Kubernetes provider's supported GPU enablement path |
 | Storage and Secrets Store CSI drivers | Required when configs reference their volumes or secret providers. | Your Kubernetes provider and CSI driver documentation |
-| Tau workspace controller | Required to reconcile TauWorkspace state and declared Node topology labels. | TauGrid dependency or `applications/tau-core-controller` through ArgoCD |
+| Tau workspace controller | Required to reconcile TauWorkspace state and declared Node topology labels. | TauGrid dependency or the platform's independently managed deployment |
 
 Review upstream release notes and pin component versions rather than following
 mutable tags.

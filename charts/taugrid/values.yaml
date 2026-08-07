@@ -144,10 +144,6 @@ kuberay-operator:
       - name: RAY_metric_cardinality_level
         value: recommended
 
-# The Tau control plane is an internal preview, so its image still lives in a
-# private ACR pinned by digest. A cluster's kubelet identity needs AcrPull on
-# that registry, or the image must be mirrored and overridden here, until the
-# controller is promoted to MCR.
 tau-core-controller:
   platformNamespace: tau-platform
   image:

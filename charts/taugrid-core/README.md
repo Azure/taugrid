@@ -81,7 +81,7 @@ components render into: `prewarm.namespace`, `stellar.namespace`,
 `portal.namespace`, and `lifecycleRecorder.namespace`.
 
 Helm refuses to apply over an object it did not create. A namespace that already
-exists out-of-band — from `applications/tau-queues`, from workspace tooling, or
+exists out-of-band — from platform queue policy, from workspace tooling, or
 from a plain `kubectl create namespace` — has none of Helm's ownership metadata,
 so a chart that rendered it would fail install with:
 
@@ -115,7 +115,7 @@ same command, or keep the release name (see above).
 
 `lifecycleRecorder.targetNamespace` is never created here. It is the observed
 workload namespace, owned by `tau-core-controller` (from a `TauWorkspace`) or by
-`applications/tau-queues`. Enabling the recorder against a namespace that does
+platform queue policy. Enabling the recorder against a namespace that does
 not exist fails with a message naming the value and those owners, instead of
 surfacing later as `namespaces "<name>" not found` on the recorder's Role.
 
@@ -165,7 +165,7 @@ helm upgrade --install taugrid-core ./taugrid-core \
   --kube-context my-cluster \
   -f values-test-clusters.yaml \
   --set stellar.enabled=true \
-  --set stellar.image.repository=aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau \
+  --set stellar.image.repository=<staging-image-repository> \
   --set stellar.image.tag=<pinned-tau-image-tag> \
   --set stellar.kusto.queryCommand=/usr/local/bin/query-kusto \
   --set stellar.serviceAccount.create=true \

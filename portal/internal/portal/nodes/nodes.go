@@ -7,7 +7,7 @@
 // reads core v1 Node objects via internal/portal/kubeclient (client-go), so it
 // shares the Jobs/Ray Kubernetes reader and needs no Kusto access.
 //
-// It mirrors what the gpudash TUI extracts per node (tools/gpudash build_node_rows):
+// It mirrors what the gpudash TUI extracts per node:
 // SKU from node.kubernetes.io/instance-type, pool from
 // kubernetes.azure.com/agentpool, region/zone from topology.kubernetes.io/*,
 // and CPU/memory/GPU from .status.capacity/.allocatable. Capacity quantities are
