@@ -16,7 +16,7 @@ The public repository is organized by ownership and release boundary:
 | `monitoring/` | GPU health and metrics components |
 | `charts/` | Public Helm charts |
 | `images/` | Reproducible container image definitions |
-| `deploy/` | Reusable, non-environment-specific deployment examples |
+| `cluster-overlays/` | Optional, cluster-specific Kubernetes configuration overlays for queues, storage, topology, and dashboards; not installed by the Helm charts |
 | `examples/` | Runnable training, fine-tuning, inference, and local examples |
 | `docs/` | Architecture and contributor documentation |
 | `site/` | Hugo/Docsy documentation site |

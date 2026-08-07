@@ -29,7 +29,8 @@
 # PREREQUISITES (verify before applying):
 #   - Azure Managed Lustre CSI driver installed:
 #       kubectl get csidrivers | grep azurelustre.csi.azure.com
-#   - The workload namespace exists (provisioned by lanes/shared-gpu-queue.yaml).
+#   - The workload namespace exists (for example, after applying
+#       cluster-overlays/queues/shared-gpu-queue.yaml).
 #   - A subnet with enough free IPs for the AMLFS cluster (dynamic provisioning
 #     creates the filesystem; consult the azurelustre-csi-driver docs for the
 #     exact parameter set your driver version expects).
