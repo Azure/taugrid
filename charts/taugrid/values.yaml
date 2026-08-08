@@ -150,10 +150,13 @@ gpu-monitoring:
     # label, so match them by instance type without requiring that label.
     requireAcceleratorLabel: false
 
+# The Tau control plane image is publicly available from MCR and pinned by
+# digest. Override the repository or digest only for a mirrored or pre-release
+# build.
 tau-core-controller:
   platformNamespace: tau-platform
   image:
-    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
+    repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
   tauCluster:
     # Inherits the controller chart's reviewed AKS GPU VM-size catalog, which

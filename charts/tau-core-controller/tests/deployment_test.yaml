@@ -2,14 +2,11 @@ suite: Controller deployment portability
 templates:
   - deployment.yaml
 tests:
-  - it: pins the preview image by digest and does not re-pull it
-    set:
-      image:
-        repository: test.azurecr.io/aks/ai-runtime/tau-core-controller
+  - it: pins the public MCR image by digest and does not re-pull it
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: test.azurecr.io/aks/ai-runtime/tau-core-controller@sha256:6ef8473f89bf0d27dae303aef37b6846915d59b3a4203cdad2f6753875ef10ea
+          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller@sha256:f08c589695d0c9f0b230327eecd01e285801204a48fa1f21be684a08ca1f2357
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
@@ -23,7 +20,7 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --platform-namespace=tau-platform
 
-  - it: accepts a mirrored or promoted image
+  - it: accepts a mirrored image
     set:
       image:
         repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller

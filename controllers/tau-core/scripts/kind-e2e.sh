@@ -171,7 +171,7 @@ if [[ ! -f "${IMAGE_DOCKERFILE}" ]]; then
   exit 1
 fi
 rendered_deployment="$(sed \
-  -e "s#image: aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
+  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
   -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
   "${APP_BASE_DIR}/kustomize/deployment.yaml")"
@@ -334,7 +334,7 @@ load_local_image
 # --leader-elect=false since a single-replica Kind run has no need for the
 # extra Lease-acquisition startup latency.
 sed \
-  -e "s#image: aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
+  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
   -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
   "${APP_BASE_DIR}/kustomize/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"
