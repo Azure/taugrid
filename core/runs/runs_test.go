@@ -23,12 +23,52 @@ func TestHasTauLabel(t *testing.T) {
 		{"nil map", nil, false},
 		{"mixed labels", map[string]string{"app": "foo", workloadmeta.LabelRun: "r1"}, true},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := hasTauLabel(tt.labels); got != tt.want {
 				t.Fatalf("hasTauLabel(%v) = %v, want %v", tt.labels, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBoardIncludesExternalWorkloadsOnlyWhenRequested(t *testing.T) {
+	reader := fakeReader{
+		jobs: []byte(`{"items":[
+			{"metadata":{"name":"tau-job","labels":{"` + workloadmeta.LabelJob + `":"tau-job"}},"status":{"active":1}},
+			{"metadata":{"name":"external-job","labels":{"app":"trainer"}},"status":{"active":1}},
+			{"metadata":{"name":"ray-owned","ownerReferences":[{"kind":"RayJob"}]},"status":{"active":1}}
+		]}`),
+		ray: []byte(`{"items":[
+			{"metadata":{"name":"external-ray","labels":{"app":"ray"}},"status":{"jobDeploymentStatus":"Running"}}
+		]}`),
+	}
+
+	defaultSnap, err := Board(context.Background(), reader, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaultSnap.Runs) != 1 || defaultSnap.Runs[0].Name != "tau-job" || defaultSnap.Runs[0].Source != "" {
+		t.Fatalf("default runs = %+v", defaultSnap.Runs)
+	}
+
+	externalSnap, err := Board(context.Background(), reader, Options{IncludeExternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(externalSnap.Runs) != 3 {
+		t.Fatalf("external runs = %+v", externalSnap.Runs)
+	}
+	sources := map[string]string{}
+	for _, run := range externalSnap.Runs {
+		sources[run.Name] = run.Source
+	}
+	if sources["tau-job"] != "tau" || sources["external-job"] != "external" || sources["external-ray"] != "external" {
+		t.Fatalf("sources = %+v", sources)
+	}
+	if _, ok := sources["ray-owned"]; ok {
+		t.Fatalf("RayJob-owned Job was not excluded: %+v", externalSnap.Runs)
 	}
 }
 

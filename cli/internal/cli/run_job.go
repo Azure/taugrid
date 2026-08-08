@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -207,6 +208,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		PVCMount:              pvcMount,
 		Volumes:               volumes,
 		VolumeMounts:          volumeMounts,
+		ImageAssets:           append([]runconfig.ImageAsset{}, o.imageAssets...),
 		Env:                   env,
 		EnvSecrets:            envSecrets,
 		RedactSecrets:         o.dryRun == "client",
