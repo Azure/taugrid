@@ -85,7 +85,8 @@ const (
 	LabelService      = "tau.azure.com/service"
 	LabelDataset      = "tau.azure.com/dataset"
 
-	AnnotationNamespace = "tau.azure.com/namespace"
+	AnnotationNamespace  = "tau.azure.com/namespace"
+	AnnotationArchivedAt = "tau.azure.com/archived-at"
 
 	// AnnotationOwnerName and AnnotationOwnerKind record the Job/RayJob that
 	// owns a generated Secret so the ownerReference can be patched in after

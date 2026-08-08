@@ -72,13 +72,18 @@ tau run resume <run-name> --config tau/train.yaml
 
 `--config` is required — resume re-resolves the same direct run config used
 for the original submission. Tau discovers the checkpoint directory (or
-`--from` to override it), injects it into the new attempt, deletes the old
-workload, and resubmits. **If the original failure was `OOMKilled`, `resume`
+`--from` to override it), injects it into a successor execution, and submits
+that successor with a fresh immutable run ID. The failed workload remains
+available as provenance. **If the original failure was `OOMKilled`, `resume`
 requires `--force`** — the same opt-in-only-after-you've-changed-something
 reasoning as automatic retry applies here too, just gated by an explicit flag
 instead of a config list.
 
 Resume requires a durable checkpoint contract (a `storage` mount under
 `/data`, not node-local scratch). If your workload only ever wrote
-checkpoints to ephemeral storage, there is nothing to resume from — that
-state does not survive the workload's deletion.
+checkpoints to ephemeral storage, there is nothing to resume from — pod-local
+state does not survive the failed execution.
+
+Automatic retries follow the same identity rule: every retry is a new physical
+Job/RayJob under the same logical config name. Tau does not delete the failed
+predecessor to make room for the retry.

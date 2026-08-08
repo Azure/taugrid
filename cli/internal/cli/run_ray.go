@@ -43,6 +43,10 @@ func newRunRayRequest(options runDispatchOptions, name string) (runRayRequest, e
 	if name == "" {
 		return runRayRequest{}, fmt.Errorf("ray runs require NAME")
 	}
+	identity, err := ensureRunIdentity(&options, name)
+	if err != nil {
+		return runRayRequest{}, err
+	}
 	if options.script == "" {
 		return runRayRequest{}, fmt.Errorf("engine=ray requires run.entrypoint")
 	}
@@ -52,7 +56,7 @@ func newRunRayRequest(options runDispatchOptions, name string) (runRayRequest, e
 	if len(options.volumeSpecs) > 0 || len(options.mountSpecs) > 0 {
 		return runRayRequest{}, fmt.Errorf("ray run configs support storage.data_pvc/output, but not storage.volumes/mounts")
 	}
-	return runRayRequest{Name: name, Options: options}, nil
+	return runRayRequest{Name: identity.PhysicalName, Options: options}, nil
 }
 
 func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRayRequest, captureCommand string) error {
@@ -168,6 +172,9 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	}
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
+	labels[workloadmeta.LabelRunID] = o.runID
+	labels[workloadmeta.LabelRun] = o.logicalName
+	labels[workloadmeta.LabelJob] = name
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
 	if o.submissionID != "" {
 		annotations[workloadmeta.AnnotationSubmissionID] = o.submissionID

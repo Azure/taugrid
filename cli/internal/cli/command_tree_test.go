@@ -69,7 +69,7 @@ func TestRunHelpIsConfigFirst(t *testing.T) {
 
 func TestRunProjectFlagIsInheritedByEveryLifecycleCommand(t *testing.T) {
 	root := NewRoot()
-	for _, name := range []string{"status", "logs", "get", "list", "cancel", "resume"} {
+	for _, name := range []string{"status", "logs", "get", "list", "cancel", "delete", "archive", "resume"} {
 		command, _, err := root.Find([]string{"run", name})
 		if err != nil {
 			t.Fatalf("find run %s: %v", name, err)

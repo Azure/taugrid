@@ -42,6 +42,7 @@ const (
 
 type managerCleanupHooks struct {
 	fetchSnapshot func(context.Context) (status.Snapshot, error)
+	deleteExact   func(context.Context, kubeRawRunner, string, string, io.Writer) error
 	wait          func(context.Context, time.Duration) error
 	now           func() time.Time
 }
@@ -65,7 +66,11 @@ func deleteWorkloadAndWaitForManagerCleanup(ctx context.Context, r kubeRawRunner
 	if capturedCluster == "" {
 		capturedCluster = before.RayClusterName
 	}
-	if err := deleteWorkload(ctx, r, name, ns, w); err != nil {
+	deleteExact := hooks.deleteExact
+	if deleteExact == nil {
+		deleteExact = deleteWorkload
+	}
+	if err := deleteExact(ctx, r, name, ns, w); err != nil {
 		return err
 	}
 	if err := waitForManagerCleanup(ctx, r, name, ns, before, beforeErr, opts, hooks); err != nil {

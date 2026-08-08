@@ -40,6 +40,10 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 	if strings.TrimSpace(name) == "" {
 		return runJobRequest{}, fmt.Errorf("job runs require NAME")
 	}
+	identity, err := ensureRunIdentity(&options, name)
+	if err != nil {
+		return runJobRequest{}, err
+	}
 	if err := validateRunJobStorageConfig(options); err != nil {
 		return runJobRequest{}, err
 	}
@@ -55,7 +59,7 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 				"and keep the run to a single self-contained entrypoint.")
 	}
 	if options.output == "" && firstNonEmpty(options.dataPVC, options.resultPVC) != "" {
-		options.output = defaultRunOutputPath(name)
+		options.output = defaultRunOutputPath(identity.PhysicalName)
 	}
 	if options.metricsOffloadEnabled && strings.TrimSpace(options.metricsSessionID) == "" {
 		sessionID, err := newMetricsSessionID()
@@ -72,7 +76,7 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 	if err := ensureArtifactPublicationID(&options); err != nil {
 		return runJobRequest{}, err
 	}
-	return runJobRequest{Name: name, Options: options}, nil
+	return runJobRequest{Name: identity.PhysicalName, Options: options}, nil
 }
 
 func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJobRequest, captureCommand string) error {
@@ -312,6 +316,9 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	}
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	opts.Labels, opts.Annotations = experiment.MergeMetadata(opts.Labels, opts.Annotations, capture)
+	opts.Labels[workloadmeta.LabelRunID] = o.runID
+	opts.Labels[workloadmeta.LabelRun] = o.logicalName
+	opts.Labels[workloadmeta.LabelJob] = request.Name
 	opts.Labels = workloadmeta.StampWorkspace(opts.Labels, o.workspace)
 	if o.submissionID != "" {
 		opts.Annotations[workloadmeta.AnnotationSubmissionID] = o.submissionID

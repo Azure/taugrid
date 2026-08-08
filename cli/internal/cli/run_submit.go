@@ -334,6 +334,8 @@ func runSubmissionGVR(resource string) (schema.GroupVersionResource, error) {
 		return schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}, nil
 	case "rayjob", "rayjobs", "rayjob.ray.io", "rayjobs.ray.io":
 		return schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayjobs"}, nil
+	case "raycluster", "rayclusters", "raycluster.ray.io", "rayclusters.ray.io":
+		return schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}, nil
 	case "service", "services":
 		return schema.GroupVersionResource{Version: "v1", Resource: "services"}, nil
 	case "secret", "secrets":

@@ -72,6 +72,11 @@ Examples:
 				return err
 			}
 			defer restore()
+			workloadRef, err := resolveRunWorkload(cmd.Context(), kube.New(resolvedContext), ns, name)
+			if err != nil {
+				return err
+			}
+			name = workloadRef.Name
 			switch output {
 			case "table", "json", "raw":
 			default:

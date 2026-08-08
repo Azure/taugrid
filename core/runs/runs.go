@@ -284,7 +284,7 @@ func parseJobs(now time.Time, data []byte) []Run {
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "Job",
-			Status:             jobStatus(item.Status.Conditions, item.Status.Active, item.Status.Succeeded, item.Status.Failed),
+			Status:             archivedStatus(item.Metadata.Annotations, jobStatus(item.Status.Conditions, item.Status.Active, item.Status.Succeeded, item.Status.Failed)),
 			Created:            created,
 			Age:                FormatAge(now, created),
 			RunID:              runID(item.Metadata.Labels),
@@ -313,7 +313,7 @@ func parseRayJobs(now time.Time, data []byte) []Run {
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "RayJob",
-			Status:             rayJobStatus(item.Status.JobDeploymentStatus, item.Status.JobStatus),
+			Status:             archivedStatus(item.Metadata.Annotations, rayJobStatus(item.Status.JobDeploymentStatus, item.Status.JobStatus)),
 			Created:            created,
 			Age:                FormatAge(now, created),
 			RunID:              runID(item.Metadata.Labels),
@@ -324,7 +324,15 @@ func parseRayJobs(now time.Time, data []byte) []Run {
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
 		})
 	}
+
 	return out
+}
+
+func archivedStatus(annotations map[string]string, current string) string {
+	if strings.TrimSpace(annotations[workloadmeta.AnnotationArchivedAt]) != "" {
+		return "Archived"
+	}
+	return current
 }
 
 // hasTauLabel reports whether any label key is under the Tau prefix.

@@ -60,7 +60,7 @@ func formatRaySubmitHandoff(name, namespace, kubeContext string, preset *runtopo
 	fmt.Fprintf(&b, "head:    cluster=$(kubectl get rayjob %s -n %s -o jsonpath='{.status.rayClusterName}'%s) && kubectl get pod -n %s -l ray.io/cluster=$cluster,ray.io/node-type=head%s\n", name, namespace, contextFlag(kubeContext), namespace, contextFlag(kubeContext))
 	fmt.Fprintf(&b, "logs:    tau run logs %s -n %s -f%s\n", name, namespace, contextFlag(kubeContext))
 	fmt.Fprintf(&b, "kueue:   uid=$(kubectl get rayjob %s -n %s -o jsonpath='{.metadata.uid}'%s) && kubectl get workload -n %s -l kueue.x-k8s.io/job-uid=$uid%s\n", name, namespace, contextFlag(kubeContext), namespace, contextFlag(kubeContext))
-	fmt.Fprintf(&b, "delete:  kubectl delete rayjob %s -n %s%s\n", name, namespace, contextFlag(kubeContext))
+	fmt.Fprintf(&b, "cancel:  tau run cancel %s -n %s%s\n", name, namespace, contextFlag(kubeContext))
 	if preset != nil {
 		b.WriteString(formatPresetHandoff(*preset))
 	}

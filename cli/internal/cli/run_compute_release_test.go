@@ -149,7 +149,7 @@ func TestWaitForComputeRelease_TimeoutNamesClusterPodsAndRecovery(t *testing.T) 
 		"run-a-raycluster",
 		"1 pod(s) still holding capacity",
 		"do NOT resubmit yet",
-		"kubectl -n ray delete rayclusters.ray.io run-a-raycluster",
+		"tau run delete run-a -n ray",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("expected timeout error to contain %q, got %q", want, msg)

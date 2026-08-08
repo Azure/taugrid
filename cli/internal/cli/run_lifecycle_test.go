@@ -21,10 +21,12 @@ func TestRunStatusRegistersRunProfileFlag(t *testing.T) {
 
 func TestRunLifecycleQueriesRegisterWorkspaceFlag(t *testing.T) {
 	tests := map[string]func() *cobra.Command{
-		"status": newRunStatusCmd,
-		"logs":   newRunLogsCmd,
-		"get":    newRunGetCmd,
-		"cancel": newRunCancelCmd,
+		"status":  newRunStatusCmd,
+		"logs":    newRunLogsCmd,
+		"get":     newRunGetCmd,
+		"cancel":  newRunCancelCmd,
+		"delete":  newRunDeleteCmd,
+		"archive": newRunArchiveCmd,
 	}
 	for name, build := range tests {
 		t.Run(name, func(t *testing.T) {
