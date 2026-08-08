@@ -209,7 +209,7 @@ wait_for_workload_finished() {
 wait_for_rayjob_running() {
   local name="$1"
   local timeout="$2"
-  local deadline status deployment cluster_name cluster_state scheduling pod_states
+  local deadline status deployment cluster_name cluster_state scheduling scheduling_issue pod_states
   deadline=$((SECONDS + ${timeout%s}))
   while (( SECONDS < deadline )); do
     status="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$name" -o jsonpath='{.status.jobStatus}' 2>/dev/null || true)"
@@ -227,6 +227,7 @@ wait_for_rayjob_running() {
       echo "RayJob ${name} failed: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>} rayClusterStatus=${cluster_state:-<empty>}" >&2
       return 1
     fi
+    scheduling_issue=""
     if [[ -n "$cluster_name" ]]; then
       scheduling="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get pods \
         -l "ray.io/cluster=${cluster_name}" \
@@ -234,8 +235,7 @@ wait_for_rayjob_running() {
         2>/dev/null || true)"
       while IFS=$'\t' read -r pod_name scheduled reason message; do
         if [[ "$scheduled" == "False" && "$reason" == "Unschedulable" ]]; then
-          echo "RayJob ${name} cannot become ready: pod ${pod_name} is Unschedulable: ${message}" >&2
-          return 1
+          scheduling_issue="; pod ${pod_name} is currently Unschedulable: ${message}"
         fi
       done <<<"$scheduling"
 
@@ -252,7 +252,7 @@ wait_for_rayjob_running() {
         fi
       done <<<"$pod_states"
     fi
-    echo "waiting for RayJob ${name}: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>} rayCluster=${cluster_name:-<empty>} rayClusterStatus=${cluster_state:-<empty>}"
+    echo "waiting for RayJob ${name}: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>} rayCluster=${cluster_name:-<empty>} rayClusterStatus=${cluster_state:-<empty>}${scheduling_issue}"
     sleep 2
   done
   echo "timed out waiting for RayJob ${name} to reach Running with a ready RayCluster" >&2
