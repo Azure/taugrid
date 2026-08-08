@@ -149,6 +149,32 @@ func TestCheckStillValidatesEnabledComponentsWhenAnotherIsDisabled(t *testing.T)
 	}
 }
 
+func TestCheckSkipsDisabledTauCoreSurfaces(t *testing.T) {
+	runner := readyRunner()
+	delete(runner, "get deployment tau-core-controller --namespace tau-platform --output=json")
+	delete(runner, "get clusters.tau.azure.com cluster --output=json")
+	delete(runner, "get validatingadmissionpolicy tau-quota-approval-guard --output=json")
+	delete(runner, "get validatingadmissionpolicybinding tau-quota-approval-guard --output=json")
+	opts := testOptions()
+	opts.DisabledComponents = []Component{ComponentTauCore}
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("disabled tau-core-controller blocked readiness:\n%s", report.Summary())
+	}
+	summary := report.Summary()
+	for _, want := range []string{
+		"SKIP  Tau controller       components.tauCoreController.enabled is false in the Helm release",
+		"SKIP  TauCluster           components.tauCoreController.enabled is false in the Helm release",
+		"SKIP  Quota guard          components.tauCoreController.enabled is false in the Helm release",
+		"READY: 4/4 checks passed",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+}
+
 func TestCheckFailsDisabledComponentPeersWhenDeploymentListErrors(t *testing.T) {
 	runner := readyRunner()
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
@@ -182,14 +208,19 @@ func TestDisabledComponentsReadsChartSwitches(t *testing.T) {
 			values: `{"baselineQueue":{"enabled":true}}`,
 		},
 		{
-			name:   "both disabled",
-			values: `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false}}}`,
-			want:   []Component{ComponentKueue, ComponentKubeRay},
+			name:   "all validated components disabled",
+			values: `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false}}}`,
+			want:   []Component{ComponentKueue, ComponentKubeRay, ComponentTauCore},
 		},
 		{
 			name:   "only kuberay disabled",
 			values: `{"components":{"kueue":{"enabled":true},"kuberayOperator":{"enabled":false}}}`,
 			want:   []Component{ComponentKubeRay},
+		},
+		{
+			name:   "only tau core disabled",
+			values: `{"components":{"tauCoreController":{"enabled":false}}}`,
+			want:   []Component{ComponentTauCore},
 		},
 		{
 			name:   "shorthand bool leaves the subchart installed",

@@ -193,7 +193,7 @@ if grep -q "azurecr.io" <<<"${rendered_deployment}"; then
 fi
 
 echo "== static guard: go build/vet for the controller module =="
-(cd "${CONTROLLER_DIR}" && go build ./... && go vet ./...)
+(cd "${CONTROLLER_DIR}" && go build -buildvcs=false ./... && go vet ./...)
 
 echo "static checks passed"
 if [[ "${STATIC_ONLY}" == "1" ]]; then
@@ -351,7 +351,7 @@ kubectl -n "${PLATFORM_NAMESPACE}" rollout status deployment/tau-core-controller
 # existing Kind Node stands in for an AKS-managed pool Node; a newly created
 # Node object stands in for a later Flex join.
 echo "== proving continuous native and Flex Node topology reconciliation =="
-native_node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+native_node="$(kubectl get nodes -l 'node-role.kubernetes.io/control-plane' -o jsonpath='{.items[0].metadata.name}')"
 kubectl label node "${native_node}" \
   node.kubernetes.io/instance-type=Standard_ND96amsr_A100_v4 --overwrite
 
@@ -578,13 +578,15 @@ kubectl auth can-i create configmaps -n "${TARGET_NAMESPACE}" --as=researcher@ex
 kubectl auth can-i get configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i create quotarequests.tau.azure.com -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+kubectl auth can-i get "clusterqueues.kueue.x-k8s.io/${WORKSPACE_NAME}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+[[ "$(kubectl auth can-i list clusterqueues.kueue.x-k8s.io --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i list workspaces.tau.azure.com -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i update "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 # Cannot read another namespace's secrets: tau-researcher-v1 is bound via a
 # namespace-scoped RoleBinding in the target namespace only, so this same
 # subject has zero permissions in tau-platform (or any other namespace).
 [[ "$(kubectl auth can-i get secrets -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
-[[ "$(kubectl auth can-i list secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" != "yes" ]] # secrets are namespace-scoped create/get, not enumerable elsewhere; see below for the positive case
+kubectl auth can-i list secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 # Cannot create cluster-scoped resources.
 [[ "$(kubectl auth can-i create namespaces --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
@@ -650,7 +652,7 @@ fi
 
 tau_home="${SCRATCH_DIR}/rune-home"
 mkdir -p "${tau_home}/home" "${tau_home}/tau" "${tau_home}/tau-config/connections" "${tau_home}/tau-config/kubeconfigs"
-go build -o "${tau_home}/tau-bin" ./cmd/tau
+go build -buildvcs=false -o "${tau_home}/tau-bin" ./cmd/tau
 cp "${SCRATCH_DIR}/kubeconfig-impersonation.json" "${tau_home}/tau-config/kubeconfigs/researcher.yaml"
 chmod 600 "${tau_home}/tau-config/kubeconfigs/researcher.yaml"
 
@@ -685,6 +687,7 @@ entrypoint: ../train.sh
 runtime:
   image: mcr.microsoft.com/azurelinux/base/core:3.0
 compute:
+  gpus: 0
   cpu_request: 50m
   memory_request: 64Mi
   cpu_limit: 250m
@@ -724,15 +727,19 @@ JSON
 # non-interactive path.
 if ! (
   cd "${tau_home}"
-  script -q /dev/null env \
-    HOME="${tau_home}/home" \
-    TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run train --dry-run=client
+  script -q -c \
+    "env HOME='${tau_home}/home' TAU_CONFIG_DIR='${tau_home}/tau-config' '${tau_home}/tau-bin' run train --dry-run=client" \
+    /dev/null
 ) >"${tau_home}/verified-train.yaml"; then
   cat "${tau_home}/verified-train.yaml" >&2
   exit 1
 fi
 grep -q "name: project-train" "${tau_home}/verified-train.yaml"
+grep -q "kueue.x-k8s.io/queue-name: <unresolved-queue>" "${tau_home}/verified-train.yaml"
+
+kubectl -n "${TARGET_NAMESPACE}" delete jobs.batch \
+  -l tau.azure.com/onboarding-smoke=true \
+  --ignore-not-found --wait=true >/dev/null
 
 (
   cd "${tau_home}"
@@ -744,7 +751,7 @@ SMOKE_PID=$!
 deadline=$((SECONDS + WAIT_SECONDS))
 smoke_job=""
 while (( SECONDS < deadline )); do
-  smoke_job="$(kubectl -n "${TARGET_NAMESPACE}" get jobs.batch -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep '^smoke-' | head -n1 || true)"
+  smoke_job="$(kubectl -n "${TARGET_NAMESPACE}" get jobs.batch -l tau.azure.com/onboarding-smoke=true -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep '^smoke-' | tail -n1 || true)"
   [[ -n "${smoke_job}" ]] && break
   sleep 1
 done
@@ -764,16 +771,14 @@ wait "${SMOKE_PID}"
 grep -q "Run: ${smoke_job}" "${tau_home}/smoke.out"
 grep -q "Workspace: ${WORKSPACE_NAME}" "${tau_home}/smoke.out"
 grep -q "Phase: Succeeded" "${tau_home}/smoke.out"
-grep -q "Tau onboarding complete." "${tau_home}/smoke.out"
+grep -q "Platform reachable:" "${tau_home}/smoke.out"
 
 (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run train --dry-run=client
-) >"${SCRATCH_DIR}/tau-run-train.yaml"
-grep -q "namespace: ${TARGET_NAMESPACE}" "${SCRATCH_DIR}/tau-run-train.yaml"
-grep -q "kueue.x-k8s.io/queue-name: ${WORKSPACE_NAME}" "${SCRATCH_DIR}/tau-run-train.yaml"
-grep -q "name: project-train" "${SCRATCH_DIR}/tau-run-train.yaml"
+    "${tau_home}/tau-bin" run train --dry-run=server
+) >"${SCRATCH_DIR}/tau-run-train.txt"
+grep -q "job.batch/project-train created (server dry run)" "${SCRATCH_DIR}/tau-run-train.txt"
 
 (
   cd "${tau_home}"
@@ -817,6 +822,10 @@ kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAM
   -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' | grep -qx ExistingClusterAuthorization
 if kubectl -n "${TARGET_NAMESPACE}" get rolebinding tau-researcher-v1 >/dev/null 2>&1; then
   echo "cluster-wide authorization retained the researcher RoleBinding" >&2
+  exit 1
+fi
+if kubectl get clusterrolebinding "tau-clusterqueue-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
+  echo "cluster-wide authorization retained the ClusterQueue reader ClusterRoleBinding" >&2
   exit 1
 fi
 if kubectl -n "${PLATFORM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1 ||
@@ -868,6 +877,10 @@ if kubectl -n "${PLATFORM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE
 fi
 if kubectl -n "${PLATFORM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
   echo "platform-namespace reader RoleBinding tau-workspace-reader-${WORKSPACE_NAME} was not cleaned up" >&2
+  exit 1
+fi
+if kubectl get clusterrolebinding "tau-clusterqueue-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
+  echo "ClusterQueue reader ClusterRoleBinding tau-clusterqueue-reader-${WORKSPACE_NAME} was not cleaned up" >&2
   exit 1
 fi
 

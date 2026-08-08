@@ -25,5 +25,6 @@ const (
 
 	workspaceFinalizer = labelkeys.FinalizerWorkspaceCleanup
 
-	defaultRoleName = "tau-researcher-v1"
+	defaultRoleName            = "tau-researcher-v1"
+	clusterQueueReaderRoleName = "tau-clusterqueue-reader-v1"
 )

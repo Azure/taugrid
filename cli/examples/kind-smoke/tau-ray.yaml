@@ -11,7 +11,7 @@ compute:
   head_cpu_request: "1"
   head_memory_request: 512Mi
   head_cpu_limit: "1"
-  head_memory_limit: 2Gi
+  head_memory_limit: 6Gi
   worker_cpu_request: 500m
   worker_memory_request: 256Mi
   worker_cpu_limit: "1"

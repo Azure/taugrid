@@ -43,6 +43,7 @@ func TestRenderSmokeIsBoundedKueueJob(t *testing.T) {
 		"serviceAccountName: tau-workload",
 		workloadmeta.LabelWorkspace + ": sample",
 		workloadmeta.LabelRunID + ": smoke-test",
+		workloadmeta.LabelOnboardingSmoke + ": \"true\"",
 		workloadmeta.LabelWorkloadKind + ": job",
 		workloadmeta.AnnotationWorkspaceID + ": sample",
 		workloadmeta.AnnotationResultScope + ": /data/workspaces/sample",

@@ -1,0 +1,126 @@
+name: TauGrid Kubernetes Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/taugrid-kubernetes-validation.yml
+      - charts/tau-core-controller/**
+      - charts/taugrid/**
+      - charts/taugrid-core/**
+      - cli/**
+      - controllers/tau-core/**
+      - core/**
+      - images/tau-core-controller/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/taugrid-kubernetes-validation.yml
+      - charts/tau-core-controller/**
+      - charts/taugrid/**
+      - charts/taugrid-core/**
+      - cli/**
+      - controllers/tau-core/**
+      - core/**
+      - images/tau-core-controller/**
+  workflow_dispatch:
+
+concurrency:
+  group: taugrid-kubernetes-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  GOTOOLCHAIN: local
+  KIND_VERSION: v0.32.0
+  KIND_LINUX_AMD64_SHA256: 50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
+
+jobs:
+  controller-smoke:
+    name: Controller smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: controllers/tau-core/go.mod
+          cache-dependency-path: |
+            controllers/tau-core/go.sum
+            cli/go.sum
+            core/go.sum
+
+      - name: Install Kind
+        shell: bash
+        run: |
+          kind_path="${RUNNER_TEMP}/kind"
+          curl --fail --location --retry 3 \
+            --output "${kind_path}" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_LINUX_AMD64_SHA256}  ${kind_path}" | sha256sum --check --strict
+          chmod +x "${kind_path}"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Run controller smoke
+        env:
+          TAU_CORE_KIND_DELETE_CLUSTER: "1"
+          TAU_CORE_KIND_RECREATE: "1"
+        run: make -C controllers/tau-core test-kind-e2e
+
+  runtime-smoke:
+    name: Runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: |
+            cli/go.sum
+            core/go.sum
+
+      - name: Install Kind
+        shell: bash
+        run: |
+          kind_path="${RUNNER_TEMP}/kind"
+          curl --fail --location --retry 3 \
+            --output "${kind_path}" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_LINUX_AMD64_SHA256}  ${kind_path}" | sha256sum --check --strict
+          chmod +x "${kind_path}"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Run runtime smoke
+        env:
+          TAU_KIND_DELETE_CLUSTER: "1"
+          TAU_KIND_RAY_WAIT_FOR_COMPLETION: "1"
+          TAU_KIND_RECREATE: "1"
+        run: make -C cli test-kind-e2e
+
+  required:
+    name: Required
+    if: always()
+    needs:
+      - controller-smoke
+      - runtime-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check validation result
+        env:
+          CONTROLLER_SMOKE_RESULT: ${{ needs.controller-smoke.result }}
+          RUNTIME_SMOKE_RESULT: ${{ needs.runtime-smoke.result }}
+        run: |
+          test "${CONTROLLER_SMOKE_RESULT}" = success
+          test "${RUNTIME_SMOKE_RESULT}" = success
