@@ -49,7 +49,9 @@ jobs:
           # Charts to validate = changed chart directories that contain a Chart.yaml.
           CHART_LIST=$(
             printf '%s\n' "${CHANGED_DIRS}" | while IFS= read -r dir; do
-              [[ -n "$dir" && -f "${dir}/Chart.yaml" ]] && echo "$dir"
+              if [[ -n "$dir" && -f "${dir}/Chart.yaml" ]]; then
+                echo "$dir"
+              fi
             done | sort -u
           )
 
