@@ -235,6 +235,11 @@ func fetchPVCList(ctx context.Context, kubeContext, namespace, runName, pvcName,
 	return fetchPVCListWithMode(ctx, kubeContext, namespace, runName, pvcName, dirPath, false)
 }
 
+// fetchPVCListRecursive returns every descendant as a relative path.
+func fetchPVCListRecursive(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string) ([]string, error) {
+	return fetchPVCListWithMode(ctx, kubeContext, namespace, runName, pvcName, dirPath, true)
+}
+
 func fetchPVCListWithMode(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string, recursive bool) ([]string, error) {
 	if pvcName == "" {
 		pvcName = defaultTauPVCName

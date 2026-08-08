@@ -50,6 +50,18 @@ func (s listErrorStore) List(context.Context, string) ([]Object, error) {
 	return nil, s.err
 }
 
+type downloadErrorStore struct {
+	memoryStore
+	fail string
+}
+
+func (s downloadErrorStore) Download(ctx context.Context, name string, out io.Writer) error {
+	if name == s.fail {
+		return errors.New("download interrupted")
+	}
+	return s.memoryStore.Download(ctx, name, out)
+}
+
 func testRuntime() Runtime {
 	return Runtime{
 		BundleID:           "bundle-1",
@@ -278,7 +290,7 @@ func TestDownloadRejectsExistingDestinationWithoutReplacingIt(t *testing.T) {
 
 func TestDownloadChecksSizeBeforePublishingDestination(t *testing.T) {
 	store := memoryStore{"runs/training-1/result.json": []byte("actual")}
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "bundle")
 	target := filepath.Join(root, "runs", "training-1", "result.json")
 	_, err := Download(context.Background(), store, Manifest{}, []Object{{
 		Name: "runs/training-1/result.json",
@@ -289,5 +301,34 @@ func TestDownloadChecksSizeBeforePublishingDestination(t *testing.T) {
 	}
 	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
 		t.Fatalf("size mismatch published destination: %v", statErr)
+	}
+}
+
+func TestDownloadPublishesNothingWhenLaterObjectFails(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "bundle")
+	store := downloadErrorStore{
+		memoryStore: memoryStore{
+			"runs/training-1/first.json":  []byte("first"),
+			"runs/training-1/second.json": []byte("second"),
+		},
+		fail: "runs/training-1/second.json",
+	}
+	_, err := Download(context.Background(), store, Manifest{}, []Object{
+		{Name: "runs/training-1/first.json", Size: 5},
+		{Name: "runs/training-1/second.json", Size: 6},
+	}, root)
+	if err == nil || !strings.Contains(err.Error(), "download interrupted") {
+		t.Fatalf("interrupted download error = %v", err)
+	}
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		t.Fatalf("interrupted download published destination: %v", statErr)
+	}
+	stages, globErr := filepath.Glob(filepath.Join(parent, ".bundle.tau-download-*"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(stages) != 0 {
+		t.Fatalf("interrupted download left staging directories: %v", stages)
 	}
 }

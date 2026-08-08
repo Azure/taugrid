@@ -52,9 +52,11 @@ the non-secret Blob transport identity on new workloads; this metadata contains
 no account key, SAS token, or other repository credential. Multi-node Indexed
 Jobs intentionally do not emit a bundle acknowledgement until Tau has a
 Job-level coordinator; a single index is not allowed to claim completion for the
-whole Job. Bundle retrieval also requires the result PVC at Tau's `/data`
-durable-storage root; custom mount roots continue to run without a bundle
-acknowledgement.
+whole Job. Jobs that rely entirely on the image's `ENTRYPOINT`/`CMD`, and
+file-valued `storage.output` paths, also continue without a bundle
+acknowledgement because Tau cannot safely wrap them as a result directory.
+Bundle retrieval requires the result PVC at Tau's `/data` durable-storage root;
+custom mount roots continue to run without a bundle acknowledgement.
 
 Main field groups:
 

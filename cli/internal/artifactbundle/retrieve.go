@@ -161,18 +161,24 @@ func Download(ctx context.Context, store Store, manifest Manifest, objects []Obj
 	if err != nil {
 		return nil, fmt.Errorf("resolve artifact bundle destination: %w", err)
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, fmt.Errorf("create artifact bundle destination: %w", err)
-	}
-	if info, err := os.Lstat(root); err != nil {
+	if _, err := os.Lstat(root); err == nil {
+		return nil, fmt.Errorf("artifact bundle destination already exists: %s", root)
+	} else if !os.IsNotExist(err) {
 		return nil, err
-	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, fmt.Errorf("artifact bundle destination %s must be a real directory", root)
 	}
+	parent := filepath.Dir(root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return nil, fmt.Errorf("create artifact bundle destination parent: %w", err)
+	}
+	stage, err := os.MkdirTemp(parent, "."+filepath.Base(root)+".tau-download-*")
+	if err != nil {
+		return nil, fmt.Errorf("create artifact bundle staging directory: %w", err)
+	}
+	defer os.RemoveAll(stage)
 	targets := make([]string, len(objects))
 	seenTargets := make(map[string]string, len(objects))
 	for i, object := range objects {
-		target, err := downloadTarget(root, object.Name)
+		target, err := downloadTarget(stage, object.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -180,28 +186,13 @@ func Download(ctx context.Context, store Store, manifest Manifest, objects []Obj
 			return nil, fmt.Errorf("artifact bundle objects %q and %q resolve to the same destination", previous, object.Name)
 		}
 		seenTargets[target] = object.Name
-		if _, err := os.Lstat(target); err == nil {
-			return nil, fmt.Errorf("artifact bundle destination file already exists: %s", target)
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
 		targets[i] = target
 	}
-	metadataDir := filepath.Join(root, ".tau-bundle")
-	for _, target := range []string{
-		filepath.Join(metadataDir, "manifest.json"),
-		filepath.Join(metadataDir, "files.json"),
-	} {
-		if _, err := os.Lstat(target); err == nil {
-			return nil, fmt.Errorf("artifact bundle metadata file already exists: %s", target)
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
+	metadataDir := filepath.Join(stage, ".tau-bundle")
 	files := make([]DownloadedFile, 0, len(objects))
 	for i, object := range objects {
 		target := targets[i]
-		if err := ensureSafeDirectory(root, filepath.Dir(target)); err != nil {
+		if err := ensureSafeDirectory(stage, filepath.Dir(target)); err != nil {
 			return nil, err
 		}
 		file, err := os.CreateTemp(filepath.Dir(target), ".tau-download-*")
@@ -249,7 +240,7 @@ func Download(ctx context.Context, store Store, manifest Manifest, objects []Obj
 			SHA256: hex.EncodeToString(hash.Sum(nil)),
 		})
 	}
-	if err := ensureSafeDirectory(root, metadataDir); err != nil {
+	if err := ensureSafeDirectory(stage, metadataDir); err != nil {
 		return nil, err
 	}
 	if err := writeJSONAtomic(filepath.Join(metadataDir, "manifest.json"), manifest); err != nil {
@@ -257,6 +248,9 @@ func Download(ctx context.Context, store Store, manifest Manifest, objects []Obj
 	}
 	if err := writeJSONAtomic(filepath.Join(metadataDir, "files.json"), files); err != nil {
 		return nil, err
+	}
+	if err := os.Rename(stage, root); err != nil {
+		return nil, fmt.Errorf("publish artifact bundle destination: %w", err)
 	}
 	return files, nil
 }

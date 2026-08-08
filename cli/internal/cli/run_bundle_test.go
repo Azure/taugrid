@@ -78,6 +78,7 @@ func TestResolveArtifactBundleSkipsReadOnlyAndEphemeralResults(t *testing.T) {
 		{output: "/data/runs/training-1", pvc: "", writable: true},
 		{output: "/data/runs/training-1", pvc: "blob-training", writable: false},
 		{output: "/data-nfs/runs/training-1", pvc: "shared-nfs", writable: true},
+		{output: "/data/runs/training-1/result.json", pvc: "blob-training", writable: true},
 	} {
 		runtime, err := resolveArtifactBundle(
 			"training-1", "research", "submission-1", test.output, test.pvc, test.writable,

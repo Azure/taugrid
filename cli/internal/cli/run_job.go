@@ -301,6 +301,11 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if err != nil {
 		return err
 	}
+	if artifactBundle.Enabled() && strings.TrimSpace(o.script) == "" {
+		warnings = append(warnings,
+			"tau: complete bundle acknowledgement is unavailable for Jobs that use the image ENTRYPOINT/CMD")
+		artifactBundle = artifactbundle.Runtime{}
+	}
 	opts.ArtifactBundle = artifactBundle
 	if artifactBundle.Enabled() && opts.Nodes > 1 {
 		warnings = append(warnings,

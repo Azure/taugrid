@@ -67,7 +67,8 @@ an account key or SAS token. Legacy workloads may require permission to read
 their bound PV for transport discovery.
 A missing staged-publication marker, metrics acknowledgement, final bundle
 marker, or storage listing is an error rather than a partial success. Downloads
-refuse to replace existing destination files. Runs created before the bundle
+are staged beside the requested destination and published only after every file
+and metadata record succeeds; an existing destination is never replaced. Runs created before the bundle
 acknowledgement contract can still list or fetch known artifacts where practical,
 but cannot claim a complete bundle.
 

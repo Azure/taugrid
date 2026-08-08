@@ -2436,6 +2436,29 @@ func TestRender_ArtifactBundleRejectsMultiNodeIndexedJob(t *testing.T) {
 	}
 }
 
+func TestRender_ArtifactBundlePreservesImageEntrypointWithoutExplicitCommand(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:      "image-entrypoint",
+		Namespace: "research",
+		ArtifactBundle: artifactbundle.Runtime{
+			BundleID:  "bundle-1",
+			Run:       "image-entrypoint",
+			Namespace: "research",
+			ResultPVC: "blob-training",
+			OutputDir: "/data/runs/image-entrypoint",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render image entrypoint Job: %v", err)
+	}
+	job := parseYAML(t, out)
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	container := pod["containers"].([]any)[0].(map[string]any)
+	if command, ok := container["command"]; ok {
+		t.Fatalf("image entrypoint Job unexpectedly overrides command: %v", command)
+	}
+}
+
 func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 	script := torchrunScript(t)
 	readOnlyProfile := trainProfile()

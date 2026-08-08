@@ -25,6 +25,9 @@ func resolveArtifactBundle(
 	if outputDir != "/data" && !strings.HasPrefix(outputDir, "/data/") {
 		return artifactbundle.Runtime{}, nil
 	}
+	if !looksLikeDirectory(outputDir) {
+		return artifactbundle.Runtime{}, nil
+	}
 	bundleID := firstNonEmpty(publication.PublicationID, submissionID)
 	if bundleID == "" {
 		return artifactbundle.Runtime{}, nil

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -120,55 +119,39 @@ Examples:
 			if destination != "" && artifact != "" {
 				return fmt.Errorf("--destination and --artifact cannot be combined")
 			}
-			var blobVolume runBlobVolume
-			if strings.TrimSpace(ref.ArtifactStore) != "" {
-				blobVolume, err = parseRunBlobVolume(ref.ArtifactStore)
-			} else {
-				blobVolume, err = resolveRunBlobVolume(cmd.Context(), kube.New(resolvedContext), ns, ref.PVC)
-			}
-			if err != nil {
-				return err
-			}
-			store, err := newAzureRunArtifactStore(blobVolume)
-			if err != nil {
-				return err
-			}
-			if ref.BundleID != "" || destination != "" {
+			if destination != "" {
+				var blobVolume runBlobVolume
+				if strings.TrimSpace(ref.ArtifactStore) != "" {
+					blobVolume, err = parseRunBlobVolume(ref.ArtifactStore)
+				} else {
+					blobVolume, err = resolveRunBlobVolume(cmd.Context(), kube.New(resolvedContext), ns, ref.PVC)
+				}
+				if err != nil {
+					return err
+				}
+				store, err := newAzureRunArtifactStore(blobVolume)
+				if err != nil {
+					return err
+				}
 				manifest, loadErr := artifactbundle.Load(cmd.Context(), store, ref.Path, ref.BundleID)
 				if loadErr != nil {
-					if destination != "" {
-						return fmt.Errorf(
-							"complete artifact bundle is unavailable: %w; this run may predate Tau's final bundle acknowledgement",
-							loadErr,
-						)
-					}
-					return loadErr
+					return fmt.Errorf(
+						"complete artifact bundle is unavailable: %w; this run may predate Tau's final bundle acknowledgement",
+						loadErr,
+					)
 				}
 				if manifest.ResultPVC != ref.PVC || path.Clean(manifest.ResultRoot) != path.Clean(ref.Path) {
 					return fmt.Errorf("artifact bundle identity does not match workload result metadata")
 				}
-				if destination != "" {
-					objects, err := artifactbundle.Enumerate(cmd.Context(), store, manifest)
-					if err != nil {
-						return err
-					}
-					files, err := artifactbundle.Download(cmd.Context(), store, manifest, objects, destination)
-					if err != nil {
-						return err
-					}
-					return writeRunBundleDownload(cmd, output, manifest, destination, files)
+				objects, err := artifactbundle.Enumerate(cmd.Context(), store, manifest)
+				if err != nil {
+					return err
 				}
-				if artifact == "" {
-					objects, err := artifactbundle.Enumerate(cmd.Context(), store, manifest)
-					if err != nil {
-						return err
-					}
-					entries := make([]string, 0, len(objects))
-					for _, object := range objects {
-						entries = append(entries, object.Name)
-					}
-					return writeRunGet(cmd, output, nil, entries, manifest.ResultRoot, manifest.ResultPVC, ref.CheckpointArtifact)
+				files, err := artifactbundle.Download(cmd.Context(), store, manifest, objects, destination)
+				if err != nil {
+					return err
 				}
+				return writeRunBundleDownload(cmd, output, manifest, destination, files)
 			}
 
 			resultPath := ref.Path
@@ -178,7 +161,7 @@ Examples:
 				}
 				resultPath = path.Join(ref.Path, artifactpublish.GenerationsDir, ref.PublicationID)
 				marker := path.Join(resultPath, artifactpublish.CompletionMarker)
-				raw, err := readRunBlobPath(cmd.Context(), store, marker)
+				raw, err := fetchPVCFile(cmd.Context(), resolvedContext, ns, name, ref.PVC, marker)
 				if err != nil {
 					return fmt.Errorf("staged artifacts are not completely published: %w", err)
 				}
@@ -195,20 +178,20 @@ Examples:
 					return err
 				}
 				file := path.Join(resultPath, cleanArtifact)
-				raw, err := readRunBlobPath(cmd.Context(), store, file)
+				raw, err := fetchPVCFile(cmd.Context(), resolvedContext, ns, name, ref.PVC, file)
 				if err != nil {
 					return err
 				}
 				return writeRunGet(cmd, output, raw, nil, file, ref.PVC, "")
 			}
 			if !isDir {
-				raw, err := readRunBlobPath(cmd.Context(), store, resultPath)
+				raw, err := fetchPVCFile(cmd.Context(), resolvedContext, ns, name, ref.PVC, resultPath)
 				if err != nil {
 					return err
 				}
 				return writeRunGet(cmd, output, raw, nil, resultPath, ref.PVC, "")
 			}
-			entries, err := listRunBlobPath(cmd.Context(), store, resultPath)
+			entries, err := fetchPVCListRecursive(cmd.Context(), resolvedContext, ns, name, ref.PVC, resultPath)
 			if err != nil {
 				return err
 			}
@@ -291,38 +274,6 @@ func parseRunResultRef(raw []byte, resource string) (runResultRef, error) {
 		ArtifactStore:      obj.Metadata.Annotations[workloadmeta.AnnotationArtifactStore],
 		CheckpointArtifact: obj.Metadata.Annotations[workloadmeta.AnnotationCheckpointArtifact],
 	}, nil
-}
-
-func readRunBlobPath(ctx context.Context, store artifactbundle.Store, absolutePath string) ([]byte, error) {
-	key, err := artifactbundle.PVCRelativePath(absolutePath)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := store.Read(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("read durable artifact %s: %w", absolutePath, err)
-	}
-	return raw, nil
-}
-
-func listRunBlobPath(ctx context.Context, store artifactbundle.Store, absolutePath string) ([]string, error) {
-	prefix, err := artifactbundle.PVCRelativePath(absolutePath)
-	if err != nil {
-		return nil, err
-	}
-	if prefix != "" && !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	objects, err := store.List(ctx, prefix)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate durable artifact directory %s: %w", absolutePath, err)
-	}
-	entries := make([]string, 0, len(objects))
-	for _, object := range objects {
-		entries = append(entries, strings.TrimPrefix(object.Name, prefix))
-	}
-	sort.Strings(entries)
-	return entries, nil
 }
 
 func writeRunBundleDownload(

@@ -377,9 +377,11 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		if o.Nodes > 1 {
 			return nil, fmt.Errorf("artifact bundle completion requires a single Job pod")
 		}
-		cmd, err = artifactbundle.WrapCommand(cmd, o.ArtifactBundle)
-		if err != nil {
-			return nil, err
+		if len(cmd) > 0 {
+			cmd, err = artifactbundle.WrapCommand(cmd, o.ArtifactBundle)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
