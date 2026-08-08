@@ -151,5 +151,6 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 - `staticcheck.conf` at repo root disables specific style checks (ST1000, ST1003, ST1005, ST1016, ST1020-ST1023, S1016) — do not re-enable without fixing all findings
 - Python: requires 3.10+, lint with ruff
 - Never edit generated CRDs manually — use `make manifests` in the controller
+- AI agents must run `python3 scripts/check-license-headers.py` before committing source changes. Use `./scripts/add-license-headers.py` only for Microsoft-authored files, preserve all existing copyright notices, and never add a Microsoft copyright notice to third-party code.
 - Container images go through MCR; never publish from a contributor PR
 - Integration tests must not require Azure subscriptions or private network access unless explicitly marked maintainer-only
