@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - charts/**
+      - .github/workflows/ci-helm-charts.yml
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +25,7 @@ jobs:
       has-charts: ${{ steps.find.outputs.has-charts }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -48,7 +49,9 @@ jobs:
           # Charts to validate = changed chart directories that contain a Chart.yaml.
           CHART_LIST=$(
             printf '%s\n' "${CHANGED_DIRS}" | while IFS= read -r dir; do
-              [[ -n "$dir" && -f "${dir}/Chart.yaml" ]] && echo "$dir"
+              if [[ -n "$dir" && -f "${dir}/Chart.yaml" ]]; then
+                echo "$dir"
+              fi
             done | sort -u
           )
 
@@ -81,10 +84,10 @@ jobs:
       matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v${{ matrix.helm_version }}
 
@@ -97,9 +100,9 @@ jobs:
       - name: Install helm-unittest
         run: |
           if [[ "${{ matrix.helm_version }}" == 3.* ]]; then
-            helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.1
+            helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2
           else
-            helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.1 --verify=false
+            helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.2 --verify=false
           fi
 
       - name: Run unit tests
