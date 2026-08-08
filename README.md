@@ -54,6 +54,12 @@ TauGrid is built on open Kubernetes-native components:
 - `kubectl` configured for your cluster
 - Helm 3.0 or later
 
+TauGrid is built on Kubernetes and currently tested end-to-end on AKS, with
+some integrations—such as observability through Azure Data Explorer
+(Kusto)—remaining Azure-specific. Our goal is to make TauGrid provider-neutral
+across cloud and on-premises Kubernetes environments, and contributions toward
+that goal are welcome.
+
 ### Install TauGrid
 
 ```bash
