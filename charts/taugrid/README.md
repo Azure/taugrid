@@ -213,7 +213,7 @@ for the complete reference.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `tau-core-controller.platformNamespace` | string | `tau-platform` | Namespace where TauWorkspace CRs live |
-| `tau-core-controller.image.repository` | string | configured staging repository | Controller image |
+| `tau-core-controller.image.repository` | string | `mcr.microsoft.com/aks/ai-runtime/tau-core-controller` | Controller image |
 | `tau-core-controller.tauCluster.nodeLabelRules` | list | reviewed AKS GPU catalog | VM-size rules that reconcile GPU class and series labels |
 | `tau-core-controller.tauCluster.extraNodeLabelRules` | list | `[]` | Additional cluster-specific GPU label rules |
 

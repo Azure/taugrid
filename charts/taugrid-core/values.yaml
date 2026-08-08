@@ -115,11 +115,8 @@ stellar:
     idempotencyKey: tau-stellar-expstore-init
   image:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
-    # Current pre-MCR staging image. Do not change the default to MCR until the
-    # microsoft/mcr onboarding YAML is merged and
-    # mcr.microsoft.com/aks/ai-runtime/taugrid-portal is pull-tested. After
-    # promotion, keep tag pinned to the same immutable short-SHA build tag.
-    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal
+    # Use a published immutable short-SHA build tag from MCR.
+    repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     tag: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -375,7 +372,7 @@ portal:
     create: false
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
-    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal
+    repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     tag: ""
     digest: ""
     pullPolicy: IfNotPresent
