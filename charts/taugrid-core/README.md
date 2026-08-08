@@ -46,6 +46,8 @@ resourceFlavors:
     - name: nd-h200-v5
       nodeLabels:
         tau.azure.com/gpu-class: h200-141gb
+      topologyName: default-node-topology
+      requiredTopology: kubernetes.io/hostname
 ```
 
 Keep placement/interconnect in workload topology (`independent`,
@@ -53,6 +55,9 @@ Keep placement/interconnect in workload topology (`independent`,
 class label. The sibling `tau-core-controller` chart continuously derives class
 and series labels for its reviewed AKS GPU VM-size catalog. Install an
 equivalent node-label reconciler when deploying this services chart alone.
+For TAS-only flavors, `requiredTopology` renders the ResourceFlavor metadata
+annotation Tau uses to make generated workloads admissible without a hidden
+user-side annotation. Expert-authored raw manifests are not modified.
 
 ## What this chart does NOT install
 

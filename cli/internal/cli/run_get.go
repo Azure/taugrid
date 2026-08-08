@@ -59,7 +59,9 @@ func newRunGetCmd() *cobra.Command {
 Reads the ` + workloadmeta.AnnotationResultPath + ` and ` + workloadmeta.AnnotationResultPVC + ` annotations the
 run recorded on the Job. If the path is a file, it's catted directly. If the
 path is a directory, its recursive listing is printed; pass --artifact NAME to
-fetch one file from it.
+fetch one file from it. Object-backed mounts are allowed to settle before Tau
+accepts a zero-entry listing, so a populated directory is not reported as empty
+during the BlobFuse mount-time list suppression window.
 
 For runs submitted by a current Tau version, --destination downloads the complete
 acknowledged bundle: staged terminal artifacts, immutable metrics histories and
@@ -69,14 +71,15 @@ to bound-PV discovery for legacy workloads), then reads through Azure RBAC with
 DefaultAzureCredential. It never reads storage Secrets, account keys, or SAS
 tokens and does not create a PVC-reader pod. The command fails closed if either
 the staged publication marker or final bundle acknowledgement is absent, and it
-never replaces existing destination files.
-Override the recorded path/pvc with --path/--pvc.
+never replaces an existing destination.
+Override the recorded path/pvc with --path/--pvc. For an externally submitted
+or already deleted workload with no Tau result annotations, pass both flags.
 
 Examples:
   tau run get swordfish-bench-001 -n ray
   tau run get swordfish-bench-001 -n ray --artifact profile/rank-0.summary.md
   tau run get swordfish-bench-001 -n ray --destination ./results
-  tau run get my-job --path /data/my-job/results -o json`,
+  tau run get my-job --path /data/my-job/results --pvc research-data -o json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -111,10 +114,10 @@ Examples:
 				ref.ArtifactStore = ""
 			}
 			if ref.Path == "" {
-				return fmt.Errorf("run workload %s/%s has no %s; resubmit with storage.output, or pass --path", ns, name, workloadmeta.AnnotationResultPath)
+				return fmt.Errorf("run workload %s/%s has no %s; resubmit with storage.output, or pass both --path and --pvc for an external or deleted workload", ns, name, workloadmeta.AnnotationResultPath)
 			}
 			if ref.PVC == "" {
-				return fmt.Errorf("run workload %s/%s has no %s; pass --pvc to override", ns, name, workloadmeta.AnnotationResultPVC)
+				return fmt.Errorf("run workload %s/%s has no %s; pass both --path and --pvc for an external or deleted workload", ns, name, workloadmeta.AnnotationResultPVC)
 			}
 			if destination != "" && artifact != "" {
 				return fmt.Errorf("--destination and --artifact cannot be combined")

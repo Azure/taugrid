@@ -40,6 +40,7 @@ Production operators should replace them with deliberate capacity policy.
 | `baselineQueue.namespaceSelector` | object | `matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]` | Namespaces that receive the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
 | `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
+| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Required topology level copied from managed GPU flavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory flavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti | CPU/memory admission quota |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
@@ -52,9 +53,11 @@ zero GPU quota, while the generic `taugrid-default-gpu` has CPU/memory plus GPU
 quota and supports `gpu_class: any` on a fresh install. When hardware is known,
 replace the GPU flavor list with class-specific flavors and label matching nodes
 with `a100-80gb`, `h100-95gb`, or `h200-141gb`.
-Only GPU flavors carry `topologyName`. They provide the pod set's single TAS
-flavor for Tau's explicit placement policy, while the CPU/memory flavor remains
-non-TAS so CPU-only jobs without placement annotations can be admitted.
+Only GPU flavors carry `topologyName` and the managed
+`kueue.x-k8s.io/podset-required-topology` metadata annotation. Connected Tau
+submission copies that requirement onto generated GPU pod templates when no
+explicit placement policy is present. Raw Kubernetes manifests remain
+expert-controlled. The CPU/memory flavor remains non-TAS.
 For upgrades with saved legacy values, remove GPU resources from
 `baselineQueue.resources` and move all GPU class/series labels and GPU-node
 tolerations out of `baselineQueue.flavor` before adding their replacements

@@ -440,6 +440,34 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 			t.Fatalf("worker placement missing %q:\n%s", want, workerYAML)
 		}
 	}
+
+}
+
+func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "managed-tas",
+		Namespace:     "taugrid-default",
+		ScriptName:    "train.py",
+		Script:        []byte("print('train')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName:        "jobqueue",
+			RequiredTopology: "kubernetes.io/hostname",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headAnnotations := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if _, ok := headAnnotations[topology.RequiredTopologyAnnotation]; ok {
+		t.Fatalf("control head retained GPU topology requirement: %v", headAnnotations)
+	}
+	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
+		t.Fatalf("worker required topology=%v, want kubernetes.io/hostname", got)
+	}
 }
 
 func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {

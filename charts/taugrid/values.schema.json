@@ -13,6 +13,26 @@
           "minLength": 1,
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         },
+        "topology": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "name"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requiredLevel": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
         "flavor": {
           "type": "object",
           "required": [
@@ -140,6 +160,7 @@
       "required": [
         "enabled",
         "name",
+        "topology",
         "flavor",
         "gpu",
         "resources"

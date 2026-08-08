@@ -138,6 +138,112 @@ func TestRender_HappyPath_Command(t *testing.T) {
 	}
 }
 
+func TestRender_ImageAssetStagesPinnedDirectoryWithoutConfigMap(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	image := "example.azurecr.io/reference-assets@sha256:" + digest
+	out, err := Render(trainProfile(), Options{
+		Name:      "external-batch-job",
+		Namespace: "tau-default",
+		Command:   []string{"python", "generate.py"},
+		ImageAssets: []runconfig.ImageAsset{{
+			Name:       "pinned-reference-assets",
+			Image:      image,
+			SourcePath: "/opt/source-assets",
+			MountPath:  "/opt/reference",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(out), "kind: ConfigMap") {
+		t.Fatalf("image assets must not render ConfigMaps:\n%s", out)
+	}
+	m := parseYAML(t, out)
+	spec := m["spec"].(map[string]any)
+	if spec["suspend"] != true {
+		t.Fatalf("Job must remain suspended for Kueue: %v", spec)
+	}
+	pod := spec["template"].(map[string]any)["spec"].(map[string]any)
+	init := pod["initContainers"].([]any)
+	if len(init) != 1 {
+		t.Fatalf("initContainers = %v", init)
+	}
+	assetInit := init[0].(map[string]any)
+	if assetInit["name"] != "tau-asset-pinned-reference-assets" || assetInit["image"] != image {
+		t.Fatalf("asset init = %v", assetInit)
+	}
+	if got := assetInit["command"].([]any); len(got) != 1 || got[0] != "/bin/cp" {
+		t.Fatalf("asset command = %v", got)
+	}
+	args := assetInit["args"].([]any)
+	if got := fmt.Sprint(args); !strings.Contains(got, "/opt/source-assets/.") || !strings.Contains(got, "/tau-asset/") {
+		t.Fatalf("asset args = %v", args)
+	}
+	main := pod["containers"].([]any)[0].(map[string]any)
+	foundMount := false
+	for _, raw := range main["volumeMounts"].([]any) {
+		mount := raw.(map[string]any)
+		if mount["name"] == "tau-asset-pinned-reference-assets" {
+			foundMount = mount["mountPath"] == "/opt/reference" && mount["readOnly"] == true
+		}
+	}
+	if !foundMount {
+		t.Fatalf("main volumeMounts = %v", main["volumeMounts"])
+	}
+}
+
+func TestRender_ImageAssetRejectsStorageCollision(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	_, err := Render(trainProfile(), Options{
+		Name:      "external-batch-job",
+		Namespace: "tau-default",
+		Command:   []string{"true"},
+		Volumes:   []Volume{{Name: "tau-asset-reference", PVC: "data"}},
+		VolumeMounts: []VolumeMount{{
+			Name: "tau-asset-reference", MountPath: "/opt/other",
+		}},
+		ImageAssets: []runconfig.ImageAsset{{
+			Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
+			SourcePath: "/opt/reference", MountPath: "/opt/reference",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already used by storage") {
+		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestRender_ImageAssetRejectsNestedStorageMounts(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, tc := range []struct {
+		name         string
+		assetMount   string
+		storageMount string
+	}{
+		{name: "storage below asset", assetMount: "/opt/reference", storageMount: "/opt/reference/models"},
+		{name: "asset below storage", assetMount: "/opt/reference/models", storageMount: "/opt/reference"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Render(trainProfile(), Options{
+				Name:         "external-batch-job",
+				Namespace:    "tau-default",
+				Command:      []string{"true"},
+				Volumes:      []Volume{{Name: "models", PVC: "data"}},
+				VolumeMounts: []VolumeMount{{Name: "models", MountPath: tc.storageMount}},
+				ImageAssets: []runconfig.ImageAsset{{
+					Name:       "reference",
+					Image:      "example.azurecr.io/reference-assets@sha256:" + digest,
+					SourcePath: "/opt/source-assets",
+					MountPath:  tc.assetMount,
+				}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "overlaps storage mount") {
+				t.Fatalf("nested mount collision error = %v", err)
+			}
+		})
+	}
+}
+
 func TestRender_SuspendedJobRequiresQueue(t *testing.T) {
 	p := trainProfile()
 	delete(p.Spec, "queue")
@@ -955,6 +1061,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 		"preemptable":         true,
 		"checkpointOnPreempt": true,
 	}
+
 	out, err := Render(p, Options{
 		Name:      "train-a100",
 		Namespace: "tau",
@@ -988,6 +1095,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 			t.Fatalf("Tau metadata label should be omitted: %s", key)
 		}
 	}
+
 	annotations := meta["annotations"].(map[string]any)
 	if annotations["kueue.x-k8s.io/podset-required-topology"] != "kubernetes.io/hostname" {
 		t.Fatalf("job topology annotation missing: %v", annotations)
@@ -1001,6 +1109,23 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	nodeSelector := pod["nodeSelector"].(map[string]any)
 	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
 		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	}
+}
+
+func TestRender_ResourceFlavorRequiredTopologyWithoutUserPlacement(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:             "managed-tas",
+		Namespace:        "tau",
+		Command:          []string{"true"},
+		QueueName:        "jobqueue",
+		RequiredTopology: "kubernetes.io/hostname",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := parseYAML(t, out)
+	if got := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)[runtopology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
+		t.Fatalf("pod required topology=%v, want kubernetes.io/hostname", got)
 	}
 }
 

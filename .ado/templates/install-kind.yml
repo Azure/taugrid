@@ -1,0 +1,29 @@
+parameters:
+  - name: version
+    type: string
+
+steps:
+  - bash: |
+      set -euo pipefail
+
+      archive="kind-linux-amd64"
+      download_dir="$(Agent.TempDirectory)/kind-download"
+      install_dir="$(Agent.ToolsDirectory)/kind/${KIND_VERSION}/x64"
+      base_url="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
+
+      mkdir -p "${download_dir}" "${install_dir}"
+      curl --fail --location --show-error --silent \
+        --output "${download_dir}/${archive}" \
+        "${base_url}/${archive}"
+      curl --fail --location --show-error --silent \
+        --output "${download_dir}/${archive}.sha256sum" \
+        "${base_url}/${archive}.sha256sum"
+      (
+        cd "${download_dir}"
+        sha256sum --check "${archive}.sha256sum"
+      )
+      install -m 0755 "${download_dir}/${archive}" "${install_dir}/kind"
+      echo "##vso[task.prependpath]${install_dir}"
+    displayName: Install Kind ${{ parameters.version }}
+    env:
+      KIND_VERSION: ${{ parameters.version }}

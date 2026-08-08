@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -152,6 +153,7 @@ type Options struct {
 	// small PVC-only subset for researcher data volumes.
 	Volumes      []Volume
 	VolumeMounts []VolumeMount
+	ImageAssets  []runconfig.ImageAsset
 
 	// Labels and Annotations carry workload-specific metadata that other
 	// Tau commands can read back. V0 uses this for eval result paths and
@@ -215,6 +217,7 @@ type Options struct {
 	// gpu.nvidia.com). It does not alter rendered pod resources.
 	GPUResourceName                 string
 	PriorityTier                    string
+	RequiredTopology                string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
 	DisableKueueTopologyAnnotations bool
@@ -278,6 +281,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		CheckpointEvery:                 o.CheckpointEvery,
 		QueueName:                       o.QueueName,
 		PriorityTier:                    o.PriorityTier,
+		RequiredTopology:                o.RequiredTopology,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,
@@ -293,6 +297,9 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	}
 	storagePlan, err := buildStoragePlan(p, o, storageContract, hasStorageContract)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateImageAssetStorageCollisions(storagePlan, o.ImageAssets); err != nil {
 		return nil, err
 	}
 	if storagePlan.HasDurableData {
@@ -414,6 +421,9 @@ func (o Options) validate() error {
 	}
 	if o.Namespace == "" {
 		return errors.New("Options.Namespace is required")
+	}
+	if err := (runconfig.Storage{ImageAssets: o.ImageAssets}).ValidateImageAssets(); err != nil {
+		return err
 	}
 	if o.TTLSecondsAfterFinished < 0 {
 		return errors.New("Options.TTLSecondsAfterFinished must be >= 0")
@@ -892,6 +902,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			container["volumeMounts"] = []any{shmMount}
 		}
 	}
+	applyImageAssets(pod, container, o.ImageAssets)
 
 	containers := []any{container}
 	if o.MetricsOffload.Enabled() {
@@ -901,6 +912,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		} else {
 			pod["volumes"] = []any{runtimeVolume}
 		}
+
 		runtimeMount := metricsoffload.RuntimeMount()
 		if existing, ok := container["volumeMounts"].([]any); ok {
 			container["volumeMounts"] = append(existing, runtimeMount)
@@ -1067,6 +1079,58 @@ type storagePlan struct {
 	VolumeMounts           []VolumeMount
 	HasDurableData         bool
 	HasWritableDurableData bool
+}
+
+func applyImageAssets(pod, container map[string]any, assets []runconfig.ImageAsset) {
+	if len(assets) == 0 {
+		return
+	}
+
+	initContainers, _ := pod["initContainers"].([]any)
+	volumes, _ := pod["volumes"].([]any)
+	mounts, _ := container["volumeMounts"].([]any)
+	for _, asset := range assets {
+		name := "tau-asset-" + asset.Name
+		initContainers = append(initContainers, map[string]any{
+			"name":    name,
+			"image":   asset.Image,
+			"command": []string{"/bin/cp"},
+			"args":    []string{"-a", "--", asset.SourcePath + "/.", "/tau-asset/"},
+			"volumeMounts": []any{map[string]any{
+				"name": name, "mountPath": "/tau-asset",
+			}},
+		})
+		volumes = append(volumes, map[string]any{
+			"name": name, "emptyDir": map[string]any{},
+		})
+		mounts = append(mounts, map[string]any{
+			"name": name, "mountPath": asset.MountPath, "readOnly": true,
+		})
+	}
+	pod["initContainers"] = initContainers
+	pod["volumes"] = volumes
+	container["volumeMounts"] = mounts
+}
+
+func validateImageAssetStorageCollisions(plan storagePlan, assets []runconfig.ImageAsset) error {
+	for _, asset := range assets {
+		name := "tau-asset-" + asset.Name
+		if plan.hasVolumeName(name) {
+			return fmt.Errorf("storage.image_assets[%s] generates volume name %q already used by storage", asset.Name, name)
+		}
+		for _, mount := range plan.VolumeMounts {
+			if mountPathsOverlap(asset.MountPath, mount.MountPath) {
+				return fmt.Errorf("storage.image_assets[%s] mount_path %q overlaps storage mount %q", asset.Name, asset.MountPath, mount.MountPath)
+			}
+		}
+	}
+	return nil
+}
+
+func mountPathsOverlap(a, b string) bool {
+	a = path.Clean(a)
+	b = path.Clean(b)
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
 func metricsOffloadMounts(storage storagePlan) []metricsoffload.Mount {
