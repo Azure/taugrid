@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/artifactbundle"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
@@ -518,6 +519,21 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 			PublicationID: "publication-1",
 		},
 		MetricsOffload: runtime,
+		ArtifactBundle: artifactbundle.Runtime{
+			BundleID:          "publication-1",
+			Run:               "modernbert-ray",
+			Namespace:         "research-workspace",
+			ResultPVC:         "research-workspace",
+			OutputDir:         "/data/research-workspace/runs/modernbert-ray",
+			PublicationMode:   artifactpublish.ModeStaged,
+			PublicationID:     "publication-1",
+			PublicationRoot:   "/data/research-workspace/runs/modernbert-ray/.tau-artifacts/publication-1",
+			PublicationMarker: "/data/research-workspace/runs/modernbert-ray/.tau-artifacts/publication-1/.tau-artifacts-complete",
+			MetricsSessionID:  "session",
+			MetricsHistory:    runtime.History,
+			MetricsOffloadDir: runtime.Out,
+			MetricsEnabled:    true,
+		},
 		Annotations: map[string]string{
 			workloadmeta.AnnotationResultPath:            "/data/research-workspace/runs/modernbert-ray",
 			workloadmeta.AnnotationResultPVC:             "research-workspace",
@@ -559,6 +575,19 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	pod := head["template"].(map[string]any)["spec"].(map[string]any)
 	if got := containerNames(t, pod["containers"].([]any)); !strings.Contains(got, "metrics-offload") {
 		t.Fatalf("head containers = %s", got)
+	}
+	entrypoint := spec["entrypoint"].(string)
+	driverIndex := strings.Index(entrypoint, "tau_driver_child")
+	bundleIndex := strings.Index(entrypoint, "tau_bundle_child")
+	metricsIndex := strings.Index(entrypoint, "tau_metrics_child")
+	if driverIndex < 0 || bundleIndex < 0 || metricsIndex < 0 ||
+		!(driverIndex < bundleIndex && bundleIndex < metricsIndex) {
+		t.Fatalf("lifecycle wrapper order must be logs -> bundle -> metrics:\n%s", entrypoint)
+	}
+	for _, want := range []string{".tau/bundle.complete", "publication-1", ".tau-artifacts-complete"} {
+		if !strings.Contains(entrypoint, want) {
+			t.Fatalf("bundle lifecycle wrapper missing %q:\n%s", want, entrypoint)
+		}
 	}
 }
 

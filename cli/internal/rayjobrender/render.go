@@ -15,6 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/artifactbundle"
 	"github.com/Azure/taugrid/cli/internal/artifactindex"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/jsonutil"
@@ -120,6 +121,7 @@ type Options struct {
 	Resources       Resources
 	OutputDir       string
 	ArtifactPublish artifactpublish.Runtime
+	ArtifactBundle  artifactbundle.Runtime
 
 	// CheckpointArtifact is storage.checkpoint: the file or directory,
 	// relative to the run checkpoint dir, that this run produces as its
@@ -746,6 +748,7 @@ func entrypoint(o Options) (string, error) {
 			Run:          o.Name,
 			ResourceName: o.Name,
 			Namespace:    o.Namespace,
+			BundleID:     o.ArtifactBundle.BundleID,
 		}) + "\n"
 	}
 	if o.ArtifactPublish.Enabled() {
@@ -756,6 +759,12 @@ func entrypoint(o Options) (string, error) {
 	}
 	if o.MetricsOffload.Enabled() {
 		script, err = metricsoffload.WrapShellScript(script, o.MetricsOffload)
+		if err != nil {
+			return "", err
+		}
+	}
+	if o.ArtifactBundle.Enabled() {
+		script, err = artifactbundle.WrapShellScript(script, o.ArtifactBundle)
 		if err != nil {
 			return "", err
 		}

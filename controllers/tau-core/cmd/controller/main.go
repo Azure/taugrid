@@ -76,6 +76,10 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "TauQuotaRequest")
 		os.Exit(1)
 	}
+	if err := corecontroller.SetupArtifactStoreControllers(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ArtifactStore")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

@@ -38,6 +38,24 @@ namespace. Tau references and mounts that claim; it does not provision or own
 the PVC, StorageClass, CSI configuration, or backing storage. The platform
 owner chooses the backend and manages its lifecycle.
 
+Set `storage.publish: staged` when terminal artifacts must become visible only
+after the workload succeeds and Tau verifies their copies. The application
+writes closed regular files to `TAU_OUTPUT_STAGING_DIR`; immutable metric chunks
+may continue to use their declared `metrics.history` paths under `/data`. After
+staged publication, checkpoint indexing, and enabled metrics offload all
+acknowledge completion, Tau atomically commits a bundle manifest under
+`storage.output/.tau/`. `tau run get <name> --destination DIR` requires that
+final acknowledgement and downloads the result tree plus any declared
+checkpoint tree directly from the Blob CSI container. It does not create a
+reader Pod or bypass publication acknowledgement. The tau-core controller stamps
+the non-secret Blob transport identity on new workloads; this metadata contains
+no account key, SAS token, or other repository credential. Multi-node Indexed
+Jobs intentionally do not emit a bundle acknowledgement until Tau has a
+Job-level coordinator; a single index is not allowed to claim completion for the
+whole Job. Bundle retrieval also requires the result PVC at Tau's `/data`
+durable-storage root; custom mount roots continue to run without a bundle
+acknowledgement.
+
 Main field groups:
 
 | Group | Purpose |

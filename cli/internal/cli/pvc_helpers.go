@@ -34,6 +34,7 @@ const (
 type managedWorkflowArtifactIndex struct {
 	SchemaVersion int                       `json:"schema_version"`
 	Run           string                    `json:"run"`
+	BundleID      string                    `json:"bundle_id,omitempty"`
 	Namespace     string                    `json:"namespace,omitempty"`
 	ResourceName  string                    `json:"resource_name,omitempty"`
 	CreatedAt     string                    `json:"created_at,omitempty"`
@@ -232,11 +233,6 @@ func decodePVCFileLogs(path, pvcName, logs string) ([]byte, error) {
 // fetchPVCList returns the direct children under dirPath on the named PVC.
 func fetchPVCList(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string) ([]string, error) {
 	return fetchPVCListWithMode(ctx, kubeContext, namespace, runName, pvcName, dirPath, false)
-}
-
-// fetchPVCListRecursive returns every descendant as a relative path.
-func fetchPVCListRecursive(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string) ([]string, error) {
-	return fetchPVCListWithMode(ctx, kubeContext, namespace, runName, pvcName, dirPath, true)
 }
 
 func fetchPVCListWithMode(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string, recursive bool) ([]string, error) {

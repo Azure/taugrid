@@ -43,6 +43,7 @@ rest of this walkthrough.
 tau run status <run-name> --watch
 tau run logs <run-name>
 tau run get <run-name>
+tau run get <run-name> --destination ./artifacts/<run-name>
 ```
 
 `status --watch` renders the startup phase tree (Submitted, Kueue admission,
@@ -51,7 +52,24 @@ scheduling, image pull, readiness) until the
 interrupt it. For RayJobs, `logs` streams the Ray
 driver's execution output rather than head-pod logs; for batch Jobs it streams
 the Job pod logs. `get` fetches durable run results and artifacts once the run
-has produced them.
+has produced them. With `--destination`, it downloads the complete acknowledged
+bundle: staged terminal artifacts, immutable metric chunks and offload metadata,
+and the durable checkpoint tree when one was declared. The downloaded
+`.tau-bundle/manifest.json` records artifact, checkpoint, and log references;
+`.tau-bundle/files.json` records the downloaded byte count and SHA-256 for every
+file.
+
+Complete-bundle retrieval is read-only and creates no Kubernetes Pods. Tau reads
+the non-secret Blob CSI volume identity that the tau-core controller records on
+current workloads and uses your Azure RBAC identity through
+`DefaultAzureCredential`; it never reads Kubernetes storage Secrets or asks for
+an account key or SAS token. Legacy workloads may require permission to read
+their bound PV for transport discovery.
+A missing staged-publication marker, metrics acknowledgement, final bundle
+marker, or storage listing is an error rather than a partial success. Downloads
+refuse to replace existing destination files. Runs created before the bundle
+acknowledgement contract can still list or fetch known artifacts where practical,
+but cannot claim a complete bundle.
 
 If you need to stop a run before it finishes — for example, you spot a bad
 hyperparameter mid-training — cancel it instead of leaving it to fail on its

@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/artifactbundle"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/core/envspec"
@@ -2322,6 +2323,17 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 		ScriptPath:     script,
 		PVCMount:       "research-workspace",
 		MetricsOffload: runtime,
+		ArtifactBundle: artifactbundle.Runtime{
+			BundleID:          "bundle-1",
+			Run:               "modernbert-bounded",
+			Namespace:         "research-workspace",
+			ResultPVC:         "research-workspace",
+			OutputDir:         "/data/research-workspace/modernbert-bounded",
+			MetricsSessionID:  "metrics-1",
+			MetricsHistory:    runtime.History,
+			MetricsOffloadDir: runtime.Out,
+			MetricsEnabled:    true,
+		},
 		Annotations: map[string]string{
 			workloadmeta.AnnotationExperimentSource: "stellar",
 		},
@@ -2372,6 +2384,17 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 			t.Fatalf("main lifecycle wrapper missing %q:\n%s", want, mainCommand)
 		}
 	}
+	command := main["command"].([]any)
+	if len(command) < 5 || command[0] != "bash" || command[1] != "-c" ||
+		command[3] != "tau-bundle-entrypoint" || command[4] != "bash" {
+		t.Fatalf("artifact bundle must wrap metrics lifecycle command: %v", command)
+	}
+	bundleScript := command[2].(string)
+	for _, want := range []string{"tau_bundle_child", ".tau/bundle.complete", "bundle-1"} {
+		if !strings.Contains(bundleScript, want) {
+			t.Fatalf("bundle lifecycle wrapper missing %q:\n%s", want, bundleScript)
+		}
+	}
 	volumes := fmt.Sprint(pod["volumes"])
 	if !strings.Contains(volumes, "tau-metrics-runtime") || !strings.Contains(volumes, "emptyDir") {
 		t.Fatalf("pod-local metrics runtime volume missing: %s", volumes)
@@ -2387,6 +2410,29 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("rendered telemetry contract must not contain credentials (%q):\n%s", forbidden, rendered)
 		}
+	}
+}
+
+func TestRender_ArtifactBundleRejectsMultiNodeIndexedJob(t *testing.T) {
+	script := torchrunScript(t)
+	_, err := Render(trainProfile(), Options{
+		Name:       "multi-node",
+		Namespace:  "research",
+		ScriptPath: script,
+		Launcher:   "torchrun",
+		Nodes:      2,
+		PVCMount:   "blob-training",
+		OutputDir:  "/data/runs/multi-node",
+		ArtifactBundle: artifactbundle.Runtime{
+			BundleID:  "bundle-1",
+			Run:       "multi-node",
+			Namespace: "research",
+			ResultPVC: "blob-training",
+			OutputDir: "/data/runs/multi-node",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "single Job pod") {
+		t.Fatalf("multi-node bundle error = %v", err)
 	}
 }
 

@@ -25,8 +25,12 @@ var tauTokenRe = regexp.MustCompile(regexp.QuoteMeta(Domain) + `[A-Za-z0-9._-]*`
 // sharedKeys contains only keys that cross the module boundary. Controller-only
 // namespace and quota keys do not belong in the CLI's canonical package.
 var sharedKeys = map[string]string{
-	"LabelWorkspace":        "LabelWorkspace",
-	"AnnotationResultScope": "AnnotationResultScope",
+	"LabelWorkspace":             "LabelWorkspace",
+	"LabelManagedBy":             "LabelManagedBy",
+	"AnnotationResultScope":      "AnnotationResultScope",
+	"AnnotationResultPVC":        "AnnotationResultPVC",
+	"AnnotationArtifactBundleID": "AnnotationArtifactBundleID",
+	"AnnotationArtifactStore":    "AnnotationArtifactStore",
 }
 
 func TestSharedLabelKeysAgreeWithTauCLI(t *testing.T) {

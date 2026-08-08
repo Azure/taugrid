@@ -31,6 +31,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/artifactbundle"
 	"github.com/Azure/taugrid/cli/internal/artifactindex"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
@@ -188,6 +189,7 @@ type Options struct {
 	// ArtifactPublish optionally wraps the workload so closed artifacts staged
 	// on local /mnt are copied and renamed into durable OutputDir after success.
 	ArtifactPublish artifactpublish.Runtime
+	ArtifactBundle  artifactbundle.Runtime
 
 	// NodeSelector is a run-time placement override merged after profile and
 	// topology selectors. ClearNodeSelector drops profile selectors before the
@@ -350,6 +352,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			Run:          o.Name,
 			ResourceName: o.Name,
 			Namespace:    o.Namespace,
+			BundleID:     o.ArtifactBundle.BundleID,
 		})
 	}
 	if o.MetricsOffload.Enabled() {
@@ -366,6 +369,15 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			return nil, fmt.Errorf("metrics offload requires writable durable PVC storage")
 		}
 		cmd, err = metricsoffload.WrapCommand(cmd, o.MetricsOffload)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if o.ArtifactBundle.Enabled() {
+		if o.Nodes > 1 {
+			return nil, fmt.Errorf("artifact bundle completion requires a single Job pod")
+		}
+		cmd, err = artifactbundle.WrapCommand(cmd, o.ArtifactBundle)
 		if err != nil {
 			return nil, err
 		}

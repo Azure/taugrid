@@ -175,6 +175,8 @@ const (
 	AnnotationCheckpointURI         = "tau.azure.com/checkpoint-uri"
 	AnnotationArtifactPublication   = "tau.azure.com/artifact-publication"
 	AnnotationArtifactPublicationID = "tau.azure.com/artifact-publication-id"
+	AnnotationArtifactBundleID      = "tau.azure.com/artifact-bundle-id"
+	AnnotationArtifactStore         = "tau.azure.com/artifact-store"
 
 	// AnnotationCheckpointArtifact records the storage.checkpoint value a run
 	// declared, so a later command can tell "this run produced no artifacts"

@@ -211,6 +211,24 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		annotations[experiment.AnnotationExperimentSource] = "stellar"
 		annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
+	artifactBundle, err := resolveArtifactBundle(
+		name,
+		namespace,
+		o.submissionID,
+		outputDir,
+		annotations[workloadmeta.AnnotationResultPVC],
+		outputWritable,
+		artifactPublication,
+		metricsRuntime,
+		o.metricsSessionID,
+		o.checkpointArtifact,
+	)
+	if err != nil {
+		return err
+	}
+	if artifactBundle.Enabled() {
+		annotations[workloadmeta.AnnotationArtifactBundleID] = artifactBundle.BundleID
+	}
 
 	projectArchive, scriptName, err := buildProjectArchive(o)
 	if err != nil {
@@ -243,6 +261,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 			Annotations:        annotations,
 			OutputDir:          outputDir,
 			ArtifactPublish:    artifactPublication,
+			ArtifactBundle:     artifactBundle,
 			CheckpointArtifact: o.checkpointArtifact,
 			MetricsOffload:     metricsRuntime,
 			Resources: rayjobrender.Resources{
