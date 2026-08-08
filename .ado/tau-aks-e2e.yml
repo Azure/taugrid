@@ -7,7 +7,7 @@ pool:
   vmImage: ubuntu-24.04
 
 variables:
-  azureServiceConnection: taugrid
+  azureServiceConnection: aks ai runtime - corp
   azureLocation: westus3
   goVersion: 1.26.5
   helmVersion: 3.18.6

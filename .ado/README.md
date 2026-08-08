@@ -24,8 +24,8 @@ agent.
 
 `.ado/tau-aks-e2e.yml` is manual-only. It targets the `taugrid-e2e` ADO
 Environment, which must have a manual approval check and an exclusive-lock
-check. The pipeline uses the `taugrid` Azure Resource Manager service
-connection and creates these resources in `westus3`:
+check. The pipeline uses the `aks ai runtime - corp` workload-identity Azure
+Resource Manager service connection and creates these resources in `westus3`:
 
 - one owned resource group;
 - one Basic ACR containing the controller built from the checked-out commit;

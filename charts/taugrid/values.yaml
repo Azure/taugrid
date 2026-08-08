@@ -144,6 +144,12 @@ kuberay-operator:
       - name: RAY_metric_cardinality_level
         value: recommended
 
+gpu-monitoring:
+  daemonset:
+    # Externally joined GPU nodes do not receive the AKS-managed accelerator
+    # label, so match them by instance type without requiring that label.
+    requireAcceleratorLabel: false
+
 tau-core-controller:
   platformNamespace: tau-platform
   image:
