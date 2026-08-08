@@ -138,6 +138,11 @@ fi
 		shellQuote(currentCompletion+".tmp.$$"), shellQuote(runtime.BundleID), shellQuote(currentCompletion)), nil
 }
 
+var shellQuoteReplacer = strings.NewReplacer(
+	"'", `'"'"'`,
+	`"`, `'"\""'`,
+)
+
 func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+	return "'" + shellQuoteReplacer.Replace(value) + "'"
 }

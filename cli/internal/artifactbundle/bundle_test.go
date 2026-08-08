@@ -83,6 +83,17 @@ func testRuntime() Runtime {
 	}
 }
 
+func TestShellQuotePreservesJSONQuotes(t *testing.T) {
+	raw := "{\"message\":\"it's $(printf injected)\"}\n"
+	out, err := exec.Command("bash", "-c", "printf '%s' "+shellQuote(raw)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("evaluate quoted JSON: %v\n%s", err, out)
+	}
+	if string(out) != raw {
+		t.Fatalf("quoted JSON = %q, want %q", out, raw)
+	}
+}
+
 func TestWrapperCommitsOnlyAfterNestedAcknowledgements(t *testing.T) {
 	runtime := testRuntime()
 	root := t.TempDir()
