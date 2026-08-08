@@ -679,6 +679,38 @@ func TestValidateSelectionCatalogTopologyRejectsConflictingManagedRequirements(t
 	}
 }
 
+func TestValidateSelectionCatalogTopologyChecksAssignableFlavorsWithOtherTopologies(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"default-topology","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"rack-topology","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "default-topology", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"default-topology", "", "default-node-topology", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "rack-topology", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"rack-topology", "", "rack-node-topology", "topology.example.com/rack", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicting") || !strings.Contains(err.Error(), topology.RequiredTopologyAnnotation) {
+		t.Fatalf("expected cross-topology flavor conflict rejection, got %v", err)
+	}
+}
+
 func TestValidateSelectionCatalogTopologyRejectsMissingManagedRequirement(t *testing.T) {
 	runner := &validationFakeRunner{
 		outputs: map[string]string{

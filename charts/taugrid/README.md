@@ -76,7 +76,7 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
 | `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Topology level Tau copies from managed GPU ResourceFlavors to generated pod templates |
+| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Topology level Tau copies from managed GPU ResourceFlavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |

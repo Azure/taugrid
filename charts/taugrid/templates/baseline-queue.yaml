@@ -65,7 +65,10 @@ metadata:
     {{- include "taugrid.labels" . | nindent 4 }}
 spec:
   levels:
+    {{- if ne $requiredTopology "kubernetes.io/hostname" }}
     - nodeLabel: {{ $requiredTopology }}
+    {{- end }}
+    - nodeLabel: kubernetes.io/hostname
 ---
 {{- end }}
 apiVersion: kueue.x-k8s.io/v1beta2

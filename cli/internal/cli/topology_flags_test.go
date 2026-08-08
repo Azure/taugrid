@@ -260,6 +260,66 @@ spec:
 	}
 }
 
+func TestPrepareGeneratedQueueTopologyReenablesAnnotationsAfterQueueOverride(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "custom-queue", "-o", "json"): `{"metadata":{"name":"custom-queue"},"spec":{"clusterQueue":"custom-cq"}}`,
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "custom-cq", "-o", "json"):                     `{"metadata":{"name":"custom-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"custom-gpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "custom-gpu", "-o", "json"): `{
+				"metadata":{
+					"name":"custom-gpu",
+					"annotations":{"kueue.x-k8s.io/podset-required-topology":"kubernetes.io/hostname"}
+				},
+				"spec":{"topologyName":"custom-topology"}
+			}`,
+		},
+		errors: map[string]error{},
+	}
+	opts := jobrender.Options{
+		QueueName:                       "custom-queue",
+		DisableKueueTopologyAnnotations: true,
+	}
+	render := func() ([]byte, error) {
+		annotation := ""
+		if opts.RequiredTopology != "" && !opts.DisableKueueTopologyAnnotations {
+			annotation = "\n      annotations:\n        " + runtopology.RequiredTopologyAnnotation + ": " + opts.RequiredTopology
+		}
+		return []byte(`apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: custom-queue
+spec:
+  template:
+    metadata:` + annotation + `
+    spec:
+      containers:
+      - resources:
+          limits:
+            nvidia.com/gpu: 1
+`), nil
+	}
+	initial, err := render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := prepareGeneratedQueueTopology(
+		context.Background(), runner, "workspace", initial, &opts, queueValidationPolicy{}, render)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.DisableKueueTopologyAnnotations {
+		t.Fatal("managed queue requirement did not re-enable Kueue topology annotations")
+	}
+	contract, err := renderedQueueContractFromManifest(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contract.TopologyRequest {
+		t.Fatalf("queue override rerender still lacks topology request:\n%s", rendered)
+	}
+}
+
 func TestRenderedQueueContractIgnoresTopologyOutsideGPUPodTemplate(t *testing.T) {
 	manifest := []byte(`apiVersion: ray.io/v1
 kind: RayJob

@@ -204,7 +204,8 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 }
 
 func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) (string, []kueueapi.ResourceFlavor, error) {
-	var fitting []kueueapi.ResourceFlavor
+	var fittingTopology []kueueapi.ResourceFlavor
+	var assignable []kueueapi.ResourceFlavor
 	fallback := ""
 	var fallbackCapacity int64
 	seen := map[string]bool{}
@@ -224,8 +225,7 @@ func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.Clu
 				unreadable = append(unreadable, fmt.Sprintf("%s (%s)", flavor.Name, err))
 				continue
 			}
-			if strings.TrimSpace(rf.Spec.TopologyName) != target.TopologyName ||
-				!resourceFlavorMatchesNodeSelector(rf, target.NodeSelector) ||
+			if !resourceFlavorMatchesNodeSelector(rf, target.NodeSelector) ||
 				!resourceFlavorMatchesPodTolerations(rf, target.PodTolerations) {
 				continue
 			}
@@ -234,28 +234,35 @@ func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.Clu
 				continue
 			}
 			if int64(target.GPUCount) <= capacity {
-				fitting = append(fitting, rf)
+				assignable = append(assignable, rf)
+				if strings.TrimSpace(rf.Spec.TopologyName) == target.TopologyName {
+					fittingTopology = append(fittingTopology, rf)
+				}
 				continue
 			}
-			if fallback == "" || capacity > fallbackCapacity || capacity == fallbackCapacity && flavor.Name < fallback {
+			if strings.TrimSpace(rf.Spec.TopologyName) == target.TopologyName &&
+				(fallback == "" || capacity > fallbackCapacity || capacity == fallbackCapacity && flavor.Name < fallback) {
 				fallback = flavor.Name
 				fallbackCapacity = capacity
 			}
 		}
 	}
-	sort.Slice(fitting, func(i, j int) bool {
-		return fitting[i].Metadata.Name < fitting[j].Metadata.Name
-	})
-	if len(fitting) > 0 {
-		return fitting[0].Metadata.Name, fitting, nil
-	}
-	if fallback != "" {
-		return fallback, nil, nil
-	}
 	if len(unreadable) > 0 {
 		return "", nil, fmt.Errorf(
 			"cannot resolve topology %q in ClusterQueue %q because ResourceFlavor capabilities could not be read: %s",
 			target.TopologyName, target.ClusterQueue, strings.Join(unreadable, ", "))
+	}
+	sort.Slice(fittingTopology, func(i, j int) bool {
+		return fittingTopology[i].Metadata.Name < fittingTopology[j].Metadata.Name
+	})
+	sort.Slice(assignable, func(i, j int) bool {
+		return assignable[i].Metadata.Name < assignable[j].Metadata.Name
+	})
+	if len(fittingTopology) > 0 {
+		return fittingTopology[0].Metadata.Name, assignable, nil
+	}
+	if fallback != "" {
+		return fallback, nil, nil
 	}
 	return "", nil, nil
 }

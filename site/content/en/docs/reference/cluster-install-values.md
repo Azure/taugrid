@@ -40,7 +40,7 @@ Production operators should replace them with deliberate capacity policy.
 | `baselineQueue.namespaceSelector` | object | `matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]` | Namespaces that receive the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
 | `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Required topology level copied from managed GPU flavors to generated pod templates |
+| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Required topology level copied from managed GPU flavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory flavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti | CPU/memory admission quota |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |

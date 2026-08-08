@@ -454,6 +454,7 @@ func prepareGeneratedQueueTopology(
 		return rendered, nil
 	}
 	opts.RequiredTopology = report.RequiredTopology
+	opts.DisableKueueTopologyAnnotations = false
 	rendered, err = rerender()
 	if err != nil {
 		return nil, fmt.Errorf("render ResourceFlavor-required topology: %w", err)
