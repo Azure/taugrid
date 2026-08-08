@@ -3,6 +3,7 @@ package runconfig
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,127 @@ func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	cfg := Config{Compute: Compute{GPUs: &negative}}
 	if err := cfg.ValidateDirect(); err == nil || !strings.Contains(err.Error(), "compute.gpus must be >= 0") {
 		t.Fatalf("expected negative compute.gpus rejection, got %v", err)
+	}
+}
+
+func TestParseSourceBundle(t *testing.T) {
+	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cfg, err := parse([]byte(`name: bundled
+engine: job
+run:
+  working_dir_excludes:
+    - legacy-only
+  source_bundle:
+    path: ./project
+    excludes:
+      - .git
+      - "*.log"
+    digest: `+digest+`
+`), "tau.yaml")
+	if err != nil {
+		t.Fatalf("parse source bundle: %v", err)
+	}
+	if cfg.Run.SourceBundle == nil {
+		t.Fatal("SourceBundle = nil, want parsed bundle")
+	}
+	if got := cfg.Run.SourceBundle; got.Path != "./project" || !reflect.DeepEqual(got.Excludes, []string{".git", "*.log"}) || got.Digest != digest {
+		t.Fatalf("SourceBundle = %#v, want path, excludes, and digest preserved", got)
+	}
+	if !reflect.DeepEqual(cfg.Run.WorkingDirExcludes, []string{"legacy-only"}) {
+		t.Fatalf("WorkingDirExcludes = %v, want independent legacy excludes preserved", cfg.Run.WorkingDirExcludes)
+	}
+}
+
+func TestParseRejectsInvalidSourceBundle(t *testing.T) {
+	validDigest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	upperDigest := "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{{
+		name: "missing path",
+		raw: `engine: job
+run:
+  source_bundle:
+    digest: ` + validDigest,
+		want: "run.source_bundle.path is required",
+	}, {
+		name: "malformed digest",
+		raw: `engine: job
+run:
+  source_bundle:
+    path: ./project
+    digest: sha256:not-a-digest`,
+		want: "run.source_bundle.digest",
+	}, {
+		name: "uppercase digest",
+		raw: `engine: job
+run:
+  source_bundle:
+    path: ./project
+    digest: ` + upperDigest,
+		want: "run.source_bundle.digest",
+	}, {
+		name: "working dir conflict",
+		raw: `engine: job
+run:
+  working_dir: ./legacy-project
+  source_bundle:
+    path: ./project`,
+		want: "run.source_bundle cannot be combined with run.working_dir",
+	}, {
+		name: "managed workflow",
+		raw: `schema_version: 1
+run:
+  source_bundle:
+    path: ./project`,
+		want: "run.source_bundle is only supported for direct run configs",
+	}, {
+		name: "unknown nested field",
+		raw: `engine: job
+run:
+  source_bundle:
+    path: ./project
+    unexpected: true`,
+		want: "field unexpected not found",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parse([]byte(tc.raw), "tau.yaml")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("parse error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseWorkingDirRemainsCompatibleWithoutSourceBundle(t *testing.T) {
+	cfg, err := parse([]byte(`engine: ray
+run:
+  working_dir: ./legacy-project
+  working_dir_excludes:
+    - .git
+`), "tau.yaml")
+	if err != nil {
+		t.Fatalf("parse working_dir config: %v", err)
+	}
+	if cfg.Run.SourceBundle != nil {
+		t.Fatalf("SourceBundle = %#v, want nil", cfg.Run.SourceBundle)
+	}
+	if cfg.Run.WorkingDir != "./legacy-project" || !reflect.DeepEqual(cfg.Run.WorkingDirExcludes, []string{".git"}) {
+		t.Fatalf("working_dir fields = %#v, want preserved legacy values", cfg.Run)
+	}
+
+	cfg, err = parse([]byte(`engine: ray
+run:
+  working_dir_excludes:
+    - legacy-only
+`), "tau.yaml")
+	if err != nil {
+		t.Fatalf("parse working_dir_excludes-only config: %v", err)
+	}
+	if cfg.Run.WorkingDir != "" || !reflect.DeepEqual(cfg.Run.WorkingDirExcludes, []string{"legacy-only"}) {
+		t.Fatalf("working_dir_excludes-only fields = %#v, want preserved legacy values", cfg.Run)
 	}
 }
 
@@ -374,6 +496,25 @@ func TestJSONSchemaCoversCoreFields(t *testing.T) {
 	if envSecret["x-tau-status"] != string(statusSupported) {
 		t.Fatalf("runtime.env_secret status = %v, want supported", envSecret["x-tau-status"])
 	}
+	run := props["run"].(map[string]any)
+	sourceBundle := run["properties"].(map[string]any)["source_bundle"].(map[string]any)
+	if sourceBundle["x-tau-status"] != string(statusDirectOnly) {
+		t.Fatalf("run.source_bundle status = %v, want direct-only", sourceBundle["x-tau-status"])
+	}
+	if sourceBundle["additionalProperties"] != false {
+		t.Fatalf("run.source_bundle should reject unknown fields: %v", sourceBundle["additionalProperties"])
+	}
+	required := sourceBundle["required"].([]any)
+	if len(required) != 1 || required[0] != "path" {
+		t.Fatalf("run.source_bundle required = %#v, want [path]", required)
+	}
+	sourceBundleProps := sourceBundle["properties"].(map[string]any)
+	if path := sourceBundleProps["path"].(map[string]any); path["minLength"] != float64(1) {
+		t.Fatalf("run.source_bundle.path minLength = %v, want 1", path["minLength"])
+	}
+	if digest := sourceBundleProps["digest"].(map[string]any); digest["pattern"] != "^sha256:[0-9a-f]{64}$" {
+		t.Fatalf("run.source_bundle.digest pattern = %v, want exact SHA-256 pattern", digest["pattern"])
+	}
 }
 
 func TestJSONSchemaDurationRendersAsString(t *testing.T) {
@@ -466,6 +607,10 @@ func TestReferenceMarkdownCallsOutScopeAndUnsupportedFields(t *testing.T) {
 	for _, want := range []string{
 		"direct `tau run --config` files",
 		"`run.image` | supported",
+		"`run.source_bundle` | direct-only",
+		"`run.source_bundle.path` | direct-only",
+		"`run.source_bundle.excludes` | direct-only",
+		"`run.source_bundle.digest` | direct-only",
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
@@ -488,6 +633,10 @@ var pathScopedStatuses = map[string]FieldStatus{
 	"runtime.env_kv":             statusWorkflowOnly,
 	"storage.publish":            statusDirectOnly,
 	"policy.clear_node_selector": statusDirectOnly,
+	"run.source_bundle":          statusDirectOnly,
+	"run.source_bundle.path":     statusDirectOnly,
+	"run.source_bundle.excludes": statusDirectOnly,
+	"run.source_bundle.digest":   statusDirectOnly,
 }
 
 // Fields that a config path rejects outright must not read as `supported`.

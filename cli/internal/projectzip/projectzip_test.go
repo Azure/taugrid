@@ -129,6 +129,34 @@ func TestBuildIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestBuildPreservesOnlySafeExecutableBits(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "train.py", "print('ok')\n")
+	write(t, root, "run.sh", "#!/bin/sh\nexec python3 train.py\n")
+	if err := os.Chmod(filepath.Join(root, "run.sh"), 0o775); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	archive, _, err := Build(Options{Dir: root})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	modes := map[string]os.FileMode{}
+	for _, file := range zr.File {
+		modes[file.Name] = file.Mode().Perm()
+	}
+	if got := modes["run.sh"]; got != 0o755 {
+		t.Fatalf("run.sh mode = %o, want safe executable mode 755", got)
+	}
+	if got := modes["train.py"]; got != 0o644 {
+		t.Fatalf("train.py mode = %o, want non-executable mode 644", got)
+	}
+}
+
 func TestBuildRejectsOversizeProjectAndNamesLargestFiles(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "train.py", "x")

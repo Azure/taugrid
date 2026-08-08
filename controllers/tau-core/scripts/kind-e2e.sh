@@ -557,14 +557,23 @@ kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAM
 
 # ---------------------------------------------------------------------------
 # RBAC boundary: researcher can read their own workspace and work in their
-# namespace, but cannot read another namespace's secrets or create
-# cluster-scoped resources.
+# namespace, but cannot access another namespace or create cluster-scoped
+# resources.
 # ---------------------------------------------------------------------------
 echo "== RBAC boundary checks for the researcher subject =="
 kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i create configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+for verb in create get list watch delete; do
+  kubectl auth can-i "${verb}" pods -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+done
+kubectl auth can-i create pods/exec -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+[[ "$(kubectl auth can-i patch pods -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i update pods -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i create persistentvolumeclaims -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i create pods -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i create pods/exec -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i create quotarequests.tau.azure.com -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 [[ "$(kubectl auth can-i list workspaces.tau.azure.com -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]

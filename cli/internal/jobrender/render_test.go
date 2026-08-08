@@ -18,6 +18,7 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
+	"github.com/Azure/taugrid/cli/internal/sourcebundle"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -66,6 +67,15 @@ func parseYAML(t *testing.T, b []byte) map[string]any {
 		t.Fatalf("unmarshal rendered yaml: %v\n%s", err, string(b))
 	}
 	return m
+}
+
+func asYAML(t *testing.T, value any) string {
+	t.Helper()
+	data, err := yaml.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal yaml: %v", err)
+	}
+	return string(data)
 }
 
 func TestRender_HappyPath_Command(t *testing.T) {
@@ -3038,5 +3048,67 @@ func TestRender_ExtraFlags_EmptyValueRendersBareFlag(t *testing.T) {
 	// Sorted: debug, output, verbose.
 	if !strings.Contains(s, "--debug --output=/tmp/out --verbose") {
 		t.Errorf("bare flags not rendered correctly:\n%s", s)
+	}
+}
+
+func TestRenderSourceBundleExtractsWithoutEmbeddingEntrypoint(t *testing.T) {
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	runtime := &sourcebundle.Runtime{
+		Digest:     digest,
+		Path:       sourcebundle.DurableRoot + "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+		Entrypoint: "pkg/train.py",
+	}
+	out, err := Render(trainProfile(), Options{
+		Name:         "source-job",
+		Namespace:    "ray",
+		SourceBundle: runtime,
+		PVCMount:     "source-pvc",
+		Launcher:     "torchrun",
+		ExtraFlags:   map[string]string{"epochs": "3"},
+	})
+	if err != nil {
+		t.Fatalf("render source bundle: %v", err)
+	}
+	rendered := string(out)
+	for _, unwanted := range []string{"TAU_SCRIPT_B64", "TAU_SCRIPT_SRC", "base64 -d"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("source bundle render must not embed an entrypoint (%q):\n%s", unwanted, rendered)
+		}
+	}
+
+	manifest := parseYAML(t, out)
+	annotations := manifest["metadata"].(map[string]any)["annotations"].(map[string]any)
+	for key, want := range map[string]string{
+		workloadmeta.AnnotationSourceBundleDigest: digest,
+		workloadmeta.AnnotationSourceBundlePVC:    "source-pvc",
+		workloadmeta.AnnotationSourceBundlePath:   runtime.Path,
+	} {
+		if got := annotations[key]; got != want {
+			t.Fatalf("annotation %s = %#v, want %q", key, got, want)
+		}
+	}
+	pod := manifest["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	main := pod["containers"].([]any)[0].(map[string]any)
+	if got := main["workingDir"]; got != sourceBundleTargetDir {
+		t.Fatalf("main workingDir = %#v, want %q", got, sourceBundleTargetDir)
+	}
+	if got := asYAML(t, main["command"]); !strings.Contains(got, "torch.distributed.run") || !strings.Contains(got, "pkg/train.py") || !strings.Contains(got, "--epochs=3") {
+		t.Fatalf("source bundle command lost launcher/flags:\n%s", got)
+	}
+	if got := asYAML(t, main["command"]); !strings.Contains(got, `export PYTHONPATH=/tau/source${PYTHONPATH:+:$PYTHONPATH}`) {
+		t.Fatalf("source bundle command does not make the bundle root importable:\n%s", got)
+	}
+	if got := asYAML(t, main["volumeMounts"]); !strings.Contains(got, "name: tau-source") || !strings.Contains(got, "mountPath: /tau/source") || !strings.Contains(got, "readOnly: true") {
+		t.Fatalf("main source mount missing or writable:\n%s", got)
+	}
+	if got := asYAML(t, pod["volumes"]); !strings.Contains(got, "claimName: source-pvc") || !strings.Contains(got, "name: tau-source") {
+		t.Fatalf("source PVC/emptyDir volumes missing:\n%s", got)
+	}
+	init := pod["initContainers"].([]any)
+	if len(init) != 1 {
+		t.Fatalf("source init containers = %d, want 1", len(init))
+	}
+	if got := asYAML(t, init[0]); !strings.Contains(got, "TAU_SOURCE_BUNDLE_MODE") || !strings.Contains(got, "extract") || !strings.Contains(got, digest) || !strings.Contains(got, runtime.Path) || !strings.Contains(got, "mountPath: /data") || !strings.Contains(got, "readOnly: true") {
+		t.Fatalf("source init contract missing:\n%s", got)
 	}
 }

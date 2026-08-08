@@ -219,6 +219,9 @@ const (
 	AnnotationPayloadDigest         = "tau.azure.com/payload-digest"
 	AnnotationManifestPayloadDigest = "tau.azure.com/manifest-payload-digest"
 	AnnotationScriptPayloadDigest   = "tau.azure.com/script-payload-digest"
+	AnnotationSourceBundleDigest    = "tau.azure.com/source-bundle-digest"
+	AnnotationSourceBundlePVC       = "tau.azure.com/source-bundle-pvc"
+	AnnotationSourceBundlePath      = "tau.azure.com/source-bundle-path"
 )
 
 // LabelProfile records the name of the resolved compute profile a workload was

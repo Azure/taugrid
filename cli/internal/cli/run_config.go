@@ -207,6 +207,11 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o.configDir = baseDir
 	o.workingDir = configRelativePath(baseDir, c.Run.WorkingDir)
 	o.workingDirExcludes = append([]string{}, c.Run.WorkingDirExcludes...)
+	if c.Run.SourceBundle != nil {
+		o.sourceBundlePath = configRelativePath(baseDir, c.Run.SourceBundle.Path)
+		o.sourceBundleExcludes = append([]string{}, c.Run.SourceBundle.Excludes...)
+		o.sourceBundleDigest = c.Run.SourceBundle.Digest
+	}
 	if c.Run.SmokePairs != nil {
 		o.smokePairs = *c.Run.SmokePairs
 	}

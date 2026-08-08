@@ -11,11 +11,46 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/core/status"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 func TestRunStatusRegistersRunProfileFlag(t *testing.T) {
 	if flag := newRunStatusCmd().Flags().Lookup("run-profile"); flag == nil {
 		t.Fatal("tau run status must support the --run-profile handoff")
+	}
+}
+
+func TestWriteStatusSnapshotShowsSourceBundleProvenance(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	snap := status.Snapshot{
+		Name: "train",
+		Annotations: map[string]string{
+			workloadmeta.AnnotationSourceBundleDigest: digest,
+			workloadmeta.AnnotationSourceBundlePVC:    "blob-training",
+			workloadmeta.AnnotationSourceBundlePath:   "/data/tau/source-bundles/sha256/" + strings.Repeat("a", 64) + ".zip",
+		},
+	}
+	var out bytes.Buffer
+	writeStatusSnapshot(&out, snap, false)
+
+	for _, want := range []string{
+		"Source bundle:",
+		"sha256:aaaaaaaaaaaa…",
+		"full: " + digest,
+		"PVC:     blob-training",
+		"/data/tau/source-bundles/sha256/" + strings.Repeat("a", 64) + ".zip",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestWriteStatusSnapshotOmitsSourceBundleSectionWithoutAnnotations(t *testing.T) {
+	var out bytes.Buffer
+	writeStatusSnapshot(&out, status.Snapshot{Name: "train"}, false)
+	if strings.Contains(out.String(), "Source bundle:") {
+		t.Fatalf("status unexpectedly included source bundle provenance:\n%s", out.String())
 	}
 }
 

@@ -467,6 +467,44 @@ func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 	}
 }
 
+func TestLifecycleRecordRetainsCompleteSourceBundleAnnotations(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	metadata := testMetadata("source-bundle")
+	metadata.Annotations[workloadmeta.AnnotationSourceBundleDigest] = digest
+	metadata.Annotations[workloadmeta.AnnotationSourceBundlePVC] = "blob-training"
+	metadata.Annotations[workloadmeta.AnnotationSourceBundlePath] = "/data/tau/source-bundles/sha256/" + strings.Repeat("a", 64) + ".zip"
+
+	record := baseRecord(metadata, "cluster-a", "", "", "Job", experiment.WorkloadKindJob, nil, time.Now())
+	if record.SourceBundleDigest != digest {
+		t.Fatalf("source bundle digest = %q, want complete digest %q", record.SourceBundleDigest, digest)
+	}
+	if record.SourceBundlePVC != "blob-training" {
+		t.Fatalf("source bundle PVC = %q", record.SourceBundlePVC)
+	}
+	if !strings.HasSuffix(record.SourceBundlePath, strings.Repeat("a", 64)+".zip") {
+		t.Fatalf("source bundle path = %q", record.SourceBundlePath)
+	}
+	for key, want := range map[string]string{
+		"tau.source_bundle_digest": digest,
+		"tau.source_bundle_pvc":    "blob-training",
+		"tau.source_bundle_path":   record.SourceBundlePath,
+	} {
+		if got := record.Tags[key]; got != want {
+			t.Errorf("durable tags[%q] = %q, want %q", key, got, want)
+		}
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{digest, "blob-training", record.SourceBundlePath} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("lifecycle JSON dropped source-bundle value %q: %s", want, data)
+		}
+	}
+}
+
 func TestLifecycleMappingReferencesRecordFields(t *testing.T) {
 	record := Record{
 		ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "observation", DurableID: "durable", RunID: "run",

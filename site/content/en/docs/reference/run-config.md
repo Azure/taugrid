@@ -38,6 +38,58 @@ namespace. Tau references and mounts that claim; it does not provision or own
 the PVC, StorageClass, CSI configuration, or backing storage. The platform
 owner chooses the backend and manages its lifecycle.
 
+## Ship an immutable source bundle
+
+Use `run.source_bundle` when a Job or RayJob must run the checked-out project
+tree rather than a single inline script. Paths are relative to the directory
+containing this config file:
+
+```yaml
+run:
+  entrypoint: project/train.py
+  source_bundle:
+    path: project
+    excludes: [large-data/**]
+    # Optional reproducibility pin:
+    digest: sha256:<64 lowercase hex>
+
+storage:
+  data_pvc: blob-training # optional; source-bundle mode selects its default when omitted
+```
+
+Tau deterministically archives the selected local tree. The **uncompressed
+input** is capped at 8 MiB; this is deliberately not the 64 KiB inline-payload
+limit. Bundle contents are not placed in the workload manifest. Use
+`excludes` for large local data and keep it on a PVC instead. `.git` is
+excluded by default. A `digest` pin is optional, but when supplied it must be
+`sha256:` followed by exactly 64 lowercase hexadecimal characters; submission
+fails if the locally built archive does not match.
+
+`run.source_bundle` and `run.working_dir` are mutually exclusive.
+`working_dir` remains the Ray runtime-environment mechanism for its existing
+use cases: it fails fast when its compressed inline archive exceeds 64 KiB.
+Choose a source bundle for project shipping that needs the 8 MiB input budget
+and durable content addressing instead.
+
+On a real submission, Tau stages the zip over `kubectl exec` standard input to
+the data PVC at
+`/data/tau/source-bundles/sha256/<hex>.zip`. It verifies the exact SHA-256
+before and after staging, reuses an already verified digest, and rejects a
+corrupt existing target. Jobs and RayJobs verify the requested digest and
+validate every archive member before the main container starts. Jobs safely
+extract into pod-local runtime storage; Ray receives the verified zip through
+its `runtime_env.working_dir` contract. `--dry-run=client` and
+`--dry-run=server` render this reference but never stage source bytes.
+
+Bundles are made only from the local working tree. This supports private
+repositories without copying repository credentials, remotes, or tokens into
+the PVC or workload; it also means a remote repository is not cloned during
+submission. The workload image must include `python3`, which Tau uses to verify
+the archive in every Job or Ray pod and to extract Job bundles. Multi-node
+RayJobs require the selected data PVC to support `ReadWriteMany`. Run
+`tau run status <name>` to see the short and full bundle digest, PVC, and
+durable path recorded on the workload.
+
 Main field groups:
 
 | Group | Purpose |

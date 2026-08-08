@@ -70,6 +70,7 @@ type Options struct {
 type File struct {
 	Name string
 	Size int64
+	Mode fs.FileMode
 }
 
 // Build walks Dir and returns a deterministic zip archive plus the entries it
@@ -124,7 +125,11 @@ func Build(o Options) ([]byte, []File, error) {
 			return err
 		}
 		total += fi.Size()
-		files = append(files, File{Name: rel, Size: fi.Size()})
+		mode := fs.FileMode(0o644)
+		if fi.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		files = append(files, File{Name: rel, Size: fi.Size(), Mode: mode})
 		return nil
 	})
 	if err != nil {
@@ -147,7 +152,7 @@ func Build(o Options) ([]byte, []File, error) {
 	for _, f := range files {
 		header := &zip.FileHeader{Name: f.Name, Method: zip.Deflate}
 		header.Modified = fixedModTime
-		header.SetMode(0o644)
+		header.SetMode(f.Mode)
 		w, err := zw.CreateHeader(header)
 		if err != nil {
 			return nil, nil, fmt.Errorf("archiving %s: %w", f.Name, err)

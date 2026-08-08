@@ -13,6 +13,7 @@ decision path used across these pages -- do not guess which layer owns the
 problem.
 
 - [Troubleshoot a run](troubleshoot/) -- start here first
+- [Operate source bundles](source-bundles/) -- prepare bundle storage, RBAC, and retention
 - Review [observability](../../operations/observability/)
 - Understand [queue and GPU placement](../../concepts/policy-and-placement/)
 - Apply [retry and resume](../../operations/recovery/) only after classifying failure.

@@ -40,6 +40,12 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 	if strings.TrimSpace(name) == "" {
 		return runJobRequest{}, fmt.Errorf("job runs require NAME")
 	}
+	if options.hasSourceBundle() && strings.TrimSpace(options.script) == "" {
+		return runJobRequest{}, fmt.Errorf("source bundle requires run.entrypoint")
+	}
+	if options.hasSourceBundle() && firstNonEmpty(options.dataPVC, options.resultPVC) == "" {
+		options.dataPVC = defaultTauPVCName
+	}
 	if err := validateRunJobStorageConfig(options); err != nil {
 		return runJobRequest{}, err
 	}
@@ -84,7 +90,11 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.dryRun != "" && o.dryRun != "client" && o.dryRun != "server" {
 		return fmt.Errorf("--dry-run must be one of: client, server")
 	}
-	if o.script != "" {
+	source, err := buildRunSourceBundle(o)
+	if err != nil {
+		return err
+	}
+	if source == nil && o.script != "" {
 		if _, err := os.Stat(o.script); err != nil {
 			return fmt.Errorf("run.entrypoint: %w", err)
 		}
@@ -218,6 +228,10 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		CheckpointArtifact:    o.checkpointArtifact,
 		Annotations:           annotations,
 	}
+	if source != nil {
+		opts.SourceBundle = &source.runtime
+		opts.ScriptPath = ""
+	}
 	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, preset, func(flag string) bool {
 		return runJobTopologyFieldSet(o, flag)
 	}, o.workspaceQueueResolved)
@@ -338,6 +352,9 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		if err := validateRenderedQueue(ctx, kube.New(kubeContext), ns, manifest, opts, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
 			return err
 		}
+	}
+	if err := stageRunSourceBundle(ctx, o.dryRun, runner, ns, pvcMount, request.Name, source); err != nil {
+		return err
 	}
 	for _, warning := range warnings {
 		fmt.Fprintln(stderr, warning)

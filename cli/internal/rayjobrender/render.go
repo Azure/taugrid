@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
+	"github.com/Azure/taugrid/cli/internal/sourcebundle"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
@@ -92,6 +93,9 @@ type Options struct {
 	ServiceAccountName string
 	ScriptName         string
 	Script             []byte
+	// SourceBundle references source staged on DataPVC. Its archive is never
+	// embedded in the rendered RayJob.
+	SourceBundle *sourcebundle.Runtime
 	// ProjectArchive is a deterministic zip of the project directory. When
 	// set, it is shipped to every node and handed to Ray as a runtime_env
 	// working_dir, which puts the unpacked tree on PYTHONPATH so sibling
@@ -160,7 +164,10 @@ func Render(o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
-	files := map[string][]byte{o.ScriptName: o.Script}
+	files := map[string][]byte{}
+	if o.SourceBundle == nil {
+		files[o.ScriptName] = o.Script
+	}
 	if isTuneLauncher(o.Launcher) {
 		files[tuneDriverFilename] = []byte(tuneDriverScript)
 	}
@@ -172,9 +179,13 @@ func Render(o Options) ([]byte, error) {
 			files[tuneDriverFilename] = []byte(tuneDriverScript)
 		}
 	}
-	encodedPayload, payloadDigest, err := payload.Encode(payload.New(files))
-	if err != nil {
-		return nil, fmt.Errorf("script payload: %w", err)
+	var encodedPayload, payloadDigest string
+	if len(files) > 0 {
+		var err error
+		encodedPayload, payloadDigest, err = payload.Encode(payload.New(files))
+		if err != nil {
+			return nil, fmt.Errorf("script payload: %w", err)
+		}
 	}
 	plan, err := topology.Build(o.Profile, o.TopologyOptions)
 	if err != nil {
@@ -225,10 +236,27 @@ func (o Options) validate() error {
 	if o.Namespace == "" {
 		return fmt.Errorf("namespace is required")
 	}
-	if strings.TrimSpace(o.ScriptName) == "" {
+	scriptName := o.ScriptName
+	if o.SourceBundle != nil {
+		scriptName = o.SourceBundle.Entrypoint
+	}
+	if strings.TrimSpace(scriptName) == "" {
 		return fmt.Errorf("script name is required")
 	}
-	if len(o.ProjectArchive) > 0 {
+	if o.SourceBundle != nil {
+		if o.DataPVC == "" {
+			return fmt.Errorf("source bundle requires a durable data PVC")
+		}
+		if len(o.ProjectArchive) > 0 {
+			return fmt.Errorf("source bundle cannot be combined with a project archive")
+		}
+		if err := o.SourceBundle.Validate(); err != nil {
+			return fmt.Errorf("source bundle: %w", err)
+		}
+		if _, err := entrypointModule(scriptName); err != nil {
+			return err
+		}
+	} else if len(o.ProjectArchive) > 0 {
 		// The entrypoint is a module path relative to the project root, so
 		// nested paths are legitimate here; entrypointModule rejects escapes.
 		if _, err := entrypointModule(o.ScriptName); err != nil {
@@ -240,7 +268,7 @@ func (o Options) validate() error {
 			return fmt.Errorf("script name %q must be a single file name", o.ScriptName)
 		}
 	}
-	if len(o.Script) == 0 {
+	if o.SourceBundle == nil && len(o.Script) == 0 {
 		return fmt.Errorf("script %q is empty", o.ScriptName)
 	}
 	if o.Workers < 1 {
@@ -367,8 +395,9 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	}
 	labels[workloadmeta.LabelManagedBy] = workloadmeta.ManagedByValue
 
-	annotations := map[string]any{
-		payload.AnnotationDigest: payloadDigest,
+	annotations := map[string]any{}
+	if payloadDigest != "" {
+		annotations[payload.AnnotationDigest] = payloadDigest
 	}
 	// Record the declaration on the workload so `tau run get` can tell a run
 	// that produced nothing from one whose promised artifact is missing.
@@ -387,6 +416,11 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	}
 	if o.Launcher != "" {
 		annotations[workloadmeta.AnnotationSpecExecution] = fmt.Sprintf(`{"launcher":%q}`, strings.ToLower(o.Launcher))
+	}
+	if o.SourceBundle != nil {
+		annotations[workloadmeta.AnnotationSourceBundleDigest] = o.SourceBundle.Digest
+		annotations[workloadmeta.AnnotationSourceBundlePVC] = o.DataPVC
+		annotations[workloadmeta.AnnotationSourceBundlePath] = o.SourceBundle.Path
 	}
 
 	podLabels := map[string]any{}
@@ -483,7 +517,7 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 			"workerGroupSpecs": workers,
 		},
 	}
-	if runtimeEnv := runtimeEnvYAML(o.RuntimePip, o.ProjectArchive); runtimeEnv != "" {
+	if runtimeEnv := runtimeEnvYAML(o.RuntimePip, o.ProjectArchive, o.SourceBundle); runtimeEnv != "" {
 		spec["runtimeEnvYAML"] = runtimeEnv
 	}
 
@@ -552,10 +586,16 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		pod["serviceAccountName"] = o.ServiceAccountName
 	}
 	if isHead {
-		pod["initContainers"] = []any{
-			raylogoffload.PrepareInitContainer(image),
-			payloadInitContainer(image, encodedPayload, payloadDigest),
+		initContainers := []any{raylogoffload.PrepareInitContainer(image)}
+		if o.SourceBundle != nil {
+			initContainers = append(initContainers, sourceBundleInitContainer(image, *o.SourceBundle))
 		}
+		if encodedPayload != "" {
+			initContainers = append(initContainers, payloadInitContainer(image, encodedPayload, payloadDigest))
+		}
+		pod["initContainers"] = initContainers
+	} else if o.SourceBundle != nil {
+		pod["initContainers"] = []any{sourceBundleInitContainer(image, *o.SourceBundle)}
 	} else if len(o.ProjectArchive) > 0 {
 		// Ray resolves a file:// working_dir separately on every node, so a
 		// worker can only join the job if the archive exists on its own
@@ -601,6 +641,27 @@ func payloadInitContainer(image, encodedPayload, payloadDigest string) map[strin
 		},
 		"volumeMounts": []any{
 			map[string]any{"name": "script", "mountPath": payloadTargetDir},
+		},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "10m", "memory": "32Mi"},
+			"limits":   map[string]any{"cpu": "250m", "memory": "128Mi"},
+		},
+	}
+}
+
+func sourceBundleInitContainer(image string, runtime sourcebundle.Runtime) map[string]any {
+	return map[string]any{
+		"name":    "tau-source-bundle",
+		"image":   image,
+		"command": []any{"python3", "-c", sourcebundle.InitScript()},
+		"env": []any{
+			map[string]any{"name": sourcebundle.InitEnvSourcePath, "value": runtime.Path},
+			map[string]any{"name": sourcebundle.InitEnvDigest, "value": runtime.Digest},
+			map[string]any{"name": sourcebundle.InitEnvTargetDir, "value": "/tau/source"},
+			map[string]any{"name": sourcebundle.InitEnvMode, "value": "validate"},
+		},
+		"volumeMounts": []any{
+			map[string]any{"name": "data", "mountPath": storage.DurableRoot, "readOnly": true},
 		},
 		"resources": map[string]any{
 			"requests": map[string]any{"cpu": "10m", "memory": "32Mi"},
@@ -694,7 +755,8 @@ func entrypoint(o Options) (string, error) {
 	// ray:py3.12-ray2.54.0-cuda13.0. It installs cleanly on DefaultCPUImage,
 	// where this fallback simply never fires. Retry into the user site rather
 	// than making every researcher set PIP_USER=1 by hand.
-	b.WriteString("if [ -s /script/requirements.txt ]; then python3 -m pip install --quiet --no-cache-dir -r /script/requirements.txt || python3 -m pip install --quiet --no-cache-dir --user -r /script/requirements.txt; fi\n")
+	requirementsPath := payloadTargetDir + "/requirements.txt"
+	b.WriteString("if [ -s " + requirementsPath + " ]; then python3 -m pip install --quiet --no-cache-dir -r " + requirementsPath + " || python3 -m pip install --quiet --no-cache-dir --user -r " + requirementsPath + "; fi\n")
 	// --user drops console scripts in the user base bin dir, which is not on
 	// PATH here; without this `torchrun` and friends are installed but unusable.
 	b.WriteString("PATH=\"$(python3 -m site --user-base)/bin:$PATH\"; export PATH\n")
@@ -713,6 +775,13 @@ func entrypoint(o Options) (string, error) {
 	case isTuneLauncher(o.Launcher):
 		b.WriteString("python3 " + payloadTargetDir + "/")
 		b.WriteString(tuneDriverFilename)
+	case o.SourceBundle != nil:
+		module, err := entrypointModule(o.SourceBundle.Entrypoint)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("python3 -m ")
+		b.WriteString(shellQuote(module))
 	case len(o.ProjectArchive) > 0:
 		// In working_dir mode the entrypoint lives inside the archive that
 		// Ray unpacks per node, not at a path we control, so it is run as a
@@ -795,12 +864,16 @@ func isTuneLauncher(launcher string) bool {
 // its own filesystem, which is exactly what the per-pod tau-payload
 // initContainer provides, so no object store, credential, or shared volume is
 // involved and the workload stays self-contained.
-func runtimeEnvYAML(pkgs []string, projectArchive []byte) string {
-	if len(pkgs) == 0 && len(projectArchive) == 0 {
+func runtimeEnvYAML(pkgs []string, projectArchive []byte, source *sourcebundle.Runtime) string {
+	if len(pkgs) == 0 && len(projectArchive) == 0 && source == nil {
 		return ""
 	}
 	var b strings.Builder
-	if len(projectArchive) > 0 {
+	if source != nil {
+		b.WriteString("working_dir: \"file://")
+		b.WriteString(source.Path)
+		b.WriteString("\"\n")
+	} else if len(projectArchive) > 0 {
 		b.WriteString("working_dir: \"file://")
 		b.WriteString(payloadTargetDir + "/" + projectArchiveFilename)
 		b.WriteString("\"\n")
@@ -917,6 +990,13 @@ func envList(o Options, isHead bool) ([]any, error) {
 
 	if isTuneLauncher(o.Launcher) {
 		moduleName := strings.TrimSuffix(o.ScriptName, ".py")
+		if o.SourceBundle != nil {
+			var err error
+			moduleName, err = entrypointModule(o.SourceBundle.Entrypoint)
+			if err != nil {
+				return nil, err
+			}
+		}
 		env["TAU_TUNE_TRAIN_MODULE"] = moduleName
 		env["TAU_TUNE_METRIC"] = o.TuneMetric
 		if o.TuneMode != "" {
@@ -951,9 +1031,7 @@ func envList(o Options, isHead bool) ([]any, error) {
 }
 
 // volumes returns the pod-level volumes for a Ray head or worker template.
-// The "script" emptyDir (populated at runtime by the tau-payload
-// initContainer) is only needed on the head, which is where the RayJob's
-// entrypoint actually runs; see buildPodSpec.
+// The "script" emptyDir is only present when an embedded payload needs it.
 func volumes(o Options, isHead bool) []any {
 	data := map[string]any{"name": "data"}
 	if o.DataPVC != "" {
@@ -969,14 +1047,13 @@ func volumes(o Options, isHead bool) []any {
 		})
 	}
 	if isHead {
-		// "script" is populated at runtime by the tau-payload initContainer
-		// from the payload embedded directly in this pod spec, so the RayJob
-		// no longer depends on a per-run ConfigMap being present on whichever
-		// cluster the workload is dispatched to.
-		vols = append(vols, map[string]any{
-			"name":     "script",
-			"emptyDir": map[string]any{},
-		}, raylogoffload.Volume())
+		if o.SourceBundle == nil || isTuneLauncher(o.Launcher) {
+			vols = append(vols, map[string]any{
+				"name":     "script",
+				"emptyDir": map[string]any{},
+			})
+		}
+		vols = append(vols, raylogoffload.Volume())
 		if o.MetricsOffload.Enabled() {
 			vols = append(vols, metricsoffload.RuntimeVolume())
 		}
@@ -988,11 +1065,8 @@ func volumes(o Options, isHead bool) []any {
 	)
 }
 
-// volumeMounts returns the main container's volume mounts. The "script"
-// mount is head-only unless a project archive is in play: Ray's runtime_env
-// agent resolves the file:// working_dir from inside the ray container, so
-// every node that participates in the job needs the archive visible there,
-// not just in its initContainer.
+// volumeMounts returns the main container's volume mounts. The "script" mount
+// exists only for an embedded payload.
 func volumeMounts(o Options, isHead bool) []any {
 	mounts := []any{}
 	if !isHead && len(o.ProjectArchive) > 0 {
@@ -1001,10 +1075,10 @@ func volumeMounts(o Options, isHead bool) []any {
 		)
 	}
 	if isHead {
-		mounts = append(mounts,
-			map[string]any{"name": "script", "mountPath": payloadTargetDir, "readOnly": true},
-			raylogoffload.VolumeMount(false),
-		)
+		if o.SourceBundle == nil || isTuneLauncher(o.Launcher) {
+			mounts = append(mounts, map[string]any{"name": "script", "mountPath": payloadTargetDir, "readOnly": true})
+		}
+		mounts = append(mounts, raylogoffload.VolumeMount(false))
 		if o.MetricsOffload.Enabled() {
 			mounts = append(mounts, metricsoffload.RuntimeMount())
 		}

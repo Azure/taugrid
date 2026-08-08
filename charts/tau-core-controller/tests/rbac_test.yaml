@@ -1,0 +1,33 @@
+suite: Researcher source-bundle staging RBAC
+templates:
+  - rbac.yaml
+tests:
+  - it: grants only the pod lifecycle and exec operations needed for source-bundle staging
+    documentSelector:
+      path: metadata.name
+      value: tau-researcher-v1
+    asserts:
+      - equal:
+          path: rules[2]
+          value:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["create", "get", "list", "watch", "delete"]
+      - equal:
+          path: rules[3]
+          value:
+            apiGroups: [""]
+            resources: ["pods/exec"]
+            verbs: ["create"]
+      - equal:
+          path: rules[4]
+          value:
+            apiGroups: [""]
+            resources: ["pods/log", "events", "persistentvolumeclaims"]
+            verbs: ["get", "list", "watch"]
+      - equal:
+          path: rules[5]
+          value:
+            apiGroups: [""]
+            resources: ["configmaps", "secrets"]
+            verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]

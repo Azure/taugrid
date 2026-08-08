@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/status"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 type watchStatusHooks struct {
@@ -150,9 +151,39 @@ func clearStatusScreen(w io.Writer) {
 
 func writeStatusSnapshot(w io.Writer, snap status.Snapshot, runProfile bool) {
 	fmt.Fprint(w, status.Render(snap))
+	writeSourceBundleStatus(w, snap.Annotations)
 	if runProfile {
 		fmt.Fprint(w, status.RenderRunProfile(snap, status.CostProfile{}))
 	}
+}
+
+func writeSourceBundleStatus(w io.Writer, annotations map[string]string) {
+	digest := strings.TrimSpace(annotations[workloadmeta.AnnotationSourceBundleDigest])
+	pvc := strings.TrimSpace(annotations[workloadmeta.AnnotationSourceBundlePVC])
+	bundlePath := strings.TrimSpace(annotations[workloadmeta.AnnotationSourceBundlePath])
+	if digest == "" && pvc == "" && bundlePath == "" {
+		return
+	}
+
+	fmt.Fprint(w, "\nSource bundle:\n")
+	if digest != "" {
+		fmt.Fprintf(w, "  digest:  %s (full: %s)\n", shortSourceBundleDigest(digest), digest)
+	}
+	if pvc != "" {
+		fmt.Fprintf(w, "  PVC:     %s\n", pvc)
+	}
+	if bundlePath != "" {
+		fmt.Fprintf(w, "  path:    %s\n", bundlePath)
+	}
+}
+
+func shortSourceBundleDigest(digest string) string {
+	const prefixLength = len("sha256:")
+	const shortHexLength = 12
+	if strings.HasPrefix(digest, "sha256:") && len(digest) > prefixLength+shortHexLength {
+		return digest[:prefixLength+shortHexLength] + "…"
+	}
+	return digest
 }
 
 func newRunLogsCmd() *cobra.Command {

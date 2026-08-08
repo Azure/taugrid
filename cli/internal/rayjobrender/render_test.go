@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
+	"github.com/Azure/taugrid/cli/internal/sourcebundle"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -1968,4 +1969,68 @@ func TestRenderRejectsCheckpointArtifactWithoutDurablePVC(t *testing.T) {
 			t.Fatalf("render with a durable PVC should succeed, got: %v", err)
 		}
 	})
+}
+
+func TestRenderSourceBundleUsesDurableArchiveWithoutPayload(t *testing.T) {
+	const digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	runtime := &sourcebundle.Runtime{
+		Digest:     digest,
+		Path:       sourcebundle.DurableRoot + "/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.zip",
+		Entrypoint: "pkg/train.py",
+	}
+	out, err := Render(Options{
+		Name:         "source-ray",
+		Namespace:    "ray",
+		ScriptName:   runtime.Entrypoint,
+		SourceBundle: runtime,
+		Workers:      2,
+		DataPVC:      "source-pvc",
+		TopologyOptions: topology.Options{
+			QueueName: "team-a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("render source bundle: %v", err)
+	}
+	rendered := string(out)
+	for _, unwanted := range []string{"TAU_PAYLOAD_B64", "TAU_PAYLOAD_DIGEST", "tau-payload", "projectArchive"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("source bundle render must not embed payload/archive (%q):\n%s", unwanted, rendered)
+		}
+	}
+
+	rayjob := decodeDocs(t, out)[0]
+	metadata := rayjob["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	for key, want := range map[string]string{
+		workloadmeta.AnnotationSourceBundleDigest: digest,
+		workloadmeta.AnnotationSourceBundlePVC:    "source-pvc",
+		workloadmeta.AnnotationSourceBundlePath:   runtime.Path,
+	} {
+		if got := annotations[key]; got != want {
+			t.Fatalf("annotation %s = %#v, want %q", key, got, want)
+		}
+	}
+	spec := rayjob["spec"].(map[string]any)
+	if got, want := spec["runtimeEnvYAML"], "working_dir: \"file://"+runtime.Path+"\"\n"; got != want {
+		t.Fatalf("runtimeEnvYAML = %#v, want %q", got, want)
+	}
+	if entrypoint := spec["entrypoint"].(string); !strings.Contains(entrypoint, "python3 -m pkg.train") {
+		t.Fatalf("source bundle entrypoint must run relative module:\n%s", entrypoint)
+	}
+	cluster := spec["rayClusterSpec"].(map[string]any)
+	headPod := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	for _, pod := range []map[string]any{headPod, workerPod} {
+		init := containerByName(t, pod["initContainers"].([]any), "tau-source-bundle")
+		if got := asYAML(t, init); !strings.Contains(got, "TAU_SOURCE_BUNDLE_MODE") || !strings.Contains(got, "validate") || !strings.Contains(got, digest) || !strings.Contains(got, runtime.Path) || !strings.Contains(got, "mountPath: /data") || !strings.Contains(got, "readOnly: true") {
+			t.Fatalf("source validation init contract missing:\n%s", got)
+		}
+		if got := asYAML(t, pod["volumes"]); strings.Contains(got, "name: script") {
+			t.Fatalf("source bundle pod must not use script emptyDir:\n%s", got)
+		}
+	}
+	if got := asYAML(t, headPod["initContainers"]); !strings.Contains(got, raylogoffload.PrepareInitName) {
+		t.Fatalf("head lost ray log preparation:\n%s", got)
+	}
 }

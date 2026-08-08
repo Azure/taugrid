@@ -47,6 +47,10 @@ var fieldCatalog = map[string]FieldInfo{
 	"run.script":                   {Status: statusSupported, Description: "Alias for run.entrypoint."},
 	"run.working_dir":              {Status: statusSupported, Description: "Project directory shipped with the run so sibling modules and local packages import on workers; resolved relative to the config file."},
 	"run.working_dir_excludes":     {Status: statusSupported, Description: "Extra glob patterns excluded from the shipped project directory."},
+	"run.source_bundle":            {Status: statusDirectOnly, Description: "Content-addressed source directory bundle for a direct run. Mutually exclusive with run.working_dir; the CLI verifies the local directory."},
+	"run.source_bundle.path":       {Status: statusDirectOnly, Description: "Required non-empty local directory path for the source bundle, resolved relative to the config file."},
+	"run.source_bundle.excludes":   {Status: statusDirectOnly, Description: "Optional source-bundle exclusion patterns. These are independent of run.working_dir_excludes."},
+	"run.source_bundle.digest":     {Status: statusDirectOnly, Description: "Optional expected source-bundle digest, exactly sha256: followed by 64 lowercase hexadecimal characters."},
 	"run.image":                    {Status: statusSupported, Description: "Nested container image override when runtime.image is not set."},
 	"run.main_script":              {Status: statusSupported, Description: "Main script passed to workflow rendering when workflow.file is used."},
 	"run.workload_kind":            {Status: statusSupported, Description: "Workload kind selector for dispatch compatibility.", Values: []string{"job", "rayjob", "ray-train", "ray_train"}},
@@ -331,8 +335,17 @@ func schemaForType(t reflect.Type, path string) map[string]any {
 			props[name] = schemaForType(field.Type, childPath)
 		}
 		schema["properties"] = props
+		if path == "run.source_bundle" {
+			schema["required"] = []string{"path"}
+		}
 	case t.Kind() == reflect.String:
 		schema["type"] = "string"
+		if path == "run.source_bundle.path" {
+			schema["minLength"] = 1
+		}
+		if path == "run.source_bundle.digest" {
+			schema["pattern"] = `^sha256:[0-9a-f]{64}$`
+		}
 	case t.Kind() == reflect.Int:
 		schema["type"] = "integer"
 	case t.Kind() == reflect.Bool:
