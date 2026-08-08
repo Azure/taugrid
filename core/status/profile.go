@@ -81,8 +81,13 @@ func RenderRunProfile(s Snapshot, c CostProfile) string {
 	row("cost", costSummary(c))
 	row("gpu_hours", gpuHoursSummary(c))
 	row("estimated_cost", estimatedCostSummary(c))
-	row("gpu_utilization", "not collected (DCGM/Prometheus integration pending)")
-	row("gpu_memory", "not collected (DCGM/Prometheus integration pending)")
+	row("gpu_allocation", gpuAllocationSummary(s))
+	row("gpu_telemetry", gpuTelemetrySummary(s.GPURuntime))
+	row("gpu_devices", gpuDevicesSummary(s.GPURuntime))
+	row("gpu_utilization", gpuUtilizationSummary(s.GPURuntime))
+	row("gpu_memory", gpuMemorySummary(s.GPURuntime))
+	row("gpu_activity", gpuActivitySummary(s.GPURuntime))
+	row("cuda_compute_process", "not available (dcgm-exporter exposes device activity, not per-process or CUDA-context metrics)")
 	row("results", annotationOrDefault(s, workloadmeta.AnnotationResultPath, "not declared on Job"))
 	if v := annotationOrDefault(s, workloadmeta.AnnotationResultArtifacts, ""); v != "" {
 		row("artifacts", v)
@@ -104,6 +109,161 @@ func canonicalGPUClassLabel(v string) string {
 	}
 	canonical, _ := topology.NormalizeGPUClass(v)
 	return canonical
+}
+
+func gpuAllocationSummary(s Snapshot) string {
+	if len(s.ResourceClaims) == 0 {
+		return "not collected (no DRA ResourceClaim found)"
+	}
+	claims := make([]string, 0, len(s.ResourceClaims))
+	for _, claim := range s.ResourceClaims {
+		state := claim.Allocation
+		if state == "" && claim.Allocated {
+			state = "allocated"
+		}
+		if state == "" {
+			state = "pending"
+		}
+		claims = append(claims, claim.Name+"="+state)
+	}
+	sort.Strings(claims)
+	return strings.Join(claims, ", ")
+}
+
+func gpuDevicesSummary(e GPURuntimeEvidence) string {
+	if e.State != GPURuntimeObserved {
+		return gpuUnavailableSummary(e)
+	}
+	devices := make([]string, 0, len(e.Devices))
+	for _, device := range e.Devices {
+		identity := device.Pod
+		if device.Container != "" {
+			identity += "/" + device.Container
+		}
+		parts := []string{identity}
+		if device.GPU != "" {
+			parts = append(parts, "gpu="+device.GPU)
+		}
+		if device.UUID != "" {
+			parts = append(parts, "uuid="+device.UUID)
+		}
+		devices = append(devices, strings.Join(parts, " "))
+	}
+	return strings.Join(devices, ", ")
+}
+
+func gpuTelemetrySummary(e GPURuntimeEvidence) string {
+	if e.State != GPURuntimeObserved {
+		return gpuUnavailableSummary(e)
+	}
+	source := firstNonEmpty(e.Source, "GPU telemetry")
+	if e.NodesExpected == 0 {
+		return source + " live snapshot"
+	}
+	summary := fmt.Sprintf("%s live snapshot (%d/%d workload nodes)", source, e.NodesScraped, e.NodesExpected)
+	if e.NodesScraped < e.NodesExpected {
+		summary += "; partial coverage"
+	}
+	return summary
+}
+
+func gpuUtilizationSummary(e GPURuntimeEvidence) string {
+	if e.State != GPURuntimeObserved {
+		return gpuUnavailableSummary(e)
+	}
+	var total, max float64
+	count := 0
+	for _, device := range e.Devices {
+		if !device.UtilizationObserved {
+			continue
+		}
+		total += device.UtilizationPercent
+		if device.UtilizationPercent > max {
+			max = device.UtilizationPercent
+		}
+		count++
+	}
+	if count == 0 {
+		return "not available (DCGM_FI_DEV_GPU_UTIL is not exposed for matching pods)"
+	}
+	return fmt.Sprintf("%.1f%% avg, %.1f%% max across %d GPU(s)%s", total/float64(count), max, count, gpuCoverageSuffix(e))
+}
+
+func gpuMemorySummary(e GPURuntimeEvidence) string {
+	if e.State != GPURuntimeObserved {
+		return gpuUnavailableSummary(e)
+	}
+	var total, max float64
+	count := 0
+	for _, device := range e.Devices {
+		if !device.FramebufferUsedObserved {
+			continue
+		}
+		total += device.FramebufferUsedMiB
+		if device.FramebufferUsedMiB > max {
+			max = device.FramebufferUsedMiB
+		}
+		count++
+	}
+	if count == 0 {
+		return "not available (DCGM_FI_DEV_FB_USED is not exposed for matching pods)"
+	}
+	return fmt.Sprintf("%.2f GiB avg, %.2f GiB max across %d GPU(s)%s", total/1024/float64(count), max/1024, count, gpuCoverageSuffix(e))
+}
+
+func gpuActivitySummary(e GPURuntimeEvidence) string {
+	if e.State != GPURuntimeObserved {
+		return gpuUnavailableSummary(e)
+	}
+	observed := 0
+	active := 0
+	framebufferObserved := 0
+	var framebufferUsedMiB float64
+	for _, device := range e.Devices {
+		if device.FramebufferUsedObserved && device.FramebufferUsedMiB > 0 {
+			framebufferObserved++
+			framebufferUsedMiB += device.FramebufferUsedMiB
+		}
+		if !device.UtilizationObserved {
+			continue
+		}
+		observed++
+		if device.UtilizationPercent > 0 {
+			active++
+		}
+	}
+	if observed == 0 {
+		return "not available (GPU utilization is required for device activity evidence)"
+	}
+	if active == 0 {
+		if framebufferObserved > 0 {
+			return fmt.Sprintf(
+				"idle now (DCGM utilization observed at 0%% on %d GPU(s); %.2f GiB framebuffer used across %d GPU(s))",
+				observed,
+				framebufferUsedMiB/1024,
+				framebufferObserved,
+			)
+		}
+		return fmt.Sprintf("idle (DCGM utilization observed at 0%% on %d GPU(s))", observed)
+	}
+	return fmt.Sprintf("active (DCGM utilization > 0%% on %d/%d GPU(s); device-level evidence only)", active, observed)
+}
+
+func gpuCoverageSuffix(e GPURuntimeEvidence) string {
+	if e.NodesExpected > 0 && e.NodesScraped < e.NodesExpected {
+		return " (partial coverage)"
+	}
+	return ""
+}
+
+func gpuUnavailableSummary(e GPURuntimeEvidence) string {
+	if e.State == GPURuntimeNotRequested {
+		return "not collected (GPU telemetry was not requested)"
+	}
+	if e.Reason == "" {
+		return "not available"
+	}
+	return "not available (" + e.Reason + ")"
 }
 
 func queueWait(s Snapshot) string {

@@ -112,7 +112,7 @@ func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) er
 		return watchStatusCommand(cmd, opts, name)
 	}
 	r := kube.NewWithKubeconfig(opts.KubeContext, opts.Kubeconfig)
-	snap, err := status.Fetch(cmd.Context(), r, opts.Namespace, name)
+	snap, err := fetchRunStatusSnapshot(cmd.Context(), r, opts.Namespace, name, opts.RunProfile)
 	if err != nil {
 		return err
 	}
@@ -130,15 +130,26 @@ func watchStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) 
 	if opts.MaxIterations < 0 {
 		return fmt.Errorf("--max-iterations must be >= 0")
 	}
-	r := kube.New(opts.KubeContext)
+	r := kube.NewWithKubeconfig(opts.KubeContext, opts.Kubeconfig)
 	hooks := watchStatusHooks{
 		fetch: func(ctx context.Context) (status.Snapshot, error) {
-			return status.Fetch(ctx, r, opts.Namespace, name)
+			return fetchRunStatusSnapshot(ctx, r, opts.Namespace, name, opts.RunProfile)
 		},
 		wait:        waitStatusInterval,
 		clearScreen: clearStatusScreen,
 	}
 	return watchStatusCommandWithHooks(cmd, opts, name, hooks)
+}
+
+func fetchRunStatusSnapshot(ctx context.Context, r *kube.Runner, namespace, name string, runProfile bool) (status.Snapshot, error) {
+	snap, err := status.Fetch(ctx, r, namespace, name)
+	if err != nil {
+		return snap, err
+	}
+	if runProfile {
+		snap.GPURuntime = status.FetchGPURuntime(ctx, r, snap)
+	}
+	return snap, nil
 }
 
 func watchStatusCommandWithHooks(cmd *cobra.Command, opts statusRunOptions, name string, hooks watchStatusHooks) error {

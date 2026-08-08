@@ -77,6 +77,10 @@ type Snapshot struct {
 	// DRA ResourceClaims referenced by Pods.
 	ResourceClaims []ResourceClaim
 
+	// GPURuntime is populated on demand for the --run-profile view. Ordinary
+	// status avoids the extra exporter discovery and proxy requests.
+	GPURuntime GPURuntimeEvidence
+
 	// Events for the Job/RayJob, Kueue Workload, Pods, and ResourceClaims.
 	Events []Event
 }
