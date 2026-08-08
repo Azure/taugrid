@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 IMAGE    := ray
 PYTHON_VERSION ?= 3.12
 RAY_VERSION    ?= 2.54.0

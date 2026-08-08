@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package serve renders a tau Profile + user options into a KubeRay
 // RayService manifest. North-star §1 / §5 — serving.
 //

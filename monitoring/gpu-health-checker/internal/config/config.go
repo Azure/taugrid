@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package config loads and validates the gpu-health-checker YAML configuration.
 package config
 

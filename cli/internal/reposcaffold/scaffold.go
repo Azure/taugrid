@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package reposcaffold renders Tau-ready Python research repository scaffolds.
 package reposcaffold
 

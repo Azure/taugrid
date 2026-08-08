@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Researcher-facing train/eval workload decorators for Tau."""
 
 from __future__ import annotations

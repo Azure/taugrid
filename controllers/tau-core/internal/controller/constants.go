@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package controller
 
 import "github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"

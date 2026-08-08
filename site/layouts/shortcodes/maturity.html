@@ -1,3 +1,6 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
 {{- $status := .Get "status" | default "shipped" -}}
 {{- $reviewed := .Get "reviewed" | default "unknown" -}}
 <aside class="tau-maturity tau-maturity--{{ $status | anchorize }}" aria-label="Documentation maturity">

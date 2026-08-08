@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package jobdetail builds the portal's job detail page: everything about one
 // Tau-managed workload, gathered from the seams the other boards already own.
 //

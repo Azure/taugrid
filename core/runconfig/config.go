@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package runconfig owns the direct `tau run --config` YAML contract.
 package runconfig
 

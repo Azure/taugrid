@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package jobrender
 
 import "github.com/Azure/taugrid/core/topology"

@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """W&B-style experiment logging for Tau/Stellar.
 
 The logger keeps the integration point familiar: training code calls

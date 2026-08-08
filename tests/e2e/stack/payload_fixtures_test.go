@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Static regression coverage for issues #869/#871 PR3/PR3b: every
 // manager-routed RayJob fixture (inference, inference-gpu, fineweb, training,
 // training-gpu, nanogpt) embeds its driver script directly (head-only

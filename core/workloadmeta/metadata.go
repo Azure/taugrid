@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package workloadmeta is the single authoritative source of truth for every
 // Kubernetes label, annotation, and finalizer key in the "tau.azure.com/"
 // namespace.

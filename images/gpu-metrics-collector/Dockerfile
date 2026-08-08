@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.25-cbl-mariner2.0 AS builder
 ARG TARGETARCH
 RUN tdnf install -y glibc-static && tdnf clean all

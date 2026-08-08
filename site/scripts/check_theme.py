@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Validate the generated site's early theme initialization contract."""
 
 from __future__ import annotations

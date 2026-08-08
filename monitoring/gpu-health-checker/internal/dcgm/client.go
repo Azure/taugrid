@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package dcgm wraps the NVIDIA DCGM Go bindings, managing the DCGM lifecycle
 // and providing GPU enumeration and device info queries.
 package dcgm

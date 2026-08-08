@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """RayJob driver that lights BOTH portal detail-page links at once.
 
 Goal: submit a single ``tau run --config tau.yaml`` job whose portal detail

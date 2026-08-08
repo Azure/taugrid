@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package artifactindex emits the durable artifact index (artifacts.json) that
 // the CLI's train -> serve handoff depends on.
 //

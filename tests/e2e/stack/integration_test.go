@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package stack contains full-stack integration tests that exercise the seam
 // between charts rather than validating each one in isolation.
 //

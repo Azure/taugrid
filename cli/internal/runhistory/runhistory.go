@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package runhistory records metadata-only Kubernetes run lifecycle observations.
 package runhistory
 

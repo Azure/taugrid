@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Command gpu-health-checker provides DCGM-based GPU health monitoring for NPD.
 package main
 

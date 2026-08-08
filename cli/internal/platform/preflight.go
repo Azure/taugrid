@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package platform contains operator-only, canary-grade tooling for
 // verifying MultiKueue worker cluster readiness.
 //

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kustoquery is the portal's generic Kusto access seam for the boards
 // that read the Metrics ADX database (Cluster Health, Cost).
 //

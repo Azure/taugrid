@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package e2e provides the test framework for taugrid e2e integration tests.
 //
 // Tests only run when AI_RUNTIME_E2E=1 is set. This prevents accidental execution

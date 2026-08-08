@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package rayjobrender renders researcher-authored Ray Train scripts as Kueue
 // admitted RayJob workloads. Rendered RayJobs are self-contained: the driver
 // script is embedded directly in the RayJob's pod templates (see the

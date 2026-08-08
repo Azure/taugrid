@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Ray Train checkpoint-aware failure recovery E2E fixture.
 
 Exercises execution.configs.failure_config.max_failures via

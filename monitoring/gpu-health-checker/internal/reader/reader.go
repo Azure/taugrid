@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package reader implements the one-shot health check readers invoked by NPD.
 // Each reader queries the SQLite database and returns an exit code indicating
 // GPU health status.

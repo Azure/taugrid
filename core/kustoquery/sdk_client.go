@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // SDKClient is the portal's native Azure Kusto access path. Unlike Client — which
 // shells out to an external --kusto-query-command (outsourcing auth + transport,
 // which forces IMDS-token and JSON-escaping hacks in the adapter script) —

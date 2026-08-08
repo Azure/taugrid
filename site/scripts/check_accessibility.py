@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Run lightweight accessibility checks against generated Tau documentation."""
 
 from __future__ import annotations

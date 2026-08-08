@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """JSONL data loading helpers for Tau examples and jobs."""
 
 from __future__ import annotations

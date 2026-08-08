@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 BINARY := taugrid-portal
 IMAGE  := taugrid-portal
 TAG    ?= latest

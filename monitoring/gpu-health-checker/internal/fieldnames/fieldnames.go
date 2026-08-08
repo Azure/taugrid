@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package fieldnames provides centralized field name constants used as the
 // "field" column value in the samples table. These names are shared between
 // the collector (writer) and readers (consumers).

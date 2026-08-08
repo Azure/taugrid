@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package metricsoffload owns the reusable metrics producer configuration
 // shared by managed RayJobs and direct Jobs.
 package metricsoffload

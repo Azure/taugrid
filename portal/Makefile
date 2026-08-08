@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 .PHONY: build install test test-stellar-adx-e2e lint clean
 
 BINARY := taugrid-portal

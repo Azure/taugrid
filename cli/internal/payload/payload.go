@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package payload provides a shared helper for embedding small, deterministic,
 // non-secret generated payloads (e.g. a researcher's driver script) directly
 // in a Kubernetes workload spec instead of a per-run ConfigMap.

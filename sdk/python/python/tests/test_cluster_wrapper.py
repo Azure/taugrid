@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Generated cluster-wrapper contract tests.
 
 These run the rendered wrapper in a subprocess because that wrapper is shipped

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package bundle writes diagnostic artifacts captured by e2e tests.
 package bundle
 

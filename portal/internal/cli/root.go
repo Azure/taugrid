@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package cli wires the taugrid-portal cobra command tree.
 //
 // The surface is deliberately identical to the `experiment` and `portal`

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package clusteraccess obtains and normalizes normal-user AKS access for Tau.
 package clusteraccess
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
