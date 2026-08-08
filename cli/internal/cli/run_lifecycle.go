@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,11 +24,12 @@ type watchStatusHooks struct {
 
 func newRunStatusCmd() *cobra.Command {
 	var (
-		connection    runLifecycleConnectionFlags
-		runProfile    bool
-		watch         bool
-		watchInterval time.Duration
-		maxIterations int
+		connection      runLifecycleConnectionFlags
+		runProfile      bool
+		watch           bool
+		watchInterval   time.Duration
+		maxIterations   int
+		diagnosticHints bool
 	)
 	cmd := &cobra.Command{
 		Use:   "status [job-name]",
@@ -56,12 +59,14 @@ Examples:
 			}
 			defer restore()
 			opts := statusRunOptions{
-				Namespace:     ns,
-				KubeContext:   resolvedContext,
-				RunProfile:    runProfile,
-				Watch:         watch,
-				Interval:      watchInterval,
-				MaxIterations: maxIterations,
+				Namespace:       ns,
+				KubeContext:     resolvedContext,
+				Kubeconfig:      activeKubeconfigPath(),
+				RunProfile:      runProfile,
+				Watch:           watch,
+				Interval:        watchInterval,
+				MaxIterations:   maxIterations,
+				DiagnosticHints: diagnosticHints,
 			}
 			return runStatusCommand(cmd, opts, name)
 		},
@@ -71,16 +76,27 @@ Examples:
 	cmd.Flags().BoolVar(&watch, "watch", false, "refresh startup phases until ready, failed, interrupted, or --max-iterations")
 	cmd.Flags().DurationVar(&watchInterval, "interval", 2*time.Second, "poll interval when --watch is set")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "maximum watch iterations; 0 runs until ready, failed, or interrupted")
+	cmd.Flags().BoolVar(&diagnosticHints, "diagnostic-hints", false, "print scoped kubectl commands for deep pod diagnostics")
 	return cmd
 }
 
+func activeKubeconfigPath() string {
+	paths := filepath.SplitList(os.Getenv("KUBECONFIG"))
+	if len(paths) != 1 {
+		return ""
+	}
+	return strings.TrimSpace(paths[0])
+}
+
 type statusRunOptions struct {
-	Namespace     string
-	KubeContext   string
-	Watch         bool
-	Interval      time.Duration
-	MaxIterations int
-	RunProfile    bool
+	Namespace       string
+	KubeContext     string
+	Kubeconfig      string
+	Watch           bool
+	Interval        time.Duration
+	MaxIterations   int
+	RunProfile      bool
+	DiagnosticHints bool
 }
 
 func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) error {
@@ -89,15 +105,21 @@ func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) er
 		return err
 	}
 	opts.Namespace = resolvedNamespace
+	if opts.Watch && opts.DiagnosticHints {
+		return fmt.Errorf("--diagnostic-hints cannot be used with --watch")
+	}
 	if opts.Watch {
 		return watchStatusCommand(cmd, opts, name)
 	}
-	r := kube.New(opts.KubeContext)
+	r := kube.NewWithKubeconfig(opts.KubeContext, opts.Kubeconfig)
 	snap, err := status.Fetch(cmd.Context(), r, opts.Namespace, name)
 	if err != nil {
 		return err
 	}
 	writeStatusSnapshot(cmd.OutOrStdout(), snap, opts.RunProfile)
+	if opts.DiagnosticHints {
+		fmt.Fprint(cmd.OutOrStdout(), renderKubectlDiagnosticHints(opts.KubeContext, opts.Kubeconfig, opts.Namespace, name, snap))
+	}
 	return nil
 }
 
@@ -155,11 +177,136 @@ func writeStatusSnapshot(w io.Writer, snap status.Snapshot, runProfile bool) {
 	}
 }
 
+func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) string {
+	if snap.JobFound && snap.RayJob.Found {
+		// Status gives a same-name batch Job precedence. The fetched pod set can
+		// contain both Job and Ray pods, so use the Job selector rather than
+		// emitting pod-specific commands that could cross workload boundaries.
+		snap.Pods = nil
+	}
+	base := []string{"kubectl"}
+	if strings.TrimSpace(kubeContext) != "" {
+		base = append(base, "--context", kubeContext)
+	}
+	if strings.TrimSpace(kubeconfig) != "" {
+		base = append(base, "--kubeconfig", kubeconfig)
+	}
+	base = append(base, "-n", namespace)
+	selector := diagnosticPodSelector(name, snap)
+
+	var b strings.Builder
+	b.WriteString("\nDeep diagnostics (kubectl escape hatches):\n")
+	if len(snap.Pods) > 0 {
+		for _, pod := range snap.Pods {
+			topArgs := append(append([]string{}, base...), "top", "pod", pod.Name, "--containers")
+			b.WriteString("  ")
+			b.WriteString(renderShellCommand(topArgs))
+			b.WriteByte('\n')
+		}
+	} else {
+		topArgs := append(append([]string{}, base...), "top", "pod", "-l", selector, "--containers")
+		b.WriteString("  ")
+		b.WriteString(renderShellCommand(topArgs))
+		b.WriteByte('\n')
+	}
+
+	logArgs := append(append([]string{}, base...), "logs", "-l", selector, "--all-containers=true", "--prefix=true", "--timestamps=true")
+	if pod, container, previous, ok := firstDiagnosticContainer(snap); ok {
+		logArgs = append(append([]string{}, base...), "logs", pod, "-c", container)
+		if previous {
+			logArgs = append(logArgs, "--previous")
+		}
+		logArgs = append(logArgs, "--timestamps=true")
+	}
+	b.WriteString("  ")
+	b.WriteString(renderShellCommand(logArgs))
+	b.WriteByte('\n')
+
+	if pod, container, ok := firstRunnableContainer(snap); ok {
+		execArgs := append(append([]string{}, base...), "exec", "-it", pod, "-c", container, "--", "/bin/sh")
+		b.WriteString("  ")
+		b.WriteString(renderShellCommand(execArgs))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func diagnosticPodSelector(name string, snap status.Snapshot) string {
+	if !snap.JobFound && snap.RayJob.Found && strings.TrimSpace(snap.RayJob.RayClusterName) != "" {
+		return "ray.io/cluster=" + snap.RayJob.RayClusterName
+	}
+	return "job-name=" + name
+}
+
+func firstDiagnosticContainer(snap status.Snapshot) (string, string, bool, bool) {
+	for _, pod := range snap.Pods {
+		for _, container := range pod.InitContainers {
+			if container.ExitCode != nil && *container.ExitCode != 0 {
+				return pod.Name, container.Name, false, true
+			}
+		}
+		for _, container := range pod.Containers {
+			if container.ExitCode != nil && *container.ExitCode != 0 {
+				return pod.Name, container.Name, false, true
+			}
+		}
+	}
+	for _, pod := range snap.Pods {
+		for _, container := range pod.InitContainers {
+			if containerNeedsPrevious(container) {
+				return pod.Name, container.Name, true, true
+			}
+		}
+		for _, container := range pod.Containers {
+			if containerNeedsPrevious(container) {
+				return pod.Name, container.Name, true, true
+			}
+		}
+	}
+	for _, pod := range snap.Pods {
+		if len(pod.Containers) > 0 {
+			return pod.Name, pod.Containers[0].Name, false, true
+		}
+		if len(pod.InitContainers) > 0 {
+			return pod.Name, pod.InitContainers[0].Name, false, true
+		}
+	}
+	return "", "", false, false
+}
+
+func containerNeedsPrevious(container status.Container) bool {
+	return container.RestartCount > 0 || container.LastExitCode != nil || strings.TrimSpace(container.LastReason) != ""
+}
+
+func firstRunnableContainer(snap status.Snapshot) (string, string, bool) {
+	for _, pod := range snap.Pods {
+		for _, container := range pod.Containers {
+			if container.State == "running" {
+				return pod.Name, container.Name, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func renderShellCommand(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
 func newRunLogsCmd() *cobra.Command {
 	var (
 		connection    runLifecycleConnectionFlags
 		follow        bool
 		tail          int
+		container     string
+		allContainers bool
+		previous      bool
+		timestamps    bool
+		prefix        bool
 		kustoCluster  string
 		kustoEndpoint string
 		kustoDatabase string
@@ -193,6 +340,11 @@ Examples:
 				Namespace:     ns,
 				Follow:        follow,
 				Tail:          tail,
+				Container:     container,
+				AllContainers: allContainers,
+				Previous:      previous,
+				Timestamps:    timestamps,
+				Prefix:        prefix,
 				KustoCluster:  kustoCluster,
 				KustoEndpoint: kustoEndpoint,
 				KustoDatabase: kustoDatabase,
@@ -201,6 +353,11 @@ Examples:
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream new logs")
 	cmd.Flags().IntVar(&tail, "tail", 200, "lines from end (-1 = all)")
+	cmd.Flags().StringVarP(&container, "container", "c", "", "container or init-container name (batch Jobs only)")
+	cmd.Flags().BoolVar(&allContainers, "all-containers", false, "include every container (batch Jobs only)")
+	cmd.Flags().BoolVar(&previous, "previous", false, "show logs for the previous container instance (batch Jobs only)")
+	cmd.Flags().BoolVar(&timestamps, "timestamps", false, "include timestamps on each line (batch Jobs only)")
+	cmd.Flags().BoolVar(&prefix, "prefix", false, "prefix each line with pod and container names (batch Jobs only)")
 	cmd.Flags().StringVar(&kustoCluster, "kusto-cluster", "", "cluster identifier in ADX Logs.ContainerLogs for terminal local RayJob logs")
 	cmd.Flags().StringVar(&kustoEndpoint, "kusto-endpoint", "", "ADX endpoint for centrally offloaded RayJob logs")
 	cmd.Flags().StringVar(&kustoDatabase, "kusto-database", "", "ADX database for centrally offloaded RayJob logs")

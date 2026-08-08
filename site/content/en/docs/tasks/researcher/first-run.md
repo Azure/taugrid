@@ -53,6 +53,26 @@ driver's execution output rather than head-pod logs; for batch Jobs it streams
 the Job pod logs. `get` fetches durable run results and artifacts once the run
 has produced them.
 
+Named `status` and `logs` also work for a batch Job submitted outside Tau. Such
+Jobs are hidden from the default Tau-owned list; opt in when investigating a
+shared namespace:
+
+```bash
+tau run list --include-external
+tau run logs <job-name> -c <container> --previous --timestamps
+tau run status <job-name> --diagnostic-hints
+```
+
+Batch logs also support `--all-containers` and `--prefix`. The diagnostic hints
+print correctly scoped `kubectl top`, detailed log, and exec commands; Tau does
+not proxy metrics or interactive exec and does not request broader RBAC. For an
+external or already deleted Job with no Tau result annotations, retrieve a known
+PVC path explicitly:
+
+```bash
+tau run get <job-name> --path /data/<job-name>/results --pvc <pvc-name>
+```
+
 If you need to stop a run before it finishes — for example, you spot a bad
 hyperparameter mid-training — cancel it instead of leaving it to fail on its
 own:
