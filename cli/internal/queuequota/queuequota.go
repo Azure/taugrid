@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package queuequota builds a read-only researcher view of the Kueue quota
 // backing one workspace: what the workspace's ClusterQueue nominally holds per
 // ResourceFlavor, how much of it is currently reserved and used, and which

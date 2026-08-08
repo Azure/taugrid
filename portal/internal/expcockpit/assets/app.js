@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 const root = document.getElementById("stellar-root");
 
 const config = {

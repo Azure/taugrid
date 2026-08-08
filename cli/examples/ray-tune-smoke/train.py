@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Minimal training function for Ray Tune HPO smoke test.
 
 Tau generates the Tuner + TorchTrainer wrapper — this file only defines the

@@ -46,6 +46,8 @@ resourceFlavors:
     - name: nd-h200-v5
       nodeLabels:
         tau.azure.com/gpu-class: h200-141gb
+      topologyName: default-node-topology
+      requiredTopology: kubernetes.io/hostname
 ```
 
 Keep placement/interconnect in workload topology (`independent`,
@@ -53,6 +55,9 @@ Keep placement/interconnect in workload topology (`independent`,
 class label. The sibling `tau-core-controller` chart continuously derives class
 and series labels for its reviewed AKS GPU VM-size catalog. Install an
 equivalent node-label reconciler when deploying this services chart alone.
+For TAS-only flavors, `requiredTopology` renders the ResourceFlavor metadata
+annotation Tau uses to make generated workloads admissible without a hidden
+user-side annotation. Expert-authored raw manifests are not modified.
 
 ## What this chart does NOT install
 
@@ -81,7 +86,7 @@ components render into: `prewarm.namespace`, `stellar.namespace`,
 `portal.namespace`, and `lifecycleRecorder.namespace`.
 
 Helm refuses to apply over an object it did not create. A namespace that already
-exists out-of-band — from `applications/tau-queues`, from workspace tooling, or
+exists out-of-band — from platform queue policy, from workspace tooling, or
 from a plain `kubectl create namespace` — has none of Helm's ownership metadata,
 so a chart that rendered it would fail install with:
 
@@ -115,7 +120,7 @@ same command, or keep the release name (see above).
 
 `lifecycleRecorder.targetNamespace` is never created here. It is the observed
 workload namespace, owned by `tau-core-controller` (from a `TauWorkspace`) or by
-`applications/tau-queues`. Enabling the recorder against a namespace that does
+platform queue policy. Enabling the recorder against a namespace that does
 not exist fails with a message naming the value and those owners, instead of
 surfacing later as `namespaces "<name>" not found` on the recorder's Role.
 
@@ -157,7 +162,7 @@ the hosted experience now runs through Tau Portal. The retained values are an
 explicit compatibility/debug path in the `tau` namespace; keep that namespace
 distinct from the `ray` workload namespace used for researcher RayJobs, Kueue
 LocalQueues, and the `blob-training` `/data` PVC. To render the deprecated
-standalone path, opt in explicitly and pin a published Tau image:
+standalone path, opt in explicitly and pin a published TauGrid Portal image:
 
 ```bash
 # Keep the existing taugrid-core release name for this test-cluster upgrade.
@@ -165,8 +170,8 @@ helm upgrade --install taugrid-core ./taugrid-core \
   --kube-context my-cluster \
   -f values-test-clusters.yaml \
   --set stellar.enabled=true \
-  --set stellar.image.repository=aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau \
-  --set stellar.image.tag=<pinned-tau-image-tag> \
+  --set stellar.image.repository=mcr.microsoft.com/aks/ai-runtime/taugrid-portal \
+  --set stellar.image.tag=<pinned-taugrid-portal-image-tag> \
   --set stellar.kusto.queryCommand=/usr/local/bin/query-kusto \
   --set stellar.serviceAccount.create=true \
   --set stellar.serviceAccount.name=tau-stellar
@@ -262,7 +267,7 @@ alongside or instead of the standalone Stellar Deployment.
 helm upgrade --install taugrid-core ./taugrid-core \
   --kube-context my-cluster \
   --set portal.enabled=true \
-  --set portal.image.tag=<pinned-tau-image-tag> \
+  --set portal.image.tag=<pinned-taugrid-portal-image-tag> \
   --set portal.serviceAccount.create=true \
   --set portal.serviceAccount.name=tau-portal \
   --set portal.rbac.create=true \

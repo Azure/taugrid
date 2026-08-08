@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package dcgm
 
 import (
@@ -17,19 +20,19 @@ var (
 	FieldXIDErrors FieldID = dcgm.DCGM_FI_DEV_XID_ERRORS
 
 	// ECC
-	FieldECCDBEVolTotal FieldID = dcgm.DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
-	FieldECCDBEAggTotal FieldID = dcgm.DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
-	FieldECCSBEVolTotal FieldID = dcgm.DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
-	FieldECCSBEAggTotal FieldID = dcgm.DCGM_FI_DEV_ECC_SBE_AGG_TOTAL
+	FieldECCDBEVolTotal  FieldID = dcgm.DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
+	FieldECCDBEAggTotal  FieldID = dcgm.DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
+	FieldECCSBEVolTotal  FieldID = dcgm.DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
+	FieldECCSBEAggTotal  FieldID = dcgm.DCGM_FI_DEV_ECC_SBE_AGG_TOTAL
 	FieldRowRemapPending FieldID = dcgm.DCGM_FI_DEV_ROW_REMAP_PENDING
 	FieldRowRemapFailure FieldID = dcgm.DCGM_FI_DEV_ROW_REMAP_FAILURE
 
 	// NVLink
-	FieldNVLinkCRCFlit    FieldID = dcgm.DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
-	FieldNVLinkCRCData    FieldID = dcgm.DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL
-	FieldNVLinkReplay     FieldID = dcgm.DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
-	FieldNVLinkRecovery   FieldID = dcgm.DCGM_FI_DEV_NVLINK_RECOVERY_ERROR_COUNT_TOTAL
-	FieldGPUNVLinkErrors  FieldID = dcgm.DCGM_FI_DEV_GPU_NVLINK_ERRORS
+	FieldNVLinkCRCFlit   FieldID = dcgm.DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
+	FieldNVLinkCRCData   FieldID = dcgm.DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL
+	FieldNVLinkReplay    FieldID = dcgm.DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
+	FieldNVLinkRecovery  FieldID = dcgm.DCGM_FI_DEV_NVLINK_RECOVERY_ERROR_COUNT_TOTAL
+	FieldGPUNVLinkErrors FieldID = dcgm.DCGM_FI_DEV_GPU_NVLINK_ERRORS
 
 	// Thermal / Power
 	FieldThermalViolation FieldID = dcgm.DCGM_FI_DEV_THERMAL_VIOLATION
@@ -52,7 +55,7 @@ var (
 	FieldC2CLinkStatus FieldID = dcgm.DCGM_FI_DEV_C2C_LINK_STATUS
 
 	// CPU / NVSwitch temperatures
-	FieldCPUTemp     FieldID = dcgm.DCGM_FI_DEV_CPU_TEMP_CURRENT
+	FieldCPUTemp      FieldID = dcgm.DCGM_FI_DEV_CPU_TEMP_CURRENT
 	FieldNVSwitchTemp FieldID = dcgm.DCGM_FI_DEV_NVSWITCH_TEMPERATURE_CURRENT
 
 	// Info (static)

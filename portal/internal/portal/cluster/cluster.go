@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package cluster builds the portal's Cluster Health board.
 //
 // A single GpuHealth() KQL takes the latest sample per GPU for the

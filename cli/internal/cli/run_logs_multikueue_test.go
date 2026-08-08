@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -123,6 +126,109 @@ func TestLocalJobLogsTailMinusOneIsPassedExplicitly(t *testing.T) {
 	}
 }
 
+func TestLocalJobLogsPassesDetailedContainerFlags(t *testing.T) {
+	var gotArgs []string
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		gotArgs = append([]string(nil), args...)
+		return "", nil
+	})
+	opts := runLogsOptions{
+		Container:  "stage-reference",
+		Previous:   true,
+		Timestamps: true,
+		Prefix:     true,
+		Follow:     true,
+		Tail:       25,
+	}
+	if _, err := localJobLogsWithOptions(context.Background(), runner, "tau-default", "external-batch-job", opts); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"-n", "tau-default", "logs", "-l", "job-name=external-batch-job",
+		"-c", "stage-reference", "--previous", "--timestamps=true", "--prefix=true", "-f", "--tail=25",
+	}
+	if strings.Join(gotArgs, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("kubectl args = %v, want %v", gotArgs, want)
+	}
+}
+
+func TestRunLogsRejectsContainerAndAllContainers(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "train", runLogsOptions{
+		Namespace: "tau-default", Container: "trainer", AllContainers: true,
+	}, runLogsHooks{})
+	if err == nil || !strings.Contains(err.Error(), "--container and --all-containers") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunLogsRejectsBatchFlagsForRayJob(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "ray-train", runLogsOptions{
+		Namespace: "ray", Previous: true,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{RayJob: status.RayJob{Found: true}}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only for batch/v1 Job logs") {
+		t.Fatalf("error = %v", err)
+	}
+
+	var jobCalled bool
+	err = runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "shared-name", runLogsOptions{
+		Namespace: "ray", Container: "trainer",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			snap := multiKueueWatchSnapshot(status.MultiKueueStateReady)
+			snap.JobFound = true
+			return snap, nil
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			jobCalled = true
+			return "batch logs", nil
+		},
+	})
+	if err != nil || !jobCalled {
+		t.Fatalf("batch/RayJob collision did not route batch flags to Job: called=%v err=%v", jobCalled, err)
+	}
+}
+
+func TestRunLogsRejectsBatchFlagsForPartialRayJobSnapshot(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "ray-train", runLogsOptions{
+		Namespace: "ray", Container: "worker",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{RayJob: status.RayJob{Found: true}}, errors.New("workloads forbidden")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("partial RayJob snapshot must not route to batch logs")
+			return "", nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only for batch/v1 Job logs") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunLogsRoutesBatchFlagsForPartialSameNameSnapshot(t *testing.T) {
+	var jobCalled bool
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "shared-name", runLogsOptions{
+		Namespace: "ray", Container: "worker",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			snap := multiKueueWatchSnapshot(status.MultiKueueStateReady)
+			snap.JobFound = true
+			return snap, errors.New("workloads forbidden")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			jobCalled = true
+			return "batch logs", nil
+		},
+	})
+	if err != nil || !jobCalled {
+		t.Fatalf("partial batch/RayJob collision did not route batch flags to Job: called=%v err=%v", jobCalled, err)
+	}
+}
+
 func TestRunLogsCommand_FoundRayJobNeverFallsBackToJobNameSelector(t *testing.T) {
 	var out bytes.Buffer
 	err := runLogsCommandWithHooks(context.Background(), &out, nil, "train-001", runLogsOptions{
@@ -193,6 +299,95 @@ func TestRunLogsCommand_FoundRayJobWithJobIDOmitsStartupHint(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "status.jobId") {
 		t.Fatalf("startup hint must not appear once jobId is populated, got %q", err.Error())
+	}
+}
+
+func TestRunLogsCommand_TerminalLocalRayJobFallsBackToADXAfterPodCleanup(t *testing.T) {
+	var out bytes.Buffer
+	var gotQuery kustoLogsQuery
+	err := runLogsCommandWithHooks(context.Background(), &out, nil, "train-001", runLogsOptions{
+		Namespace:     "ray",
+		Tail:          2,
+		KustoCluster:  "aks-ai-runtime-eastus2",
+		KustoEndpoint: "https://adx.example",
+		KustoDatabase: "Logs",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				Name:      "train-001",
+				Namespace: "ray",
+				RayJob: status.RayJob{
+					Found:               true,
+					Name:                "train-001",
+					JobID:               "raysubmit_abc123",
+					RayClusterName:      "train-001-cluster",
+					JobDeploymentStatus: "Complete",
+					JobStatus:           "SUCCEEDED",
+				},
+			}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("head pod not found for RayJob train-001")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("batch/v1 fallback must not run for a terminal RayJob")
+			return "", nil
+		},
+		queryADXLogs: func(_ context.Context, spec kustoLogsQuery) ([]kustoquery.Row, error) {
+			gotQuery = spec
+			return []kustoquery.Row{
+				{"Timestamp": "2026-08-06T17:00:01Z", "Body": "line-1"},
+				{"Timestamp": "2026-08-06T17:00:02Z", "Body": "line-2"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected terminal local ADX fallback to succeed, got %v", err)
+	}
+	for _, want := range []string{
+		"| where Cluster == @'aks-ai-runtime-eastus2'",
+		"| where Namespace == @'ray'",
+		"| where Pod startswith @'train-001-cluster-head'",
+	} {
+		if !strings.Contains(gotQuery.Query, want) {
+			t.Fatalf("terminal local query missing %q:\n%s", want, gotQuery.Query)
+		}
+	}
+	if got := out.String(); got != "line-1\nline-2\n" {
+		t.Fatalf("unexpected terminal local logs output: %q", got)
+	}
+}
+
+func TestRunLogsCommand_TerminalLocalRayJobRequiresExplicitADXCluster(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "train-001", runLogsOptions{
+		Namespace:     "ray",
+		KustoEndpoint: "https://adx.example",
+		KustoDatabase: "Logs",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				Name:      "train-001",
+				Namespace: "ray",
+				RayJob: status.RayJob{
+					Found:               true,
+					Name:                "train-001",
+					JobID:               "raysubmit_abc123",
+					RayClusterName:      "train-001-cluster",
+					JobDeploymentStatus: "Failed",
+				},
+			}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("head pod not found for RayJob train-001")
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing local ADX cluster metadata to fail")
+	}
+	for _, want := range []string{"local pod logs unavailable", "--kusto-cluster"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("terminal local fallback error %q missing %q", err.Error(), want)
+		}
 	}
 }
 

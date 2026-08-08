@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kuberay contains e2e tests for the KubeRay operator.
 //
 // Tests verify that the KubeRay Helm chart deploys correctly and that

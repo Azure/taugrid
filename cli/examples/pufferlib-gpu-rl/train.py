@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Production-shaped PufferLib + CUDA RL workload for Tau."""
 
 from __future__ import annotations

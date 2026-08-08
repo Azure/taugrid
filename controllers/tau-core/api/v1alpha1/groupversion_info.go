@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package v1alpha1 contains API schema definitions for the Tau core API.
 //
 // +kubebuilder:object:generate=true

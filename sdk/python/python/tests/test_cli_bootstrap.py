@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Runtime CLI integration tests."""
 
 from pathlib import Path

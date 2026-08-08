@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 set -euo pipefail
 
 # FineWeb 16xH200 InfiniBand conformance harness. Sibling to

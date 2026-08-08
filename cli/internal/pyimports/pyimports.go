@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package pyimports detects, at submit time, Python imports in a run's
 // entrypoint that will not be present at runtime.
 //

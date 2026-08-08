@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 HUGO_VERSION ?= v0.164.0
 BIN_DIR := $(CURDIR)/.bin
 HUGO := $(BIN_DIR)/hugo

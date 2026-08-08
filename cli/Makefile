@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 .PHONY: build install test test-installer test-kind-e2e lint clean verify-release-inputs release-binaries release-assets
 
 BINARY := tau

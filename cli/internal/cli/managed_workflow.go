@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -152,6 +155,7 @@ func topologyOptionsFromSubmit(o jobrender.Options) runtopology.Options {
 		CheckpointEvery:                 o.CheckpointEvery,
 		QueueName:                       o.QueueName,
 		PriorityTier:                    o.PriorityTier,
+		RequiredTopology:                o.RequiredTopology,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,
@@ -169,7 +173,7 @@ func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Opt
 	switch o.Lane {
 	case "", "training", "elastic", "large-memory":
 		// Train lanes (or no explicit lane). REJECT on rayjob-eval —
-		// the eval shape (1-GPU head + CPU workers) belongs on lane=workload.
+		// the eval shape (system head + GPU actor + CPU workers) belongs on lane=workload.
 		// "" passes here because a missing lane is normal for the train
 		// path (suggestManagedWorkflowPreset stamps lane=training by default).
 		// On rayjob-eval, however, "" means the caller forgot to pick an
@@ -179,8 +183,8 @@ func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Opt
 			return fmt.Errorf("--workload-kind=rayjob-eval requires lane=eval, got lane=%q; pick an eval-lane preset (e.g. azure.research.eval.gpu) or pass --lane=eval", o.Lane)
 		}
 	case "eval":
-		// Eval lane is only valid for the rayjob-eval shape (1 GPU head +
-		// CPU workers). A normal finetune (Job or RayJob multi-node) on
+		// Eval lane is only valid for the rayjob-eval shape (system head +
+		// GPU actor worker + CPU workers). A normal finetune (Job or RayJob multi-node) on
 		// the eval lane would be misdispatched.
 		if workloadKind != manifest.WorkloadKindRayJobEval {
 			return fmt.Errorf("preset uses lane=eval, but workload kind is %q; eval lane is only valid for --workload-kind=rayjob-eval", workloadKind)
@@ -378,17 +382,6 @@ func patchSecretOwnerRef(ctx context.Context, r *kube.Runner, namespace string, 
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("patch secret ownerRef: %w", err)
-	}
-	return nil
-}
-
-func cleanupJobSecret(ctx context.Context, r *kube.Runner, namespace, name string) error {
-	_, err := r.Raw(ctx, []string{
-		"delete", "secret", name, "-n", namespace,
-		"--ignore-not-found=true",
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("delete generated secret: %w", err)
 	}
 	return nil
 }

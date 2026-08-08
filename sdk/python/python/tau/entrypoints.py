@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Helpers for loading staged Python entrypoints inside Tau jobs."""
 
 from __future__ import annotations

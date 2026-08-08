@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package projectcatalog owns strict Tau monorepo project discovery and
 // filesystem-derived run targets.
 package projectcatalog

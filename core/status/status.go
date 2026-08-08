@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package status fetches and renders the lifecycle of a tau-submitted job.
 //
 // The shape mirrors the earlier shell CLI's `status` output (Kueue
@@ -76,6 +79,10 @@ type Snapshot struct {
 
 	// DRA ResourceClaims referenced by Pods.
 	ResourceClaims []ResourceClaim
+
+	// GPURuntime is populated on demand for the --run-profile view. Ordinary
+	// status avoids the extra exporter discovery and proxy requests.
+	GPURuntime GPURuntimeEvidence
 
 	// Events for the Job/RayJob, Kueue Workload, Pods, and ResourceClaims.
 	Events []Event
@@ -319,6 +326,10 @@ func Render(s Snapshot) string {
 			b.WriteString("  (none — manager view only; worker-cluster pods are not visible here)\n")
 		} else if rayJobStatusSucceeded(rj) {
 			b.WriteString("  (none — RayCluster pods cleaned up after successful completion)\n")
+		} else if rayJobStatusFailed(rj) && s.PodsObserved {
+			b.WriteString("  (none — RayCluster pods cleaned up after terminal failure)\n")
+		} else if rayJobStatusFailed(rj) {
+			b.WriteString("  (none — pod state unavailable for failed RayJob)\n")
 		} else {
 			b.WriteString("  (none — workload is suspended or not yet admitted)\n")
 		}

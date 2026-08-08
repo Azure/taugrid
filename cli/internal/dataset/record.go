@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package dataset implements the tau dataset registry: an immutable,
 // subscription-scoped catalog of pre-training and RL datasets.
 //

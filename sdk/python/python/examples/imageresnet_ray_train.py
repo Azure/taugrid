@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Distributed Ray Train image-ResNet sample for Tau/Stellar rich artifacts.
 
 The sample intentionally keeps model semantics in the training job. Tau/Stellar

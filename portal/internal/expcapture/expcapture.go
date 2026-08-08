@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package expcapture maps status run profiles into experiment store records.
 //
 // It exists so that the status package can project a run without importing the

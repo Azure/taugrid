@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -20,7 +23,7 @@ const (
 	defaultTauGridRelease      = "taugrid"
 	defaultTauGridNamespace    = "tau-system"
 	defaultTauGridChartVersion = "0.2.0"
-	defaultTauGridChart        = "oci://aksairuntime.azurecr.io/unlisted/aks/ai-runtime/helm/taugrid"
+	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
 )
 
 type clusterInstallSpec struct {

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package stack contains full-stack integration tests that exercise the seam
 // between charts rather than validating each one in isolation.
 //
@@ -178,7 +181,7 @@ func stackLargeGPUQueueForRun() string {
 
 func requireArgoCDStackQueue(ctx context.Context, kubeClient kubernetes.Interface, dynamicClient dynamic.Interface) error {
 	if _, err := kubeClient.CoreV1().Namespaces().Get(ctx, stackNamespace, metav1.GetOptions{}); err != nil {
-		return fmt.Errorf("namespace %s must be created by applications/tau-queues before live stack conformance runs: %w", stackNamespace, err)
+		return fmt.Errorf("namespace %s must be created by platform queue policy before live stack conformance runs: %w", stackNamespace, err)
 	}
 	queues := []string{stackQueueForRun(), stackLargeGPUQueueForRun()}
 	seen := map[string]struct{}{}
@@ -188,7 +191,7 @@ func requireArgoCDStackQueue(ctx context.Context, kubeClient kubernetes.Interfac
 		}
 		seen[queue] = struct{}{}
 		if _, err := dynamicClient.Resource(localQueueGVR).Namespace(stackNamespace).Get(ctx, queue, metav1.GetOptions{}); err != nil {
-			return fmt.Errorf("LocalQueue %s/%s must be created by applications/tau-queues before live stack conformance runs: %w", stackNamespace, queue, err)
+			return fmt.Errorf("LocalQueue %s/%s must be created by platform queue policy before live stack conformance runs: %w", stackNamespace, queue, err)
 		}
 	}
 	return nil

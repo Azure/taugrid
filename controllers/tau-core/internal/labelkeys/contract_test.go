@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package labelkeys
 
 import (
@@ -19,8 +22,6 @@ import (
 // intentionally small, so a source-parsing contract test is cheaper and safer
 // than a third module or a controller dependency in the CLI.
 const cliMetadataPath = "../../../../core/workloadmeta/metadata.go"
-
-const applicationReadmePath = "../../../../applications/tau-core-controller/README.md"
 
 var tauTokenRe = regexp.MustCompile(regexp.QuoteMeta(Domain) + `[A-Za-z0-9._-]*`)
 

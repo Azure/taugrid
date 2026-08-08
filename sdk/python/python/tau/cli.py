@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Tau Python SDK CLI for inspect, submit, and doctor.
 
 The Go CLI's ``tau python ...`` command proxies to this module. Direct module

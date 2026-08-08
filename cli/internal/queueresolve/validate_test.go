@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package queueresolve
 
 import (
@@ -430,6 +433,38 @@ func TestValidateSelectionRejectsMissingTopologyWhenAllGPUFlavorsRequireTAS(t *t
 			t.Fatalf("topology preflight error missing %q: %v", want, err)
 		}
 	}
+
+}
+
+func TestValidateSelectionReturnsManagedRequiredTopology(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]},
+					{"name":"tau-system","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): resourceFlavorObjectWithRequiredTopology("nd-h200-v5", "", "default-node-topology", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "tau-system", "-o", "json"): resourceFlavorObjectWithRequiredTopology("tau-system", "", "default-node-topology", "kubernetes.io/hostname", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:       "workspace",
+		QueueName:       "jobqueue",
+		GPUCount:        1,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.RequiredTopology != "kubernetes.io/hostname" || report.ResourceFlavor != "nd-h200-v5" {
+		t.Fatalf("managed topology report=%+v", report)
+	}
 }
 
 func TestValidateSelectionAcceptsMissingTopologyWithCompatibleNonTASFlavor(t *testing.T) {
@@ -485,7 +520,7 @@ func TestValidateSelectionRejectsUntoleratedNonTASFlavor(t *testing.T) {
 			{Key: "sku", Operator: "Equal", Value: "gpu", Effect: "NoSchedule"},
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "TopologyAwareScheduling (nd-h200-v5)") {
+	if err == nil || !strings.Contains(err.Error(), topology.RequiredTopologyAnnotation) || !strings.Contains(err.Error(), "nd-h200-v5") {
 		t.Fatalf("untolerated non-TAS flavor should not bypass TAS-only rejection: %v", err)
 	}
 }
@@ -577,6 +612,137 @@ func TestValidateSelectionAcceptsTopologyCapableWorkspaceQueue(t *testing.T) {
 	}
 	if report.ClusterQueue != "workspace-cq" || report.ResourceFlavor != "nd-h200-v5" || report.TopologyName != "default-node-topology" {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestValidateSelectionCatalogTopologyReturnsConsistentManagedRequirement(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"tau-system","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"nd-h200-v5", "", "default-node-topology", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "tau-system", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"tau-system", "", "default-node-topology", "kubernetes.io/hostname", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.RequiredTopology != "kubernetes.io/hostname" {
+		t.Fatalf("report=%+v", report)
+	}
+}
+
+func TestValidateSelectionCatalogTopologyRejectsConflictingManagedRequirements(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"tau-system","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"nd-h200-v5", "", "default-node-topology", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "tau-system", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"tau-system", "", "default-node-topology", "topology.kubernetes.io/zone", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicting") || !strings.Contains(err.Error(), topology.RequiredTopologyAnnotation) {
+		t.Fatalf("expected conflicting catalog topology rejection, got %v", err)
+	}
+}
+
+func TestValidateSelectionCatalogTopologyChecksAssignableFlavorsWithOtherTopologies(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"default-topology","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"rack-topology","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "default-topology", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"default-topology", "", "default-node-topology", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "rack-topology", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"rack-topology", "", "rack-node-topology", "topology.example.com/rack", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicting") || !strings.Contains(err.Error(), topology.RequiredTopologyAnnotation) {
+		t.Fatalf("expected cross-topology flavor conflict rejection, got %v", err)
+	}
+}
+
+func TestValidateSelectionCatalogTopologyRejectsMissingManagedRequirement(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): localQueueObject("jobqueue", "workspace-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"): `{
+				"metadata":{"name":"workspace-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+					{"name":"tau-system","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"nd-h200-v5", "", "default-node-topology", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "tau-system", "-o", "json"): resourceFlavorObject(
+				"tau-system", "", "default-node-topology", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:               "workspace",
+		QueueName:               "jobqueue",
+		TopologyName:            "default-node-topology",
+		CatalogTopologyContract: true,
+		GPUCount:                1,
+		GPUResourceName:         kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil || !strings.Contains(err.Error(), topology.RequiredTopologyAnnotation) || !strings.Contains(err.Error(), "tau-system") {
+		t.Fatalf("expected missing catalog topology metadata rejection, got %v", err)
 	}
 }
 
@@ -812,6 +978,75 @@ func TestSelectQueueFiltersByGPUResourceMode(t *testing.T) {
 	}
 }
 
+func TestSelectQueueCarriesManagedRequiredTopology(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"nd-h200-v5", topology.GPUClassH200141GB, "default-node-topology", "kubernetes.io/hostname", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	selected, _, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        1,
+		GPUClass:        topology.GPUClassH200141GB,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.RequiredTopology != "kubernetes.io/hostname" {
+		t.Fatalf("selected managed topology=%+v", selected)
+	}
+}
+
+func TestSelectQueueRejectsConflictingManagedRequiredTopology(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "ray", "get", "localqueues.kueue.x-k8s.io", "-o", "json"): `{"items":[
+				{"metadata":{"name":"jobqueue","namespace":"ray"},"spec":{"clusterQueue":"tau-cq"}}
+			]}`,
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"): `{
+				"metadata":{"name":"tau-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"h200-a","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]},
+					{"name":"h200-b","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}
+				]}]}
+			}`,
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "h200-a", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"h200-a", topology.GPUClassH200141GB, "topology-a", "kubernetes.io/hostname", ""),
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "h200-b", "-o", "json"): resourceFlavorObjectWithRequiredTopology(
+				"h200-b", topology.GPUClassH200141GB, "topology-b", "cloud.provider.com/rack", ""),
+		},
+		errors: map[string]error{},
+	}
+
+	_, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
+		Namespace:       "ray",
+		GPUCount:        1,
+		GPUClass:        topology.GPUClassH200141GB,
+		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
+	})
+	if err == nil {
+		t.Fatal("expected automatic queue selection to reject conflicting managed topology")
+	}
+	if len(candidates) != 1 ||
+		!strings.Contains(candidates[0].Reason, "conflicting") ||
+		!strings.Contains(candidates[0].Reason, topology.RequiredTopologyAnnotation) {
+		t.Fatalf("candidates=%+v", candidates)
+	}
+}
+
 func TestSelectQueueMatchesGPUClassByExactResourceFlavorLabel(t *testing.T) {
 	runner := &validationFakeRunner{
 		outputs: map[string]string{
@@ -1038,15 +1273,31 @@ func resourceFlavorObject(name, gpuClass, topologyName, taintKey string) string 
 }
 
 func resourceFlavorObjectWithLabels(name string, labels map[string]string, topologyName, taintKey string) string {
+	return resourceFlavorObjectWithRequiredTopologyAndLabels(name, labels, topologyName, "", taintKey)
+}
+
+func resourceFlavorObjectWithRequiredTopology(name, gpuClass, topologyName, requiredTopology, taintKey string) string {
+	labels := map[string]string{}
+	if gpuClass != "" {
+		labels[topology.NodeLabelGPUClass] = gpuClass
+	}
+	return resourceFlavorObjectWithRequiredTopologyAndLabels(name, labels, topologyName, requiredTopology, taintKey)
+}
+
+func resourceFlavorObjectWithRequiredTopologyAndLabels(name string, labels map[string]string, topologyName, requiredTopology, taintKey string) string {
 	topologyField := ""
 	if topologyName != "" {
 		topologyField = fmt.Sprintf(`,"topologyName":%q`, topologyName)
+	}
+	annotations := ""
+	if requiredTopology != "" {
+		annotations = fmt.Sprintf(`,"annotations":{%q:%q}`, topology.RequiredTopologyAnnotation, requiredTopology)
 	}
 	taints := ""
 	if taintKey != "" {
 		taints = fmt.Sprintf(`,"nodeTaints":[{"key":%q,"effect":"NoSchedule"}]`, taintKey)
 	}
-	return fmt.Sprintf(`{"metadata":{"name":%q},"spec":{"nodeLabels":%s%s%s}}`, name, labelsJSON(labels), topologyField, taints)
+	return fmt.Sprintf(`{"metadata":{"name":%q%s},"spec":{"nodeLabels":%s%s%s}}`, name, annotations, labelsJSON(labels), topologyField, taints)
 }
 
 func labelsJSON(labels map[string]string) string {

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package links builds the portal's cross-board ID mapping.
 //
 // Cross-linking is the portal's core value-add over five separate dashboards.

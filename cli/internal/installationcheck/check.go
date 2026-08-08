@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package installationcheck validates the read-only readiness contract for a
 // Helm-installed TauGrid control plane.
 package installationcheck

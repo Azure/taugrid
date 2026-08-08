@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """CPU-impossible A100 proof for the TauGrid GPU quickstart.
 
 `Job Complete` proves nothing about a GPU: a workload that silently fell back to

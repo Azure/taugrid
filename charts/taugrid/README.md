@@ -13,7 +13,7 @@ tau cluster install --version 0.2.0 --values taugrid-values.yaml
 Or with Helm directly:
 
 ```bash
-helm upgrade --install taugrid oci://aksairuntime.azurecr.io/unlisted/aks/ai-runtime/helm/taugrid \
+helm upgrade --install taugrid <private-oci-chart-reference> \
   --version 0.2.0 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
@@ -76,6 +76,7 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
 | `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
+| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Topology level Tau copies from managed GPU ResourceFlavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
@@ -91,11 +92,12 @@ flavor across all requested resources. The fresh-install GPU flavor
 hardware is known, replace the entire GPU flavor list with class-labeled
 flavors; do not retain the generic GPU flavor alongside them.
 
-When topology is enabled, only GPU flavors carry `topologyName`. Tau GPU
-workloads with an explicit `topology` policy carry Kueue's required, preferred,
-or unconstrained TAS annotation. The CPU/memory flavor remains non-TAS so
-CPU-only workloads without a placement policy can be admitted. Kueue rejects a
-pod set assigned more than one TAS flavor.
+When topology is enabled, only GPU flavors carry `topologyName` and the
+`kueue.x-k8s.io/podset-required-topology` resource-metadata annotation. Connected
+Tau submission copies that requirement to generated GPU pod templates when the
+workload has no explicit placement policy. Explicit topology policy remains
+authoritative, and raw Kubernetes manifests are never rewritten. The CPU/memory
+flavor remains non-TAS so CPU-only workloads can be admitted.
 
 ```yaml
 baselineQueue:
@@ -211,7 +213,7 @@ for the complete reference.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `tau-core-controller.platformNamespace` | string | `tau-platform` | Namespace where TauWorkspace CRs live |
-| `tau-core-controller.image.repository` | string | `aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller` | Controller image |
+| `tau-core-controller.image.repository` | string | `mcr.microsoft.com/aks/ai-runtime/tau-core-controller` | Controller image |
 | `tau-core-controller.tauCluster.nodeLabelRules` | list | reviewed AKS GPU catalog | VM-size rules that reconcile GPU class and series labels |
 | `tau-core-controller.tauCluster.extraNodeLabelRules` | list | `[]` | Additional cluster-specific GPU label rules |
 

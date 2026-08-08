@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Minimal hello-world for tau-py.
 
 Local: `python hello_train.py` runs `hello(ctx)` with cwd-rooted paths.

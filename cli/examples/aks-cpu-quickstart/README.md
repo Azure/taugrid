@@ -281,20 +281,19 @@ does not require ADX/Kusto:
 # stellar.image.tag is non-empty, so it will not catch either mistake.
 #
 # Discover a tag that actually exists:
-#   az acr repository show-tags --name aksairuntime \
-#     --repository unlisted/aks/ai-runtime/taugrid-portal \
-#     --orderby time_desc --top 20 -o tsv
+#   curl -fsSL \
+#     https://mcr.microsoft.com/v2/aks/ai-runtime/taugrid-portal/tags/list
 #
 # NOTE: the chart takes a tag only. templates/stellar.yaml renders
 # "{{ .repository }}:{{ .tag }}" and has no digest support, so a digest cannot
 # be pinned here even though AGENTS.md prefers one. Use a short-SHA tag, which
 # is immutable in practice, and verify it resolves before installing.
-STELLAR_TAG="098cdf4a"
+STELLAR_TAG="ece2e751a66b"
 
-# Preflight: fail here, not 5 minutes into a rollout.
-az acr manifest show-metadata \
-  "aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal:${STELLAR_TAG}" \
-  --query digest -o tsv \
+# Preflight the public consumer path: fail here, not 5 minutes into a rollout.
+curl --fail --silent --show-error --output /dev/null \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  "https://mcr.microsoft.com/v2/aks/ai-runtime/taugrid-portal/manifests/${STELLAR_TAG}" \
   || { echo "portal tag '$STELLAR_TAG' does not resolve; pick a current one"; exit 1; }
 
 tau cluster install \
@@ -309,11 +308,10 @@ tau cluster install \
   --wait --timeout 8m
 ```
 
-> **Note:** this registry is private and holds mostly PR-scoped, prunable tags.
-> `098cdf4a` resolved to
-> `sha256:c538d417629b10bc97d1a3db80925afada3784f7769befa919a78177c299b0cb`
+> **Note:** `ece2e751a66b` resolved from public MCR to
+> `sha256:cdb4ff5cd4b7c39d55aaaa64c9e1d1cf3886413856c40bf5466ce12fb8c333b3`
 > when this example was written. If the preflight fails, use the discovery
-> command above to choose a current tag.
+> command above to choose a current immutable tag.
 
 See [Caveat 2](#caveat-2-stellar-needs-a-pvc-created-out-of-band) for the one
 manual `kubectl` step this currently needs.

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package manifest implements the schema_version: 1 managed workflow
 // manifest: the schema used to parse, validate, and render researcher-
 // authored (and Tau Python SDK-generated) configs for `tau run --config`.
@@ -85,8 +88,8 @@ type Manifest struct {
 	Name          string `yaml:"name"`
 	Eval          struct {
 		// CPUWorkers is the number of CPU-only Ray worker pods to provision
-		// when this manifest is rendered as a rayjob-eval (Ray actor on the
-		// GPU head + ray.remote tasks fanned out across CPU pods). Optional;
+		// when this manifest is rendered as a rayjob-eval (Ray actor on a
+		// dedicated GPU worker + ray.remote tasks fanned out across CPU pods). Optional;
 		// 0 (default) means "no separate CPU workers" — only meaningful when
 		// the workload kind is rayjob-eval.
 		CPUWorkers int `yaml:"cpu_workers,omitempty"`

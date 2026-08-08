@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package runconfig
 
 import (
@@ -69,9 +72,9 @@ var fieldCatalog = map[string]FieldInfo{
 	"runtime.env_kv":     {Status: statusWorkflowOnly, Description: "Key Vault-backed environment variables as a map from env var name to secret-name or vault/secret-name. Direct job/ray configs reject this field; it needs the managed workflow path (workflow.file, or an SDK manifest with schema_version), plus --tenant-id, --workload-identity-client-id, and a pod ServiceAccount from --service-account or policy.workspace. Bare secret names also need --key-vault.", Notes: "All entries must resolve to the same vault: one SecretProviderClass is rendered per workload."},
 
 	"compute":                       {Status: statusSupported, Description: "Workload sizing and dispatch hints."},
-	"compute.workers":               {Status: statusSupported, Description: "Total Ray execution-pod count, including the head. A value of 1 is head-only; N > 1 renders the head plus N-1 worker pods.", Default: "1"},
+	"compute.workers":               {Status: statusSupported, Description: "Ray execution-worker count. Generated RayJobs add a separate control-only head on the system node pool.", Default: "1"},
 	"compute.gpus":                  {Status: statusSupported, Description: "Pod-level GPU count for direct Job execution. Set 0 explicitly for a CPU Job."},
-	"compute.gpus_per_worker":       {Status: statusSupported, Description: "GPU count per Ray execution pod, including the head. Not valid for direct Job execution.", Default: "1"},
+	"compute.gpus_per_worker":       {Status: statusSupported, Description: "GPU count per dedicated worker in a direct Ray run; its head remains CPU-only. Not valid for direct Job execution.", Default: "1"},
 	"compute.cpu_workers":           {Status: statusSupported, Description: "CPU eval worker count."},
 	"compute.workload_kind":         {Status: statusSupported, Description: "Workload kind selector.", Values: []string{"job", "rayjob", "ray-train", "ray_train"}},
 	"compute.gpu_resource_mode":     {Status: statusSupported, Description: "GPU resource mode forwarded to workflow rendering when supported.", Values: []string{"device-plugin", "nvidia", "dra", "mig"}},
@@ -110,14 +113,19 @@ var fieldCatalog = map[string]FieldInfo{
 	"policy.clear_node_selector":        {Status: statusDirectOnly, Description: "Clear profile node selectors before applying the protected topology contract and policy.node_selector. Managed workflow configs reject this field.", Notes: "Within direct configs this also requires engine: job; Ray dispatch cannot clear profile node selectors."},
 	"policy.disable_default_priorities": {Status: statusSupported, Description: "Advanced/operator override: omit Tau default Kueue and Kubernetes priority classes for clusters that do not define taugrid-* priorities."},
 
-	"storage":            {Status: statusSupported, Description: "PVC and result-path settings."},
-	"storage.data_pvc":   {Status: statusSupported, Description: "Existing platform-managed PVC mounted at /data; Tau never creates the claim."},
-	"storage.result_pvc": {Status: statusSupported, Description: "Existing result PVC; direct job configs require it to match storage.data_pvc when both are set."},
-	"storage.checkpoint": {Status: statusSupported, Description: "File or directory, relative to the run checkpoint dir, that this run produces as its servable model (e.g. last.safetensors). Declaring it writes an artifact index after a successful run so tau serve deploy --from-finetune can resolve the model by run name."},
-	"storage.output":     {Status: statusSupported, Description: "Durable output path advertised to the workload."},
-	"storage.publish":    {Status: statusDirectOnly, Description: "Optional Tau-owned artifact publication mode. staged exposes TAU_OUTPUT_STAGING_DIR on pod-local /mnt, verifies closed regular files into storage.output, and writes a completion marker after successful execution. Managed workflow configs reject this field.", Values: []string{"staged"}},
-	"storage.volumes":    {Status: statusSupported, Description: "Additional run-time volume specs."},
-	"storage.mounts":     {Status: statusSupported, Description: "Additional run-time mount specs."},
+	"storage":                          {Status: statusSupported, Description: "PVC and result-path settings."},
+	"storage.data_pvc":                 {Status: statusSupported, Description: "Existing platform-managed PVC mounted at /data; Tau never creates the claim."},
+	"storage.result_pvc":               {Status: statusSupported, Description: "Existing result PVC; direct job configs require it to match storage.data_pvc when both are set."},
+	"storage.checkpoint":               {Status: statusSupported, Description: "File or directory, relative to the run checkpoint dir, that this run produces as its servable model (e.g. last.safetensors). Declaring it writes an artifact index after a successful run so tau serve deploy --from-finetune can resolve the model by run name."},
+	"storage.output":                   {Status: statusSupported, Description: "Durable output path advertised to the workload."},
+	"storage.publish":                  {Status: statusDirectOnly, Description: "Optional Tau-owned artifact publication mode. staged exposes TAU_OUTPUT_STAGING_DIR on pod-local /mnt, verifies closed regular files into storage.output, and writes a completion marker after successful execution. Managed workflow configs reject this field.", Values: []string{"staged"}},
+	"storage.volumes":                  {Status: statusSupported, Description: "Additional run-time volume specs."},
+	"storage.mounts":                   {Status: statusSupported, Description: "Additional run-time mount specs."},
+	"storage.image_assets":             {Status: statusDirectOnly, Description: "Digest-pinned image directories copied by init containers into read-only main-container mounts. Direct Jobs only."},
+	"storage.image_assets.name":        {Status: statusDirectOnly, Description: "Unique DNS label used to derive the init-container and volume names."},
+	"storage.image_assets.image":       {Status: statusDirectOnly, Description: "Source OCI image pinned by an exact sha256 digest."},
+	"storage.image_assets.source_path": {Status: statusDirectOnly, Description: "Clean absolute source directory inside the pinned image."},
+	"storage.image_assets.mount_path":  {Status: statusDirectOnly, Description: "Clean absolute read-only mount path in the main container."},
 
 	"profiler":          {Status: statusSupported, Description: "Optional Nsight profiler wrapper settings."},
 	"profiler.mode":     {Status: statusSupported, Description: "Profiler mode.", Values: []string{"nsys", "ncu"}},
@@ -277,6 +285,9 @@ func fieldPaths(t reflect.Type, prefix string) []string {
 		}
 		paths = append(paths, path)
 		ft := deref(field.Type)
+		if ft.Kind() == reflect.Slice {
+			ft = deref(ft.Elem())
+		}
 		if ft.Kind() == reflect.Struct && ft.PkgPath() == reflect.TypeOf(Config{}).PkgPath() && ft != reflect.TypeOf(Duration{}) {
 			paths = append(paths, fieldPaths(ft, path)...)
 		}

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package runs builds the portal's Jobs board: the list of Tau-managed
 // workloads — batch/v1 Jobs and ray.io RayJobs — in a namespace.
 //
@@ -66,6 +69,7 @@ type Reader interface {
 type Options struct {
 	Namespace         string
 	Queue             string
+	IncludeExternal   bool
 	ExperimentSurface ExperimentSurfaceState
 	History           HistoryReader
 	HistoryScope      HistoryScope
@@ -89,6 +93,7 @@ type Run struct {
 	Cluster            string    `json:"cluster,omitempty"`
 	ResourceUID        string    `json:"resourceUid,omitempty"`
 	DurableID          string    `json:"durableId,omitempty"`
+	Source             string    `json:"source,omitempty"`
 	ExperimentTracking string    `json:"experimentTracking"`
 	ExperimentPath     string    `json:"experimentPath,omitempty"`
 }
@@ -116,7 +121,7 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	if rayErr != nil {
 		rayJSON = nil
 	}
-	snap := aggregate(time.Now(), jobsJSON, rayJSON)
+	snap := aggregateWithExternal(time.Now(), jobsJSON, rayJSON, opts.IncludeExternal)
 	snap.Namespace = opts.Namespace
 	liveUnavailable := jobsErr != nil && rayErr != nil
 	snap.Runs = filterQueue(snap.Runs, opts.Queue)
@@ -158,6 +163,11 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 		return snap, nil
 	}
 	history = filterHistoryScope(history, historyScope)
+	if opts.IncludeExternal {
+		for i := range history {
+			history[i].Source = "tau"
+		}
+	}
 	snap.Runs = mergeHistory(snap.Runs, filterQueue(history, opts.Queue))
 	snap.HistoryState = historyStateAvailable
 	snap.Total = len(snap.Runs)
@@ -201,9 +211,13 @@ func filterHistoryScope(rows []Run, scope HistoryScope) []Run {
 // source that fails to decode simply contributes no rows), so callers can pass
 // whatever their lister returned without a second guard.
 func aggregate(now time.Time, jobsJSON, rayJSON []byte) Snapshot {
+	return aggregateWithExternal(now, jobsJSON, rayJSON, false)
+}
+
+func aggregateWithExternal(now time.Time, jobsJSON, rayJSON []byte, includeExternal bool) Snapshot {
 	runs := make([]Run, 0)
-	runs = append(runs, parseJobs(now, jobsJSON)...)
-	runs = append(runs, parseRayJobs(now, rayJSON)...)
+	runs = append(runs, parseJobs(now, jobsJSON, includeExternal)...)
+	runs = append(runs, parseRayJobs(now, rayJSON, includeExternal)...)
 	sortRuns(runs)
 	return Snapshot{Total: len(runs), Runs: runs, HistoryState: historyStateLiveOnly}
 }
@@ -267,7 +281,7 @@ type rayJobList struct {
 // parseJobs decodes the Jobs list and keeps Tau-managed, non-RayJob-owned Jobs.
 // Invalid JSON (e.g. a "CRD not found" message where JSON was expected) yields no
 // rows rather than an error, matching the board's graceful-degradation contract.
-func parseJobs(now time.Time, data []byte) []Run {
+func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 	var list jobList
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil
@@ -277,8 +291,16 @@ func parseJobs(now time.Time, data []byte) []Run {
 		if ownedByRayJob(item.Metadata.OwnerReferences) {
 			continue
 		}
-		if !hasTauLabel(item.Metadata.Labels) {
+		managed := hasTauLabel(item.Metadata.Labels)
+		if !managed && !includeExternal {
 			continue
+		}
+		source := ""
+		if includeExternal {
+			source = "external"
+			if managed {
+				source = "tau"
+			}
 		}
 		created := parseTime(item.Metadata.CreationTimestamp)
 		out = append(out, Run{
@@ -292,6 +314,7 @@ func parseJobs(now time.Time, data []byte) []Run {
 			Namespace:          item.Metadata.Namespace,
 			ResourceUID:        item.Metadata.UID,
 			DurableID:          durableID(item.Metadata.Labels, item.Metadata.Annotations),
+			Source:             source,
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
 		})
 	}
@@ -299,15 +322,23 @@ func parseJobs(now time.Time, data []byte) []Run {
 }
 
 // parseRayJobs decodes the RayJobs list and keeps Tau-managed RayJobs.
-func parseRayJobs(now time.Time, data []byte) []Run {
+func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 	var list rayJobList
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil
 	}
 	var out []Run
 	for _, item := range list.Items {
-		if !hasTauLabel(item.Metadata.Labels) {
+		managed := hasTauLabel(item.Metadata.Labels)
+		if !managed && !includeExternal {
 			continue
+		}
+		source := ""
+		if includeExternal {
+			source = "external"
+			if managed {
+				source = "tau"
+			}
 		}
 		created := parseTime(item.Metadata.CreationTimestamp)
 		out = append(out, Run{
@@ -321,6 +352,7 @@ func parseRayJobs(now time.Time, data []byte) []Run {
 			Namespace:          item.Metadata.Namespace,
 			ResourceUID:        item.Metadata.UID,
 			DurableID:          durableID(item.Metadata.Labels, item.Metadata.Annotations),
+			Source:             source,
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
 		})
 	}

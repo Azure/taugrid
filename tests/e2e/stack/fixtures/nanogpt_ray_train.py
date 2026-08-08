@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Ray Train nanoGPT-style workload for live 16-GPU stack conformance."""
 
 from __future__ import annotations

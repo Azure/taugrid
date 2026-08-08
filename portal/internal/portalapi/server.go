@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package portalapi serves the unified observability portal: a single HTTP
 // surface that aggregates and cross-links the runtime's existing dashboards.
 //

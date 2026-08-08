@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package scriptpayload is a small, test-only mirror of the wire format
 // produced by cli/internal/payload (envelope version 1,
 // established by PR1 for issues #869/#871). It exists solely so the

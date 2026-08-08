@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kueue contains e2e tests for the Kueue scheduling system.
 //
 // Tests verify that the Kueue Helm chart deploys correctly and that

@@ -95,9 +95,10 @@ Default: `Standard_NC24ads_A100_v4` — 24 vCPU, **1× A100 80GB**, the smallest
 A100 shape on Azure. One node is enough to prove the whole platform path, and it
 is roughly an eighth of the cost of an 8-GPU `ND96` node.
 
-Note that Tau gives the Ray **head** pod `compute.gpus` GPUs as well. With
-`workers: 1` in `tau.yaml` that means exactly one GPU pod, hence one node.
-Setting `workers: 2` requests a second A100 and therefore a second node — it
+Tau keeps the Ray **head** pod CPU-only on the system pool and gives each
+dedicated execution worker `compute.gpus` GPUs. With `workers: 1` in `tau.yaml`
+that means exactly one GPU pod, hence one GPU node. Setting `workers: 2`
+requests a second A100 and therefore a second GPU node — it
 still fits a 50 vCPU quota (2 × 24) but doubles the hourly cost, so the default
 stays at the smallest configuration that proves the platform works.
 

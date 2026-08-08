@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Validate every runnable YAML example in the taugrid skill against the
 installed `tau` binary.
 

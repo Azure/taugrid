@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package cli wires the tau cobra command tree.
 //
 // One file per public command group. Tau v0.5 keeps the visible surface small:

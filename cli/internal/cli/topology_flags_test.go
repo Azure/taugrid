@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -182,6 +185,7 @@ func TestValidateRenderedQueueRejectsMissingTopologyOnTASOnlyFlavor(t *testing.T
 		},
 		errors: map[string]error{},
 	}
+
 	manifest := []byte(`apiVersion: batch/v1
 kind: Job
 metadata:
@@ -197,8 +201,125 @@ spec:
 `)
 
 	err := validateRenderedQueue(context.Background(), runner, "workspace", manifest, jobrender.Options{}, queueValidationPolicy{})
-	if err == nil || !strings.Contains(err.Error(), "policy.topology") || !strings.Contains(err.Error(), "Tau will not choose scientific placement semantics automatically") {
+	if err == nil || !strings.Contains(err.Error(), "policy.topology") || !strings.Contains(err.Error(), runtopology.RequiredTopologyAnnotation) {
 		t.Fatalf("expected actionable connected topology preflight error, got %v", err)
+	}
+}
+
+func TestPrepareGeneratedQueueTopologyInjectsManagedFlavorRequirement(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): `{"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"workspace-cq"}}`,
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "workspace-cq", "-o", "json"):              `{"metadata":{"name":"workspace-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"nd-h200-v5","resources":[{"name":"nvidia.com/gpu","nominalQuota":"16"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json"): `{
+				"metadata":{
+					"name":"nd-h200-v5",
+					"annotations":{"kueue.x-k8s.io/podset-required-topology":"kubernetes.io/hostname"}
+				},
+				"spec":{"topologyName":"default-node-topology"}
+			}`,
+		},
+		errors: map[string]error{},
+	}
+	opts := jobrender.Options{QueueName: "jobqueue"}
+	render := func() ([]byte, error) {
+		annotation := ""
+		if opts.RequiredTopology != "" {
+			annotation = "\n      annotations:\n        " + runtopology.RequiredTopologyAnnotation + ": " + opts.RequiredTopology
+		}
+		return []byte(`apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: jobqueue
+spec:
+  template:
+    metadata:` + annotation + `
+    spec:
+      containers:
+      - resources:
+          limits:
+            nvidia.com/gpu: 1
+`), nil
+	}
+	initial, err := render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := prepareGeneratedQueueTopology(
+		context.Background(), runner, "workspace", initial, &opts, queueValidationPolicy{}, render)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.RequiredTopology != "kubernetes.io/hostname" {
+		t.Fatalf("resolved required topology=%q", opts.RequiredTopology)
+	}
+	contract, err := renderedQueueContractFromManifest(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contract.TopologyRequest {
+		t.Fatalf("generated workload still lacks topology request:\n%s", rendered)
+	}
+}
+
+func TestPrepareGeneratedQueueTopologyReenablesAnnotationsAfterQueueOverride(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "custom-queue", "-o", "json"): `{"metadata":{"name":"custom-queue"},"spec":{"clusterQueue":"custom-cq"}}`,
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "custom-cq", "-o", "json"):                     `{"metadata":{"name":"custom-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"custom-gpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "custom-gpu", "-o", "json"): `{
+				"metadata":{
+					"name":"custom-gpu",
+					"annotations":{"kueue.x-k8s.io/podset-required-topology":"kubernetes.io/hostname"}
+				},
+				"spec":{"topologyName":"custom-topology"}
+			}`,
+		},
+		errors: map[string]error{},
+	}
+	opts := jobrender.Options{
+		QueueName:                       "custom-queue",
+		DisableKueueTopologyAnnotations: true,
+	}
+	render := func() ([]byte, error) {
+		annotation := ""
+		if opts.RequiredTopology != "" && !opts.DisableKueueTopologyAnnotations {
+			annotation = "\n      annotations:\n        " + runtopology.RequiredTopologyAnnotation + ": " + opts.RequiredTopology
+		}
+		return []byte(`apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: custom-queue
+spec:
+  template:
+    metadata:` + annotation + `
+    spec:
+      containers:
+      - resources:
+          limits:
+            nvidia.com/gpu: 1
+`), nil
+	}
+	initial, err := render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := prepareGeneratedQueueTopology(
+		context.Background(), runner, "workspace", initial, &opts, queueValidationPolicy{}, render)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.DisableKueueTopologyAnnotations {
+		t.Fatal("managed queue requirement did not re-enable Kueue topology annotations")
+	}
+	contract, err := renderedQueueContractFromManifest(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contract.TopologyRequest {
+		t.Fatalf("queue override rerender still lacks topology request:\n%s", rendered)
 	}
 }
 

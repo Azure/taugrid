@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package stack
 
 import (
@@ -69,9 +72,9 @@ func TestTauPyEntrypointRayJob(t *testing.T) {
 	require.NoError(t, err, "Tau Python entrypoint Ray head should be running and ready")
 
 	workers := tauPyEntrypointWorkers(t)
-	if workers > 1 {
+	if workers > 0 {
 		workerSelector := "ray.io/node-type=worker,ray.io/cluster=" + rayClusterName
-		err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, workers-1, 3*time.Minute)
+		err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, workers, 3*time.Minute)
 		require.NoError(t, err, "Tau Python entrypoint Ray workers should be running and ready")
 	}
 
@@ -81,8 +84,9 @@ func TestTauPyEntrypointRayJob(t *testing.T) {
 
 // TestTauPyEntrypointRayJobGPU is the golden Tau live e2e for the "submit a
 // pure PyTorch file" contract on GPU nodes. Unlike the CPU smoke above, this
-// uses real torch, requests nvidia.com/gpu, asserts the head pod is placed on the
-// selected GPU node, and the user code fails unless CUDA is available.
+// uses real torch, requests nvidia.com/gpu on a dedicated worker, asserts the
+// control head stays on the system pool, and the user code fails unless CUDA
+// is available.
 func TestTauPyEntrypointRayJobGPU(t *testing.T) {
 	if os.Getenv("E2E_TAU_PY_ENTRYPOINT_GPU") != "1" {
 		t.Skip("set E2E_TAU_PY_ENTRYPOINT_GPU=1 to run the tau-py GPU entrypoint RayJob e2e")
@@ -131,8 +135,14 @@ func TestTauPyEntrypointRayJobGPU(t *testing.T) {
 	headSelector := "ray.io/node-type=head,ray.io/cluster=" + rayClusterName
 	err = tc.WaitForRunningPodsByLabel(stackNamespace, headSelector, 1, gpuPodReadyTimeout)
 	require.NoError(t, err, "Tau Python GPU entrypoint Ray head should be running and ready")
-	requirePodsOnSelectedNodes(t, tc, headSelector, gpuSelectorKey, gpuSelectorValue,
-		"Tau Python GPU entrypoint head should run on the selected GPU node")
+	requirePodsOnSelectedNodes(t, tc, headSelector, envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
+		"Tau Python GPU entrypoint head should run on the selected system node")
+
+	workerSelector := "ray.io/node-type=worker,ray.io/cluster=" + rayClusterName
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, 1, gpuPodReadyTimeout)
+	require.NoError(t, err, "Tau Python GPU entrypoint Ray worker should be running and ready")
+	requirePodsOnSelectedNodes(t, tc, workerSelector, gpuSelectorKey, gpuSelectorValue,
+		"Tau Python GPU entrypoint worker should run on the selected GPU node")
 
 	err = tc.WaitForRayJobStatus(stackNamespace, tauPyGPUEntrypointRayJob, "SUCCEEDED", gpuRayJobTimeout)
 	require.NoError(t, err, "Tau Python GPU entrypoint RayJob should reach SUCCEEDED status")

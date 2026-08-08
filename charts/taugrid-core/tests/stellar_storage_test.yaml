@@ -26,6 +26,10 @@ tests:
       - isKind:
           of: Deployment
         documentIndex: 0
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:pinned
+        documentIndex: 0
       - isNull:
           path: spec.template.spec.volumes
         documentIndex: 0

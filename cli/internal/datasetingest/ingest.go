@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package datasetingest implements the byte-transfer core for tau dataset
 // ingest: copying manifest-described files from a source to a destination with
 // sha256 verification, per-file checkpointing, resume, and a version lock to

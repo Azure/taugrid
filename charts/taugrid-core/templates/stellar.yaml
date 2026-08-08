@@ -40,7 +40,7 @@ that plan. See README.md "Upgrading existing releases".
 {{- fail "stellar.image.repository is required when stellar.enabled=true" -}}
 {{- end -}}
 {{- if not $stellar.image.tag -}}
-{{- fail "stellar.image.tag is required when stellar.enabled=true; publish or select a real Tau image tag" -}}
+{{- fail "stellar.image.tag is required when stellar.enabled=true; publish or select a real TauGrid Portal image tag" -}}
 {{- end -}}
 {{- if not (has $source (list "local" "auto" "kusto")) -}}
 {{- fail "stellar.source must be local, auto, or kusto" -}}

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -58,12 +61,13 @@ path is a directory, its recursive listing is printed; pass --artifact NAME to
 fetch one file from it. Object-backed mounts are allowed to settle before Tau
 accepts a zero-entry listing, so a populated directory is not reported as empty
 during the BlobFuse mount-time list suppression window.
-Override the recorded path/pvc with --path/--pvc.
+Override the recorded path/pvc with --path/--pvc. For an externally submitted
+or already deleted workload with no Tau result annotations, pass both flags.
 
 Examples:
   tau run get swordfish-bench-001 -n ray
   tau run get swordfish-bench-001 -n ray --artifact profile/rank-0.summary.md
-  tau run get my-job --path /data/my-job/results -o json`,
+  tau run get my-job --path /data/my-job/results --pvc research-data -o json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -92,10 +96,10 @@ Examples:
 				ref.PVC = pvcOverride
 			}
 			if ref.Path == "" {
-				return fmt.Errorf("run workload %s/%s has no %s; resubmit with storage.output, or pass --path", ns, name, workloadmeta.AnnotationResultPath)
+				return fmt.Errorf("run workload %s/%s has no %s; resubmit with storage.output, or pass both --path and --pvc for an external or deleted workload", ns, name, workloadmeta.AnnotationResultPath)
 			}
 			if ref.PVC == "" {
-				return fmt.Errorf("run workload %s/%s has no %s; pass --pvc to override", ns, name, workloadmeta.AnnotationResultPVC)
+				return fmt.Errorf("run workload %s/%s has no %s; pass both --path and --pvc for an external or deleted workload", ns, name, workloadmeta.AnnotationResultPVC)
 			}
 			resultPath := ref.Path
 			if ref.Publication == artifactpublish.ModeStaged {

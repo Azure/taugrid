@@ -29,6 +29,9 @@ baselineQueue:
   topology:
     enabled: true
     name: default-node-topology
+    # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
+    # templates after queue resolution.
+    requiredLevel: kubernetes.io/hostname
   flavor:
     # New identity avoids mutating the topologyName of the chart 0.2.0
     # taugrid-default ResourceFlavor, which Kueue treats as immutable.
@@ -144,14 +147,19 @@ kuberay-operator:
       - name: RAY_metric_cardinality_level
         value: recommended
 
-# The Tau control plane is an internal preview, so its image still lives in a
-# private ACR pinned by digest. A cluster's kubelet identity needs AcrPull on
-# that registry, or the image must be mirrored and overridden here, until the
-# controller is promoted to MCR.
+gpu-monitoring:
+  daemonset:
+    # Externally joined GPU nodes do not receive the AKS-managed accelerator
+    # label, so match them by instance type without requiring that label.
+    requireAcceleratorLabel: false
+
+# The Tau control plane image is publicly available from MCR and pinned by
+# digest. Override the repository or digest only for a mirrored or pre-release
+# build.
 tau-core-controller:
   platformNamespace: tau-platform
   image:
-    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
+    repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
   tauCluster:
     # Inherits the controller chart's reviewed AKS GPU VM-size catalog, which

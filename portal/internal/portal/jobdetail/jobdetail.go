@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package jobdetail builds the portal's job detail page: everything about one
 // Tau-managed workload, gathered from the seams the other boards already own.
 //
@@ -542,14 +545,8 @@ type podList struct {
 	} `json:"items"`
 }
 
-// parsePods keeps pods whose selectorKey label equals selectorValue. An empty
-// selectorValue (e.g. a RayJob whose RayCluster is not yet named) matches
-// nothing, so the section is simply empty until the cluster exists.
-func parsePods(data []byte, selectorKey, selectorValue string) []PodDetail {
-	pods, _ := parsePodsWithStatus(data, selectorKey, selectorValue)
-	return pods
-}
-
+// parsePodsWithStatus keeps pods whose selectorKey label equals selectorValue.
+// An empty selectorValue matches nothing until the RayCluster exists.
 func parsePodsWithStatus(data []byte, selectorKey, selectorValue string) ([]PodDetail, bool) {
 	if selectorValue == "" {
 		return nil, false

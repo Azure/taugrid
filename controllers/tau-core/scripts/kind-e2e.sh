@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 set -euo pipefail
 
 # Tau core controller Kind E2E
@@ -9,8 +12,7 @@ set -euo pipefail
 #
 #   1. Build the current controller image and install it (Deployment and RBAC)
 #      plus the v0.5 tau.azure.com CRDs
-#      from the same manifests ArgoCD would apply
-#      (applications/tau-core-controller/base, via `kubectl apply -k`).
+#      from the chart's Kustomize manifests via `kubectl apply -k`.
 #   2. Prove topology labels reconcile on an existing native-style Node, a newly
 #      joined Flex-style Node, and subsequent label drift.
 #   3. Apply a native TauWorkspace as platform desired state.
@@ -41,7 +43,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONTROLLER_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${CONTROLLER_DIR}/../.." && pwd)"
 TAU_DIR="${REPO_ROOT}/cli"
-APP_BASE_DIR="${REPO_ROOT}/applications/tau-core-controller/base"
+APP_BASE_DIR="${REPO_ROOT}/charts/tau-core-controller"
+IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 
 CLUSTER_NAME="${TAU_CORE_KIND_CLUSTER_NAME:-tau-core-e2e}"
 KUBE_CONTEXT="${TAU_CORE_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"
@@ -166,11 +169,15 @@ done
 grep -q 'APIGroup\s*=\s*"tau.azure.com"' "${TAU_DIR}/internal/workspace/workspace.go"
 
 echo "== static guard: local-image deployment rewrite is well-formed =="
+if [[ ! -f "${IMAGE_DOCKERFILE}" ]]; then
+  echo "controller image Dockerfile not found: ${IMAGE_DOCKERFILE}" >&2
+  exit 1
+fi
 rendered_deployment="$(sed \
-  -e "s#image: aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
-  -e "s#imagePullPolicy: Always#imagePullPolicy: Never#" \
+  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
+  -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
-  "${APP_BASE_DIR}/templates/deployment.yaml")"
+  "${APP_BASE_DIR}/kustomize/deployment.yaml")"
 for want in \
   "image: ${LOCAL_IMAGE}" \
   "imagePullPolicy: Never" \
@@ -180,7 +187,7 @@ for want in \
     exit 1
   fi
 done
-if grep -q "aksairuntime.azurecr.io" <<<"${rendered_deployment}"; then
+if grep -q "azurecr.io" <<<"${rendered_deployment}"; then
   echo "local-image deployment rewrite still references the private ACR digest" >&2
   exit 1
 fi
@@ -229,8 +236,7 @@ kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 # LocalQueue is served in BOTH v1beta1 and v1beta2: the controller's own
 # queueStatus()/clusterQueueGPUQuota() (internal/controller/workspace_controller.go)
 # get LocalQueue/ClusterQueue at v1beta1, while reconciliation applies
-# LocalQueue at v1beta2 (matching the real production Kueue chart in
-# applications/tau-queues/base/localqueues.yaml). Both
+# LocalQueue at v1beta2 (matching the production Kueue API). Both
 # schemas are intentionally x-kubernetes-preserve-unknown-fields so the
 # default "None" conversion strategy is a lossless passthrough between them.
 cat >"${SCRATCH_DIR}/mock-kueue-crds.yaml" <<'YAML'
@@ -309,7 +315,7 @@ kubectl apply -f "${SCRATCH_DIR}/mock-kueue-crds.yaml"
 # --- Establish the Tau APIs before applying the same full kustomization ArgoCD
 # applies. kubectl's RESTMapper cannot discover a CRD and its TauCluster
 # instance in one fresh-cluster apply pass. ---
-kubectl apply -f "${APP_BASE_DIR}/templates/namespace.yaml"
+kubectl apply -f "${APP_BASE_DIR}/kustomize/namespace.yaml"
 kubectl apply -f "${APP_BASE_DIR}/crds"
 kubectl wait --for=condition=Established \
   crd/clusters.tau.azure.com \
@@ -320,7 +326,10 @@ kubectl apply -k "${APP_BASE_DIR}"
 
 # --- Build and load the controller image locally; no external mutable
 # image is introduced, and no network access is required after this point.
-"${CONTAINER_ENGINE}" build -t "${LOCAL_IMAGE}" "${CONTROLLER_DIR}"
+"${CONTAINER_ENGINE}" build \
+  --file "${IMAGE_DOCKERFILE}" \
+  --tag "${LOCAL_IMAGE}" \
+  "${CONTROLLER_DIR}"
 load_local_image
 
 # Overlay the Deployment with the locally-built image and
@@ -328,10 +337,10 @@ load_local_image
 # --leader-elect=false since a single-replica Kind run has no need for the
 # extra Lease-acquisition startup latency.
 sed \
-  -e "s#image: aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
-  -e "s#imagePullPolicy: Always#imagePullPolicy: Never#" \
+  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
+  -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
-  "${APP_BASE_DIR}/templates/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"
+  "${APP_BASE_DIR}/kustomize/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"
 kubectl apply -f "${SCRATCH_DIR}/deployment.local.yaml"
 kubectl -n "${PLATFORM_NAMESPACE}" rollout status deployment/tau-core-controller --timeout="${ROLLOUT_WAIT_SECONDS}s"
 

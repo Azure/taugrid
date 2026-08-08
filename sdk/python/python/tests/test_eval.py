@@ -1,23 +1,22 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """tau-py unit tests. Stdlib + pytest only — no tau binary required."""
 
 from __future__ import annotations
 
 import inspect
-import json
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
-import types
 from pathlib import Path
 
 import pytest
 import yaml
 
 import tau
-from tau import cli as tau_cli
-from tau._cluster import CLUSTER_WRAPPER_TEMPLATE, render_wrapper
+from tau._cluster import render_wrapper
 
 
 def _write_python(path: Path, source: str) -> None:

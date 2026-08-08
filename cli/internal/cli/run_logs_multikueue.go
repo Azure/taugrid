@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -22,6 +25,12 @@ type runLogsOptions struct {
 	Namespace     string
 	Follow        bool
 	Tail          int
+	Container     string
+	AllContainers bool
+	Previous      bool
+	Timestamps    bool
+	Prefix        bool
+	KustoCluster  string
 	KustoEndpoint string
 	KustoDatabase string
 }
@@ -53,10 +62,17 @@ type kustoLogsQuery struct {
 }
 
 func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner, name string, opts runLogsOptions, hooks runLogsHooks) error {
+	if err := validateRunLogsOptions(opts); err != nil {
+		return err
+	}
 	hooks = normalizeRunLogsHooks(r, opts, name, hooks)
 
 	snap, snapErr := hooks.fetchSnapshot(ctx)
-	if snapErr == nil && shouldUseManagerMultiKueueLogs(snap) {
+	preferBatchJob := hasBatchLogOptions(opts) && snap.JobFound
+	if snapErr == nil && shouldUseManagerMultiKueueLogs(snap) && !preferBatchJob {
+		if hasBatchLogOptions(opts) {
+			return batchLogOptionsError(name)
+		}
 		logs, err := managerMultiKueueRayJobLogs(ctx, r, name, opts, snap, hooks)
 		if err != nil {
 			return err
@@ -64,8 +80,11 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 		_, err = io.WriteString(out, logs)
 		return err
 	}
-	if snapErr != nil && snap.RayJob.Found && snap.IsMultiKueue() {
+	if snapErr != nil && snap.RayJob.Found && snap.IsMultiKueue() && !preferBatchJob {
 		return fmt.Errorf("resolve manager-side MultiKueue placement for RayJob %s: %w", name, snapErr)
+	}
+	if snap.RayJob.Found && !snap.JobFound && hasBatchLogOptions(opts) {
+		return batchLogOptionsError(name)
 	}
 
 	// A successful snapshot is authoritative about the workload type. When it
@@ -77,6 +96,14 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 	if snapErr == nil && snap.RayJob.Found && !snap.JobFound {
 		logs, err := hooks.rayJobLogs(ctx, r, opts.Namespace, name, opts.Follow)
 		if err != nil {
+			if localRayJobTerminal(snap.RayJob) {
+				centralLogs, centralErr := localTerminalRayJobLogs(ctx, name, opts, snap, hooks)
+				if centralErr == nil {
+					_, centralErr = io.WriteString(out, centralLogs)
+					return centralErr
+				}
+				return fmt.Errorf("read logs for terminal RayJob %s: local pod logs unavailable: %w; central log fallback failed: %v", name, err, centralErr)
+			}
 			// Distinguish "not ready yet" from "no logs". Terse on purpose:
 			// `tau run status` already renders the startup phases.
 			hint := ""
@@ -93,10 +120,14 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 	// prove the run is missing: the Job can be TTL-deleted while its pods linger,
 	// so the label selector below may still find output. Attempt both paths and
 	// decide on the OBSERVED result rather than on a prediction from the snapshot.
-	logs, err := hooks.rayJobLogs(ctx, r, opts.Namespace, name, opts.Follow)
-	if err == nil {
-		_, err = io.WriteString(out, logs)
-		return err
+	var logs string
+	var err error
+	if !hasBatchLogOptions(opts) {
+		logs, err = hooks.rayJobLogs(ctx, r, opts.Namespace, name, opts.Follow)
+		if err == nil {
+			_, err = io.WriteString(out, logs)
+			return err
+		}
 	}
 
 	logs, err = hooks.jobLogs(ctx, r, opts.Namespace, name, opts.Follow, opts.Tail)
@@ -128,8 +159,11 @@ func normalizeRunLogsHooks(r *kube.Runner, opts runLogsOptions, name string, hoo
 		hooks.rayJobLogs = rayJobLogs
 	}
 	if hooks.jobLogs == nil {
-		hooks.jobLogs = localJobLogs
+		hooks.jobLogs = func(ctx context.Context, r kubeRawRunner, namespace, name string, _ bool, _ int) (string, error) {
+			return localJobLogsWithOptions(ctx, r, namespace, name, opts)
+		}
 	}
+
 	if hooks.resolveMultiKueueWorker == nil {
 		hooks.resolveMultiKueueWorker = fetchMultiKueueWorkerRef
 	}
@@ -137,6 +171,21 @@ func normalizeRunLogsHooks(r *kube.Runner, opts runLogsOptions, name string, hoo
 		hooks.queryADXLogs = queryADXLogs
 	}
 	return hooks
+}
+
+func validateRunLogsOptions(opts runLogsOptions) error {
+	if strings.TrimSpace(opts.Container) != "" && opts.AllContainers {
+		return fmt.Errorf("--container and --all-containers cannot be used together")
+	}
+	return nil
+}
+
+func hasBatchLogOptions(opts runLogsOptions) bool {
+	return strings.TrimSpace(opts.Container) != "" || opts.AllContainers || opts.Previous || opts.Timestamps || opts.Prefix
+}
+
+func batchLogOptionsError(name string) error {
+	return fmt.Errorf("container selection, --previous, --timestamps, and --prefix are supported only for batch/v1 Job logs; %s is a RayJob", name)
 }
 
 func shouldUseManagerMultiKueueLogs(snap status.Snapshot) bool {
@@ -169,21 +218,14 @@ func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name stri
 		if rayClusterName == "" {
 			return "", fmt.Errorf("RayJob %s has not reported its mirrored RayCluster name yet; wait for `tau run status %s` to show the worker-side RayCluster before reading manager-side logs", name, name)
 		}
-		if opts.Tail == 0 {
-			return "", nil
-		}
-		rows, err := hooks.queryADXLogs(ctx, kustoLogsQuery{
-			Endpoint: strings.TrimSpace(opts.KustoEndpoint),
-			Database: strings.TrimSpace(opts.KustoDatabase),
-			Query:    buildMultiKueueRayDriverLogsQuery(adxCluster, opts.Namespace, rayClusterName, opts.Tail),
-		})
+		logs, err := centralRayDriverLogs(ctx, name, adxCluster, rayClusterName, opts, hooks)
 		if err != nil {
 			return "", fmt.Errorf("query ADX Logs.ContainerLogs for RayJob %s on worker %s: %w", name, worker, err)
 		}
-		if len(rows) == 0 {
+		if logs == "" && opts.Tail != 0 {
 			return "", fmt.Errorf("no manager-side driver logs were found in ADX for RayJob %s on worker %s yet; wait for the %s sidecar to ingest logs and try again", name, worker, raylogoffload.SidecarContainerName)
 		}
-		return formatCentralLogRows(rows, opts.Tail), nil
+		return logs, nil
 	}
 	state := snap.MultiKueueState()
 	switch state {
@@ -198,13 +240,91 @@ func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name stri
 	}
 }
 
+func localRayJobTerminal(rj status.RayJob) bool {
+	for _, state := range []string{rj.JobDeploymentStatus, rj.JobStatus} {
+		switch strings.ToUpper(strings.TrimSpace(state)) {
+		case "COMPLETE", "FAILED", "SUCCEEDED", "STOPPED":
+			return true
+		}
+	}
+	return !rj.FinishedAt.IsZero()
+}
+
+func localTerminalRayJobLogs(ctx context.Context, name string, opts runLogsOptions, snap status.Snapshot, hooks runLogsHooks) (string, error) {
+	if opts.Follow {
+		return "", fmt.Errorf("--follow is not supported after a RayJob's head pod is deleted; tau queries ADX and does not implement cursor-based polling or de-duplication for centrally offloaded driver logs")
+	}
+	missing := make([]string, 0, 3)
+	if strings.TrimSpace(opts.KustoCluster) == "" {
+		missing = append(missing, "--kusto-cluster")
+	}
+	if strings.TrimSpace(opts.KustoEndpoint) == "" {
+		missing = append(missing, "--kusto-endpoint")
+	}
+	if strings.TrimSpace(opts.KustoDatabase) == "" {
+		missing = append(missing, "--kusto-database")
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("head pod was deleted and terminal local RayJob logs require %s to query ADX Logs.ContainerLogs", strings.Join(missing, ", "))
+	}
+	rayClusterName := strings.TrimSpace(snap.RayJob.RayClusterName)
+	if rayClusterName == "" {
+		return "", fmt.Errorf("RayJob %s has no recorded RayCluster name for the ADX pod-prefix query", name)
+	}
+	logs, err := centralRayDriverLogs(ctx, name, opts.KustoCluster, rayClusterName, opts, hooks)
+	if err != nil {
+		return "", err
+	}
+	if logs == "" && opts.Tail != 0 {
+		return "", fmt.Errorf("no centrally offloaded driver logs were found in ADX for terminal RayJob %s", name)
+	}
+	return logs, nil
+}
+
+func centralRayDriverLogs(ctx context.Context, name, clusterName, rayClusterName string, opts runLogsOptions, hooks runLogsHooks) (string, error) {
+	if opts.Follow {
+		return "", fmt.Errorf("--follow is not supported for centrally offloaded RayJob logs")
+	}
+	if opts.Tail == 0 {
+		return "", nil
+	}
+	rows, err := hooks.queryADXLogs(ctx, kustoLogsQuery{
+		Endpoint: strings.TrimSpace(opts.KustoEndpoint),
+		Database: strings.TrimSpace(opts.KustoDatabase),
+		Query:    buildMultiKueueRayDriverLogsQuery(clusterName, opts.Namespace, rayClusterName, opts.Tail),
+	})
+	if err != nil {
+		return "", fmt.Errorf("query ADX Logs.ContainerLogs for RayJob %s: %w", name, err)
+	}
+	return formatCentralLogRows(rows, opts.Tail), nil
+}
+
 func localJobLogs(ctx context.Context, r kubeRawRunner, namespace, name string, follow bool, tail int) (string, error) {
+	return localJobLogsWithOptions(ctx, r, namespace, name, runLogsOptions{Follow: follow, Tail: tail})
+}
+
+func localJobLogsWithOptions(ctx context.Context, r kubeRawRunner, namespace, name string, opts runLogsOptions) (string, error) {
 	selector := "job-name=" + name
 	args := []string{"-n", namespace, "logs", "-l", selector}
-	if follow {
+	if container := strings.TrimSpace(opts.Container); container != "" {
+		args = append(args, "-c", container)
+	}
+	if opts.AllContainers {
+		args = append(args, "--all-containers=true")
+	}
+	if opts.Previous {
+		args = append(args, "--previous")
+	}
+	if opts.Timestamps {
+		args = append(args, "--timestamps=true")
+	}
+	if opts.Prefix {
+		args = append(args, "--prefix=true")
+	}
+	if opts.Follow {
 		args = append(args, "-f")
 	}
-	args = append(args, fmt.Sprintf("--tail=%d", tail))
+	args = append(args, fmt.Sprintf("--tail=%d", opts.Tail))
 	return r.Raw(ctx, args, nil)
 }
 

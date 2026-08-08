@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kube centralizes Tau's Kubernetes client identity and execution.
 //
 // Tau intentionally shells out to kubectl for its normal manifest and query

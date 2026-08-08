@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Deterministic decorator build artifact coverage."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Deployment-kind serving renderer — plain k8s Deployment that goes
 // through Kueue via the Pod integration (not the RayService integration).
 //

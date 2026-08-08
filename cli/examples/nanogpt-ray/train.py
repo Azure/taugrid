@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """PyTorch nanoGPT-style Tau/Ray smoke and scale experiment.
 
 The full llm.c discussion #481 target is GPT-2 124M on FineWeb. This script is a

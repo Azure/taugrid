@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Ray Train ~1.7B FineWeb pre-training workload for the 16xH200 InfiniBand
 conformance test.
 

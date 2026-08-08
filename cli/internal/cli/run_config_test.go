@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -726,8 +729,18 @@ experiment:
 			t.Fatalf("config ray dry-run leaked secret ref %q:\n%s", leaked, rendered)
 		}
 	}
-	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 1 {
-		t.Fatalf("single-pod config ray dry-run serviceAccountName count=%d want 1:\n%s", got, rendered)
+	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 2 {
+		t.Fatalf("GPU config ray dry-run serviceAccountName count=%d want head + worker (2):\n%s", got, rendered)
+	}
+	for _, want := range []string{
+		"key: kubernetes.azure.com/mode",
+		"operator: In",
+		"- system",
+		"operator: DoesNotExist",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("GPU config ray dry-run must give its CPU head portable system affinity; missing %q:\n%s", want, rendered)
+		}
 	}
 	if strings.Contains(rendered, "azure.workload.identity/use") {
 		t.Fatalf("non-workspace RayJob should not gain the Azure workload identity label:\n%s", rendered)
@@ -1139,6 +1152,10 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`storage.image_assets.name` | direct-only",
+		"`storage.image_assets.image` | direct-only",
+		"`storage.image_assets.source_path` | direct-only",
+		"`storage.image_assets.mount_path` | direct-only",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("explain-config missing %q:\n%s", want, out)
@@ -1639,6 +1656,7 @@ func TestRunConfigAcceptsRayTrainLauncher(t *testing.T) {
 	if err := os.WriteFile(script, []byte("print('train')\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: ray-train-explicit
 engine: ray
@@ -1659,6 +1677,52 @@ execution:
 	}
 	if !strings.Contains(rendered, "name: ray-train-explicit") {
 		t.Fatalf("expected name ray-train-explicit, got:\n%s", rendered)
+	}
+}
+
+func TestRunConfigDryRunStagesDigestPinnedImageAsset(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "generate.py"), []byte("print('generate')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("c", 64)
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: external-batch-job
+engine: job
+entrypoint: generate.py
+runtime:
+  image: example.azurecr.io/workload:latest
+compute:
+  gpus: 0
+policy:
+  namespace: tau-default
+  queue: research-training
+storage:
+  image_assets:
+    - name: pinned-reference-assets
+      image: example.azurecr.io/reference-assets@sha256:`+digest+`
+      source_path: /opt/source-assets
+      mount_path: /opt/reference
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	for _, want := range []string{
+		"kind: Job",
+		"suspend: true",
+		"kueue.x-k8s.io/queue-name: research-training",
+		"name: tau-asset-pinned-reference-assets",
+		"example.azurecr.io/reference-assets@sha256:" + digest,
+		"- /opt/source-assets/.",
+		"mountPath: /opt/reference",
+		"readOnly: true",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("image asset dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "kind: ConfigMap") {
+		t.Fatalf("image asset dry-run must remain self-contained:\n%s", rendered)
 	}
 }
 

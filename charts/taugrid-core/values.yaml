@@ -24,7 +24,9 @@ namespaces:
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class
 # to one of a100-80gb, h100-95gb, or h200-141gb, and matching GPU nodes must
 # carry the same label. ResourceFlavor metadata.name is platform-owned and is
-# never parsed as the researcher gpu_class API.
+# never parsed as the researcher gpu_class API. TAS-only flavors must declare
+# both topologyName and requiredTopology; Tau copies the latter to generated GPU
+# pod templates as kueue.x-k8s.io/podset-required-topology.
 resourceFlavors:
   enabled: false
   items: []
@@ -113,11 +115,8 @@ stellar:
     idempotencyKey: tau-stellar-expstore-init
   image:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
-    # Current pre-MCR staging image. Do not change the default to MCR until the
-    # microsoft/mcr onboarding YAML is merged and
-    # mcr.microsoft.com/aks/ai-runtime/taugrid-portal is pull-tested. After
-    # promotion, keep tag pinned to the same immutable short-SHA build tag.
-    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal
+    # Use a published immutable short-SHA build tag from MCR.
+    repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     tag: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -202,7 +201,7 @@ lifecycleRecorder:
   #
   # The recorder's Role and RoleBinding render here, but this chart never
   # creates this namespace: it is the workload namespace, owned by
-  # tau-core-controller (from TauWorkspace) or by applications/tau-queues.
+  # tau-core-controller (from TauWorkspace) or by platform-managed queue policy.
   # Installing against a namespace that does not exist fails with a message
   # naming this value rather than an apply-time `namespaces "<name>" not found`.
   targetNamespace: ""
@@ -373,7 +372,7 @@ portal:
     create: false
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
-    repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal
+    repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     tag: ""
     digest: ""
     pullPolicy: IfNotPresent

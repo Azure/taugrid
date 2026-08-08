@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -15,14 +18,26 @@ import (
 const exampleRowGenerator = `
 import json, sys, types, importlib.util
 
-for name in ("ray", "ray.train", "ray.train.torch"):
+for name in (
+    "ray",
+    "ray.train",
+    "ray.train.torch",
+    "ray.util",
+    "ray.util.placement_group",
+    "ray.util.scheduling_strategies",
+):
     module = types.ModuleType(name)
     module.__getattr__ = lambda _attr: None
     sys.modules[name] = module
 sys.modules["ray"].train = sys.modules["ray.train"]
+sys.modules["ray"].util = sys.modules["ray.util"]
+sys.modules["ray"].remote = lambda *_args, **_kwargs: lambda fn: fn
 sys.modules["ray.train"].torch = sys.modules["ray.train.torch"]
 sys.modules["ray.train"].ScalingConfig = object
 sys.modules["ray.train.torch"].TorchTrainer = object
+sys.modules["ray.util.placement_group"].placement_group = object
+sys.modules["ray.util.placement_group"].remove_placement_group = object
+sys.modules["ray.util.scheduling_strategies"].PlacementGroupSchedulingStrategy = object
 
 spec = importlib.util.spec_from_file_location("portal_ray_stellar_train", sys.argv[1])
 train = importlib.util.module_from_spec(spec)

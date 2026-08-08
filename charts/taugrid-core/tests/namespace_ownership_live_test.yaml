@@ -137,7 +137,7 @@ tests:
             labels:
               app.kubernetes.io/managed-by: Helm
             annotations:
-              meta.helm.sh/release-name: taugrid-core
+              meta.helm.sh/release-name: taugrid-core-legacy
               meta.helm.sh/release-namespace: tau-system
     asserts:
       - hasDocuments:
@@ -157,7 +157,7 @@ tests:
       lifecycleRecorder.targetNamespace: ns-absent
     asserts:
       - failedTemplate:
-          errorMessage: 'lifecycleRecorder.targetNamespace "ns-absent" does not exist. This chart does not create it: it is the workload namespace owned by tau-core-controller (via TauWorkspace) or applications/tau-queues. Create it before installing, or point lifecycleRecorder.targetNamespace at an existing workload namespace.'
+          errorMessage: 'lifecycleRecorder.targetNamespace "ns-absent" does not exist. This chart does not create it: it is the workload namespace owned by tau-core-controller (via TauWorkspace) or platform-managed queue policy. Create it before installing, or point lifecycleRecorder.targetNamespace at an existing workload namespace.'
 
   - it: installs the recorder when its target namespace exists
     templates:

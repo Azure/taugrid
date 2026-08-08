@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Generated cluster-wrapper contract tests.
 
 These run the rendered wrapper in a subprocess because that wrapper is shipped
@@ -8,7 +11,6 @@ from __future__ import annotations
 
 import os
 import json
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -20,7 +22,7 @@ import yaml
 
 import tau
 from tau import cli as tau_cli
-from tau._cluster import CLUSTER_WRAPPER_TEMPLATE, render_wrapper
+from tau._cluster import render_wrapper
 
 
 def _write_python(path: Path, source: str) -> None:
@@ -1864,11 +1866,11 @@ def test_cluster_wrapper_includes_multi_node_helpers():
     assert '"duration": str(active_seconds)' not in src
     assert (
         "_run_multi_node(handle, ctx)\n"
-        "        _finalize_train_artifacts(ctx)\n"
         "        _finalize_ray_worker_profiles(ctx)"
     ) in src
-    # Branch selector in main():
-    assert "if ctx.workers > 1:" in src
+    assert "_finalize_train_artifacts(worker_ctx)" in src
+    # Managed RayJobs use dedicated workers even when compute.workers=1.
+    assert 'if os.environ.get("TAU_NUM_WORKERS"):' in src
 
 
 def _write_fake_torch_package(
@@ -2098,6 +2100,7 @@ def _run_rendered_multi_node_wrapper(
         "LOCAL_RANK": str(local_rank),
         "PYTHONPATH": str(tmp_path) + os.pathsep + env.get("PYTHONPATH", ""),
         "RAY_FAKE_GPUS": str(gpus * workers),
+        "TAU_NUM_WORKERS": str(gpus * workers if gpus > 0 else workers),
     })
     res = subprocess.run(
         [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
@@ -2123,6 +2126,20 @@ def test_cluster_wrapper_ray_train_single_visible_gpu_leaves_device_unchanged(tm
     ]
     assert "classic pod-level GPU visibility" not in res.stdout
     assert "RunConfig does not support worker_runtime_env" not in res.stdout
+
+
+def test_cluster_wrapper_ray_train_uses_dedicated_worker_when_workers_is_one(tmp_path):
+    res, torch_calls, ray_calls = _run_rendered_multi_node_wrapper(
+        tmp_path, cuda_device_count=1, local_rank=0, gpus=1, workers=1
+    )
+
+    assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
+    assert torch_calls == ["user_seen:1:1"]
+    assert ray_calls == [
+        "init:auto",
+        "trainer:1:True:{'GPU': 1}:SPREAD",
+        "run_config_worker_runtime_env:{'pip': ['torch==2.4.0']}",
+    ]
 
 
 def test_cluster_wrapper_ray_train_classic_pod_gpu_visibility_selects_local_rank(tmp_path):

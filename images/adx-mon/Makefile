@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 # AdxMon image build targets
 # Build adx-mon component images using MSFT Go + FIPS (GOEXPERIMENT=systemcrypto)
 #

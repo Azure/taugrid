@@ -1,6 +1,10 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package topology
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,6 +31,37 @@ func topologyProfile() profile.Profile {
 				"workloadPriorityClassName": "taugrid-batch",
 			},
 		},
+	}
+}
+
+func TestSystemNodeAffinitySupportsAKSAndPortableClusters(t *testing.T) {
+	affinity := SystemNodeAffinity()
+	rendered := fmt.Sprint(affinity)
+	for _, want := range []string{AKSNodePoolModeLabel, AKSSystemNodePoolMode, "In", "DoesNotExist"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("system affinity missing %q: %v", want, affinity)
+		}
+	}
+}
+
+func TestWithoutKueueTopologyAnnotations(t *testing.T) {
+	annotations := map[string]string{
+		requiredTopologyAnnotation:         hostnameTopology,
+		preferredTopologyAnnotation:        "topology.kubernetes.io/zone",
+		unconstrainedTopologyAnnot:         "true",
+		workloadmeta.AnnotationWorkspaceID: "workspace-123",
+	}
+	filtered := WithoutKueueTopologyAnnotations(annotations)
+	for _, key := range []string{requiredTopologyAnnotation, preferredTopologyAnnotation, unconstrainedTopologyAnnot} {
+		if _, ok := filtered[key]; ok {
+			t.Errorf("filtered annotations retained %q: %v", key, filtered)
+		}
+	}
+	if got := filtered[workloadmeta.AnnotationWorkspaceID]; got != "workspace-123" {
+		t.Errorf("non-topology annotation=%q, want workspace-123", got)
+	}
+	if got := annotations[requiredTopologyAnnotation]; got != hostnameTopology {
+		t.Errorf("input annotations mutated: %v", annotations)
 	}
 }
 
@@ -63,6 +98,7 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if plan.Annotations[requiredTopologyAnnotation] != "" ||
 		plan.Annotations[preferredTopologyAnnotation] != "" ||
 		plan.Annotations[unconstrainedTopologyAnnot] != "" {
@@ -73,11 +109,36 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 			t.Fatalf("Tau-specific topology labels should be omitted: %v", plan.Labels)
 		}
 	}
+
 	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
 		t.Fatalf("DRA gpu class selector=%q want %q", got, GPUClassA10080GB)
 	}
 	if plan.Labels[workloadPriorityLabel] != "taugrid-batch" {
 		t.Fatalf("missing workload priority label: %v", plan.Labels)
+	}
+}
+
+func TestBuild_ResourceFlavorRequiredTopology(t *testing.T) {
+	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
+		QueueName:        SharedGPUQueueName,
+		RequiredTopology: hostnameTopology,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Annotations[RequiredTopologyAnnotation]; got != hostnameTopology {
+		t.Fatalf("required topology annotation=%q, want %q", got, hostnameTopology)
+	}
+}
+
+func TestBuild_ResourceFlavorRequiredTopologyRejectsConflictingPlacement(t *testing.T) {
+	_, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
+		QueueName:        SharedGPUQueueName,
+		Placement:        "independent",
+		RequiredTopology: hostnameTopology,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicts with placement=independent") {
+		t.Fatalf("expected managed topology conflict, got %v", err)
 	}
 }
 

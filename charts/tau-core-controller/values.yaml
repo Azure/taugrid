@@ -3,20 +3,17 @@
 platformNamespace: tau-platform
 
 # app.kubernetes.io/part-of for every rendered object. The TauGrid distribution
-# leaves this as taugrid; the AKS AI Runtime ArgoCD path renders the literal
-# manifests under kustomize/ instead, which stay on taugrid.
+# leaves this as taugrid; GitOps paths rendering the literal manifests under
+# kustomize/ should keep the same value.
 partOf: taugrid
 
-# Internal preview: the controller image is published to private ACR and is not
-# on MCR yet, so a consuming cluster's kubelet identity needs AcrPull on this
-# registry. Override repository/digest to run a mirrored or pre-release build.
-# Promotion to mcr.microsoft.com/aks/ai-runtime/tau-core-controller is tracked
-# by the Tau release effort.
+# The controller image is publicly available from MCR. Override the repository
+# or digest only to run a mirrored or pre-release build.
 image:
-  repository: aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau-core-controller
+  repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
   # A digest is immutable, so IfNotPresent is correct; set tag instead only for
   # a mutable pre-release build.
-  digest: sha256:6ef8473f89bf0d27dae303aef37b6846915d59b3a4203cdad2f6753875ef10ea
+  digest: sha256:f08c589695d0c9f0b230327eecd01e285801204a48fa1f21be684a08ca1f2357
   tag: ""
   pullPolicy: IfNotPresent
 

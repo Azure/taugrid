@@ -1,0 +1,15 @@
+# Copyright and license headers are not added to these copied or derived
+# third-party sources. Keep this list aligned with the repository NOTICE.
+
+# Azure/adx-mon v0.3.0 CRDs and derived collector build instructions.
+charts/adx-mon/crds/
+images/adx-mon/Dockerfile.collector
+
+# NVIDIA/k8s-device-plugin v0.19.3-derived manifest.
+cli/examples/aks-gpu-quickstart/nvidia-device-plugin.yaml
+
+# Ray 2.54.0 and KubeRay v1.6.2-derived dashboards.
+cluster-overlays/dashboards/
+
+# Bundled prometheus-community kube-state-metrics chart.
+charts/adx-mon/charts/

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package datasetingest
 
 // Azure implementations of ByteSource, StagedSink, and VersionLocker.

@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 BINARY   := gpu-health-checker
 MODULE   := github.com/Azure/taugrid/monitoring/gpu-health-checker
 GOARCH   ?= arm64

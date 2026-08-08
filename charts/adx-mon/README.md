@@ -1,6 +1,8 @@
 # adx-mon Helm Chart
 
-Azure Data Explorer Monitor — an observability pipeline for AKS AI Runtime clusters. Collects metrics, logs, and GPU telemetry from Kubernetes and ships them to Azure Data Explorer (ADX) for dashboarding, alerting, and cost tracking.
+Azure Data Explorer Monitor is an observability pipeline for GPU-enabled
+Kubernetes clusters. It collects metrics, logs, and GPU telemetry and ships them
+to Azure Data Explorer (ADX) for dashboarding, alerting, and cost tracking.
 
 ## Architecture
 
@@ -66,7 +68,7 @@ global:
   region: "westus2"
 EOF
 
-# Install with AI Runtime preset
+# Install with the GPU cluster preset
 helm install adx-mon charts/adx-mon/ \
   -n adx-mon --create-namespace \
   -f charts/adx-mon/values.yaml \
@@ -83,7 +85,7 @@ kubectl get functions,alertrules,summaryrules -n adx-mon
 | File | Purpose |
 |------|---------|
 | `values.yaml` | Base defaults — all features disabled or minimal |
-| `values-ai-runtime.yaml` | AI Runtime preset — GPU telemetry, journal logs, drop-metrics filter, management policies |
+| `values-ai-runtime.yaml` | GPU cluster preset - GPU telemetry, journal logs, drop-metrics filter, management policies |
 | `values-dev.yaml` | Development overrides |
 
 Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific overrides.

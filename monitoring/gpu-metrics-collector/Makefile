@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 BINARY   := gpu-metrics-collector
 
 .PHONY: build test lint clean

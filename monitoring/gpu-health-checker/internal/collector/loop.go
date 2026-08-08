@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package collector implements the long-running DCGM sample collection daemon.
 // It reads DCGM field values and writes them to a SQLite database.
 package collector

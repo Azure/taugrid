@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kueueapi holds the Kueue API JSON shapes and GPU quota accounting
 // shared by the CLI's queue validation path and the portal's queue snapshot
 // path. Both decode the same ClusterQueue/LocalQueue/ResourceFlavor documents
@@ -337,8 +340,9 @@ func SelectorValues(m map[string]string) []string {
 
 type ResourceFlavor struct {
 	Metadata struct {
-		Name   string            `json:"name"`
-		Labels map[string]string `json:"labels"`
+		Name        string            `json:"name"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeLabels   map[string]string `json:"nodeLabels"`

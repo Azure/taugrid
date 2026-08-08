@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -166,6 +169,7 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o.checkpointArtifact = c.Storage.Checkpoint
 	o.volumeSpecs = append([]string{}, c.Storage.Volumes...)
 	o.mountSpecs = append([]string{}, c.Storage.Mounts...)
+	o.imageAssets = append([]runconfig.ImageAsset{}, c.Storage.ImageAssets...)
 
 	if c.Compute.Workers != nil {
 		o.workers = *c.Compute.Workers

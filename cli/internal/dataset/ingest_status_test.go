@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package dataset
 
 // Tests for ingest_status.go and ingest_registry.go.

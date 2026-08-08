@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package cli
 
 import (
@@ -45,6 +48,7 @@ func newRunListCmd() *cobra.Command {
 		kustoCluster      string
 		kustoWorkspaceID  string
 		historyLimit      int
+		includeExternal   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -84,9 +88,10 @@ Examples:
 				})
 			}
 			snap, err := runs.Board(cmd.Context(), runListReader{raw: r}, runs.Options{
-				Namespace: ns,
-				Queue:     queue,
-				History:   history,
+				Namespace:       ns,
+				Queue:           queue,
+				IncludeExternal: includeExternal,
+				History:         history,
 				HistoryScope: runs.HistoryScope{
 					Table:       kustoTable,
 					Cluster:     kustoCluster,
@@ -114,6 +119,7 @@ Examples:
 	cmd.Flags().StringVar(&kustoCluster, "kusto-cluster", "", "cluster identifier required when querying durable run history")
 	cmd.Flags().StringVar(&kustoWorkspaceID, "kusto-workspace-id", "", "optional durable workspace ID filter")
 	cmd.Flags().IntVar(&historyLimit, "history-limit", 200, "maximum durable history rows to merge")
+	cmd.Flags().BoolVar(&includeExternal, "include-external", false, "include non-Tau Jobs and RayJobs in the namespace")
 	return cmd
 }
 
@@ -135,6 +141,20 @@ func writeRunList(out, errOut io.Writer, namespace, output string, snap runs.Sna
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	defer tw.Flush()
+	showSource := false
+	for _, run := range snap.Runs {
+		if run.Source != "" {
+			showSource = true
+			break
+		}
+	}
+	if showSource {
+		fmt.Fprintln(tw, "NAME\tKIND\tSTATUS\tAGE\tSOURCE")
+		for _, run := range snap.Runs {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", run.Name, run.Kind, run.Status, run.Age, run.Source)
+		}
+		return nil
+	}
 	fmt.Fprintln(tw, "NAME\tKIND\tSTATUS\tAGE")
 	for _, run := range snap.Runs {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", run.Name, run.Kind, run.Status, run.Age)

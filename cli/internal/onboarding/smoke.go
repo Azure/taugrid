@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package onboarding implements Tau's bounded zero-to-first-job smoke.
 package onboarding
 

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Command tau is the Kubernetes-native AI runtime CLI.
 //
 // The public documentation defines the command and behavior contracts. The

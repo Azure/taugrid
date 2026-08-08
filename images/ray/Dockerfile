@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 ARG PYTHON_VERSION
 
 # --- Build GNU Wget 1.x from source ---

@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Researcher-facing train/eval workload decorators for Tau."""
 
 from __future__ import annotations
@@ -9,7 +12,6 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import tempfile
 import warnings
 from dataclasses import dataclass, field
@@ -963,7 +965,7 @@ class _TrainHandle:
             )
         if lane == "eval":
             # @tau.train is for training shapes; @tau.eval is its own
-            # decorator with the eval Kueue queue + 1-GPU-head + CPU-workers
+            # decorator with the eval Kueue queue + GPU-actor + CPU-workers
             # topology. Allowing lane="eval" here would silently land a
             # multi-GPU train on the eval queue (wrong priority class,
             # wrong shape). The Go validator would catch it on submit, but
@@ -1485,7 +1487,7 @@ class _EvalHandle:
             raise ValueError(
                 "tau-py: @tau.eval cpu_workers must be >= 1 (got "
                 + str(cpu_workers)
-                + "); the eval shape is 1 GPU head + N CPU workers, "
+                + "); the eval shape is a system head + 1 GPU actor worker + N CPU workers, "
                 "and N=0 makes no sense (use @tau.train instead)"
             )
         if gpus < 1:
@@ -1797,8 +1799,8 @@ def eval(
 ) -> Callable[[Callable[[Ctx], Any]], _EvalHandle]:
     """Decorator: register a function as a Tau eval entrypoint.
 
-    Eval is a separate workload kind from train: 1 GPU head pod (holds a
-    Ray actor) + ``cpu_workers`` CPU-only worker pods (run ``ray.remote``
+    Eval is a separate workload kind from train: a CPU-only system head,
+    1 GPU worker (holds a Ray actor), and ``cpu_workers`` CPU-only worker pods (run ``ray.remote``
     fanout tasks). Use this for the "score N initial conditions against a
     trained checkpoint" pattern where most of the eval work is CPU-bound
     (loading data, post-processing) but you need at least one GPU for

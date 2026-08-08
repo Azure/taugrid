@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package cost builds the portal's Cost board.
 //
 // The board's spine is GPU-hours by namespace: from GpuHealth() gpu_utilization

@@ -34,6 +34,49 @@ Two things are never proof of training progress by themselves:
 - A `Running` pod phase (layer 5) means containers started, not that the
   model or data process is making useful progress (layer 7).
 
+For current GPU runtime evidence, add `--run-profile`:
+
+```bash
+tau run status <run-name> --run-profile
+```
+
+When NVIDIA `dcgm-exporter` is installed with its Kubernetes pod-resource
+labels, the run profile reads the exporter through the Kubernetes API and
+reports:
+
+- `gpu_allocation`: DRA `ResourceClaim` allocation identity, when the run uses
+  DRA.
+- `gpu_devices`: the matching workload pod/container, GPU index, and GPU UUID.
+- `gpu_utilization`: current average and maximum
+  `DCGM_FI_DEV_GPU_UTIL`.
+- `gpu_memory`: current average and maximum `DCGM_FI_DEV_FB_USED`, converted
+  from MiB to GiB.
+- `gpu_activity`: `active` when matching device utilization is above zero,
+  `idle now` when utilization is zero but framebuffer use remains observed, or
+  `idle` when both are zero. This is an instantaneous device-level signal, not
+  proof of useful model progress.
+- `cuda_compute_process`: explicitly unavailable because dcgm-exporter's
+  supported scalar metrics do not expose compute PIDs or CUDA contexts. Do not
+  infer a process/context from utilization alone.
+
+The command does not exec into a workload or system pod and does not require
+workload instrumentation. It performs at most two targeted discovery requests
+(the official dcgm-exporter label and Tau's GPU-monitoring label), then at most
+one current metrics request per distinct workload node for each profile
+refresh. Tau's GPU-monitoring DaemonSet proxies its existing node-local DCGM
+endpoint; it does not start another collector. `--watch --run-profile` repeats
+that bounded snapshot at the selected watch interval.
+
+An active run shows observed values only when samples match both its namespace
+and pod names. An allocated-but-idle run shows `0%` as a real observation.
+A completed run keeps any allocation identity still present in Kubernetes but
+reports live GPU telemetry unavailable; missing samples are never translated
+to zero. Missing exporter pods, Kubernetes enrichment, pod-proxy RBAC, or
+required metrics are also reported as unavailable. Listing exporter pods
+requires cluster-wide pod read access, and reading metrics requires the
+`pods/proxy` subresource; base `tau run status` output still works when those
+permissions are absent.
+
 ## At a glance
 
 | # | Layer | Primary command | Owner if it fails |
@@ -314,6 +357,19 @@ show durable
 summaries, and artifacts -- that outlive the pod. `tau run get <run-name>`
 fetches a specific durable result artifact (`--artifact NAME`) when the run's
 config declared a `storage.output` path.
+
+After KubeRay deletes a terminal RayJob's head pod, read the driver output from
+the central log offload by supplying the explicit ADX identity:
+
+```bash
+tau run logs <run-name> \
+  --kusto-cluster <Logs.ContainerLogs Cluster value> \
+  --kusto-endpoint <adx-endpoint> \
+  --kusto-database <logs-database>
+```
+
+Tau requires the exact `Cluster` value instead of guessing from the kube
+context, whose name is not a stable observability identity.
 
 **What success proves:** The driver log shows expected progress (loss
 decreasing, steps advancing, checkpoints written), and that progress is

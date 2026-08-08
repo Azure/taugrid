@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package main
 
 import (
@@ -9,7 +12,7 @@ import (
 
 func TestValidateCapacityAcceptsBorrowingQueueWithinNominalCapacity(t *testing.T) {
 	capacity := writeTempFile(t, "capacity.yaml", `
-apiVersion: ai-runtime.aks/v1alpha1
+apiVersion: tau.azure.com/v1alpha1
 kind: KueueCapacityInventory
 metadata:
   name: test
@@ -70,7 +73,7 @@ spec:
 
 func TestValidateCapacityRejectsNominalQuotaAboveCapacity(t *testing.T) {
 	capacity := writeTempFile(t, "capacity.yaml", `
-apiVersion: ai-runtime.aks/v1alpha1
+apiVersion: tau.azure.com/v1alpha1
 kind: KueueCapacityInventory
 metadata:
   name: test
@@ -127,7 +130,7 @@ spec:
 
 func TestValidateCapacityRejectsMissingCapacityEntry(t *testing.T) {
 	capacity := writeTempFile(t, "capacity.yaml", `
-apiVersion: ai-runtime.aks/v1alpha1
+apiVersion: tau.azure.com/v1alpha1
 kind: KueueCapacityInventory
 metadata:
   name: test

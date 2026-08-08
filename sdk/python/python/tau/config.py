@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Lightweight project-owned config helpers for tau-py."""
 
 from __future__ import annotations

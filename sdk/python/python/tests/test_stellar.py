@@ -1,9 +1,13 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -641,7 +645,9 @@ def test_find_portal_binary_prefers_taugrid_portal(tmp_path, monkeypatch):
 
     monkeypatch.delenv("TAUGRID_PORTAL_BINARY", raising=False)
     monkeypatch.delenv("TAU_BINARY", raising=False)
-    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv(
+        "PATH", str(bindir) + os.pathsep + str(Path(sys.executable).parent)
+    )
 
     assert _find_portal_binary() == str(portal)
 
@@ -675,7 +681,9 @@ def test_find_portal_binary_falls_back_to_pre_split_tau(tmp_path, monkeypatch):
 
     monkeypatch.delenv("TAUGRID_PORTAL_BINARY", raising=False)
     monkeypatch.delenv("TAU_BINARY", raising=False)
-    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv(
+        "PATH", str(bindir) + os.pathsep + str(Path(sys.executable).parent)
+    )
 
     with pytest.warns(DeprecationWarning):
         assert _find_portal_binary() == str(legacy)
@@ -692,7 +700,9 @@ def test_find_portal_binary_rejects_post_split_tau(tmp_path, monkeypatch):
 
     monkeypatch.delenv("TAUGRID_PORTAL_BINARY", raising=False)
     monkeypatch.delenv("TAU_BINARY", raising=False)
-    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv(
+        "PATH", str(bindir) + os.pathsep + str(Path(sys.executable).parent)
+    )
 
     with pytest.raises(RuntimeError, match="taugrid-portal"):
         _find_portal_binary()

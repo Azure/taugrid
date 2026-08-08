@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kustoquery is the portal's generic Kusto access seam for the boards
 // that read the Metrics ADX database (Cluster Health, Cost).
 //
@@ -18,7 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
+	"io"
 	"strconv"
 	"strings"
 
@@ -92,16 +95,14 @@ func (c Client) Query(ctx context.Context, kql string) ([]Row, error) {
 	endpoint := firstNonEmpty(c.Endpoint, expkusto.DefaultEndpoint)
 	database := firstNonEmpty(c.Database, expkusto.DefaultDatabase)
 	args, queryInArgs := expandArgs(c.Args, endpoint, database, kql)
-	cmd := exec.CommandContext(ctx, c.Command, args...)
+	var stdin io.Reader
 	if !queryInArgs {
-		cmd.Stdin = strings.NewReader(kql)
+		stdin = strings.NewReader(kql)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, stderr, err := RunCommand(ctx, c.Command, args, stdin)
 	if err != nil {
-		if detail := strings.TrimSpace(stderr.String()); detail != "" {
-			return nil, fmt.Errorf("execute kusto query command: %w: %s", err, detail)
+		if stderr != "" {
+			return nil, fmt.Errorf("execute kusto query command: %w: %s", err, stderr)
 		}
 		return nil, fmt.Errorf("execute kusto query command: %w", err)
 	}
