@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -59,6 +61,7 @@ Examples:
 			opts := statusRunOptions{
 				Namespace:       ns,
 				KubeContext:     resolvedContext,
+				Kubeconfig:      activeKubeconfigPath(),
 				RunProfile:      runProfile,
 				Watch:           watch,
 				Interval:        watchInterval,
@@ -77,9 +80,18 @@ Examples:
 	return cmd
 }
 
+func activeKubeconfigPath() string {
+	paths := filepath.SplitList(os.Getenv("KUBECONFIG"))
+	if len(paths) != 1 {
+		return ""
+	}
+	return strings.TrimSpace(paths[0])
+}
+
 type statusRunOptions struct {
 	Namespace       string
 	KubeContext     string
+	Kubeconfig      string
 	Watch           bool
 	Interval        time.Duration
 	MaxIterations   int
@@ -99,14 +111,14 @@ func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) er
 	if opts.Watch {
 		return watchStatusCommand(cmd, opts, name)
 	}
-	r := kube.New(opts.KubeContext)
+	r := kube.NewWithKubeconfig(opts.KubeContext, opts.Kubeconfig)
 	snap, err := status.Fetch(cmd.Context(), r, opts.Namespace, name)
 	if err != nil {
 		return err
 	}
 	writeStatusSnapshot(cmd.OutOrStdout(), snap, opts.RunProfile)
 	if opts.DiagnosticHints {
-		fmt.Fprint(cmd.OutOrStdout(), renderKubectlDiagnosticHints(opts.KubeContext, opts.Namespace, name, snap))
+		fmt.Fprint(cmd.OutOrStdout(), renderKubectlDiagnosticHints(opts.KubeContext, opts.Kubeconfig, opts.Namespace, name, snap))
 	}
 	return nil
 }
@@ -165,7 +177,7 @@ func writeStatusSnapshot(w io.Writer, snap status.Snapshot, runProfile bool) {
 	}
 }
 
-func renderKubectlDiagnosticHints(kubeContext, namespace, name string, snap status.Snapshot) string {
+func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) string {
 	if snap.JobFound && snap.RayJob.Found {
 		// Status gives a same-name batch Job precedence. The fetched pod set can
 		// contain both Job and Ray pods, so use the Job selector rather than
@@ -175,6 +187,9 @@ func renderKubectlDiagnosticHints(kubeContext, namespace, name string, snap stat
 	base := []string{"kubectl"}
 	if strings.TrimSpace(kubeContext) != "" {
 		base = append(base, "--context", kubeContext)
+	}
+	if strings.TrimSpace(kubeconfig) != "" {
+		base = append(base, "--kubeconfig", kubeconfig)
 	}
 	base = append(base, "-n", namespace)
 	selector := diagnosticPodSelector(name, snap)

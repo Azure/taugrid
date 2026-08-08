@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,8 +26,19 @@ func TestRunStatusRegistersDiagnosticHintsFlag(t *testing.T) {
 	}
 }
 
+func TestActiveKubeconfigPathRequiresSingleResolvedPath(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/tmp/resolved-kubeconfig")
+	if got := activeKubeconfigPath(); got != "/tmp/resolved-kubeconfig" {
+		t.Fatalf("active kubeconfig = %q", got)
+	}
+	t.Setenv("KUBECONFIG", strings.Join([]string{"/tmp/first", "/tmp/second"}, string(os.PathListSeparator)))
+	if got := activeKubeconfigPath(); got != "" {
+		t.Fatalf("multi-file kubeconfig must not become --kubeconfig: %q", got)
+	}
+}
+
 func TestRenderKubectlDiagnosticHintsUsesResolvedPodAndContainer(t *testing.T) {
-	got := renderKubectlDiagnosticHints("research'admin", "tau-default", "external-batch-job", status.Snapshot{
+	got := renderKubectlDiagnosticHints("research'admin", "/tmp/research kube'config", "tau-default", "external-batch-job", status.Snapshot{
 		Pods: []status.Pod{{
 			Name: "external-batch-pod",
 			Containers: []status.Container{{
@@ -36,6 +48,7 @@ func TestRenderKubectlDiagnosticHintsUsesResolvedPodAndContainer(t *testing.T) {
 	})
 	for _, want := range []string{
 		`'--context' 'research'"'"'admin'`,
+		`'--kubeconfig' '/tmp/research kube'"'"'config'`,
 		`'top' 'pod' 'external-batch-pod' '--containers'`,
 		`'logs' 'external-batch-pod' '-c' 'trainer' '--previous' '--timestamps=true'`,
 		`'exec' '-it' 'external-batch-pod' '-c' 'trainer' '--' '/bin/sh'`,
@@ -47,7 +60,7 @@ func TestRenderKubectlDiagnosticHintsUsesResolvedPodAndContainer(t *testing.T) {
 }
 
 func TestRenderKubectlDiagnosticHintsUsesRayPodNamesAndCurrentLogs(t *testing.T) {
-	got := renderKubectlDiagnosticHints("", "ray", "train", status.Snapshot{
+	got := renderKubectlDiagnosticHints("", "", "ray", "train", status.Snapshot{
 		RayJob: status.RayJob{Found: true, RayClusterName: "train-cluster"},
 		Pods: []status.Pod{{
 			Name:       "train-worker",
@@ -70,7 +83,7 @@ func TestRenderKubectlDiagnosticHintsUsesRayPodNamesAndCurrentLogs(t *testing.T)
 func TestRenderKubectlDiagnosticHintsPrefersCurrentFailureOverPreviousAttempt(t *testing.T) {
 	exitCode := int32(1)
 	lastExitCode := int32(2)
-	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{
 		Pods: []status.Pod{{
 			Name: "external-batch-pod",
 			Containers: []status.Container{{
@@ -91,7 +104,7 @@ func TestRenderKubectlDiagnosticHintsPrefersCurrentFailureOverPreviousAttempt(t 
 func TestRenderKubectlDiagnosticHintsUsesCurrentLogsForRestartedFinalFailure(t *testing.T) {
 	exitCode := int32(1)
 	lastExitCode := int32(2)
-	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{
 		Pods: []status.Pod{{
 			Name: "external-batch-pod",
 			Containers: []status.Container{{
@@ -109,7 +122,7 @@ func TestRenderKubectlDiagnosticHintsUsesCurrentLogsForRestartedFinalFailure(t *
 
 func TestRenderKubectlDiagnosticHintsOmitsExecForTerminalContainer(t *testing.T) {
 	exitCode := int32(1)
-	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{
 		Pods: []status.Pod{{
 			Name: "external-batch-pod",
 			Containers: []status.Container{{
@@ -126,7 +139,7 @@ func TestRenderKubectlDiagnosticHintsOmitsExecForTerminalContainer(t *testing.T)
 }
 
 func TestRenderKubectlDiagnosticHintsWithoutPodsStaysSelectorBased(t *testing.T) {
-	got := renderKubectlDiagnosticHints("", "tau-default", "external-batch-job", status.Snapshot{})
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{})
 	if !strings.Contains(got, "'logs' '-l' 'job-name=external-batch-job' '--all-containers=true'") {
 		t.Fatalf("hints = %q", got)
 	}
@@ -136,7 +149,7 @@ func TestRenderKubectlDiagnosticHintsWithoutPodsStaysSelectorBased(t *testing.T)
 }
 
 func TestRenderKubectlDiagnosticHintsUsesJobPrecedenceForSameNameCollision(t *testing.T) {
-	got := renderKubectlDiagnosticHints("", "tau-default", "shared-name", status.Snapshot{
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "shared-name", status.Snapshot{
 		JobFound: true,
 		RayJob:   status.RayJob{Found: true, RayClusterName: "shared-name-cluster"},
 		Pods: []status.Pod{{

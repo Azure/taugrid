@@ -113,6 +113,14 @@ func TestImageAssetsFailClosed(t *testing.T) {
 			want: "complete lowercase OCI image reference",
 		},
 		{
+			name: "implicit default registry",
+			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
+				Name: "reference", Image: "reference-assets@sha256:" + digest,
+				SourcePath: "/opt/reference", MountPath: "/opt/reference",
+			}}}},
+			want: "complete lowercase OCI image reference",
+		},
+		{
 			name: "invalid image name",
 			cfg: Config{Storage: Storage{ImageAssets: []ImageAsset{{
 				Name: "reference", Image: "https://example.azurecr.io/reference-assets@sha256:" + digest,

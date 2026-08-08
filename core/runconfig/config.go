@@ -413,7 +413,7 @@ func (s Storage) ValidateImageAssets() error {
 		names[asset.Name] = struct{}{}
 		named, err := reference.ParseNormalizedNamed(asset.Image)
 		digested, pinned := named.(reference.Digested)
-		if err != nil || !pinned || asset.Image != strings.ToLower(asset.Image) || !imageAssetDigestRE.MatchString(digested.Digest().String()) {
+		if err != nil || !pinned || named.String() != asset.Image || asset.Image != strings.ToLower(asset.Image) || !imageAssetDigestRE.MatchString(digested.Digest().String()) {
 			return fmt.Errorf("%s.image must be a complete lowercase OCI image reference pinned by an @sha256:<64 lowercase hex> digest", field)
 		}
 		if err := validateImageAssetPath(field+".source_path", asset.SourcePath); err != nil {
