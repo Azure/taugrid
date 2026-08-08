@@ -1,0 +1,305 @@
+name: tau-aks-e2e_$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-24.04
+
+variables:
+  azureServiceConnection: taugrid
+  azureLocation: westus3
+  goVersion: 1.26.5
+  helmVersion: 3.18.6
+  kubectlVersion: 1.36.3
+  nodeCount: 3
+  nodeVmSize: Standard_D4_v5
+  resourceGroup: taugrid-e2e-$(Build.BuildId)-rg
+  clusterName: taugrid-e2e-$(Build.BuildId)
+  kubeContext: taugrid-e2e-$(Build.BuildId)-admin
+  controllerImageTag: ado-$(Build.BuildId)
+  kubeconfigPath: $(Pipeline.Workspace)/kubeconfig
+  workspaceName: taugrid-default
+
+stages:
+  - stage: live_aks_e2e
+    displayName: Live AKS E2E
+    lockBehavior: sequential
+    jobs:
+      - deployment: tau_aks_e2e
+        displayName: Tau core and CLI on ephemeral AKS
+        environment: taugrid-e2e
+        timeoutInMinutes: 90
+        cancelTimeoutInMinutes: 20
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: none
+
+                - checkout: self
+                  clean: true
+                  fetchDepth: 1
+
+                - task: GoTool@0
+                  displayName: Install Go $(goVersion)
+                  inputs:
+                    version: $(goVersion)
+
+                - task: KubectlInstaller@0
+                  displayName: Install kubectl $(kubectlVersion)
+                  inputs:
+                    kubectlVersion: $(kubectlVersion)
+
+                - task: HelmInstaller@1
+                  displayName: Install Helm $(helmVersion)
+                  inputs:
+                    helmVersionToInstall: $(helmVersion)
+
+                - bash: |
+                    set -euo pipefail
+
+                    suffix="$(
+                      printf '%s' "${COLLECTION_ID}:${PROJECT_ID}:${BUILD_ID}" \
+                        | sha256sum \
+                        | cut -c1-16
+                    )"
+                    echo "##vso[task.setvariable variable=acrName]tge2e${suffix}"
+                  displayName: Generate globally unique resource names
+                  env:
+                    BUILD_ID: $(Build.BuildId)
+                    COLLECTION_ID: $(System.CollectionId)
+                    PROJECT_ID: $(System.TeamProjectId)
+
+                - bash: |
+                    set -euo pipefail
+                    make -C cli build
+                    echo "##vso[task.prependpath]$(Build.SourcesDirectory)/cli/bin"
+                    tau version
+                  displayName: Build Tau CLI
+
+                - task: AzureCLI@2
+                  displayName: Provision ACR and CPU AKS
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    visibleAzLogin: false
+                    inlineScript: |
+                      set -euo pipefail
+
+                      az group create \
+                        --name "${RESOURCE_GROUP}" \
+                        --location "${LOCATION}" \
+                        --tags \
+                          taugrid-e2e=true \
+                          ado-build-id="${BUILD_ID}" \
+                        --output none
+
+                      az acr create \
+                        --resource-group "${RESOURCE_GROUP}" \
+                        --name "${ACR_NAME}" \
+                        --location "${LOCATION}" \
+                        --sku Basic \
+                        --admin-enabled false \
+                        --tags \
+                          taugrid-e2e=true \
+                          ado-build-id="${BUILD_ID}" \
+                        --output none
+
+                      build_context="$(Agent.TempDirectory)/tau-core-image"
+                      mkdir -p "${build_context}"
+                      cp -R controllers/tau-core/. "${build_context}/"
+                      cp images/tau-core-controller/Dockerfile "${build_context}/Dockerfile"
+                      (
+                        cd "${build_context}"
+                        az acr build \
+                          --registry "${ACR_NAME}" \
+                          --image "tau-core-controller:${CONTROLLER_IMAGE_TAG}" \
+                          --file Dockerfile \
+                          .
+                      )
+
+                      az aks create \
+                        --resource-group "${RESOURCE_GROUP}" \
+                        --name "${CLUSTER_NAME}" \
+                        --location "${LOCATION}" \
+                        --node-count "${NODE_COUNT}" \
+                        --node-vm-size "${NODE_VM_SIZE}" \
+                        --tier free \
+                        --attach-acr "${ACR_NAME}" \
+                        --generate-ssh-keys \
+                        --tags \
+                          taugrid-e2e=true \
+                          ado-build-id="${BUILD_ID}" \
+                        --output none
+
+                      mkdir -p "$(dirname "${KUBECONFIG}")"
+                      az aks get-credentials \
+                        --resource-group "${RESOURCE_GROUP}" \
+                        --name "${CLUSTER_NAME}" \
+                        --admin \
+                        --file "${KUBECONFIG}" \
+                        --overwrite-existing
+                      kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
+                      kubectl --context "${KUBE_CONTEXT}" wait \
+                        --for=condition=Ready \
+                        nodes \
+                        --all \
+                        --timeout=10m
+                  env:
+                    ACR_NAME: $(acrName)
+                    BUILD_ID: $(Build.BuildId)
+                    CLUSTER_NAME: $(clusterName)
+                    CONTROLLER_IMAGE_TAG: $(controllerImageTag)
+                    KUBECONFIG: $(kubeconfigPath)
+                    KUBE_CONTEXT: $(kubeContext)
+                    LOCATION: $(azureLocation)
+                    NODE_COUNT: $(nodeCount)
+                    NODE_VM_SIZE: $(nodeVmSize)
+                    RESOURCE_GROUP: $(resourceGroup)
+
+                - bash: |
+                    set -euo pipefail
+
+                    values_file="$(Agent.TempDirectory)/tau-aks-e2e-values.yaml"
+                    cat >"${values_file}" <<EOF
+                    tau-core-controller:
+                      image:
+                        repository: ${ACR_NAME}.azurecr.io/tau-core-controller
+                        digest: ""
+                        tag: ${CONTROLLER_IMAGE_TAG}
+                        pullPolicy: IfNotPresent
+                    EOF
+
+                    tau cluster install \
+                      --chart charts/taugrid \
+                      --context "${KUBE_CONTEXT}" \
+                      --values "${values_file}" \
+                      --wait=false \
+                      --atomic=false
+                    kubectl --context "${KUBE_CONTEXT}" \
+                      --namespace tau-platform \
+                      rollout status deployment/tau-core-controller \
+                      --timeout=5m
+                    tau cluster validate installation --context "${KUBE_CONTEXT}"
+
+                    deployed_image="$(
+                      kubectl --context "${KUBE_CONTEXT}" \
+                        --namespace tau-platform \
+                        get deployment/tau-core-controller \
+                        -o jsonpath='{.spec.template.spec.containers[0].image}'
+                    )"
+                    expected_image="${ACR_NAME}.azurecr.io/tau-core-controller:${CONTROLLER_IMAGE_TAG}"
+                    if [[ "${deployed_image}" != "${expected_image}" ]]; then
+                      echo "deployed controller image ${deployed_image}, expected ${expected_image}" >&2
+                      exit 1
+                    fi
+                  displayName: Install and validate Tau core
+                  env:
+                    ACR_NAME: $(acrName)
+                    CONTROLLER_IMAGE_TAG: $(controllerImageTag)
+                    KUBE_CONTEXT: $(kubeContext)
+                    KUBECONFIG: $(kubeconfigPath)
+
+                - bash: |
+                    set -euo pipefail
+
+                    tau workspace create "${WORKSPACE_NAME}" \
+                      --principal-name ado-taugrid-e2e \
+                      --context "${KUBE_CONTEXT}" \
+                      --apply
+                    kubectl --context "${KUBE_CONTEXT}" \
+                      --namespace tau-platform \
+                      wait \
+                      --for=jsonpath='{.status.phase}'=Ready \
+                      "workspace.tau.azure.com/${WORKSPACE_NAME}" \
+                      --timeout=5m
+                    tau workspace check "${WORKSPACE_NAME}" \
+                      --context "${KUBE_CONTEXT}"
+
+                    smoke_output="$(tau run smoke --context "${KUBE_CONTEXT}")"
+                    printf '%s\n' "${smoke_output}"
+                    grep -q '^Phase: Succeeded$' <<<"${smoke_output}"
+                    grep -q '^Platform reachable:' <<<"${smoke_output}"
+
+                    smoke_run="$(awk '/^Run: / {print $2; exit}' <<<"${smoke_output}")"
+                    if [[ -z "${smoke_run}" ]]; then
+                      echo "Tau smoke did not report a run ID" >&2
+                      exit 1
+                    fi
+                    tau run status "${smoke_run}" --context "${KUBE_CONTEXT}"
+                    tau run logs "${smoke_run}" --context "${KUBE_CONTEXT}"
+                  displayName: Run Tau CLI AKS smoke
+                  env:
+                    KUBE_CONTEXT: $(kubeContext)
+                    KUBECONFIG: $(kubeconfigPath)
+                    WORKSPACE_NAME: $(workspaceName)
+
+                - bash: |
+                    set +e
+
+                    diagnostics="$(Agent.TempDirectory)/tau-aks-e2e-diagnostics"
+                    mkdir -p "${diagnostics}"
+                    kubectl --request-timeout=15s get nodes -o wide \
+                      | tee "${diagnostics}/nodes.txt"
+                    kubectl --request-timeout=15s get pods -A -o wide \
+                      | tee "${diagnostics}/pods.txt"
+                    kubectl --request-timeout=15s get events -A --sort-by=.lastTimestamp \
+                      | tee "${diagnostics}/events.txt"
+                    kubectl --request-timeout=15s --namespace tau-platform logs \
+                      deployment/tau-core-controller \
+                      --all-containers=true \
+                      --tail=500 \
+                      >"${diagnostics}/tau-core-controller.log" 2>&1
+                    kubectl --request-timeout=15s cluster-info dump \
+                      --output-directory="${diagnostics}/cluster-dump"
+                  displayName: Collect failure diagnostics
+                  condition: failed()
+                  timeoutInMinutes: 5
+                  env:
+                    KUBECONFIG: $(kubeconfigPath)
+
+                - task: PublishPipelineArtifact@1
+                  displayName: Publish failure diagnostics
+                  condition: failed()
+                  inputs:
+                    targetPath: $(Agent.TempDirectory)/tau-aks-e2e-diagnostics
+                    artifact: tau-aks-e2e-diagnostics-$(Build.BuildId)
+                    publishLocation: pipeline
+
+                - task: AzureCLI@2
+                  displayName: Delete ephemeral Azure resources
+                  condition: always()
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    visibleAzLogin: false
+                    inlineScript: |
+                      set -euo pipefail
+
+                      if [[ "$(az group exists --name "${RESOURCE_GROUP}")" != "true" ]]; then
+                        echo "Resource group ${RESOURCE_GROUP} is already absent"
+                        exit 0
+                      fi
+
+                      az group delete \
+                        --name "${RESOURCE_GROUP}" \
+                        --yes \
+                        --no-wait
+
+                      deadline=$((SECONDS + 900))
+                      while (( SECONDS < deadline )); do
+                        if [[ "$(az group exists --name "${RESOURCE_GROUP}")" != "true" ]]; then
+                          echo "Deleted resource group ${RESOURCE_GROUP}"
+                          exit 0
+                        fi
+                        echo "Waiting for resource group ${RESOURCE_GROUP} deletion"
+                        sleep 15
+                      done
+
+                      echo "Timed out waiting for resource group ${RESOURCE_GROUP} deletion" >&2
+                      exit 1
+                  env:
+                    RESOURCE_GROUP: $(resourceGroup)
