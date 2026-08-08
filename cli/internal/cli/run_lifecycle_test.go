@@ -19,6 +19,69 @@ func TestRunStatusRegistersRunProfileFlag(t *testing.T) {
 	}
 }
 
+func TestRunStatusRegistersOutputFlag(t *testing.T) {
+	flag := newRunStatusCmd().Flags().Lookup("output")
+	if flag == nil {
+		t.Fatal("tau run status must support --output")
+	}
+	if flag.DefValue != "table" {
+		t.Fatalf("--output default = %q, want table", flag.DefValue)
+	}
+}
+
+func TestWriteStatusSnapshotJSON(t *testing.T) {
+	var buf bytes.Buffer
+	snapshot := status.Snapshot{
+		Name: "train", Namespace: "tau", JobFound: true, JobActive: 1,
+		Observations: status.Observations{
+			Job:       status.ResourceObservation{State: status.ObservationObserved},
+			RayJob:    status.ResourceObservation{State: status.ObservationNotFound},
+			Workloads: status.ResourceObservation{State: status.ObservationObserved},
+			Pods:      status.ResourceObservation{State: status.ObservationObserved},
+		},
+		Pods: []status.Pod{{
+			Name: "train-pod", Phase: "Running", Node: "h200-node-7", Ready: "1/1",
+			Containers: []status.Container{{Name: "main", State: "running", Ready: true}},
+		}},
+	}
+	if err := writeStatusSnapshot(&buf, snapshot, false, "json"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"schemaVersion": "v1alpha1"`,
+		`"state": "Running"`,
+		`"node": "h200-node-7"`,
+		`"restartCount": 0`,
+		`"exitCode": null`,
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("status JSON missing %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+func TestRunStatusRejectsJSONWatchAndProfileModes(t *testing.T) {
+	tests := []statusRunOptions{
+		{Output: "json", Watch: true},
+		{Output: "json", RunProfile: true},
+	}
+	for _, opts := range tests {
+		cmd := &cobra.Command{}
+		err := runStatusCommand(cmd, opts, "train")
+		if err == nil || !strings.Contains(err.Error(), "not supported") {
+			t.Fatalf("options %+v returned %v", opts, err)
+		}
+	}
+}
+
+func TestRunStatusRejectsUnknownOutput(t *testing.T) {
+	cmd := &cobra.Command{}
+	err := runStatusCommand(cmd, statusRunOptions{Output: "yaml"}, "train")
+	if err == nil || !strings.Contains(err.Error(), "--output must be one of: table, json") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunLifecycleQueriesRegisterWorkspaceFlag(t *testing.T) {
 	tests := map[string]func() *cobra.Command{
 		"status": newRunStatusCmd,

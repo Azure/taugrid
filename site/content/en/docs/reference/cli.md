@@ -137,7 +137,7 @@ subcommand** — `tau run train --dry-run=client` runs the `run` root with
 | `schema` | Print the JSON schema for the direct run config |
 | `explain-config` | Print the direct run config field reference |
 | `list` | List Tau-managed Jobs/RayJobs in a namespace |
-| `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
+| `status [job-name]` | Show admission, placement, pod/container state, restarts, and exits; `--watch` to poll or `-o json` for one machine-readable snapshot |
 | `logs <job-name>` | Stream Ray driver logs or the batch Job pod logs |
 | `get <name>` | Fetch durable run results and artifacts |
 | `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |
@@ -147,6 +147,21 @@ There is no `tau run retry` subcommand — automatic retry is driven entirely
 by the `resilience.*` fields in your run config. See
 [recovery](../../operations/recovery/) for the full retry and resume
 contract.
+
+`tau run status` is the normal inspection surface for both Jobs and RayJobs.
+The default table includes the Tau startup phases, Kueue Workload admission,
+MultiKueue worker placement when manager-visible, Job/RayJob conditions,
+pod-to-node placement, and one row per init/application container with
+readiness, restart count, current or last exit code, and reason. A failed
+container also marks the run `degraded` even before the workload controller
+publishes a terminal condition.
+
+Use `tau run status <name> -o json` for automation. The normalized document has
+`schemaVersion: v1alpha1`, a controller `state`, a separate `degraded` signal,
+startup `phases`, Job/RayJob summaries, Workloads, Pods, Containers, and
+per-resource `observations`. An observation distinguishes `notFound` from
+`unavailable`, so an RBAC denial is never reported as an absent run. JSON emits
+one snapshot; `--watch` and `--run-profile` are table-only.
 
 ## `tau serve`
 

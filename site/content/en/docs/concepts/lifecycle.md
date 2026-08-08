@@ -25,3 +25,11 @@ These states are not equivalent:
 
 Use the [layered troubleshooting guide](../../operations/troubleshooting/) to
 find the first failed transition.
+
+`tau run status <name>` is the Tau-owned view across those control planes. It
+keeps the controller state separate from container health: for example, a Job
+can still be `Running` while a sidecar makes the snapshot `degraded`. The pod
+and container rows retain node placement, readiness, restart count, and current
+or last exit code. For automation, `tau run status <name> -o json` returns the
+same normalized lifecycle with explicit `observed`, `notFound`, or `unavailable`
+read states instead of exposing raw Kubernetes objects.

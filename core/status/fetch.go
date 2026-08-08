@@ -69,14 +69,16 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	s := Snapshot{Name: name, Namespace: namespace}
 
 	// Job: -o json so we get conditions + status counts.
-	jobJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "job", name, "-o", "json"}, nil)
-	if err == nil {
+	jobJSON, jobErr := r.Raw(ctx, []string{"-n", namespace, "get", "job", name, "-o", "json"}, nil)
+	s.Observations.Job = observeObjectRead(jobErr, name, false, "job.batch", "jobs.batch")
+	if jobErr == nil {
 		s.JobFound = true
 		hydrateJob(&s, []byte(jobJSON))
 	}
 	// Whether Job exists or not, still try RayJob + Workloads + Pods.
-	rayJobJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "rayjob", name, "-o", "json"}, nil)
-	if err == nil {
+	rayJobJSON, rayJobErr := r.Raw(ctx, []string{"-n", namespace, "get", "rayjob", name, "-o", "json"}, nil)
+	s.Observations.RayJob = observeObjectRead(rayJobErr, name, true, "rayjob.ray.io", "rayjobs.ray.io")
+	if rayJobErr == nil {
 		hydrateRayJob(&s, []byte(rayJobJSON))
 	}
 
@@ -84,9 +86,10 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	// the Job's metadata.uid, AND we add tau.azure.com/job=<name> via
 	// the workload metadata/template labels. Either selector should work; we prefer
 	// our own label since it survives Job recreation.
-	wlJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
+	wlJSON, workloadErr := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
 		"-l", workloadmeta.LabelJob + "=" + name, "-o", "json"}, nil)
-	if err == nil {
+	s.Observations.Workloads = mergeObservation(s.Observations.Workloads, observeListRead(workloadErr))
+	if workloadErr == nil {
 		s.Workloads = hydrateWorkloads([]byte(wlJSON))
 	}
 	// Fall back to job-uid selector if our label found nothing.
@@ -95,6 +98,7 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 		if uid != "" {
 			wlJSON2, err2 := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
 				"-l", "kueue.x-k8s.io/job-uid=" + uid, "-o", "json"}, nil)
+			s.Observations.Workloads = mergeObservation(s.Observations.Workloads, observeListRead(err2))
 			if err2 == nil {
 				s.Workloads = hydrateWorkloads([]byte(wlJSON2))
 			}
@@ -104,6 +108,7 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	if len(s.Workloads) == 0 && rj.Found && rj.UID != "" {
 		wlJSON2, err2 := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
 			"-l", "kueue.x-k8s.io/job-uid=" + rj.UID, "-o", "json"}, nil)
+		s.Observations.Workloads = mergeObservation(s.Observations.Workloads, observeListRead(err2))
 		if err2 == nil {
 			s.Workloads = hydrateWorkloads([]byte(wlJSON2))
 		}
@@ -119,6 +124,7 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	for _, selector := range selectors {
 		podJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "pods",
 			"-l", selector, "-o", "json"}, nil)
+		s.Observations.Pods = mergeObservation(s.Observations.Pods, observeListRead(err))
 		if err == nil {
 			s.PodsObserved = true
 			s.Pods = mergePods(s.Pods, hydratePods([]byte(podJSON)))
@@ -129,6 +135,54 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	s.Events = fetchEvents(ctx, r, namespace, eventObjectNames(s))
 
 	return s, nil
+}
+
+func observeObjectRead(err error, name string, allowUnknownResource bool, resourceKinds ...string) ResourceObservation {
+	switch {
+	case err == nil:
+		return ResourceObservation{State: ObservationObserved}
+	case cleanupExactObjectNotFound(err, name, resourceKinds...):
+		return ResourceObservation{State: ObservationNotFound}
+	case allowUnknownResource && cleanupUnknownResourceError(err):
+		return ResourceObservation{State: ObservationUnavailable, Reason: "resource type is not installed"}
+	case statusForbiddenError(err):
+		return ResourceObservation{State: ObservationUnavailable, Reason: "access denied by Kubernetes RBAC"}
+	default:
+		return ResourceObservation{State: ObservationUnavailable, Reason: "Kubernetes query failed"}
+	}
+}
+
+func observeListRead(err error) ResourceObservation {
+	switch {
+	case err == nil:
+		return ResourceObservation{State: ObservationObserved}
+	case cleanupUnknownResourceError(err):
+		return ResourceObservation{State: ObservationUnavailable, Reason: "resource type is not installed"}
+	case statusForbiddenError(err):
+		return ResourceObservation{State: ObservationUnavailable, Reason: "access denied by Kubernetes RBAC"}
+	default:
+		return ResourceObservation{State: ObservationUnavailable, Reason: "Kubernetes query failed"}
+	}
+}
+
+func mergeObservation(current, next ResourceObservation) ResourceObservation {
+	if current.State == ObservationUnavailable || next.State == ObservationUnavailable {
+		if current.State == ObservationUnavailable {
+			return current
+		}
+		return next
+	}
+	if next.State != "" {
+		return next
+	}
+	return current
+}
+
+func statusForbiddenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "forbidden")
 }
 
 // FetchManagerCleanup populates the subset of Snapshot needed by manager-side
@@ -662,6 +716,7 @@ func hydratePods(data []byte) []Pod {
 			}
 		}
 		for _, cs := range initContainers {
+			restarts += cs.RestartCount
 			if reason == "" {
 				reason = cs.Reason
 			}

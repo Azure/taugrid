@@ -16,6 +16,13 @@ tau run status <run-name>
 phases top to bottom and stop at the first one that is not `done`. Then work
 through the layers below, in order, until you reach that phase:
 
+The pod and container tables are also authoritative for normal inspection:
+they show the selected node, readiness, restart counts, current or last
+termination exit code, and reason. `status -o json` exposes the same normalized
+facts to automation. If Tau reports an observation as `unavailable`, preserve
+that distinction -- it means the current identity could not read the resource,
+not that the resource is absent.
+
 1. Repository/connection resolution and cluster access -- optional offline
    `tau workspace connection inspect`, then a live `tau run` path.
 2. [TauWorkspace](../../concepts/glossary/#tauworkspace) readiness and

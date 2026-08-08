@@ -80,6 +80,14 @@ func podLifecyclePhases(s Snapshot) []Phase {
 		containerStartPhase(s),
 		readyPhase(s),
 	}
+	if len(s.Pods) == 0 && s.Observations.Pods.State == ObservationUnavailable {
+		for i := 1; i < len(phases); i++ {
+			phases[i].Status = phaseSkipped
+			phases[i].Detail = "pod status unavailable: " + observationReason(s.Observations.Pods)
+			phases[i].Hint = ""
+		}
+		return phases
+	}
 	rj := snapshotRayJob(s)
 	if rayJobStatusFailed(rj) && len(s.Pods) == 0 {
 		detail := "pod state unavailable after terminal RayJob failure"
@@ -304,6 +312,14 @@ func submittedPhase(s Snapshot) Phase {
 			StartedAt: rj.CreatedAt,
 		}
 	}
+	if detail := unavailableObjectReads(s); detail != "" {
+		return Phase{
+			Name:   "Submitted",
+			Status: phaseWarning,
+			Detail: "workload lookup unavailable: " + detail,
+			Hint:   "request read access for the workload kind or use a context with existing viewer permissions",
+		}
+	}
 	return Phase{
 		Name:   "Submitted",
 		Status: phasePending,
@@ -313,6 +329,14 @@ func submittedPhase(s Snapshot) Phase {
 
 func kueuePhase(s Snapshot) Phase {
 	if len(s.Workloads) == 0 {
+		if s.Observations.Workloads.State == ObservationUnavailable {
+			return Phase{
+				Name:   "Kueue admission",
+				Status: phaseWarning,
+				Detail: "workload status unavailable: " + observationReason(s.Observations.Workloads),
+				Hint:   "request get/list access to workloads.kueue.x-k8s.io",
+			}
+		}
 		rj := snapshotRayJob(s)
 		status := phasePending
 		detail := "waiting for Kueue Workload"
@@ -493,6 +517,14 @@ func activeRayCompute(pods []Pod) (int, []string) {
 
 func podSchedulingPhase(s Snapshot) Phase {
 	if len(s.Pods) == 0 {
+		if s.Observations.Pods.State == ObservationUnavailable {
+			return Phase{
+				Name:   "Pod scheduling",
+				Status: phaseWarning,
+				Detail: "pod status unavailable: " + observationReason(s.Observations.Pods),
+				Hint:   "request list access to pods in the run namespace",
+			}
+		}
 		return Phase{
 			Name:   "Pod scheduling",
 			Status: phasePending,

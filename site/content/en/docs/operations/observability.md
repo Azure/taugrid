@@ -10,8 +10,8 @@ Use each evidence plane for its intended scope:
 
 | Plane | Use |
 |---|---|
-| Tau status and logs | Immediate lifecycle of one submitted run |
-| Kubernetes events and pod state | Admission, scheduling, startup, and termination |
+| Tau status and logs | Immediate admission, scheduling, placement, pod/container, restart, exit, and log state for one submitted run |
+| Kubernetes objects and events | Operator-only raw escalation after Tau identifies an unavailable or deeper platform-owned layer |
 | Ray and GPU metrics | Runtime and hardware behavior |
 | Expstore and durable artifacts | Authoritative experiment, checkpoint, and recovery state |
 | adx-mon and ADX/Kusto | Optional hosted scalar and fleet analysis |
