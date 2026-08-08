@@ -106,6 +106,13 @@ pinned plugin or CI container. Cover default values and every public optional
 feature affected by the change. Public defaults must use anonymously accessible
 dependencies and immutable image versions or digests.
 
+Merges to `main` that change `charts/**` run the Azure DevOps chart publishing
+pipeline in `.pipelines/publish-helm-charts.yml`. It packages all TauGrid-owned
+charts and publishes new versions under
+`oci://mcr.microsoft.com/aks/ai-runtime/helm`. If a version already exists, the
+pipeline permits an identical package but fails before push when its content
+differs. Bump `version` in the chart's `Chart.yaml` for every content change.
+
 ## Documentation Site
 
 The site uses Hugo and Docsy. From `site/`, use its Makefile as the source of
