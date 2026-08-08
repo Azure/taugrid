@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 .PHONY: install install-optional install-from-git require-usable-python python-env-guidance vendor-snippet test clean help
 
 # Path to this tau-py directory (resolved at make-invocation time so any

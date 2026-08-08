@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package nodeutil builds the portal's node resource-utilization board.
 //
 // It is the CPU/memory sibling of internal/portal/cluster (which reads GPU DCGM

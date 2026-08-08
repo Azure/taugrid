@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """
 Image classification test for e2e validation.
 Adapted from aks-unbounded/ray/inference_job.py.

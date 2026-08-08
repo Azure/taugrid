@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 # Minimal local package so `train.py` can do `from tau import stellar` using
 # the real, unmodified `sdk/python/tau/stellar.py` SDK module (a byte-identical
 # copy) without pulling in the rest of the Tau Python SDK (`workloads.py`,

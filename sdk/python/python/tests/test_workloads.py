@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """tau-py unit tests. Stdlib + pytest only — no tau binary required."""
 
 from __future__ import annotations

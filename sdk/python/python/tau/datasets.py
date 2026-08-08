@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Dataset/example file path helpers for Tau workloads."""
 
 from __future__ import annotations

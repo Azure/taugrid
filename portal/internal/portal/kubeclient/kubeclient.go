@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kubeclient is the portal's only Kubernetes access path.
 //
 // Unlike the rest of the tau CLI (which shells out to kubectl via

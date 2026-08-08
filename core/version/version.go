@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package version exposes build metadata for the binaries that link it.
 //
 // Version, Commit, and Date are set at build time via -ldflags -X; see the

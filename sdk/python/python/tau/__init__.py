@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """tau: Python-first authoring SDK for the Tau Go CLI.
 
 Researchers write a Python file with a `@tau.train(...)`-decorated

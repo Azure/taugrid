@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package status fetches and renders the lifecycle of a tau-submitted job.
 //
 // The shape mirrors the earlier shell CLI's `status` output (Kueue

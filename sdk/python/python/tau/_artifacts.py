@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Shared artifact validation helpers for tau-py internals."""
 
 from __future__ import annotations

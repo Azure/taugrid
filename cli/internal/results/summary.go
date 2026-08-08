@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package results turns eval/train JSON artifacts into the small, stable
 // researcher-facing summary/dashboard shape used by Tau read commands.
 package results

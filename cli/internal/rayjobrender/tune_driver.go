@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package rayjobrender
 
 const tuneDriverScript = `import json, os, sys

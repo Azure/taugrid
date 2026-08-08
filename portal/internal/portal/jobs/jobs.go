@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package jobs builds the portal's Jobs/Queue board.
 //
 // It is the client-go analogue of queue.Fetch(): it reads the same three Kueue

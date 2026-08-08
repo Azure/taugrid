@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package metricsoffload renders the opt-in Stellar metrics sidecar.
 //
 // The sidecar argv below starts with "experiment offload metrics", which is a

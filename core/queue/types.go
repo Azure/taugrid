@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package queue builds a researcher-facing view of Kueue queue pressure.
 package queue
 

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package profile contains the internal render-time resource contract used by
 // Tau manifest builders. It intentionally does not load legacy profile catalogs.
 package profile

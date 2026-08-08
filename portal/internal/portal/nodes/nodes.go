@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package nodes builds the portal's Cluster Nodes board.
 //
 // Unlike the Cluster Health board (which reports per-GPU *runtime* metrics from

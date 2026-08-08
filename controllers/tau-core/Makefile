@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 BINARY := tau-core-controller
 
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
@@ -21,7 +24,7 @@ lint:
 	gofmt -l . | tee /dev/stderr | (! read)
 
 generate:
-	$(CONTROLLER_GEN) object paths=./api/...
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths=./api/...
 
 manifests: generate
 	$(CONTROLLER_GEN) crd paths=./api/... output:crd:artifacts:config=config/crd/bases

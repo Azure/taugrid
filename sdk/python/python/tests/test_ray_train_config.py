@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Tests for TAU_RAY_TRAIN_CONFIG_JSON consumption in the cluster wrapper."""
 
 import json

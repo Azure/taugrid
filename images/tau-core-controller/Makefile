@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 IMAGE := tau-core-controller
 TAG   ?= latest
 

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package runs builds the portal's Jobs board: the list of Tau-managed
 // workloads — batch/v1 Jobs and ray.io RayJobs — in a namespace.
 //

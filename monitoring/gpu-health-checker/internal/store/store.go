@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package store manages the SQLite database used for communication between
 // the collector daemon and reader processes.
 package store

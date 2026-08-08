@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package kueueapi holds the Kueue API JSON shapes and GPU quota accounting
 // shared by the CLI's queue validation path and the portal's queue snapshot
 // path. Both decode the same ClusterQueue/LocalQueue/ResourceFlavor documents

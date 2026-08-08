@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package artifactpublish owns Tau's opt-in local-staged artifact publication
 // contract. Applications write closed artifacts beneath a pod-local staging
 // directory; Tau verifies regular files into a generation-specific durable

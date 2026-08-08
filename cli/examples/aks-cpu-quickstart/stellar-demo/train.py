@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """CPU PyTorch training with real Tau Stellar SDK experiment logging.
 
 Same multi-interest retrieval model as ../../cpu-multi-interest-ray/train.py

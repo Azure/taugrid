@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Cluster-side runtime: the wrapper that runs on the Ray head pod.
 
 This module is read as a string (`CLUSTER_WRAPPER_TEMPLATE`) by `tau.workloads`

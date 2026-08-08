@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package results provides structured outcome recording for e2e tests.
 //
 // Every test that calls [e2e.NewTestContext] automatically records its outcome

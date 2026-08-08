@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Deterministic build artifacts for decorated Tau train/eval workflows."""
 
 from __future__ import annotations

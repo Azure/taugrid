@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Verify a Tau nanoGPT result bundle."""
 
 from __future__ import annotations

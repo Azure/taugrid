@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package labelkeys owns every tau.azure.com label, annotation, and finalizer
 // key that the Tau workspace controller module reads or writes.
 //

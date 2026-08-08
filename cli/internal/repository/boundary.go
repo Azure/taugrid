@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package repository resolves filesystem and Git worktree boundaries used by
 // repository-local Tau configuration.
 package repository

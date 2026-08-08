@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Command taugrid-portal serves the Tau experiment and observability web
 // surface: the Stellar experiment store and dashboards, and the unified portal.
 //

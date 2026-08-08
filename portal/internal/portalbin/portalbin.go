@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package portalbin names the binary that owns the Stellar and Portal verbs.
 //
 // Stellar and Portal moved out of the tau CLI into taugrid-portal, so every

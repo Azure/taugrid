@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package workspace contains the client-side shape of TauWorkspace objects.
 package workspace
 

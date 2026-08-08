@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package workspaceconnection owns Tau's non-secret repository-to-workspace
 // connection contract and local verified connection state.
 package workspaceconnection

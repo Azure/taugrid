@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package jobrender renders a Tau Profile + typed options into a Kubernetes
 // batch/v1 Job or multi-node Indexed Job manifest.
 //

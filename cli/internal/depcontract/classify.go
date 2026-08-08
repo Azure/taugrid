@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package depcontract classifies the cluster-local dependencies a rendered
 // Tau Job/RayJob manifest declares: Secrets, PersistentVolumeClaims,
 // ServiceAccounts, image pull secrets, CSI SecretProviderClasses, and

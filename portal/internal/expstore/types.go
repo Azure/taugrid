@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package expstore implements Tau's local experiment-tracking store.
 package expstore
 

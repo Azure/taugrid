@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Minimal GPU training job for stack e2e.
 
 Exercises the training path of the advertised feature set:

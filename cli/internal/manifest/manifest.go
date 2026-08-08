@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package manifest implements the schema_version: 1 managed workflow
 // manifest: the schema used to parse, validate, and render researcher-
 // authored (and Tau Python SDK-generated) configs for `tau run --config`.

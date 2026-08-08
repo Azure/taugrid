@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package ray builds the portal's Ray board.
 //
 // Discovery is head-Service based: KubeRay auto-creates a `<raycluster>-head-svc`

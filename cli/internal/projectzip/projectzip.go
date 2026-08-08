@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package projectzip builds a deterministic zip archive of a research project
 // directory for use as a Ray runtime_env working_dir.
 //

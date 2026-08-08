@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package topology turns Tau's researcher-facing workload contract into
 // Kueue-facing queue, priority, and topology metadata.
 package topology

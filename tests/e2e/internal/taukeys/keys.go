@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Package taukeys is the e2e module's small, source-checked view of the Tau key
 // contract. The e2e module does not depend on core/workloadmeta,
 // so workflows/tau_label_contract_test.go verifies these declarations against
