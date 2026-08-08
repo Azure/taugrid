@@ -12,6 +12,8 @@ macOS 12.0 or newer.
 
 - `tau-{darwin,linux}-{amd64,arm64}`
 - `tau-gen-{darwin,linux}-{amd64,arm64}`
+- `install.sh`
+- `LICENSE`
 - `SHA256SUMS`
 
 The Tau Python SDK is installed from the same tagged source revision. GitHub
@@ -50,7 +52,8 @@ Releases do not contain Python wheels.
 ## Publish after authorization
 
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
-   push only that tag.
+   push only that tag. Repository tag rules must prevent updates or deletion of
+   release tags; the workflow revalidates the remote tag before publication.
 2. Manually dispatch **Release tau CLI** with the existing tag.
 3. The read-only validation job verifies that the tag is annotated, follows
    SemVer, points to `main`, has checked-in release notes, and has no existing
@@ -61,9 +64,9 @@ Releases do not contain Python wheels.
    every GitHub asset digest, and only then publishes the draft. It never
    overwrites an existing release or asset.
 6. After publication, clean GitHub-hosted Ubuntu and macOS runners install the
-   tagged Python SDK, bootstrap `tau` through the published GitHub Release,
-   download `tau-gen` from the same release, and exercise native version and
-   help commands. A failure leaves the immutable published release unchanged and
+   tagged Python SDK, install `tau` through the published `install.sh`, download
+   `tau-gen` from the same release, and exercise native version and help
+   commands. A failure leaves the immutable published release unchanged and
    fails the workflow for explicit follow-up.
 
 ## Verify

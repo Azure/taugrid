@@ -1,0 +1,411 @@
+name: Release tau CLI
+
+run-name: Release tau CLI ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated SemVer tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tau-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      date: ${{ steps.release.outputs.date }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Check out main with tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Validate immutable release inputs
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Dispatch this workflow from main, not $GITHUB_REF" >&2
+            exit 1
+          fi
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*))(\.((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*)))*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+          if [[ ! "$TAG" =~ $semver_re ]]; then
+            echo "tag must be SemVer with a v prefix, got '$TAG'" >&2
+            exit 1
+          fi
+
+          git fetch --force origin main "refs/tags/$TAG:refs/tags/$TAG"
+          if [[ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]]; then
+            echo "$TAG must be an annotated tag" >&2
+            exit 1
+          fi
+
+          commit="$(git rev-parse "$TAG^{commit}")"
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "$TAG points to $commit, which is not on main" >&2
+            exit 1
+          fi
+          if ! git cat-file -e "$commit:cli/releases/$TAG.md"; then
+            echo "cli/releases/$TAG.md is required" >&2
+            exit 1
+          fi
+
+          status="$(
+            curl --silent --show-error --output "$RUNNER_TEMP/existing-release.json" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
+          )"
+          case "$status" in
+            404)
+              ;;
+            200)
+              echo "GitHub Release $TAG already exists; releases are never overwritten" >&2
+              exit 1
+              ;;
+            *)
+              echo "cannot verify whether GitHub Release $TAG exists (HTTP $status)" >&2
+              exit 1
+              ;;
+          esac
+
+          date="$(git show -s --format=%cI "$commit")"
+          {
+            echo "tag=$TAG"
+            echo "commit=$commit"
+            echo "date=$date"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Validated release input"
+            echo
+            echo "- Tag: \`$TAG\`"
+            echo "- Commit: \`$commit\`"
+            echo "- Commit date: \`$date\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  gates:
+    name: Run release gates
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: |
+            cli/go.sum
+            core/go.sum
+
+      - name: Test Go release modules
+        run: |
+          set -euo pipefail
+          (cd core && go test ./...)
+          (cd cli && go test ./...)
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: sdk/python/python/pyproject.toml
+
+      - name: Test source-aligned Python SDK
+        env:
+          EXPECTED_VERSION: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -e "./sdk/python/python[dev]"
+          python -m pytest sdk/python/python/tests
+          python -c 'import os, tau; assert "v" + tau.__version__ == os.environ["EXPECTED_VERSION"]'
+
+      - name: Test release installer
+        run: |
+          shellcheck cli/scripts/install-tau.sh cli/scripts/test-install-tau.sh
+          make -C cli test-installer
+
+  build:
+    name: Build reproducible release assets
+    needs: validate
+    runs-on: macos-15
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: |
+            cli/go.sum
+            core/go.sum
+
+      - name: Build twice and compare
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          DATE: ${{ needs.validate.outputs.date }}
+          VERSION: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          first="$RUNNER_TEMP/tau-release-a"
+          second="$RUNNER_TEMP/tau-release-b"
+          make -C cli release-assets \
+            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$first"
+          make -C cli release-assets \
+            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$second"
+
+          expected=(
+            LICENSE
+            SHA256SUMS
+            install.sh
+            tau-darwin-amd64
+            tau-darwin-arm64
+            tau-gen-darwin-amd64
+            tau-gen-darwin-arm64
+            tau-gen-linux-amd64
+            tau-gen-linux-arm64
+            tau-linux-amd64
+            tau-linux-arm64
+          )
+          printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
+          find "$first" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/actual-assets"
+          diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
+
+          diff -u "$first/SHA256SUMS" "$second/SHA256SUMS"
+          (cd "$first" && shasum -a 256 --check SHA256SUMS)
+          while read -r _ asset; do
+            cmp "$first/$asset" "$second/$asset"
+            if [[ "$asset" == tau-* ]]; then
+              go version -m "$first/$asset"
+            fi
+          done < "$first/SHA256SUMS"
+
+          host_arch="$(go env GOHOSTARCH)"
+          test "$("$first/tau-darwin-$host_arch" version --short)" = "$VERSION"
+          "$first/tau-darwin-$host_arch" --help >/dev/null
+          "$first/tau-gen-darwin-$host_arch" --help >/dev/null
+
+      - name: Upload validated release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: tau-release-${{ needs.validate.outputs.tag }}
+          path: ${{ runner.temp }}/tau-release-a/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish immutable GitHub Release
+    needs:
+      - validate
+      - gates
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+
+      - name: Download validated release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: tau-release-${{ needs.validate.outputs.tag }}
+          path: ${{ runner.temp }}/tau-release
+
+      - name: Create, verify, and publish release
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          verify_remote_tag() {
+            remote_commit="$(
+              git ls-remote origin "refs/tags/$TAG^{}" |
+                awk 'NR == 1 { print $1 }'
+            )"
+            if [[ "$remote_commit" != "$EXPECTED_COMMIT" ]]; then
+              echo "$TAG no longer points to validated commit $EXPECTED_COMMIT" >&2
+              exit 1
+            fi
+          }
+
+          release_dir="$RUNNER_TEMP/tau-release"
+          (cd "$release_dir" && shasum -a 256 --check SHA256SUMS)
+
+          expected=(
+            LICENSE
+            SHA256SUMS
+            install.sh
+            tau-darwin-amd64
+            tau-darwin-arm64
+            tau-gen-darwin-amd64
+            tau-gen-darwin-arm64
+            tau-gen-linux-amd64
+            tau-gen-linux-arm64
+            tau-linux-amd64
+            tau-linux-arm64
+          )
+          printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
+          find "$release_dir" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/local-assets"
+          diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/local-assets"
+
+          status="$(
+            curl --silent --show-error --output "$RUNNER_TEMP/existing-release.json" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
+          )"
+          case "$status" in
+            404)
+              ;;
+            200)
+              echo "GitHub Release $TAG already exists; releases are never overwritten" >&2
+              exit 1
+              ;;
+            *)
+              echo "cannot verify whether GitHub Release $TAG exists (HTTP $status)" >&2
+              exit 1
+              ;;
+          esac
+          verify_remote_tag
+
+          release_flags=(
+            --repo "$GITHUB_REPOSITORY"
+            --draft
+            --verify-tag
+            --title "TauGrid $TAG"
+            --notes-file "cli/releases/$TAG.md"
+          )
+          version_without_build="${TAG%%+*}"
+          if [[ "$version_without_build" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "${release_flags[@]}" "$release_dir"/*
+
+          release_id="$(
+            gh api "/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id
+          )"
+          gh api --paginate \
+            "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            --jq '.[].name' | sort > "$RUNNER_TEMP/github-assets"
+          diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/github-assets"
+
+          verify_dir="$RUNNER_TEMP/downloaded-release"
+          mkdir -p "$verify_dir"
+          gh api --paginate \
+            "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            --jq '.[] | [.id, .name] | @tsv' > "$RUNNER_TEMP/github-assets.tsv"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              --header "Accept: application/octet-stream" \
+              "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$verify_dir/$asset_name"
+            cmp "$release_dir/$asset_name" "$verify_dir/$asset_name"
+          done < "$RUNNER_TEMP/github-assets.tsv"
+          (cd "$verify_dir" && shasum -a 256 --check SHA256SUMS)
+
+          verify_remote_tag
+          gh release edit "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+          echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Smoke test ${{ matrix.os }}-${{ matrix.arch }}
+    needs:
+      - validate
+      - publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+          - runner: macos-15
+            os: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install tagged Python SDK
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            "git+https://github.com/$GITHUB_REPOSITORY.git@$TAG#subdirectory=sdk/python/python"
+
+      - name: Download and exercise published binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          TAU_ARCH: ${{ matrix.arch }}
+          TAU_OS: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+
+          release_dir="$RUNNER_TEMP/release"
+          bin_dir="$RUNNER_TEMP/bin"
+          mkdir -p "$release_dir" "$bin_dir"
+          cd "$release_dir"
+
+          tau_gen_asset="tau-gen-$TAU_OS-$TAU_ARCH"
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern install.sh \
+            --pattern "$tau_gen_asset" \
+            --pattern SHA256SUMS
+
+          TAU_INSTALL_DIR="$bin_dir" TAU_VERSION="$TAG" sh install.sh
+          awk -v asset="$tau_gen_asset" '$2 == asset' SHA256SUMS > tau-gen.checksums
+          test "$(wc -l < tau-gen.checksums)" -eq 1
+          shasum -a 256 --check tau-gen.checksums
+
+          install -m 0755 "$tau_gen_asset" "$bin_dir/tau-gen"
+          export PATH="$bin_dir:$PATH"
+
+          test "$(tau version --short)" = "$TAG"
+          tau --help >/dev/null
+          tau-gen --help >/dev/null
+          python -c 'import os, tau; assert "v" + tau.__version__ == os.environ["TAG"]'
+          python -m tau.cli --help >/dev/null

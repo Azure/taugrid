@@ -65,12 +65,16 @@ helm install taugrid taugrid/taugrid --namespace taugrid-system --create-namespa
 ### Install the tau CLI
 
 ```bash
-# Linux / macOS
-curl -fsSL https://aka.ms/install-tau | bash
-
-# Or via Go
-go install github.com/Azure/taugrid/cmd/tau@latest
+curl -fsSL https://github.com/Azure/taugrid/releases/latest/download/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+tau version --short
 ```
+
+The installer supports Linux and macOS on amd64 and arm64, verifies the binary
+against the release's `SHA256SUMS`, and installs to `$HOME/.local/bin` without
+sudo. It installs the MIT license under `$HOME/.local/share/doc/tau`. See the
+[installation guide](site/content/en/docs/getting-started/install.md)
+for the full release contract.
 
 ### Submit Your First Workload
 
