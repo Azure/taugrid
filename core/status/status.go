@@ -595,7 +595,7 @@ func deriveState(s Snapshot) string {
 		return string(s.MultiKueueState())
 	}
 	rj := snapshotRayJob(s)
-	if rj.Found {
+	if rj.Found && !s.JobFound {
 		return deriveRayJobState(rj)
 	}
 	for _, c := range s.JobConditions {
@@ -624,7 +624,7 @@ func deriveRayJobState(rj RayJob) string {
 	case rayJobStatusSucceeded(rj):
 		return "Complete"
 	}
-	raw := firstNonEmpty(rj.JobStatus, rj.JobDeploymentStatus)
+	raw := firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus)
 	switch strings.ToUpper(raw) {
 	case "RUNNING":
 		return "Running"

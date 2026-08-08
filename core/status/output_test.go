@@ -199,6 +199,20 @@ func TestNewOutputMarksReasonlessTerminalFailureDegraded(t *testing.T) {
 func TestNewOutputStoppedRayJobUsesFailurePrecedence(t *testing.T) {
 	out := NewOutput(Snapshot{
 		Name: "stopped", Namespace: "tau",
+		RayJob: RayJob{
+			Found:               true,
+			JobDeploymentStatus: "Complete",
+			JobStatus:           "STOPPED",
+		},
+	})
+	if out.State != "Failed" || !out.Degraded {
+		t.Fatalf("stopped RayJob output = %+v", out)
+	}
+}
+
+func TestNewOutputSameNameCollisionUsesBatchJobPrecedence(t *testing.T) {
+	out := NewOutput(Snapshot{
+		Name: "shared", Namespace: "tau",
 		JobFound: true,
 		JobConditions: []Condition{{
 			Type: "Complete", Status: "True",
@@ -209,8 +223,22 @@ func TestNewOutputStoppedRayJobUsesFailurePrecedence(t *testing.T) {
 			JobStatus:           "STOPPED",
 		},
 	})
-	if out.State != "Failed" || !out.Degraded {
-		t.Fatalf("stopped RayJob output = %+v", out)
+	if out.State != "Complete" {
+		t.Fatalf("same-name collision state = %q, want batch Job Complete", out.State)
+	}
+}
+
+func TestNewOutputRayJobNonterminalUsesControllerLifecycle(t *testing.T) {
+	out := NewOutput(Snapshot{
+		Name: "starting", Namespace: "tau",
+		RayJob: RayJob{
+			Found:               true,
+			JobDeploymentStatus: "Initializing",
+			JobStatus:           "RUNNING",
+		},
+	})
+	if out.State != "Initializing" {
+		t.Fatalf("RayJob nonterminal state = %q, want controller lifecycle Initializing", out.State)
 	}
 }
 
