@@ -1,0 +1,81 @@
+name: tau-core-e2e_$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - .ado/tau-core-e2e.yml
+      - .ado/templates/install-kind.yml
+      - charts/tau-core-controller/**
+      - cli/**
+      - controllers/tau-core/**
+      - core/**
+      - images/tau-core-controller/**
+
+pr:
+  autoCancel: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - .ado/tau-core-e2e.yml
+      - .ado/templates/install-kind.yml
+      - charts/tau-core-controller/**
+      - cli/**
+      - controllers/tau-core/**
+      - core/**
+      - images/tau-core-controller/**
+
+pool:
+  vmImage: ubuntu-24.04
+
+variables:
+  goVersion: 1.26.5
+  kindVersion: v0.32.0
+  kubectlVersion: 1.36.3
+
+jobs:
+  - job: tau_core_kind_e2e
+    displayName: Tau core Kind E2E
+    timeoutInMinutes: 30
+    steps:
+      - checkout: self
+        clean: true
+        fetchDepth: 1
+
+      - task: GoTool@0
+        displayName: Install Go $(goVersion)
+        inputs:
+          version: $(goVersion)
+
+      - task: KubectlInstaller@0
+        displayName: Install kubectl $(kubectlVersion)
+        inputs:
+          kubectlVersion: $(kubectlVersion)
+
+      - template: templates/install-kind.yml
+        parameters:
+          version: $(kindVersion)
+
+      - bash: |
+          set -euo pipefail
+          docker info >/dev/null
+          go version
+          kind version
+          kubectl version --client
+          python3 --version
+          command -v script
+        displayName: Verify E2E prerequisites
+
+      - bash: make -C controllers/tau-core test-kind-e2e
+        displayName: Run Tau core Kind E2E
+        env:
+          TAU_CORE_KIND_DELETE_CLUSTER: "1"
+
+      - bash: kind delete cluster --name tau-core-e2e || true
+        displayName: Clean up Kind cluster
+        condition: always()
