@@ -51,9 +51,10 @@ tau run explain-config        # field reference with statuses
 ```
 
 If a command you expect is missing, the binary is old — say so rather than
-writing instructions against a surface the user does not have. They upgrade by
-downloading the current `tau-{darwin,linux}-{amd64,arm64}` from GitHub Releases
-(verify against `SHA256SUMS`).
+writing instructions against a surface the user does not have. They upgrade on
+Linux or macOS with
+`curl -fsSL https://github.com/Azure/taugrid/releases/latest/download/install.sh | sh`;
+the installer verifies the matching binary against `SHA256SUMS`.
 
 **`tau` has exactly seven roots:** `cluster`, `workspace`, `run`, `serve`,
 `data`, `python`, `version`. Experiment tracking and the observability portal

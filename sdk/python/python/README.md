@@ -200,12 +200,13 @@ wants the Tau `ctx` as its first argument.
 Install from a checkout:
 
 ```bash
-make install-tau
-pip install -e /path/to/taugrid/sdk/python
+make -C /path/to/taugrid/cli install
+python -m pip install -e /path/to/taugrid/sdk/python/python
 tau python doctor -n ray
 ```
 
-Pinned installs and troubleshooting: [`../../docs/install-tau.md`](../../docs/install-tau.md).
+Pinned installs and troubleshooting:
+[`../../../site/content/en/docs/getting-started/install.md`](../../../site/content/en/docs/getting-started/install.md).
 
 Public API: `tau.train`, `tau.eval`, `tau.serve`, `tau.config`,
 `tau.secret_from_env`, `tau.secret_from_file`, `tau.secret_ref`,

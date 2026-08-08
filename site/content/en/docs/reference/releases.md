@@ -15,7 +15,8 @@ The workflow:
 2. Requires checked-in release notes.
 3. Runs Go and Python release gates.
 4. Compares two independent binary builds.
-5. Publishes raw binaries and `SHA256SUMS` without overwriting assets.
+5. Publishes raw binaries, `install.sh`, `LICENSE`, and `SHA256SUMS` without
+   overwriting assets.
 6. Verifies every uploaded digest.
 7. Proves bootstrap and native commands on clean Ubuntu and macOS runners.
 

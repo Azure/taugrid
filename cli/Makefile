@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: build install test test-kind-e2e lint clean verify-release-inputs release-binaries release-assets
+.PHONY: build install test test-installer test-kind-e2e lint clean verify-release-inputs release-binaries release-assets
 
 BINARY := tau
 GEN_BINARY := tau-gen
@@ -34,6 +34,9 @@ install:
 test:
 	go test ./...
 
+test-installer:
+	./scripts/test-install-tau.sh
+
 test-kind-e2e: build
 	TAU_KIND_SKIP_BUILD=1 ./scripts/kind-smoke-e2e.sh
 
@@ -52,7 +55,7 @@ clean:
 # workflow separately proves that the checkout is clean and VERSION names an
 # annotated tag on main.
 verify-release-inputs:
-	@printf '%s\n' "$(VERSION)" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$' || \
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*))(\.((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*)))*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$$' || \
 	  { echo "VERSION must be SemVer with a v prefix, got '$(VERSION)'" >&2; exit 1; }
 	@printf '%s\n' "$(COMMIT)" | grep -Eq '^[0-9a-f]{40}$$' || \
 	  { echo "COMMIT must be a full 40-character git SHA, got '$(COMMIT)'" >&2; exit 1; }
@@ -86,5 +89,8 @@ release-binaries: verify-release-inputs
 	@ls -lh "$(RELEASE_DIR)"/
 
 release-assets: release-binaries
-	@(cd "$(RELEASE_DIR)" && shasum -a 256 tau-* > SHA256SUMS)
-	@ls -lh "$(RELEASE_DIR)"/tau-* "$(RELEASE_DIR)"/SHA256SUMS
+	@sed 's/@TAU_VERSION@/$(VERSION)/g' scripts/install-tau.sh > "$(RELEASE_DIR)/install.sh"
+	@chmod 0755 "$(RELEASE_DIR)/install.sh"
+	@cp ../LICENSE "$(RELEASE_DIR)/LICENSE"
+	@(cd "$(RELEASE_DIR)" && shasum -a 256 tau-* install.sh LICENSE > SHA256SUMS)
+	@ls -lh "$(RELEASE_DIR)"/tau-* "$(RELEASE_DIR)"/install.sh "$(RELEASE_DIR)"/LICENSE "$(RELEASE_DIR)"/SHA256SUMS
