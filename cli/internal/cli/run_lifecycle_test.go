@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -60,10 +61,50 @@ func TestWriteStatusSnapshotJSON(t *testing.T) {
 	}
 }
 
+func TestRunStatusRegistersDiagnosticHintsFlag(t *testing.T) {
+	if flag := newRunStatusCmd().Flags().Lookup("diagnostic-hints"); flag == nil {
+		t.Fatal("tau run status must support --diagnostic-hints")
+	}
+}
+
+func TestActiveKubeconfigPathRequiresSingleResolvedPath(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/tmp/resolved-kubeconfig")
+	if got := activeKubeconfigPath(); got != "/tmp/resolved-kubeconfig" {
+		t.Fatalf("active kubeconfig = %q", got)
+	}
+	t.Setenv("KUBECONFIG", strings.Join([]string{"/tmp/first", "/tmp/second"}, string(os.PathListSeparator)))
+	if got := activeKubeconfigPath(); got != "" {
+		t.Fatalf("multi-file kubeconfig must not become --kubeconfig: %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsUsesResolvedPodAndContainer(t *testing.T) {
+	got := renderKubectlDiagnosticHints("research'admin", "/tmp/research kube'config", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "trainer", State: "running", RestartCount: 1,
+			}},
+		}},
+	})
+	for _, want := range []string{
+		`'--context' 'research'"'"'admin'`,
+		`'--kubeconfig' '/tmp/research kube'"'"'config'`,
+		`'top' 'pod' 'external-batch-pod' '--containers'`,
+		`'logs' 'external-batch-pod' '-c' 'trainer' '--previous' '--timestamps=true'`,
+		`'exec' '-it' 'external-batch-pod' '-c' 'trainer' '--' '/bin/sh'`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hints %q missing %q", got, want)
+		}
+	}
+}
+
 func TestRunStatusRejectsJSONWatchAndProfileModes(t *testing.T) {
 	tests := []statusRunOptions{
 		{Output: "json", Watch: true},
 		{Output: "json", RunProfile: true},
+		{Output: "json", DiagnosticHints: true},
 	}
 	for _, opts := range tests {
 		cmd := &cobra.Command{}
@@ -74,11 +115,131 @@ func TestRunStatusRejectsJSONWatchAndProfileModes(t *testing.T) {
 	}
 }
 
+func TestRenderKubectlDiagnosticHintsUsesRayPodNamesAndCurrentLogs(t *testing.T) {
+	got := renderKubectlDiagnosticHints("", "", "ray", "train", status.Snapshot{
+		RayJob: status.RayJob{Found: true, RayClusterName: "train-cluster"},
+		Pods: []status.Pod{{
+			Name:       "train-worker",
+			Containers: []status.Container{{Name: "ray-worker", State: "running"}},
+		}, {
+			Name:       "train-head",
+			Containers: []status.Container{{Name: "ray-head", State: "running"}},
+		}},
+	})
+	if !strings.Contains(got, "'top' 'pod' 'train-worker' '--containers'") ||
+		!strings.Contains(got, "'top' 'pod' 'train-head' '--containers'") ||
+		strings.Contains(got, "'train-worker' 'train-head'") {
+		t.Fatalf("Ray top hint = %q", got)
+	}
+	if !strings.Contains(got, "'logs' 'train-worker' '-c' 'ray-worker' '--timestamps=true'") || strings.Contains(got, "'--previous'") {
+		t.Fatalf("Ray log hint = %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsPrefersCurrentFailureOverPreviousAttempt(t *testing.T) {
+	exitCode := int32(1)
+	lastExitCode := int32(2)
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "restarted-worker", RestartCount: 1, LastExitCode: &lastExitCode,
+			}, {
+				Name: "failed-worker", ExitCode: &exitCode,
+			}},
+		}},
+	})
+	if !strings.Contains(got, "'logs' 'external-batch-pod' '-c' 'failed-worker' '--timestamps=true'") {
+		t.Fatalf("hints must target current failed container: %q", got)
+	}
+	if strings.Contains(got, "'--previous'") {
+		t.Fatalf("hints must not request previous logs while a current failure exists: %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsUsesCurrentLogsForRestartedFinalFailure(t *testing.T) {
+	exitCode := int32(1)
+	lastExitCode := int32(2)
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "failed-worker", RestartCount: 1, ExitCode: &exitCode, LastExitCode: &lastExitCode,
+			}},
+		}},
+	})
+	if !strings.Contains(got, "'logs' 'external-batch-pod' '-c' 'failed-worker' '--timestamps=true'") {
+		t.Fatalf("hints must target current failed container: %q", got)
+	}
+	if strings.Contains(got, "'--previous'") {
+		t.Fatalf("hints must not request previous logs for a final current failure: %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsOmitsExecForTerminalContainer(t *testing.T) {
+	exitCode := int32(1)
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{
+		Pods: []status.Pod{{
+			Name: "external-batch-pod",
+			Containers: []status.Container{{
+				Name: "failed-worker", State: "terminated", ExitCode: &exitCode,
+			}},
+		}},
+	})
+	if !strings.Contains(got, "'logs' 'external-batch-pod' '-c' 'failed-worker' '--timestamps=true'") {
+		t.Fatalf("terminal hints must retain current logs: %q", got)
+	}
+	if strings.Contains(got, "'exec'") {
+		t.Fatalf("terminal hints must not emit an unusable exec command: %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsWithoutPodsStaysSelectorBased(t *testing.T) {
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "external-batch-job", status.Snapshot{})
+	if !strings.Contains(got, "'logs' '-l' 'job-name=external-batch-job' '--all-containers=true'") {
+		t.Fatalf("hints = %q", got)
+	}
+	if strings.Contains(got, "'exec'") {
+		t.Fatalf("hints should not render exec without a pod: %q", got)
+	}
+}
+
+func TestRenderKubectlDiagnosticHintsUsesJobPrecedenceForSameNameCollision(t *testing.T) {
+	got := renderKubectlDiagnosticHints("", "", "tau-default", "shared-name", status.Snapshot{
+		JobFound: true,
+		RayJob:   status.RayJob{Found: true, RayClusterName: "shared-name-cluster"},
+		Pods: []status.Pod{{
+			Name:       "batch-pod",
+			Containers: []status.Container{{Name: "worker", State: "running"}},
+		}, {
+			Name:       "ray-pod",
+			Containers: []status.Container{{Name: "ray-worker", State: "running"}},
+		}},
+	})
+	if !strings.Contains(got, "'job-name=shared-name'") {
+		t.Fatalf("collision hints must use Job selector: %q", got)
+	}
+	for _, unwanted := range []string{"ray.io/cluster", "batch-pod", "ray-pod", "'exec'"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("collision hints must not contain %q: %q", unwanted, got)
+		}
+	}
+}
+
 func TestRunStatusRejectsUnknownOutput(t *testing.T) {
 	cmd := &cobra.Command{}
 	err := runStatusCommand(cmd, statusRunOptions{Output: "yaml"}, "train")
 	if err == nil || !strings.Contains(err.Error(), "--output must be one of: table, json") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunLogsRegistersDetailedBatchFlags(t *testing.T) {
+	cmd := newRunLogsCmd()
+	for _, name := range []string{"container", "all-containers", "previous", "timestamps", "prefix"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Fatalf("tau run logs missing --%s", name)
+		}
 	}
 }
 

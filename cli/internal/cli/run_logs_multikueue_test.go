@@ -123,6 +123,109 @@ func TestLocalJobLogsTailMinusOneIsPassedExplicitly(t *testing.T) {
 	}
 }
 
+func TestLocalJobLogsPassesDetailedContainerFlags(t *testing.T) {
+	var gotArgs []string
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		gotArgs = append([]string(nil), args...)
+		return "", nil
+	})
+	opts := runLogsOptions{
+		Container:  "stage-reference",
+		Previous:   true,
+		Timestamps: true,
+		Prefix:     true,
+		Follow:     true,
+		Tail:       25,
+	}
+	if _, err := localJobLogsWithOptions(context.Background(), runner, "tau-default", "external-batch-job", opts); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"-n", "tau-default", "logs", "-l", "job-name=external-batch-job",
+		"-c", "stage-reference", "--previous", "--timestamps=true", "--prefix=true", "-f", "--tail=25",
+	}
+	if strings.Join(gotArgs, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("kubectl args = %v, want %v", gotArgs, want)
+	}
+}
+
+func TestRunLogsRejectsContainerAndAllContainers(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "train", runLogsOptions{
+		Namespace: "tau-default", Container: "trainer", AllContainers: true,
+	}, runLogsHooks{})
+	if err == nil || !strings.Contains(err.Error(), "--container and --all-containers") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunLogsRejectsBatchFlagsForRayJob(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "ray-train", runLogsOptions{
+		Namespace: "ray", Previous: true,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{RayJob: status.RayJob{Found: true}}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only for batch/v1 Job logs") {
+		t.Fatalf("error = %v", err)
+	}
+
+	var jobCalled bool
+	err = runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "shared-name", runLogsOptions{
+		Namespace: "ray", Container: "trainer",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			snap := multiKueueWatchSnapshot(status.MultiKueueStateReady)
+			snap.JobFound = true
+			return snap, nil
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			jobCalled = true
+			return "batch logs", nil
+		},
+	})
+	if err != nil || !jobCalled {
+		t.Fatalf("batch/RayJob collision did not route batch flags to Job: called=%v err=%v", jobCalled, err)
+	}
+}
+
+func TestRunLogsRejectsBatchFlagsForPartialRayJobSnapshot(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "ray-train", runLogsOptions{
+		Namespace: "ray", Container: "worker",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{RayJob: status.RayJob{Found: true}}, errors.New("workloads forbidden")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("partial RayJob snapshot must not route to batch logs")
+			return "", nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only for batch/v1 Job logs") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunLogsRoutesBatchFlagsForPartialSameNameSnapshot(t *testing.T) {
+	var jobCalled bool
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "shared-name", runLogsOptions{
+		Namespace: "ray", Container: "worker",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			snap := multiKueueWatchSnapshot(status.MultiKueueStateReady)
+			snap.JobFound = true
+			return snap, errors.New("workloads forbidden")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			jobCalled = true
+			return "batch logs", nil
+		},
+	})
+	if err != nil || !jobCalled {
+		t.Fatalf("partial batch/RayJob collision did not route batch flags to Job: called=%v err=%v", jobCalled, err)
+	}
+}
+
 func TestRunLogsCommand_FoundRayJobNeverFallsBackToJobNameSelector(t *testing.T) {
 	var out bytes.Buffer
 	err := runLogsCommandWithHooks(context.Background(), &out, nil, "train-001", runLogsOptions{

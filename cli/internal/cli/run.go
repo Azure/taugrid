@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/onboarding"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
@@ -278,6 +279,7 @@ type runDispatchOptions struct {
 	headCPURequest, headMemoryRequest, headCPULimit, headMemoryLimit                                string
 	workerCPURequest, workerMemoryRequest, workerCPULimit, workerMemoryLimit                        string
 	volumeSpecs, mountSpecs                                                                         []string
+	imageAssets                                                                                     []runconfig.ImageAsset
 	topologyPolicy, workloadKind, upstreamCheckpoint                                                string
 	configDir                                                                                       string
 	workingDir                                                                                      string

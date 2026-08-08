@@ -1,0 +1,53 @@
+# Publishes TauGrid-owned Helm charts to the public ACR that synchronizes to MCR.
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - charts/**
+      - scripts/ci/publish-helm-charts.sh
+      - .pipelines/publish-helm-charts.yml
+
+pr: none
+
+variables:
+  - name: ACR_NAME
+    value: aksmcrimagescommon
+  - name: REPOSITORY_NAME
+    value: public/aks/ai-runtime
+  - name: azureServiceConnection
+    value: aks ai runtime - prod
+
+stages:
+  - stage: PublishHelmCharts
+    displayName: Publish Helm charts
+    jobs:
+      - job: publish_charts
+        displayName: Validate, package, and publish
+        pool:
+          name: 1es-aks-ai-runtime-ado-eastus2
+        steps:
+          - checkout: self
+
+          - bash: |
+              set -euo pipefail
+              scripts/ci/publish-helm-charts.sh package \
+                "$(Build.ArtifactStagingDirectory)/helm"
+            displayName: Validate and package charts
+
+          - task: AzureCLI@2
+            displayName: Publish and verify charts
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                scripts/ci/publish-helm-charts.sh publish \
+                  "$(Build.ArtifactStagingDirectory)/helm"
+            env:
+              ACR_NAME: $(ACR_NAME)
+              REPOSITORY_NAME: $(REPOSITORY_NAME)
