@@ -443,7 +443,8 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	}
 	warnings = append(warnings, autoWarnings...)
 	if dryRun != "client" {
-		if err := validateRenderedQueue(ctx, r, namespace, rendered, topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
+		rendered, err = prepareGeneratedQueueTopology(ctx, r, namespace, rendered, &topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved), renderManagedWorkflow)
+		if err != nil {
 			return err
 		}
 	}

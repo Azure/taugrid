@@ -13,6 +13,7 @@ func ApplyTopologyOptions(o *Options, top topology.Options) {
 	o.CheckpointEvery = top.CheckpointEvery
 	o.QueueName = top.QueueName
 	o.PriorityTier = top.PriorityTier
+	o.RequiredTopology = top.RequiredTopology
 	o.WorkloadPriorityClassName = top.WorkloadPriorityClassName
 	o.PodPriorityClassName = top.PodPriorityClassName
 	o.DisableKueueTopologyAnnotations = top.DisableKueueTopologyAnnotations

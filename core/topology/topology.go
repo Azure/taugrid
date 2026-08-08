@@ -14,7 +14,8 @@ import (
 const (
 	QueueLabel                  = "kueue.x-k8s.io/queue-name"
 	workloadPriorityLabel       = "kueue.x-k8s.io/priority-class"
-	requiredTopologyAnnotation  = "kueue.x-k8s.io/podset-required-topology"
+	RequiredTopologyAnnotation  = "kueue.x-k8s.io/podset-required-topology"
+	requiredTopologyAnnotation  = RequiredTopologyAnnotation
 	preferredTopologyAnnotation = "kueue.x-k8s.io/podset-preferred-topology"
 	unconstrainedTopologyAnnot  = "kueue.x-k8s.io/podset-unconstrained-topology"
 	hostnameTopology            = "kubernetes.io/hostname"
@@ -186,6 +187,9 @@ type Options struct {
 	// PriorityTier is a user-facing shorthand for Tau-managed priority classes.
 	// Supported values are "default" and "priority".
 	PriorityTier string
+	// RequiredTopology is a platform-owned ResourceFlavor requirement copied to
+	// generated GPU pod templates after live queue resolution.
+	RequiredTopology string
 	// DisableKueueTopologyAnnotations keeps Tau's topology labels/explainability
 	// while omitting Kueue TAS podset annotations. Use this when the selected
 	// ResourceFlavor does not define spec.topologyName; Kueue rejects podset
@@ -261,15 +265,33 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	}
 
 	if !spec.disableKueueTopology {
+		if spec.requiredTopology != "" {
+			plan.Annotations[requiredTopologyAnnotation] = spec.requiredTopology
+		}
 		switch spec.placement {
 		case "single-node-nvlink":
+			if spec.requiredTopology != "" && spec.requiredTopology != hostnameTopology {
+				return Plan{}, fmt.Errorf(
+					"profile %q topology: ResourceFlavor requires %s=%q, but placement=single-node-nvlink requires %q",
+					p.Name, requiredTopologyAnnotation, spec.requiredTopology, hostnameTopology)
+			}
 			plan.Annotations[requiredTopologyAnnotation] = hostnameTopology
 		case "multi-node-nccl":
+			if spec.requiredTopology != "" {
+				return Plan{}, fmt.Errorf(
+					"profile %q topology: ResourceFlavor requires %s=%q, which conflicts with placement=multi-node-nccl",
+					p.Name, requiredTopologyAnnotation, spec.requiredTopology)
+			}
 			// Multi-node gangs must span hosts. The managed worker Topologies
 			// expose hostname only, so an explicit hostname preference would
 			// first try to co-locate the gang and broader levels are invalid.
 			plan.Annotations[unconstrainedTopologyAnnot] = "true"
 		case "independent", "elastic-workers":
+			if spec.requiredTopology != "" {
+				return Plan{}, fmt.Errorf(
+					"profile %q topology: ResourceFlavor requires %s=%q, which conflicts with placement=%s",
+					p.Name, requiredTopologyAnnotation, spec.requiredTopology, spec.placement)
+			}
 			plan.Annotations[unconstrainedTopologyAnnot] = "true"
 		}
 	}
@@ -289,6 +311,7 @@ type contract struct {
 	podPriorityClassName      string
 	workloadPriorityClassName string
 	priorityTier              string
+	requiredTopology          string
 	disabledReason            string
 	preemptible               bool
 	hasCheckpoint             bool
@@ -363,6 +386,9 @@ func (c *contract) apply(o Options) {
 		c.priorityTier = o.PriorityTier
 		c.workloadPriorityClassName = ""
 		c.podPriorityClassName = ""
+	}
+	if o.RequiredTopology != "" {
+		c.requiredTopology = strings.TrimSpace(o.RequiredTopology)
 	}
 	if o.WorkloadPriorityClassName != "" {
 		c.workloadPriorityClassName = o.WorkloadPriorityClassName
@@ -537,7 +563,7 @@ func (o Options) hasValues() bool {
 	return o.Team != "" || o.Lane != "" || o.Mode != "" || o.Placement != "" ||
 		o.Shape != "" || o.GPUClass != "" || o.CheckpointEvery != "" || o.QueueName != "" ||
 		o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.PriorityTier != "" ||
-		o.DisableDefaultPriorities
+		o.RequiredTopology != "" || o.DisableDefaultPriorities
 }
 
 func laneFromProfile(p profile.Profile) string {

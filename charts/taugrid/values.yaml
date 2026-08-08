@@ -29,6 +29,9 @@ baselineQueue:
   topology:
     enabled: true
     name: default-node-topology
+    # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
+    # templates after queue resolution.
+    requiredLevel: kubernetes.io/hostname
   flavor:
     # New identity avoids mutating the topologyName of the chart 0.2.0
     # taugrid-default ResourceFlavor, which Kueue treats as immutable.
@@ -146,6 +149,8 @@ kuberay-operator:
 
 gpu-monitoring:
   daemonset:
+    # Externally joined GPU nodes do not receive the AKS-managed accelerator
+    # label, so match them by instance type without requiring that label.
     requireAcceleratorLabel: false
 
 tau-core-controller:

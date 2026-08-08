@@ -40,7 +40,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONTROLLER_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${CONTROLLER_DIR}/../.." && pwd)"
 TAU_DIR="${REPO_ROOT}/cli"
-APP_BASE_DIR="${REPO_ROOT}/charts/tau-core-controller/kustomize"
+APP_BASE_DIR="${REPO_ROOT}/charts/tau-core-controller"
+IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 
 CLUSTER_NAME="${TAU_CORE_KIND_CLUSTER_NAME:-tau-core-e2e}"
 KUBE_CONTEXT="${TAU_CORE_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"
@@ -165,11 +166,15 @@ done
 grep -q 'APIGroup\s*=\s*"tau.azure.com"' "${TAU_DIR}/internal/workspace/workspace.go"
 
 echo "== static guard: local-image deployment rewrite is well-formed =="
+if [[ ! -f "${IMAGE_DOCKERFILE}" ]]; then
+  echo "controller image Dockerfile not found: ${IMAGE_DOCKERFILE}" >&2
+  exit 1
+fi
 rendered_deployment="$(sed \
   -e "s#image: aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
-  -e "s#imagePullPolicy: Always#imagePullPolicy: Never#" \
+  -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
-  "${APP_BASE_DIR}/templates/deployment.yaml")"
+  "${APP_BASE_DIR}/kustomize/deployment.yaml")"
 for want in \
   "image: ${LOCAL_IMAGE}" \
   "imagePullPolicy: Never" \
@@ -307,7 +312,7 @@ kubectl apply -f "${SCRATCH_DIR}/mock-kueue-crds.yaml"
 # --- Establish the Tau APIs before applying the same full kustomization ArgoCD
 # applies. kubectl's RESTMapper cannot discover a CRD and its TauCluster
 # instance in one fresh-cluster apply pass. ---
-kubectl apply -f "${APP_BASE_DIR}/templates/namespace.yaml"
+kubectl apply -f "${APP_BASE_DIR}/kustomize/namespace.yaml"
 kubectl apply -f "${APP_BASE_DIR}/crds"
 kubectl wait --for=condition=Established \
   crd/clusters.tau.azure.com \
@@ -318,7 +323,10 @@ kubectl apply -k "${APP_BASE_DIR}"
 
 # --- Build and load the controller image locally; no external mutable
 # image is introduced, and no network access is required after this point.
-"${CONTAINER_ENGINE}" build -t "${LOCAL_IMAGE}" "${CONTROLLER_DIR}"
+"${CONTAINER_ENGINE}" build \
+  --file "${IMAGE_DOCKERFILE}" \
+  --tag "${LOCAL_IMAGE}" \
+  "${CONTROLLER_DIR}"
 load_local_image
 
 # Overlay the Deployment with the locally-built image and
@@ -327,9 +335,9 @@ load_local_image
 # extra Lease-acquisition startup latency.
 sed \
   -e "s#image: aksairuntime\.azurecr\.io/unlisted/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
-  -e "s#imagePullPolicy: Always#imagePullPolicy: Never#" \
+  -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
-  "${APP_BASE_DIR}/templates/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"
+  "${APP_BASE_DIR}/kustomize/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"
 kubectl apply -f "${SCRATCH_DIR}/deployment.local.yaml"
 kubectl -n "${PLATFORM_NAMESPACE}" rollout status deployment/tau-core-controller --timeout="${ROLLOUT_WAIT_SECONDS}s"
 

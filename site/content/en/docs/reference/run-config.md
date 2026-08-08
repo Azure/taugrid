@@ -38,6 +38,26 @@ namespace. Tau references and mounts that claim; it does not provision or own
 the PVC, StorageClass, CSI configuration, or backing storage. The platform
 owner chooses the backend and manages its lifecycle.
 
+Direct batch Jobs can stage an immutable reference directory from another image
+without creating a ConfigMap:
+
+```yaml
+engine: job
+storage:
+  image_assets:
+    - name: pinned-reference-assets
+      image: <registry>/<repository>@sha256:<64-hex-digest>
+      source_path: /opt/source-assets
+      mount_path: /opt/reference
+```
+
+Tau renders each asset as a pinned init-container image that runs
+`/bin/cp -a` into an `emptyDir`, then mounts that volume read-only in the main
+container. Source images must provide `/bin/cp`. Names and paths are validated,
+Tau-reserved paths cannot be replaced, and mutable image tags are rejected.
+`storage.image_assets` is intentionally limited to direct `engine: job`
+configs; managed workflows and Ray configs reject it.
+
 Main field groups:
 
 | Group | Purpose |

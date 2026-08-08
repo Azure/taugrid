@@ -1160,6 +1160,7 @@ runtime:
 		{WorkloadKindRayJob, baseRaw},
 		{WorkloadKindRayJobEval, evalRaw},
 	}
+
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
 			m, err := Parse(tc.raw)
@@ -1183,6 +1184,72 @@ runtime:
 			}
 			if strings.Contains(s, "pip install --quiet --no-cache-dir numpy>=2.0,<3") {
 				t.Fatalf("runtime.pip specs rendered unquoted:\n%s", s)
+			}
+		})
+	}
+}
+
+func TestRenderResourceFlavorRequiredTopologyAcrossManagedWorkloadKinds(t *testing.T) {
+	baseRaw := []byte(`
+schema_version: 1
+name: managed-tas
+compute: { gpus: 1 }
+runtime:
+  pip: [torch]
+`)
+	evalRaw := []byte(`
+schema_version: 1
+name: managed-tas-eval
+eval:
+  cpu_workers: 2
+compute: { gpus: 1 }
+runtime:
+  pip: [torch]
+`)
+	for _, tc := range []struct {
+		kind string
+		raw  []byte
+	}{
+		{WorkloadKindJob, baseRaw},
+		{WorkloadKindRayJob, baseRaw},
+		{WorkloadKindRayJobEval, evalRaw},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			m, err := Parse(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := Render(RenderOptions{
+				Manifest:         m,
+				ManifestRaw:      tc.raw,
+				ManifestFilename: "managed-tas.yaml",
+				TopologyOptions: topology.Options{
+					QueueName:        "jobqueue",
+					RequiredTopology: "kubernetes.io/hostname",
+				},
+				WorkloadKind: tc.kind,
+				MainScript:   []byte("# trainer\n"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			workload := unmarshalLast(t, out)
+			if tc.kind == WorkloadKindJob {
+				if got := dig(workload, "spec", "template", "metadata", "annotations", topology.RequiredTopologyAnnotation); got != "kubernetes.io/hostname" {
+					t.Fatalf("Job required topology=%v", got)
+				}
+				return
+			}
+			if got := dig(workload, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "annotations", topology.RequiredTopologyAnnotation); got != nil {
+				t.Fatalf("Ray control head retained topology requirement: %v", got)
+			}
+			if got := dig(workload, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "metadata", "annotations", topology.RequiredTopologyAnnotation); got != "kubernetes.io/hostname" {
+				t.Fatalf("Ray GPU worker required topology=%v", got)
+			}
+			if tc.kind == WorkloadKindRayJobEval {
+				if got := dig(workload, "spec", "rayClusterSpec", "workerGroupSpecs", 1, "template", "metadata", "annotations", topology.RequiredTopologyAnnotation); got != nil {
+					t.Fatalf("eval CPU worker retained topology requirement: %v", got)
+				}
 			}
 		})
 	}

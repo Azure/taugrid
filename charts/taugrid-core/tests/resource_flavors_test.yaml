@@ -1,0 +1,46 @@
+suite: TauGrid core ResourceFlavor contract
+templates:
+  - resource-flavors.yaml
+tests:
+  - it: renders managed TAS resource metadata
+    set:
+      resourceFlavors.enabled: true
+      resourceFlavors.items:
+        - name: nd-h200-v5
+          annotations:
+            owner.example.com/team: research
+            kueue.x-k8s.io/podset-required-topology: ignored-in-favor-of-requiredTopology
+          nodeLabels:
+            kueue.azure.com/gpu-series: nd-h200-v5
+            tau.azure.com/gpu-class: h200-141gb
+          nodeTaints:
+            - key: nvidia.com/gpu
+              effect: NoSchedule
+          topologyName: default-node-topology
+          requiredTopology: kubernetes.io/hostname
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nd-h200-v5
+      - equal:
+          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
+          value: kubernetes.io/hostname
+      - equal:
+          path: metadata.annotations["owner.example.com/team"]
+          value: research
+      - equal:
+          path: spec.topologyName
+          value: default-node-topology
+      - equal:
+          path: spec.nodeTaints[0].key
+          value: nvidia.com/gpu
+
+  - it: rejects an incomplete managed TAS contract
+    set:
+      resourceFlavors.enabled: true
+      resourceFlavors.items:
+        - name: nd-h200-v5
+          topologyName: default-node-topology
+    asserts:
+      - failedTemplate:
+          errorMessage: resourceFlavors.items[nd-h200-v5] must set topologyName and requiredTopology together

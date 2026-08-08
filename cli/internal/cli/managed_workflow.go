@@ -152,6 +152,7 @@ func topologyOptionsFromSubmit(o jobrender.Options) runtopology.Options {
 		CheckpointEvery:                 o.CheckpointEvery,
 		QueueName:                       o.QueueName,
 		PriorityTier:                    o.PriorityTier,
+		RequiredTopology:                o.RequiredTopology,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,

@@ -1,4 +1,5 @@
 {{- if .Values.baselineQueue.enabled }}
+{{- $requiredTopology := default "kubernetes.io/hostname" .Values.baselineQueue.topology.requiredLevel }}
 {{- if and .Values.baselineQueue.gpu.enabled (empty .Values.baselineQueue.gpu.flavors) }}
 {{- fail "baselineQueue.gpu.flavors must contain at least one flavor when baselineQueue.gpu.enabled is true" }}
 {{- end }}
@@ -64,6 +65,9 @@ metadata:
     {{- include "taugrid.labels" . | nindent 4 }}
 spec:
   levels:
+    {{- if ne $requiredTopology "kubernetes.io/hostname" }}
+    - nodeLabel: {{ $requiredTopology }}
+    {{- end }}
     - nodeLabel: kubernetes.io/hostname
 ---
 {{- end }}
@@ -91,6 +95,10 @@ metadata:
   name: {{ $gpuFlavor.name }}
   labels:
     {{- include "taugrid.labels" $ | nindent 4 }}
+  {{- if $.Values.baselineQueue.topology.enabled }}
+  annotations:
+    kueue.x-k8s.io/podset-required-topology: {{ $requiredTopology | quote }}
+  {{- end }}
 spec:
   {{- with $gpuFlavor.nodeLabels }}
   nodeLabels:

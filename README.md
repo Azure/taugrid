@@ -57,9 +57,11 @@ TauGrid is built on open Kubernetes-native components:
 ### Install TauGrid
 
 ```bash
-helm repo add taugrid https://azure.github.io/taugrid
-helm repo update
-helm install taugrid taugrid/taugrid --namespace taugrid-system --create-namespace
+helm install taugrid \
+  oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
+  --version 0.2.0 \
+  --namespace tau-system \
+  --create-namespace
 ```
 
 ### Install the tau CLI
@@ -96,6 +98,19 @@ TauGrid first-party images are published under the following MCR repositories:
 | Tau core controller | `mcr.microsoft.com/aks/ai-runtime/tau-core-controller` |
 
 Use the versioned tag or immutable digest documented by each release rather than a mutable `latest` tag.
+
+## Helm Charts
+
+TauGrid-owned charts are published as public OCI artifacts under
+`oci://mcr.microsoft.com/aks/ai-runtime/helm`. Chart versions come from each
+chart's `Chart.yaml`; published versions are immutable.
+
+| Chart | OCI reference |
+|---|---|
+| TauGrid distribution | `oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid` |
+| TauGrid core services | `oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid-core` |
+| Tau core controller | `oci://mcr.microsoft.com/aks/ai-runtime/helm/tau-core-controller` |
+| ADX monitoring | `oci://mcr.microsoft.com/aks/ai-runtime/helm/adx-mon` |
 
 ## Documentation
 
