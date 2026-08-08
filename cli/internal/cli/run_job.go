@@ -321,7 +321,10 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.metricsOffloadEnabled {
 		opts.Annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
-	manifest, err := jobrender.Render(p, opts)
+	renderJob := func() ([]byte, error) {
+		return jobrender.Render(p, opts)
+	}
+	manifest, err := renderJob()
 	if err != nil {
 		return err
 	}
@@ -330,14 +333,15 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		return err
 	}
 	if explicitAuto || implicitAuto {
-		manifest, err = jobrender.Render(p, opts)
+		manifest, err = renderJob()
 		if err != nil {
 			return err
 		}
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
-		if err := validateRenderedQueue(ctx, kube.New(kubeContext), ns, manifest, opts, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
+		manifest, err = prepareGeneratedQueueTopology(ctx, kube.New(kubeContext), ns, manifest, &opts, queueValidationPolicyFor(preset, o.workspaceQueueResolved), renderJob)
+		if err != nil {
 			return err
 		}
 	}

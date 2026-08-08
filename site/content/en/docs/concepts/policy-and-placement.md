@@ -121,10 +121,12 @@ single-flavor installs by draining admission and splitting the flavor:
    counts to reach zero. Do not delete PVCs or namespaces.
 2. Create a generic non-TAS CPU ResourceFlavor without GPU labels or GPU
    admission taints. Create separate GPU ResourceFlavors with exact
-   `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, and `topologyName`. Tau's
-   explicit GPU placement policy then uses the GPU flavor as the pod set's
-   single TAS flavor. CPU-only jobs without placement annotations remain
-   admissible through the non-TAS CPU flavor and cannot consume GPU quota.
+   `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, `topologyName`, and the
+   managed resource annotation
+   `kueue.x-k8s.io/podset-required-topology=<level>`. Connected Tau submission
+   copies that platform requirement onto generated GPU pod templates when no
+   explicit placement policy is present. CPU-only jobs remain admissible through
+   the non-TAS CPU flavor and cannot consume GPU quota.
 3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
    Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor
    CPU, memory, and GPU quota. Kueue then assigns one node flavor across every

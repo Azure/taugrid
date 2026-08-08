@@ -215,6 +215,7 @@ type Options struct {
 	// gpu.nvidia.com). It does not alter rendered pod resources.
 	GPUResourceName                 string
 	PriorityTier                    string
+	RequiredTopology                string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
 	DisableKueueTopologyAnnotations bool
@@ -278,6 +279,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		CheckpointEvery:                 o.CheckpointEvery,
 		QueueName:                       o.QueueName,
 		PriorityTier:                    o.PriorityTier,
+		RequiredTopology:                o.RequiredTopology,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,

@@ -270,6 +270,7 @@ func (f topologyFlags) resolveAutoQueueFromManifest(
 		return nil, fmt.Errorf("%s: %w%s", prefix, err, formatQueueCandidates(candidates))
 	}
 	o.QueueName = selected.QueueName
+	o.RequiredTopology = selected.RequiredTopology
 	return []string{fmt.Sprintf("selected queue %s -> %s/%s for %d GPU(s)", selected.QueueName, selected.ClusterQueue, selected.ResourceFlavor, contract.GPUCount)}, nil
 }
 
@@ -367,17 +368,17 @@ type queueValidationPolicy struct {
 	CatalogTopologyContract bool
 }
 
-func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string, manifest []byte, opts jobrender.Options, policy queueValidationPolicy) error {
+func inspectRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string, manifest []byte, opts jobrender.Options, policy queueValidationPolicy) (queueresolve.ValidationReport, error) {
 	contract, err := renderedQueueContractFromManifest(manifest)
 	if err != nil {
-		return err
+		return queueresolve.ValidationReport{}, err
 	}
 	queueName := contract.QueueName
 	if queueName == "" {
 		queueName = opts.QueueName
 	}
 	if queueName == "" {
-		return nil
+		return queueresolve.ValidationReport{}, nil
 	}
 	nodeSelector := opts.NodeSelector
 	if len(contract.NodeSelector) > 0 {
@@ -406,7 +407,7 @@ func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace strin
 		TopologyName:            policy.TopologyName,
 		CatalogTopologyContract: policy.CatalogTopologyContract,
 	}
-	_, err = queueresolve.ValidateSelection(ctx, r, validationOpts)
+	report, err := queueresolve.ValidateSelection(ctx, r, validationOpts)
 	if err != nil && contract.GPUCount > 0 {
 		_, candidates, selectErr := queueresolve.SelectQueue(ctx, r, queueresolve.AutoSelectOptions{
 			Namespace:       namespace,
@@ -417,10 +418,51 @@ func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace strin
 			GPUResourceName: gpuResourceName,
 		})
 		if selectErr == nil || len(candidates) > 0 {
-			return fmt.Errorf("%w%s", err, formatQueueCandidates(candidates))
+			return report, fmt.Errorf("%w%s", err, formatQueueCandidates(candidates))
 		}
 	}
-	return err
+	return report, err
+}
+
+func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string, manifest []byte, opts jobrender.Options, policy queueValidationPolicy) error {
+	report, err := inspectRenderedQueue(ctx, r, namespace, manifest, opts, policy)
+	if err != nil {
+		return err
+	}
+	if report.RequiredTopology != "" {
+		return fmt.Errorf(
+			"generated GPU workload is missing ResourceFlavor-required annotation %s=%q; Tau-managed submission paths must inject it before apply",
+			runtopology.RequiredTopologyAnnotation, report.RequiredTopology)
+	}
+	return nil
+}
+
+func prepareGeneratedQueueTopology(
+	ctx context.Context,
+	r kubeRawRunner,
+	namespace string,
+	rendered []byte,
+	opts *jobrender.Options,
+	policy queueValidationPolicy,
+	rerender func() ([]byte, error),
+) ([]byte, error) {
+	report, err := inspectRenderedQueue(ctx, r, namespace, rendered, *opts, policy)
+	if err != nil {
+		return nil, err
+	}
+	if report.RequiredTopology == "" {
+		return rendered, nil
+	}
+	opts.RequiredTopology = report.RequiredTopology
+	opts.DisableKueueTopologyAnnotations = false
+	rendered, err = rerender()
+	if err != nil {
+		return nil, fmt.Errorf("render ResourceFlavor-required topology: %w", err)
+	}
+	if err := validateRenderedQueue(ctx, r, namespace, rendered, *opts, policy); err != nil {
+		return nil, err
+	}
+	return rendered, nil
 }
 
 func renderedQueueContractFromManifest(manifest []byte) (renderedQueueContract, error) {

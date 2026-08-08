@@ -43,6 +43,10 @@ tests:
           value: default-node-topology
         documentIndex: 2
       - equal:
+          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
+          value: kubernetes.io/hostname
+        documentIndex: 2
+      - equal:
           path: kind
           value: ClusterQueue
         documentIndex: 3
@@ -101,6 +105,21 @@ tests:
           path: metadata.name
           value: research
         documentIndex: 3
+
+  - it: preserves hostname as the leaf when the managed level is customized
+    set:
+      baselineQueue.topology.requiredLevel: topology.example.com/rack
+    asserts:
+      - equal:
+          path: spec.levels
+          value:
+            - nodeLabel: topology.example.com/rack
+            - nodeLabel: kubernetes.io/hostname
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
+          value: topology.example.com/rack
+        documentIndex: 2
 
   - it: renders a class-labeled GPU flavor without constraining the CPU flavor
     set:
