@@ -397,6 +397,9 @@ func newRunDeleteCmd() *cobra.Command {
 			r := kube.New(resolvedContext)
 			ref, err := resolveRunWorkload(cmd.Context(), r, ns, args[0])
 			if err != nil {
+				if !isRunWorkloadNotFound(err) {
+					return err
+				}
 				deleted, cleanupErr := deleteOwnedRunRayClusters(cmd.Context(), newKubernetesRunSubmissionRunner(r), ns, args[0])
 				if cleanupErr != nil {
 					return fmt.Errorf("%v; orphan RayCluster cleanup failed: %w", err, cleanupErr)
@@ -441,7 +444,8 @@ func newRunArchiveCmd() *cobra.Command {
 			if ref.active() {
 				return fmt.Errorf("run %s/%s is still active; cancel it or wait for terminal status before archiving", ns, ref.Name)
 			}
-			if ref.Annotations[workloadmeta.AnnotationArchivedAt] != "" {
+			alreadyArchived := ref.Annotations[workloadmeta.AnnotationArchivedAt] != ""
+			if alreadyArchived && (ref.Kind != "Job" || ref.TTLSecondsAfterFinished == nil) {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s %q is already archived\n", ref.Resource, ref.Name)
 				return nil
 			}
@@ -468,6 +472,15 @@ func archiveRunPatch(run resolvedRunWorkload, archivedAt time.Time) ([]byte, err
 		{"op": "test", "path": "/metadata/uid", "value": string(run.UID)},
 		{"op": "test", "path": "/metadata/labels/" + jsonPointerEscape(workloadmeta.LabelManagedBy), "value": workloadmeta.ManagedByValue},
 		{"op": "test", "path": "/metadata/labels/" + jsonPointerEscape(workloadmeta.LabelRunID), "value": run.RunID},
+	}
+	if run.Kind == "Job" && run.TTLSecondsAfterFinished != nil {
+		operations = append(operations, map[string]any{
+			"op":   "remove",
+			"path": "/spec/ttlSecondsAfterFinished",
+		})
+	}
+	if run.Annotations[workloadmeta.AnnotationArchivedAt] != "" {
+		return json.Marshal(operations)
 	}
 	if run.Annotations == nil {
 		operations = append(operations, map[string]any{"op": "add", "path": "/metadata/annotations", "value": map[string]string{}})

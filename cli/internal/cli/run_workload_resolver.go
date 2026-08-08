@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,19 +13,34 @@ import (
 )
 
 type resolvedRunWorkload struct {
-	Resource    string
-	Kind        string
-	Name        string
-	LogicalName string
-	RunID       string
-	Namespace   string
-	UID         types.UID
-	Labels      map[string]string
-	Annotations map[string]string
-	Terminal    bool
+	Resource                string
+	Kind                    string
+	Name                    string
+	LogicalName             string
+	RunID                   string
+	Namespace               string
+	UID                     types.UID
+	Labels                  map[string]string
+	Annotations             map[string]string
+	Terminal                bool
+	TTLSecondsAfterFinished *int32
 }
 
 func (r resolvedRunWorkload) active() bool { return !r.Terminal }
+
+type runWorkloadNotFoundError struct {
+	selector  string
+	namespace string
+}
+
+func (e *runWorkloadNotFoundError) Error() string {
+	return fmt.Sprintf("no Tau-managed Job or RayJob matches %q in namespace %q", e.selector, e.namespace)
+}
+
+func isRunWorkloadNotFound(err error) bool {
+	var target *runWorkloadNotFoundError
+	return errors.As(err, &target)
+}
 
 func resolveRunWorkload(ctx context.Context, runner kubeRawRunner, namespace, selector string) (resolvedRunWorkload, error) {
 	if runner == nil {
@@ -88,7 +104,7 @@ func resolveRunWorkload(ctx context.Context, runner kubeRawRunner, namespace, se
 			)
 		}
 	}
-	return resolvedRunWorkload{}, fmt.Errorf("no Tau-managed Job or RayJob matches %q in namespace %q", selector, namespace)
+	return resolvedRunWorkload{}, &runWorkloadNotFoundError{selector: selector, namespace: namespace}
 }
 
 func parseResolvedRunWorkloads(data []byte, resource, kind string) ([]resolvedRunWorkload, error) {
@@ -109,7 +125,11 @@ func parseResolvedRunWorkloads(data []byte, resource, kind string) ([]resolvedRu
 				} `json:"conditions"`
 				JobDeploymentStatus string `json:"jobDeploymentStatus"`
 				JobStatus           string `json:"jobStatus"`
+				EndTime             string `json:"endTime"`
 			} `json:"status"`
+			Spec struct {
+				TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished"`
+			} `json:"spec"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -136,30 +156,35 @@ func parseResolvedRunWorkloads(data []byte, resource, kind string) ([]resolvedRu
 					break
 				}
 			}
-		} else {
-			state := strings.ToLower(strings.TrimSpace(firstNonEmpty(
-				item.Status.JobDeploymentStatus,
-				item.Status.JobStatus,
-			)))
-			switch state {
-			case "complete", "completed", "succeeded", "failed", "stopped":
-				terminal = true
-			}
+		} else if isTerminalRayState(item.Status.JobDeploymentStatus) ||
+			isTerminalRayState(item.Status.JobStatus) ||
+			strings.TrimSpace(item.Status.EndTime) != "" {
+			terminal = true
 		}
 		out = append(out, resolvedRunWorkload{
-			Resource:    resource,
-			Kind:        kind,
-			Name:        item.Metadata.Name,
-			LogicalName: logicalName,
-			RunID:       runID,
-			Namespace:   item.Metadata.Namespace,
-			UID:         item.Metadata.UID,
-			Labels:      item.Metadata.Labels,
-			Annotations: item.Metadata.Annotations,
-			Terminal:    terminal,
+			Resource:                resource,
+			Kind:                    kind,
+			Name:                    item.Metadata.Name,
+			LogicalName:             logicalName,
+			RunID:                   runID,
+			Namespace:               item.Metadata.Namespace,
+			UID:                     item.Metadata.UID,
+			Labels:                  item.Metadata.Labels,
+			Annotations:             item.Metadata.Annotations,
+			Terminal:                terminal,
+			TTLSecondsAfterFinished: item.Spec.TTLSecondsAfterFinished,
 		})
 	}
 	return out, nil
+}
+
+func isTerminalRayState(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "complete", "completed", "succeeded", "failed", "stopped":
+		return true
+	default:
+		return false
+	}
 }
 
 func deleteOwnedRunWorkload(

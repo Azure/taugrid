@@ -102,6 +102,64 @@ func TestResolveRunWorkloadIgnoresForeignObjects(t *testing.T) {
 	}
 }
 
+func TestResolveRunWorkloadClassifiesOnlyConfirmedNoMatch(t *testing.T) {
+	runner := runListFixtureRunner(t, nil, nil)
+	_, err := resolveRunWorkload(context.Background(), runner, "research", "missing")
+	if err == nil || !isRunWorkloadNotFound(err) {
+		t.Fatalf("confirmed no-match error = %v", err)
+	}
+
+	transient := errors.New("temporary list failure")
+	_, err = resolveRunWorkload(context.Background(), submissionRunnerFunc(
+		func(context.Context, []string, []byte) (string, error) {
+			return "", transient
+		},
+	), "research", "missing")
+	if err == nil || isRunWorkloadNotFound(err) || !errors.Is(err, transient) {
+		t.Fatalf("transient resolver error = %v", err)
+	}
+}
+
+func TestParseResolvedRayJobTerminalStatusUsesAllSignals(t *testing.T) {
+	tests := []struct {
+		name   string
+		status map[string]any
+	}{
+		{
+			name: "terminal job status overrides stale deployment status",
+			status: map[string]any{
+				"jobDeploymentStatus": "Running",
+				"jobStatus":           "SUCCEEDED",
+			},
+		},
+		{
+			name: "end time marks terminal when states are stale",
+			status: map[string]any{
+				"jobDeploymentStatus": "Running",
+				"jobStatus":           "RUNNING",
+				"endTime":             "2026-08-07T12:00:00Z",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := runListFixture("train-a1", "train", "run-a", "uid-a", false)
+			item["status"] = test.status
+			data, err := json.Marshal(map[string]any{"items": []map[string]any{item}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runs, err := parseResolvedRunWorkloads(data, "rayjobs.ray.io", "RayJob")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 1 || !runs[0].Terminal {
+				t.Fatalf("resolved runs = %+v", runs)
+			}
+		})
+	}
+}
+
 func TestDeleteOwnedRunWorkloadUsesUIDAndMatchingOwnership(t *testing.T) {
 	run := resolvedRunWorkload{
 		Resource:  "jobs.batch",
@@ -257,10 +315,13 @@ func TestManagerCleanupUsesOwnershipSafeDeleteHook(t *testing.T) {
 }
 
 func TestArchiveRunPatchProtectsUIDAndRunID(t *testing.T) {
+	ttl := int32(28800)
 	patch, err := archiveRunPatch(resolvedRunWorkload{
-		UID:         "uid-a",
-		RunID:       "run-a",
-		Annotations: map[string]string{},
+		Kind:                    "Job",
+		UID:                     "uid-a",
+		RunID:                   "run-a",
+		Annotations:             map[string]string{},
+		TTLSecondsAfterFinished: &ttl,
 	}, time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -270,8 +331,29 @@ func TestArchiveRunPatchProtectsUIDAndRunID(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := string(patch)
-	if !stringsContainAll(encoded, "uid-a", "run-a", "managed-by", "archived-at", "2026-08-07T12:00:00Z") {
+	if !stringsContainAll(encoded, "uid-a", "run-a", "managed-by", "ttlSecondsAfterFinished", "archived-at", "2026-08-07T12:00:00Z") {
 		t.Fatalf("patch = %v", operations)
+	}
+}
+
+func TestArchiveRunPatchRemovesTTLWithoutReplacingExistingArchiveTimestamp(t *testing.T) {
+	ttl := int32(28800)
+	patch, err := archiveRunPatch(resolvedRunWorkload{
+		Kind:  "Job",
+		UID:   "uid-a",
+		RunID: "run-a",
+		Annotations: map[string]string{
+			workloadmeta.AnnotationArchivedAt: "2026-08-06T12:00:00Z",
+		},
+		TTLSecondsAfterFinished: &ttl,
+	}, time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(patch)
+	if !strings.Contains(encoded, "ttlSecondsAfterFinished") ||
+		strings.Contains(encoded, workloadmeta.AnnotationArchivedAt) {
+		t.Fatalf("patch = %s", encoded)
 	}
 }
 
