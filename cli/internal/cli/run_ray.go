@@ -310,6 +310,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		Resource:     "rayjob.ray.io",
 		Name:         name,
 		Namespace:    namespace,
+		KubeContext:  kubeContext,
 		SubmissionID: o.submissionID,
 		Manifest:     rendered,
 		DryRun:       o.dryRun,

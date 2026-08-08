@@ -351,7 +351,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		runner = kube.New(kubeContext)
 	}
 	if o.nodes > 1 && o.dryRun == "" {
-		if err := createMultiNodeRunJobManifest(ctx, newKubernetesRunSubmissionRunner(runner), manifest, ns, request.Name, o.submissionID, stdout); err != nil {
+		if err := createMultiNodeRunJobManifest(ctx, newKubernetesRunSubmissionRunner(runner), manifest, ns, request.Name, kubeContext, o.submissionID, stdout); err != nil {
 			return err
 		}
 	} else {
@@ -359,6 +359,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 			Resource:     "job",
 			Name:         request.Name,
 			Namespace:    ns,
+			KubeContext:  kubeContext,
 			SubmissionID: o.submissionID,
 			Manifest:     manifest,
 			DryRun:       o.dryRun,
@@ -855,7 +856,7 @@ func patchRunJobHeadlessServiceOwnerRef(ctx context.Context, runner kubeRawRunne
 	return nil
 }
 
-func createMultiNodeRunJobManifest(ctx context.Context, runner runSubmissionCleanupRunner, manifest []byte, namespace, name, submissionID string, stdout io.Writer) error {
+func createMultiNodeRunJobManifest(ctx context.Context, runner runSubmissionCleanupRunner, manifest []byte, namespace, name, kubeContext, submissionID string, stdout io.Writer) error {
 	serviceName := name + jobrender.HeadlessSuffix
 	separator := []byte("\n---\n")
 	index := bytes.Index(manifest, separator)
@@ -868,6 +869,7 @@ func createMultiNodeRunJobManifest(ctx context.Context, runner runSubmissionClea
 		Resource:     "job",
 		Name:         name,
 		Namespace:    namespace,
+		KubeContext:  kubeContext,
 		SubmissionID: submissionID,
 		Manifest:     jobDocument,
 	})

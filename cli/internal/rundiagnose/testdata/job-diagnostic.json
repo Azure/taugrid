@@ -1,0 +1,228 @@
+{
+  "apiVersion": "diagnostics.tau.azure.com/v1alpha1",
+  "kind": "RunDiagnostic",
+  "collectedAt": "2026-08-07T20:00:00Z",
+  "run": {
+    "name": "train-001",
+    "namespace": "research",
+    "context": "research-cluster",
+    "recordSource": "live-kubernetes",
+    "state": "found",
+    "kinds": [
+      "Job"
+    ],
+    "uids": [
+      "job-1"
+    ],
+    "labels": {
+      "kueue.x-k8s.io/queue-name": "gpu-training",
+      "tau.azure.com/job": "train-001",
+      "tau.azure.com/managed-by": "tau"
+    },
+    "annotations": {
+      "tau.azure.com/image": "example.azurecr.io/train:v1"
+    }
+  },
+  "limits": {
+    "tailLines": 20,
+    "logLimitBytes": 4096,
+    "eventLimit": 10,
+    "maxLogStreams": 24,
+    "maxWorkloads": 32,
+    "maxPods": 128,
+    "maxEventSubjects": 64
+  },
+  "access": [
+    {
+      "resource": "job/train-001",
+      "status": "available"
+    },
+    {
+      "resource": "rayjob.ray.io/train-001",
+      "status": "absent",
+      "message": "Error from server (NotFound): rayjobs.ray.io \"train-001\" not found"
+    },
+    {
+      "resource": "workloads.kueue.x-k8s.io?selector=tau.azure.com/job=train-001",
+      "status": "available"
+    },
+    {
+      "resource": "workloads.kueue.x-k8s.io?selector=kueue.x-k8s.io/job-uid=job-1",
+      "status": "available"
+    },
+    {
+      "resource": "pods?selector=job-name=train-001",
+      "status": "available"
+    },
+    {
+      "resource": "pods?selector=tau.azure.com/job=train-001",
+      "status": "available"
+    },
+    {
+      "resource": "events?involvedObject.uid=job-1",
+      "status": "absent"
+    },
+    {
+      "resource": "events?involvedObject.uid=wl-1",
+      "status": "absent"
+    },
+    {
+      "resource": "events?involvedObject.uid=pod-1",
+      "status": "available"
+    },
+    {
+      "resource": "pods/train-pod/logs/log-offload",
+      "status": "available"
+    },
+    {
+      "resource": "pods/train-pod/logs/trainer",
+      "status": "available"
+    }
+  ],
+  "jobs": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "name": "train-001",
+      "uid": "job-1",
+      "namespace": "research",
+      "createdAt": "2026-08-07T19:50:00Z",
+      "generation": 2,
+      "labels": {
+        "kueue.x-k8s.io/queue-name": "gpu-training",
+        "tau.azure.com/job": "train-001",
+        "tau.azure.com/managed-by": "tau"
+      },
+      "annotations": {
+        "tau.azure.com/image": "example.azurecr.io/train:v1"
+      },
+      "owners": [],
+      "spec": {
+        "parallelism": 1,
+        "suspend": false
+      },
+      "status": {
+        "active": 1,
+        "startTime": "2026-08-07T19:51:00Z"
+      }
+    }
+  ],
+  "rayJobs": [],
+  "rayClusters": [],
+  "workloads": [
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta1",
+      "kind": "Workload",
+      "name": "job-train-001-a1b2",
+      "uid": "wl-1",
+      "namespace": "research",
+      "createdAt": "2026-08-07T19:50:01Z",
+      "owners": [
+        {
+          "apiVersion": "batch/v1",
+          "kind": "Job",
+          "name": "train-001",
+          "uid": "job-1"
+        }
+      ],
+      "queueName": "gpu-training",
+      "priorityClassName": "normal",
+      "admission": {
+        "clusterQueue": "gpu-cq"
+      },
+      "admissionChecks": [
+        {
+          "message": "reservation active",
+          "name": "multikueue",
+          "state": "Ready"
+        }
+      ],
+      "conditions": [
+        {
+          "type": "Admitted",
+          "status": "True",
+          "reason": "AdmittedByTest",
+          "lastTransitionTime": "2026-08-07T19:50:03Z"
+        }
+      ]
+    }
+  ],
+  "pods": [
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "name": "train-pod",
+      "uid": "pod-1",
+      "namespace": "research",
+      "createdAt": "2026-08-07T19:50:02Z",
+      "owners": [
+        {
+          "apiVersion": "v1",
+          "kind": "Job",
+          "name": "train-001",
+          "uid": "job-1"
+        }
+      ],
+      "phase": "Running",
+      "nodeName": "gpu-node-1",
+      "conditions": [],
+      "initContainers": [],
+      "containers": [
+        {
+          "name": "log-offload",
+          "image": "example/log-offload:v1",
+          "ready": false,
+          "restartCount": 0,
+          "current": {
+            "state": "terminated",
+            "reason": "Error",
+            "message": "upload failed",
+            "exitCode": 17,
+            "startedAt": "2026-08-07T19:51:00Z",
+            "finishedAt": "2026-08-07T19:52:00Z"
+          }
+        },
+        {
+          "name": "trainer",
+          "image": "example/train:v1",
+          "ready": true,
+          "restartCount": 0,
+          "current": {
+            "state": "running",
+            "startedAt": "2026-08-07T19:51:00Z"
+          }
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "regarding": {
+        "kind": "Pod",
+        "name": "train-pod",
+        "uid": "pod-1"
+      },
+      "type": "Warning",
+      "reason": "BackOff",
+      "message": "Back-off restarting failed container",
+      "count": 3,
+      "firstSeen": "2026-08-07T19:58:00Z",
+      "lastSeen": "2026-08-07T19:59:00Z"
+    }
+  ],
+  "logs": [
+    {
+      "pod": "train-pod",
+      "container": "log-offload",
+      "status": "available",
+      "text": "upload failed\n"
+    },
+    {
+      "pod": "train-pod",
+      "container": "trainer",
+      "status": "available",
+      "text": "step=42 loss=0.12\n"
+    }
+  ],
+  "warnings": []
+}

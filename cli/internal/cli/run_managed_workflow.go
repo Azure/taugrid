@@ -464,6 +464,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 		Resource:     workloadKindK8sResource(workloadKind),
 		Name:         m.ResourceName(),
 		Namespace:    namespace,
+		KubeContext:  kubeContext,
 		SubmissionID: o.submissionID,
 		Manifest:     rendered,
 		DryRun:       dryRun,

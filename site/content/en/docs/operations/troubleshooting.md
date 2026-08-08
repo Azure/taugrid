@@ -19,6 +19,22 @@ Start every investigation the same way:
 tau run status <run-name>
 ```
 
+When the status view identifies a control-plane or lifecycle failure, capture
+the evidence before replacing or cleaning up anything:
+
+```bash
+tau run diagnose <run-name> -o json > <run-name>-diagnostic.json
+```
+
+The diagnostic is read-only and ownership-scoped. It includes the Tau run's
+live Kubernetes metadata (not its durable run-history/ADX record), matching
+Job/RayJob, Kueue Workload admission and conditions, pods,
+container termination state, events, and bounded per-container logs. Missing
+resources and RBAC denials remain explicit in the bundle. Secret objects and
+environment values are never fetched, and common token/credential forms in
+metadata, events, errors, and logs are redacted. Ray driver output is identified
+from Tau's bounded driver-log sidecar stream when that sidecar is present.
+
 `tau run status` is the single canonical lifecycle view. It walks the same
 ordered phase tree for every run -- Submitted, Kueue admission, (for a RayJob)
 RayCluster, pod scheduling, DRA allocation, image pull, init containers,
@@ -236,8 +252,17 @@ container started and passed readiness.
 owner. Image pull -- researcher (wrong pinned tag) or the image's owning
 team. Init/container crash -- researcher action required.
 
-Operator-only deep inspection, after `tau run status` has identified the
-stuck phase:
+Raw `kubectl` may still be useful when `tau run diagnose` explicitly reports
+missing RBAC, when an operator must inspect a cluster-scoped object outside the
+run's ownership graph (for example a Node, ResourceSlice, ClusterQueue, or
+controller Deployment), when the Kubernetes API is too unhealthy for Tau to
+complete the snapshot, or for a newly introduced resource type that the
+installed Tau version does not yet understand. Capture the Tau diagnostic first
+whenever the API is reachable; use `kubectl` to fill that specific gap, not to
+restart, delete, or replace resources while evidence is still being collected.
+
+Operator-only deep inspection, after `tau run status` and `tau run diagnose`
+have identified the stuck phase:
 
 ```bash
 kubectl describe pod <pod-name> -n <namespace>

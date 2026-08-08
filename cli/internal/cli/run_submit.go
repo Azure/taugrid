@@ -28,6 +28,7 @@ type runSubmission struct {
 	Resource     string
 	Name         string
 	Namespace    string
+	KubeContext  string
 	SubmissionID string
 	Manifest     []byte
 	DryRun       string
@@ -57,12 +58,28 @@ func newKubernetesRunSubmissionRunner(runner *kube.Runner) *kubernetesRunSubmiss
 }
 
 type runNameCollisionError struct {
-	Resource  string
-	Name      string
-	Namespace string
+	Resource    string
+	Name        string
+	Namespace   string
+	KubeContext string
+	Cause       error
 }
 
 func (e *runNameCollisionError) Error() string {
+	if e.Cause != nil {
+		diagnose := fmt.Sprintf("tau run diagnose %s -n %s -o json", e.Name, e.Namespace)
+		if strings.TrimSpace(e.KubeContext) != "" {
+			diagnose += " --context " + e.KubeContext
+		}
+		return fmt.Sprintf(
+			"server dry-run for %s %s/%s was blocked by an existing Kubernetes object: %v. "+
+				"Capture the named run evidence first with `%s`. "+
+				"Choose a distinct config name, cancel the existing workload with `tau run cancel %s -n %s`, "+
+				"or use `tau run resume %s --config <path>` when explicitly replacing a failed run",
+			e.Resource, e.Namespace, e.Name, e.Cause,
+			diagnose, e.Name, e.Namespace, e.Name,
+		)
+	}
 	return fmt.Sprintf(
 		"%s %s/%s already exists from another submission; refusing to reuse it for this tau run. "+
 			"Choose a distinct config name, cancel the existing workload with `tau run cancel %s -n %s`, "+
@@ -100,6 +117,15 @@ func submitRunWorkload(ctx context.Context, runner kubeRawRunner, submission run
 		return result, nil
 	}
 	if submission.DryRun != "" {
+		if isKubernetesAlreadyExistsError(createErr) {
+			return result, &runNameCollisionError{
+				Resource:    submission.Resource,
+				Name:        submission.Name,
+				Namespace:   submission.Namespace,
+				KubeContext: submission.KubeContext,
+				Cause:       createErr,
+			}
+		}
 		return result, createErr
 	}
 
@@ -119,6 +145,14 @@ func submitRunWorkload(ctx context.Context, runner kubeRawRunner, submission run
 		Name:      submission.Name,
 		Namespace: submission.Namespace,
 	}
+}
+
+func isKubernetesAlreadyExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "error from server (alreadyexists):")
 }
 
 func existingRunSubmissionID(ctx context.Context, runner kubeRawRunner, submission runSubmission) (string, error) {

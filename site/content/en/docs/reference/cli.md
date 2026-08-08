@@ -138,6 +138,7 @@ subcommand** — `tau run train --dry-run=client` runs the `run` root with
 | `explain-config` | Print the direct run config field reference |
 | `list` | List Tau-managed Jobs/RayJobs in a namespace |
 | `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
+| `diagnose <run-name>` | Capture a bounded, redacted live-Kubernetes snapshot of the run, Kueue admission, pods, events, termination state, and logs (`-o json` for a bundle; this is not durable run history) |
 | `logs <job-name>` | Stream Ray driver logs or the batch Job pod logs |
 | `get <name>` | Fetch durable run results and artifacts |
 | `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |

@@ -181,11 +181,19 @@ Use the run lifecycle after submission:
 
 ```bash
 tau run status <run-name> --watch
+tau run diagnose <run-name> -o json > <run-name>-diagnostic.json
 tau run logs <run-name>
 tau run get <run-name>  # Job-backed run with persisted results
 tau run resume <run-name> --config tau/train.yaml
 tau run cancel <run-name>
 ```
+
+`tau run diagnose` is the read-only evidence-capture path before replacement or
+cleanup. It gathers only the named Tau run and owned descendants, records
+missing RBAC/resources explicitly, bounds events and logs, and redacts common
+credential forms without fetching Secret objects or environment values. Its run
+record is live Kubernetes metadata, not the durable run-history/ADX record; the
+Ray driver-log sidecar is identified explicitly when present.
 
 For copyable workspace-first repositories, run `tau workspace init-repo`, which
 scaffolds a Tau-ready project layout. The examples under this directory are

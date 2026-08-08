@@ -145,6 +145,61 @@ func TestSubmitRunWorkloadRejectsExistingNamesRegardlessOfStateOrSpec(t *testing
 	}
 }
 
+func TestSubmitRunServerDryRunPointsAtDiagnosticBeforeReplacement(t *testing.T) {
+	runner := submissionRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if args[0] != "create" {
+			t.Fatalf("server dry-run collision should not issue a follow-up get: %v", args)
+		}
+		return "", errors.New(`Error from server (AlreadyExists): rayjobs.ray.io "parity-server" already exists`)
+	})
+
+	_, err := submitRunWorkload(context.Background(), runner, runSubmission{
+		Resource:    "rayjob.ray.io",
+		Name:        "parity-server",
+		Namespace:   "research",
+		KubeContext: "research-admin",
+		Manifest:    []byte("new-spec"),
+		DryRun:      "server",
+	})
+	var collision *runNameCollisionError
+	if !errors.As(err, &collision) {
+		t.Fatalf("error = %v, want runNameCollisionError", err)
+	}
+	if !strings.Contains(err.Error(), "tau run diagnose parity-server -n research -o json --context research-admin") {
+		t.Fatalf("server dry-run collision does not point at evidence capture: %v", err)
+	}
+}
+
+func TestSubmitRunServerDryRunAncillaryCollisionPointsAtNamedRunDiagnostic(t *testing.T) {
+	runner := submissionRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if args[0] != "create" {
+			t.Fatalf("server dry-run collision should not issue a follow-up get: %v", args)
+		}
+		return "", errors.New(`Error from server (AlreadyExists): services "parity-server-headless" already exists`)
+	})
+
+	_, err := submitRunWorkload(context.Background(), runner, runSubmission{
+		Resource:    "job",
+		Name:        "parity-server",
+		Namespace:   "research",
+		KubeContext: "research-admin",
+		Manifest:    []byte("multi-object-manifest"),
+		DryRun:      "server",
+	})
+	var collision *runNameCollisionError
+	if !errors.As(err, &collision) {
+		t.Fatalf("error = %v, want runNameCollisionError", err)
+	}
+	for _, want := range []string{
+		`services "parity-server-headless" already exists`,
+		"tau run diagnose parity-server -n research -o json --context research-admin",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("server dry-run ancillary collision missing %q: %v", want, err)
+		}
+	}
+}
+
 func TestSubmitRunWorkloadRecoversUncertainCreateOnlyForSameSubmission(t *testing.T) {
 	const submissionID = "same-submission"
 	runner := submissionRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {

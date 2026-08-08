@@ -262,7 +262,7 @@ Common examples:
 	cmd.Flags().StringVar(&serviceAccountName, "service-account", "", "pod ServiceAccount for workload cloud identity (overrides the TauWorkspace default; authorization remains server-side)")
 	cmd.PersistentFlags().StringVar(&projectName, "project", "", "Tau project name from the repository's tau.projects.yaml")
 
-	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
+	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunDiagnoseCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
 	return cmd
 }
 
