@@ -1,6 +1,6 @@
 module github.com/Azure/taugrid/monitoring/gpu-health-checker
 
-go 1.25
+go 1.25.12
 
 require (
 	github.com/NVIDIA/go-dcgm v0.0.0-20260214140307-ad5d86fe3d32
