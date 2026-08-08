@@ -282,6 +282,8 @@ type runDispatchOptions struct {
 	configDir                                                                                       string
 	workingDir                                                                                      string
 	workingDirExcludes                                                                              []string
+	sourceBundlePath, sourceBundleDigest                                                            string
+	sourceBundleExcludes                                                                            []string
 	nodeSelectors, runtimePip, env, envSecrets, envKV, extraScripts                                 []string
 	metricsHistory                                                                                  []string
 	metricsSessionID                                                                                string

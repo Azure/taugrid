@@ -34,6 +34,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/artifactindex"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
+	"github.com/Azure/taugrid/cli/internal/sourcebundle"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/cli/internal/storageprobe"
 	"github.com/Azure/taugrid/core/envspec"
@@ -86,6 +87,10 @@ type Options struct {
 	// arguments ($1, $2, ... inside the script). Ignored when Command is set
 	// (the caller already controls argv) or when ScriptPath is empty.
 	ScriptArgs []string
+
+	// SourceBundle references source staged separately on a durable PVC. When
+	// set, ScriptPath is not read or embedded in the workload.
+	SourceBundle *sourcebundle.Runtime
 
 	// CheckpointArtifact is storage.checkpoint: the file or directory,
 	// relative to the run checkpoint dir, that this run produces as its
@@ -424,6 +429,17 @@ func (o Options) validate() error {
 	if o.Nodes > 1 && len(o.Name)+len(HeadlessSuffix) > 63 {
 		return fmt.Errorf("job name %q is too long for multi-node: %q must fit DNS label limit (63 chars); max name length is %d", o.Name, o.Name+HeadlessSuffix, 63-len(HeadlessSuffix))
 	}
+	if o.SourceBundle != nil {
+		if len(o.Command) > 0 {
+			return errors.New("source bundle cannot be combined with an explicit command override")
+		}
+		if strings.TrimSpace(o.PVCMount) == "" {
+			return errors.New("source bundle requires PVCMount")
+		}
+		if err := o.SourceBundle.Validate(); err != nil {
+			return fmt.Errorf("source bundle: %w", err)
+		}
+	}
 	if o.Launcher == "torchrun" {
 		reserved := []string{"MASTER_ADDR", "MASTER_PORT"}
 		if o.Nodes > 1 {
@@ -508,6 +524,9 @@ func RequirePythonEntrypoint(scriptPath string) error {
 // ENTRYPOINT/CMD takes over — common when --image points to a container
 // that knows what to do).
 func resolveCommand(o Options) ([]string, map[string]string, error) {
+	if o.SourceBundle != nil {
+		return resolveSourceBundleCommand(o)
+	}
 	if len(o.Command) > 0 {
 		if o.Launcher == "torchrun" {
 			return nil, nil, fmt.Errorf("--launcher=torchrun cannot be combined with an explicit command override")
@@ -583,6 +602,55 @@ func resolveCommand(o Options) ([]string, map[string]string, error) {
 		return nil, nil, fmt.Errorf("--launcher=torchrun requires --script (no script or command was provided)")
 	}
 	return nil, nil, nil // let the image's ENTRYPOINT/CMD run
+}
+
+func resolveSourceBundleCommand(o Options) ([]string, map[string]string, error) {
+	entrypoint := o.SourceBundle.Entrypoint
+	pythonPathPrefix := "export PYTHONPATH=" + shellQuote(sourceBundleTargetDir) + `${PYTHONPATH:+:$PYTHONPATH}; `
+	var argList strings.Builder
+	for _, arg := range o.ScriptArgs {
+		argList.WriteByte(' ')
+		argList.WriteString(shellQuote(arg))
+	}
+	extraFlagStr := renderExtraFlags(o.ExtraFlags)
+
+	if o.Launcher == "torchrun" {
+		if err := RequirePythonEntrypoint(entrypoint); err != nil {
+			return nil, nil, err
+		}
+		nproc := max(o.ProcessesPerNode, 1)
+		nodes := max(o.Nodes, 1)
+		var torchArgs string
+		env := map[string]string{}
+		if nodes > 1 {
+			headlessHost := o.Name + "-0." + o.Name + HeadlessSuffix
+			torchArgs = fmt.Sprintf("--nnodes=%d --node_rank=$JOB_COMPLETION_INDEX --rdzv-backend=c10d --rdzv-endpoint=%s:%d --rdzv-id=%s --nproc_per_node=%d",
+				nodes, headlessHost, c10dPort, o.Name, nproc)
+			env["MASTER_ADDR"] = headlessHost
+			env["MASTER_PORT"] = strconv.Itoa(c10dPort)
+		} else {
+			torchArgs = fmt.Sprintf("--standalone --nproc_per_node=%d", nproc)
+			env["MASTER_ADDR"] = "localhost"
+			env["MASTER_PORT"] = strconv.Itoa(c10dPort)
+		}
+		if nproc > 1 || nodes > 1 {
+			env["OMP_NUM_THREADS"] = "1"
+		}
+		return []string{
+			"bash", "-c",
+			pythonPathPrefix + fmt.Sprintf("exec python3 -m torch.distributed.run %s %s%s%s", torchArgs, shellQuote(entrypoint), argList.String(), extraFlagStr),
+		}, env, nil
+	}
+	if o.Launcher == "python" || strings.EqualFold(filepath.Ext(entrypoint), ".py") {
+		return []string{
+			"bash", "-c",
+			pythonPathPrefix + "exec python3 " + shellQuote(entrypoint) + argList.String() + extraFlagStr,
+		}, nil, nil
+	}
+	return []string{
+		"bash", "-c",
+		pythonPathPrefix + "exec " + shellQuote("./"+entrypoint) + argList.String() + extraFlagStr,
+	}, nil, nil
 }
 
 func shouldRunScriptWithPython(path string, data []byte, launcher string) (bool, error) {
@@ -857,6 +925,22 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if storagePlan.HasDurableData {
 		container["workingDir"] = storage.DurableRoot
 	}
+	if o.SourceBundle != nil {
+		sourceVolume := map[string]any{"name": "tau-source", "emptyDir": map[string]any{}}
+		if existing, ok := pod["volumes"].([]any); ok {
+			pod["volumes"] = append(existing, sourceVolume)
+		} else {
+			pod["volumes"] = []any{sourceVolume}
+		}
+		sourceMount := map[string]any{"name": "tau-source", "mountPath": sourceBundleTargetDir, "readOnly": true}
+		if existing, ok := container["volumeMounts"].([]any); ok {
+			container["volumeMounts"] = append(existing, sourceMount)
+		} else {
+			container["volumeMounts"] = []any{sourceMount}
+		}
+		container["workingDir"] = sourceBundleTargetDir
+		pod["initContainers"] = []any{sourceBundleInitContainer(image, *o.SourceBundle)}
+	}
 
 	// /dev/shm: PyTorch DDP uses shared memory for inter-process IPC. The
 	// default 64MB is too small for multi-GPU training; mount an emptyDir
@@ -1002,7 +1086,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	// local map below, not o.Annotations: Options is passed by value but its
 	// map header is shared, so stamping there leaks onto the next render.
 	checkpointArtifact := strings.TrimSpace(o.CheckpointArtifact)
-	if len(o.Annotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpuPlan.Annotations) > 0 || len(storageAnnotations) > 0 || hasExecution || checkpointArtifact != "" {
+	if len(o.Annotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpuPlan.Annotations) > 0 || len(storageAnnotations) > 0 || hasExecution || checkpointArtifact != "" || o.SourceBundle != nil {
 		annotations := map[string]any{}
 		if checkpointArtifact != "" {
 			annotations[workloadmeta.AnnotationCheckpointArtifact] = checkpointArtifact
@@ -1035,6 +1119,11 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		if o.Nodes > 1 {
 			annotations[workloadmeta.AnnotationMultiKueueIncompatible] = "indexed-job-headless-service"
 		}
+		if o.SourceBundle != nil {
+			annotations[workloadmeta.AnnotationSourceBundleDigest] = o.SourceBundle.Digest
+			annotations[workloadmeta.AnnotationSourceBundlePVC] = o.PVCMount
+			annotations[workloadmeta.AnnotationSourceBundlePath] = o.SourceBundle.Path
+		}
 		if len(annotations) > 0 {
 			metadata["annotations"] = annotations
 		}
@@ -1046,6 +1135,30 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"metadata":   metadata,
 		"spec":       jobSpec,
 	}, nil
+}
+
+const sourceBundleTargetDir = "/tau/source"
+
+func sourceBundleInitContainer(image string, runtime sourcebundle.Runtime) map[string]any {
+	return map[string]any{
+		"name":    "tau-source-bundle",
+		"image":   image,
+		"command": []any{"python3", "-c", sourcebundle.InitScript()},
+		"env": []any{
+			map[string]any{"name": sourcebundle.InitEnvSourcePath, "value": runtime.Path},
+			map[string]any{"name": sourcebundle.InitEnvDigest, "value": runtime.Digest},
+			map[string]any{"name": sourcebundle.InitEnvTargetDir, "value": sourceBundleTargetDir},
+			map[string]any{"name": sourcebundle.InitEnvMode, "value": "extract"},
+		},
+		"volumeMounts": []any{
+			map[string]any{"name": "data", "mountPath": storage.DurableRoot, "readOnly": true},
+			map[string]any{"name": "tau-source", "mountPath": sourceBundleTargetDir},
+		},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "10m", "memory": "32Mi"},
+			"limits":   map[string]any{"cpu": "250m", "memory": "128Mi"},
+		},
+	}
 }
 
 type storagePlan struct {

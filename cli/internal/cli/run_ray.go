@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/projectzip"
 	"github.com/Azure/taugrid/cli/internal/rayjobrender"
 	"github.com/Azure/taugrid/cli/internal/secretpreflight"
+	"github.com/Azure/taugrid/cli/internal/sourcebundle"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/kube"
@@ -46,6 +47,9 @@ func newRunRayRequest(options runDispatchOptions, name string) (runRayRequest, e
 	if options.script == "" {
 		return runRayRequest{}, fmt.Errorf("engine=ray requires run.entrypoint")
 	}
+	if options.hasSourceBundle() && firstNonEmpty(options.dataPVC, options.resultPVC) == "" {
+		options.dataPVC = defaultTauPVCName
+	}
 	if options.resultPVC != "" && options.dataPVC != "" && options.resultPVC != options.dataPVC {
 		return runRayRequest{}, fmt.Errorf("storage.result_pvc cannot differ from storage.data_pvc for Ray run configs")
 	}
@@ -66,9 +70,16 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		return fmt.Errorf("--dry-run must be one of: client, server")
 	}
 
-	scriptBytes, err := os.ReadFile(o.script)
+	source, err := buildRunSourceBundle(o)
 	if err != nil {
-		return fmt.Errorf("run.entrypoint: %w", err)
+		return err
+	}
+	var scriptBytes []byte
+	if source == nil {
+		scriptBytes, err = os.ReadFile(o.script)
+		if err != nil {
+			return fmt.Errorf("run.entrypoint: %w", err)
+		}
 	}
 	env, err := parseEnvKV(o.env)
 	if err != nil {
@@ -212,9 +223,17 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
 
-	projectArchive, scriptName, err := buildProjectArchive(o)
-	if err != nil {
-		return err
+	var projectArchive []byte
+	scriptName := filepath.Base(o.script)
+	var sourceRuntime *sourcebundle.Runtime
+	if source != nil {
+		scriptName = source.runtime.Entrypoint
+		sourceRuntime = &source.runtime
+	} else {
+		projectArchive, scriptName, err = buildProjectArchive(o)
+		if err != nil {
+			return err
+		}
 	}
 
 	renderRayJob := func() ([]byte, error) {
@@ -224,6 +243,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 			ServiceAccountName: o.serviceAccountName,
 			ScriptName:         scriptName,
 			Script:             scriptBytes,
+			SourceBundle:       sourceRuntime,
 			ProjectArchive:     projectArchive,
 			Image:              o.image,
 			Workers:            o.workers,
@@ -295,6 +315,9 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		if err := validateRenderedQueue(ctx, runner, namespace, rendered, topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved)); err != nil {
 			return err
 		}
+	}
+	if err := stageRunSourceBundle(ctx, o.dryRun, runner, namespace, dataPVC, name, source); err != nil {
+		return err
 	}
 	for _, warning := range warnings {
 		fmt.Fprintln(stderr, warning)

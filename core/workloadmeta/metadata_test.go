@@ -33,7 +33,24 @@ func TestPodCorrelationAnnotations(t *testing.T) {
 		AnnotationStellarExperimentID: "experiment:exact",
 		AnnotationStellarProject:      "vision",
 	}
+
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PodCorrelationAnnotations() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSourceBundleProvenanceAnnotationKeys(t *testing.T) {
+	got := map[string]string{
+		"digest": AnnotationSourceBundleDigest,
+		"pvc":    AnnotationSourceBundlePVC,
+		"path":   AnnotationSourceBundlePath,
+	}
+	want := map[string]string{
+		"digest": Domain + "source-bundle-digest",
+		"pvc":    Domain + "source-bundle-pvc",
+		"path":   Domain + "source-bundle-path",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("source bundle annotations = %#v, want %#v", got, want)
 	}
 }

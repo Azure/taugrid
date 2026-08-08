@@ -85,6 +85,18 @@ type Run struct {
 	// WorkingDirExcludes are extra glob patterns to leave out of the shipped
 	// project archive, on top of the built-in defaults.
 	WorkingDirExcludes []string `yaml:"working_dir_excludes"`
+	// SourceBundle declares a content-addressed local source directory for a
+	// direct run. It cannot be combined with WorkingDir.
+	SourceBundle *SourceBundle `yaml:"source_bundle"`
+}
+
+// SourceBundle identifies source material staged separately from a direct run's
+// legacy working directory. The CLI owns filesystem inspection and packaging;
+// this package validates only its stable configuration contract.
+type SourceBundle struct {
+	Path     string   `yaml:"path"`
+	Excludes []string `yaml:"excludes"`
+	Digest   string   `yaml:"digest"`
 }
 
 type Workflow struct {
@@ -290,6 +302,9 @@ func parseWithDiagnostics(raw []byte, source string) (Config, []string, error) {
 		if err := yaml.Unmarshal(raw, &projection); err != nil {
 			return Config{}, nil, fmt.Errorf("parse %s: %w", source, err)
 		}
+		if projection.Run.SourceBundle != nil {
+			return Config{}, nil, fmt.Errorf("validate %s: run.source_bundle is only supported for direct run configs", source)
+		}
 		// The projection is partial by design, so unknown keys are reported
 		// rather than rejected. See unknown.go.
 		unknown, uerr := UnknownKeys(raw)
@@ -344,6 +359,9 @@ func (p managedConfigProjection) config() Config {
 }
 
 func (c Config) ValidateDirect() error {
+	if err := c.Run.ValidateSourceBundle(); err != nil {
+		return err
+	}
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
 	}
@@ -361,6 +379,39 @@ func (c Config) ValidateDirect() error {
 	}
 	if err := c.Storage.Validate(); err != nil {
 		return err
+	}
+	return nil
+}
+
+var sourceBundleDigestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// ValidateSourceBundle validates configuration-only source bundle invariants.
+// Filesystem existence and directory checks belong to the CLI, where relative
+// paths can be resolved against the config file.
+func (r Run) ValidateSourceBundle() error {
+	if r.SourceBundle == nil {
+		return nil
+	}
+	if r.WorkingDir != "" {
+		return fmt.Errorf("run.source_bundle cannot be combined with run.working_dir")
+	}
+	path := r.SourceBundle.Path
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("run.source_bundle.path is required and must be a non-empty local directory path")
+	}
+	if path != strings.TrimSpace(path) {
+		return fmt.Errorf("run.source_bundle.path must not have surrounding whitespace (got %q)", path)
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return fmt.Errorf("run.source_bundle.path must not contain a NUL byte")
+	}
+	for _, exclude := range r.SourceBundle.Excludes {
+		if strings.IndexByte(exclude, 0) >= 0 {
+			return fmt.Errorf("run.source_bundle.excludes must not contain a NUL byte")
+		}
+	}
+	if digest := r.SourceBundle.Digest; digest != "" && !sourceBundleDigestRE.MatchString(digest) {
+		return fmt.Errorf("run.source_bundle.digest must be sha256: followed by 64 lowercase hexadecimal characters")
 	}
 	return nil
 }

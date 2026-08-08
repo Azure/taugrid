@@ -141,6 +141,9 @@ type Record struct {
 	ConfigHash         string            `json:"config_hash,omitempty"`
 	CodeSHA            string            `json:"code_sha,omitempty"`
 	TauCommand         string            `json:"tau_command,omitempty"`
+	SourceBundleDigest string            `json:"source_bundle_digest,omitempty"`
+	SourceBundlePVC    string            `json:"source_bundle_pvc,omitempty"`
+	SourceBundlePath   string            `json:"source_bundle_path,omitempty"`
 	ResultPath         string            `json:"result_path,omitempty"`
 	ResultPVC          string            `json:"result_pvc,omitempty"`
 	ArtifactURI        string            `json:"artifact_uri,omitempty"`
@@ -423,7 +426,7 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		ResultScope:        first(annotations[experiment.AnnotationResultScope], defaultResultScope),
 		Project:            project,
 		Group:              text(annotations[experiment.AnnotationStellarGroup]),
-		Tags:               stellarTags(annotations[experiment.AnnotationStellarTags]),
+		Tags:               lifecycleTags(stellarTags(annotations[experiment.AnnotationStellarTags]), annotations),
 		OwnerKind:          ownerKindValue,
 		OwnerName:          ownerName,
 		Namespace:          metadata.Namespace,
@@ -442,6 +445,9 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		ConfigHash:         text(annotations[experiment.AnnotationConfigHash]),
 		CodeSHA:            text(annotations[experiment.AnnotationCodeSHA]),
 		TauCommand:         text(annotations[experiment.AnnotationTauCommand]),
+		SourceBundleDigest: text(annotations[workloadmeta.AnnotationSourceBundleDigest]),
+		SourceBundlePVC:    text(annotations[workloadmeta.AnnotationSourceBundlePVC]),
+		SourceBundlePath:   text(annotations[workloadmeta.AnnotationSourceBundlePath]),
 		ResultPath:         text(annotations[experiment.AnnotationResultPath]),
 		ResultPVC:          text(annotations[experiment.AnnotationResultPVC]),
 		ArtifactURI:        uri(annotations[experiment.AnnotationArtifactURI]),
@@ -450,6 +456,37 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		ExperimentTracking: tracking,
 		ExperimentSource:   source,
 	}
+}
+
+// lifecycleTags preserves source-bundle provenance in the existing dynamic tags
+// column, so deployed lifecycle tables retain it without requiring a schema
+// migration. The dedicated Record fields keep the JSON contract easy to query.
+func lifecycleTags(tags map[string]string, annotations map[string]string) map[string]string {
+	sourceBundleTags := map[string]string{
+		"tau.source_bundle_digest": text(annotations[workloadmeta.AnnotationSourceBundleDigest]),
+		"tau.source_bundle_pvc":    text(annotations[workloadmeta.AnnotationSourceBundlePVC]),
+		"tau.source_bundle_path":   text(annotations[workloadmeta.AnnotationSourceBundlePath]),
+	}
+	for _, value := range sourceBundleTags {
+		if value != "" {
+			if tags == nil {
+				tags = make(map[string]string, len(sourceBundleTags))
+			} else {
+				copy := make(map[string]string, len(tags)+len(sourceBundleTags))
+				for key, tag := range tags {
+					copy[key] = tag
+				}
+				tags = copy
+			}
+			break
+		}
+	}
+	for key, value := range sourceBundleTags {
+		if value != "" {
+			tags[key] = value
+		}
+	}
+	return tags
 }
 
 func jobState(job Job) (string, string, string) {

@@ -116,7 +116,7 @@ func validateRunDispatchOptions(o runDispatchOptions) error {
 // import otherwise survives validation and admission and only fails inside a
 // Ray worker once the cluster is already up.
 func checkEntrypointImports(o runDispatchOptions) error {
-	if strings.TrimSpace(o.workingDir) != "" {
+	if strings.TrimSpace(o.workingDir) != "" || o.hasSourceBundle() {
 		// The whole project directory ships and Ray puts it on PYTHONPATH, so
 		// local imports resolve on the driver and on every worker.
 		return nil
