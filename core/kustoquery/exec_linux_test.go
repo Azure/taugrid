@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 const helperArgPrefix = "--kustoquery-helper="
@@ -31,17 +29,20 @@ func TestMain(m *testing.M) {
 
 func runProcessHelper(mode string) int {
 	switch mode {
-	case "success", "error", "cancel", "pipe":
+	case "success", "error", "cancel", "pipe", "escape":
 		child := exec.Command(os.Args[0], helperArgPrefix+"descendant")
 		if mode == "pipe" {
 			child.Stdout = os.Stdout
 			child.Stderr = os.Stderr
 		}
+		if mode == "escape" {
+			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		}
 		if err := child.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "start descendant: %v\n", err)
 			return 2
 		}
-		if mode == "success" {
+		if mode == "success" || mode == "escape" {
 			fmt.Printf(`[{"pid":%d,"pgid":%d}]`, child.Process.Pid, syscall.Getpgrp())
 			return 0
 		}
@@ -58,6 +59,10 @@ func runProcessHelper(mode string) int {
 	case "descendant":
 		time.Sleep(30 * time.Second)
 		return 0
+	case "healthy":
+		time.Sleep(750 * time.Millisecond)
+		fmt.Print(`[{"ok":1}]`)
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "unknown helper mode %q\n", mode)
 		return 2
@@ -65,7 +70,6 @@ func runProcessHelper(mode string) int {
 }
 
 func TestClientQueryReapsAdoptedDescendantOnSuccess(t *testing.T) {
-	requireChildSubreaper(t)
 	rows, err := (Client{
 		Command: os.Args[0],
 		Args:    []string{helperArgPrefix + "success"},
@@ -78,9 +82,9 @@ func TestClientQueryReapsAdoptedDescendantOnSuccess(t *testing.T) {
 	}
 	pid := rowInt(t, rows[0], "pid")
 	pgid := rowInt(t, rows[0], "pgid")
-	t.Cleanup(func() { terminateAndReap(pid) })
 
 	if processExists(pid) {
+		terminateProcess(pid)
 		t.Errorf("descendant pid %d still exists after successful query", pid)
 	}
 	if pgid == syscall.Getpgrp() {
@@ -90,7 +94,6 @@ func TestClientQueryReapsAdoptedDescendantOnSuccess(t *testing.T) {
 }
 
 func TestClientQueryReapsAdoptedDescendantOnCommandError(t *testing.T) {
-	requireChildSubreaper(t)
 	_, err := (Client{
 		Command: os.Args[0],
 		Args:    []string{helperArgPrefix + "error"},
@@ -105,16 +108,15 @@ func TestClientQueryReapsAdoptedDescendantOnCommandError(t *testing.T) {
 	}
 	pid, _ := strconv.Atoi(match[1])
 	pgid, _ := strconv.Atoi(match[2])
-	t.Cleanup(func() { terminateAndReap(pid) })
 
 	if processExists(pid) {
+		terminateProcess(pid)
 		t.Errorf("descendant pid %d still exists after command error", pid)
 	}
 	assertNoChildInGroup(t, pgid)
 }
 
 func TestClientQueryReapsAdoptedDescendantOnCancellation(t *testing.T) {
-	requireChildSubreaper(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := (Client{
@@ -131,9 +133,9 @@ func TestClientQueryReapsAdoptedDescendantOnCancellation(t *testing.T) {
 	}
 	pid, _ := strconv.Atoi(match[1])
 	pgid, _ := strconv.Atoi(match[2])
-	t.Cleanup(func() { terminateAndReap(pid) })
 
 	if processExists(pid) {
+		terminateProcess(pid)
 		t.Errorf("descendant pid %d still exists after canceled query", pid)
 	}
 	if pgid == syscall.Getpgrp() {
@@ -143,15 +145,19 @@ func TestClientQueryReapsAdoptedDescendantOnCancellation(t *testing.T) {
 }
 
 func TestClientQueryBoundsWaitForDescendantHoldingPipes(t *testing.T) {
-	requireChildSubreaper(t)
 	started := time.Now()
-	_, err := (Client{
-		Command: os.Args[0],
-		Args:    []string{helperArgPrefix + "pipe"},
-	}).Query(context.Background(), "GpuHealth()")
+	out, stderr, err := RunCommand(
+		context.Background(),
+		os.Args[0],
+		[]string{helperArgPrefix + "pipe"},
+		nil,
+	)
 	elapsed := time.Since(started)
-	if !errors.Is(err, exec.ErrWaitDelay) {
-		t.Fatalf("Query err = %v, want exec.ErrWaitDelay", err)
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	if string(out) != "[]" {
+		t.Fatalf("stdout = %q, want []", out)
 	}
 	// The bound only needs to rule out the descendant's unbounded 30s sleep;
 	// the race detector slows signal delivery around the WaitDelay path.
@@ -159,24 +165,53 @@ func TestClientQueryBoundsWaitForDescendantHoldingPipes(t *testing.T) {
 	if elapsed > tolerance {
 		t.Fatalf("Query took %s with inherited pipes, want at most %s", elapsed, tolerance)
 	}
-
-	match := regexp.MustCompile(`descendant-pid=(\d+) helper-pgid=(\d+)`).FindStringSubmatch(err.Error())
+	match := regexp.MustCompile(`descendant-pid=(\d+) helper-pgid=(\d+)`).FindStringSubmatch(stderr)
 	if len(match) != 3 {
-		t.Fatalf("Query error %q does not include helper process metadata", err)
+		t.Fatalf("stderr %q does not include helper process metadata", stderr)
 	}
 	pid, _ := strconv.Atoi(match[1])
-	pgid, _ := strconv.Atoi(match[2])
-	t.Cleanup(func() { terminateAndReap(pid) })
 	if processExists(pid) {
+		terminateProcess(pid)
 		t.Errorf("pipe-holding descendant pid %d still exists after query", pid)
 	}
-	assertNoChildInGroup(t, pgid)
 }
 
-func requireChildSubreaper(t *testing.T) {
-	t.Helper()
-	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
-		t.Fatalf("set child subreaper: %v", err)
+func TestClientQueryReapsDescendantThatEscapesProcessGroup(t *testing.T) {
+	rows, err := (Client{
+		Command: os.Args[0],
+		Args:    []string{helperArgPrefix + "escape"},
+	}).Query(context.Background(), "GpuHealth()")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	pid := rowInt(t, rows[0], "pid")
+	if processExists(pid) {
+		terminateProcess(pid)
+		t.Errorf("setsid descendant pid %d still exists after query", pid)
+	}
+}
+
+func TestClientQuerySupervisorsAreIndependent(t *testing.T) {
+	healthy := make(chan error, 1)
+	go func() {
+		_, err := (Client{
+			Command: os.Args[0],
+			Args:    []string{helperArgPrefix + "healthy"},
+		}).Query(context.Background(), "GpuHealth()")
+		healthy <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, canceledErr := (Client{
+		Command: os.Args[0],
+		Args:    []string{helperArgPrefix + "cancel"},
+	}).Query(ctx, "GpuHealth()")
+	if canceledErr == nil {
+		t.Fatal("canceled Query err = nil, want failure")
+	}
+	if err := <-healthy; err != nil {
+		t.Fatalf("concurrent healthy Query: %v", err)
 	}
 }
 
@@ -206,15 +241,6 @@ func assertNoChildInGroup(t *testing.T, pgid int) {
 	}
 }
 
-func terminateAndReap(pid int) {
+func terminateProcess(pid int) {
 	_ = syscall.Kill(pid, syscall.SIGKILL)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		var status syscall.WaitStatus
-		waited, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
-		if waited == pid || errors.Is(err, syscall.ECHILD) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }

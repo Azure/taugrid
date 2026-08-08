@@ -3,22 +3,20 @@
 package kustoquery
 
 import (
-	"errors"
-	"os"
+	"bytes"
+	"context"
+	"io"
 	"os/exec"
+	"strings"
 )
 
-func configureProcessTree(*exec.Cmd) error { return nil }
-
-func cancelProcessTree(cmd *exec.Cmd) error {
-	if cmd.Process == nil {
-		return os.ErrProcessDone
-	}
-	err := cmd.Process.Kill()
-	if errors.Is(err, os.ErrProcessDone) {
-		return os.ErrProcessDone
-	}
-	return err
+func runCommand(ctx context.Context, name string, args []string, stdin io.Reader) ([]byte, string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = stdin
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = commandWaitDelay
+	err := cmd.Run()
+	return stdout.Bytes(), strings.TrimSpace(stderr.String()), err
 }
-
-func cleanupProcessTree(*exec.Cmd) error { return nil }
