@@ -2558,8 +2558,8 @@ function renderVariablesRail(snapshot) {
     h("div", { class: "rail-top" },
       h("p", { class: "rail-label" }, `${loadedRuns} loaded of ${canonicalRuns} · ${visibleRuns.length} visible`),
       h("div", { class: "run-toolbar" },
-        h("button", { type: "button", class: "icon-button", title: "Show all runs", onclick: showAllRuns }, "all"),
-        h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(listedRuns) }, "hide"),
+        h("button", { type: "button", class: "icon-button", title: "Show all runs", onclick: showAllRuns }, "Show all"),
+        h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(listedRuns) }, "Hide listed"),
       ),
       h("input", {
         type: "search",
@@ -5766,6 +5766,9 @@ function renderMetricChart(chart, options = {}) {
     bottom: height - margin.bottom,
   };
   const domain = chartDomain(chart, dataset);
+  const metricName = text(options.metricName, chart.metric_name);
+  const plottedPoints = dataset.reduce((total, series) => total + series.points.length, 0);
+  const chartSummary = `${metricName} line chart with ${dataset.length} visible series and ${plottedPoints} plotted ${plottedPoints === 1 ? "point" : "points"}. Steps ${formatAxisValue(domain.xMin)} to ${formatAxisValue(domain.xMax)}; values ${formatAxisValue(domain.yMin)} to ${formatAxisValue(domain.yMax)}.`;
   const project = (point) => ({
     x: projectLinear(point.step, domain.xMin, domain.xMax, plot.left, plot.right),
     y: projectLinear(point.value, domain.yMin, domain.yMax, plot.bottom, plot.top),
@@ -5775,7 +5778,7 @@ function renderMetricChart(chart, options = {}) {
     class: "stellar-line-chart",
     viewBox: `0 0 ${width} ${height}`,
     role: "img",
-    "aria-label": `${text(options.metricName, chart.metric_name)} line chart`,
+    "aria-label": chartSummary,
   });
   const yTicks = ticks(domain.yMin, domain.yMax, options.compact ? 4 : 5);
   const xTicks = ticks(domain.xMin, domain.xMax, options.compact ? 3 : 5);

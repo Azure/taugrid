@@ -761,8 +761,8 @@ body.embedded .landing-shell {
 
 .icon-button {
   display: inline-grid;
-  min-width: 28px;
-  height: 24px;
+  min-width: 32px;
+  min-height: 32px;
   place-items: center;
   padding: 0 6px;
   border: 1px solid var(--line);
@@ -979,7 +979,7 @@ body.embedded .landing-shell {
 
 .run-row {
   display: grid;
-  grid-template-columns: 16px 16px minmax(0, 1fr);
+  grid-template-columns: 24px 16px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
   padding: 7px 4px;
@@ -1019,9 +1019,9 @@ body.embedded .landing-shell {
 }
 
 .run-row input {
-  width: 14px;
-  height: 14px;
-  margin: 3px 0 0;
+  width: 24px;
+  height: 24px;
+  margin: 0;
   accent-color: var(--aim-primary);
 }
 
