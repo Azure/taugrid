@@ -1511,7 +1511,8 @@ async function loadMetricSnapshot(metricName, options = {}) {
   }
   const loadPromise = (async () => {
     const errors = selectedMetric ? state.featuredErrors : state.presetMetricErrors;
-    errors.delete(metricName);
+    state.featuredErrors.delete(metricName);
+    state.presetMetricErrors.delete(metricName);
     try {
       const snapshot = await fetchSnapshotFor(metricName, request);
       if (state.target !== requestTarget) {
@@ -1524,7 +1525,8 @@ async function loadMetricSnapshot(metricName, options = {}) {
       if (loadedMetric !== metricName) {
         cache.set(metricName, hydratedSnapshot);
       }
-      errors.delete(loadedMetric);
+      state.featuredErrors.delete(loadedMetric);
+      state.presetMetricErrors.delete(loadedMetric);
       if (state.metric === loadedMetric || state.metric === metricName) {
         setPanelSnapshotForMetric(loadedMetric, summary);
       }
@@ -3091,6 +3093,7 @@ async function refreshAdditionalRuns() {
     }
     state.additionalRuns = list(result.runs);
     state.runSearchTruncated = result.truncated === true;
+    state.runsError = "";
   } finally {
     if (state.target === requestTarget) {
       state.runsLoading = false;
