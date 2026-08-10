@@ -363,6 +363,7 @@ type RunSearchResult struct {
 }
 
 type ExperimentSearchOptions struct {
+	Target        string
 	Query         string
 	Workspace     string
 	Project       string

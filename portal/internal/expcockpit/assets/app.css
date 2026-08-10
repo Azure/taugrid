@@ -972,6 +972,38 @@ body.embedded .landing-shell {
   align-items: start;
   padding: 7px 4px;
   border-radius: 6px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 54px;
+}
+
+.run-load-more {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.run-load-more:hover:not(:disabled) {
+  background: #f6f5f1;
+}
+
+.run-load-more:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.run-load-status {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  color: #b42318;
+  font-size: 11px;
 }
 
 .run-row input {

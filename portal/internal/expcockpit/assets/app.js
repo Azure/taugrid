@@ -10,6 +10,7 @@ const config = {
   metric: root?.dataset.metric || "",
   snapshotPath: root?.dataset.snapshotPath || "/api/stellar/snapshot",
   seriesPath: root?.dataset.seriesPath || "/api/stellar/series",
+  runsPath: root?.dataset.runsPath || "/api/stellar/runs",
   experimentsPath: root?.dataset.experimentsPath || "/api/stellar/experiments",
   source: root?.dataset.source || "",
   refreshInterval: root?.dataset.refreshInterval || root?.dataset.autoRefreshInterval || "",
@@ -40,6 +41,8 @@ const focusedSeriesResolutionOptions = [
 ];
 const defaultAutoRefreshIntervalMs = 30000;
 const minAutoRefreshIntervalMs = 5000;
+const runPageSize = 200;
+const maxLoadedRuns = 1000;
 const pinnedStoragePrefix = "stellar:pinnedMetrics:";
 const dashboardSectionStoragePrefix = "stellar:dashboardSections:";
 const runUpdatedFilterOptions = [
@@ -134,6 +137,11 @@ const state = {
   selectedMetrics: initialPinnedMetrics(),
   metricSelectionInitialized: false,
   hiddenRuns: new Set(),
+  additionalRuns: [],
+  runSearchLimit: runPageSize,
+  runSearchTruncated: false,
+  runsLoading: false,
+  runsError: "",
   snapshot: null,
   summarySnapshot: null,
   fullSnapshot: null,
@@ -1109,6 +1117,14 @@ function snapshotURL(metric = state.metric, options = {}) {
   return url;
 }
 
+function runsURL(limit) {
+  const url = new URL(config.runsPath, window.location.origin);
+  url.searchParams.set("target", state.target);
+  url.searchParams.set("limit", String(limit));
+  applySourceParam(url);
+  return url;
+}
+
 function experimentsURL(options = {}) {
   const url = new URL(config.experimentsPath, window.location.origin);
   const query = text(options.query ?? state.experimentSearch, "").trim();
@@ -1175,6 +1191,15 @@ async function fetchExperiments(options = {}) {
     throw new Error(`Experiment search failed (${response.status})`);
   }
   return response.json();
+}
+
+async function fetchRuns(limit) {
+  const response = await fetch(runsURL(limit), { headers: { Accept: "application/json" } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.detail || body.error || `Run search failed (${response.status})`);
+  }
+  return body;
 }
 
 async function refreshExperiments(options = {}) {
@@ -1306,6 +1331,11 @@ async function fetchSnapshot(options = {}) {
     renderLoading();
   }
   if (!autoRefresh) {
+    state.additionalRuns = [];
+    state.runSearchLimit = runPageSize;
+    state.runSearchTruncated = false;
+    state.runsLoading = false;
+    state.runsError = "";
     state.summarySnapshot = null;
     state.fullSnapshot = null;
     state.fullSnapshotLoading = false;
@@ -1332,6 +1362,10 @@ async function fetchSnapshot(options = {}) {
   }
   state.summarySnapshot = primary;
   state.snapshot = primary;
+  if (!autoRefresh) {
+    state.runSearchLimit = Math.max(runPageSize, list(primary.runs).length);
+    state.runSearchTruncated = list(primary.runs).length >= runPageSize;
+  }
   ensureSelectedMetrics(primary, { preserveSelection: autoRefresh });
 
   const selected = selectedMetricSpecs(primary);
@@ -2248,7 +2282,7 @@ function activeRunFilterLabels(snapshot) {
   }
   if (labels.length) {
     labels.push("Charts, runs, and evidence share these filters");
-  } else if (snapshot && list(snapshot.runs).length !== filteredRuns(snapshot).length) {
+  } else if (snapshot && allRuns(snapshot).length !== filteredRuns(snapshot).length) {
     labels.push("Filtered run set active");
   }
   return labels;
@@ -2433,6 +2467,7 @@ function renderVariablesRail(snapshot) {
       h("div", { class: "run-list" },
         ...listedRuns.map((run) => renderRunRailRow(run)),
       ),
+      renderRunLoadMore(),
     ),
     renderControlsDrawer(snapshot, metricSelect, groupSelect),
   );
@@ -2557,6 +2592,11 @@ function returnToLanding() {
   state.fullSnapshot = null;
   state.fullSnapshotLoading = false;
   state.fullSnapshotError = "";
+  state.additionalRuns = [];
+  state.runSearchLimit = runPageSize;
+  state.runSearchTruncated = false;
+  state.runsLoading = false;
+  state.runsError = "";
   state.hiddenRuns.clear();
   state.focusedSeriesCache.clear();
   state.featuredSnapshots.clear();
@@ -2686,7 +2726,7 @@ function renderLifecycleFilters(snapshot) {
   return h("div", { class: "run-filter-chips", role: "list", "aria-label": "Run lifecycle filters" },
     ...options.map((option) => {
       const active = state.lifecycleFilter === option.id;
-      const count = option.id ? counts[option.id] || 0 : list(snapshot.runs).length;
+      const count = option.id ? counts[option.id] || 0 : allRuns(snapshot).length;
       return h("button", {
         type: "button",
         class: `run-filter-chip ${active ? "active" : ""}`.trim(),
@@ -2734,7 +2774,7 @@ function renderRunUpdatedControls() {
 
 function lifecycleCounts(snapshot) {
   const counts = {};
-  for (const run of list(snapshot.runs)) {
+  for (const run of allRuns(snapshot)) {
     const lifecycle = runLifecycle(run);
     counts[lifecycle] = (counts[lifecycle] || 0) + 1;
   }
@@ -2868,6 +2908,46 @@ function renderRunRailRow(run) {
       ),
     ),
   );
+}
+
+function renderRunLoadMore() {
+  if (state.runsError) {
+    return h("div", { class: "run-load-status", role: "status" },
+      h("span", {}, state.runsError),
+      h("button", { type: "button", class: "run-load-more", onclick: () => loadMoreRuns() }, "Retry"),
+    );
+  }
+  if (state.runsLoading || state.runSearchTruncated) {
+    const remaining = Math.max(0, maxLoadedRuns - state.runSearchLimit);
+    return h("button", {
+      type: "button",
+      class: "run-load-more",
+      disabled: state.runsLoading || remaining === 0,
+      onclick: () => loadMoreRuns(),
+    }, state.runsLoading ? "Loading runs..." : remaining === 0 ? "Run limit reached" : `Load ${Math.min(runPageSize, remaining)} more runs`);
+  }
+  return null;
+}
+
+async function loadMoreRuns() {
+  if (state.runsLoading || state.runSearchLimit >= maxLoadedRuns) {
+    return;
+  }
+  const limit = Math.min(maxLoadedRuns, state.runSearchLimit + runPageSize);
+  state.runsLoading = true;
+  state.runsError = "";
+  render();
+  try {
+    const result = await fetchRuns(limit);
+    state.additionalRuns = list(result.runs);
+    state.runSearchLimit = limit;
+    state.runSearchTruncated = result.truncated === true;
+  } catch (error) {
+    state.runsError = error.message || String(error);
+  } finally {
+    state.runsLoading = false;
+    render();
+  }
 }
 
 function toggleRunVisibility(runID) {
@@ -4006,7 +4086,7 @@ function formatTableValue(value, spec) {
 
 function filteredRuns(snapshot, options = {}) {
   const query = state.search.trim().toLowerCase();
-  const runs = list(snapshot?.runs).filter((run) => {
+  const runs = allRuns(snapshot).filter((run) => {
     if (state.group && run.run_group_id !== state.group) {
       return false;
     }
@@ -4025,6 +4105,19 @@ function filteredRuns(snapshot, options = {}) {
     return searchableRunParts(run).some((part) => text(part, "").toLowerCase().includes(query));
   });
   return sortRunsByUpdated(runs);
+}
+
+function allRuns(snapshot) {
+  const runs = [];
+  const seen = new Set();
+  for (const run of [...list(snapshot?.runs), ...state.additionalRuns]) {
+    if (!run?.run_id || seen.has(run.run_id)) {
+      continue;
+    }
+    seen.add(run.run_id);
+    runs.push(run);
+  }
+  return runs;
 }
 
 function filteredRunIDs(snapshot, options = {}) {
