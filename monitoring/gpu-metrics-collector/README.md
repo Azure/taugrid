@@ -88,10 +88,14 @@ make build
 make test
 
 # Build container for ARM64 (stretch nodes)
-az acr build --registry aksmcrimagescommon --image unlisted/aks/ai-runtime/gpu-metrics-collector:v0.6 --platform linux/arm64 .
+docker buildx build --platform linux/arm64 \
+  -f images/gpu-metrics-collector/Dockerfile \
+  -t gpu-metrics-collector:dev --load .
 
 # Build container for AMD64
-az acr build --registry aksmcrimagescommon --image unlisted/aks/ai-runtime/gpu-metrics-collector:v0.6 --platform linux/amd64 .
+docker buildx build --platform linux/amd64 \
+  -f images/gpu-metrics-collector/Dockerfile \
+  -t gpu-metrics-collector:dev --load .
 ```
 
 ## Configuration
@@ -104,8 +108,8 @@ Rules are defined in the Helm `values.yaml` under `metricsCollector.rules` and r
 metricsCollector:
   enabled: true
   image:
-    repository: aksmcrimagescommon.azurecr.io/unlisted/aks/ai-runtime/gpu-metrics-collector
-    tag: v0.6
+    repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
+    tag: 5e606678
   scrapeInterval: "15s"
   resources:
     requests:
@@ -168,8 +172,8 @@ The collector runs as a sidecar in the NPD DaemonSet. Enable it per-SKU via over
 metricsCollector:
   enabled: true
   image:
-    repository: aksmcrimagescommon.azurecr.io/unlisted/aks/ai-runtime/gpu-metrics-collector
-    tag: v0.6
+    repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
+    tag: 5e606678
 ```
 
 ### Adding Custom Rules

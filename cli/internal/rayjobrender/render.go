@@ -33,8 +33,8 @@ import (
 )
 
 const (
-	RayVersion      = "2.54.0"
-	DefaultGPUImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0"
+	RayVersion      = "2.56.0"
+	DefaultGPUImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
 	DefaultCPUImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0"
 
 	metricsPort              = 8080
@@ -694,7 +694,7 @@ func entrypoint(o Options) (string, error) {
 	// A plain install fails with EACCES on the canonical Ray CUDA image
 	// (DefaultGPUImage): pip cannot write to the root-owned
 	// /usr/lib/python3.12/site-packages/nvidia. Observed on
-	// ray:py3.12-ray2.54.0-cuda13.0. It installs cleanly on DefaultCPUImage,
+	// ray:py3.12-ray2.56.0-cuda13.0. It installs cleanly on DefaultCPUImage,
 	// where this fallback simply never fires. Retry into the user site rather
 	// than making every researcher set PIP_USER=1 by hand.
 	b.WriteString("if [ -s /script/requirements.txt ]; then python3 -m pip install --quiet --no-cache-dir -r /script/requirements.txt || python3 -m pip install --quiet --no-cache-dir --user -r /script/requirements.txt; fi\n")

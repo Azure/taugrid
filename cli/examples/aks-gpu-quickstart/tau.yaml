@@ -29,7 +29,7 @@ compute:
 runtime:
   # CUDA build of the canonical Ray image. The CPU quickstart's plain
   # py3.12-ray2.54.0 tag ships no CUDA runtime and cannot see the device.
-  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
   pip:
     # The default PyPI torch wheel bundles its own CUDA runtime libraries, so no
     # extra index URL is needed; it only requires a recent enough host driver,

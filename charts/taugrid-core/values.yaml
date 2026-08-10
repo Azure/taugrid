@@ -52,7 +52,7 @@ prewarm:
     - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
     - { key: sku, operator: Equal, value: gpu, effect: NoSchedule }
   images:
-    - mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+    - mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 
 # Spegel handle (just a doc-pointer + namespace existence assertion;
 # install the upstream chart separately for now).
@@ -115,9 +115,9 @@ stellar:
     idempotencyKey: tau-stellar-expstore-init
   image:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
-    # Use a published immutable short-SHA build tag from MCR.
+    # b5f7e2b8b85f is the immutable build currently promoted as latest in MCR.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: ""
+    tag: b5f7e2b8b85f
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   deploymentAnnotations: {}
@@ -218,10 +218,10 @@ lifecycleRecorder:
     database: Metrics
     table: TauExpRunLifecycle
   image:
-    # Customer/public shipped first-party images use MCR. Enabled installs must
-    # pin the exact promoted image digest; mutable tags are rejected.
+    # b73a5762d54f is the immutable tag promoted as latest. Use its multi-arch
+    # digest because mutable tags are rejected for the recorder.
     repository: mcr.microsoft.com/aks/ai-runtime/tau
-    digest: ""
+    digest: sha256:1ff3aa523b9ad1f7d34918108197097a887bb336c27db1c6be776940f8f323a4
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   podLabels: {}
@@ -373,7 +373,8 @@ portal:
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: ""
+    # Immutable build currently promoted as latest in MCR.
+    tag: b5f7e2b8b85f
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []

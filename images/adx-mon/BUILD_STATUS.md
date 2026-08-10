@@ -100,7 +100,7 @@ File: `.github/workflows/publish-adx-mon-images.yaml`
 Pattern: follows `publish-gpu-metrics-collector.yaml` exactly  
 Pool: `1ES.Pool=1es-<runner-pool>`  
 Trigger: `workflow_dispatch` with `releaseTag` input  
-ACR: `aksmcrimagescommon.azurecr.io/public/aks/ai-runtime/adx-mon/{collector,ingestor,alerter,operator}`
+Public images: `mcr.microsoft.com/aks/ai-runtime/adx-mon/{collector,ingestor,alerter,operator}:v0.3.0`
 
 ---
 

@@ -37,7 +37,11 @@ package_charts() {
 
   for chart in "${CHARTS[@]}"; do
     echo "Validating ${chart}"
-    helm dependency build "$chart"
+    if [[ "$chart" == "charts/taugrid" ]]; then
+      scripts/ci/vendor-taugrid-dependencies.sh "$chart"
+    else
+      helm dependency build "$chart"
+    fi
     helm lint "$chart"
     helm template test "$chart" > /dev/null
     helm package "$chart" --destination "$output_dir"

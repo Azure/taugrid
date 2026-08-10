@@ -111,8 +111,7 @@ returning `ResourceGroupNotFound` after cleanup.
 
 ## Design decisions (safe naming / no collisions)
 
-- Region: `eastus2` (matches the existing `taugrid-*` test clusters
-  and the `aksairuntime` ACR, all in the same region/subscription).
+- Region: `eastus2` (matches the existing `taugrid-*` test clusters).
 - Dedicated resource group: `taugrid-cpu-quickstart-rg` — does not
   collide with any existing RG, and makes final cleanup a single
   `az group delete`.
@@ -288,7 +287,7 @@ does not require ADX/Kusto:
 # "{{ .repository }}:{{ .tag }}" and has no digest support, so a digest cannot
 # be pinned here even though AGENTS.md prefers one. Use a short-SHA tag, which
 # is immutable in practice, and verify it resolves before installing.
-STELLAR_TAG="ece2e751a66b"
+STELLAR_TAG="b5f7e2b8b85f"
 
 # Preflight the public consumer path: fail here, not 5 minutes into a rollout.
 curl --fail --silent --show-error --output /dev/null \
@@ -308,8 +307,8 @@ tau cluster install \
   --wait --timeout 8m
 ```
 
-> **Note:** `ece2e751a66b` resolved from public MCR to
-> `sha256:cdb4ff5cd4b7c39d55aaaa64c9e1d1cf3886413856c40bf5466ce12fb8c333b3`
+> **Note:** `b5f7e2b8b85f` resolved from public MCR to
+> `sha256:2ecc4b111416a370c024a24274cebaed85e2046ea301fe84d0327963503b190b`
 > when this example was written. If the preflight fails, use the discovery
 > command above to choose a current immutable tag.
 

@@ -11,9 +11,9 @@ partOf: taugrid
 # or digest only to run a mirrored or pre-release build.
 image:
   repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
-  # A digest is immutable, so IfNotPresent is correct; set tag instead only for
-  # a mutable pre-release build.
-  digest: sha256:f08c589695d0c9f0b230327eecd01e285801204a48fa1f21be684a08ca1f2357
+  # b73a5762d54f is the immutable tag promoted as latest. Pin its multi-arch
+  # digest so deployments cannot drift if a mutable tag moves.
+  digest: sha256:0f1d58b3cb2a9297117670874ef2e7df35847f13e2a34edb02126f1a4a8dd766
   tag: ""
   pullPolicy: IfNotPresent
 

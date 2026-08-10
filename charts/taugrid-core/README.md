@@ -162,7 +162,8 @@ the hosted experience now runs through Tau Portal. The retained values are an
 explicit compatibility/debug path in the `tau` namespace; keep that namespace
 distinct from the `ray` workload namespace used for researcher RayJobs, Kueue
 LocalQueues, and the `blob-training` `/data` PVC. To render the deprecated
-standalone path, opt in explicitly and pin a published TauGrid Portal image:
+standalone path, opt in explicitly. The chart defaults to the latest immutable
+TauGrid Portal build promoted through MCR:
 
 ```bash
 # Keep the existing taugrid-core release name for this test-cluster upgrade.
@@ -170,8 +171,6 @@ helm upgrade --install taugrid-core ./taugrid-core \
   --kube-context my-cluster \
   -f values-test-clusters.yaml \
   --set stellar.enabled=true \
-  --set stellar.image.repository=mcr.microsoft.com/aks/ai-runtime/taugrid-portal \
-  --set stellar.image.tag=<pinned-taugrid-portal-image-tag> \
   --set stellar.kusto.queryCommand=/usr/local/bin/query-kusto \
   --set stellar.serviceAccount.create=true \
   --set stellar.serviceAccount.name=tau-stellar
@@ -267,7 +266,6 @@ alongside or instead of the standalone Stellar Deployment.
 helm upgrade --install taugrid-core ./taugrid-core \
   --kube-context my-cluster \
   --set portal.enabled=true \
-  --set portal.image.tag=<pinned-taugrid-portal-image-tag> \
   --set portal.serviceAccount.create=true \
   --set portal.serviceAccount.name=tau-portal \
   --set portal.rbac.create=true \

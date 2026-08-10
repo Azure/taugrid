@@ -37,8 +37,8 @@ short-SHA image has been pushed and verified.
 
 ## Publish and consume
 
-1. Build and push the multi-arch image to the backing repository,
-   `aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau:<short-sha>`.
+1. Build and push the multi-arch image to the backing repository configured by
+   the local Makefile.
 2. Verify that immutable source tag with `docker buildx imagetools inspect` in
    `the release pipeline`.
 3. Confirm the same short-SHA tag is available from

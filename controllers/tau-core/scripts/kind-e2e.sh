@@ -188,7 +188,7 @@ for want in \
   fi
 done
 if grep -q "azurecr.io" <<<"${rendered_deployment}"; then
-  echo "local-image deployment rewrite still references the private ACR digest" >&2
+  echo "local-image deployment rewrite still references a backing ACR image" >&2
   exit 1
 fi
 

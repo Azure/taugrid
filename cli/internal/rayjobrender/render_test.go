@@ -988,12 +988,12 @@ func TestParseRayVersionFromImage(t *testing.T) {
 		image string
 		want  [2]int
 	}{
-		{"mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0", [2]int{2, 54}},
+		{"mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0", [2]int{2, 56}},
 		{"mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0", [2]int{2, 54}},
 		{"registry.example.com/taugrid/ray:py3.10-ray2.39.0-gpu-rdma-jammy-custom", [2]int{2, 39}},
 		{"custom-registry.io/ray:py3.11-ray2.40.1-custom", [2]int{2, 40}},
-		{"no-version-tag:latest", [2]int{2, 54}}, // falls back to RayVersion constant
-		{"", [2]int{2, 54}},                      // empty falls back
+		{"no-version-tag:latest", [2]int{2, 56}}, // falls back to RayVersion constant
+		{"", [2]int{2, 56}},                      // empty falls back
 	}
 	for _, tt := range tests {
 		got := parseRayVersion(tt.image)

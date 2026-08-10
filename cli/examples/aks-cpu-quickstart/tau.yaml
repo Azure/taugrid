@@ -38,7 +38,7 @@ runtime:
     # nodes). Verified working on this CPU-only image: a measured run imported
     # torch 2.13.0+cu130 and completed training. The root-owned site-packages
     # permission failure seen on the CUDA image variant
-    # (ray:py3.12-ray2.54.0-cuda13.0) does not apply here.
+    # (ray:py3.12-ray2.56.0-cuda13.0) does not apply here.
     - PyYAML>=6.0
     - torch>=2.4.0
 # Source: arxiv:2506.23060v1

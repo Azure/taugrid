@@ -83,7 +83,7 @@ func TestCheckMultiKueuePreflight_AllHealthy(t *testing.T) {
 		{Kind: depcontract.KindImagePullSecret, Namespace: "ray", Name: "acr-secret", Roles: []depcontract.Role{depcontract.RoleJob}},
 		{Kind: depcontract.KindPersistentVolumeClaim, Namespace: "ray", Name: "blob-training", Roles: []depcontract.Role{depcontract.RoleJob}},
 		{Kind: depcontract.KindSecretProviderClass, Namespace: "ray", Name: "kv-spc", Roles: []depcontract.Role{depcontract.RoleJob}},
-		{Kind: depcontract.KindImage, Name: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0"},
+		{Kind: depcontract.KindImage, Name: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"},
 	}
 
 	workers := []Worker{
@@ -507,7 +507,7 @@ func TestCheckMultiKueuePreflight_NamespacedDependencyWithoutNamespaceFailsBefor
 func TestCheckMultiKueuePreflight_OnlyClusterScopedDependenciesMayOmitNamespace(t *testing.T) {
 	workerA := &fakeRunner{responses: map[string]string{}}
 	deps := []depcontract.Dependency{
-		{Kind: depcontract.KindImage, Name: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0"},
+		{Kind: depcontract.KindImage, Name: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"},
 	}
 	workers := []Worker{{Context: "worker-a", Runner: workerA}}
 

@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - charts/**
+      - scripts/ci/vendor-taugrid-dependencies.sh
       - .github/workflows/ci-helm-charts.yml
   workflow_dispatch:
 
@@ -45,6 +46,9 @@ jobs:
             | grep '^charts/' \
             | cut -d/ -f1-2 \
             | sort -u || true)
+          if grep -qx 'scripts/ci/vendor-taugrid-dependencies.sh' <<<"${CHANGED_FILES}"; then
+            CHANGED_DIRS=$(printf '%s\ncharts/taugrid\n' "${CHANGED_DIRS}" | sort -u)
+          fi
 
           # Charts to validate = changed chart directories that contain a Chart.yaml.
           CHART_LIST=$(
@@ -92,7 +96,12 @@ jobs:
           version: v${{ matrix.helm_version }}
 
       - name: Build chart dependencies
-        run: helm dependency build "${{ matrix.chart }}"
+        run: |
+          if [[ "${{ matrix.chart }}" == "charts/taugrid" ]]; then
+            scripts/ci/vendor-taugrid-dependencies.sh "${{ matrix.chart }}"
+          else
+            helm dependency build "${{ matrix.chart }}"
+          fi
 
       - name: Lint chart
         run: helm lint "${{ matrix.chart }}"

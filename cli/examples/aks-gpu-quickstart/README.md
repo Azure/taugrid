@@ -177,7 +177,7 @@ The only GPU-specific settings live in the researcher's `tau.yaml`:
 compute:
   gpus: 1
 runtime:
-  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
   pip: [torch>=2.4.0]
 ```
 

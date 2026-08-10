@@ -6,10 +6,9 @@ experiment dashboard and the unified observability Portal. It was split out of
 embedded JS/CSS/HTML assets, and the experiment store.
 
 It follows the same build/publish pattern as [`images/tau`](../tau/README.md):
-multi-arch BuildX push to
-`aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal:<short-sha>`,
-then MCR syndication and a workflow-created `:latest` tag. The entrypoint is
-`taugrid-portal`, so Kubernetes manifests pass normal CLI arguments directly.
+multi-arch BuildX push to the backing repository, then MCR syndication and a
+workflow-created `:latest` tag. The entrypoint is `taugrid-portal`, so
+Kubernetes manifests pass normal CLI arguments directly.
 
 ## Who needs this image
 
@@ -45,8 +44,8 @@ render `/bin/sh -lc` for this image.
 
 ## Publish and consume
 
-1. Build and push the multi-arch image to
-   `aksairuntime.azurecr.io/unlisted/aks/ai-runtime/taugrid-portal:<short-sha>`.
+1. Build and push the multi-arch image to the backing repository configured by
+   the local Makefile.
 2. Verify the pushed short-SHA image with `docker buildx imagetools inspect` as
    part of `the release pipeline`.
 3. Confirm the same short-SHA tag is available from
