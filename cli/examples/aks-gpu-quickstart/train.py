@@ -171,12 +171,12 @@ def train_loop(config: dict) -> None:
         # Warm up so we time steady-state compute rather than lazy CUDA module load
         # and autotuning, which would otherwise dominate a short measurement.
         for _ in range(5):
-            a @ b
+            _ = a @ b
         torch.cuda.synchronize()
 
         start = time.perf_counter()
         for _ in range(MATMUL_ITERS):
-            a @ b
+            _ = a @ b
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
 

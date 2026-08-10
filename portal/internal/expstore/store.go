@@ -1064,16 +1064,13 @@ func acquireStoreWriteLock(ctx context.Context, root string) (*storeWriteLock, e
 			return &storeWriteLock{file: f}, nil
 		}
 		if !isLockBusy(err) {
-			f.Close()
-			return nil, fmt.Errorf("lock experiment store %s: %w", root, err)
+			return nil, errors.Join(fmt.Errorf("lock experiment store %s: %w", root, err), f.Close())
 		}
 		select {
 		case <-ctx.Done():
-			f.Close()
-			return nil, fmt.Errorf("lock experiment store %s: %w", root, ctx.Err())
+			return nil, errors.Join(fmt.Errorf("lock experiment store %s: %w", root, ctx.Err()), f.Close())
 		case <-timeout.C:
-			f.Close()
-			return nil, fmt.Errorf("%w: timed out waiting for experiment store writer lock %s", ErrConflict, path)
+			return nil, errors.Join(fmt.Errorf("%w: timed out waiting for experiment store writer lock %s", ErrConflict, path), f.Close())
 		case <-ticker.C:
 		}
 	}
@@ -1128,7 +1125,7 @@ func (s *Store) appendJSONLWithRollback(name string, record any) (func() error, 
 		return os.Truncate(path, offset)
 	}
 	if _, err := f.Write(raw); err != nil {
-		f.Close()
+		err = errors.Join(err, f.Close())
 		_ = cleanup()
 		return nil, err
 	}

@@ -552,11 +552,13 @@ func (b *fileBackend) WriteFile(_ context.Context, p string, data []byte, overwr
 			}
 			return err
 		}
-		defer f.Close()
 		if _, err := f.Write(data); err != nil {
-			return err
+			return errors.Join(err, f.Close())
 		}
-		return f.Sync()
+		if err := f.Sync(); err != nil {
+			return errors.Join(err, f.Close())
+		}
+		return f.Close()
 	}
 	return b.writeFileAtomic(lp, data)
 }

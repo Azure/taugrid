@@ -5,6 +5,7 @@ package expstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -156,8 +157,7 @@ func copyFile(src, dest string, mode os.FileMode, result *ExportResult) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+		return errors.Join(err, out.Close())
 	}
 	if err := out.Close(); err != nil {
 		return err
