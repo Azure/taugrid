@@ -2298,13 +2298,11 @@ function renderOperationalSummary(snapshot) {
   const active = (counts.running || 0) + (counts.pending || 0);
   const stale = counts.not_responding || 0;
   const failed = counts.failed || 0;
-  const missingTelemetry = list(snapshot.runs).filter((run) => !list(run.metric_names).length).length;
-  const queryErrors = new Set([
-    ...state.featuredErrors.values(),
-    ...state.presetMetricErrors.values(),
-    state.focusedSeriesError,
-    state.fullSnapshotError,
-  ].filter(Boolean)).size;
+  const missingTelemetry = allRuns(snapshot).filter((run) => !list(run.metric_names).length).length;
+  const queryErrors = state.featuredErrors.size
+    + state.presetMetricErrors.size
+    + Number(Boolean(state.focusedSeriesError))
+    + Number(Boolean(state.fullSnapshotError));
   const needsAttention = failed + stale + missingTelemetry + queryErrors > 0;
   const nextAction = failed
     ? "Review failed runs"
@@ -2318,7 +2316,8 @@ function renderOperationalSummary(snapshot) {
 
   return h("section", {
     class: `operational-summary ${needsAttention ? "needs-attention" : ""}`.trim(),
-    "aria-label": "Operational status",
+    "aria-label": "Loaded run operational status",
+    title: "Run counts cover loaded runs only.",
   },
     h("h2", {}, needsAttention ? "Needs attention" : active ? "Operational" : "No active runs"),
     renderCompactStatusRow([
@@ -2416,7 +2415,7 @@ function renderTopbar(snapshot) {
     renderExperimentSearchBar(),
     h("div", { class: "topbar-actions" },
       renderSourceStatus(),
-      statPill("loaded runs", list(snapshot.runs).length),
+      statPill("loaded runs", allRuns(snapshot).length),
       statPill("metric files", snapshot.status?.metric_files),
       renderRefreshStatus(),
     ),
@@ -2532,7 +2531,7 @@ function experimentsErrorMessage() {
 function renderVariablesRail(snapshot) {
   const visibleRuns = filteredRuns(snapshot);
   const listedRuns = filteredRuns(snapshot, { includeHidden: true });
-  const loadedRuns = list(snapshot.runs).length;
+  const loadedRuns = allRuns(snapshot).length;
   const canonicalRuns = canonicalRunCount(snapshot, loadedRuns);
   const metricSelect = h("select", {
     onchange: (event) => {
@@ -2897,7 +2896,7 @@ function lifecycleCounts(snapshot) {
 
 function canonicalRunCount(snapshot, loadedRuns) {
   const experimentID = snapshot.experiment?.experiment_id || snapshot.target;
-  const project = snapshot.experiment?.project || list(snapshot.runs)[0]?.project;
+  const project = snapshot.experiment?.project || allRuns(snapshot)[0]?.project;
   const experiment = list(state.experiments).find((candidate) =>
     candidate.experiment_id === experimentID && (!project || candidate.project === project));
   const total = Number(experiment?.run_count);
@@ -3055,20 +3054,28 @@ async function loadMoreRuns() {
   if (state.runsLoading || state.runSearchLimit >= maxLoadedRuns) {
     return;
   }
+  const requestTarget = state.target;
   const limit = Math.min(maxLoadedRuns, state.runSearchLimit + runPageSize);
   state.runsLoading = true;
   state.runsError = "";
   render();
   try {
     const result = await fetchRuns(limit);
+    if (state.target !== requestTarget) {
+      return;
+    }
     state.additionalRuns = list(result.runs);
     state.runSearchLimit = limit;
     state.runSearchTruncated = result.truncated === true;
   } catch (error) {
-    state.runsError = error.message || String(error);
+    if (state.target === requestTarget) {
+      state.runsError = error.message || String(error);
+    }
   } finally {
-    state.runsLoading = false;
-    render();
+    if (state.target === requestTarget) {
+      state.runsLoading = false;
+      render();
+    }
   }
 }
 
@@ -4050,10 +4057,14 @@ function bestSignal(snapshot, spec) {
   return snapshot.sweep?.best_run || null;
 }
 
-function metricValueForRun(metricName, runID) {
+function metricValueForRun(metricName, run) {
   const snapshot = snapshotForMetric(metricName);
-  const sweepRun = (snapshot?.sweep?.runs || []).find((run) => run.run_id === runID);
-  return sweepRun?.metric ?? "";
+  const sweepRun = list(snapshot?.sweep?.runs).find((candidate) => candidate.run_id === run.run_id);
+  if (sweepRun?.metric !== null && sweepRun?.metric !== undefined && sweepRun?.metric !== "") {
+    return sweepRun.metric;
+  }
+  const summary = list(run.metrics).find((metric) => metric.metric_name === metricName);
+  return summary?.latest_value ?? "";
 }
 
 function metricIsLoading(metricName) {
@@ -4102,7 +4113,7 @@ function missingMetricState(metricName, options = {}) {
 }
 
 function renderMetricValueForRun(metricName, run, spec) {
-  const value = metricValueForRun(metricName, run.run_id);
+  const value = metricValueForRun(metricName, run);
   if (value !== null && value !== undefined && value !== "") {
     return formatSignalValue(value, spec);
   }
@@ -4584,7 +4595,7 @@ function renderPinnedMetricCard(spec, options = {}) {
     options.reviewSecondary ? "review-secondary" : "",
     options.uniform ? "uniform" : "",
     state.metric === spec.name ? "focused" : "",
-    !snapshot || state.featuredErrors.has(spec.name) || !dataset.length ? "muted" : "",
+    !snapshot || metricErrorForName(spec.name) || !dataset.length ? "muted" : "",
   ].filter(Boolean).join(" ");
   return h("article", { class: classes },
     h("div", { class: "metric-card-head" },
