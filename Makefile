@@ -1,20 +1,32 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: help install-tau install-tau-cli install-tau-sdk \
+.PHONY: help build test lint check license-headers \
+	install-tau install-tau-cli install-tau-sdk \
 	install-taugrid-portal uninstall-tau uninstall-taugrid-portal \
 	tau-docs-build tau-docs-check tau-docs-serve
 
 REPO_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
 TAU_GO_DIR := $(REPO_ROOT)/cli
+CORE_DIR := $(REPO_ROOT)/core
 TAUGRID_PORTAL_DIR := $(REPO_ROOT)/portal
+TAU_CORE_CONTROLLER_DIR := $(REPO_ROOT)/controllers/tau-core
+GPU_HEALTH_CHECKER_DIR := $(REPO_ROOT)/monitoring/gpu-health-checker
+GPU_METRICS_COLLECTOR_DIR := $(REPO_ROOT)/monitoring/gpu-metrics-collector
 TAU_SDK_DIR := $(REPO_ROOT)/sdk/python/python
 TAU_SITE_DIR := $(REPO_ROOT)/site
 PYTHON ?= python3
+HOST_GOARCH := $(shell go env GOARCH)
+STATICCHECK_VERSION := v0.7.0
+GO_COMMAND_FLAGS := -mod=readonly -buildvcs=false
 
 help:
 	@echo "TauGrid repository targets:"
 	@echo ""
+	@echo "  make build                   # build first-party Go components"
+	@echo "  make test                    # run Go and Python unit tests"
+	@echo "  make lint                    # lint Go and Python source"
+	@echo "  make check                   # run build, test, lint, and license checks"
 	@echo "  make install-tau             # install the Tau CLI and optional Python SDK"
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
@@ -26,6 +38,51 @@ help:
 	@echo "  make tau-docs-serve          # serve the documentation site locally"
 	@echo ""
 	@echo "Override the Python SDK interpreter with PYTHON=/path/to/python."
+
+build:
+	$(MAKE) -C $(TAU_GO_DIR) build
+	@echo "==> core"
+	@cd $(CORE_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go build ./...
+	$(MAKE) -C $(TAUGRID_PORTAL_DIR) build
+	$(MAKE) -C $(TAU_CORE_CONTROLLER_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) build \
+		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
+	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
+
+test:
+	$(MAKE) -C $(TAU_GO_DIR) test
+	@echo "==> core"
+	@cd $(CORE_DIR) && go test ./...
+	$(MAKE) -C $(TAUGRID_PORTAL_DIR) test
+	$(MAKE) -C $(TAU_CORE_CONTROLLER_DIR) test
+	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) test GOARCH=$(HOST_GOARCH)
+	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) test
+	@echo "==> sdk/python/python"
+	@cd $(TAU_SDK_DIR) && $(PYTHON) -m pytest
+
+lint:
+	$(MAKE) -C $(TAU_GO_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	@echo "==> core"
+	@cd $(CORE_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go vet ./...
+	@cd $(CORE_DIR) && gofmt -l . | tee /dev/stderr | (! read -r _)
+	@cd $(CORE_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" \
+		go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+	$(MAKE) -C $(TAUGRID_PORTAL_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(TAU_CORE_CONTROLLER_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) lint \
+		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
+	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	@echo "==> sdk/python/python"
+	@cd $(TAU_SDK_DIR) && $(PYTHON) -m ruff check .
+
+check:
+	$(MAKE) build
+	$(MAKE) test
+	$(MAKE) lint
+	$(MAKE) license-headers
+
+license-headers:
+	python3 $(REPO_ROOT)/scripts/check-license-headers.py
 
 install-tau: install-tau-cli
 	$(MAKE) -C $(TAU_SDK_DIR) install-optional PYTHON="$(PYTHON)"
