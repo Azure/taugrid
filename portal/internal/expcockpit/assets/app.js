@@ -162,6 +162,7 @@ const state = {
   outputMediaStep: text(initialURL.searchParams.get("media_step"), ""),
   dashboardSections: initialDashboardSections(),
   expandedMetricFamilies: new Set(),
+  metricCatalogOpen: false,
   showAllPinnedCharts: false,
   autoRefresh: initialAutoRefreshState(),
 };
@@ -2267,6 +2268,7 @@ function render(options = {}) {
       h("div", { class: "workspace" },
         renderVariablesRail(snapshot),
         h("main", { class: "report-canvas" },
+          renderOperationalSummary(snapshot),
           h("section", { class: "panel-grid" }, ...renderDashboardSections(snapshot)),
         ),
       ),
@@ -2289,6 +2291,51 @@ function render(options = {}) {
     sections: visibleDashboardSectionIDs(),
     filters: activeRunFilterLabels(snapshot),
   });
+}
+
+function renderOperationalSummary(snapshot) {
+  const counts = lifecycleCounts(snapshot);
+  const active = (counts.running || 0) + (counts.pending || 0);
+  const stale = counts.not_responding || 0;
+  const failed = counts.failed || 0;
+  const missingTelemetry = list(snapshot.runs).filter((run) => !list(run.metric_names).length).length;
+  const queryErrors = new Set([
+    ...state.featuredErrors.values(),
+    ...state.presetMetricErrors.values(),
+    state.focusedSeriesError,
+    state.fullSnapshotError,
+  ].filter(Boolean)).size;
+  const needsAttention = failed + stale + missingTelemetry + queryErrors > 0;
+  const nextAction = failed
+    ? "Review failed runs"
+    : stale
+      ? "Review runs that are not responding"
+      : queryErrors
+        ? "Retry failed metric queries"
+        : missingTelemetry
+          ? "Inspect runs without telemetry"
+          : text(snapshot.summary?.next_action, active ? "Monitor active runs" : "Start or select a run");
+
+  return h("section", {
+    class: `operational-summary ${needsAttention ? "needs-attention" : ""}`.trim(),
+    "aria-label": "Operational status",
+  },
+    h("h2", {}, needsAttention ? "Needs attention" : active ? "Operational" : "No active runs"),
+    renderCompactStatusRow([
+      operationalCount("active", active),
+      operationalCount("stale", stale, stale ? "warning" : ""),
+      operationalCount("failed", failed, failed ? "critical" : ""),
+      operationalCount("missing telemetry", missingTelemetry, missingTelemetry ? "warning" : ""),
+      operationalCount("query errors", queryErrors, queryErrors ? "critical" : ""),
+    ], ["Next action: ", h("strong", {}, nextAction)]),
+  );
+}
+
+function operationalCount(label, value, tone = "") {
+  return h("span", { class: `evidence-count operational-count ${tone}`.trim() },
+    h("b", {}, value),
+    label,
+  );
 }
 
 function publishVisualState(status, detail = {}) {
@@ -4444,36 +4491,48 @@ function renderMetricCatalogPanel(snapshot) {
   const metricGroups = groupedMetricOptions(snapshot, { family: activeFamily });
   const matchingMetrics = metricCatalogCount(metricGroups);
   const totalMetrics = list(snapshot.metric_options).length;
-  const body = h("div", { class: "metric-dashboard metric-catalog-dashboard" },
-    h("div", { class: "dashboard-summary" },
-      statPill("focused", state.metric || "none"),
-      statPill("pinned", `${specs.length}/${maxPinnedMetrics}`),
-      statPill("available metrics", totalMetrics),
+  const body = h("details", {
+    class: "rail-disclosure metric-catalog-disclosure",
+    open: state.metricCatalogOpen,
+    ontoggle: (event) => {
+      state.metricCatalogOpen = event.currentTarget.open;
+    },
+  },
+    h("summary", {},
+      h("strong", {}, "Metric catalog"),
+      h("span", {}, `${totalMetrics} available · ${specs.length} pinned`),
     ),
-    renderMetricFamilyTabs(familyGroups, activeFamily),
-    h("div", { class: "metric-catalog-toolbar" },
-      h("input", {
-        type: "search",
-        value: state.metricSearch,
-        placeholder: "Search metrics, families, or cards",
-        "data-metric-search-input": true,
-        oninput: (event) => {
-          state.metricSearch = event.target.value;
-          render({ focusMetricSearch: true });
-        },
-      }),
-      h("span", {}, state.metricSearch ? `${matchingMetrics}/${totalMetrics} metrics` : activeFamily ? `${matchingMetrics}/${totalMetrics} metrics` : `${totalMetrics} metrics`),
-      matchingMetrics ? h("button", {
-        type: "button",
-        class: "metric-catalog-expand",
-        title: `Pin up to ${maxPinnedMetrics} metrics from the current ${activeFamily || "catalog"} view`,
-        onclick: () => pinVisibleMetricGroups(metricGroups),
-      }, `Pin visible ${Math.min(matchingMetrics, maxPinnedMetrics)}`) : null,
-    ),
-    h("div", { class: "metric-catalog" },
-      matchingMetrics
-        ? metricGroups.map((group) => renderMetricCatalogGroup(group))
-        : h("p", { class: "empty" }, "No metrics match the current search."),
+    h("div", { class: "rail-disclosure-body metric-dashboard metric-catalog-dashboard" },
+      h("div", { class: "dashboard-summary" },
+        statPill("focused", state.metric || "none"),
+        statPill("pinned", `${specs.length}/${maxPinnedMetrics}`),
+        statPill("available metrics", totalMetrics),
+      ),
+      renderMetricFamilyTabs(familyGroups, activeFamily),
+      h("div", { class: "metric-catalog-toolbar" },
+        h("input", {
+          type: "search",
+          value: state.metricSearch,
+          placeholder: "Search metrics, families, or cards",
+          "data-metric-search-input": true,
+          oninput: (event) => {
+            state.metricSearch = event.target.value;
+            render({ focusMetricSearch: true });
+          },
+        }),
+        h("span", {}, state.metricSearch ? `${matchingMetrics}/${totalMetrics} metrics` : activeFamily ? `${matchingMetrics}/${totalMetrics} metrics` : `${totalMetrics} metrics`),
+        matchingMetrics ? h("button", {
+          type: "button",
+          class: "metric-catalog-expand",
+          title: `Pin up to ${maxPinnedMetrics} metrics from the current ${activeFamily || "catalog"} view`,
+          onclick: () => pinVisibleMetricGroups(metricGroups),
+        }, `Pin visible ${Math.min(matchingMetrics, maxPinnedMetrics)}`) : null,
+      ),
+      h("div", { class: "metric-catalog" },
+        matchingMetrics
+          ? metricGroups.map((group) => renderMetricCatalogGroup(group))
+          : h("p", { class: "empty" }, "No metrics match the current search."),
+      ),
     ),
   );
   return configuredPanel("catalog", "Metric catalog", "Search and pin additional charts after the graph-first defaults.", body, "full metric-catalog-panel");
