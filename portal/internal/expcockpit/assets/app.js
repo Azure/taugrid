@@ -1212,13 +1212,8 @@ async function refreshExperiments(options = {}) {
   state.experimentsError = "";
   try {
     const result = await fetchExperiments(options);
-    const experiments = list(result.experiments);
-    if (experiments.length === 0 && state.experiments.length > 0) {
-      state.experimentsError = "Experiment refresh returned no results; showing previously loaded experiments.";
-    } else {
-      state.experiments = experiments;
-      state.experimentsLastCompletedAt = Date.now();
-    }
+    state.experiments = list(result.experiments);
+    state.experimentsLastCompletedAt = Date.now();
   } catch (error) {
     state.experimentsError = error.message || String(error);
   } finally {
@@ -1407,6 +1402,9 @@ async function fetchSnapshot(options = {}) {
 
   updateURL();
   await refreshExperiments({ query: state.experimentSearch, render: false });
+  if (autoRefresh) {
+    await refreshAdditionalRuns();
+  }
   if (backgroundMetricNames.length) {
     const loadOptions = {
       selectedMetricSet,
@@ -3075,6 +3073,27 @@ async function loadMoreRuns() {
     if (state.target === requestTarget) {
       state.runsLoading = false;
       render();
+    }
+  }
+}
+
+async function refreshAdditionalRuns() {
+  if (!state.additionalRuns.length || state.runsLoading) {
+    return;
+  }
+  const requestTarget = state.target;
+  const limit = state.runSearchLimit;
+  state.runsLoading = true;
+  try {
+    const result = await fetchRuns(limit);
+    if (state.target !== requestTarget) {
+      return;
+    }
+    state.additionalRuns = list(result.runs);
+    state.runSearchTruncated = result.truncated === true;
+  } finally {
+    if (state.target === requestTarget) {
+      state.runsLoading = false;
     }
   }
 }
