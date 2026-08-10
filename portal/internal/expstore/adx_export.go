@@ -9,6 +9,7 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -713,8 +714,7 @@ func writeADXJSONL(path string, schema ADXTableSchema, rows []map[string]any, me
 	enc := json.NewEncoder(f)
 	for _, row := range rows {
 		if err := enc.Encode(projectADXRow(schema, row, meta)); err != nil {
-			f.Close()
-			return err
+			return errors.Join(err, f.Close())
 		}
 	}
 	return f.Close()
@@ -731,8 +731,7 @@ func writeADXCSV(path string, schema ADXTableSchema, rows []map[string]any, meta
 		header = append(header, col.Name)
 	}
 	if err := cw.Write(header); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	for _, row := range rows {
 		projected := projectADXRow(schema, row, meta)
@@ -741,14 +740,12 @@ func writeADXCSV(path string, schema ADXTableSchema, rows []map[string]any, meta
 			record = append(record, adxCSVCell(projected[col.Name]))
 		}
 		if err := cw.Write(record); err != nil {
-			f.Close()
-			return err
+			return errors.Join(err, f.Close())
 		}
 	}
 	cw.Flush()
 	if err := cw.Error(); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	return f.Close()
 }

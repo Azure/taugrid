@@ -406,7 +406,6 @@ def train_loop(config: dict) -> None:
     )
 
     first_checkpoint_done = False
-    last_loss = math.nan
     for step in range(1, steps + 1):
         xb, yb = get_batch(tokens, batch_size, block_size, vocab_size, rank, step, device)
         _, loss = model(xb, yb)

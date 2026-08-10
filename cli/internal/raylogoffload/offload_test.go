@@ -446,8 +446,13 @@ func TestWrapShellScriptForwardsTermToWorkload(t *testing.T) {
 		t.Skip("bash entrypoint wrapper test requires Unix signal semantics")
 	}
 
-	completionPath := filepath.Join(t.TempDir(), "tau-driver-complete")
-	command := "trap 'exit 42' TERM INT\nwhile true; do sleep 1; done"
+	root := t.TempDir()
+	completionPath := filepath.Join(root, "tau-driver-complete")
+	readyPath := filepath.Join(root, "workload-ready")
+	command := fmt.Sprintf(
+		"trap 'exit 42' TERM INT\nprintf 'ready\\n' > %s\nwhile true; do sleep 1; done",
+		shellTestQuote(readyPath),
+	)
 	cmd := exec.Command("bash", "-c", WrapShellScript(command))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), "TAU_RAY_LOG_COMPLETION_FILE="+completionPath)
@@ -460,7 +465,23 @@ func TestWrapShellScriptForwardsTermToWorkload(t *testing.T) {
 		}
 	})
 
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ready, err := os.ReadFile(readyPath)
+		if err == nil {
+			if string(ready) != "ready\n" {
+				t.Fatalf("workload readiness marker = %q, want %q", ready, "ready\n")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read workload readiness marker: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("workload did not install its signal trap within 2s")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal wrapper: %v", err)
 	}

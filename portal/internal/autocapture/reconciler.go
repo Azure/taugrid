@@ -74,7 +74,6 @@ func (r Reconciler) Reconcile(ctx context.Context, store *expstore.Store, opts O
 		if err != nil {
 			return Result{}, err
 		}
-		record.Command = "exp autocapture"
 		augmentRunContext(record.RunContext, jobWorkloads, jobClaims)
 		enriched, err := store.EnrichRunData(ctx, expstore.EnrichRunDataOptions{
 			Run:        record.Run,

@@ -14,7 +14,9 @@ import pytest
 import yaml
 
 import tau
-from tau import workloads as _workloads  # for testing internal helpers + Ctx
+from tau.serve import serve as serve_workload
+
+_workloads = tau.workloads
 
 
 def _write_python(path: Path, source: str) -> None:
@@ -73,6 +75,7 @@ def test_finetune_module_is_not_exported():
 
 
 def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
+    assert tau.serve is serve_workload
     recorder = tmp_path / "tau_argv.txt"
     fake = tmp_path / "tau"
     _write_argv_recorder(fake, recorder)
@@ -81,7 +84,7 @@ def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
     def f(ctx):
         return ctx
 
-    handle = tau.serve(
+    handle = serve_workload(
         name="ft-endpoint",
         profile="research-serve",
         from_finetune=f,
@@ -111,9 +114,9 @@ def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
 
 
 def test_serve_rejects_multiple_checkpoint_sources():
-    tau.serve(name="svc", profile="research-serve")
+    serve_workload(name="svc", profile="research-serve")
     with pytest.raises(ValueError, match="at most one"):
-        tau.serve(
+        serve_workload(
             name="svc",
             profile="research-serve",
             from_finetune="ft",
@@ -126,7 +129,7 @@ def test_serve_accepts_model_ref_and_delegates_to_cli(tmp_path):
     fake = tmp_path / "tau"
     _write_argv_recorder(fake, recorder)
 
-    handle = tau.serve(
+    handle = serve_workload(
         name="sample-endpoint",
         profile="research-serve",
         from_model="sample-lora:best-loss",
@@ -780,7 +783,7 @@ def test_serve_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     _write_argv_recorder(fake_tau, recorder)
     monkeypatch.setenv("TAU_BINARY", str(fake_tau))
 
-    service = tau.serve(
+    service = serve_workload(
         name="example-serve",
         kind="rayservice",
         profile="ai-serve-gpu-l",
@@ -829,7 +832,7 @@ def test_serve_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
 
 
 def test_serve_validates_dry_run_without_spawning_tau():
-    service = tau.serve(name="x", profile="ai-serve-gpu-l")
+    service = serve_workload(name="x", profile="ai-serve-gpu-l")
     with pytest.raises(ValueError, match="dry_run must be"):
         service.deploy(dry_run="bogus")
 

@@ -23,10 +23,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable
 
 import numpy as np
 import torch
@@ -237,6 +237,8 @@ def prepare_fineweb_smoke_tokens(root: Path, target_tokens: int, history_path: P
             },
         )
         return out_path
+    handle = None
+    tmp = None
     try:
         import tiktoken
         from datasets import load_dataset
@@ -324,14 +326,12 @@ def prepare_fineweb_smoke_tokens(root: Path, target_tokens: int, history_path: P
         )
         return out_path
     except Exception as exc:
-        try:
-            handle.close()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
-        try:
-            tmp.unlink(missing_ok=True)  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
+        if handle is not None:
+            with suppress(Exception):
+                handle.close()
+        if tmp is not None:
+            with suppress(Exception):
+                tmp.unlink(missing_ok=True)
         log_jsonl(
             history_path,
             {

@@ -1461,11 +1461,12 @@ async function loadMetricSnapshot(metricName, options = {}) {
     target: requestTarget,
   };
   const loadKey = metricSnapshotLoadKey(metricName, request);
-  if (state.metricSnapshotLoads.has(loadKey)) {
-    await state.metricSnapshotLoads.get(loadKey);
+  const pendingLoad = state.metricSnapshotLoads.get(loadKey);
+  if (pendingLoad) {
+    await pendingLoad.promise;
     return;
   }
-  const load = (async () => {
+  const loadPromise = (async () => {
     const errors = selectedMetric ? state.featuredErrors : state.presetMetricErrors;
     errors.delete(metricName);
     try {
@@ -1488,9 +1489,10 @@ async function loadMetricSnapshot(metricName, options = {}) {
       errors.set(metricName, error.message || String(error));
     }
   })();
-  state.metricSnapshotLoads.set(loadKey, load);
-  await load;
-  if (state.metricSnapshotLoads.get(loadKey) === load) {
+  const loadEntry = { promise: loadPromise };
+  state.metricSnapshotLoads.set(loadKey, loadEntry);
+  await loadEntry.promise;
+  if (state.metricSnapshotLoads.get(loadKey) === loadEntry) {
     state.metricSnapshotLoads.delete(loadKey);
   }
 }
@@ -3559,7 +3561,7 @@ function defaultMetricSpecs(snapshot) {
   const knownNames = new Set(known.map((spec) => spec.name));
   const inferred = (snapshot.metric_options || [])
     .filter((option) => !knownNames.has(option.name))
-    .map((option) => metricSpecFromSnapshot(snapshot, option.name))
+    .map((option) => metricSpecFromSnapshot(snapshot, option.name));
   const prioritized = inferred.filter((spec) => metricResearchPriority(spec.name) < 100);
   const presetNames = new Set(researcherPresetMetricNames(snapshot));
   const preset = [...presetNames]
