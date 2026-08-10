@@ -8,7 +8,17 @@ TauGrid is a cloud-native AI infrastructure platform for GPU workloads on Kubern
 
 ## Build and Test Commands
 
-The repo has no top-level Makefile. Each component is built from its own directory:
+The top-level Makefile provides installation and documentation entry points:
+
+```bash
+make install-tau             # install the CLI and optional Python SDK
+make install-tau-cli         # install the CLI only
+make install-tau-sdk         # install the Python SDK in the active Python
+make install-taugrid-portal  # install the Portal CLI
+make tau-docs-check          # build and validate the documentation site
+```
+
+Each component can also be built and tested from its own directory:
 
 ### CLI (`cli/`)
 ```bash
