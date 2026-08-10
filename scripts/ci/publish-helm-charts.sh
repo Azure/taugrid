@@ -93,11 +93,16 @@ verify_existing_chart() {
   echo "Chart ${chart_name}:${chart_version} is already published with identical content; skipping."
 }
 
+cleanup_work_root() {
+  local work_root="$1"
+  rm -rf "$work_root"
+}
+
 publish_charts() {
   local package_dir="$1"
   local work_root
   work_root=$(mktemp -d)
-  trap 'rm -rf "$work_root"' EXIT
+  trap "cleanup_work_root $(printf '%q' "$work_root")" EXIT
 
   az acr login --name "$ACR_NAME"
 
