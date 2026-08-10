@@ -31,6 +31,14 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
+      kubernetes-go-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "k8s.io/api"
+          - "k8s.io/apiextensions-apiserver"
+          - "k8s.io/apimachinery"
+          - "k8s.io/client-go"
+          - "sigs.k8s.io/controller-runtime"
       go-dependency-updates:
         applies-to: version-updates
         patterns:
