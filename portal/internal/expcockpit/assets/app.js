@@ -126,6 +126,7 @@ const state = {
   experiments: [],
   experimentsLoading: false,
   experimentsError: "",
+  experimentsLastCompletedAt: 0,
   expandedExperimentIDs: initialExpandedExperiments(),
   search: "",
   lifecycleFilter: normalizeLifecycleFilter(initialURL.searchParams.get("lifecycle")),
@@ -1210,7 +1211,13 @@ async function refreshExperiments(options = {}) {
   state.experimentsError = "";
   try {
     const result = await fetchExperiments(options);
-    state.experiments = list(result.experiments);
+    const experiments = list(result.experiments);
+    if (experiments.length === 0 && state.experiments.length > 0) {
+      state.experimentsError = "Experiment refresh returned no results; showing previously loaded experiments.";
+    } else {
+      state.experiments = experiments;
+      state.experimentsLastCompletedAt = Date.now();
+    }
   } catch (error) {
     state.experimentsError = error.message || String(error);
   } finally {
@@ -1355,9 +1362,7 @@ async function fetchSnapshot(options = {}) {
   const metricMode = highMetricCatalog || autoRefresh ? "metric" : "";
   const primaryMetric = primary.chart?.metric_name || focusedMetric;
   if (autoRefresh) {
-    state.featuredSnapshots.clear();
     state.featuredErrors.clear();
-    state.presetMetricSnapshots.clear();
     state.presetMetricErrors.clear();
   }
   state.summarySnapshot = primary;
@@ -1390,6 +1395,7 @@ async function fetchSnapshot(options = {}) {
     summary: primary,
     mode: metricMode,
     includeStatic: !autoRefresh && !highMetricCatalog,
+    force: autoRefresh,
   });
   traceMeasure("stellar.fetchSnapshot.metricSnapshots", metricsMark);
   const panelMetric = state.metric || state.selectedMetrics[0] || primaryMetric;
@@ -1400,18 +1406,13 @@ async function fetchSnapshot(options = {}) {
 
   updateURL();
   await refreshExperiments({ query: state.experimentSearch, render: false });
-  if (!autoRefresh) {
-    state.autoRefresh.lastCompletedAt = Date.now();
-  }
-  if (shouldRender) {
-    render();
-  }
   if (backgroundMetricNames.length) {
     const loadOptions = {
       selectedMetricSet,
       summary: primary,
       mode: metricMode,
       includeStatic: !autoRefresh && !highMetricCatalog,
+      force: autoRefresh,
       render: shouldRender,
     };
     if (autoRefresh || options.deferBackground === false) {
@@ -1422,6 +1423,15 @@ async function fetchSnapshot(options = {}) {
   }
   if (options.loadAutoSeriesDetail !== false && autoSeriesDetail && state.metric) {
     await loadFocusedSeriesDetail();
+  }
+  if (!autoRefresh) {
+    state.autoRefresh.lastError = criticalRefreshError();
+    if (!state.autoRefresh.lastError) {
+      state.autoRefresh.lastCompletedAt = Date.now();
+    }
+  }
+  if (shouldRender) {
+    render();
   }
   traceMeasure("stellar.fetchSnapshot.total", overallMark);
 }
@@ -1479,12 +1489,12 @@ async function loadMetricSnapshot(metricName, options = {}) {
   }
   const selectedMetricSet = options.selectedMetricSet || new Set(normalizeMetricList(state.selectedMetrics));
   const selectedMetric = selectedMetricSet.has(metricName);
-  if (selectedMetric && state.presetMetricSnapshots.has(metricName)) {
+  if (!options.force && selectedMetric && state.presetMetricSnapshots.has(metricName)) {
     state.featuredSnapshots.set(metricName, state.presetMetricSnapshots.get(metricName));
     state.presetMetricErrors.delete(metricName);
     return;
   }
-  if (snapshotForMetric(metricName)) {
+  if (!options.force && snapshotForMetric(metricName)) {
     return;
   }
   const summary = options.summary || state.summarySnapshot || state.snapshot;
@@ -1657,7 +1667,11 @@ async function refreshNow(options = {}) {
   let shouldRender = false;
   try {
     await fetchSnapshot({ autoRefresh: true, silent: true, render: false, loadAutoSeriesDetail: false });
-    await refreshFocusedSeriesAfterSnapshot();
+    const seriesError = await refreshFocusedSeriesAfterSnapshot();
+    const refreshError = criticalRefreshError(seriesError);
+    if (refreshError) {
+      throw new Error(refreshError);
+    }
     state.autoRefresh.lastCompletedAt = Date.now();
     shouldRender = true;
   } catch (error) {
@@ -1672,6 +1686,14 @@ async function refreshNow(options = {}) {
   }
 }
 
+function criticalRefreshError(seriesError = state.focusedSeriesError) {
+  return state.experimentsError
+    || seriesError
+    || state.featuredErrors.values().next().value
+    || state.presetMetricErrors.values().next().value
+    || "";
+}
+
 function dashboardHasActiveControl() {
   const active = document.activeElement;
   if (!active || !root.contains(active)) {
@@ -1684,13 +1706,14 @@ function dashboardHasActiveControl() {
 async function refreshFocusedSeriesAfterSnapshot() {
   const metricName = state.metric || state.snapshot?.chart?.metric_name;
   if (!metricName || !cachedFocusedSeries(metricName)) {
-    return;
+    return "";
   }
-  const cacheKey = focusedSeriesCacheKey(metricName, queryOptions);
-  if (cacheKey) {
-    state.focusedSeriesCache.delete(cacheKey);
-  }
+  const retainedDetail = cachedFocusedSeries(metricName);
   await loadFocusedSeriesDetail({ force: true, silent: true });
+  if (state.focusedSeriesError && retainedDetail) {
+    applyFocusedSeriesDetail(retainedDetail);
+  }
+  return state.focusedSeriesError;
 }
 
 function snapshotWithSummaryDefaults(snapshot, summary) {
@@ -1991,7 +2014,7 @@ function renderLanding(options = {}) {
         h("p", {}, "Search experiments and open a labeled run dashboard when you are ready to inspect metrics."),
         renderLandingControls(projectOptions, state.experiments.length),
       ),
-      state.experimentsError ? h("section", { class: "landing-error" }, state.experimentsError) : null,
+      state.experimentsError ? h("section", { class: "landing-error" }, experimentsErrorMessage()) : null,
       h("section", { class: "landing-grid", "aria-live": "polite" },
         state.experimentsLoading ? h("article", { class: "landing-empty" }, "Loading experiments...") : null,
         !state.experimentsLoading && visibleExperiments.length === 0
@@ -2394,12 +2417,14 @@ function renderRefreshStatus() {
     : refresh.pausedReason
       ? `paused: ${refresh.pausedReason}`
       : refresh.lastError
-        ? "error"
+        ? refresh.lastCompletedAt
+          ? `stale · updated ${formatClockTime(refresh.lastCompletedAt)}`
+          : "degraded"
         : refresh.lastCompletedAt
           ? `updated ${formatClockTime(refresh.lastCompletedAt)}`
           : "waiting";
   const title = refresh.lastError
-    ? `Last refresh failed: ${refresh.lastError}`
+    ? `Last refresh failed: ${refresh.lastError}${refresh.lastCompletedAt ? ` Showing data last successfully updated ${new Date(refresh.lastCompletedAt).toLocaleString()}.` : ""}`
     : refresh.enabled
       ? `Auto-refreshes every ${formatRefreshInterval(refresh.intervalMs)} while this tab is visible.`
       : "Auto-refresh is disabled for this dashboard.";
@@ -2420,6 +2445,10 @@ function renderRefreshStatus() {
       onclick: () => refreshNow({ manual: true }),
     }, refresh.inFlight ? "Refreshing" : "Refresh"),
   );
+}
+
+function experimentsErrorMessage() {
+  return `${state.experimentsError}${state.experimentsLastCompletedAt ? ` Last successful update: ${new Date(state.experimentsLastCompletedAt).toLocaleString()}.` : ""}`;
 }
 
 function renderVariablesRail(snapshot) {
@@ -2525,7 +2554,7 @@ function renderExperimentRail(snapshot) {
         onclick: () => refreshExperiments({ render: true }).catch(renderError),
       }, state.experimentsLoading ? "loading" : "refresh"),
     ),
-    state.experimentsError ? h("p", { class: "rail-error" }, state.experimentsError) : null,
+    state.experimentsError ? h("p", { class: "rail-error" }, experimentsErrorMessage()) : null,
     experiments.length === 0 && !state.experimentsLoading ? h("p", { class: "rail-help" }, experimentRailEmptyLabel()) : null,
     h("div", { class: "experiment-list" },
       ...visible.map((experiment) => renderExperimentRow(experiment, selectedID, olderExperimentIDs(older).has(experiment.experiment_id))),
@@ -3245,7 +3274,7 @@ function metricValueSummary(metricName, options = {}) {
   const spec = metricSpecForName(metricName);
   const snapshot = metricSnapshotForName(metricName, state.snapshot);
   const error = metricErrorForName(metricName);
-  if (error) {
+  if (error && !snapshot) {
     return { spec, value: "--", detail: error, error: true };
   }
   if (!snapshot) {
@@ -4449,7 +4478,7 @@ function renderPinnedMetricCard(spec, options = {}) {
 }
 
 function renderMetricCardBody(spec, snapshot, dataset, singlePoint, options = {}) {
-  if (state.featuredErrors.has(spec.name)) {
+  if (state.featuredErrors.has(spec.name) && !snapshot) {
     return h("p", { class: "metric-card-state" }, state.featuredErrors.get(spec.name));
   }
   if (!snapshot) {
