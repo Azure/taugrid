@@ -2315,7 +2315,7 @@ function renderTopbar(snapshot) {
     renderExperimentSearchBar(),
     h("div", { class: "topbar-actions" },
       renderSourceStatus(),
-      statPill("runs", snapshot.status?.runs),
+      statPill("loaded runs", list(snapshot.runs).length),
       statPill("metric files", snapshot.status?.metric_files),
       renderRefreshStatus(),
     ),
@@ -2425,6 +2425,8 @@ function renderRefreshStatus() {
 function renderVariablesRail(snapshot) {
   const visibleRuns = filteredRuns(snapshot);
   const listedRuns = filteredRuns(snapshot, { includeHidden: true });
+  const loadedRuns = list(snapshot.runs).length;
+  const canonicalRuns = canonicalRunCount(snapshot, loadedRuns);
   const metricSelect = h("select", {
     onchange: (event) => {
       setFocusMetric(event.target.value);
@@ -2447,7 +2449,7 @@ function renderVariablesRail(snapshot) {
   return h("aside", { class: "variables-rail" },
     renderExperimentRail(snapshot),
     h("div", { class: "rail-top" },
-      h("p", { class: "rail-label" }, `Runs (${visibleRuns.length}/${listedRuns.length})`),
+      h("p", { class: "rail-label" }, `${loadedRuns} loaded of ${canonicalRuns} · ${visibleRuns.length} visible`),
       h("div", { class: "run-toolbar" },
         h("button", { type: "button", class: "icon-button", title: "Show all runs", onclick: showAllRuns }, "all"),
         h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(listedRuns) }, "hide"),
@@ -2723,7 +2725,12 @@ function renderLifecycleFilters(snapshot) {
     { id: "cancelled", label: "Cancelled" },
     { id: "incomplete", label: "Incomplete" },
   ];
-  return h("div", { class: "run-filter-chips", role: "list", "aria-label": "Run lifecycle filters" },
+  return h("div", {
+    class: "run-filter-chips",
+    role: "list",
+    "aria-label": "Loaded run lifecycle filters",
+    title: "Lifecycle counts cover loaded runs only.",
+  },
     ...options.map((option) => {
       const active = state.lifecycleFilter === option.id;
       const count = option.id ? counts[option.id] || 0 : allRuns(snapshot).length;
@@ -2779,6 +2786,15 @@ function lifecycleCounts(snapshot) {
     counts[lifecycle] = (counts[lifecycle] || 0) + 1;
   }
   return counts;
+}
+
+function canonicalRunCount(snapshot, loadedRuns) {
+  const experimentID = snapshot.experiment?.experiment_id || snapshot.target;
+  const project = snapshot.experiment?.project || list(snapshot.runs)[0]?.project;
+  const experiment = list(state.experiments).find((candidate) =>
+    candidate.experiment_id === experimentID && (!project || candidate.project === project));
+  const total = Number(experiment?.run_count);
+  return Number.isFinite(total) ? Math.max(total, loadedRuns) : loadedRuns;
 }
 
 function renderDashboardSectionControls() {
