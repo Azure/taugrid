@@ -13,6 +13,7 @@ TAUGRID_PORTAL_DIR := $(REPO_ROOT)/portal
 TAU_CORE_CONTROLLER_DIR := $(REPO_ROOT)/controllers/tau-core
 GPU_HEALTH_CHECKER_DIR := $(REPO_ROOT)/monitoring/gpu-health-checker
 GPU_METRICS_COLLECTOR_DIR := $(REPO_ROOT)/monitoring/gpu-metrics-collector
+E2E_DIR := $(REPO_ROOT)/tests/e2e
 TAU_SDK_DIR := $(REPO_ROOT)/sdk/python/python
 TAU_SITE_DIR := $(REPO_ROOT)/site
 PYTHON ?= python3
@@ -24,7 +25,7 @@ help:
 	@echo "TauGrid repository targets:"
 	@echo ""
 	@echo "  make build                   # build first-party Go components"
-	@echo "  make test                    # run Go and Python unit tests"
+	@echo "  make test                    # run Go, offline E2E, and Python tests"
 	@echo "  make lint                    # lint Go and Python source"
 	@echo "  make check                   # run build, test, lint, and license checks"
 	@echo "  make install-tau             # install the Tau CLI and optional Python SDK"
@@ -48,6 +49,8 @@ build:
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) build \
 		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
+	@echo "==> tests/e2e"
+	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go build ./...
 
 test:
 	$(MAKE) -C $(TAU_GO_DIR) test
@@ -57,6 +60,9 @@ test:
 	$(MAKE) -C $(TAU_CORE_CONTROLLER_DIR) test
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) test GOARCH=$(HOST_GOARCH)
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) test
+	@echo "==> tests/e2e (offline)"
+	@cd $(E2E_DIR) && AI_RUNTIME_E2E=0 GOFLAGS="$(GO_COMMAND_FLAGS)" \
+		go test -count=1 ./...
 	@echo "==> sdk/python/python"
 	@cd $(TAU_SDK_DIR) && $(PYTHON) -m pytest
 
@@ -72,6 +78,9 @@ lint:
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) lint \
 		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	@echo "==> tests/e2e"
+	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go vet ./...
+	@cd $(E2E_DIR) && gofmt -l . | tee /dev/stderr | (! read -r _)
 	@echo "==> sdk/python/python"
 	@cd $(TAU_SDK_DIR) && $(PYTHON) -m ruff check .
 

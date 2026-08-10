@@ -12,7 +12,7 @@ The top-level Makefile provides repository-wide validation, installation, and do
 
 ```bash
 make build                   # build first-party Go components
-make test                    # run Go and Python unit tests
+make test                    # run Go, offline E2E, and Python tests
 make lint                    # lint Go and Python source
 make check                   # build, test, lint, and check license headers
 make install-tau             # install the CLI and optional Python SDK
@@ -74,6 +74,21 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 python -m pytest          # run tests
 python -m ruff check .    # lint (ruff 0.16.1)
+```
+
+### Portable end-to-end module (`tests/e2e/`)
+```bash
+cd tests/e2e
+AI_RUNTIME_E2E=0 go test -count=1 ./...  # offline tests; never contacts a cluster
+go vet ./...
+```
+
+The top-level `make check` always forces `AI_RUNTIME_E2E=0`. Run real-cluster
+tests only when explicitly requested and only after verifying the kubeconfig:
+
+```bash
+cd tests/e2e
+AI_RUNTIME_E2E=1 go test -v -timeout 15m ./...
 ```
 
 ### Helm Charts (`charts/`)
