@@ -1541,6 +1541,20 @@ async function loadMetricSnapshot(metricName, options = {}) {
   }
 }
 
+async function retryMetricSnapshot(metricName) {
+  const summary = state.summarySnapshot || state.snapshot;
+  const load = loadMetricSnapshot(metricName, {
+    force: true,
+    selectedMetricSet: new Set(normalizeMetricList(state.selectedMetrics)),
+    summary,
+    mode: metricSnapshotRequestMode(summary),
+    includeStatic: false,
+  });
+  render();
+  await load;
+  render();
+}
+
 function loadVisibleMetricSnapshots() {
   const summary = state.summarySnapshot || state.snapshot;
   if (!summary) {
@@ -1995,7 +2009,12 @@ function renderError(error) {
       h("p", { class: "eyebrow" }, "Stellar"),
       h("h1", {}, "Stellar could not load"),
       h("p", {}, error.message || String(error)),
-      h("p", {}, "Refresh the page or check the Stellar API response."),
+      h("p", {}, "The experiment snapshot request failed. Retry it without reloading the page."),
+      h("button", {
+        type: "button",
+        class: "refresh-button",
+        onclick: () => fetchSnapshot().catch(renderError),
+      }, "Retry experiment snapshot"),
     ),
   );
   publishVisualState("error", { error: error.message || String(error) });
@@ -2014,7 +2033,7 @@ function renderLanding(options = {}) {
         h("p", {}, "Search experiments and open a labeled run dashboard when you are ready to inspect metrics."),
         renderLandingControls(projectOptions, state.experiments.length),
       ),
-      state.experimentsError ? h("section", { class: "landing-error" }, experimentsErrorMessage()) : null,
+      state.experimentsError ? renderExperimentDiscoveryError("landing-error") : null,
       h("section", { class: "landing-grid", "aria-live": "polite" },
         state.experimentsLoading ? h("article", { class: "landing-empty" }, "Loading experiments...") : null,
         !state.experimentsLoading && visibleExperiments.length === 0
@@ -2041,6 +2060,18 @@ function renderLandingControls(projectOptions, totalCount) {
     renderExperimentSearchBar({ variant: "landing" }),
     renderLandingProjectSelect(projectOptions, totalCount),
     renderLandingTagFilter(),
+  );
+}
+
+function renderExperimentDiscoveryError(className) {
+  return h("section", { class: `${className} retry-state`, "aria-live": "polite" },
+    h("span", {}, `Experiment discovery failed: ${experimentsErrorMessage()}`),
+    h("button", {
+      type: "button",
+      class: "mini-link-button",
+      disabled: state.experimentsLoading,
+      onclick: () => refreshExperiments({ render: true }).catch(renderError),
+    }, state.experimentsLoading ? "Retrying..." : "Retry experiment discovery"),
   );
 }
 
@@ -2554,7 +2585,7 @@ function renderExperimentRail(snapshot) {
         onclick: () => refreshExperiments({ render: true }).catch(renderError),
       }, state.experimentsLoading ? "loading" : "refresh"),
     ),
-    state.experimentsError ? h("p", { class: "rail-error" }, experimentsErrorMessage()) : null,
+    state.experimentsError ? renderExperimentDiscoveryError("rail-error") : null,
     experiments.length === 0 && !state.experimentsLoading ? h("p", { class: "rail-help" }, experimentRailEmptyLabel()) : null,
     h("div", { class: "experiment-list" },
       ...visible.map((experiment) => renderExperimentRow(experiment, selectedID, olderExperimentIDs(older).has(experiment.experiment_id))),
@@ -4472,6 +4503,7 @@ function renderPinnedMetricCard(spec, options = {}) {
         },
       }, "Pinned"),
     ),
+    snapshot && state.featuredErrors.has(spec.name) ? renderMetricRetryState(spec, true) : null,
     renderMetricCardBody(spec, snapshot, dataset, singlePoint, options),
     renderMetricCardDensity(chart, { runIDs: filteredRunIDs(snapshot) }),
   );
@@ -4479,10 +4511,21 @@ function renderPinnedMetricCard(spec, options = {}) {
 
 function renderMetricCardBody(spec, snapshot, dataset, singlePoint, options = {}) {
   if (state.featuredErrors.has(spec.name) && !snapshot) {
-    return h("p", { class: "metric-card-state" }, state.featuredErrors.get(spec.name));
+    return renderMetricRetryState(spec);
   }
   if (!snapshot) {
     return h("p", { class: "metric-card-state" }, "Loading chart...");
+  }
+
+  function renderMetricRetryState(spec, retained = false) {
+    return h("div", { class: "metric-card-state retry-state", "aria-live": "polite" },
+      h("span", {}, `${retained ? "Showing retained data. " : ""}Chart failed to load: ${state.featuredErrors.get(spec.name)}`),
+      h("button", {
+        type: "button",
+        class: "mini-link-button",
+        onclick: () => retryMetricSnapshot(spec.name).catch(renderError),
+      }, "Retry chart"),
+    );
   }
   if (!dataset.length) {
     return h("p", { class: "metric-card-state" }, activeRunFilterLabels(snapshot).length ? "No points match the active run filters." : "No points yet.");

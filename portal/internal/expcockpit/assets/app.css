@@ -723,6 +723,18 @@ body.embedded .landing-shell {
   font-size: 12px;
 }
 
+.retry-state {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.metric-card-state.retry-state {
+  flex-direction: column;
+  justify-content: center;
+}
+
 .rail-section label,
 .rail-disclosure label,
 .rail-label {
