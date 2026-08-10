@@ -1,0 +1,129 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "09:00"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: gomod
+    directories:
+      - "/cli"
+      - "/controllers/tau-core"
+      - "/core"
+      - "/monitoring/gpu-health-checker"
+      - "/monitoring/gpu-metrics-collector"
+      - "/portal"
+      - "/site"
+      - "/tests/e2e"
+    schedule:
+      interval: daily
+      time: "10:00"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      go-dependency-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        group-by: dependency-name
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: pip
+    directory: "/sdk/python/python"
+    schedule:
+      interval: daily
+      time: "09:00"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      python-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directory: "/site"
+    schedule:
+      interval: daily
+      time: "10:00"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: helm
+    directories:
+      - "/charts/adx-mon"
+      - "/charts/tau-core-controller"
+      - "/charts/taugrid"
+      - "/charts/taugrid-core"
+    schedule:
+      interval: daily
+      time: "09:00"
+    cooldown:
+      default-days: 7
+    groups:
+      helm-dependency-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        group-by: dependency-name
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: docker
+    directories:
+      - "/images/adx-mon"
+      - "/images/gpu-metrics-collector"
+      - "/images/ray"
+      - "/images/tau-core-controller"
+      - "/images/tau"
+      - "/images/taugrid-portal"
+    schedule:
+      interval: daily
+      time: "10:00"
+    cooldown:
+      default-days: 7
+    groups:
+      container-base-image-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        group-by: dependency-name
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
