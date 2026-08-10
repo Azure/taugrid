@@ -1913,7 +1913,7 @@ async function loadFocusedSeriesDetail(options = {}) {
     }
     return;
   }
-  const cacheKey = focusedSeriesCacheKey(metricName);
+  const cacheKey = focusedSeriesCacheKey(metricName, queryOptions);
   if (!options.force && cacheKey && state.focusedSeriesCache.has(cacheKey)) {
     applyFocusedSeriesDetail(state.focusedSeriesCache.get(cacheKey));
     if (!options.silent) {
@@ -2834,7 +2834,7 @@ function renderLifecycleFilters(snapshot) {
   return h("div", {
     class: "run-filter-chips",
     role: "list",
-    "aria-label": "Loaded run lifecycle filters",
+    "aria-label": "Run lifecycle filters for loaded runs",
     title: "Lifecycle counts cover loaded runs only.",
   },
     ...options.map((option) => {
