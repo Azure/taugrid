@@ -28,7 +28,7 @@ stages:
     jobs:
       - deployment: tau_aks_e2e
         displayName: Tau core and CLI on ephemeral AKS
-        environment: taugrid-e2e
+        environment: aks-ai-runtime-longhaul-gpu
         timeoutInMinutes: 90
         cancelTimeoutInMinutes: 20
         strategy:
