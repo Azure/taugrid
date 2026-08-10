@@ -439,11 +439,12 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 		"kueue.x-k8s.io/priority-class: taugrid-default",
 		"priorityClassName: taugrid-default",
 		`num-gpus: "0"`,
-		"cpu: 500m",
+		"cpu: 20m",
+		"cpu: 50m",
 		"memory: 256Mi",
 		"memory: 512Mi",
 		"memory: 768Mi",
-		"memory: 2Gi",
+		"memory: 6Gi",
 		workloadmeta.AnnotationPayloadDigest,
 		"name: tau-payload",
 	} {
@@ -466,8 +467,10 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 	if !ok {
 		t.Fatalf("decoded payload missing ray_train.py: keys=%v", filesKeys(files))
 	}
-	if !strings.Contains(string(trainPy), "tau kind ray smoke complete") {
-		t.Fatalf("decoded ray_train.py missing expected script content:\n%s", trainPy)
+	for _, want := range []string{"class WorkerProbe", "len(set(worker_nodes)) != 2", "tau kind ray smoke complete"} {
+		if !strings.Contains(string(trainPy), want) {
+			t.Fatalf("decoded ray_train.py missing %q:\n%s", want, trainPy)
+		}
 	}
 }
 

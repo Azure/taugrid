@@ -62,7 +62,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		t.Fatalf("install output missing plan:\n%s", out)
 	}
 	for _, want := range []string{
-		"Helm wait:  disabled (Tau readiness validation still runs)",
+		"Helm wait:  bootstrap only (Tau readiness validation still runs after queue policy)",
 		"Rollback:   disabled",
 		"tau workspace create --principal-name <external-group-or-team> --apply",
 		"kubectl get workspaces.tau.azure.com -n tau-platform",
@@ -112,7 +112,7 @@ func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 			t.Fatalf("Helm 4 should receive --rollback-on-failure, not deprecated --atomic: %#v", args)
 		}
 	}
-	for _, want := range []string{"Helm wait:  enabled", "Rollback:   enabled (implies Helm watcher wait)"} {
+	for _, want := range []string{"Helm wait:  enabled for both passes", "Rollback:   enabled (implies Helm watcher wait)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install plan missing %q:\n%s", want, out)
 		}
@@ -151,6 +151,12 @@ func TestClusterInstallBootstrapsFreshReleaseWithoutQueuePolicy(t *testing.T) {
 	}
 	if !containsArgPair(calls[0], "--set", "baselineQueue.enabled=false") {
 		t.Fatalf("bootstrap args = %#v, want baseline queue disabled until Kueue CRDs exist", calls[0])
+	}
+	if !containsArg(calls[0], "--wait") {
+		t.Fatalf("bootstrap args = %#v, want Helm to wait for admission webhooks before queue policy", calls[0])
+	}
+	if containsArg(calls[1], "--wait") {
+		t.Fatalf("final args = %#v, generic Helm wait must remain opt-in for the queue-policy pass", calls[1])
 	}
 	if containsArgPair(calls[1], "--set", "baselineQueue.enabled=false") {
 		t.Fatalf("final args = %#v, baseline queue must use requested values", calls[1])

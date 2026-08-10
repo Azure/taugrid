@@ -168,9 +168,9 @@ func validateClusterInstallSpec(spec clusterInstallSpec) error {
 }
 
 func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
-	helmWait := "disabled (Tau readiness validation still runs)"
+	helmWait := "bootstrap only (Tau readiness validation still runs after queue policy)"
 	if spec.Wait {
-		helmWait = "enabled"
+		helmWait = "enabled for both passes"
 	}
 	rollback := "disabled"
 	if spec.Atomic {
@@ -225,6 +225,10 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 }
 
 func clusterInstallBootstrapArgs(spec clusterInstallSpec) []string {
+	// The queue-policy pass creates Kueue resources that are admitted through
+	// the webhooks installed by the bootstrap pass. Wait for those Deployments
+	// before asking the API server to call their webhooks.
+	spec.Wait = true
 	args := clusterInstallArgs(spec)
 	return append(args, "--set", "baselineQueue.enabled=false")
 }

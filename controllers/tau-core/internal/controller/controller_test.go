@@ -464,6 +464,16 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 	if binding.Subjects[0].APIGroup != rbacv1.GroupName {
 		t.Fatalf("RoleBinding subject apiGroup = %q, want %q", binding.Subjects[0].APIGroup, rbacv1.GroupName)
 	}
+	var clusterQueueBinding rbacv1.ClusterRoleBinding
+	if err := c.Get(ctx, client.ObjectKey{Name: clusterQueueReaderBindingName("aurora")}, &clusterQueueBinding); err != nil {
+		t.Fatalf("ClusterQueue reader ClusterRoleBinding not reconciled: %v", err)
+	}
+	if clusterQueueBinding.RoleRef.Kind != "ClusterRole" || clusterQueueBinding.RoleRef.Name != clusterQueueReaderRoleName {
+		t.Fatalf("ClusterQueue reader roleRef = %#v, want ClusterRole %s", clusterQueueBinding.RoleRef, clusterQueueReaderRoleName)
+	}
+	if len(clusterQueueBinding.Subjects) != 1 || clusterQueueBinding.Subjects[0].Name != "aurora-researchers" || clusterQueueBinding.Subjects[0].APIGroup != rbacv1.GroupName {
+		t.Fatalf("ClusterQueue reader subjects = %#v, want aurora-researchers group", clusterQueueBinding.Subjects)
+	}
 	var readerRole rbacv1.Role
 	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}, &readerRole); err != nil {
 		t.Fatalf("workspace reader role not reconciled: %v", err)
@@ -529,6 +539,7 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 	staleBinding := testRoleBinding("aurora", defaultRoleName, "aurora")
 	staleReaderRole := testRole(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
 	staleReaderBinding := testRoleBinding(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
+	staleClusterQueueBinding := testClusterRoleBinding(clusterQueueReaderBindingName("aurora"), "aurora")
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(
@@ -537,6 +548,7 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 			staleBinding,
 			staleReaderRole,
 			staleReaderBinding,
+			staleClusterQueueBinding,
 		).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
@@ -557,6 +569,7 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: "aurora"}},
 		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}},
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName("aurora")}},
 	} {
 		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); !apierrors.IsNotFound(err) {
 			t.Fatalf("cluster-wide authorization retained subject-specific %T: %v", obj, err)
@@ -640,6 +653,25 @@ func TestCleanupPlatformReaderRBACDoesNotDeleteForeignObject(t *testing.T) {
 	var got rbacv1.Role
 	if err := c.Get(ctx, client.ObjectKeyFromObject(foreignRole), &got); err != nil {
 		t.Fatalf("foreign reader Role was deleted: %v", err)
+	}
+}
+
+func TestCleanupClusterQueueReaderRBACDoesNotDeleteForeignObject(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	foreignBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName("aurora")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreignBinding).Build()
+	reconciler := &TauWorkspaceReconciler{Client: c}
+
+	err := reconciler.cleanupClusterQueueReaderRBAC(ctx, "aurora")
+	if err == nil || !strings.Contains(err.Error(), "refusing to delete") {
+		t.Fatalf("cleanup error = %v, want refusal to delete foreign ClusterRoleBinding", err)
+	}
+	var got rbacv1.ClusterRoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(foreignBinding), &got); err != nil {
+		t.Fatalf("foreign ClusterRoleBinding was deleted: %v", err)
 	}
 }
 
@@ -956,11 +988,12 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	targetServiceAccount := testServiceAccount("aurora", "tau-workload", "aurora")
 	readerRole := testRole(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
 	readerBinding := testRoleBinding(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
+	clusterQueueBinding := testClusterRoleBinding(clusterQueueReaderBindingName("aurora"), "aurora")
 	localQueue := testLocalQueue("aurora", "aurora", "aurora")
 	localQueue.SetLabels(workspaceLabels("aurora"))
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, targetNamespace, targetRole, targetBinding, targetServiceAccount, readerRole, readerBinding, localQueue).
+		WithObjects(workspace, targetNamespace, targetRole, targetBinding, targetServiceAccount, readerRole, readerBinding, clusterQueueBinding, localQueue).
 		Build()
 	reconciler := &TauWorkspaceReconciler{Client: c}
 
@@ -987,6 +1020,9 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	}
 	if err := c.Get(ctx, client.ObjectKey{Name: "aurora"}, targetNamespace); err != nil {
 		t.Fatalf("target namespace was deleted: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: clusterQueueReaderBindingName("aurora")}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected ClusterQueue reader ClusterRoleBinding deleted, got err=%v", err)
 	}
 	deletedLocalQueue := &unstructured.Unstructured{}
 	deletedLocalQueue.SetGroupVersionKind(localQueueGVK)
@@ -1693,6 +1729,17 @@ func testRoleBinding(namespace, name, workspace string) *rbacv1.RoleBinding {
 			Namespace: namespace,
 			Labels:    workspaceLabels(workspace),
 		},
+	}
+}
+
+func testClusterRoleBinding(name, workspace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: workspaceLabels(workspace),
+		},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterQueueReaderRoleName},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: workspace + "-researchers"}},
 	}
 }
 

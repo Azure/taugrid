@@ -60,7 +60,7 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	original := runHelmCommand
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
 		helmArgs = append([]string(nil), args...)
-		_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false}}}`)
+		_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false}}}`)
 		return nil
 	}
 	t.Cleanup(func() { runHelmCommand = original })
@@ -79,8 +79,8 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	if !slices.Equal(helmArgs, want) {
 		t.Fatalf("helm args:\n got: %#v\nwant: %#v", helmArgs, want)
 	}
-	if !slices.Equal(got.DisabledComponents, []installationcheck.Component{installationcheck.ComponentKueue, installationcheck.ComponentKubeRay}) {
-		t.Fatalf("disabled components = %v, want both chart components", got.DisabledComponents)
+	if !slices.Equal(got.DisabledComponents, []installationcheck.Component{installationcheck.ComponentKueue, installationcheck.ComponentKubeRay, installationcheck.ComponentTauCore}) {
+		t.Fatalf("disabled components = %v, want all disabled readiness components", got.DisabledComponents)
 	}
 }
 
