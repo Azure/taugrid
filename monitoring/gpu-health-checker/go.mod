@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/NVIDIA/go-dcgm v0.0.0-20260214140307-ad5d86fe3d32
-	github.com/mattn/go-sqlite3 v1.14.24
+	github.com/mattn/go-sqlite3 v1.14.49
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )
