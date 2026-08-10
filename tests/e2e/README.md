@@ -4,7 +4,7 @@ Integration tests that deploy the vendored Helm charts to a real AKS cluster and
 
 ## Prerequisites
 
-- **Go 1.25+**
+- **Go 1.26.5**
 - **kubectl** configured with a kubeconfig pointing to an AKS cluster
 - All 3 Helm charts installed on the cluster:
   - Kueue (`kueue-system` namespace)

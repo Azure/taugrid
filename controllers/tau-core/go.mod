@@ -1,6 +1,6 @@
 module github.com/Azure/taugrid/controllers/tau-core
 
-go 1.25.12
+go 1.26.5
 
 require (
 	k8s.io/api v0.35.1
