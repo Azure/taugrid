@@ -1152,6 +1152,7 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`run.ttl_seconds_after_finished` | direct-only",
 		"`storage.image_assets.name` | direct-only",
 		"`storage.image_assets.image` | direct-only",
 		"`storage.image_assets.source_path` | direct-only",
@@ -1723,6 +1724,52 @@ storage:
 	}
 	if strings.Contains(rendered, "kind: ConfigMap") {
 		t.Fatalf("image asset dry-run must remain self-contained:\n%s", rendered)
+	}
+}
+
+func TestRunConfigDryRunStagesDigestPinnedSourceWithoutLocalEntrypoint(t *testing.T) {
+	dir := t.TempDir()
+	digest := strings.Repeat("d", 64)
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: source-backed-job
+engine: job
+entrypoint: experiments/train.py
+run:
+  ttl_seconds_after_finished: 3600
+  source:
+    image: example.azurecr.io/research-source@sha256:`+digest+`
+    path: /workspace
+runtime:
+  image: example.azurecr.io/workload:latest
+compute:
+  gpus: 0
+policy:
+  namespace: tau-default
+  queue: research-training
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	for _, want := range []string{
+		"kind: Job",
+		"ttlSecondsAfterFinished: 3600",
+		"name: tau-source",
+		"example.azurecr.io/research-source@sha256:" + digest,
+		"- /workspace",
+		`chmod a+x "/tau-source/$2"`,
+		"mountPath: /tau/source",
+		"workingDir: /tau/source",
+		"exec python3 /tau/source/experiments/train.py",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("source dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, forbidden := range []string{"TAU_SCRIPT_B64", "TAU_PAYLOAD_B64", "kind: ConfigMap"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("source dry-run contains forbidden transport %q:\n%s", forbidden, rendered)
+		}
 	}
 }
 

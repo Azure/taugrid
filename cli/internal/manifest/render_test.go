@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -43,6 +44,7 @@ runtime:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
+
 	out, err := Render(RenderOptions{
 		Manifest:         m,
 		ManifestRaw:      raw,
@@ -76,6 +78,23 @@ runtime:
 		if strings.Contains(s, leaked) {
 			t.Fatalf("client dry-run leaked secret material %q:\n%s", leaked, s)
 		}
+	}
+}
+
+func TestRenderRejectsOversizedManagedLiteralEnvironment(t *testing.T) {
+	raw := []byte(`
+schema_version: 1
+name: oversized-env
+compute: { gpus: 1 }
+runtime:
+  pip: [torch]
+  env:
+    - name: KG_SOURCE_PATCH_B64
+      value: ` + strings.Repeat("x", runconfig.MaxLiteralEnvValueBytes+1) + `
+`)
+	_, err := Parse(raw)
+	if err == nil || !strings.Contains(err.Error(), "run.source") {
+		t.Fatalf("expected oversized managed environment rejection, got %v", err)
 	}
 }
 
@@ -4416,16 +4435,12 @@ runtime:
 // TestRenderAcceptsWorkloadUnderRenderedSizeLimit together pin the exact
 // crossover point of the additional maxRenderedWorkloadBytes (200 KiB) hard
 // guard on the fully-rendered workload JSON. Neither payload alone can
-// reach 200 KiB (each is separately capped at 64 KiB decoded by
-// payload.MaxDecodedBytes), so both a near-cap script payload AND a
-// near-cap manifest payload must be combined to cross this limit — proving
-// the guard genuinely measures the *combined* rendered object, not just one
-// payload. Byte counts below were bisected empirically against the current
-// render.go template overhead; if the templates change materially, these
-// two tests will need to be re-bisected (they currently sit just under and
-// just over the limit respectively with the current canonical MCR workload
-// image contract).
-const sizeLimitScriptExtraBytes = 88000
+// reach 200 KiB alone, so this probe renders a RayJob, where the script payload
+// appears on both the head and worker templates, plus the head-only manifest
+// payload. This proves the guard measures the combined rendered object rather
+// than just one environment entry. Byte counts below were bisected empirically
+// against the current templates.
+const sizeLimitScriptExtraBytes = 48500
 
 func renderSizeLimitProbe(t *testing.T, manifestPadBytes int) ([]byte, error) {
 	t.Helper()
@@ -4441,15 +4456,12 @@ func renderSizeLimitProbe(t *testing.T, manifestPadBytes int) ([]byte, error) {
 		ManifestFilename: "sizelimit.yaml",
 		MainScript:       []byte("# trainer\n"),
 		ExtraScripts:     []ExtraScript{{Name: "pad.py", Data: extra}},
+		WorkloadKind:     WorkloadKindRayJob,
 	})
 }
 
 func TestRenderAcceptsWorkloadUnderRenderedSizeLimit(t *testing.T) {
-	// manifestPadBytes=66000 lands the rendered workload JSON just below
-	// 204800 bytes — under the rendered-workload limit with the batch Job's
-	// canonical MCR image, and with both payloads' encoded environment
-	// entries still inside payload.MaxEnvEntryBytes.
-	out, err := renderSizeLimitProbe(t, 66000)
+	out, err := renderSizeLimitProbe(t, 42000)
 	if err != nil {
 		t.Fatalf("Render: want success at (not over) the %d byte rendered-workload limit, got error: %v", maxRenderedWorkloadBytes, err)
 	}
@@ -4467,9 +4479,14 @@ func TestRenderAcceptsWorkloadUnderRenderedSizeLimit(t *testing.T) {
 func TestRenderRejectsWorkloadOverRenderedSizeLimit(t *testing.T) {
 	// Keep enough margin that public identifier length changes cannot move this
 	// fixture back below the rendered-workload limit.
-	_, err := renderSizeLimitProbe(t, 70000)
+	out, err := renderSizeLimitProbe(t, 50600)
 	if err == nil {
-		t.Fatalf("Render: want error just over the %d byte rendered-workload limit, got nil", maxRenderedWorkloadBytes)
+		doc := unmarshalLast(t, out)
+		jsonBytes, marshalErr := json.Marshal(doc)
+		if marshalErr != nil {
+			t.Fatalf("json.Marshal: %v", marshalErr)
+		}
+		t.Fatalf("Render: want error just over the %d byte rendered-workload limit, got %d bytes", maxRenderedWorkloadBytes, len(jsonBytes))
 	}
 	if !strings.Contains(err.Error(), "exceeds the") || !strings.Contains(err.Error(), "byte limit") {
 		t.Errorf("error must explain the rendered-workload byte limit was exceeded; got: %v", err)

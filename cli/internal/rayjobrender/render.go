@@ -82,12 +82,12 @@ const projectArchiveFilename = "_tau_project.zip"
 // here: the rendered object is stored verbatim in kubectl's
 // last-applied-configuration annotation, which Kubernetes caps at ~256 KiB.
 // Two copies of the encoded payload plus the rest of the spec has to fit in
-// that with margin, which puts the ceiling near 64 KiB of archive.
+// that with margin, which puts the ceiling near 45 KiB of archive.
 //
 // This is far less restrictive than it sounds: the archive is deflated, and
 // Python source compresses roughly 3.5x, so 64 KiB of archive is on the order
 // of 200+ KiB of real source spread across as many files as the project likes.
-const MaxProjectArchiveBytes = 64 << 10
+const MaxProjectArchiveBytes = 45 << 10
 
 type Options struct {
 	Name               string
@@ -942,6 +942,9 @@ func envList(o Options, isHead bool) ([]any, error) {
 	}
 	if o.OutputDir != "" {
 		env["TAU_OUTPUT_DIR"] = o.OutputDir
+	}
+	if err := runconfig.ValidateLiteralEnvPayloads(env); err != nil {
+		return nil, err
 	}
 	if o.RedactSecrets {
 		o.EnvSecrets = envspec.RedactSecretRefs(o.EnvSecrets)

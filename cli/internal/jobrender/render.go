@@ -16,9 +16,9 @@
 //   - DRA ResourceClaim wiring: if the profile declares
 //     spec.resources.dra.claimTemplate, we attach a single claim named
 //     "gpu" and reference it from the container resources.claims slice.
-//   - Script handling: if a script path is supplied, it's base64-encoded
-//     into TAU_SCRIPT_B64 and the entrypoint decodes-and-runs it. No
-//     ConfigMap or PVC mount is required.
+//   - Script handling: a local script path keeps the legacy TAU_SCRIPT_B64
+//     path. A run.source tree is copied from a digest-pinned OCI image into an
+//     emptyDir by an init container and never travels through an env var.
 package jobrender
 
 import (
@@ -83,8 +83,11 @@ type Options struct {
 	MemoryLimit   string
 
 	// ScriptPath, if non-empty, is read from disk and base64-encoded into
-	// TAU_SCRIPT_B64. The container entrypoint decodes and executes it.
+	// TAU_SCRIPT_B64. When Source is set, ScriptPath is instead a clean path
+	// relative to the staged source root.
 	ScriptPath string
+	// Source stages an immutable source tree from a digest-pinned OCI image.
+	Source *runconfig.Source
 
 	// ScriptArgs, if non-empty, are forwarded to ScriptPath as positional
 	// arguments ($1, $2, ... inside the script). Ignored when Command is set
@@ -303,6 +306,9 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err := validateImageAssetStorageCollisions(storagePlan, o.ImageAssets); err != nil {
 		return nil, err
 	}
+	if err := validateSourceStorageCollisions(storagePlan, o.Source); err != nil {
+		return nil, err
+	}
 	if storagePlan.HasDurableData {
 		env = mergeEnv(storage.ContractEnv(storageContract, hasStorageContract), env)
 		cmd = wrapCommandWithStoragePreflight(cmd)
@@ -414,6 +420,12 @@ func (o Options) validate() error {
 	if err := (runconfig.Storage{ImageAssets: o.ImageAssets}).ValidateImageAssets(); err != nil {
 		return err
 	}
+	if err := o.Source.Validate(); err != nil {
+		return err
+	}
+	if err := o.Source.ValidateEntrypoint(o.ScriptPath); err != nil {
+		return err
+	}
 	if o.TTLSecondsAfterFinished < 0 {
 		return errors.New("Options.TTLSecondsAfterFinished must be >= 0")
 	}
@@ -517,15 +529,17 @@ func RequirePythonEntrypoint(scriptPath string) error {
 }
 
 // resolveCommand returns the container command + extra env vars.
-// Precedence: Options.Command > Options.ScriptPath > nil (image's own
-// ENTRYPOINT/CMD takes over — common when --image points to a container
-// that knows what to do).
+// Precedence: Options.Command > Options.Source+ScriptPath > Options.ScriptPath
+// > nil (image's own ENTRYPOINT/CMD takes over).
 func resolveCommand(o Options) ([]string, map[string]string, error) {
 	if len(o.Command) > 0 {
 		if o.Launcher == "torchrun" {
 			return nil, nil, fmt.Errorf("--launcher=torchrun cannot be combined with an explicit command override")
 		}
 		return o.Command, nil, nil
+	}
+	if o.Source != nil {
+		return resolveSourceCommand(o)
 	}
 	if o.ScriptPath != "" {
 		data, err := os.ReadFile(o.ScriptPath)
@@ -596,6 +610,55 @@ func resolveCommand(o Options) ([]string, map[string]string, error) {
 		return nil, nil, fmt.Errorf("--launcher=torchrun requires --script (no script or command was provided)")
 	}
 	return nil, nil, nil // let the image's ENTRYPOINT/CMD run
+}
+
+func resolveSourceCommand(o Options) ([]string, map[string]string, error) {
+	entrypoint := path.Join(runconfig.SourceMountPath, o.ScriptPath)
+	var argList strings.Builder
+	for _, a := range o.ScriptArgs {
+		argList.WriteString(" ")
+		argList.WriteString(shellQuote(a))
+	}
+	extraFlagStr := renderExtraFlags(o.ExtraFlags)
+
+	if o.Launcher == "torchrun" {
+		if err := RequirePythonEntrypoint(o.ScriptPath); err != nil {
+			return nil, nil, err
+		}
+		nproc := max(o.ProcessesPerNode, 1)
+		nodes := max(o.Nodes, 1)
+		env := map[string]string{}
+		var torchArgs string
+		if nodes > 1 {
+			headlessHost := o.Name + "-0." + o.Name + HeadlessSuffix
+			torchArgs = fmt.Sprintf("--nnodes=%d --node_rank=$JOB_COMPLETION_INDEX --rdzv-backend=c10d --rdzv-endpoint=%s:%d --rdzv-id=%s --nproc_per_node=%d",
+				nodes, headlessHost, c10dPort, o.Name, nproc)
+			env["MASTER_ADDR"] = headlessHost
+			env["MASTER_PORT"] = strconv.Itoa(c10dPort)
+		} else {
+			torchArgs = fmt.Sprintf("--standalone --nproc_per_node=%d", nproc)
+			env["MASTER_ADDR"] = "localhost"
+			env["MASTER_PORT"] = strconv.Itoa(c10dPort)
+		}
+		if nproc > 1 || nodes > 1 {
+			env["OMP_NUM_THREADS"] = "1"
+		}
+		return []string{
+			"bash", "-c",
+			fmt.Sprintf("exec python3 -m torch.distributed.run %s%s %s%s", torchArgs, extraFlagStr, shellQuote(entrypoint), argList.String()),
+		}, env, nil
+	}
+
+	if o.Launcher == "python" || strings.EqualFold(filepath.Ext(o.ScriptPath), ".py") {
+		return []string{
+			"bash", "-c",
+			"exec python3 " + shellQuote(entrypoint) + argList.String() + extraFlagStr,
+		}, nil, nil
+	}
+	return []string{
+		"bash", "-c",
+		"exec " + shellQuote(entrypoint) + argList.String() + extraFlagStr,
+	}, nil, nil
 }
 
 func shouldRunScriptWithPython(path string, data []byte, launcher string) (bool, error) {
@@ -892,6 +955,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		}
 	}
 	applyImageAssets(pod, container, o.ImageAssets)
+	applySource(pod, container, o.Source, o.ScriptPath)
 
 	containers := []any{container}
 	if o.MetricsOffload.Enabled() {
@@ -1099,6 +1163,56 @@ func applyImageAssets(pod, container map[string]any, assets []runconfig.ImageAss
 	pod["initContainers"] = initContainers
 	pod["volumes"] = volumes
 	container["volumeMounts"] = mounts
+}
+
+func applySource(pod, container map[string]any, source *runconfig.Source, entrypoint string) {
+	if source == nil {
+		return
+	}
+	const stagingPath = "/tau-source"
+	initContainers, _ := pod["initContainers"].([]any)
+	volumes, _ := pod["volumes"].([]any)
+	mounts, _ := container["volumeMounts"].([]any)
+	initContainers = append(initContainers, map[string]any{
+		"name":    "tau-source",
+		"image":   source.Image,
+		"command": []string{"/bin/sh"},
+		"args": []string{
+			"-c",
+			`cp -R -- "$1"/. /tau-source/ && chmod -R a+rwX /tau-source && chmod a+x "/tau-source/$2"`,
+			"tau-source",
+			source.Path,
+			entrypoint,
+		},
+		"volumeMounts": []any{map[string]any{
+			"name": "tau-source", "mountPath": stagingPath,
+		}},
+	})
+	volumes = append(volumes, map[string]any{
+		"name": "tau-source", "emptyDir": map[string]any{},
+	})
+	mounts = append(mounts, map[string]any{
+		"name": "tau-source", "mountPath": runconfig.SourceMountPath,
+	})
+	pod["initContainers"] = initContainers
+	pod["volumes"] = volumes
+	container["volumeMounts"] = mounts
+	container["workingDir"] = runconfig.SourceMountPath
+}
+
+func validateSourceStorageCollisions(plan storagePlan, source *runconfig.Source) error {
+	if source == nil {
+		return nil
+	}
+	if plan.hasVolumeName("tau-source") {
+		return fmt.Errorf("run.source generates volume name %q already used by storage", "tau-source")
+	}
+	for _, mount := range plan.VolumeMounts {
+		if mountPathsOverlap(runconfig.SourceMountPath, mount.MountPath) {
+			return fmt.Errorf("run.source mount path %q overlaps storage mount %q", runconfig.SourceMountPath, mount.MountPath)
+		}
+	}
+	return nil
 }
 
 func validateImageAssetStorageCollisions(plan storagePlan, assets []runconfig.ImageAsset) error {
@@ -1805,6 +1919,9 @@ func buildEnvList(p profile.Profile, extra map[string]string, secrets []envspec.
 	}
 	for k, v := range extra {
 		merged[k] = v
+	}
+	if err := runconfig.ValidateLiteralEnvPayloads(merged); err != nil {
+		return nil, err
 	}
 	if redactSecrets {
 		secrets = envspec.RedactSecretRefs(secrets)

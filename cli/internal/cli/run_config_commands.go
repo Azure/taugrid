@@ -119,6 +119,11 @@ func validateRunDispatchOptions(o runDispatchOptions) error {
 // import otherwise survives validation and admission and only fails inside a
 // Ray worker once the cluster is already up.
 func checkEntrypointImports(o runDispatchOptions) error {
+	if o.source != nil {
+		// The immutable source image supplies the complete project tree and the
+		// main container runs from its staged root.
+		return nil
+	}
 	if strings.TrimSpace(o.workingDir) != "" {
 		// The whole project directory ships and Ray puts it on PYTHONPATH, so
 		// local imports resolve on the driver and on every worker.

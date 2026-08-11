@@ -1646,6 +1646,7 @@ func TestRayTrainConfigRendersEnvJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
+
 	rendered := string(out)
 	if !strings.Contains(rendered, "TAU_RAY_TRAIN_CONFIG_JSON") {
 		t.Fatalf("rendered output should contain TAU_RAY_TRAIN_CONFIG_JSON:\n%s", rendered)
@@ -1662,6 +1663,22 @@ func TestRayTrainConfigRendersEnvJSON(t *testing.T) {
 	// Verify max_failures value is present.
 	if !strings.Contains(rendered, `"max_failures":3`) {
 		t.Fatalf("rendered output should contain max_failures:3:\n%s", rendered)
+	}
+}
+
+func TestTuneParamSpaceRejectsOversizedGeneratedEnvironment(t *testing.T) {
+	_, err := Render(Options{
+		Name:           "oversized-config",
+		Namespace:      "ray",
+		ScriptName:     "train.py",
+		Script:         []byte("import ray\n"),
+		Workers:        1,
+		GPUsPerWorker:  1,
+		Launcher:       "ray-tune",
+		TuneParamSpace: strings.Repeat("x", runconfig.MaxLiteralEnvValueBytes+1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "run.source") {
+		t.Fatalf("expected generated Ray environment rejection, got %v", err)
 	}
 }
 

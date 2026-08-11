@@ -57,6 +57,44 @@ func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	}
 }
 
+func TestRunTTLSecondsAfterFinished(t *testing.T) {
+	cfg, err := parse([]byte(`name: short-retention
+engine: job
+entrypoint: train.py
+run:
+  ttl_seconds_after_finished: 3600
+`), "tau.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Run.TTLSecondsAfterFinished == nil || *cfg.Run.TTLSecondsAfterFinished != 3600 {
+		t.Fatalf("ttl = %v, want 3600", cfg.Run.TTLSecondsAfterFinished)
+	}
+	if err := cfg.ValidateExecution("job"); err != nil {
+		t.Fatalf("validate Job TTL: %v", err)
+	}
+
+	zero := int64(0)
+	if err := (Config{Run: Run{TTLSecondsAfterFinished: &zero}}).ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "must be > 0") {
+		t.Fatalf("expected zero TTL rejection, got %v", err)
+	}
+	if err := (Config{Run: Run{TTLSecondsAfterFinished: cfg.Run.TTLSecondsAfterFinished}}).ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
+		t.Fatalf("expected Ray TTL rejection, got %v", err)
+	}
+}
+
+func TestValidateLiteralEnvPayloadsRejectsContentTransport(t *testing.T) {
+	tooLarge := strings.Repeat("x", MaxLiteralEnvValueBytes+1)
+	if err := ValidateLiteralEnvPayloads(map[string]string{"KG_SOURCE_PATCH_B64": tooLarge}); err == nil || !strings.Contains(err.Error(), "run.source") {
+		t.Fatalf("expected oversized value rejection, got %v", err)
+	}
+
+	part := strings.Repeat("x", MaxLiteralEnvValueBytes)
+	if err := ValidateLiteralEnvPayloads(map[string]string{"PART_A": part, "PART_B": part}); err == nil || !strings.Contains(err.Error(), "payload") {
+		t.Fatalf("expected aggregate payload rejection, got %v", err)
+	}
+}
+
 func TestParseAcceptsDigestPinnedImageAssetForDirectJob(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	cfg, err := parse([]byte(`name: asset-staging
@@ -77,6 +115,97 @@ storage:
 	}
 	if err := cfg.ValidateExecution("job"); err != nil {
 		t.Fatalf("validate job execution: %v", err)
+	}
+}
+
+func TestParseAcceptsDigestPinnedSourceForDirectJob(t *testing.T) {
+	digest := strings.Repeat("d", 64)
+	cfg, err := parse([]byte(`name: source-backed
+engine: job
+entrypoint: experiments/train.py
+run:
+  source:
+    image: example.azurecr.io/research-source@sha256:`+digest+`
+    path: /workspace
+`), "tau.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Run.Source == nil {
+		t.Fatal("run.source was not parsed")
+	}
+	if cfg.Run.Source.Image != "example.azurecr.io/research-source@sha256:"+digest || cfg.Run.Source.Path != "/workspace" {
+		t.Fatalf("source = %+v", cfg.Run.Source)
+	}
+	if err := cfg.ValidateExecution("job"); err != nil {
+		t.Fatalf("validate job execution: %v", err)
+	}
+}
+
+func TestSourceFailsClosed(t *testing.T) {
+	digest := strings.Repeat("e", 64)
+	validSource := &Source{
+		Image: "example.azurecr.io/research-source@sha256:" + digest,
+		Path:  "/workspace",
+	}
+	tests := []struct {
+		name   string
+		cfg    Config
+		engine string
+		want   string
+	}{
+		{
+			name: "mutable image",
+			cfg: Config{Run: Run{Source: &Source{
+				Image: "example.azurecr.io/research-source:latest",
+				Path:  "/workspace",
+			}}},
+			want: "pinned",
+		},
+		{
+			name:   "ray engine",
+			cfg:    Config{Entrypoint: "train.py", Run: Run{Source: validSource}},
+			engine: "ray",
+			want:   "requires engine: job",
+		},
+		{
+			name:   "working dir conflict",
+			cfg:    Config{Entrypoint: "train.py", Run: Run{Source: validSource, WorkingDir: "."}},
+			engine: "job",
+			want:   "cannot be used together",
+		},
+		{
+			name:   "absolute entrypoint",
+			cfg:    Config{Entrypoint: "/workspace/train.py", Run: Run{Source: validSource}},
+			engine: "job",
+			want:   "clean relative path",
+		},
+		{
+			name:   "parent entrypoint",
+			cfg:    Config{Entrypoint: "../train.py", Run: Run{Source: validSource}},
+			engine: "job",
+			want:   "clean relative path",
+		},
+		{
+			name:   "parent directory entrypoint",
+			cfg:    Config{Entrypoint: "..", Run: Run{Source: validSource}},
+			engine: "job",
+			want:   "clean relative path",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.cfg.ValidateDirect(); err != nil {
+				if !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("ValidateDirect error = %v, want %q", err, tt.want)
+				}
+				return
+			}
+			err := tt.cfg.ValidateExecution(tt.engine)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ValidateExecution error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -506,6 +635,8 @@ func TestConfigFieldPathsIncludeStructSliceChildren(t *testing.T) {
 		paths[path] = true
 	}
 	for _, want := range []string{
+		"run.source.image",
+		"run.source.path",
 		"storage.image_assets.name",
 		"storage.image_assets.image",
 		"storage.image_assets.source_path",

@@ -287,6 +287,7 @@ type runDispatchOptions struct {
 	configDir                                                                                       string
 	workingDir                                                                                      string
 	workingDirExcludes                                                                              []string
+	source                                                                                          *runconfig.Source
 	nodeSelectors, runtimePip, env, envSecrets, envKV, extraScripts                                 []string
 	metricsHistory                                                                                  []string
 	metricsSessionID                                                                                string
@@ -315,6 +316,7 @@ type runDispatchOptions struct {
 	launcher                                                                                              string
 	processesPerNode                                                                                      int
 	nodes                                                                                                 int
+	ttlSecondsAfterFinished                                                                               int64
 	tuneMetric, tuneMode, tuneParamSpace                                                                  string
 	tuneNumSamples, tuneMaxConcurrentTrials                                                               int
 	configs                                                                                               map[string]any

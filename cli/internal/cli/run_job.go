@@ -88,7 +88,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.dryRun != "" && o.dryRun != "client" && o.dryRun != "server" {
 		return fmt.Errorf("--dry-run must be one of: client, server")
 	}
-	if o.script != "" {
+	if o.script != "" && o.source == nil {
 		if _, err := os.Stat(o.script); err != nil {
 			return fmt.Errorf("run.entrypoint: %w", err)
 		}
@@ -194,34 +194,36 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	}
 
 	opts := jobrender.Options{
-		Name:                  request.Name,
-		Namespace:             ns,
-		Image:                 o.image,
-		ServiceAccountName:    o.serviceAccountName,
-		AzureWorkloadIdentity: o.azureWorkloadIdentity,
-		ScriptPath:            o.script,
-		Launcher:              o.launcher,
-		ProcessesPerNode:      o.processesPerNode,
-		Nodes:                 o.nodes,
-		ExtraFlags:            stringifyConfigs(o.configs),
-		CPURequest:            o.cpuRequest,
-		MemoryRequest:         o.memoryRequest,
-		CPULimit:              o.cpuLimit,
-		MemoryLimit:           o.memoryLimit,
-		PVCMount:              pvcMount,
-		Volumes:               volumes,
-		VolumeMounts:          volumeMounts,
-		ImageAssets:           append([]runconfig.ImageAsset{}, o.imageAssets...),
-		Env:                   env,
-		EnvSecrets:            envSecrets,
-		RedactSecrets:         o.dryRun == "client",
-		Profile:               profileOptions,
-		NodeSelector:          nodeSelector,
-		ClearNodeSelector:     o.clearNodeSelector,
-		OutputDir:             outputDir,
-		ArtifactPublish:       artifactPublication,
-		CheckpointArtifact:    o.checkpointArtifact,
-		Annotations:           annotations,
+		Name:                    request.Name,
+		Namespace:               ns,
+		Image:                   o.image,
+		ServiceAccountName:      o.serviceAccountName,
+		AzureWorkloadIdentity:   o.azureWorkloadIdentity,
+		ScriptPath:              o.script,
+		Source:                  o.source,
+		Launcher:                o.launcher,
+		ProcessesPerNode:        o.processesPerNode,
+		Nodes:                   o.nodes,
+		ExtraFlags:              stringifyConfigs(o.configs),
+		CPURequest:              o.cpuRequest,
+		MemoryRequest:           o.memoryRequest,
+		CPULimit:                o.cpuLimit,
+		MemoryLimit:             o.memoryLimit,
+		PVCMount:                pvcMount,
+		Volumes:                 volumes,
+		VolumeMounts:            volumeMounts,
+		ImageAssets:             append([]runconfig.ImageAsset{}, o.imageAssets...),
+		Env:                     env,
+		EnvSecrets:              envSecrets,
+		RedactSecrets:           o.dryRun == "client",
+		Profile:                 profileOptions,
+		NodeSelector:            nodeSelector,
+		ClearNodeSelector:       o.clearNodeSelector,
+		OutputDir:               outputDir,
+		ArtifactPublish:         artifactPublication,
+		CheckpointArtifact:      o.checkpointArtifact,
+		TTLSecondsAfterFinished: o.ttlSecondsAfterFinished,
+		Annotations:             annotations,
 	}
 	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, preset, func(flag string) bool {
 		return runJobTopologyFieldSet(o, flag)
@@ -308,6 +310,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		o.image,
 		o.script,
 		pvcMount,
+		o.source,
 		p,
 		volumes,
 		volumeMounts,

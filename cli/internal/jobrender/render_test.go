@@ -195,6 +195,104 @@ func TestRender_ImageAssetStagesPinnedDirectoryWithoutConfigMap(t *testing.T) {
 	}
 }
 
+func TestRender_SourceStagesPinnedTreeWithoutEnvTransport(t *testing.T) {
+	digest := strings.Repeat("b", 64)
+	image := "example.azurecr.io/research-source@sha256:" + digest
+	out, err := Render(trainProfile(), Options{
+		Name:       "source-backed-job",
+		Namespace:  "tau-default",
+		ScriptPath: "experiments/train.py",
+		Source: &runconfig.Source{
+			Image: image,
+			Path:  "/workspace",
+		},
+		ScriptArgs: []string{"--seed", "7"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "TAU_SCRIPT_B64") || strings.Contains(string(out), "TAU_PAYLOAD_B64") {
+		t.Fatalf("source bytes must not travel through env vars:\n%s", out)
+	}
+	if strings.Contains(string(out), "kind: ConfigMap") {
+		t.Fatalf("source-backed Job must remain self-contained:\n%s", out)
+	}
+
+	m := parseYAML(t, out)
+	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	init := pod["initContainers"].([]any)
+	if len(init) != 1 {
+		t.Fatalf("initContainers = %v", init)
+	}
+	sourceInit := init[0].(map[string]any)
+	if sourceInit["name"] != "tau-source" || sourceInit["image"] != image {
+		t.Fatalf("source init = %v", sourceInit)
+	}
+	if got := fmt.Sprint(sourceInit["args"]); !strings.Contains(got, "/workspace") ||
+		!strings.Contains(got, "chmod -R a+rwX /tau-source") ||
+		!strings.Contains(got, `chmod a+x "/tau-source/$2"`) {
+		t.Fatalf("source args = %v", sourceInit["args"])
+	}
+
+	main := pod["containers"].([]any)[0].(map[string]any)
+	if main["workingDir"] != runconfig.SourceMountPath {
+		t.Fatalf("workingDir = %v, want %s", main["workingDir"], runconfig.SourceMountPath)
+	}
+	if got := fmt.Sprint(main["command"]); !strings.Contains(got, "python3 /tau/source/experiments/train.py --seed 7") {
+		t.Fatalf("source command = %v", main["command"])
+	}
+	foundMount := false
+	for _, raw := range main["volumeMounts"].([]any) {
+		mount := raw.(map[string]any)
+		if mount["name"] == "tau-source" {
+			_, readOnlySet := mount["readOnly"]
+			foundMount = mount["mountPath"] == runconfig.SourceMountPath && !readOnlySet
+		}
+	}
+	if !foundMount {
+		t.Fatalf("main volumeMounts = %v", main["volumeMounts"])
+	}
+}
+
+func TestRender_SourceInitMakesEntrypointExecutableForNonRootMain(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:       "source-backed-shell",
+		Namespace:  "tau-default",
+		ScriptPath: "scripts/run.sh",
+		Source: &runconfig.Source{
+			Image: "example.azurecr.io/research-source@sha256:" + strings.Repeat("f", 64),
+			Path:  "/workspace",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, `chmod a+x "/tau-source/$2"`) {
+		t.Fatalf("source init does not restore executable permission:\n%s", out)
+	}
+	if !strings.Contains(got, "exec /tau/source/scripts/run.sh") || strings.Contains(got, "chmod +x /tau/source/scripts/run.sh") {
+		t.Fatalf("main container should execute the init-normalized source directly:\n%s", out)
+	}
+}
+
+func TestRender_SourceRejectsStorageCollision(t *testing.T) {
+	_, err := Render(trainProfile(), Options{
+		Name:       "source-backed-job",
+		Namespace:  "tau-default",
+		ScriptPath: "train.py",
+		Source: &runconfig.Source{
+			Image: "example.azurecr.io/research-source@sha256:" + strings.Repeat("c", 64),
+			Path:  "/workspace",
+		},
+		Volumes:      []Volume{{Name: "source-cache", PVC: "data"}},
+		VolumeMounts: []VolumeMount{{Name: "source-cache", MountPath: "/tau/source/cache"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "overlaps storage mount") {
+		t.Fatalf("collision error = %v", err)
+	}
+}
+
 func TestRender_ImageAssetRejectsStorageCollision(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	_, err := Render(trainProfile(), Options{
@@ -297,6 +395,20 @@ func TestRender_ServiceAccountAndTTLOverrides(t *testing.T) {
 	podLabels := spec["template"].(map[string]any)["metadata"].(map[string]any)["labels"].(map[string]any)
 	if got := podLabels[workloadmeta.LabelAzureWorkloadIdentityUse]; got != "true" {
 		t.Fatalf("%s = %#v, want true", workloadmeta.LabelAzureWorkloadIdentityUse, got)
+	}
+}
+
+func TestRenderRejectsOversizedLiteralEnvironment(t *testing.T) {
+	_, err := Render(trainProfile(), Options{
+		Name:      "oversized-env",
+		Namespace: "sample",
+		Command:   []string{"true"},
+		Env: map[string]string{
+			"KG_SOURCE_PATCH_B64": strings.Repeat("x", runconfig.MaxLiteralEnvValueBytes+1),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "run.source") {
+		t.Fatalf("expected oversized literal environment rejection, got %v", err)
 	}
 }
 
