@@ -319,7 +319,6 @@ def train_loop(config: dict) -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["learning_rate"]), betas=(0.9, 0.95))
     report_every = int(config["report_every"])
 
-    last_loss = math.nan
     for step in range(1, steps + 1):
         xb, yb = get_batch(tokens, batch_size, block_size, vocab_size, rank, step, device)
         _, loss = model(xb, yb)

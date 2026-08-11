@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 import tau
-from tau import cli as tau_cli
+import tau.cli as tau_cli
 from tau._cluster import render_wrapper
 
 

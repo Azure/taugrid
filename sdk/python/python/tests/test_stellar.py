@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 import tau
-from tau import stellar
+
+stellar = tau.stellar
 
 
 def _write_jsonl_argv_recorder(path: Path, recorder: Path) -> None:

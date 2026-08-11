@@ -24,11 +24,22 @@ rules:
     resources: ["localqueues"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
-    resources: ["clusterqueues"]
-    verbs: ["get"]
-  - apiGroups: ["kueue.x-k8s.io"]
     resources: ["workloads"]
     verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tau-clusterqueue-reader-v1
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/name: tau-core-controller
+    app.kubernetes.io/part-of: taugrid
+rules:
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -65,8 +76,11 @@ rules:
     resources: ["rolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
-    resourceNames: ["tau-researcher-v1"]
+    resourceNames: ["tau-researcher-v1", "tau-clusterqueue-reader-v1"]
     verbs: ["bind"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["localqueues"]

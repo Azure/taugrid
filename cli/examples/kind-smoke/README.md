@@ -1,14 +1,16 @@
 # Tau Kind smoke
 
 > **Status:** `smoke/debug`
-> **Intended use:** prove the local Tau -> Kueue -> Kubernetes Job path on a disposable Kind cluster.
-> **Not for:** GPU scheduling, AKS node labelling, CSI storage, Ray operator, or production queue policy.
+> **Intended use:** prove the local Tau -> Kueue -> Kubernetes Job and KubeRay paths on a disposable Kind cluster.
+> **Not for:** GPU scheduling, AKS node labelling, CSI storage, or production queue policy.
 
 This example is the smallest local end-to-end for `tau run`: it creates or
 reuses a Kind cluster, installs Kueue and KubeRay through the repo's TauGrid
 distribution chart, applies a test-only CPU Kueue lane, submits both `tau.yaml` (batch Job) and
 `tau-ray.yaml` (KubeRay RayJob), waits for Kueue admission plus a ready KubeRay
 RayCluster, and checks the lifecycle through the Kubernetes, Kueue, and Ray CRDs.
+Completion mode also runs one actor on each of two Ray workers and requires the
+RayJob and its Kueue Workload to finish successfully.
 
 From `cli`:
 
@@ -30,7 +32,7 @@ defaults to `tau-kind`; override it with `TAU_KIND_CLUSTER_NAME`. Set
 Workload reaches `Finished`, and assert the Ray driver log contains the smoke
 completion marker.
 
-The two-node Ray smoke requires an 8 GiB Docker or Podman VM. On macOS with
+The two-worker Ray smoke requires an 8 GiB Docker or Podman VM. On macOS with
 Podman:
 
 ```bash
@@ -50,11 +52,11 @@ TAU_KIND_DELETE_TIMEOUT_SECONDS=180
 TAU_KIND_CREATE_TIMEOUT_SECONDS=600
 ```
 
-`tau-ray.yaml` sets local-only CPU/memory requests because Kind runs all Ray
-pods on one Docker node. The Ray head uses the larger memory shape from the
-existing KubeRay CPU e2e fixture, while the worker stays small so the RayJob
-still exercises head + worker podsets within the 8 GiB provider budget. Production
-configs should use platform presets or cluster-sized resource requests instead.
+`tau-ray.yaml` sets local-only CPU/memory requests because Kind runs the Ray
+head and both workers on one Kubernetes node. The head has enough memory for
+the local Ray control plane and driver, while the workers stay small enough to
+exercise both worker pods within the 8 GiB provider budget. Production configs
+should use platform presets or cluster-sized resource requests instead.
 
 `tau cluster install` exercises the same Helm-only distribution path used by a
 fresh cluster. The private-image-dependent Tau controller and optional TauGrid

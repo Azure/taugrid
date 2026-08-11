@@ -21,7 +21,7 @@ test-kind-e2e:
 
 lint:
 	go vet ./...
-	gofmt -l . | tee /dev/stderr | (! read)
+	gofmt -l . | tee /dev/stderr | (! read -r _)
 
 generate:
 	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths=./api/...

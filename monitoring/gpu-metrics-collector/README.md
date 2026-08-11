@@ -72,7 +72,7 @@ monitoring/gpu-metrics-collector/
 │   │   └── conditions.go          # Node condition writer with jittered heartbeat
 │   └── config/
 │       └── config.go              # YAML config loader with validation
-├── Dockerfile                     # Multi-stage: golang:1.25 → distroless/static
+├── Dockerfile                     # Multi-stage: Microsoft Go 1.26.5 → distroless/static
 ├── Makefile
 ├── go.mod
 └── go.sum

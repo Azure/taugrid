@@ -209,7 +209,9 @@ wait_for_workload_finished() {
 wait_for_rayjob_running() {
   local name="$1"
   local timeout="$2"
-  local deadline status deployment cluster_name cluster_state scheduling pod_states
+  local deadline status deployment cluster_name cluster_state scheduling scheduling_issue pod_states
+  local failed_pod_issue reported_failed_pods
+  reported_failed_pods=""
   deadline=$((SECONDS + ${timeout%s}))
   while (( SECONDS < deadline )); do
     status="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$name" -o jsonpath='{.status.jobStatus}' 2>/dev/null || true)"
@@ -227,6 +229,8 @@ wait_for_rayjob_running() {
       echo "RayJob ${name} failed: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>} rayClusterStatus=${cluster_state:-<empty>}" >&2
       return 1
     fi
+    scheduling_issue=""
+    failed_pod_issue=""
     if [[ -n "$cluster_name" ]]; then
       scheduling="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get pods \
         -l "ray.io/cluster=${cluster_name}" \
@@ -234,8 +238,7 @@ wait_for_rayjob_running() {
         2>/dev/null || true)"
       while IFS=$'\t' read -r pod_name scheduled reason message; do
         if [[ "$scheduled" == "False" && "$reason" == "Unschedulable" ]]; then
-          echo "RayJob ${name} cannot become ready: pod ${pod_name} is Unschedulable: ${message}" >&2
-          return 1
+          scheduling_issue="; pod ${pod_name} is currently Unschedulable: ${message}"
         fi
       done <<<"$scheduling"
 
@@ -245,15 +248,18 @@ wait_for_rayjob_running() {
         2>/dev/null || true)"
       while IFS=$'\t' read -r pod_name phase container_states; do
         if [[ "$phase" == "Failed" || "$container_states" =~ =([1-9][0-9]*): ]]; then
-          echo "RayJob ${name} cannot become ready: pod ${pod_name} has failed container state ${container_states:-<empty>}" >&2
-          kubectl --request-timeout=20s --context "$KUBE_CONTEXT" -n "$NAMESPACE" logs "$pod_name" \
-            --all-containers=true --tail=100 >&2 || true
-          return 1
+          failed_pod_issue="; pod ${pod_name} exited with ${container_states:-<empty>}, waiting for KubeRay recovery"
+          if ! grep -Fxq "$pod_name" <<<"$reported_failed_pods"; then
+            echo "RayJob ${name} observed failed pod ${pod_name} with container state ${container_states:-<empty>}; waiting for KubeRay recovery" >&2
+            kubectl --request-timeout=20s --context "$KUBE_CONTEXT" -n "$NAMESPACE" logs "$pod_name" \
+              --all-containers=true --tail=100 >&2 || true
+            reported_failed_pods+="${pod_name}"$'\n'
+          fi
         fi
       done <<<"$pod_states"
     fi
-    echo "waiting for RayJob ${name}: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>} rayCluster=${cluster_name:-<empty>} rayClusterStatus=${cluster_state:-<empty>}"
-    sleep 10
+    echo "waiting for RayJob ${name}: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>} rayCluster=${cluster_name:-<empty>} rayClusterStatus=${cluster_state:-<empty>}${scheduling_issue}${failed_pod_issue}"
+    sleep 2
   done
   echo "timed out waiting for RayJob ${name} to reach Running with a ready RayCluster" >&2
   return 1
@@ -276,7 +282,7 @@ wait_for_rayjob_succeeded() {
       return 1
     fi
     echo "waiting for RayJob ${name}: jobStatus=${status:-<empty>} jobDeploymentStatus=${deployment:-<empty>}"
-    sleep 10
+    sleep 2
   done
   echo "timed out waiting for RayJob ${name} to succeed" >&2
   return 1
@@ -415,8 +421,8 @@ wait_for_workload_admitted "rayjob.ray.io" "$RAY_JOB_NAME" "$WAIT_TIMEOUT"
 wait_for_rayjob_running "$RAY_JOB_NAME" "$RAY_WAIT_TIMEOUT"
 if [[ "${TAU_KIND_RAY_WAIT_FOR_COMPLETION:-0}" == "1" ]]; then
   wait_for_rayjob_succeeded "$RAY_JOB_NAME" "$RAY_WAIT_TIMEOUT"
-  wait_for_workload_finished "rayjob.ray.io" "$RAY_JOB_NAME" "$WAIT_TIMEOUT"
   assert_ray_completion_marker "$RAY_JOB_NAME"
+  wait_for_workload_finished "rayjob.ray.io" "$RAY_JOB_NAME" "$WAIT_TIMEOUT"
 fi
 kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o wide
 kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get workloads.kueue.x-k8s.io -l "kueue.x-k8s.io/job-uid=$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')" -o wide

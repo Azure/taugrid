@@ -10,6 +10,7 @@ const config = {
   metric: root?.dataset.metric || "",
   snapshotPath: root?.dataset.snapshotPath || "/api/stellar/snapshot",
   seriesPath: root?.dataset.seriesPath || "/api/stellar/series",
+  runsPath: root?.dataset.runsPath || "/api/stellar/runs",
   experimentsPath: root?.dataset.experimentsPath || "/api/stellar/experiments",
   source: root?.dataset.source || "",
   refreshInterval: root?.dataset.refreshInterval || root?.dataset.autoRefreshInterval || "",
@@ -40,6 +41,8 @@ const focusedSeriesResolutionOptions = [
 ];
 const defaultAutoRefreshIntervalMs = 30000;
 const minAutoRefreshIntervalMs = 5000;
+const runPageSize = 200;
+const maxLoadedRuns = 1000;
 const pinnedStoragePrefix = "stellar:pinnedMetrics:";
 const dashboardSectionStoragePrefix = "stellar:dashboardSections:";
 const runUpdatedFilterOptions = [
@@ -123,6 +126,7 @@ const state = {
   experiments: [],
   experimentsLoading: false,
   experimentsError: "",
+  experimentsLastCompletedAt: 0,
   expandedExperimentIDs: initialExpandedExperiments(),
   search: "",
   lifecycleFilter: normalizeLifecycleFilter(initialURL.searchParams.get("lifecycle")),
@@ -134,6 +138,11 @@ const state = {
   selectedMetrics: initialPinnedMetrics(),
   metricSelectionInitialized: false,
   hiddenRuns: new Set(),
+  additionalRuns: [],
+  runSearchLimit: runPageSize,
+  runSearchTruncated: false,
+  runsLoading: false,
+  runsError: "",
   snapshot: null,
   summarySnapshot: null,
   fullSnapshot: null,
@@ -153,6 +162,7 @@ const state = {
   outputMediaStep: text(initialURL.searchParams.get("media_step"), ""),
   dashboardSections: initialDashboardSections(),
   expandedMetricFamilies: new Set(),
+  metricCatalogOpen: false,
   showAllPinnedCharts: false,
   autoRefresh: initialAutoRefreshState(),
 };
@@ -1109,6 +1119,14 @@ function snapshotURL(metric = state.metric, options = {}) {
   return url;
 }
 
+function runsURL(limit) {
+  const url = new URL(config.runsPath, window.location.origin);
+  url.searchParams.set("target", state.target);
+  url.searchParams.set("limit", String(limit));
+  applySourceParam(url);
+  return url;
+}
+
 function experimentsURL(options = {}) {
   const url = new URL(config.experimentsPath, window.location.origin);
   const query = text(options.query ?? state.experimentSearch, "").trim();
@@ -1177,6 +1195,15 @@ async function fetchExperiments(options = {}) {
   return response.json();
 }
 
+async function fetchRuns(limit) {
+  const response = await fetch(runsURL(limit), { headers: { Accept: "application/json" } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.detail || body.error || `Run search failed (${response.status})`);
+  }
+  return body;
+}
+
 async function refreshExperiments(options = {}) {
   if (state.experimentsLoading) {
     return;
@@ -1186,6 +1213,7 @@ async function refreshExperiments(options = {}) {
   try {
     const result = await fetchExperiments(options);
     state.experiments = list(result.experiments);
+    state.experimentsLastCompletedAt = Date.now();
   } catch (error) {
     state.experimentsError = error.message || String(error);
   } finally {
@@ -1306,6 +1334,11 @@ async function fetchSnapshot(options = {}) {
     renderLoading();
   }
   if (!autoRefresh) {
+    state.additionalRuns = [];
+    state.runSearchLimit = runPageSize;
+    state.runSearchTruncated = false;
+    state.runsLoading = false;
+    state.runsError = "";
     state.summarySnapshot = null;
     state.fullSnapshot = null;
     state.fullSnapshotLoading = false;
@@ -1325,13 +1358,17 @@ async function fetchSnapshot(options = {}) {
   const metricMode = highMetricCatalog || autoRefresh ? "metric" : "";
   const primaryMetric = primary.chart?.metric_name || focusedMetric;
   if (autoRefresh) {
-    state.featuredSnapshots.clear();
     state.featuredErrors.clear();
-    state.presetMetricSnapshots.clear();
     state.presetMetricErrors.clear();
   }
   state.summarySnapshot = primary;
   state.snapshot = primary;
+  if (!autoRefresh) {
+    state.runSearchLimit = Math.max(runPageSize, list(primary.runs).length);
+    state.runSearchTruncated = list(primary.runs).length >= runPageSize;
+  } else if (!state.additionalRuns.length) {
+    state.runSearchTruncated = list(primary.runs).length >= runPageSize;
+  }
   ensureSelectedMetrics(primary, { preserveSelection: autoRefresh });
 
   const selected = selectedMetricSpecs(primary);
@@ -1356,6 +1393,7 @@ async function fetchSnapshot(options = {}) {
     summary: primary,
     mode: metricMode,
     includeStatic: !autoRefresh && !highMetricCatalog,
+    force: autoRefresh,
   });
   traceMeasure("stellar.fetchSnapshot.metricSnapshots", metricsMark);
   const panelMetric = state.metric || state.selectedMetrics[0] || primaryMetric;
@@ -1366,11 +1404,8 @@ async function fetchSnapshot(options = {}) {
 
   updateURL();
   await refreshExperiments({ query: state.experimentSearch, render: false });
-  if (!autoRefresh) {
-    state.autoRefresh.lastCompletedAt = Date.now();
-  }
-  if (shouldRender) {
-    render();
+  if (autoRefresh) {
+    await refreshAdditionalRuns();
   }
   if (backgroundMetricNames.length) {
     const loadOptions = {
@@ -1378,6 +1413,7 @@ async function fetchSnapshot(options = {}) {
       summary: primary,
       mode: metricMode,
       includeStatic: !autoRefresh && !highMetricCatalog,
+      force: autoRefresh,
       render: shouldRender,
     };
     if (autoRefresh || options.deferBackground === false) {
@@ -1388,6 +1424,15 @@ async function fetchSnapshot(options = {}) {
   }
   if (options.loadAutoSeriesDetail !== false && autoSeriesDetail && state.metric) {
     await loadFocusedSeriesDetail();
+  }
+  if (!autoRefresh) {
+    state.autoRefresh.lastError = criticalRefreshError();
+    if (!state.autoRefresh.lastError) {
+      state.autoRefresh.lastCompletedAt = Date.now();
+    }
+  }
+  if (shouldRender) {
+    render();
   }
   traceMeasure("stellar.fetchSnapshot.total", overallMark);
 }
@@ -1445,12 +1490,12 @@ async function loadMetricSnapshot(metricName, options = {}) {
   }
   const selectedMetricSet = options.selectedMetricSet || new Set(normalizeMetricList(state.selectedMetrics));
   const selectedMetric = selectedMetricSet.has(metricName);
-  if (selectedMetric && state.presetMetricSnapshots.has(metricName)) {
+  if (!options.force && selectedMetric && state.presetMetricSnapshots.has(metricName)) {
     state.featuredSnapshots.set(metricName, state.presetMetricSnapshots.get(metricName));
     state.presetMetricErrors.delete(metricName);
     return;
   }
-  if (snapshotForMetric(metricName)) {
+  if (!options.force && snapshotForMetric(metricName)) {
     return;
   }
   const summary = options.summary || state.summarySnapshot || state.snapshot;
@@ -1461,13 +1506,15 @@ async function loadMetricSnapshot(metricName, options = {}) {
     target: requestTarget,
   };
   const loadKey = metricSnapshotLoadKey(metricName, request);
-  if (state.metricSnapshotLoads.has(loadKey)) {
-    await state.metricSnapshotLoads.get(loadKey);
+  const pendingLoad = state.metricSnapshotLoads.get(loadKey);
+  if (pendingLoad) {
+    await pendingLoad.promise;
     return;
   }
-  const load = (async () => {
+  const loadPromise = (async () => {
     const errors = selectedMetric ? state.featuredErrors : state.presetMetricErrors;
-    errors.delete(metricName);
+    state.featuredErrors.delete(metricName);
+    state.presetMetricErrors.delete(metricName);
     try {
       const snapshot = await fetchSnapshotFor(metricName, request);
       if (state.target !== requestTarget) {
@@ -1480,7 +1527,8 @@ async function loadMetricSnapshot(metricName, options = {}) {
       if (loadedMetric !== metricName) {
         cache.set(metricName, hydratedSnapshot);
       }
-      errors.delete(loadedMetric);
+      state.featuredErrors.delete(loadedMetric);
+      state.presetMetricErrors.delete(loadedMetric);
       if (state.metric === loadedMetric || state.metric === metricName) {
         setPanelSnapshotForMetric(loadedMetric, summary);
       }
@@ -1488,11 +1536,26 @@ async function loadMetricSnapshot(metricName, options = {}) {
       errors.set(metricName, error.message || String(error));
     }
   })();
-  state.metricSnapshotLoads.set(loadKey, load);
-  await load;
-  if (state.metricSnapshotLoads.get(loadKey) === load) {
+  const loadEntry = { promise: loadPromise, metricName };
+  state.metricSnapshotLoads.set(loadKey, loadEntry);
+  await loadEntry.promise;
+  if (state.metricSnapshotLoads.get(loadKey) === loadEntry) {
     state.metricSnapshotLoads.delete(loadKey);
   }
+}
+
+async function retryMetricSnapshot(metricName) {
+  const summary = state.summarySnapshot || state.snapshot;
+  const load = loadMetricSnapshot(metricName, {
+    force: true,
+    selectedMetricSet: new Set(normalizeMetricList(state.selectedMetrics)),
+    summary,
+    mode: metricSnapshotRequestMode(summary),
+    includeStatic: false,
+  });
+  render();
+  await load;
+  render();
 }
 
 function loadVisibleMetricSnapshots() {
@@ -1621,7 +1684,11 @@ async function refreshNow(options = {}) {
   let shouldRender = false;
   try {
     await fetchSnapshot({ autoRefresh: true, silent: true, render: false, loadAutoSeriesDetail: false });
-    await refreshFocusedSeriesAfterSnapshot();
+    const seriesError = await refreshFocusedSeriesAfterSnapshot();
+    const refreshError = criticalRefreshError(seriesError);
+    if (refreshError) {
+      throw new Error(refreshError);
+    }
     state.autoRefresh.lastCompletedAt = Date.now();
     shouldRender = true;
   } catch (error) {
@@ -1636,6 +1703,14 @@ async function refreshNow(options = {}) {
   }
 }
 
+function criticalRefreshError(seriesError = state.focusedSeriesError) {
+  return state.experimentsError
+    || seriesError
+    || state.featuredErrors.values().next().value
+    || state.presetMetricErrors.values().next().value
+    || "";
+}
+
 function dashboardHasActiveControl() {
   const active = document.activeElement;
   if (!active || !root.contains(active)) {
@@ -1648,13 +1723,14 @@ function dashboardHasActiveControl() {
 async function refreshFocusedSeriesAfterSnapshot() {
   const metricName = state.metric || state.snapshot?.chart?.metric_name;
   if (!metricName || !cachedFocusedSeries(metricName)) {
-    return;
+    return "";
   }
-  const cacheKey = focusedSeriesCacheKey(metricName, queryOptions);
-  if (cacheKey) {
-    state.focusedSeriesCache.delete(cacheKey);
-  }
+  const retainedDetail = cachedFocusedSeries(metricName);
   await loadFocusedSeriesDetail({ force: true, silent: true });
+  if (state.focusedSeriesError && retainedDetail) {
+    applyFocusedSeriesDetail(retainedDetail);
+  }
+  return state.focusedSeriesError;
 }
 
 function snapshotWithSummaryDefaults(snapshot, summary) {
@@ -1839,7 +1915,7 @@ async function loadFocusedSeriesDetail(options = {}) {
     }
     return;
   }
-  const cacheKey = focusedSeriesCacheKey(metricName);
+  const cacheKey = focusedSeriesCacheKey(metricName, queryOptions);
   if (!options.force && cacheKey && state.focusedSeriesCache.has(cacheKey)) {
     applyFocusedSeriesDetail(state.focusedSeriesCache.get(cacheKey));
     if (!options.silent) {
@@ -1936,7 +2012,12 @@ function renderError(error) {
       h("p", { class: "eyebrow" }, "Stellar"),
       h("h1", {}, "Stellar could not load"),
       h("p", {}, error.message || String(error)),
-      h("p", {}, "Refresh the page or check the Stellar API response."),
+      h("p", {}, "The experiment snapshot request failed. Retry it without reloading the page."),
+      h("button", {
+        type: "button",
+        class: "refresh-button",
+        onclick: () => fetchSnapshot().catch(renderError),
+      }, "Retry experiment snapshot"),
     ),
   );
   publishVisualState("error", { error: error.message || String(error) });
@@ -1955,7 +2036,7 @@ function renderLanding(options = {}) {
         h("p", {}, "Search experiments and open a labeled run dashboard when you are ready to inspect metrics."),
         renderLandingControls(projectOptions, state.experiments.length),
       ),
-      state.experimentsError ? h("section", { class: "landing-error" }, state.experimentsError) : null,
+      state.experimentsError ? renderExperimentDiscoveryError("landing-error") : null,
       h("section", { class: "landing-grid", "aria-live": "polite" },
         state.experimentsLoading ? h("article", { class: "landing-empty" }, "Loading experiments...") : null,
         !state.experimentsLoading && visibleExperiments.length === 0
@@ -1982,6 +2063,18 @@ function renderLandingControls(projectOptions, totalCount) {
     renderExperimentSearchBar({ variant: "landing" }),
     renderLandingProjectSelect(projectOptions, totalCount),
     renderLandingTagFilter(),
+  );
+}
+
+function renderExperimentDiscoveryError(className) {
+  return h("section", { class: `${className} retry-state`, "aria-live": "polite" },
+    h("span", {}, `Experiment discovery failed: ${experimentsErrorMessage()}`),
+    h("button", {
+      type: "button",
+      class: "mini-link-button",
+      disabled: state.experimentsLoading,
+      onclick: () => refreshExperiments({ render: true }).catch(renderError),
+    }, state.experimentsLoading ? "Retrying..." : "Retry experiment discovery"),
   );
 }
 
@@ -2177,6 +2270,7 @@ function render(options = {}) {
       h("div", { class: "workspace" },
         renderVariablesRail(snapshot),
         h("main", { class: "report-canvas" },
+          renderOperationalSummary(snapshot),
           h("section", { class: "panel-grid" }, ...renderDashboardSections(snapshot)),
         ),
       ),
@@ -2199,6 +2293,50 @@ function render(options = {}) {
     sections: visibleDashboardSectionIDs(),
     filters: activeRunFilterLabels(snapshot),
   });
+}
+
+function renderOperationalSummary(snapshot) {
+  const counts = lifecycleCounts(snapshot);
+  const active = (counts.running || 0) + (counts.pending || 0);
+  const stale = counts.not_responding || 0;
+  const failed = counts.failed || 0;
+  const missingTelemetry = allRuns(snapshot).filter((run) => !list(run.metric_names).length).length;
+  const queryErrors = state.featuredErrors.size
+    + state.presetMetricErrors.size
+    + Number(Boolean(state.focusedSeriesError))
+    + Number(Boolean(state.fullSnapshotError));
+  const needsAttention = failed + stale + missingTelemetry + queryErrors > 0;
+  const nextAction = failed
+    ? "Review failed runs"
+    : stale
+      ? "Review runs that are not responding"
+      : queryErrors
+        ? "Retry failed metric queries"
+        : missingTelemetry
+          ? "Inspect runs without telemetry"
+          : text(snapshot.summary?.next_action, active ? "Monitor active runs" : "Start or select a run");
+
+  return h("section", {
+    class: `operational-summary ${needsAttention ? "needs-attention" : ""}`.trim(),
+    "aria-label": "Loaded run operational status",
+    title: "Run counts cover loaded runs only.",
+  },
+    h("h2", {}, needsAttention ? "Needs attention" : active ? "Operational" : "No active runs"),
+    renderCompactStatusRow([
+      operationalCount("active", active),
+      operationalCount("stale", stale, stale ? "warning" : ""),
+      operationalCount("failed", failed, failed ? "critical" : ""),
+      operationalCount("missing telemetry", missingTelemetry, missingTelemetry ? "warning" : ""),
+      operationalCount("query errors", queryErrors, queryErrors ? "critical" : ""),
+    ], ["Next action: ", h("strong", {}, nextAction)]),
+  );
+}
+
+function operationalCount(label, value, tone = "") {
+  return h("span", { class: `evidence-count operational-count ${tone}`.trim() },
+    h("b", {}, value),
+    label,
+  );
 }
 
 function publishVisualState(status, detail = {}) {
@@ -2246,7 +2384,7 @@ function activeRunFilterLabels(snapshot) {
   }
   if (labels.length) {
     labels.push("Charts, runs, and evidence share these filters");
-  } else if (snapshot && list(snapshot.runs).length !== filteredRuns(snapshot).length) {
+  } else if (snapshot && allRuns(snapshot).length !== filteredRuns(snapshot).length) {
     labels.push("Filtered run set active");
   }
   return labels;
@@ -2279,7 +2417,7 @@ function renderTopbar(snapshot) {
     renderExperimentSearchBar(),
     h("div", { class: "topbar-actions" },
       renderSourceStatus(),
-      statPill("runs", snapshot.status?.runs),
+      statPill("loaded runs", allRuns(snapshot).length),
       statPill("metric files", snapshot.status?.metric_files),
       renderRefreshStatus(),
     ),
@@ -2358,12 +2496,14 @@ function renderRefreshStatus() {
     : refresh.pausedReason
       ? `paused: ${refresh.pausedReason}`
       : refresh.lastError
-        ? "error"
+        ? refresh.lastCompletedAt
+          ? `stale · updated ${formatClockTime(refresh.lastCompletedAt)}`
+          : "degraded"
         : refresh.lastCompletedAt
           ? `updated ${formatClockTime(refresh.lastCompletedAt)}`
           : "waiting";
   const title = refresh.lastError
-    ? `Last refresh failed: ${refresh.lastError}`
+    ? `Last refresh failed: ${refresh.lastError}${refresh.lastCompletedAt ? ` Showing data last successfully updated ${new Date(refresh.lastCompletedAt).toLocaleString()}.` : ""}`
     : refresh.enabled
       ? `Auto-refreshes every ${formatRefreshInterval(refresh.intervalMs)} while this tab is visible.`
       : "Auto-refresh is disabled for this dashboard.";
@@ -2386,9 +2526,15 @@ function renderRefreshStatus() {
   );
 }
 
+function experimentsErrorMessage() {
+  return `${state.experimentsError}${state.experimentsLastCompletedAt ? ` Last successful update: ${new Date(state.experimentsLastCompletedAt).toLocaleString()}.` : ""}`;
+}
+
 function renderVariablesRail(snapshot) {
   const visibleRuns = filteredRuns(snapshot);
   const listedRuns = filteredRuns(snapshot, { includeHidden: true });
+  const loadedRuns = allRuns(snapshot).length;
+  const canonicalRuns = canonicalRunCount(snapshot, loadedRuns);
   const metricSelect = h("select", {
     onchange: (event) => {
       setFocusMetric(event.target.value);
@@ -2411,10 +2557,10 @@ function renderVariablesRail(snapshot) {
   return h("aside", { class: "variables-rail" },
     renderExperimentRail(snapshot),
     h("div", { class: "rail-top" },
-      h("p", { class: "rail-label" }, `Runs (${visibleRuns.length}/${listedRuns.length})`),
+      h("p", { class: "rail-label" }, `${loadedRuns} loaded of ${canonicalRuns} · ${visibleRuns.length} visible`),
       h("div", { class: "run-toolbar" },
-        h("button", { type: "button", class: "icon-button", title: "Show all runs", onclick: showAllRuns }, "all"),
-        h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(listedRuns) }, "hide"),
+        h("button", { type: "button", class: "icon-button", title: "Show all runs", onclick: showAllRuns }, "Show all"),
+        h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(listedRuns) }, "Hide listed"),
       ),
       h("input", {
         type: "search",
@@ -2431,6 +2577,7 @@ function renderVariablesRail(snapshot) {
       h("div", { class: "run-list" },
         ...listedRuns.map((run) => renderRunRailRow(run)),
       ),
+      renderRunLoadMore(),
     ),
     renderControlsDrawer(snapshot, metricSelect, groupSelect),
   );
@@ -2486,7 +2633,7 @@ function renderExperimentRail(snapshot) {
         onclick: () => refreshExperiments({ render: true }).catch(renderError),
       }, state.experimentsLoading ? "loading" : "refresh"),
     ),
-    state.experimentsError ? h("p", { class: "rail-error" }, state.experimentsError) : null,
+    state.experimentsError ? renderExperimentDiscoveryError("rail-error") : null,
     experiments.length === 0 && !state.experimentsLoading ? h("p", { class: "rail-help" }, experimentRailEmptyLabel()) : null,
     h("div", { class: "experiment-list" },
       ...visible.map((experiment) => renderExperimentRow(experiment, selectedID, olderExperimentIDs(older).has(experiment.experiment_id))),
@@ -2555,6 +2702,11 @@ function returnToLanding() {
   state.fullSnapshot = null;
   state.fullSnapshotLoading = false;
   state.fullSnapshotError = "";
+  state.additionalRuns = [];
+  state.runSearchLimit = runPageSize;
+  state.runSearchTruncated = false;
+  state.runsLoading = false;
+  state.runsError = "";
   state.hiddenRuns.clear();
   state.focusedSeriesCache.clear();
   state.featuredSnapshots.clear();
@@ -2681,10 +2833,15 @@ function renderLifecycleFilters(snapshot) {
     { id: "cancelled", label: "Cancelled" },
     { id: "incomplete", label: "Incomplete" },
   ];
-  return h("div", { class: "run-filter-chips", role: "list", "aria-label": "Run lifecycle filters" },
+  return h("div", {
+    class: "run-filter-chips",
+    role: "list",
+    "aria-label": "Run lifecycle filters for loaded runs",
+    title: "Lifecycle counts cover loaded runs only.",
+  },
     ...options.map((option) => {
       const active = state.lifecycleFilter === option.id;
-      const count = option.id ? counts[option.id] || 0 : list(snapshot.runs).length;
+      const count = option.id ? counts[option.id] || 0 : allRuns(snapshot).length;
       return h("button", {
         type: "button",
         class: `run-filter-chip ${active ? "active" : ""}`.trim(),
@@ -2732,11 +2889,20 @@ function renderRunUpdatedControls() {
 
 function lifecycleCounts(snapshot) {
   const counts = {};
-  for (const run of list(snapshot.runs)) {
+  for (const run of allRuns(snapshot)) {
     const lifecycle = runLifecycle(run);
     counts[lifecycle] = (counts[lifecycle] || 0) + 1;
   }
   return counts;
+}
+
+function canonicalRunCount(snapshot, loadedRuns) {
+  const experimentID = snapshot.experiment?.experiment_id || snapshot.target;
+  const project = snapshot.experiment?.project || allRuns(snapshot)[0]?.project;
+  const experiment = list(state.experiments).find((candidate) =>
+    candidate.experiment_id === experimentID && (!project || candidate.project === project));
+  const total = Number(experiment?.run_count);
+  return Number.isFinite(total) ? Math.max(total, loadedRuns) : loadedRuns;
 }
 
 function renderDashboardSectionControls() {
@@ -2843,7 +3009,6 @@ function persistDashboardSectionState() {
 
 function renderRunRailRow(run) {
   const selectedSpec = metricSpec(state.metric);
-  const metric = metricValueForRun(state.metric, run.run_id);
   const hidden = state.hiddenRuns.has(run.run_id);
   const lifecycle = runLifecycle(run);
   return h("article", { class: `run-row ${hidden ? "run-row-hidden" : ""}`.trim() },
@@ -2857,7 +3022,7 @@ function renderRunRailRow(run) {
     h("div", { class: "run-row-main" },
       h("div", { class: "run-row-title" },
         h("span", { title: run.run_id }, run.run_id),
-        h("b", {}, formatTableValue(metric, selectedSpec)),
+        h("b", {}, renderMetricValueForRun(state.metric, run, selectedSpec)),
       ),
       h("div", { class: "run-tags" },
         h("span", {}, run.run_group_id),
@@ -2866,6 +3031,76 @@ function renderRunRailRow(run) {
       ),
     ),
   );
+}
+
+function renderRunLoadMore() {
+  if (state.runsError) {
+    return h("div", { class: "run-load-status", role: "status" },
+      h("span", {}, state.runsError),
+      h("button", { type: "button", class: "run-load-more", onclick: () => loadMoreRuns() }, "Retry"),
+    );
+  }
+  if (state.runsLoading || state.runSearchTruncated) {
+    const remaining = Math.max(0, maxLoadedRuns - state.runSearchLimit);
+    return h("button", {
+      type: "button",
+      class: "run-load-more",
+      disabled: state.runsLoading || remaining === 0,
+      onclick: () => loadMoreRuns(),
+    }, state.runsLoading ? "Loading runs..." : remaining === 0 ? "Run limit reached" : `Load ${Math.min(runPageSize, remaining)} more runs`);
+  }
+  return null;
+}
+
+async function loadMoreRuns() {
+  if (state.runsLoading || state.runSearchLimit >= maxLoadedRuns) {
+    return;
+  }
+  const requestTarget = state.target;
+  const limit = Math.min(maxLoadedRuns, state.runSearchLimit + runPageSize);
+  state.runsLoading = true;
+  state.runsError = "";
+  render();
+  try {
+    const result = await fetchRuns(limit);
+    if (state.target !== requestTarget) {
+      return;
+    }
+    state.additionalRuns = list(result.runs);
+    state.runSearchLimit = limit;
+    state.runSearchTruncated = result.truncated === true;
+  } catch (error) {
+    if (state.target === requestTarget) {
+      state.runsError = error.message || String(error);
+    }
+  } finally {
+    if (state.target === requestTarget) {
+      state.runsLoading = false;
+      render();
+    }
+  }
+}
+
+async function refreshAdditionalRuns() {
+  if (!state.additionalRuns.length || state.runsLoading) {
+    return;
+  }
+  const requestTarget = state.target;
+  const limit = state.runSearchLimit;
+  state.runsLoading = true;
+  try {
+    const result = await fetchRuns(limit);
+    if (state.target !== requestTarget) {
+      return;
+    }
+    state.additionalRuns = list(result.runs);
+    state.runSearchTruncated = result.truncated === true;
+    state.runsError = "";
+  } finally {
+    if (state.target === requestTarget) {
+      state.runsLoading = false;
+    }
+  }
 }
 
 function toggleRunVisibility(runID) {
@@ -3147,23 +3382,22 @@ function metricValueSummary(metricName, options = {}) {
   const spec = metricSpecForName(metricName);
   const snapshot = metricSnapshotForName(metricName, state.snapshot);
   const error = metricErrorForName(metricName);
-  if (error) {
-    return { spec, value: "--", detail: error, error: true };
+  if (error && !snapshot) {
+    const missing = missingMetricState(metricName);
+    return { spec, value: missing.label, detail: missing.detail, error: true };
   }
   if (!snapshot) {
     const summarySignal = metricSummarySignal(state.fullSnapshot || state.summarySnapshot || state.snapshot, spec);
     if (summarySignal) {
       return metricSignalSummary(spec, summarySignal);
     }
-    return {
-      spec,
-      value: "--",
-      detail: metricAvailable(metricName) ? "metric detected; values are loading" : "metric not present in this run set",
-    };
+    const missing = missingMetricState(metricName, { snapshot: state.summarySnapshot || state.snapshot });
+    return { spec, value: missing.label, detail: missing.detail, error: missing.error };
   }
   const signal = options.mode === "latest" ? latestSignal(snapshot, spec) : bestSignal(snapshot, spec);
   if (!signal) {
-    return { spec, value: "--", detail: "no scalar values found yet" };
+    const missing = missingMetricState(metricName, { snapshot });
+    return { spec, value: missing.label, detail: missing.detail, error: missing.error };
   }
   return metricSignalSummary(spec, signal);
 }
@@ -3559,7 +3793,7 @@ function defaultMetricSpecs(snapshot) {
   const knownNames = new Set(known.map((spec) => spec.name));
   const inferred = (snapshot.metric_options || [])
     .filter((option) => !knownNames.has(option.name))
-    .map((option) => metricSpecFromSnapshot(snapshot, option.name))
+    .map((option) => metricSpecFromSnapshot(snapshot, option.name));
   const prioritized = inferred.filter((spec) => metricResearchPriority(spec.name) < 100);
   const presetNames = new Set(researcherPresetMetricNames(snapshot));
   const preset = [...presetNames]
@@ -3847,10 +4081,68 @@ function bestSignal(snapshot, spec) {
   return snapshot.sweep?.best_run || null;
 }
 
-function metricValueForRun(metricName, runID) {
+function metricValueForRun(metricName, run) {
   const snapshot = snapshotForMetric(metricName);
-  const sweepRun = (snapshot?.sweep?.runs || []).find((run) => run.run_id === runID);
-  return sweepRun?.metric ?? "";
+  const sweepRun = list(snapshot?.sweep?.runs).find((candidate) => candidate.run_id === run.run_id);
+  if (sweepRun?.metric !== null && sweepRun?.metric !== undefined && sweepRun?.metric !== "") {
+    return sweepRun.metric;
+  }
+  const summary = list(run.metrics).find((metric) => metric.metric_name === metricName);
+  return summary?.latest_value ?? "";
+}
+
+function metricIsLoading(metricName) {
+  return [...state.metricSnapshotLoads.values()].some((load) => load.metricName === metricName);
+}
+
+function runEnded(run) {
+  return new Set(["succeeded", "failed", "cancelled", "incomplete"]).has(runLifecycle(run));
+}
+
+function missingMetricState(metricName, options = {}) {
+  const error = metricErrorForName(metricName);
+  if (error) {
+    return { label: "Query failed", detail: error, title: error, error: true };
+  }
+  if (metricIsLoading(metricName)) {
+    return { label: "Loading", detail: "Metric values are loading.", title: "Metric values are loading." };
+  }
+  if (!options.run && !metricSnapshotForName(metricName, state.snapshot) && metricAvailable(metricName)) {
+    return { label: "Loading", detail: "Metric values are loading.", title: "Metric values are loading." };
+  }
+  if (!metricName) {
+    return { label: "N/A", detail: "No metric is selected.", title: "No metric is selected." };
+  }
+  if (options.filteredOut) {
+    return { label: "N/A", detail: "No points match the active run filters.", title: "No points match the active run filters." };
+  }
+
+  const runs = options.run ? [options.run] : filteredRuns(options.snapshot || state.summarySnapshot || state.snapshot);
+  const catalogs = runs.map((run) => list(run.metric_names));
+  if (runs.length && catalogs.every((names) => !names.length) && runs.every(runEnded)) {
+    return {
+      label: "Ended before first sample",
+      detail: runs.length === 1 ? "The run ended before logging a metric sample." : "The visible runs ended before logging a metric sample.",
+      title: runs.length === 1 ? "The run ended before logging a metric sample." : "The visible runs ended before logging a metric sample.",
+    };
+  }
+  if (catalogs.some((names) => names.length) && catalogs.every((names) => !names.includes(metricName))) {
+    return {
+      label: "Not logged",
+      detail: runs.length === 1 ? "This metric was not logged for the run." : "This metric was not logged for the visible runs.",
+      title: runs.length === 1 ? "This metric was not logged for the run." : "This metric was not logged for the visible runs.",
+    };
+  }
+  return { label: "N/A", detail: "No scalar value is available.", title: "No scalar value is available." };
+}
+
+function renderMetricValueForRun(metricName, run, spec) {
+  const value = metricValueForRun(metricName, run);
+  if (value !== null && value !== undefined && value !== "") {
+    return formatSignalValue(value, spec);
+  }
+  const missing = missingMetricState(metricName, { run });
+  return h("span", { title: missing.title }, missing.label);
 }
 
 function shortMetricName(name) {
@@ -3995,16 +4287,9 @@ function formatSignalValue(value, spec) {
   }
 }
 
-function formatTableValue(value, spec) {
-  if (value === null || value === undefined || value === "") {
-    return "--";
-  }
-  return formatSignalValue(value, spec);
-}
-
 function filteredRuns(snapshot, options = {}) {
   const query = state.search.trim().toLowerCase();
-  const runs = list(snapshot?.runs).filter((run) => {
+  const runs = allRuns(snapshot).filter((run) => {
     if (state.group && run.run_group_id !== state.group) {
       return false;
     }
@@ -4023,6 +4308,19 @@ function filteredRuns(snapshot, options = {}) {
     return searchableRunParts(run).some((part) => text(part, "").toLowerCase().includes(query));
   });
   return sortRunsByUpdated(runs);
+}
+
+function allRuns(snapshot) {
+  const runs = [];
+  const seen = new Set();
+  for (const run of [...list(snapshot?.runs), ...state.additionalRuns]) {
+    if (!run?.run_id || seen.has(run.run_id)) {
+      continue;
+    }
+    seen.add(run.run_id);
+    runs.push(run);
+  }
+  return runs;
 }
 
 function filteredRunIDs(snapshot, options = {}) {
@@ -4228,36 +4526,48 @@ function renderMetricCatalogPanel(snapshot) {
   const metricGroups = groupedMetricOptions(snapshot, { family: activeFamily });
   const matchingMetrics = metricCatalogCount(metricGroups);
   const totalMetrics = list(snapshot.metric_options).length;
-  const body = h("div", { class: "metric-dashboard metric-catalog-dashboard" },
-    h("div", { class: "dashboard-summary" },
-      statPill("focused", state.metric || "none"),
-      statPill("pinned", `${specs.length}/${maxPinnedMetrics}`),
-      statPill("available metrics", totalMetrics),
+  const body = h("details", {
+    class: "rail-disclosure metric-catalog-disclosure",
+    open: state.metricCatalogOpen,
+    ontoggle: (event) => {
+      state.metricCatalogOpen = event.currentTarget.open;
+    },
+  },
+    h("summary", {},
+      h("strong", {}, "Metric catalog"),
+      h("span", {}, `${totalMetrics} available · ${specs.length} pinned`),
     ),
-    renderMetricFamilyTabs(familyGroups, activeFamily),
-    h("div", { class: "metric-catalog-toolbar" },
-      h("input", {
-        type: "search",
-        value: state.metricSearch,
-        placeholder: "Search metrics, families, or cards",
-        "data-metric-search-input": true,
-        oninput: (event) => {
-          state.metricSearch = event.target.value;
-          render({ focusMetricSearch: true });
-        },
-      }),
-      h("span", {}, state.metricSearch ? `${matchingMetrics}/${totalMetrics} metrics` : activeFamily ? `${matchingMetrics}/${totalMetrics} metrics` : `${totalMetrics} metrics`),
-      matchingMetrics ? h("button", {
-        type: "button",
-        class: "metric-catalog-expand",
-        title: `Pin up to ${maxPinnedMetrics} metrics from the current ${activeFamily || "catalog"} view`,
-        onclick: () => pinVisibleMetricGroups(metricGroups),
-      }, `Pin visible ${Math.min(matchingMetrics, maxPinnedMetrics)}`) : null,
-    ),
-    h("div", { class: "metric-catalog" },
-      matchingMetrics
-        ? metricGroups.map((group) => renderMetricCatalogGroup(group))
-        : h("p", { class: "empty" }, "No metrics match the current search."),
+    h("div", { class: "rail-disclosure-body metric-dashboard metric-catalog-dashboard" },
+      h("div", { class: "dashboard-summary" },
+        statPill("focused", state.metric || "none"),
+        statPill("pinned", `${specs.length}/${maxPinnedMetrics}`),
+        statPill("available metrics", totalMetrics),
+      ),
+      renderMetricFamilyTabs(familyGroups, activeFamily),
+      h("div", { class: "metric-catalog-toolbar" },
+        h("input", {
+          type: "search",
+          value: state.metricSearch,
+          placeholder: "Search metrics, families, or cards",
+          "data-metric-search-input": true,
+          oninput: (event) => {
+            state.metricSearch = event.target.value;
+            render({ focusMetricSearch: true });
+          },
+        }),
+        h("span", {}, state.metricSearch ? `${matchingMetrics}/${totalMetrics} metrics` : activeFamily ? `${matchingMetrics}/${totalMetrics} metrics` : `${totalMetrics} metrics`),
+        matchingMetrics ? h("button", {
+          type: "button",
+          class: "metric-catalog-expand",
+          title: `Pin up to ${maxPinnedMetrics} metrics from the current ${activeFamily || "catalog"} view`,
+          onclick: () => pinVisibleMetricGroups(metricGroups),
+        }, `Pin visible ${Math.min(matchingMetrics, maxPinnedMetrics)}`) : null,
+      ),
+      h("div", { class: "metric-catalog" },
+        matchingMetrics
+          ? metricGroups.map((group) => renderMetricCatalogGroup(group))
+          : h("p", { class: "empty" }, "No metrics match the current search."),
+      ),
     ),
   );
   return configuredPanel("catalog", "Metric catalog", "Search and pin additional charts after the graph-first defaults.", body, "full metric-catalog-panel");
@@ -4309,7 +4619,7 @@ function renderPinnedMetricCard(spec, options = {}) {
     options.reviewSecondary ? "review-secondary" : "",
     options.uniform ? "uniform" : "",
     state.metric === spec.name ? "focused" : "",
-    !snapshot || state.featuredErrors.has(spec.name) || !dataset.length ? "muted" : "",
+    !snapshot || metricErrorForName(spec.name) || !dataset.length ? "muted" : "",
   ].filter(Boolean).join(" ");
   return h("article", { class: classes },
     h("div", { class: "metric-card-head" },
@@ -4332,20 +4642,26 @@ function renderPinnedMetricCard(spec, options = {}) {
         },
       }, "Pinned"),
     ),
+    snapshot && metricErrorForName(spec.name) ? renderMetricRetryState(spec, true) : null,
     renderMetricCardBody(spec, snapshot, dataset, singlePoint, options),
     renderMetricCardDensity(chart, { runIDs: filteredRunIDs(snapshot) }),
   );
 }
 
 function renderMetricCardBody(spec, snapshot, dataset, singlePoint, options = {}) {
-  if (state.featuredErrors.has(spec.name)) {
-    return h("p", { class: "metric-card-state" }, state.featuredErrors.get(spec.name));
+  if (metricErrorForName(spec.name) && !snapshot) {
+    return renderMetricRetryState(spec);
   }
   if (!snapshot) {
-    return h("p", { class: "metric-card-state" }, "Loading chart...");
+    const missing = missingMetricState(spec.name, { snapshot: state.summarySnapshot || state.snapshot });
+    return h("p", { class: "metric-card-state", title: missing.title }, missing.label);
   }
   if (!dataset.length) {
-    return h("p", { class: "metric-card-state" }, activeRunFilterLabels(snapshot).length ? "No points match the active run filters." : "No points yet.");
+    const missing = missingMetricState(spec.name, {
+      snapshot,
+      filteredOut: activeRunFilterLabels(snapshot).length > 0,
+    });
+    return h("p", { class: "metric-card-state", title: missing.title }, missing.label);
   }
   if (singlePoint) {
     const points = dataset.flatMap((series) => series.points.map((point) => ({ series, point })));
@@ -4363,6 +4679,17 @@ function renderMetricCardBody(spec, snapshot, dataset, singlePoint, options = {}
     showLegend: fullChart,
     runIDs: filteredRunIDs(snapshot),
   });
+}
+
+function renderMetricRetryState(spec, retained = false) {
+  return h("div", { class: "metric-card-state retry-state", "aria-live": "polite" },
+    h("span", {}, `${retained ? "Showing retained data. " : ""}Query failed: ${metricErrorForName(spec.name)}`),
+    h("button", {
+      type: "button",
+      class: "mini-link-button",
+      onclick: () => retryMetricSnapshot(spec.name).catch(renderError),
+    }, "Retry chart"),
+  );
 }
 
 function renderMetricCatalogGroup(group) {
@@ -4421,7 +4748,8 @@ function renderLinePanel(snapshot) {
   }
   const chart = focusedSnapshot?.chart || {};
   if (!chart.has_data || !(chart.series || []).length) {
-    return configuredPanel("timeline", "Selected metric timeline", text(chart.metric_name, focusedMetric), h("p", { class: "empty" }, "No time-series points for this metric."), "wide");
+    const missing = missingMetricState(focusedMetric, { snapshot: focusedSnapshot || snapshot });
+    return configuredPanel("timeline", "Selected metric timeline", text(chart.metric_name, focusedMetric), h("p", { class: "empty", title: missing.title }, missing.label), "wide");
   }
   return configuredPanel("timeline", "Selected metric timeline", `TimeSeries ${text(chart.metric_name)}`,
     h("div", { class: "focused-chart-stack" },
@@ -4430,6 +4758,7 @@ function renderLinePanel(snapshot) {
         className: "selected-line-chart",
         compact: false,
         metricName: chart.metric_name,
+        snapshot: focusedSnapshot,
         showLegend: true,
         brush: true,
       }),
@@ -4689,7 +5018,7 @@ function renderResearchRunTablePanel(snapshot) {
           ),
           h("td", {}, h("span", { class: `run-status-badge ${runLifecycle(run)}`.trim(), title: runSuccessTitle(run) }, runLifecycleLabel(run))),
           h("td", {}, run.run_group_id),
-          ...metricColumns.map((spec) => h("td", {}, formatTableValue(metricValueForRun(spec.name, run.run_id), spec))),
+          ...metricColumns.map((spec) => h("td", {}, renderMetricValueForRun(spec.name, run, spec))),
         ))),
       ),
     ),
@@ -5452,7 +5781,12 @@ function compactConfig(item) {
 function renderMetricChart(chart, options = {}) {
   const dataset = chartDataset(chart, { runIDs: options.runIDs || filteredRunIDSetForChart(chart) });
   if (!chart?.has_data || !dataset.length) {
-    return h("div", { class: `chart-empty ${options.className || ""}`.trim() }, shortMetricName(options.metricName || chart?.metric_name || state.metric));
+    const snapshot = options.snapshot || state.snapshot;
+    const missing = missingMetricState(options.metricName || chart?.metric_name || state.metric, {
+      snapshot,
+      filteredOut: activeRunFilterLabels(snapshot).length > 0,
+    });
+    return h("div", { class: `chart-empty ${options.className || ""}`.trim(), title: missing.title }, missing.label);
   }
 
   const width = 800;
@@ -5467,6 +5801,9 @@ function renderMetricChart(chart, options = {}) {
     bottom: height - margin.bottom,
   };
   const domain = chartDomain(chart, dataset);
+  const metricName = text(options.metricName, chart.metric_name);
+  const plottedPoints = dataset.reduce((total, series) => total + series.points.length, 0);
+  const chartSummary = `${metricName} line chart with ${dataset.length} visible series and ${plottedPoints} plotted ${plottedPoints === 1 ? "point" : "points"}. Steps ${formatAxisValue(domain.xMin)} to ${formatAxisValue(domain.xMax)}; values ${formatAxisValue(domain.yMin)} to ${formatAxisValue(domain.yMax)}.`;
   const project = (point) => ({
     x: projectLinear(point.step, domain.xMin, domain.xMax, plot.left, plot.right),
     y: projectLinear(point.value, domain.yMin, domain.yMax, plot.bottom, plot.top),
@@ -5476,7 +5813,7 @@ function renderMetricChart(chart, options = {}) {
     class: "stellar-line-chart",
     viewBox: `0 0 ${width} ${height}`,
     role: "img",
-    "aria-label": `${text(options.metricName, chart.metric_name)} line chart`,
+    "aria-label": chartSummary,
   });
   const yTicks = ticks(domain.yMin, domain.yMax, options.compact ? 4 : 5);
   const xTicks = ticks(domain.xMin, domain.xMax, options.compact ? 3 : 5);

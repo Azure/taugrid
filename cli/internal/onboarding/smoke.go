@@ -71,12 +71,11 @@ func RenderSmoke(options SmokeOptions) ([]byte, error) {
 	image := firstNonEmpty(options.Image, SmokeImage)
 	labels, annotations := experiment.MergeMetadata(
 		workloadmeta.StampWorkspace(map[string]string{
-			workloadmeta.LabelJob: options.Name,
-			"run_id":              options.Name,
-		}, options.Workspace),
-		map[string]string{
+			workloadmeta.LabelJob:             options.Name,
 			workloadmeta.LabelOnboardingSmoke: "true",
-		},
+			"run_id":                          options.Name,
+		}, options.Workspace),
+		nil,
 		experiment.Metadata{
 			RunID:        options.Name,
 			Namespace:    options.Namespace,

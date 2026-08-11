@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 # Stage 1: Build with MSFT Go (Debian-based) for FIPS compliance
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.5 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.5-1 AS builder
 # TODO: change default to v0.2.0 once adx-mon team tags a release
 ARG ADX_MON_VERSION=main
 

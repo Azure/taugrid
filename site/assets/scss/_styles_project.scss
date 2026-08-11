@@ -247,6 +247,10 @@ li {
   text-shadow: none !important;
 }
 
+.td-navbar .nav-link {
+  text-wrap: nowrap;
+}
+
 .td-navbar .nav-link:hover,
 .td-navbar .nav-link.active {
   color: var(--cp-link) !important;

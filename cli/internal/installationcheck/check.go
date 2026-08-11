@@ -49,6 +49,7 @@ type Component string
 const (
 	ComponentKueue   Component = "Kueue"
 	ComponentKubeRay Component = "KubeRay"
+	ComponentTauCore Component = "Tau controller"
 )
 
 type chartComponent struct {
@@ -64,6 +65,12 @@ var chartComponents = []chartComponent{
 	{name: ComponentKubeRay, valuesKey: "kuberayOperator", chartPrefix: "kuberay-operator-"},
 }
 
+var componentSwitches = []chartComponent{
+	chartComponents[0],
+	chartComponents[1],
+	{name: ComponentTauCore, valuesKey: "tauCoreController"},
+}
+
 // DisabledComponents reports which validated components a release turned off,
 // given the release's coalesced Helm values as JSON.
 func DisabledComponents(helmValues []byte) ([]Component, error) {
@@ -74,7 +81,7 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 		return nil, fmt.Errorf("decode Helm release values: %w", err)
 	}
 	var disabled []Component
-	for _, component := range chartComponents {
+	for _, component := range componentSwitches {
 		// Helm leaves a subchart installed unless its condition reads an
 		// explicit boolean false, so any other shape means still enabled.
 		settings, _ := values.Components[component.valuesKey].(map[string]any)
@@ -224,12 +231,24 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 		}
 	}
 
-	results = append(results,
-		checkTauController(ctx, runner),
-		checkTauCluster(ctx, runner),
-		checkBaselineQueue(ctx, runner, opts.Release),
-		checkQuotaGuard(ctx, runner),
-	)
+	if slices.Contains(opts.DisabledComponents, ComponentTauCore) {
+		detail := "components.tauCoreController.enabled is false in the Helm release"
+		results = append(results,
+			skip("Tau controller", detail),
+			skip("TauCluster", detail),
+		)
+	} else {
+		results = append(results,
+			checkTauController(ctx, runner),
+			checkTauCluster(ctx, runner),
+		)
+	}
+	results = append(results, checkBaselineQueue(ctx, runner, opts.Release))
+	if slices.Contains(opts.DisabledComponents, ComponentTauCore) {
+		results = append(results, skip("Quota guard", "components.tauCoreController.enabled is false in the Helm release"))
+	} else {
+		results = append(results, checkQuotaGuard(ctx, runner))
+	}
 	return Report{Results: results}
 }
 

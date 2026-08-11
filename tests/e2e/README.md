@@ -4,7 +4,7 @@ Integration tests that deploy the vendored Helm charts to a real AKS cluster and
 
 ## Prerequisites
 
-- **Go 1.25+**
+- **Go 1.26.5**
 - **kubectl** configured with a kubeconfig pointing to an AKS cluster
 - All 3 Helm charts installed on the cluster:
   - Kueue (`kueue-system` namespace)
@@ -63,7 +63,13 @@ GPU_NODE_SELECTOR_VALUE='<gpu node selector value>' \
 go test -v -timeout 35m -run '^TestTauPyEntrypointRayJobGPU$' ./stack/
 ```
 
-Without `AI_RUNTIME_E2E=1`, all tests are skipped.
+Without `AI_RUNTIME_E2E=1`, cluster-backed integration tests are skipped. The
+offline unit, fixture, payload, and fake-client tests still run and require no
+Kubernetes cluster:
+
+```bash
+AI_RUNTIME_E2E=0 go test -count=1 ./...
+```
 
 ## Test Structure
 
