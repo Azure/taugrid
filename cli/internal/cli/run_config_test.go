@@ -467,7 +467,7 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 	if !ok {
 		t.Fatalf("decoded payload missing ray_train.py: keys=%v", filesKeys(files))
 	}
-	for _, want := range []string{"class WorkerProbe", "len(set(worker_nodes)) != 2", "tau kind ray smoke complete"} {
+	for _, want := range []string{"class WorkerProbe", "wait_for_ray_cpus(2)", "len(set(worker_nodes)) != 2", "tau kind ray smoke complete"} {
 		if !strings.Contains(string(trainPy), want) {
 			t.Fatalf("decoded ray_train.py missing %q:\n%s", want, trainPy)
 		}
