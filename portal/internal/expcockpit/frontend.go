@@ -202,7 +202,7 @@ const frontendShellTemplate = `<!doctype html>
 <noscript>
   Stellar requires JavaScript.
 </noscript>
-<main
+<div
   id="stellar-root"
   class="{{ if .Target }}stellar-app{{ end }}"
   data-target="{{ .Target }}"
@@ -260,7 +260,7 @@ const frontendShellTemplate = `<!doctype html>
     </section>
   </div>
   {{ end }}
-</main>
+</div>
 <script type="module" src="{{ .JSAssetURL }}"></script>
 </body>
 </html>

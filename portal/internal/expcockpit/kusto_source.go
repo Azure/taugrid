@@ -918,9 +918,11 @@ func (s KustoSource) loadRowsForRunSearch(ctx context.Context, opts expstore.Run
 	}
 	if s.hasRemoteQuery() {
 		searchOpts := expstore.ExperimentSearchOptions{
+			Target:      opts.Target,
 			Project:     opts.Project,
 			MetricNames: opts.MetricNames,
 			Since:       opts.Since,
+			Limit:       opts.Limit,
 		}
 		rows, err := s.runKustoExperimentSearchCommand(ctx, searchOpts)
 		return rows, nil, err
@@ -1032,6 +1034,7 @@ func (s KustoSource) runKustoExperimentSearchCommand(ctx context.Context, opts e
 	query, err := expkusto.BuildExperimentSearchQuery(expkusto.MetricsQueryOptions{
 		WorkspaceID:  s.WorkspaceID,
 		Projects:     projects,
+		Target:       opts.Target,
 		MetricNames:  metricNamesWithKustoRunStatus(opts.MetricNames),
 		Since:        firstNonEmptyString(strings.TrimSpace(opts.Since), s.effectiveDiscoverySince()),
 		Ingestion:    s.Ingestion,

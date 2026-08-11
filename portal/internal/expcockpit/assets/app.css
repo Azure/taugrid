@@ -723,6 +723,18 @@ body.embedded .landing-shell {
   font-size: 12px;
 }
 
+.retry-state {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.metric-card-state.retry-state {
+  flex-direction: column;
+  justify-content: center;
+}
+
 .rail-section label,
 .rail-disclosure label,
 .rail-label {
@@ -749,8 +761,8 @@ body.embedded .landing-shell {
 
 .icon-button {
   display: inline-grid;
-  min-width: 28px;
-  height: 24px;
+  min-width: 32px;
+  min-height: 32px;
   place-items: center;
   padding: 0 6px;
   border: 1px solid var(--line);
@@ -967,17 +979,49 @@ body.embedded .landing-shell {
 
 .run-row {
   display: grid;
-  grid-template-columns: 16px 16px minmax(0, 1fr);
+  grid-template-columns: 24px 16px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
   padding: 7px 4px;
   border-radius: 6px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 54px;
+}
+
+.run-load-more {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.run-load-more:hover:not(:disabled) {
+  background: #f6f5f1;
+}
+
+.run-load-more:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.run-load-status {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  color: #b42318;
+  font-size: 11px;
 }
 
 .run-row input {
-  width: 14px;
-  height: 14px;
-  margin: 3px 0 0;
+  width: 24px;
+  height: 24px;
+  margin: 0;
   accent-color: var(--aim-primary);
 }
 
@@ -1073,6 +1117,46 @@ body.embedded .landing-shell {
 .report-canvas {
   min-width: 0;
   padding: 14px 14px 48px;
+}
+
+.operational-summary {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #ccebdc;
+  border-radius: 5px;
+  background: #f5fbf7;
+  box-shadow: var(--shadow);
+}
+
+.operational-summary.needs-attention {
+  border-color: #efd6a7;
+  background: #fffaf0;
+}
+
+.operational-summary h2 {
+  margin: 0 0 8px;
+  color: #2e2c29;
+  font-size: 14px;
+}
+
+.operational-summary .evidence-summary-strip {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.operational-summary .compact-status-row p {
+  color: var(--text);
+}
+
+.operational-count.warning {
+  border-color: #efd6a7;
+  background: #fff8ec;
+}
+
+.operational-count.critical {
+  border-color: #f0a9a9;
+  background: #fff5f5;
 }
 
 .eyebrow {
@@ -2910,6 +2994,7 @@ button.zoom-pill {
   .panel.full {
     grid-column: span 6;
   }
+
 }
 
 @media (max-width: 820px) {
