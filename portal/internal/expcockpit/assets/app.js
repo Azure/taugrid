@@ -1366,6 +1366,8 @@ async function fetchSnapshot(options = {}) {
   if (!autoRefresh) {
     state.runSearchLimit = Math.max(runPageSize, list(primary.runs).length);
     state.runSearchTruncated = list(primary.runs).length >= runPageSize;
+  } else if (!state.additionalRuns.length) {
+    state.runSearchTruncated = list(primary.runs).length >= runPageSize;
   }
   ensureSelectedMetrics(primary, { preserveSelection: autoRefresh });
 
