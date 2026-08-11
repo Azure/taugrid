@@ -74,9 +74,27 @@ run:
 		t.Fatalf("validate Job TTL: %v", err)
 	}
 
-	zero := int64(0)
-	if err := (Config{Run: Run{TTLSecondsAfterFinished: &zero}}).ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "must be > 0") {
-		t.Fatalf("expected zero TTL rejection, got %v", err)
+	tests := []struct {
+		name    string
+		value   int64
+		wantErr string
+	}{
+		{name: "minimum", value: 1},
+		{name: "maximum", value: MaxTTLSecondsAfterFinished},
+		{name: "zero", value: 0, wantErr: "must be > 0"},
+		{name: "negative", value: -1, wantErr: "must be > 0"},
+		{name: "above Kubernetes maximum", value: MaxTTLSecondsAfterFinished + 1, wantErr: "must be <= 2147483647"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Config{Run: Run{TTLSecondsAfterFinished: &tt.value}}).ValidateExecution("job")
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("ValidateExecution(%d): %v", tt.value, err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("ValidateExecution(%d) error = %v, want %q", tt.value, err, tt.wantErr)
+			}
+		})
 	}
 	if err := (Config{Run: Run{TTLSecondsAfterFinished: cfg.Run.TTLSecondsAfterFinished}}).ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
 		t.Fatalf("expected Ray TTL rejection, got %v", err)

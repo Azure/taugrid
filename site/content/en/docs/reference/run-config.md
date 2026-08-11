@@ -95,8 +95,8 @@ SOURCE_DIGEST="$(docker buildx imagetools inspect \
 printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 ```
 
-`run.ttl_seconds_after_finished` is an optional positive retention period for a
-completed or failed direct Job. It maps to Kubernetes
+`run.ttl_seconds_after_finished` is an optional retention period from 1 through
+2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
 `spec.ttlSecondsAfterFinished`; omission keeps Tau's 28800-second default. The
 TTL does not start while any regular container is still running.
 

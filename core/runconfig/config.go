@@ -130,6 +130,9 @@ const (
 	// MaxLiteralEnvTotalBytes bounds the control-plane amplification when a Job
 	// is copied into Kueue Workloads and Pods. Secret-backed values are excluded.
 	MaxLiteralEnvTotalBytes = 128 * 1024
+	// MaxTTLSecondsAfterFinished is Kubernetes' signed int32 ceiling for
+	// batch/v1 Job spec.ttlSecondsAfterFinished.
+	MaxTTLSecondsAfterFinished int64 = 1<<31 - 1
 )
 
 type Compute struct {
@@ -719,6 +722,12 @@ func (c Config) ValidateExecution(engine string) error {
 	if c.Run.TTLSecondsAfterFinished != nil {
 		if *c.Run.TTLSecondsAfterFinished <= 0 {
 			return fmt.Errorf("run.ttl_seconds_after_finished must be > 0")
+		}
+		if *c.Run.TTLSecondsAfterFinished > MaxTTLSecondsAfterFinished {
+			return fmt.Errorf(
+				"run.ttl_seconds_after_finished must be <= %d (Kubernetes int32 maximum)",
+				MaxTTLSecondsAfterFinished,
+			)
 		}
 		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
 			return fmt.Errorf("run.ttl_seconds_after_finished requires direct Job dispatch and cannot be used with workflow.file")

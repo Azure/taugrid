@@ -99,7 +99,7 @@ Build/push the source-only image once, resolve its immutable digest, and write
 `<private-repository>@sha256:<digest>` into `run.source.image` for every run.
 The source image should copy the checked-out tree to `run.source.path`.
 
-`run.ttl_seconds_after_finished` accepts a positive number of seconds for
+`run.ttl_seconds_after_finished` accepts 1 through 2147483647 seconds for
 completed/failed direct Job retention. Omission keeps the 28800-second default.
 It does not apply until the Job reaches a terminal condition.
 

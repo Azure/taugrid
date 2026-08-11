@@ -429,6 +429,12 @@ func (o Options) validate() error {
 	if o.TTLSecondsAfterFinished < 0 {
 		return errors.New("Options.TTLSecondsAfterFinished must be >= 0")
 	}
+	if o.TTLSecondsAfterFinished > runconfig.MaxTTLSecondsAfterFinished {
+		return fmt.Errorf(
+			"Options.TTLSecondsAfterFinished must be <= %d (Kubernetes int32 maximum)",
+			runconfig.MaxTTLSecondsAfterFinished,
+		)
+	}
 	switch strings.ToLower(o.Launcher) {
 	case "", "python", "torchrun":
 	default:

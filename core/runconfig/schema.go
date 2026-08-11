@@ -51,7 +51,7 @@ var fieldCatalog = map[string]FieldInfo{
 	"run.source":                     {Status: statusDirectOnly, Description: "Immutable source tree staged from a digest-pinned OCI image by an init container. Direct Jobs only."},
 	"run.source.image":               {Status: statusDirectOnly, Description: "Source OCI image pinned by an exact sha256 digest."},
 	"run.source.path":                {Status: statusDirectOnly, Description: "Clean absolute source directory inside the pinned image. Tau copies it into /tau/source."},
-	"run.ttl_seconds_after_finished": {Status: statusDirectOnly, Description: "Positive Kubernetes Job retention in seconds after completion or failure. Direct Jobs only.", Default: "28800"},
+	"run.ttl_seconds_after_finished": {Status: statusDirectOnly, Description: "Kubernetes Job retention in seconds after completion or failure (1-2147483647). Direct Jobs only.", Default: "28800"},
 	"run.working_dir":                {Status: statusSupported, Description: "Project directory shipped with the run so sibling modules and local packages import on workers; resolved relative to the config file."},
 	"run.working_dir_excludes":       {Status: statusSupported, Description: "Extra glob patterns excluded from the shipped project directory."},
 	"run.image":                      {Status: statusSupported, Description: "Nested container image override when runtime.image is not set."},

@@ -398,6 +398,18 @@ func TestRender_ServiceAccountAndTTLOverrides(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsTTLAboveKubernetesMaximum(t *testing.T) {
+	_, err := Render(trainProfile(), Options{
+		Name:                    "invalid-ttl",
+		Namespace:               "sample",
+		Command:                 []string{"true"},
+		TTLSecondsAfterFinished: runconfig.MaxTTLSecondsAfterFinished + 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be <= 2147483647") {
+		t.Fatalf("expected Kubernetes TTL maximum rejection, got %v", err)
+	}
+}
+
 func TestRenderRejectsOversizedLiteralEnvironment(t *testing.T) {
 	_, err := Render(trainProfile(), Options{
 		Name:      "oversized-env",
