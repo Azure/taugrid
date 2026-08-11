@@ -58,11 +58,58 @@ Tau-reserved paths cannot be replaced, and mutable image tags are rejected.
 `storage.image_assets` is intentionally limited to direct `engine: job`
 configs; managed workflows and Ray configs reject it.
 
+Direct Jobs can also stage their complete source tree from an immutable OCI
+image:
+
+```yaml
+name: source-backed-job
+engine: job
+entrypoint: experiments/train.py
+run:
+  ttl_seconds_after_finished: 3600
+  source:
+    image: <registry>/<repository>@sha256:<64-hex-digest>
+    path: /workspace
+```
+
+Tau copies `run.source.path` into an `emptyDir` with an init container, mounts
+the per-pod working copy at `/tau/source`, and runs `entrypoint` relative to
+that directory. Source bytes never travel in environment variables or a
+ConfigMap. The source image must provide `/bin/sh`, `cp`, and `chmod`; mutable
+tags, absolute entrypoints, Ray dispatch, managed workflows, and combining
+`run.source` with `run.working_dir` are rejected before rendering. The init
+container normalizes working-copy permissions and sets the executable bit on
+the entrypoint before a potentially non-root workload container starts. Build and push the source image once,
+then reuse its digest in every run config. Kubernetes uses the workload's
+configured private-registry authentication; do not put registry credentials or
+signed download URLs in the config.
+
+For example, build a source-only image whose `/workspace` contains the checked
+out tree, push it to the platform's private registry, and resolve the immutable
+digest before generating run configs:
+
+```bash
+docker buildx build --push -t "$SOURCE_REPOSITORY:$GIT_SHA" -f Dockerfile.source .
+SOURCE_DIGEST="$(docker buildx imagetools inspect \
+  "$SOURCE_REPOSITORY:$GIT_SHA" --format '{{.Manifest.Digest}}')"
+printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
+```
+
+`run.ttl_seconds_after_finished` is an optional retention period from 1 through
+2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
+`spec.ttlSecondsAfterFinished`; omission keeps Tau's 28800-second default. The
+TTL does not start while any regular container is still running.
+
+Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
+before workload creation. Tau's generated embedded-payload environment entries
+are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for
+content instead of embedding archives in `runtime.env`.
+
 Main field groups:
 
 | Group | Purpose |
 |---|---|
-| `name`, `engine`, `entrypoint` | Workload identity and execution mode; `script` aliases `entrypoint`, and the nested `run.*` block adds `working_dir` for shipping a whole project directory |
+| `name`, `engine`, `entrypoint` | Workload identity and execution mode; `script` aliases `entrypoint`, and the nested `run.*` block adds immutable Job source staging and Ray project-directory shipping |
 | `runtime` | Image, packages, and literal/secret/Key Vault environment; top-level `image` is a lowest-priority alias for `runtime.image` |
 | `compute` | Worker, GPU, CPU, and memory intent |
 | `execution` | Launcher, node/process topology, launcher configs, and Ray Tune search settings |

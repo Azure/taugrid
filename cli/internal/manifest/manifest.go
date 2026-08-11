@@ -59,6 +59,7 @@ import (
 	"strings"
 
 	"github.com/Azure/taugrid/core/envspec"
+	"github.com/Azure/taugrid/core/runconfig"
 	"gopkg.in/yaml.v3"
 )
 
@@ -277,6 +278,9 @@ func (m *Manifest) Validate() error {
 		}
 	}
 	if err := envspec.Validate(m.Runtime.Env); err != nil {
+		return err
+	}
+	if err := runconfig.ValidateLiteralEnvPayloads(envspec.DirectMap(m.Runtime.Env)); err != nil {
 		return err
 	}
 	if err := validateRuntimeRDMA(m.Runtime.RDMA); err != nil {

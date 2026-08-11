@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storageprobe"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -498,6 +499,9 @@ func Render(opts RenderOptions) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := runconfig.ValidateLiteralEnvPayloads(envspec.DirectMap(runtimeEnv)); err != nil {
+		return nil, err
 	}
 
 	switch kind {

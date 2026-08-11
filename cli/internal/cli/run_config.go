@@ -131,7 +131,17 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o := defaultRunDispatchOptions()
 	baseDir := filepath.Dir(configPath)
 	o.engine = firstNonEmpty(c.Run.Engine, c.Engine)
-	o.script = configRelativePath(baseDir, firstNonEmpty(c.Run.Entrypoint, c.Run.Script, c.Entrypoint, c.Script))
+	entrypoint := firstNonEmpty(c.Run.Entrypoint, c.Run.Script, c.Entrypoint, c.Script)
+	if c.Run.Source != nil {
+		source := *c.Run.Source
+		o.source = &source
+		o.script = strings.TrimSpace(entrypoint)
+	} else {
+		o.script = configRelativePath(baseDir, entrypoint)
+	}
+	if c.Run.TTLSecondsAfterFinished != nil {
+		o.ttlSecondsAfterFinished = *c.Run.TTLSecondsAfterFinished
+	}
 	if mainScript := firstNonEmpty(c.Run.MainScript, c.Workflow.MainScript, c.Workflow.Script); mainScript != "" {
 		o.mainScript = configRelativePath(baseDir, mainScript)
 	} else {

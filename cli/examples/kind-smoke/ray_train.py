@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import os
+import time
 
 import ray
 
@@ -12,9 +13,18 @@ class WorkerProbe:
         return ray.get_runtime_context().get_node_id()
 
 
+def wait_for_ray_cpus(minimum: int, timeout_seconds: int = 120) -> dict[str, float]:
+    deadline = time.monotonic() + timeout_seconds
+    resources = ray.cluster_resources()
+    while resources.get("CPU", 0) < minimum and time.monotonic() < deadline:
+        time.sleep(2)
+        resources = ray.cluster_resources()
+    return resources
+
+
 def main() -> None:
     ray.init(address="auto")
-    resources = ray.cluster_resources()
+    resources = wait_for_ray_cpus(2)
     print(f"tau kind ray marker={os.environ.get('KIND_RAY_MARKER', '')}")
     print(f"tau kind ray resources={resources}")
     if resources.get("CPU", 0) < 2:

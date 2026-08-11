@@ -11,12 +11,19 @@ import (
 	"github.com/Azure/taugrid/cli/internal/manifest"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 )
 
-func buildJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, scriptPath, pvcMount string, p profile.Profile, volumes []jobrender.Volume, volumeMounts []jobrender.VolumeMount) (experiment.Metadata, error) {
-	configHash, err := experiment.HashFile(scriptPath)
-	if err != nil {
-		return experiment.Metadata{}, err
+func buildJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, scriptPath, pvcMount string, source *runconfig.Source, p profile.Profile, volumes []jobrender.Volume, volumeMounts []jobrender.VolumeMount) (experiment.Metadata, error) {
+	var configHash string
+	if source != nil {
+		configHash = experiment.HashBytes([]byte(source.Image + "\n" + source.Path + "\n" + scriptPath))
+	} else {
+		var err error
+		configHash, err = experiment.HashFile(scriptPath)
+		if err != nil {
+			return experiment.Metadata{}, err
+		}
 	}
 	metadata := experiment.Metadata{
 		RunID:            name,

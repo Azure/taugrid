@@ -58,8 +58,8 @@ render:
 | No `policy.preset` or `policy.profile` | `policy.profile or policy.preset is required` |
 | `processes_per_node: 99` on an 8-GPU preset | `processes_per_node (99) exceeds profile GPU count (8)` |
 
-Dry-run resolves `entrypoint` on disk, so run it from the config's directory —
-otherwise it reports the script as missing.
+Dry-run resolves `entrypoint` on disk unless `run.source` supplies an immutable
+Job source tree.
 
 ## Identity and entrypoint
 
@@ -67,7 +67,7 @@ otherwise it reports the script as missing.
 |---|---|
 | `name` | Stable run/workload name. A positional `tau run NAME` can supply it. Derives the default checkpoint path. |
 | `engine` | `job` \| `ray`. Selects dispatch when Tau cannot infer it. Tau infers `ray` when `compute.workers > 1`, `gpus_per_worker != 1`, or `runtime.pip` is set. |
-| `entrypoint` | Script path, resolved relative to the config file. Alias: `script`. |
+| `entrypoint` | Script path, resolved relative to the config file. With `run.source`, it is instead a clean relative path inside the staged source tree. Alias: `script`. |
 | `image` | Image override when `runtime.image` is unset. |
 
 RayJob names are validated against KubeRay's 47-character limit, which is
@@ -75,9 +75,33 @@ stricter than the Kubernetes 63-character limit.
 
 `run.*` provides nested aliases for the same identity fields (`run.name`,
 `run.engine`, `run.entrypoint`, `run.script`, `run.image`, `run.workload_kind`,
-`run.main_script`, `run.smoke_pairs`, `run.working_dir`,
-`run.working_dir_excludes`). Prefer the top-level form in new configs; the
-nested form exists for configs that group everything under `run:`.
+`run.main_script`, `run.smoke_pairs`, `run.source`, `run.working_dir`,
+`run.working_dir_excludes`, `run.ttl_seconds_after_finished`). Prefer the
+top-level form in new configs; the nested form exists for configs that group
+everything under `run:`.
+
+For direct Jobs, `run.source.image` names a digest-pinned OCI image and
+`run.source.path` names the absolute directory to copy from that image. Tau uses
+an init container and `emptyDir`, mounts a writable per-pod working copy at
+`/tau/source`, and executes `entrypoint` from there without putting source bytes
+in environment variables. The init container normalizes working-copy
+permissions and sets the executable bit before a potentially non-root workload
+container starts. The source image must provide `/bin/sh`, `cp`, and `chmod`.
+`run.source` requires `engine: job` and cannot be combined with
+`run.working_dir`.
+
+Build and push the source image once, then reuse its immutable digest across
+runs. Kubernetes pulls it with the workload's configured private-registry
+authentication; configs must not contain registry credentials or signed
+download URLs.
+
+Build/push the source-only image once, resolve its immutable digest, and write
+`<private-repository>@sha256:<digest>` into `run.source.image` for every run.
+The source image should copy the checked-out tree to `run.source.path`.
+
+`run.ttl_seconds_after_finished` accepts 1 through 2147483647 seconds for
+completed/failed direct Job retention. Omission keeps the 28800-second default.
+It does not apply until the Job reaches a terminal condition.
 
 ## runtime
 
@@ -85,7 +109,7 @@ nested form exists for configs that group everything under `run:`.
 |---|---|
 | `runtime.image` | Container image override. Pin a tag or digest. |
 | `runtime.pip` | Packages installed through Ray `runtime_env` (Ray dispatch). Values are shell-quoted to prevent injection. |
-| `runtime.env` | Literal, non-secret env vars. |
+| `runtime.env` | Literal, non-secret env vars. Values over 64 KiB or aggregate literal payloads over 128 KiB are rejected before workload creation; Tau-generated embedded payload entries are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for content. |
 | `runtime.env_secret` | `NAME: "secret-name:key"` → `valueFrom.secretKeyRef`. Client dry-run redacts name/key but shows the dependency exists. |
 | `runtime.env_kv` | `NAME: "vault/secret"` or bare `"secret"` via Secrets Store CSI. All entries must resolve to one vault. Requires `--key-vault`, `--tenant-id`, `--workload-identity-client-id`, `--service-account`. |
 

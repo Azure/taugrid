@@ -74,14 +74,16 @@ type managedConfigProjection struct {
 }
 
 type Run struct {
-	Name         string `yaml:"name"`
-	Engine       string `yaml:"engine"`
-	Entrypoint   string `yaml:"entrypoint"`
-	Script       string `yaml:"script"`
-	Image        string `yaml:"image"`
-	MainScript   string `yaml:"main_script"`
-	WorkloadKind string `yaml:"workload_kind"`
-	SmokePairs   *int   `yaml:"smoke_pairs"`
+	Name                    string  `yaml:"name"`
+	Engine                  string  `yaml:"engine"`
+	Entrypoint              string  `yaml:"entrypoint"`
+	Script                  string  `yaml:"script"`
+	Image                   string  `yaml:"image"`
+	MainScript              string  `yaml:"main_script"`
+	WorkloadKind            string  `yaml:"workload_kind"`
+	SmokePairs              *int    `yaml:"smoke_pairs"`
+	Source                  *Source `yaml:"source"`
+	TTLSecondsAfterFinished *int64  `yaml:"ttl_seconds_after_finished"`
 
 	// WorkingDir ships a whole project directory with the run instead of the
 	// entrypoint alone, so sibling modules and local packages import on
@@ -90,6 +92,16 @@ type Run struct {
 	// WorkingDirExcludes are extra glob patterns to leave out of the shipped
 	// project archive, on top of the built-in defaults.
 	WorkingDirExcludes []string `yaml:"working_dir_excludes"`
+}
+
+const SourceMountPath = "/tau/source"
+
+// Source stages an immutable source tree from a digest-pinned OCI image for a
+// direct Job. Path is copied into SourceMountPath by an init container. The
+// source image must provide /bin/sh, cp, and chmod.
+type Source struct {
+	Image string `yaml:"image"`
+	Path  string `yaml:"path"`
 }
 
 type Workflow struct {
@@ -110,6 +122,18 @@ type Runtime struct {
 	EnvSecret map[string]string `yaml:"env_secret"`
 	EnvKV     map[string]string `yaml:"env_kv"`
 }
+
+const (
+	// MaxLiteralEnvValueBytes leaves ample room below Linux's per-string exec
+	// limit and prevents source archives from becoming Kubernetes metadata.
+	MaxLiteralEnvValueBytes = 64 * 1024
+	// MaxLiteralEnvTotalBytes bounds the control-plane amplification when a Job
+	// is copied into Kueue Workloads and Pods. Secret-backed values are excluded.
+	MaxLiteralEnvTotalBytes = 128 * 1024
+	// MaxTTLSecondsAfterFinished is Kubernetes' signed int32 ceiling for
+	// batch/v1 Job spec.ttlSecondsAfterFinished.
+	MaxTTLSecondsAfterFinished int64 = 1<<31 - 1
+)
 
 type Compute struct {
 	Workers         *int   `yaml:"workers"`
@@ -361,6 +385,9 @@ func (c Config) ValidateDirect() error {
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
 	}
+	if err := c.Run.Source.Validate(); err != nil {
+		return err
+	}
 	if err := c.Runtime.ValidateEnvSecrets(); err != nil {
 		return err
 	}
@@ -368,6 +395,9 @@ func (c Config) ValidateDirect() error {
 		return err
 	}
 	if err := c.Runtime.ValidateReservedEnvKeys(c.Execution.AllowNCCLOverride); err != nil {
+		return err
+	}
+	if err := ValidateLiteralEnvPayloads(c.Runtime.Env); err != nil {
 		return err
 	}
 	if err := c.Metrics.Validate(c.Experiment); err != nil {
@@ -399,6 +429,36 @@ var (
 	imageAssetDigestRE = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 )
 
+func (s *Source) Validate() error {
+	if s == nil {
+		return nil
+	}
+	if err := validatePinnedImage("run.source.image", s.Image); err != nil {
+		return err
+	}
+	if err := validateImageAssetPath("run.source.path", s.Path); err != nil {
+		return err
+	}
+	if s.Path == "/tau-source" || strings.HasPrefix(s.Path, "/tau-source/") {
+		return fmt.Errorf("run.source.path %q is hidden by Tau's staging volume", s.Path)
+	}
+	return nil
+}
+
+func (s *Source) ValidateEntrypoint(entrypoint string) error {
+	if s == nil {
+		return nil
+	}
+	entrypoint = strings.TrimSpace(entrypoint)
+	if entrypoint == "" {
+		return fmt.Errorf("run.source requires entrypoint")
+	}
+	if path.IsAbs(entrypoint) || entrypoint == "." || entrypoint == ".." || path.Clean(entrypoint) != entrypoint || strings.HasPrefix(entrypoint, "../") || strings.Contains(entrypoint, `\`) {
+		return fmt.Errorf("entrypoint %q must be a clean relative path inside run.source", entrypoint)
+	}
+	return nil
+}
+
 func (s Storage) ValidateImageAssets() error {
 	if len(s.ImageAssets) > 8 {
 		return fmt.Errorf("storage.image_assets supports at most 8 entries")
@@ -414,10 +474,8 @@ func (s Storage) ValidateImageAssets() error {
 			return fmt.Errorf("storage.image_assets name %q is declared more than once", asset.Name)
 		}
 		names[asset.Name] = struct{}{}
-		named, err := reference.ParseNormalizedNamed(asset.Image)
-		digested, pinned := named.(reference.Digested)
-		if err != nil || !pinned || named.String() != asset.Image || asset.Image != strings.ToLower(asset.Image) || !imageAssetDigestRE.MatchString(digested.Digest().String()) {
-			return fmt.Errorf("%s.image must be a complete lowercase OCI image reference pinned by an @sha256:<64 lowercase hex> digest", field)
+		if err := validatePinnedImage(field+".image", asset.Image); err != nil {
+			return err
 		}
 		if err := validateImageAssetPath(field+".source_path", asset.SourcePath); err != nil {
 			return err
@@ -428,7 +486,7 @@ func (s Storage) ValidateImageAssets() error {
 		if err := validateImageAssetPath(field+".mount_path", asset.MountPath); err != nil {
 			return err
 		}
-		for _, reserved := range []string{"/data", "/mnt", "/script", "/manifest", "/tmp", "/dev/shm", "/var/run/tau"} {
+		for _, reserved := range []string{"/data", "/mnt", "/script", "/manifest", "/tmp", "/dev/shm", "/var/run/tau", SourceMountPath} {
 			if imageAssetPathsOverlap(asset.MountPath, reserved) {
 				return fmt.Errorf("%s.mount_path %q overlaps Tau-reserved path %s", field, asset.MountPath, reserved)
 			}
@@ -442,6 +500,18 @@ func (s Storage) ValidateImageAssets() error {
 			}
 		}
 		mounts[asset.MountPath] = struct{}{}
+	}
+	return nil
+}
+
+func validatePinnedImage(field, image string) error {
+	named, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return fmt.Errorf("%s must be a complete lowercase OCI image reference pinned by an @sha256:<64 lowercase hex> digest", field)
+	}
+	digested, pinned := named.(reference.Digested)
+	if !pinned || named.String() != image || image != strings.ToLower(image) || !imageAssetDigestRE.MatchString(digested.Digest().String()) {
+		return fmt.Errorf("%s must be a complete lowercase OCI image reference pinned by an @sha256:<64 lowercase hex> digest", field)
 	}
 	return nil
 }
@@ -610,11 +680,77 @@ func (r Runtime) ValidateReservedEnvKeys(allowNCCLOverride bool) error {
 	return fmt.Errorf("runtime.env contains Tau-managed keys that cannot be overridden: %s; remove them from runtime.env (settable TAU_ keys: %s)", strings.Join(conflicts, ", "), strings.Join(TauEnvAllowed, ", "))
 }
 
+// ValidateLiteralEnvPayloads rejects content-sized literal environment values.
+// Kubernetes repeats literal values across Job, Workload, and Pod objects, and
+// Linux includes them in the argv+environment budget when starting a process.
+// Secret-backed references are intentionally not passed to this function.
+func ValidateLiteralEnvPayloads(env map[string]string) error {
+	total := 0
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		value := env[name]
+		valueBytes := len(value)
+		if valueBytes > MaxLiteralEnvValueBytes {
+			return fmt.Errorf(
+				"literal environment variable %q is %d bytes; maximum is %d bytes: publish source or artifacts once and reference a digest-pinned OCI image with run.source instead of embedding content in environment variables",
+				name,
+				valueBytes,
+				MaxLiteralEnvValueBytes,
+			)
+		}
+		total += len(name) + 1 + valueBytes + 1
+	}
+	if total > MaxLiteralEnvTotalBytes {
+		return fmt.Errorf(
+			"literal environment payload is %d bytes; maximum is %d bytes: publish source or artifacts once and reference a digest-pinned OCI image with run.source instead of embedding content in environment variables",
+			total,
+			MaxLiteralEnvTotalBytes,
+		)
+	}
+	return nil
+}
+
 // ValidateExecution checks that execution.launcher is valid for the given
 // engine and that engine-specific constraints (nodes, processes_per_node,
 // clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
 	engine = strings.ToLower(strings.TrimSpace(engine))
+	if c.Run.TTLSecondsAfterFinished != nil {
+		if *c.Run.TTLSecondsAfterFinished <= 0 {
+			return fmt.Errorf("run.ttl_seconds_after_finished must be > 0")
+		}
+		if *c.Run.TTLSecondsAfterFinished > MaxTTLSecondsAfterFinished {
+			return fmt.Errorf(
+				"run.ttl_seconds_after_finished must be <= %d (Kubernetes int32 maximum)",
+				MaxTTLSecondsAfterFinished,
+			)
+		}
+		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
+			return fmt.Errorf("run.ttl_seconds_after_finished requires direct Job dispatch and cannot be used with workflow.file")
+		}
+		if engine != "job" {
+			return fmt.Errorf("run.ttl_seconds_after_finished requires engine: job")
+		}
+	}
+	if c.Run.Source != nil {
+		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
+			return fmt.Errorf("run.source requires direct Job dispatch and cannot be used with workflow.file")
+		}
+		if engine != "job" {
+			return fmt.Errorf("run.source requires engine: job")
+		}
+		if strings.TrimSpace(c.Run.WorkingDir) != "" {
+			return fmt.Errorf("run.source and run.working_dir cannot be used together")
+		}
+		entrypoint := firstNonEmpty(c.Run.Entrypoint, c.Run.Script, c.Entrypoint, c.Script)
+		if err := c.Run.Source.ValidateEntrypoint(entrypoint); err != nil {
+			return err
+		}
+	}
 	if len(c.Storage.ImageAssets) > 0 {
 		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
 			return fmt.Errorf("storage.image_assets requires direct Job dispatch and cannot be used with workflow.file")

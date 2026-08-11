@@ -135,7 +135,7 @@ func TestEncodeRejectsIncompressiblePayloadOverEnvEntryLimit(t *testing.T) {
 	if !strings.Contains(msg, "environment entry") {
 		t.Fatalf("error should identify the env entry limit as the breached one, got:\n%s", msg)
 	}
-	for _, want := range []string{"114688", "112 KiB", "131072", "custom", "PVC"} {
+	for _, want := range []string{"65536", "64 KiB", "131072", "custom", "PVC"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("env-entry error missing %q:\n%s", want, msg)
 		}

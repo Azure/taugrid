@@ -12,10 +12,11 @@
 // worker for the payload to be available.
 //
 // Payloads are bounded by two limits. The binding one is MaxEnvEntryBytes: the
-// encoded envelope travels as a single TAU_PAYLOAD_B64=<...> environment entry,
-// and Linux caps any one env/arg entry at MAX_ARG_STRLEN (128 KiB) in
-// execve(2). MaxDecodedBytes is a much looser sanity ceiling on the sum of raw
-// file bytes. Encoding is deterministic: files are canonically ordered by name,
+// encoded envelope travels as a single TAU_PAYLOAD_B64=<...> environment entry.
+// Tau keeps that entry at or below 64 KiB to limit workload metadata
+// amplification, well under Linux's MAX_ARG_STRLEN (128 KiB) execve(2) limit.
+// MaxDecodedBytes is a much looser sanity ceiling on the sum of raw file bytes.
+// Encoding is deterministic: files are canonically ordered by name,
 // serialized with a fixed field layout, and gzip-compressed with a fixed level
 // and no header metadata, so identical inputs always produce a byte-identical
 // envelope and digest. A SHA-256 digest, computed over the transported
@@ -49,11 +50,11 @@ const (
 
 	// MaxEnvEntryBytes is the binding constraint: the maximum size of the
 	// whole "TAU_PAYLOAD_B64=<encoded>" environment entry handed to the
-	// tau-payload initContainer. Linux caps a single argument/environment
-	// entry at MAX_ARG_STRLEN (131072 bytes) in execve(2); we budget below
-	// that so the kernel limit is never the thing a researcher discovers.
+	// tau-payload initContainer. Tau caps embedded entries at 64 KiB to bound
+	// Kueue Workload and Pod metadata amplification, while remaining well
+	// below Linux's MAX_ARG_STRLEN (131072 bytes) execve(2) limit.
 	// See TestEncodedEnvValueStaysUnderMaxArgStrlen.
-	MaxEnvEntryBytes = 112 * 1024
+	MaxEnvEntryBytes = 64 * 1024
 
 	// maxArgStrlen is Linux's MAX_ARG_STRLEN: the kernel's per-argument and
 	// per-environment-entry size limit enforced by execve(2).
