@@ -323,6 +323,7 @@ func TestBuildRunHistoryQueryScopesBeforeDedupe(t *testing.T) {
 		Namespace:   "research",
 		LocalQueue:  "gpu-priority",
 		WorkspaceID: "sample",
+		Kind:        "RayJob",
 		Limit:       25,
 	})
 	if err != nil {
@@ -334,6 +335,7 @@ TauExpRunLifecycle
 | where namespace == 'research'
 | where local_queue == 'gpu-priority'
 | where workspace_id == 'sample'
+| where tolower(owning_resource_kind) == 'rayjob'
 | extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))
 | where isnotempty(durable_identity)
 | extend observation_identity=iff(isnotempty(observation_id), observation_id, strcat(durable_identity, ':', state, ':', tostring(observed_at)))
@@ -351,6 +353,21 @@ latest_by_state
 `
 	if query != want {
 		t.Fatalf("run history query changed:\nwant:\n%s\ngot:\n%s", want, query)
+	}
+}
+
+func TestBuildRunHistoryTimelineQueryLimitsNewestEventsThenRestoresDisplayOrder(t *testing.T) {
+	query, err := BuildRunHistoryTimelineQuery(RunHistoryQueryOptions{Kind: "RayJob", Limit: 25}, "uid-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind := strings.Index(query, "| where tolower(owning_resource_kind) == 'rayjob'")
+	resource := strings.Index(query, "| where resource_uid == 'uid-1'")
+	desc := strings.Index(query, "| order by observed_at desc")
+	take := strings.Index(query, "| take 25")
+	asc := strings.LastIndex(query, "| order by observed_at asc")
+	if kind < 0 || resource < 0 || desc < 0 || take < 0 || asc < 0 || !(kind < resource && resource < desc && desc < take && take < asc) {
+		t.Fatalf("timeline query must filter kind before limiting newest events, then restore ascending order:\n%s", query)
 	}
 }
 

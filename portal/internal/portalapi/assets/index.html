@@ -1009,7 +1009,8 @@
     view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Ray"));
     view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
       "Per-cluster Ray dashboards discovered from <cluster>-head-svc Services, via /api/portal/ray. " +
-      "The dashboard is proxied live by the portal and is only available while the RayCluster is running."));
+      "The dashboard is proxied live by the portal and is only available while the RayCluster is running; " +
+      "finished RayJobs remain visible under RayJob history."));
     let snap;
     try {
       snap = await fetchJSON("/api/portal/ray");
@@ -1026,29 +1027,101 @@
     if (clusters.length === 0) {
       view.append(el("div", { class: "empty" },
         "No Ray clusters found. Either no RayClusters are running, or the portal has no Kubernetes access."));
+    } else {
+      const table = el("table", { class: "jobs" });
+      table.append(el("thead", {}, el("tr", {},
+        el("th", {}, "Cluster"), el("th", {}, "Namespace"),
+        el("th", {}, "Service"), el("th", {}, "Type"), el("th", {}, "Dashboard"))));
+      const tbody = el("tbody");
+      for (const c of clusters) {
+        let link;
+        if (c.proxyPath && c.available) {
+          link = el("a", { href: withWorkspace(c.proxyPath), target: "_blank", rel: "noopener", class: "back" }, "open ↗");
+        } else if (c.proxyPath) {
+          link = el("span", { class: "back", style: "opacity:0.5;cursor:not-allowed;", title: "Ray dashboard unreachable: head pod not Ready" }, "open ↗");
+        } else {
+          link = el("span", { class: "warn" }, "—");
+        }
+        tbody.append(el("tr", {},
+          el("td", {}, c.name || "—"), el("td", {}, c.namespace || "—"),
+          el("td", {}, c.service || "—"), el("td", {}, c.type || "—"),
+          el("td", {}, link)));
+      }
+      table.append(tbody);
+      view.append(table);
+    }
+
+    view.append(el("h2", { style: "margin:18px 0 4px;font-size:16px;" }, "RayJob history"));
+    view.append(el("p", { class: "note", style: "margin-top:0;" },
+      "history: " + (snap.historyState || "live-only")));
+    if (snap.historyState === "history-unavailable") {
+      view.append(el("p", { class: "note warn", style: "margin-top:0;" },
+        snap.historyDiagnostic || "Durable RayJob history is temporarily unavailable; showing live dashboards only."));
+    }
+    const history = snap.history || [];
+    if (history.length === 0) {
+      view.append(el("div", { class: "empty" }, snap.historyState === "available"
+        ? "No durable RayJob records in this scope yet."
+        : "Durable RayJob history is not configured for this portal; only live dashboards are shown."));
       return;
     }
-    const table = el("table", { class: "jobs" });
-    table.append(el("thead", {}, el("tr", {},
-      el("th", {}, "Cluster"), el("th", {}, "Namespace"),
-      el("th", {}, "Service"), el("th", {}, "Type"), el("th", {}, "Dashboard"))));
-    const tbody = el("tbody");
-    for (const c of clusters) {
-      let link;
-      if (c.proxyPath && c.available) {
-        link = el("a", { href: withWorkspace(c.proxyPath), target: "_blank", rel: "noopener", class: "back" }, "open ↗");
-      } else if (c.proxyPath) {
-        link = el("span", { class: "back", style: "opacity:0.5;cursor:not-allowed;", title: "Ray dashboard unreachable: head pod not Ready" }, "open ↗");
-      } else {
-        link = el("span", { class: "warn" }, "—");
-      }
-      tbody.append(el("tr", {},
-        el("td", {}, c.name || "—"), el("td", {}, c.namespace || "—"),
-        el("td", {}, c.service || "—"), el("td", {}, c.type || "—"),
-        el("td", {}, link)));
+    const htable = el("table", { class: "jobs" });
+    htable.append(el("thead", {}, el("tr", {},
+      el("th", {}, "Name"), el("th", {}, "Namespace"), el("th", {}, "Status"),
+      el("th", {}, "Age"), el("th", {}, "Run ID"))));
+    const hbody = el("tbody");
+    for (const r of history) {
+      const ns = r.namespace || snap.namespace || "";
+      const name = (r.resourceUid && r.name)
+        ? el("a", { href: withWorkspace("/portal/ray/history/" + encodeURIComponent(r.resourceUid)) }, r.name)
+        : document.createTextNode(r.name || "—");
+      hbody.append(el("tr", {},
+        el("td", {}, name), el("td", {}, ns || "—"),
+        el("td", {}, el("span", { class: "badge" }, r.status || "—")),
+        el("td", {}, r.age || "—"), el("td", {}, r.runId || "—")));
     }
-    table.append(tbody);
-    view.append(table);
+    htable.append(hbody);
+    view.append(htable);
+  }
+
+  // renderRayHistoryDetail is intentionally ADX-only. It must not fall back to
+  // /api/portal/runs/{ns}/{name}: that API is a live Kubernetes detail view.
+  async function renderRayHistoryDetail(view, resourceUID) {
+    view.append(el("a", { href: withWorkspace("/portal/ray"), class: "back" }, "← Ray"));
+    view.append(el("h1", { style: "margin:12px 0 4px;font-size:20px;" }, "RayJob history"));
+    view.append(el("p", { class: "muted", style: "margin:0 0 10px;" },
+      "Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup."));
+    let snap;
+    try {
+      snap = await fetchJSON("/api/portal/ray/history/" + encodeURIComponent(resourceUID));
+    } catch (e) {
+      view.append(el("div", { class: "empty warn" }, "Durable RayJob history unavailable: " + e.message));
+      return;
+    }
+    const events = snap.events || [];
+    if (!events.length) {
+      view.append(el("div", { class: "empty" }, "No durable lifecycle observations found."));
+      return;
+    }
+    const last = events[events.length - 1];
+    const kv = (rows) => {
+      const t = el("table", { class: "jobs" }), tb = el("tbody");
+      for (const [k, v] of rows) if (v !== undefined && v !== null && v !== "") tb.append(el("tr", {},
+        el("td", { style: "width:200px;color:var(--muted);" }, k), el("td", {}, v)));
+      t.append(tb); return t;
+    };
+    view.append(el("h2", { style: "font-size:16px;margin:16px 0 6px;" }, "Durable run metadata"));
+    view.append(kv([["Name", last.name], ["Run ID", last.runId], ["Durable ID", last.durableId],
+      ["Resource UID", last.resourceUid], ["Namespace", last.namespace], ["Cluster", last.cluster],
+      ["Queue", last.queue], ["Image", last.image], ["Command", last.command],
+      ["Result PVC", last.resultPvc], ["Result path", last.resultPath], ["Artifact URI", last.artifactUri],
+      ["Checkpoint URI", last.checkpointUri]]));
+    view.append(el("h2", { style: "font-size:16px;margin:20px 0 6px;" }, "Lifecycle timeline"));
+    const t = el("table", { class: "jobs" }), tb = el("tbody");
+    t.append(el("thead", {}, el("tr", {}, el("th", {}, "Observed"), el("th", {}, "State"), el("th", {}, "Reason"), el("th", {}, "Message"))));
+    for (const event of events) tb.append(el("tr", {}, el("td", {}, event.observedAt || "—"),
+      el("td", {}, el("span", { class: "badge" }, event.state || "—")), el("td", {}, event.reason || "—"), el("td", {}, event.message || "—")));
+    t.append(tb); view.append(t);
   }
 
   // renderRuns organizes Tau-managed workloads by lifecycle: Running (status ==
@@ -1634,6 +1707,8 @@
       const path = location.pathname;
       if (path === "/portal/runs") {
         await renderRuns(view);
+      } else if (path.startsWith("/portal/ray/history/")) {
+        await renderRayHistoryDetail(view, decodeURIComponent(path.slice("/portal/ray/history/".length)));
       } else if (path.startsWith("/portal/runs/")) {
         // Per-job detail: /portal/runs/<namespace>/<name>. Split the tail into
         // exactly two segments so a name containing no slash is required.

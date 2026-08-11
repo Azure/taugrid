@@ -6,6 +6,7 @@ package portalapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -900,6 +901,167 @@ func TestRayBoardServesSnapshot(t *testing.T) {
 	}
 }
 
+func TestRayBoardServesScopedDurableHistory(t *testing.T) {
+	history := &scopedHistoryReader{rows: []runs.Run{
+		{Name: "completed-ray", Kind: "RayJob", Namespace: "ray", Cluster: "cluster-a"},
+		{Name: "other-kind", Kind: "Job", Namespace: "ray", Cluster: "cluster-a"},
+		{Name: "other-namespace", Kind: "RayJob", Namespace: "team-b", Cluster: "cluster-a"},
+		{Name: "other-cluster", Kind: "RayJob", Namespace: "ray", Cluster: "cluster-b"},
+	}}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Cluster: "cluster-a"},
+		Ray:     RayOptions{Reader: &stubRayReader{}},
+		Runs: RunsOptions{
+			Namespace:    "ray",
+			History:      history,
+			HistoryTable: "TauExpRunLifecycle",
+			HistoryLimit: 25,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=ray", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"historyState":"available"`) ||
+		!strings.Contains(rec.Body.String(), "completed-ray") || strings.Contains(rec.Body.String(), "other-namespace") ||
+		strings.Contains(rec.Body.String(), "other-cluster") || strings.Contains(rec.Body.String(), "other-kind") {
+		t.Fatalf("ray response = %d %s", rec.Code, rec.Body.String())
+	}
+	if history.calls != 1 || history.scope.Cluster != "cluster-a" || history.scope.Namespace != "ray" ||
+		history.scope.Table != "TauExpRunLifecycle" || history.scope.Limit != 25 {
+		t.Fatalf("history scope = %+v (calls=%d)", history.scope, history.calls)
+	}
+
+	// Legacy live discovery remains configurable per request, while durable
+	// history remains pinned to the namespace configured at startup.
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=other-namespace", nil))
+	if rec.Code != http.StatusOK || history.calls != 2 || history.scope.Namespace != "ray" {
+		t.Fatalf("legacy history response = %d, scope=%+v, calls=%d", rec.Code, history.scope, history.calls)
+	}
+}
+
+func TestRayHistoryPinsLegacyDurableScope(t *testing.T) {
+	history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+		ResourceUID: "uid-1", Namespace: "ray", Cluster: "cluster-a", Kind: "RayJob", State: "succeeded",
+	}}}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Cluster: "cluster-a"},
+		Runs:    RunsOptions{Namespace: "ray", History: history, HistoryTable: "TauExpRunLifecycle", HistoryLimit: 25},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?namespace=other-namespace&cluster=other-cluster", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if history.timelineCalls != 1 || history.resourceUID != "uid-1" ||
+		history.timelineScope.Cluster != "cluster-a" || history.timelineScope.Namespace != "ray" ||
+		history.timelineScope.Table != "TauExpRunLifecycle" || history.timelineScope.Kind != "RayJob" || history.timelineScope.Limit != 25 {
+		t.Fatalf("timeline scope = %+v, resourceUID=%q, calls=%d", history.timelineScope, history.resourceUID, history.timelineCalls)
+	}
+}
+
+func TestRayHistoryAllowsLegacyClusterWideDurableScope(t *testing.T) {
+	history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+		ResourceUID: "uid-1", Namespace: "other-namespace", Cluster: "cluster-a", Kind: "RayJob", State: "succeeded",
+	}}}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"}, Cluster: ClusterOptions{Cluster: "cluster-a"},
+		Runs: RunsOptions{History: history, HistoryTable: "TauExpRunLifecycle", HistoryLimit: 25},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1", nil))
+	if rec.Code != http.StatusOK || history.timelineScope.Namespace != "" || history.timelineScope.Kind != "RayJob" {
+		t.Fatalf("status=%d scope=%+v body=%s", rec.Code, history.timelineScope, rec.Body.String())
+	}
+}
+
+func TestRayHistoryUsesManagedWorkspaceScope(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{{
+			ID: "alpha", Cluster: "cluster-a", Namespace: "team-alpha", LocalQueue: "alpha-queue", Source: "kubernetes+kusto",
+			Default: true, Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+		ResourceUID: "uid-1", Namespace: "team-alpha", Cluster: "cluster-a", Kind: "RayJob", State: "succeeded",
+	}}}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Runs:               RunsOptions{History: history, HistoryTable: "TauExpRunLifecycle"},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := managedRequest(t, server, "/api/portal/ray/history/uid-1?workspace=alpha")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if history.timelineScope.Cluster != "cluster-a" || history.timelineScope.Namespace != "team-alpha" ||
+		history.timelineScope.LocalQueue != "alpha-queue" || history.timelineScope.WorkspaceID != "alpha" {
+		t.Fatalf("managed timeline scope = %+v", history.timelineScope)
+	}
+
+	rec = managedRequest(t, server, "/api/portal/ray/history/uid-1?workspace=alpha&namespace=team-secret")
+	if rec.Code != http.StatusBadRequest || history.timelineCalls != 1 {
+		t.Fatalf("conflicting managed scope = %d, calls=%d, body=%s", rec.Code, history.timelineCalls, rec.Body.String())
+	}
+}
+
+func TestRayHistoryReportsInvalidAndUnavailableStates(t *testing.T) {
+	newServer := func(t *testing.T, history runs.HistoryReader) *Server {
+		t.Helper()
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"}, Cluster: ClusterOptions{Cluster: "cluster-a"},
+			Runs: RunsOptions{Namespace: "ray", History: history},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return server
+	}
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		history runs.HistoryReader
+		want    int
+	}{
+		{name: "invalid path", path: "/api/portal/ray/history/", want: http.StatusNotFound},
+		{name: "invalid nested resource UID", path: "/api/portal/ray/history/uid-1/extra", want: http.StatusNotFound},
+		{name: "history not configured", path: "/api/portal/ray/history/uid-1", want: http.StatusServiceUnavailable},
+		{name: "query failure", path: "/api/portal/ray/history/uid-1", history: &scopedHistoryReader{timelineErr: errors.New("kusto down")}, want: http.StatusBadGateway},
+		{name: "not found", path: "/api/portal/ray/history/uid-1", history: &scopedHistoryReader{}, want: http.StatusNotFound},
+		{name: "out of scope", path: "/api/portal/ray/history/uid-1", history: &scopedHistoryReader{timeline: []runs.LifecycleEvent{{Namespace: "other", Cluster: "cluster-a", Kind: "RayJob"}}}, want: http.StatusNotFound},
+		{name: "not a RayJob", path: "/api/portal/ray/history/uid-1", history: &scopedHistoryReader{timeline: []runs.LifecycleEvent{{Namespace: "ray", Cluster: "cluster-a", Kind: "Job"}}}, want: http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			newServer(t, tc.history).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestRayBoardUnavailableWithoutReader(t *testing.T) {
 	// newTestServer builds a server with no Ray.Reader → board disabled.
 	rec := httptest.NewRecorder()
@@ -1168,15 +1330,27 @@ func TestRunsBoardDistinguishesUnconfiguredAndUnavailableStellar(t *testing.T) {
 }
 
 type scopedHistoryReader struct {
-	rows  []runs.Run
-	calls int
-	scope runs.HistoryScope
+	rows          []runs.Run
+	timeline      []runs.LifecycleEvent
+	timelineErr   error
+	calls         int
+	timelineCalls int
+	scope         runs.HistoryScope
+	timelineScope runs.HistoryScope
+	resourceUID   string
 }
 
 func (r *scopedHistoryReader) ListHistory(_ context.Context, scope runs.HistoryScope) ([]runs.Run, error) {
 	r.calls++
 	r.scope = scope
 	return r.rows, nil
+}
+
+func (r *scopedHistoryReader) GetHistoryTimeline(_ context.Context, scope runs.HistoryScope, resourceUID string) ([]runs.LifecycleEvent, error) {
+	r.timelineCalls++
+	r.timelineScope = scope
+	r.resourceUID = resourceUID
+	return r.timeline, r.timelineErr
 }
 
 func TestManagedRunsPassesResolvedScopeToDurableHistory(t *testing.T) {
@@ -1279,6 +1453,7 @@ func TestLegacyRunsDoNotApplySyntheticWorkspaceHistoryFilter(t *testing.T) {
 	for _, path := range []string{
 		"/api/portal/runs?cluster=",
 		"/api/portal/runs?cluster=other-cluster",
+		"/api/portal/runs?namespace=other-namespace",
 	} {
 		rec = httptest.NewRecorder()
 		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -1287,6 +1462,9 @@ func TestLegacyRunsDoNotApplySyntheticWorkspaceHistoryFilter(t *testing.T) {
 		}
 		if history.scope.Cluster != "cluster-a" {
 			t.Fatalf("%s durable history cluster = %q, want cluster-a", path, history.scope.Cluster)
+		}
+		if history.scope.Namespace != "ray" {
+			t.Fatalf("%s durable history namespace = %q, want ray", path, history.scope.Namespace)
 		}
 	}
 }

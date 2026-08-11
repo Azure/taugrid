@@ -335,6 +335,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/portal/cluster", s.handleCluster)
 	s.mux.HandleFunc("/api/portal/cost", s.handleCost)
 	s.mux.HandleFunc("/api/portal/ray", s.handleRay)
+	s.mux.HandleFunc("/api/portal/ray/history/", s.handleRayHistory)
 	s.mux.HandleFunc("/api/portal/ray/proxy/", s.handleRayProxy)
 	// Ray dashboard SPA root-absolute assets. The dashboard fetches these from the
 	// origin root (/api, /static, ...), so they carry no proxy prefix; the asset
@@ -935,12 +936,85 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 	if scope.Managed {
 		namespace = scope.Namespace
 	}
-	snapshot, err := ray.Board(r.Context(), s.ray.Reader, ray.Options{Namespace: namespace})
+	historyWorkspaceID := ""
+	historyCluster := scope.Cluster
+	historyNamespace := namespace
+	if scope.Managed {
+		historyWorkspaceID = scope.WorkspaceID
+	} else if s.runs.History != nil {
+		// Durable history is always bound to the cluster validated at startup,
+		// never to request-level overrides. Legacy live boards keep accepting a
+		// namespace filter, but HistoryScope must remain server-resolved.
+		historyCluster = s.legacyScope.Cluster
+		historyNamespace = s.legacyScope.Namespace
+	}
+	snapshot, err := ray.Board(r.Context(), s.ray.Reader, ray.Options{
+		Namespace: namespace,
+		History:   s.runs.History,
+		HistoryScope: runs.HistoryScope{
+			Table:       s.runs.HistoryTable,
+			Cluster:     historyCluster,
+			Namespace:   historyNamespace,
+			WorkspaceID: historyWorkspaceID,
+			Limit:       s.runs.HistoryLimit,
+		},
+	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
-	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0))
+	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0 && len(snapshot.History) == 0))
+}
+
+// handleRayHistory serves an ADX-only RayJob detail page. Unlike
+// /api/portal/runs/{namespace}/{name}, it never reads a Kubernetes object and
+// remains useful after KubeRay has garbage-collected the RayCluster and Pods.
+// GET /api/portal/ray/history/{resourceUID}
+func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	scope, ok := s.localWorkspaceScope(w, r)
+	if !ok {
+		return
+	}
+	resourceUID := strings.TrimPrefix(r.URL.Path, "/api/portal/ray/history/")
+	if resourceUID == "" || strings.Contains(resourceUID, "/") {
+		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/ray/history/{resourceUID}")
+		return
+	}
+	reader, ok := s.runs.History.(runs.HistoryDetailReader)
+	if !ok || reader == nil {
+		writeScopedError(w, http.StatusServiceUnavailable, scope, "durable RayJob history is not configured")
+		return
+	}
+	historyScope := runs.HistoryScope{
+		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: scope.Namespace,
+		LocalQueue: scope.LocalQueue, Kind: "RayJob", Limit: s.runs.HistoryLimit,
+	}
+	if scope.Managed {
+		historyScope.WorkspaceID = scope.WorkspaceID
+	} else {
+		historyScope.Cluster = s.legacyScope.Cluster
+		historyScope.Namespace = s.legacyScope.Namespace
+	}
+	events, err := reader.GetHistoryTimeline(r.Context(), historyScope, resourceUID)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "durable RayJob history query failed")
+		return
+	}
+	if len(events) == 0 {
+		writeScopedError(w, http.StatusNotFound, scope, "durable RayJob history not found")
+		return
+	}
+	if !strings.EqualFold(events[0].Kind, "RayJob") ||
+		(historyScope.Namespace != "" && !strings.EqualFold(events[0].Namespace, historyScope.Namespace)) ||
+		(historyScope.Cluster != "" && !strings.EqualFold(events[0].Cluster, historyScope.Cluster)) {
+		writeScopedError(w, http.StatusNotFound, scope, "durable RayJob history not found")
+		return
+	}
+	writeScopedJSON(w, http.StatusOK, map[string]any{"events": events}, scope, "ready")
 }
 
 // handleNodes serves the Cluster Nodes board: the fleet's static hardware
@@ -1042,13 +1116,15 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	historyWorkspaceID := ""
 	historyCluster := scope.Cluster
+	historyNamespace := namespace
 	if scope.Managed {
 		historyWorkspaceID = scope.WorkspaceID
 	} else if s.runs.History != nil {
 		// Legacy live boards retain their request-level cluster override for
 		// compatibility, but durable history is always bound to the explicit
-		// cluster validated at startup.
+		// cluster and namespace validated at startup.
 		historyCluster = s.legacyScope.Cluster
+		historyNamespace = s.legacyScope.Namespace
 	}
 	snapshot, err := runs.Board(r.Context(), s.runs.Reader, runs.Options{
 		Namespace:         namespace,
@@ -1058,7 +1134,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		HistoryScope: runs.HistoryScope{
 			Table:       s.runs.HistoryTable,
 			Cluster:     historyCluster,
-			Namespace:   namespace,
+			Namespace:   historyNamespace,
 			LocalQueue:  scope.LocalQueue,
 			WorkspaceID: historyWorkspaceID,
 			Limit:       s.runs.HistoryLimit,

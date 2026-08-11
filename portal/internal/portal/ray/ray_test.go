@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/Azure/taugrid/core/runs"
 )
 
 // fakeReader returns canned Services JSON (and records the namespace it was
@@ -221,5 +223,80 @@ func TestIsHeadServiceRequiresHeadNodeType(t *testing.T) {
 	plain.Metadata.Labels = map[string]string{nodeTypeLabel: nodeTypeHead}
 	if isHeadService(plain) {
 		t.Fatal("Service without ray.io/cluster should not match")
+	}
+}
+
+type fakeHistory struct {
+	rows      []runs.Run
+	err       error
+	lastScope runs.HistoryScope
+}
+
+func (f *fakeHistory) ListHistory(_ context.Context, scope runs.HistoryScope) ([]runs.Run, error) {
+	f.lastScope = scope
+	return f.rows, f.err
+}
+
+func TestBoardWithoutHistoryReaderIsLiveOnly(t *testing.T) {
+	snap, err := Board(context.Background(), &fakeReader{json: servicesJSON}, Options{})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if snap.HistoryState != historyStateLiveOnly {
+		t.Fatalf("historyState = %q, want %q", snap.HistoryState, historyStateLiveOnly)
+	}
+}
+
+func TestBoardHistoryKeepsOnlyScopedRayJobs(t *testing.T) {
+	history := &fakeHistory{rows: []runs.Run{
+		{Name: "train-a", Kind: "RayJob", Namespace: "ray", Cluster: "cluster-a"},
+		{Name: "batch-b", Kind: "Job", Namespace: "ray", Cluster: "cluster-a"},
+		{Name: "train-c", Kind: "rayjob", Namespace: "RAY", Cluster: "CLUSTER-A"},
+		{Name: "other-namespace", Kind: "RayJob", Namespace: "team-b", Cluster: "cluster-a"},
+		{Name: "other-cluster", Kind: "RayJob", Namespace: "ray", Cluster: "cluster-b"},
+	}}
+	snap, err := Board(context.Background(), &fakeReader{json: servicesJSON}, Options{
+		Namespace: "ray",
+		History:   history,
+		HistoryScope: runs.HistoryScope{
+			Cluster:   "cluster-a",
+			Namespace: "ray",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if snap.HistoryState != historyStateAvailable || len(snap.History) != 2 {
+		t.Fatalf("history = %+v, state = %q", snap.History, snap.HistoryState)
+	}
+	if history.lastScope.Namespace != "ray" || history.lastScope.Cluster != "cluster-a" || history.lastScope.Kind != historyKind {
+		t.Fatalf("history scope = %+v", history.lastScope)
+	}
+}
+
+func TestBoardKeepsClusterWideHistoryScope(t *testing.T) {
+	history := &fakeHistory{}
+	_, err := Board(context.Background(), &fakeReader{json: servicesJSON}, Options{
+		Namespace:    "ray",
+		History:      history,
+		HistoryScope: runs.HistoryScope{Cluster: "cluster-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.lastScope.Namespace != "" || history.lastScope.Kind != historyKind {
+		t.Fatalf("history scope = %+v, want cluster-wide RayJob scope", history.lastScope)
+	}
+}
+
+func TestBoardHistoryFailureIsNonFatal(t *testing.T) {
+	snap, err := Board(context.Background(), &fakeReader{json: servicesJSON}, Options{
+		History: &fakeHistory{err: errors.New("kusto down")},
+	})
+	if err != nil {
+		t.Fatalf("Board should not fail on history error: %v", err)
+	}
+	if snap.Total != 3 || snap.HistoryState != historyStateUnavailable || snap.HistoryDiagnostic == "" {
+		t.Fatalf("snapshot = %+v", snap)
 	}
 }

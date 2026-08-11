@@ -24,6 +24,7 @@
 {{- $resourceName := default "tau-portal" $portal.resourceName -}}
 {{- $serviceName := default $resourceName $portal.serviceName -}}
 {{- $serviceAccountName := default $resourceName $serviceAccount.name -}}
+{{- $workloadIdentityClientID := trim (default "" (index (default dict $serviceAccount.annotations) "azure.workload.identity/client-id")) -}}
 {{- $workspaceConfigMapName := printf "%s-workspaces" $resourceName -}}
 {{- $image := include "taugrid-core.image" (dict "component" "portal" "image" $portal.image) -}}
 {{- $extraInitContainers := default list $portal.extraInitContainers -}}
@@ -53,8 +54,11 @@
 {{- if and (has $source (list "local" "auto")) (not $portal.store) -}}
 {{- fail "portal.source=local/auto requires `portal.store` (a mounted expstore path) for the embedded Stellar experience; use portal.source=kusto for a store-less portal" -}}
 {{- end -}}
-{{- if and $runHistory.enabled (not $kusto.queryCommand) -}}
-{{- fail "portal.runHistory.enabled=true requires portal.kusto.queryCommand and an active lifecycle recorder" -}}
+{{- if and $runHistory.enabled (not (or $kusto.endpoint $kusto.queryCommand)) -}}
+{{- fail "portal.runHistory.enabled=true requires portal.kusto.endpoint or portal.kusto.queryCommand, and an active lifecycle recorder" -}}
+{{- end -}}
+{{- if and $workloadIdentityClientID (hasKey (default dict $portal.podLabels) "azure.workload.identity/use") -}}
+{{- fail "portal.podLabels must not override azure.workload.identity/use; it is derived from portal.serviceAccount.annotations.azure.workload.identity/client-id" -}}
 {{- end -}}
 {{- if not (has $jobsScopeMode (list "disabled" "workspace" "operator")) -}}
 {{- fail "portal.jobs.scopeMode must be disabled, workspace, or operator" -}}
@@ -205,6 +209,9 @@ spec:
       labels:
         app: {{ $resourceName }}
         {{- include "taugrid-core.labels" . | nindent 8 }}
+        {{- if $workloadIdentityClientID }}
+        azure.workload.identity/use: "true"
+        {{- end }}
         {{- with $portal.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
