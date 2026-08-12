@@ -118,7 +118,7 @@ ${STORAGE_PREFLIGHT}
     # A plain install fails with EACCES on the canonical Ray CUDA image this
     # template defaults to: pip cannot write to the root-owned
     # /usr/lib/python3.12/site-packages/nvidia. Observed on
-    # ray:py3.12-ray2.54.0-cuda13.0. Retry into the user site rather than
+    # ray:py3.12-ray2.56.0-cuda13.0. Retry into the user site rather than
     # requiring every researcher to set PIP_USER=1 by hand. The first form
     # still wins on images that install cleanly, including the plain
     # non-CUDA ray tags.

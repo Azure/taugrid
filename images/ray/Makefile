@@ -3,13 +3,14 @@
 
 IMAGE    := ray
 PYTHON_VERSION ?= 3.12
-RAY_VERSION    ?= 2.54.0
+RAY_VERSION    ?= 2.56.0
 CUDA_VERSION   ?= 13.0
 GIT_SHA        ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 TAG            ?= py$(PYTHON_VERSION)-ray$(RAY_VERSION)-cuda$(CUDA_VERSION)-$(GIT_SHA)
 
-ACR_REGISTRY ?= aksmcrimagescommon.azurecr.io
-IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
+IMG ?= mcr.microsoft.com/aks/ai-runtime/$(IMAGE):$(TAG)
+ACR_REGISTRY ?=
+PUSH_IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 
 PLATFORMS ?= linux/amd64,linux/arm64
 
@@ -34,12 +35,13 @@ CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_R
 
 # Build multi-arch manifest and push directly to registry
 docker-push:
+	@test -n "$(ACR_REGISTRY)" || { echo "ACR_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	docker buildx build \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		--build-arg RAY_VERSION=$(RAY_VERSION) \
 		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
 		--platform $(PLATFORMS) \
-		--tag $(IMG) \
+		--tag $(PUSH_IMG) \
 		$(CACHE_ARGS) \
 		--push \
 		.

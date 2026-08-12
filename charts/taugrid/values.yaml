@@ -153,9 +153,8 @@ gpu-monitoring:
     # label, so match them by instance type without requiring that label.
     requireAcceleratorLabel: false
 
-# The Tau control plane image is publicly available from MCR and pinned by
-# digest. Override the repository or digest only for a mirrored or pre-release
-# build.
+# The Tau control plane image is publicly available from MCR. The subchart
+# defaults to the release tag matching its chart version.
 tau-core-controller:
   platformNamespace: tau-platform
   image:
@@ -168,7 +167,7 @@ tau-core-controller:
     extraNodeLabelRules: []
 
 # TauGrid services are opt-in. Fresh installs start with only the workload
-# control plane and pull no mutable third-party images.
+# control plane; enabled first-party services use release-versioned MCR tags.
 taugrid-core:
   # A fresh cluster has no GitOps owner for these namespaces, so the chart
   # creates them. Every taugrid-core component below is off by default, so this

@@ -11,7 +11,7 @@ import (
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
-const defaultSyntheticResourceProfileImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0"
+const defaultSyntheticResourceProfileImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
 
 func resourceProfileForRender(profileName string, preset *runtopology.ResolvedPreset, opts runtopology.Options, gpuCount int) profile.Profile {
 	name := strings.TrimSpace(profileName)

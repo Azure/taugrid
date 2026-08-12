@@ -63,7 +63,7 @@ func TestRayFixturesSetStartupProbe(t *testing.T) {
 
 func TestRayVersionPrefersExplicitEnv(t *testing.T) {
 	t.Setenv("RAY_E2E_VERSION", "2.55.1")
-	t.Setenv("RAY_E2E_IMAGE", "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0")
+	t.Setenv("RAY_E2E_IMAGE", "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0")
 
 	got, err := rayVersion()
 	if err != nil {

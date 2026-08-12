@@ -8,7 +8,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 |-----------|---------|
 | **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
-| **Ray** | 2.54.0 — `ray[default]`, `ray[data]`, `ray[serve]` |
+| **Ray** | 2.56.0 — `ray[default]`, `ray[data]`, `ray[serve]` |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
 | **NCCL** | NVIDIA Collective Communications Library — multi-GPU all-reduce, broadcast; uses RDMA/IB transport when available |
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
@@ -39,7 +39,7 @@ Version combinations are defined in [`versions.json`](versions.json):
 
 ```json
 [
-  { "python": "3.12", "ray": "2.54.0", "cuda": "13.0", "default": true }
+  { "python": "3.12", "ray": "2.56.0", "cuda": "13.0", "default": true }
 ]
 ```
 
@@ -51,8 +51,8 @@ Add a new entry to `versions.json`:
 
 ```json
 [
-  { "python": "3.12", "ray": "2.54.0", "cuda": "13.0", "default": true },
-  { "python": "3.12", "ray": "2.55.0", "cuda": "13.0" }
+  { "python": "3.12", "ray": "2.54.0", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.56.0", "cuda": "13.0", "default": true }
 ]
 ```
 
@@ -67,7 +67,7 @@ Version defaults are defined in the `Makefile` and can be overridden:
 make docker-build
 
 # Build with custom versions
-make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.54.0 CUDA_VERSION=13.0
+make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.56.0 CUDA_VERSION=13.0
 
 # Run smoke tests (verifies Python, Ray, and wget versions)
 make test
@@ -81,18 +81,19 @@ make docker-push
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PYTHON_VERSION` | `3.12` | Python version for the base image |
-| `RAY_VERSION` | `2.54.0` | Ray version to install via pip |
+| `RAY_VERSION` | `2.56.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
-| `ACR_REGISTRY` | `aksmcrimagescommon.azurecr.io` | Target container registry |
+| `ACR_REGISTRY` | *(required for push)* | Backing ACR hostname for producer-side pushes; consumers use MCR |
 | `PLATFORMS` | `linux/amd64,linux/arm64` | Architectures for multi-arch build |
 | `CACHE_REPO` | *(empty)* | Set to enable registry-based BuildKit cache |
 
 ### Image Tag Format
 
-Tags follow the pattern `py<PYTHON_VERSION>-ray<RAY_VERSION>-cuda<CUDA_VERSION>-<GIT_SHA>`, for example:
+The local producer tag includes the source SHA. The corresponding stable public
+consumer tag omits that suffix, for example:
 
 ```
-aksmcrimagescommon.azurecr.io/unlisted/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0-abcdef0
+mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 ```
 
 ## CI/CD

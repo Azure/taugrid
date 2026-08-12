@@ -18,9 +18,9 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
-      - matchRegex:
+      - equal:
           path: spec.template.spec.containers[0].image
-          pattern: ^mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[0-9a-f]{64}$
+          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:0.1.2
 
   - it: accepts a mirrored image so clusters without private ACR access can install
     template: charts/tau-core-controller/templates/deployment.yaml

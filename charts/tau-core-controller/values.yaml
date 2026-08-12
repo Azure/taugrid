@@ -7,14 +7,14 @@ platformNamespace: tau-platform
 # kustomize/ should keep the same value.
 partOf: taugrid
 
-# The controller image is publicly available from MCR. Override the repository
-# or digest only to run a mirrored or pre-release build.
+# The controller image is publicly available from MCR. Override the repository,
+# tag, or digest only to run a mirrored or pre-release build.
 image:
   repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
-  # A digest is immutable, so IfNotPresent is correct; set tag instead only for
-  # a mutable pre-release build.
-  digest: sha256:f08c589695d0c9f0b230327eecd01e285801204a48fa1f21be684a08ca1f2357
-  tag: ""
+  # Release image tags follow this chart's version. Set tag to "" when
+  # overriding digest with an immutable sha256 reference.
+  digest: ""
+  tag: "0.1.2"
   pullPolicy: IfNotPresent
 
 resources:

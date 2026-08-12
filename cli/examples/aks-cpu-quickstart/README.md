@@ -85,8 +85,8 @@ shared demo's own config, and only in resource sizing (see
   > export PATH="$(brew --prefix helm@3)/bin:$PATH"
   > helm version --short   # expect v3.x
   > ```
-- A local checkout of this repo, so `tau cluster install --chart ./charts/taugrid`
-  can install from source without needing OCI registry / ACR auth.
+- No chart checkout or registry login. The installed `tau` binary pulls its
+  pinned TauGrid chart from the public MCR OCI registry.
 
 ## Cost and time
 
@@ -111,8 +111,7 @@ returning `ResourceGroupNotFound` after cleanup.
 
 ## Design decisions (safe naming / no collisions)
 
-- Region: `eastus2` (matches the existing `taugrid-*` test clusters
-  and the `aksairuntime` ACR, all in the same region/subscription).
+- Region: `eastus2` (matches the existing `taugrid-*` test clusters).
 - Dedicated resource group: `taugrid-cpu-quickstart-rg` — does not
   collide with any existing RG, and makes final cleanup a single
   `az group delete`.
@@ -178,13 +177,12 @@ az aks get-credentials \
 
 ```bash
 tau cluster install \
-  --chart ./charts/taugrid \
   --context tau-cpu-quickstart
 ```
 
-`--chart` here is a local chart directory, so Helm reads the version from its
-`Chart.yaml` and `--version` is silently ignored. Pin `--version` only when you
-point `--chart` at the OCI registry default.
+The CLI pins both the public MCR chart reference and a compatible chart version,
+so this does not require a TauGrid source checkout. Contributors can still pass
+`--chart ./charts/taugrid` when deliberately testing repository changes.
 
 This installs Kueue, KubeRay, the Tau CRDs/controller, and the bootstrap
 GPU/CPU queue objects. Confirm with the Tau-native check (not `kubectl wait`):
@@ -285,10 +283,9 @@ does not require ADX/Kusto:
 #     https://mcr.microsoft.com/v2/aks/ai-runtime/taugrid-portal/tags/list
 #
 # NOTE: the chart takes a tag only. templates/stellar.yaml renders
-# "{{ .repository }}:{{ .tag }}" and has no digest support, so a digest cannot
-# be pinned here even though AGENTS.md prefers one. Use a short-SHA tag, which
-# is immutable in practice, and verify it resolves before installing.
-STELLAR_TAG="ece2e751a66b"
+# "{{ .repository }}:{{ .tag }}" and has no digest support. Use the release tag
+# matching the taugrid-core chart and verify it resolves before installing.
+STELLAR_TAG="0.2.4"
 
 # Preflight the public consumer path: fail here, not 5 minutes into a rollout.
 curl --fail --silent --show-error --output /dev/null \
@@ -297,7 +294,6 @@ curl --fail --silent --show-error --output /dev/null \
   || { echo "portal tag '$STELLAR_TAG' does not resolve; pick a current one"; exit 1; }
 
 tau cluster install \
-  --chart ./charts/taugrid \
   --context tau-cpu-quickstart \
   --set taugrid-core.namespaces.create=true \
   --set taugrid-core.stellar.enabled=true \
@@ -308,10 +304,9 @@ tau cluster install \
   --wait --timeout 8m
 ```
 
-> **Note:** `ece2e751a66b` resolved from public MCR to
-> `sha256:cdb4ff5cd4b7c39d55aaaa64c9e1d1cf3886413856c40bf5466ce12fb8c333b3`
-> when this example was written. If the preflight fails, use the discovery
-> command above to choose a current immutable tag.
+> **Note:** this release tag must be published to MCR before the chart is used.
+> If the preflight fails, wait for MCR syndication or choose another published
+> chart and matching image release.
 
 See [Caveat 2](#caveat-2-stellar-needs-a-pvc-created-out-of-band) for the one
 manual `kubectl` step this currently needs.
@@ -805,10 +800,10 @@ tau run cancel aks-cpu-quickstart-stellar-demo -n taugrid-default --context tau-
 kubectl delete workspace.tau.azure.com taugrid-default -n tau-platform
 
 # --yes is required: uninstall refuses to run without it once TauWorkspace
-# objects have existed on the cluster. --chart must match the install: the
-# first phase re-renders the release to drain the queue policy while Kueue is
-# still running, so its finalizers are released rather than stranded.
-tau cluster uninstall --context tau-cpu-quickstart --chart ./charts/taugrid --yes
+# objects have existed on the cluster. The first phase re-renders the deployed
+# chart version to drain the queue policy while Kueue is still running, so its
+# finalizers are released rather than stranded.
+tau cluster uninstall --context tau-cpu-quickstart --yes
 
 az group delete --name taugrid-cpu-quickstart-rg --yes --no-wait
 ```

@@ -35,7 +35,7 @@ spec:
 ${DRIVER_LOG_COMPLETION_SETUP}
     trap tau_complete_driver_logs EXIT
     # A plain install fails with EACCES on the canonical Ray *CUDA* image
-    # (observed on ray:py3.12-ray2.54.0-cuda13.0, which runs as nonroot
+    # (observed on ray:py3.12-ray2.56.0-cuda13.0, which runs as nonroot
     # against a root-owned site-packages). It succeeds on the plain
     # ray:py3.12-ray2.54.0 image, and this template has no default image at
     # all -- runtime.image is always researcher-supplied here -- so the

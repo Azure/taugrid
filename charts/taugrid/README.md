@@ -7,14 +7,15 @@ AKS clusters.
 ## Install
 
 ```bash
-tau cluster install --version 0.2.1 --values taugrid-values.yaml
+tau cluster install --version 0.2.2 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
 
 ```bash
-helm upgrade --install taugrid <private-oci-chart-reference> \
-  --version 0.2.1 \
+helm upgrade --install taugrid \
+  oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
+  --version 0.2.2 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic

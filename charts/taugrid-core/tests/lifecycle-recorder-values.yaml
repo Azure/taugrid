@@ -11,9 +11,6 @@ lifecycleRecorder:
     endpoint: https://chart-test.kusto.windows.net
     database: Metrics
     table: TauExpRunLifecycle
-  image:
-    repository: mcr.microsoft.com/aks/ai-runtime/tau
-    digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   imagePullSecrets:
     - name: registry-pull
   workloadIdentity:

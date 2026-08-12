@@ -61,6 +61,8 @@ tau run logs tau-aks-gpu-quickstart -n taugrid-default --context tau-gpu-quickst
 - `az`, `tau`, `kubectl` on `PATH`, and an `az login` session.
 - `helm`. You never invoke it. `tau cluster install` shells out to it
   internally, so it must exist. Both Helm 3 and Helm 4 work with current `tau`.
+- No chart checkout or registry login. `tau` pulls its pinned TauGrid chart
+  from the public MCR OCI registry.
 - A100 quota in your target region — see below.
 
 `run.sh` invokes exactly `az`, `tau`, and `kubectl`. It generates no Kubernetes
@@ -177,7 +179,7 @@ The only GPU-specific settings live in the researcher's `tau.yaml`:
 compute:
   gpus: 1
 runtime:
-  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
   pip: [torch>=2.4.0]
 ```
 

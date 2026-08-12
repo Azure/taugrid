@@ -9,6 +9,7 @@ trigger:
     include:
       - charts/**
       - scripts/ci/publish-helm-charts.sh
+      - scripts/ci/vendor-taugrid-dependencies.sh
       - .pipelines/publish-helm-charts.yml
 
 pr: none
