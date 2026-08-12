@@ -4,6 +4,7 @@
 package expkusto
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -31,6 +32,88 @@ type SchemaOptions struct {
 	Ingestion         string
 	RemoteWriteTable  string
 	RunLifecycleTable string
+}
+
+// RunLifecycleIngestionMappingName is the ADX JSON mapping used by the
+// lifecycle recorder's queued-ingestion contract. It is created by
+// BuildRunLifecycleSchemaKQL alongside the table and dashboard function.
+const RunLifecycleIngestionMappingName = "TauExpRunLifecycleMapping"
+
+// RunLifecycleIngestionColumn describes one JSON field emitted by the
+// lifecycle recorder and its destination ADX column type.
+type RunLifecycleIngestionColumn struct {
+	Column   string `json:"column"`
+	DataType string `json:"datatype"`
+	Path     string `json:"path"`
+}
+
+var runLifecycleIngestionColumns = []RunLifecycleIngestionColumn{
+	{Column: "observed_at", DataType: "datetime", Path: "$.observed_at"},
+	{Column: "observation_id", DataType: "string", Path: "$.observation_id"},
+	{Column: "durable_id", DataType: "string", Path: "$.durable_id"},
+	{Column: "run_id", DataType: "string", Path: "$.run_id"},
+	{Column: "workspace_id", DataType: "string", Path: "$.workspace_id"},
+	{Column: "result_scope", DataType: "string", Path: "$.result_scope"},
+	{Column: "project", DataType: "string", Path: "$.project"},
+	{Column: "run_group_id", DataType: "string", Path: "$.run_group_id"},
+	{Column: "tags", DataType: "dynamic", Path: "$.tags"},
+	{Column: "owning_resource_kind", DataType: "string", Path: "$.owning_resource_kind"},
+	{Column: "owning_resource_name", DataType: "string", Path: "$.owning_resource_name"},
+	{Column: "namespace", DataType: "string", Path: "$.namespace"},
+	{Column: "cluster", DataType: "string", Path: "$.cluster"},
+	{Column: "resource_uid", DataType: "string", Path: "$.resource_uid"},
+	{Column: "resource_version", DataType: "string", Path: "$.resource_version"},
+	{Column: "generation", DataType: "long", Path: "$.generation"},
+	{Column: "submit_time", DataType: "datetime", Path: "$.submit_time"},
+	{Column: "created_time", DataType: "datetime", Path: "$.created_time"},
+	{Column: "kueue_admitted_time", DataType: "datetime", Path: "$.kueue_admitted_time"},
+	{Column: "pod_start_time", DataType: "datetime", Path: "$.pod_start_time"},
+	{Column: "completion_time", DataType: "datetime", Path: "$.completion_time"},
+	{Column: "state", DataType: "string", Path: "$.state"},
+	{Column: "reason", DataType: "string", Path: "$.reason"},
+	{Column: "message", DataType: "string", Path: "$.message"},
+	{Column: "local_queue", DataType: "string", Path: "$.local_queue"},
+	{Column: "cluster_queue", DataType: "string", Path: "$.cluster_queue"},
+	{Column: "workload_kind", DataType: "string", Path: "$.workload_kind"},
+	{Column: "image", DataType: "string", Path: "$.image"},
+	{Column: "image_digest", DataType: "string", Path: "$.image_digest"},
+	{Column: "config_hash", DataType: "string", Path: "$.config_hash"},
+	{Column: "code_sha", DataType: "string", Path: "$.code_sha"},
+	{Column: "tau_command", DataType: "string", Path: "$.tau_command"},
+	{Column: "result_path", DataType: "string", Path: "$.result_path"},
+	{Column: "result_pvc", DataType: "string", Path: "$.result_pvc"},
+	{Column: "artifact_uri", DataType: "string", Path: "$.artifact_uri"},
+	{Column: "checkpoint_uri", DataType: "string", Path: "$.checkpoint_uri"},
+	{Column: "controller_version", DataType: "string", Path: "$.controller_version"},
+	{Column: "experiment_tracking", DataType: "string", Path: "$.experiment_tracking"},
+	{Column: "experiment_source", DataType: "string", Path: "$.experiment_source"},
+}
+
+// RunLifecycleIngestionMapping returns a copy of the recorder's schema-owned
+// ADX mapping, so callers cannot mutate the contract used to render KQL.
+func RunLifecycleIngestionMapping() []RunLifecycleIngestionColumn {
+	return append([]RunLifecycleIngestionColumn(nil), runLifecycleIngestionColumns...)
+}
+
+// BuildRunLifecycleIngestionMappingKQL returns an idempotent ADX command for
+// the named JSON mapping consumed by the lifecycle recorder.
+func BuildRunLifecycleIngestionMappingKQL(opts SchemaOptions) (string, error) {
+	table := strings.TrimSpace(opts.RunLifecycleTable)
+	if table == "" {
+		table = DefaultRunLifecycleTable
+	}
+	if !isKQLIdentifier(table) {
+		return "", fmt.Errorf("--run-lifecycle-table must be a Kusto identifier")
+	}
+	mapping, err := json.Marshal(runLifecycleIngestionColumns)
+	if err != nil {
+		return "", fmt.Errorf("marshal lifecycle ingestion mapping: %w", err)
+	}
+	return fmt.Sprintf(".create-or-alter table %s ingestion json mapping %q %s\n", table, RunLifecycleIngestionMappingName, kqlStringLiteral(string(mapping))), nil
+}
+
+func kqlStringLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func BuildRemoteWriteSchemaKQL(opts SchemaOptions) (string, error) {
@@ -64,7 +147,11 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
 	if !isKQLIdentifier(table) {
 		return "", fmt.Errorf("--run-lifecycle-table must be a Kusto identifier")
 	}
-	return fmt.Sprintf(`// Tau/Stellar run lifecycle contract.
+	mapping, err := BuildRunLifecycleIngestionMappingKQL(SchemaOptions{RunLifecycleTable: table})
+	if err != nil {
+		return "", err
+	}
+	prefix := fmt.Sprintf(`// Tau/Stellar run lifecycle contract.
 // A Tau-owned controller/operator appends or upserts one row per observed run state change.
 // Metrics alone cannot answer queued/running/failed/stale states; Stellar joins this index with ExperimentMetrics rows.
 // State values: submitted, queued, admitted, running, succeeded, failed, cancelled, stale.
@@ -112,7 +199,8 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
     controller_version: string
 )
 
-.create-or-alter function with (folder = 'Tau/experiments', docstring = 'Return the latest Tau/Stellar lifecycle row per scoped durable run; terminal states remain monotonic.', skipvalidation = 'true') %s()
+`, table)
+	suffix := fmt.Sprintf(`.create-or-alter function with (folder = 'Tau/experiments', docstring = 'Return the latest Tau/Stellar lifecycle row per scoped durable run; terminal states remain monotonic.', skipvalidation = 'true') %s()
 {
 %s
 | extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))
@@ -125,7 +213,8 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
 | summarize arg_max(terminal_rank, *) by cluster, namespace, durable_identity
 | project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
 }
-`, table, defaultRunLifecycleDashboardFunction, table), nil
+`, defaultRunLifecycleDashboardFunction, table)
+	return prefix + mapping + "\n" + suffix, nil
 }
 
 func BuildProjectionDashboardSchemaKQL() string {

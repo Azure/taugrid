@@ -247,6 +247,13 @@ only `get/list/watch` on Jobs, RayJobs, and Kueue Workloads in that target
 namespace. Workload Identity is mandatory; it requires a ServiceAccount client-id
 annotation and stamps the AKS workload-identity pod label.
 
+Before enabling the recorder, apply the lifecycle schema emitted by
+`taugrid-portal exp kusto schema --ingestion lifecycle`. It creates the
+`TauExpRunLifecycle` table, its named JSON ingestion mapping, and the dashboard
+function as one idempotent contract. The recorder uses queued NDJSON ingestion
+with an inline mapping generated from that same contract, so direct upgrades do
+not require database-management permission at recorder startup.
+
 Keep `portal.runHistory.enabled=false` until this recorder is deployed and
 successfully writing lifecycle rows. The Portal then reports Runs as `live-only`
 instead of claiming that an empty but queryable table is durable history.
