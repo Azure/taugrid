@@ -7,7 +7,7 @@ menu:
     weight: 10
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau documentation is organized by reader intent:
 

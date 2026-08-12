@@ -4,7 +4,7 @@ weight: 3
 description: Recover transient failure without hiding root cause
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau has two recovery paths for a failed [run](../../concepts/glossary/#run):
 automatic retry, driven entirely by the `resilience.*` fields in your

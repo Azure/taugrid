@@ -4,7 +4,7 @@ weight: 1
 description: Choose the owning package and prove the changed contract
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 1. Start from the user path and compatibility contract.
 2. Keep Cobra command files focused on wiring, flags, validation, and output.

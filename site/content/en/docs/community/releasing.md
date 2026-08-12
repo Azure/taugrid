@@ -4,7 +4,7 @@ weight: 2
 description: Human-authorized and reproducible release publication
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau release preparation updates:
 

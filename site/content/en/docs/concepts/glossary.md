@@ -4,7 +4,7 @@ weight: 7
 description: Canonical Tau terms, so overlapping words mean one thing everywhere
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 This page is the canonical source for Tau terminology. Other concept and
 reference pages link to a definition here instead of redefining it. Where a

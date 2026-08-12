@@ -5,7 +5,7 @@ weight: 7
 description: Contribute to and release Tau
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 - [Contributing](contributing/)
 - [Releasing Tau](releasing/)

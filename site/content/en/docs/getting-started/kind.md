@@ -4,7 +4,7 @@ weight: 3
 description: Verify Tau's portable Kubernetes path without Azure
 ---
 
-{{< maturity status="shipped" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-11" >}}
 
 This is TauGrid's **portable Kubernetes evaluation path**, not its first-class
 AKS setup path. Kind supplies a local Kubernetes API and Nodes. It does not

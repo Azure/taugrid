@@ -4,7 +4,7 @@ weight: 4
 description: How Tau binaries and source-aligned SDK releases are published
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau uses canonical annotated SemVer tags (`vX.Y.Z`) and a manually authorized
 GitHub Actions workflow. Pushing a tag alone does not publish a release.

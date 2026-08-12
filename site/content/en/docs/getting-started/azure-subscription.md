@@ -5,7 +5,7 @@ weight: 2
 description: Validate subscription access, quota, cost controls, and choose an AKS provisioning path
 ---
 
-{{< maturity status="shipped" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-11" >}}
 
 An Azure subscription is the first shared surface for an AKS-backed Tau
 environment. Tau does not create or govern the subscription. A platform owner

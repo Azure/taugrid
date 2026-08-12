@@ -4,7 +4,7 @@ weight: 3
 description: TauGrid distribution chart configurable values
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-31" >}}
+{{< maturity status="ga" reviewed="2026-07-31" >}}
 
 This page documents the Helm values accepted by `tau cluster install`. The
 distribution chart bundles Kueue, KubeRay, the Tau core controller, and a

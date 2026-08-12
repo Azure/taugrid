@@ -5,7 +5,7 @@ weight: 6
 description: Run smoke, training, status, logs, and results
 ---
 
-{{< maturity status="shipped" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-11" >}}
 
 This is the **researcher workflow**, not cluster setup. It creates no Azure
 resources and installs no Kubernetes controllers. It starts only after:

@@ -4,7 +4,7 @@ weight: 2
 description: How Tau connects repository intent to Kubernetes execution
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau is primarily a CLI, renderer, and local observer. It is not a Kubernetes
 operator and does not replace Kueue, KubeRay, or the Kubernetes scheduler.

@@ -16,7 +16,18 @@ MATURITY_PATTERN = re.compile(
     r'\{\{<\s*maturity\s+status="(?P<status>[^"]+)"\s+'
     r'reviewed="(?P<reviewed>\d{4}-\d{2}-\d{2})"\s*>\}\}'
 )
-ALLOWED_STATUSES = {"shipped", "experimental", "implementing", "future"}
+ALLOWED_STATUSES = {
+    "alpha",
+    "beta",
+    "ga",
+    "deprecated",
+    "planned",
+    # Compatibility aliases for content that has not migrated yet.
+    "shipped",
+    "experimental",
+    "implementing",
+    "future",
+}
 
 
 def main() -> int:

@@ -4,7 +4,7 @@ weight: 5
 description: Request access, receive a workspace connection, and prove you can start
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 A platform operator completes infrastructure, queue, storage, identity, and
 [workspace](../../concepts/glossary/#workspace) readiness before handing a

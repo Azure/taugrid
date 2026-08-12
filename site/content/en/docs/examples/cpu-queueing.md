@@ -5,7 +5,7 @@ weight: 20
 description: Observe Kueue admission and quota behavior with raw RayJobs and no GPU quota.
 ---
 
-{{< maturity status="experimental" reviewed="2026-07-16" >}}
+{{< maturity status="alpha" reviewed="2026-07-16" >}}
 
 Use this example when you want to understand the scheduling layer beneath Tau
 without waiting for GPU capacity. It submits raw RayJobs to Kueue and makes

@@ -6,7 +6,7 @@ description: Complete workflows organized by Tau persona
 no_list: true
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 ## Researcher
 

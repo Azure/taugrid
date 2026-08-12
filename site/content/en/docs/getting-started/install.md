@@ -4,7 +4,7 @@ weight: 1
 description: Install and verify the Tau CLI, then optionally add the Python SDK
 ---
 
-{{< maturity status="shipped" reviewed="2026-08-12" >}}
+{{< maturity status="ga" reviewed="2026-08-12" >}}
 
 Tau consists of the Go `tau` CLI and an optional Python SDK package also
 imported as `tau`. The CLI is the canonical Kubernetes executor.

@@ -5,7 +5,7 @@ weight: 4
 description: What must already exist, how to validate it, and the TauWorkspace readiness gate
 ---
 
-{{< maturity status="shipped" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-11" >}}
 
 Researchers and platform owners check the same contract before the first
 run: what must already exist, what a passing check verifies, and what a

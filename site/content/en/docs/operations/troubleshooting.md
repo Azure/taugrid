@@ -4,7 +4,7 @@ weight: 1
 description: Diagnose the first failed transition instead of guessing
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 This is the canonical diagnose-first path for a stuck or failed
 [run](../../concepts/glossary/#run). Work through the layers in order and
@@ -288,10 +288,10 @@ kubectl get resourceclaim -n <namespace>
 kubectl get events -n <namespace> --sort-by=.lastTimestamp
 ```
 
-{{< maturity status="experimental" >}} If `tau run status` shows only a
+{{< maturity status="alpha" >}} If `tau run status` shows only a
 **MultiKueue placement** phase and no pod phases progress locally, the
 workload dispatched to a worker cluster. Inspect it from the worker context,
-or see [Multi-cluster execution](../multicluster/) (experimental) before
+or see [Multi-cluster execution](../multicluster/) (Alpha) before
 assuming the run is stuck.
 
 ## 6. GPU/node/topology health

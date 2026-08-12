@@ -4,7 +4,7 @@ weight: 4
 description: What is Kubernetes-native and what belongs to the Azure reference
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 The portable Tau contract is Kubernetes-native:
 

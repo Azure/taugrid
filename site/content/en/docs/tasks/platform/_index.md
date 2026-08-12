@@ -5,7 +5,7 @@ weight: 2
 description: Prepare governed clusters and workspaces
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 - [Prepare the Azure subscription and choose an infrastructure path](../../getting-started/azure-subscription/)
 - Check the [prerequisite matrix and readiness gate](../../getting-started/prerequisites/)

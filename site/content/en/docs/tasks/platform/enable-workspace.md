@@ -4,7 +4,7 @@ weight: 1
 description: Complete platform Day 0 before repository handoff
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 TauWorkspace is a Kubernetes reconciler, not a cloud provisioner. See the
 full [prerequisite matrix](../../getting-started/prerequisites/) for what

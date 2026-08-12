@@ -5,7 +5,7 @@ weight: 3
 description: Diagnose and operate Tau workloads
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 A run stuck or failing? Start with
 [Troubleshoot a run](troubleshoot/), the same canonical, layer-by-layer

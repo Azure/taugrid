@@ -5,7 +5,7 @@ weight: 20
 description: Provision GPU-capable AKS, enable TauGrid, and run the six-trial Ray Tune example through a repository workspace.
 ---
 
-{{< maturity status="shipped" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-11" >}}
 
 This guide runs the GPU HPO workflow for
 [`cli/examples/ray-tune-smoke`](https://github.com/Azure/taugrid/tree/main/cli/examples/ray-tune-smoke).

@@ -4,7 +4,7 @@ weight: 6
 description: Separate human Kubernetes authorization from workload cloud identity
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau platforms answer two different questions:
 

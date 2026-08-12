@@ -4,7 +4,7 @@ weight: 2
 description: Independent transitions from repository resolution to useful progress
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 A Tau run crosses independent control planes:
 

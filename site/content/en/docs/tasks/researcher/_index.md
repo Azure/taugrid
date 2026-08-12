@@ -5,7 +5,7 @@ weight: 1
 description: Run, observe, recover, and compare experiments
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 - Request workspace access and confirm you're ready to submit — see
   [what to request and what proves you can start](../../getting-started/workspace/)

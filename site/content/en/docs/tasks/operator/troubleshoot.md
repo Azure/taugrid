@@ -4,7 +4,7 @@ weight: 1
 description: Locate the first failed lifecycle transition
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Start with:
 

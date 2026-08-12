@@ -14,7 +14,18 @@ import tomllib
 import urllib.parse
 
 
-ALLOWED_MATURITY = {"shipped", "experimental", "implementing", "future"}
+ALLOWED_MATURITY = {
+    "alpha",
+    "beta",
+    "ga",
+    "deprecated",
+    "planned",
+    # Compatibility aliases for separately maintained pages during migration.
+    "shipped",
+    "experimental",
+    "implementing",
+    "future",
+}
 MATURITY_PATTERN = re.compile(
     r'\{\{<\s*maturity\s+status="(?P<status>[^"]+)"\s+'
     r'reviewed="(?P<reviewed>\d{4}-\d{2}-\d{2})"\s*>\}\}'

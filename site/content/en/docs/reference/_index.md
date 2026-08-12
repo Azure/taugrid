@@ -5,7 +5,7 @@ weight: 5
 description: Exact Tau user and release contracts
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 - [CLI reference](cli/)
 - [Run config reference](run-config/)
