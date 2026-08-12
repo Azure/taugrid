@@ -8,8 +8,8 @@ description: |
   present. See ../INSTALL.md for the recommended install order.
 type: application
 # taugrid-core starts an independent public release lineage.
-version: 0.2.2
-appVersion: "0.2.2"
+version: 0.2.3
+appVersion: "0.2.3"
 keywords: [taugrid, ai, kueue, multi-cloud]
 maintainers:
   - name: taugrid

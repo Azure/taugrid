@@ -2,7 +2,7 @@ apiVersion: v2
 name: taugrid
 description: Kubernetes-native TauGrid distribution for fresh AKS clusters.
 type: application
-version: 0.2.0
+version: 0.2.1
 appVersion: "0.1.0"
 kubeVersion: ">=1.30.0-0"
 keywords:
@@ -20,11 +20,11 @@ dependencies:
     repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
     condition: components.kuberayOperator.enabled
   - name: tau-core-controller
-    version: 0.1.0
+    version: 0.1.1
     repository: file://../tau-core-controller
     condition: components.tauCoreController.enabled
   - name: taugrid-core
-    version: 0.2.2
+    version: 0.2.3
     repository: file://../taugrid-core
     condition: components.taugridCore.enabled
   # GPU node health monitoring follows the Tau control plane. Helm evaluates
