@@ -4,11 +4,10 @@ weight: 5
 description: Twenty-five diagrams from evaluation through contribution
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
-
 Each diagram answers one reader question and preserves an editable source, SVG,
-and PNG. Solid elements are shipped, orange dashed elements are experimental,
-and purple dashed elements are future direction.
+and PNG. Solid elements represent GA capabilities. Orange dashed elements
+represent Alpha or Beta capabilities. Purple dashed elements represent Planned
+work.
 
 ## Understand and evaluate
 

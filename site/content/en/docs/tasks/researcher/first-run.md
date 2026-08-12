@@ -4,7 +4,7 @@ weight: 1
 description: Validate, submit, observe, and retrieve one repository target
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Prerequisites:
 

@@ -32,7 +32,8 @@ cluster:
 identity:
   tenantID: 11111111-1111-1111-1111-111111111111
 authorization:
-  mode: cluster-wide
+  mode: workspace-rbac
+  requiredRole: tau-researcher-v1
 requirements:
   minTauVersion: 0.3.0
 network:

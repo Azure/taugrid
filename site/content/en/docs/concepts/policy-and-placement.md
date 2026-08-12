@@ -4,7 +4,7 @@ weight: 4
 description: How policy intent becomes admitted and scheduled pods
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau resolves workload policy; upstream systems enforce it.
 

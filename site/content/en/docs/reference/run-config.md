@@ -4,7 +4,7 @@ weight: 2
 description: Direct config-first workload intent
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 This page documents the **direct run config**: the normal, hand-written
 `tau.yaml` that `tau run --config` reads to submit a workload. See

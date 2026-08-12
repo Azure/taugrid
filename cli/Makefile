@@ -7,7 +7,10 @@ BINARY := tau
 GEN_BINARY := tau-gen
 PKG := ./cmd/tau
 GEN_PKG := ./cmd/tau-gen
-VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
+# Local checkout builds use the explicit development marker understood by
+# workspace version checks. Release builds always override VERSION with a
+# reviewed SemVer tag; commit and date still identify local builds.
+VERSION ?= dev
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/Azure/taugrid/core/version

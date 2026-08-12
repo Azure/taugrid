@@ -4,7 +4,7 @@ weight: 3
 description: How repository and workspace intent become a workload
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 The normal researcher contract is a checked-in direct run config:
 

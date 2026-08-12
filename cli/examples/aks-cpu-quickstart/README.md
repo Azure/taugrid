@@ -1,83 +1,112 @@
-# TauGrid CPU quickstart — brand-new AKS cluster to a proven PyTorch run
+# TauGrid CPU quickstart: from a new AKS cluster to a verified PyTorch run
 
 > **Status:** `operator runbook`
-> **Intended use:** stand up a disposable CPU-only AKS cluster, install TauGrid
-> with `tau cluster install`, and prove a real PyTorch run end to end — including
-> live Stellar metrics — before trying GPU/storage-specific flows.
-> **Not for:** production clusters, GPU/CUDA workloads, or any cluster you are
-> not willing to delete afterwards. This creates billable Azure resources.
->
-> **Blocked on [#1294] (not merged).** `tau.yaml` puts `torch` in
-> `runtime.pip`, and on `main` that install fails with `EACCES` before
-> `train.py` runs. See [Caveat 7](#caveat-7-runtimepip-cannot-install-torch-yet).
-> Every other step below is unaffected and was proven live.
+> **Intended use:** create a disposable CPU-only AKS cluster, install TauGrid
+> with `tau cluster install`, and verify a real PyTorch run end to end,
+> including live Stellar metrics, before trying GPU/storage-specific flows.
+> **Not for:** production clusters, GPU/CUDA workloads, or any cluster not
+> intended for deletion afterward. This creates billable Azure resources.
 
-This example is the minimum path from **zero** (no cluster) to **evidence** (a
+This example shows the minimum path from no cluster to a verified result: a
 real, CPU-only PyTorch training run submitted through `tau` and observed in
-the Ray dashboard) using only three tools on the operator-facing path:
+the Ray dashboard. It uses only three tools on the operator-facing path:
 
-- `az` — create the AKS cluster and fetch its credentials (infra only).
-- `tau` — install TauGrid onto the cluster and submit/observe the workload.
-- `kubectl` — read-only verification and the couple of platform objects Tau's
+- `az`: create the AKS cluster and fetch its credentials (infra only).
+- `tau`: install TauGrid onto the cluster and submit/observe the workload.
+- `kubectl`: read-only verification and the couple of platform objects Tau's
   install docs don't yet automate (see caveats below).
 
 No Terraform, Helm, `make`, or custom installer scripts are invoked directly.
-`tau cluster install` itself shells out to a local `helm` binary internally —
-that is a documented prerequisite of the Tau CLI, not something this example
+`tau cluster install` itself shells out to a local `helm` binary internally.
+That is a documented prerequisite of the Tau CLI, not something this example
 invokes directly. See [Prerequisites](#prerequisites).
 
-This quickstart does **not** duplicate the training script. It reuses
+## AKS setup versus Kubernetes/TauGrid setup
+
+AKS is the first-class provider path in this runbook. That means the repository
+connection contract names an Azure tenant and AKS ARM resource and Tau can
+obtain AKS cluster-user credentials. It does not mean Tau provisions AKS.
+
+| Phase | Steps | Tool/API boundary | What it creates or validates |
+|---|---|---|---|
+| **Local validation** | 0 | Local `tau` process | Renders configs; creates no Azure or Kubernetes resources |
+| **AKS setup (Azure/provider)** | 1 | `az` and Azure Resource Manager | Resource group, AKS control plane, node pool, API endpoint, and dedicated kubeconfig |
+| **Kubernetes/TauGrid setup** | 2–3 | `tau`/Helm and the Kubernetes API | Kueue, KubeRay, Tau CRDs/controller, queue policy, TauWorkspace, Namespace, RBAC, and LocalQueue |
+| **Workload validation (operator context)** | 4–7 | `tau` and the Kubernetes API | Smoke Job, RayJob, logs/status, and optional result retrieval |
+
+The identity and storage split follows the same boundary:
+
+- AKS setup owns managed Entra, AKS credential access, Azure authorization,
+  OIDC, managed identities, Azure storage, networking, and provider add-ons.
+- Kubernetes/TauGrid setup owns workspace RBAC, ServiceAccounts, queue objects,
+  StorageClasses/PVCs, and workload objects that consume those AKS features.
+
+Kind or another conformant Kubernetes cluster can verify the portable controller,
+queue, and workload APIs. It does not exercise this runbook's AKS ARM identity,
+credential, network, storage, or node-pool path.
+
+Steps 4–7 keep using the operator's explicit `--context`. They
+verify Tau's workload path, but they do not verify a repository-first researcher
+handoff. For that first-class AKS path, AKS setup must also enable managed
+Entra, grant the intended identity access to normal AKS cluster-user
+credentials, and make the API reachable from the researcher. Kubernetes/
+TauGrid setup must bind that real subject in a Ready workspace and hand over a
+matching connection descriptor. The researcher then follows the
+[researcher quickstart](../../../site/content/en/docs/getting-started/quickstart.md)
+without an operator context override.
+
+This quickstart does not duplicate the training script. It reuses
 [`cli/examples/cpu-multi-interest-ray/train.py`](../cpu-multi-interest-ray/train.py)
-unmodified — a CPU-only, 5-pod Ray Train PyTorch DDP demo (multi-interest
+unmodified: a CPU-only, 5-pod Ray Train PyTorch DDP demo (multi-interest
 retrieval model, `arxiv:2506.23060v1`) that prints per-step loss and pairwise
 accuracy. Only [`tau.yaml`](./tau.yaml) in this directory differs from the
 shared demo's own config, and only in resource sizing (see
 [Caveat 1](#caveat-1-head-pod-oomkill-on-a-real-cluster) below for why).
 
-## What this proves
+## What this verifies
 
-1. A brand-new CPU-only AKS cluster can be created from scratch with `az`.
+1. A CPU-only AKS cluster can be created from scratch with `az`.
 2. TauGrid (Kueue + KubeRay + Tau CRDs/controller + bootstrap queue) installs
    cleanly onto it with the single supported `tau cluster install` command.
-3. A researcher can submit a real PyTorch workload through `tau run` alone —
-   no raw `kubectl apply` of Jobs/RayJobs — and it actually trains: loss drops
-   from ~3.7 to ~0.3–0.7 across 4 distributed CPU workers, not just "Pod
-   Running" or "Job Complete".
+3. A researcher can submit a real PyTorch workload through `tau run` alone,
+   with no raw `kubectl apply` of Jobs/RayJobs. The workload trains: loss drops
+   from ~3.7 to ~0.3–0.7 across 4 distributed CPU workers, rather than only
+   reaching "Pod Running" or "Job Complete" status.
 4. The live run and its logs are inspectable through both the Tau CLI
    (`tau run status` / `tau run logs`) and the Ray dashboard.
-5. Tau's Stellar experiment-tracking UI can be deployed via the same
-   `tau cluster install` command in local (non-Kusto) mode, and — using the
-   companion [`stellar-demo/`](./stellar-demo) script that calls the
-   `tau.stellar` SDK directly — **genuinely logs and renders live metrics**:
-   a real "Train loss" chart converging 3.76 → 0.72 and a real
-   `train/pairwise_accuracy` chart oscillating ~0.94–0.98 across 48/48 real
+5. Tau's Stellar experiment-tracking UI deploys through the same
+   `tau cluster install` command in local (non-Kusto) mode. Using the
+   companion [`stellar-demo/`](./stellar-demo) script, which calls the
+   `tau.stellar` SDK directly, Stellar logs and renders live metrics: a
+   "Train loss" chart converging 3.76 → 0.72 and a
+   `train/pairwise_accuracy` chart oscillating ~0.94–0.98 across 48/48
    steps, plus the run's config, final metrics, and content-addressed
-   artifacts (`history.jsonl`, `top_recommendations.json`), all visually
-   confirmed rendering in the actual dashboard UI (not just via `curl`/API).
+   artifacts (`history.jsonl`, `top_recommendations.json`). This was
+   confirmed in the dashboard UI, not only through `curl`/API calls.
    See [Recorded evidence](#recorded-evidence) below.
 
 ## Prerequisites
 
 - `az` CLI, logged in, with a subscription that can create AKS clusters.
-- `tau` — build locally from this repo (`make install-tau-cli` from the repo
+- `tau`: build locally from this repo (`make install-tau-cli` from the repo
   root) or use a published binary. This example was built/run against the
   Go CLI in `cli/`.
-- `kubectl` — for read-only verification and the two objects noted in
+- `kubectl`: for read-only verification and the two objects noted in
   [Caveats](#caveats-known-gaps-in-the-supported-flow).
 - **`helm` on `PATH`.** `tau cluster install` shells out to `helm`
-  internally to render/apply the TauGrid chart — this is an implementation
-  detail of the command, not something you invoke yourself. Nothing in this
+  internally to render/apply the TauGrid chart. This is an implementation
+  detail of the command, not something invoked directly here. Nothing in this
   example calls `helm` directly; if `tau cluster install` ever stops needing
   it, this note becomes obsolete.
 
   > **Helm 3 and Helm 4 both work.** Earlier versions of `tau cluster install`
   > called `helm list --all`; Helm v4 removed that flag, so the install failed
   > with a bare `Error: unknown flag: --all`. That is fixed
-  > ([#1274](https://github.com/Azure/taugrid/issues/1274)) —
+  > ([#1274](https://github.com/Azure/taugrid/issues/1274)):
   > the release probe now passes the individual state flags, which both major
   > versions accept, so no Helm version pin is required.
   >
-  > If you are running a `tau` build from **before** that fix and
+  > If running a `tau` build from before that fix and
   > `helm version --short` reports `v4.x`, put a Helm 3 binary ahead of it on
   > `PATH` for the duration of the install:
   >
@@ -91,7 +120,7 @@ shared demo's own config, and only in resource sizing (see
 ## Cost and time
 
 This example creates **billable Azure resources**. Budget accordingly and run
-[Cleanup](#cleanup) when you are done.
+[Cleanup](#cleanup) after finishing.
 
 | Phase | Wall-clock | Notes |
 | --- | --- | --- |
@@ -105,14 +134,14 @@ This example creates **billable Azure resources**. Budget accordingly and run
 Compute cost is 3× `Standard_D4_v5` (4 vCPU / 16 GiB each). At list price in
 `eastus2` that is roughly **$0.60–0.70/hour** for the node pool; the AKS free
 tier control plane adds nothing. A full run-and-delete cycle is well under a
-dollar. **The risk is forgetting to delete it** — an idle cluster left running
+dollar. **The risk is forgetting to delete it.** An idle cluster left running
 is ~$15/day. Confirm with `az group show --name taugrid-cpu-quickstart-rg`
 returning `ResourceGroupNotFound` after cleanup.
 
 ## Design decisions (safe naming / no collisions)
 
 - Region: `eastus2` (matches the existing `taugrid-*` test clusters).
-- Dedicated resource group: `taugrid-cpu-quickstart-rg` — does not
+- Dedicated resource group: `taugrid-cpu-quickstart-rg`. It does not
   collide with any existing RG, and makes final cleanup a single
   `az group delete`.
 - Cluster name: `tau-cpu-quickstart`, 3x `Standard_D4_v5` CPU-only system
@@ -123,9 +152,9 @@ returning `ResourceGroupNotFound` after cleanup.
 
 ## Step-by-step
 
-All commands below assume you're in the repo root and `KUBECONFIG` points at
-a dedicated file for this cluster (never merge into your default kubeconfig
-for a throwaway quickstart cluster):
+All commands below assume the repo root is the working directory and
+`KUBECONFIG` points at a dedicated file for this cluster (never merge into the
+default kubeconfig for a disposable quickstart cluster):
 
 ```bash
 export KUBECONFIG=/tmp/tau-cpu-quickstart.kubeconfig
@@ -134,8 +163,8 @@ export KUBECONFIG=/tmp/tau-cpu-quickstart.kubeconfig
 ### 0. Validate the configs before spending money (no cluster required)
 
 `--dry-run=client` renders the full RayJob manifest locally without contacting
-a cluster, so you can catch config errors before provisioning anything. Run
-this first — it takes seconds and needs no Azure resources:
+a cluster, catching config errors before provisioning anything. Run
+this first: it takes seconds and needs no Azure resources:
 
 ```bash
 tau run --config cli/examples/aks-cpu-quickstart/tau.yaml \
@@ -152,9 +181,9 @@ render, because `--dry-run=client` never contacts a cluster and so cannot look
 the namespace up. Every later command omits it: TauGrid v0 activates exactly
 one workspace per cluster, and `tau` resolves that workspace (and its
 namespace, queue, and output root) automatically. Researchers never need to
-know the workspace name — `--workspace` exists only as an operator override.
+know the workspace name. `--workspace` exists only as an operator override.
 
-### 1. Create the resource group + CPU-only AKS cluster (`az` only)
+### 1. AKS setup: create the resource group and CPU-only cluster (`az` only)
 
 ```bash
 az group create --name taugrid-cpu-quickstart-rg --location eastus2
@@ -173,16 +202,22 @@ az aks get-credentials \
   --file "$KUBECONFIG"
 ```
 
-### 2. Install TauGrid (`tau` only — Helm is internal to this command)
+This abbreviated disposable-cluster command does not enable managed Entra; it
+is sufficient only for the operator-context validation below. Do not present
+its local AKS credential as a researcher handoff. A real handoff must meet the
+managed-Entra AKS gate described above before Kubernetes/TauGrid workspace
+setup begins.
+
+### 2. Kubernetes/TauGrid setup: install the control plane (`tau` only)
 
 ```bash
 tau cluster install \
   --context tau-cpu-quickstart
 ```
 
-The CLI pins both the public MCR chart reference and a compatible chart version,
-so this does not require a TauGrid source checkout. Contributors can still pass
-`--chart ./charts/taugrid` when deliberately testing repository changes.
+The CLI uses a pinned public MCR chart reference and a compatible chart version.
+This command does not require a TauGrid source checkout. Contributors can pass
+`--chart ./charts/taugrid` to test repository changes.
 
 This installs Kueue, KubeRay, the Tau CRDs/controller, and the bootstrap
 GPU/CPU queue objects. Confirm with the Tau-native check (not `kubectl wait`):
@@ -192,9 +227,9 @@ tau cluster validate installation --context tau-cpu-quickstart
 ```
 
 Optionally, also enable Stellar (Tau's local experiment dashboard) in the same
-install call — see [Enabling Stellar](#enabling-stellar-local-mode) below.
+install call. See [Enabling Stellar](#enabling-stellar-local-mode) below.
 
-### 3. Create the researcher workspace (`tau` only)
+### 3. Kubernetes/TauGrid setup: create the researcher workspace (`tau` only)
 
 ```bash
 # NAME defaults to taugrid-default. Pass it explicitly so an override remains
@@ -206,19 +241,19 @@ tau workspace create taugrid-default \
 tau workspace status taugrid-default --context tau-cpu-quickstart
 ```
 
-### 4. Connectivity smoke test (`tau` only)
+### 4. Workload validation: connectivity smoke test (`tau` only)
 
 ```bash
 tau run smoke --context tau-cpu-quickstart
 ```
 
-### 5. Submit the real PyTorch workload (`tau` only — no raw `kubectl apply`)
+### 5. Workload validation: submit the real PyTorch workload (`tau` only)
 
 ```bash
 tau run --config cli/examples/aks-cpu-quickstart/tau.yaml --context tau-cpu-quickstart
 ```
 
-### 6. Observe it running
+### 6. Workload validation: observe it running
 
 ```bash
 tau run status tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quickstart
@@ -234,7 +269,7 @@ kubectl port-forward -n taugrid-default svc/<raycluster-name>-head-svc 18265:826
 
 (Find `<raycluster-name>` via `kubectl get raycluster -n taugrid-default`.)
 
-**What you should see in the logs**: pip install of `torch`, then Ray Train
+**Expected log output**: pip install of `torch`, then Ray Train
 starting a 4-worker DDP process group, then repeated lines like:
 
 ```
@@ -244,18 +279,18 @@ starting a 4-worker DDP process group, then repeated lines like:
 SUCC -- Job 'tau-aks-cpu-quickstart-...' succeeded
 ```
 
-Loss dropping from ~3.7 to ~0.3–0.7 across all 4 workers, plus a final
-`succeeded` status, is the real-computation proof this example is meant to
-demonstrate — not just `RUNNING`/`Complete` in isolation.
+The loss must drop from approximately 3.7 to 0.3–0.7 across all four workers.
+The final status must be `succeeded`. A `RUNNING` or `Complete` state without
+these metrics is insufficient.
 
 A full captured transcript from two independent runs is saved as durable
 evidence in this session's artifact log (see the creator session /
 `files/evidence/` for `tau_run_logs_full_transcript.txt` and
 `tau_run_logs_second_run_transcript.txt`). See
 [Recorded evidence](#recorded-evidence) below for the full researcher-journey
-video, which additionally proves the Stellar metrics case.
+video, which also verifies the Stellar metrics case.
 
-### 7. Retrieve artifacts (optional)
+### 7. Workload validation: retrieve artifacts (optional)
 
 ```bash
 tau run get tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quickstart
@@ -265,20 +300,18 @@ tau run get tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quicksta
 
 Stellar is Tau's built-in experiment-tracking UI. Enabling it in local
 (non-Kusto) mode is a single additional `--set` flag on the same
-`tau cluster install` call — it does not require the separate
+`tau cluster install` call. It does not require the separate
 `taugrid-portal` binary/image beyond what the chart already references, and
 does not require ADX/Kusto:
 
 ```bash
-# The portal image is NOT built for every commit — it is published only when a
-# PR touches its trusted inputs. So `git rev-parse --short HEAD` is the wrong
-# source for this tag: on a docs-only checkout it names a commit that was never
-# built, and the install fails with ImagePullBackOff long after `helm` reports
-# success. `latest` is a mutable tag and must not be used on a cluster
-# (AGENTS.md > "Container image sourcing"). The chart only enforces that
-# stellar.image.tag is non-empty, so it will not catch either mistake.
+# The portal image is published only when a PR changes its trusted inputs.
+# A docs-only commit might not have an image. Do not derive this tag from
+# `git rev-parse --short HEAD`. The `latest` tag is mutable and must not be used
+# on a cluster (AGENTS.md > "Container image sourcing"). The chart only verifies
+# that stellar.image.tag is non-empty.
 #
-# Discover a tag that actually exists:
+# List published tags:
 #   curl -fsSL \
 #     https://mcr.microsoft.com/v2/aks/ai-runtime/taugrid-portal/tags/list
 #
@@ -287,7 +320,7 @@ does not require ADX/Kusto:
 # matching the taugrid-core chart and verify it resolves before installing.
 STELLAR_TAG="0.2.4"
 
-# Preflight the public consumer path: fail here, not 5 minutes into a rollout.
+# Verify the public image before starting the rollout.
 curl --fail --silent --show-error --output /dev/null \
   -H 'Accept: application/vnd.oci.image.index.v1+json' \
   "https://mcr.microsoft.com/v2/aks/ai-runtime/taugrid-portal/manifests/${STELLAR_TAG}" \
@@ -320,20 +353,20 @@ kubectl port-forward -n tau svc/tau-stellar 18080:80
 # then open http://localhost:18080/stellar
 ```
 
-### Proving real Stellar metrics: the `stellar-demo/` script
+### Verifying live Stellar metrics: the `stellar-demo/` script
 
 The shared `cpu-multi-interest-ray/train.py` reused above only prints to
-stdout — it does not call the `tau.stellar` SDK, so Stellar correctly shows
-"No experiments found yet" for that run. To prove Stellar's actual job (real
+stdout. It does not call the `tau.stellar` SDK, so Stellar correctly shows
+"No experiments found yet" for that run. To verify Stellar's actual job (real
 metrics logged by a researcher's training loop, rendered live in the
 dashboard), this quickstart ships a second, self-contained script,
 [`stellar-demo/train.py`](./stellar-demo/train.py), that calls
 `stellar.init(...)` / `run.log(...)` / `run.log_artifact(...)` /
-`run.finish(...)` every step — the same SDK calls a real researcher project
+`run.finish(...)` every step, the same SDK calls a real researcher project
 would import. Submit it with its own `tau.yaml`
 ([`stellar-demo/tau.yaml`](./stellar-demo/tau.yaml), which uses the direct
 `tau run --config` schema so `run.working_dir` can ship the `tau/` package
-containing `stellar.py` alongside the script — see the comments in that file
+containing `stellar.py` alongside the script. See the comments in that file
 for why):
 
 ```bash
@@ -344,25 +377,22 @@ This produces a real, converging training curve (Train loss 3.76 → 0.72,
 `train/pairwise_accuracy` oscillating ~0.94–0.98 over 48 steps) plus a final
 `config.json`, `run.json`, `history.jsonl`, and an `artifacts/` folder
 (`top_recommendations.json`) written under `/tmp/tau_stellar_demo/<run-id>/`
-inside the pod. **Retrieving those files needs one gotcha-avoidance step —
-see [Caveat 6](#caveat-6-kubectl-cp-fails-on-the-ray-image-use-kubectl-exec-cat-instead).**
+inside the pod. Use the retrieval procedure in
+[Caveat 6](#caveat-6-kubectl-cp-fails-on-the-ray-image-use-kubectl-exec-cat-instead).**
 
-Once retrieved locally, viewing them live in Stellar's UI does **not** require
-port-forwarding into the cluster's in-cluster Stellar Deployment — the same
-experiment store directory can be served locally with the Tau Python SDK's
-companion Go binary, `taugrid-portal` (built locally via
-`make install-taugrid-portal`, same as `tau`, from this repo — **not** a new
-infra tool, just the second of the two Go binaries this repo ships):
+After retrieval, serve the experiment store locally with `taugrid-portal`.
+This does not require port-forwarding to the in-cluster Stellar Deployment.
+Install `taugrid-portal` from this repository with
+`make install-taugrid-portal`:
 
 ```bash
 taugrid-portal experiment serve --store /path/to/retrieved/tau_stellar_demo --addr 127.0.0.1:8099
 # then open http://127.0.0.1:8099/stellar?target=<run-group-name>
 ```
 
-This was visually confirmed end-to-end in a real browser: the "Train loss"
-and "train/pairwise_accuracy" charts render genuine per-step data (not the
-Stellar empty-state fallback), and the run's evidence-details drill-down
-shows the real config, final metrics, and both artifacts. See
+The "Train loss" and "train/pairwise_accuracy" charts must render per-step data
+instead of the Stellar empty state. The evidence details must show the
+configuration, final metrics, and both artifacts. See
 [Recorded evidence](#recorded-evidence).
 
 ## Running a sweep (multiple experiments)
@@ -384,11 +414,11 @@ contract, hence the `DEMO_*` prefix.)
 
 ### Making a run last long enough to watch
 
-The sweep configs above are deliberately tiny — 48 steps is roughly **2.4
+The sweep configs above are deliberately tiny. 48 steps is roughly **2.4
 seconds** of actual compute, against roughly **4 minutes** of startup (image
 pull, then `pip install torch` in the Ray runtime env). That is fine for
-producing metrics, but it means that if you open the Ray or Kueue dashboards
-"while the job runs" you are almost certainly looking at *startup*, not
+producing metrics, but opening the Ray or Kueue dashboards
+"while the job runs" almost certainly shows startup, not
 training.
 
 `train.py` therefore supports two extra, default-off knobs:
@@ -432,18 +462,18 @@ Observed results on the reference cluster (48 steps unless noted):
 | 5e-2 | **1.260** | **0.867** |
 | 2e-3, 96 steps | 0.659 | 0.922 |
 
-The `5e-2` variant exists specifically so the sweep tells a real story: the
-task converges within 48 steps at any sane learning rate, so only a
-deliberately destabilizing LR produces visible separation on the charts.
+The `5e-2` variant exists to produce visible separation on the charts: the
+task converges within 48 steps at any reasonable learning rate, so only a
+deliberately destabilizing learning rate produces a different result.
 
-> **Capacity gotcha.** On the default 3x `Standard_D4_v5` pool only about two
+> **Capacity limit.** On the default 3x `Standard_D4_v5` pool only about two
 > sweep jobs fit concurrently, and **a completed RayJob keeps its head and
-> worker pods `Running` — still occupying node CPU — until its TTL expires**.
+> worker pods `Running`, still occupying node CPU, until its TTL expires**.
 > A job can therefore report `SUCCEEDED` while continuing to consume the
 > cluster, so follow-on runs make no progress.
 >
 > This is because `shutdownAfterJobFinishes` and `ttlSecondsAfterFinished`
-> compose: the TTL is the *delay before* cleanup, not an independent knob.
+> compose: the TTL is the delay before cleanup, not an independent knob.
 > Tau now sets a 10-minute TTL, so finished runs release capacity on their own
 > shortly after completing. Previously it was 24 hours, which effectively
 > wedged small clusters
@@ -454,7 +484,7 @@ deliberately destabilizing LR produces visible separation on the charts.
 > kubectl delete rayjob <finished-run> -n taugrid-default --context "$CLUSTER"
 > ```
 >
-> Extract each run's Stellar data *before* deleting it (see below). Queueing
+> Extract each run's Stellar data before deleting it (see below). Queueing
 > behind *running* jobs is normal Kueue backpressure and is what the Kueue
 > board shows; queueing behind *finished* jobs is the TTL, not backpressure.
 
@@ -496,15 +526,15 @@ Stellar's hierarchy is **project -> experiment -> run**. The older `question`
 axis was folded into `experiment` by the expstore v1->v2 migration
 (`portal/internal/expstore/migrate.go`), so:
 
-* `taugrid-portal experiment init` takes `--description`, **not** `--question`.
+* `taugrid-portal experiment init` takes `--description`, not `--question`.
 * `taugrid-portal experiment track` takes neither `--question` nor
   `--experiment`; use `experiment experiments tag-run` to attach a run to an
   experiment.
 * In Python, pass `stellar.init(..., experiment="lr-sweep")`. The
   `question=`/`question_id=` keywords still work as deprecated aliases.
 
-> If `experiment init` rejects `--description` or demands `--question`, you are
-> running a **stale `taugrid-portal` binary** from before the migration. Build
+> If `experiment init` rejects `--description` or demands `--question`, this is a
+> **stale `taugrid-portal` binary** from before the migration. Build
 > from source and use that binary.
 
 ## Viewing Ray and Kueue dashboards
@@ -536,8 +566,7 @@ tau cluster install --context "$CLUSTER" \
   --set-string kueue.kueueViz.backend.env[0].value=http://portal.kueueviz.local
 ```
 
-Notes — most of these defaults are wrong for this setup, and each one fails
-in a way that looks like a bug but is not:
+This setup requires the following overrides:
 
 * **Namespace `tau` must pre-exist.** Nothing in the chart creates it.
 * **`portal.rbac.create` and `portal.serviceAccount.create` both default to
@@ -545,9 +574,8 @@ in a way that looks like a bug but is not:
   and the Jobs / Ray / Nodes boards return `503` with an RBAC error
   (`cannot list resource "services" at the cluster scope`). The chart's
   `values.yaml` documents this; it is expected behaviour, not a failure.
-* **`portal.jobs.namespace` defaults to `ray`.** Point it at the workspace
-  namespace you actually submit into (`taugrid-default` here) or the Jobs board is
-  empty.
+* **`portal.jobs.namespace` defaults to `ray`.** Set it to the target workspace
+  namespace (`taugrid-default` here). Otherwise, the Jobs board is empty.
 * **KueueViz Deployments land in the release namespace (`tau-system`)**, named
   `taugrid-kueue-kueueviz-{backend,frontend}`. The portal's kueueviz defaults
   point at `kueue-kueueviz-*` in `kueue-system`, so they must be overridden.
@@ -577,11 +605,10 @@ The Ray dashboard is only reachable **while the RayCluster is running**.
 
 ### Watching the dashboards during a run
 
-To see anything meaningful on Ray or Kueue mid-run you need (a) a run that
-trains for long enough (see `DEMO_MAX_SECONDS` above) and (b) more submitted
-work than the cluster can admit at once, so Kueue actually has something to
-schedule. On a 3x4-vCPU cluster, submitting `demo-live-run.yaml` plus three
-sweeps produces genuine contention:
+To observe Ray and Kueue during a run, use a run duration set by
+`DEMO_MAX_SECONDS` and submit more work than the cluster can admit
+simultaneously. On a 3x4-vCPU cluster, submit `demo-live-run.yaml` and three
+sweeps:
 
 ```bash
 tau run --config stellar-demo/demo-live-run.yaml --context "$CLUSTER"
@@ -590,13 +617,13 @@ for c in sweep-lr-low sweep-lr-high sweep-lr-extreme; do
 done
 ```
 
-The Kueue Live board then shows a real mix of `Admitted` and `Not admitted`
+The Kueue Live board then shows a mix of `Admitted` and `Not admitted`
 workloads, and the Ray job detail page streams live driver logs.
 
-Note that Stellar is **not** live in this example: `train.py` runs with
-`sync=False`, so metrics are written as append-only JSONL *inside the pod*. To
-inspect an in-flight run you must pull and re-import them (`kubectl cp` does not
-work here — use `exec ... -- cat`):
+Stellar does not stream metrics in this example. `train.py` runs with
+`sync=False`, so it writes append-only JSONL inside the pod. To inspect an
+active run, retrieve and import the file. `kubectl cp` does not work with this
+image; use `exec ... -- cat`:
 
 ```bash
 kubectl exec -n taugrid-default "$POD" --context "$CLUSTER" -- \
@@ -604,8 +631,8 @@ kubectl exec -n taugrid-default "$POD" --context "$CLUSTER" -- \
 taugrid-portal experiment import jsonl --store /tmp/store --history /tmp/history.jsonl ...
 ```
 
-That is real data, but it is a *pull*, not a stream. Ray and Kueue are
-genuinely live.
+The Ray and Kueue dashboards update during the run. Stellar data requires the
+retrieval step above.
 
 ## Caveats (known gaps in the supported flow)
 
@@ -618,17 +645,14 @@ Reason: OOMKilled`). There is no `tau run` CLI flag to override
 `compute.*` fields at submit time (see `docs/tau/tau-run-config.md`), so this
 quickstart keeps its own copy of the config
 ([`tau.yaml`](./tau.yaml)) with `compute.memory: 4Gi` instead of editing the
-shared example (which is used elsewhere and shouldn't have its defaults
-changed for this one cluster's needs).
+shared example, which has different resource requirements.
 
 ### Caveat 2: Stellar needs a PVC created out of band
 
 As of this repo's current chart, enabling `taugrid-core.stellar.enabled=true`
-creates the Stellar Deployment/Service, but does **not** create the PVC it
-mounts (`tau-stellar-expstore`) — the pod stays `Pending` until one exists.
-This is the one place this example needs a plain `kubectl` object creation
-(not a workaround for a missing `tau`/`helm` feature elsewhere, just a chart
-gap):
+creates the Stellar Deployment/Service, but does not create the PVC it
+mounts (`tau-stellar-expstore`); the pod stays `Pending` until one exists.
+Create the missing PVC with `kubectl`:
 
 ```bash
 kubectl apply -n tau -f - <<'EOF'
@@ -645,27 +669,27 @@ spec:
 EOF
 ```
 
-### Caveat 3: `stellar-demo/` proves live metrics; the shared demo does not
+### Caveat 3: `stellar-demo/` verifies live metrics; the shared demo does not
 
 Stellar is confirmed live and reachable in this quickstart. Whether it shows
 data depends entirely on whether the submitted training script calls the
 `tau.stellar` SDK:
 
-- The **shared** `cpu-multi-interest-ray/train.py` (used in step 5 above)
-  only prints to stdout — Stellar correctly shows "No experiments found yet"
+- The shared `cpu-multi-interest-ray/train.py` (used in step 5 above)
+  only prints to stdout. Stellar correctly shows "No experiments found yet"
   for that run. Treat the Ray dashboard/logs as the source of truth for that
   run's PyTorch evidence.
-- The **`stellar-demo/train.py`** script in this directory (see
-  [above](#proving-real-stellar-metrics-the-stellar-demo-script)) does call
+- The `stellar-demo/train.py` script in this directory (see
+  [above](#verifying-live-stellar-metrics-the-stellar-demo-script)) does call
   `tau.stellar`, and its metrics were confirmed rendering live in the actual
-  dashboard UI, not just via API — see
+  dashboard UI and API. See
   [Recorded evidence](#recorded-evidence).
 
 ### Caveat 4: resubmitting a completed RayJob does not restart it
 
-If you re-run `tau run --config ... ` against a workload that has already
-reached a terminal state (`SUCCEEDED`/`Complete`), Tau reports `configured`
-(an update), but KubeRay does **not** start a new run — the RayJob stays in
+Re-running `tau run --config ... ` against a workload that has already
+reached a terminal state (`SUCCEEDED`/`Complete`) makes Tau report `configured`
+(an update), but KubeRay does not start a new run: the RayJob stays in
 its old terminal state referencing its old (already-torn-down) RayCluster.
 To get a fresh run, delete it first and wait for full teardown before
 resubmitting:
@@ -685,7 +709,7 @@ container is ready. In both cases, poll `tau run status` /
 `kubectl get pod -n taugrid-default` until the job is `Running` (or the head pod is
 at least `1/2 Running`) before starting a follower or port-forward.
 
-### Caveat 6: `kubectl cp` fails on the Ray image — use `kubectl exec cat` instead
+### Caveat 6: `kubectl cp` fails on the Ray image: use `kubectl exec cat` instead
 
 The `mcr.microsoft.com/aks/ai-runtime/ray` image doesn't ship `tar` on
 `PATH`, and `kubectl cp` shells out to `tar` inside the target container to
@@ -700,7 +724,7 @@ process: exec: "tar": executable file not found in $PATH
 
 Retrieve individual files with `kubectl exec ... cat` instead (needs an
 explicit `sh -c` wrapper so the glob expands inside the container, not on
-your local shell):
+the local shell):
 
 ```bash
 POD=$(kubectl get pods -n taugrid-default \
@@ -717,77 +741,78 @@ done
 ## Recorded evidence
 
 Four recordings exist in this session's `files/evidence/` artifact log. Two
-are canonical and cover different halves of the story:
+are canonical and cover different parts of the demonstration:
 **`full_researcher_journey_demo_1080p.webm`** (one run, end to end) and
 **`taugrid_multi_experiment_demo_1080p.webm`** (a sweep plus the platform
-dashboards). The other two are earlier cuts kept only for history.
+dashboards). The other two are earlier versions kept only for history.
 
 0. **`taugrid_multi_experiment_demo_1080p.webm`** /
-   `..._report.html` (1920×1080, ~1m50s) — *canonical for the multi-run and
-   dashboard story*. A pure live-browser capture, no reconstruction: the
+   `..._report.html` (1920×1080, ~1m50s): canonical for the multi-run and
+   dashboard results. This is a live-browser capture with no reconstruction: the
    Stellar experiment chooser listing **two** experiments (`lr-sweep`,
    `schedule-study`), the `lr-sweep` dashboard where the deliberately
    unstable `lr-5e-2` arm starts at loss 8.06 and stays visibly worse than
    the other three, a switch into `schedule-study` (96 steps vs 48), then the
    in-cluster Observability Portal: **Fleet** (3/3 nodes, 0 GPUs),
    **Kueue → Scheduler** (2 admitted on `jobqueue`), **Kueue → Live** (the
-   upstream KueueViz dashboard reverse-proxied over a live WebSocket —
+   upstream KueueViz dashboard reverse-proxied over a live WebSocket:
    1 LocalQueue / 3 Workloads / 1 Completed, with a workload in
    `QuotaReserved`), and **Ray** (3 RayClusters auto-discovered from their
-   `-head-svc` Services). Playback is a uniform 2× speed-up and segments
+   `-head-svc` Services). Playback runs at a uniform 2× speed, and segments
    spent on empty or not-yet-implemented boards were cut; nothing was
-   synthesised or re-ordered. The Ray Dashboard itself opens in a new tab so
-   it is *not* in this recording — see the report for what was verified
+   synthesized or reordered. The Ray Dashboard opens in a new tab, so
+   it is not in this recording. See the report for what was verified
    separately. Reproduce it with the [sweep](#running-a-sweep-multiple-experiments)
    and [dashboard](#viewing-ray-and-kueue-dashboards) sections above.
-1. **`full_researcher_journey_demo_1080p.webm`** (1920×1080, ~2m7s) —
-   *canonical for the single-run journey*. Seven acts: title, a recap of the Copilot prompt that
-   started this engineering session, a real code review of
-   `stellar-demo/train.py` and `tau.yaml` pulled directly from this repo,
-   the **free `--dry-run=client` validation step** ([Step 0](#0-validate-the-configs-before-spending-money-no-cluster-required)),
-   the **cost-and-time breakdown** ([Cost and time](#cost-and-time)), an
-   animated terminal replay built from 100% real, unedited `tau` CLI output
+1. **`full_researcher_journey_demo_1080p.webm`** (1920×1080, ~2m7s):
+   canonical for the single-run journey. It has seven segments: title, a
+   recap of the Copilot prompt that started this engineering session, a
+   code review of `stellar-demo/train.py` and `tau.yaml` pulled directly
+   from this repo, the `--dry-run=client` validation step
+   ([Step 0](#0-validate-the-configs-before-spending-money-no-cluster-required)),
+   the cost-and-time breakdown ([Cost and time](#cost-and-time)), an
+   animated terminal replay built from unedited `tau` CLI output
    (`tau run --config`, `tau run status --watch`, `tau run logs`),
    fast-forwarded through the Kueue admission/scheduling wait, then a live
-   auto-navigation into the still-running Stellar dashboard proxying the
-   real experiment store — showing the genuine converging Train loss and
-   `train/pairwise_accuracy` charts (48/48 real points) and the real
-   config/artifacts drill-down described above. Every act carries an
-   on-screen provenance badge (`recreated UI · real prompt text`,
-   `real file contents`, `real command output`, `live dashboard`) so a
-   viewer can tell reconstruction from capture without reading these notes.
+   navigation into the still-running Stellar dashboard proxying the
+   real experiment store, showing the converging Train loss and
+   `train/pairwise_accuracy` charts (48/48 points) and the
+   config/artifacts drill-down described above. Every segment carries a
+   provenance label (`recreated UI · real prompt text`,
+   `real file contents`, `real command output`, `live dashboard`) that
+   identifies which parts are reconstructed and which are captured.
    Source page: `full_researcher_journey_demo_1080p_source.html`.
 2. **`full_researcher_journey_demo.webm`** / `..._report.html` (1280×720,
-   ~2m9s) — the previous cut. Same story, but only five acts (no dry-run or
-   cost act), and the frame has a grey pillar strip down the right edge.
-   Superseded by (1).
-3. **`stakeholder_demo_video.webm`** / `stakeholder_demo_report.html` — an
+   ~2m9s): the previous version. Same content, but only five segments (no
+   dry-run or cost segment), and the frame has a grey pillar strip down the
+   right edge. Superseded by (1).
+3. **`stakeholder_demo_video.webm`** / `stakeholder_demo_report.html`: an
    earlier, simpler walkthrough from before the Stellar SDK integration was
-   proven; superseded by (1) for the Stellar-metrics claim, kept for the
+   verified. Superseded by (1) for the Stellar-metrics claim; kept for the
    original Ray-dashboard/`tau run` walkthrough it also covers.
 
-**What is *not* live capture, stated plainly**: Act 1 (the Copilot prompt)
-is a recreated UI showing the real prompt text — no computer-use tool was
-available to record the actual Copilot conversation. The terminal in acts
-3–5 is a typewriter animation replaying real captured stdout, not a live
-`tty` recording. Everything from the Stellar dashboard onward is an
-unscripted live browser session against a real, running server.
+**What is not a live capture:** Segment 1 (the Copilot prompt) is a recreated
+UI showing the real prompt text. No computer-use tool was available to
+record the actual Copilot conversation. The terminal in segments 3–5 is a
+typewriter animation replaying real captured stdout, not a live `tty`
+recording. Everything from the Stellar dashboard onward is an unscripted
+live browser session against a real, running server.
 
-**Transparency note on tooling used to produce these recordings**: the demo
-page itself, the local HTTP server used to view it, `ffmpeg`/`ffprobe` (for
-video inspection), and the browser-automation tool (`shiplight`) used to
-drive and record the session are all **demo/visualization production
-tooling**, run entirely outside and after the actual infra/platform path.
-They never touched cluster creation, TauGrid installation, or workload
-submission — those steps used only `az`/`tau`/`kubectl` as required. Viewing
-the retrieved Stellar experiment store locally used `taugrid-portal
-experiment serve`, one of this repo's own two Go binaries (built the same
-way as `tau`), not a new external tool.
+**Tooling used to produce these recordings:** the demo page itself, the
+local HTTP server used to view it, `ffmpeg`/`ffprobe` (for video
+inspection), and the browser-automation tool (`shiplight`) used to drive
+and record the session are demo/visualization production tooling, run
+outside and after the actual infra/platform path. They did not touch
+cluster creation, TauGrid installation, or workload submission. Those
+steps used only `az`/`tau`/`kubectl` as required. Viewing the retrieved
+Stellar experiment store locally used `taugrid-portal experiment serve`,
+one of this repo's own two Go binaries (built the same way as `tau`), not
+a new external tool.
 
 ## Cleanup
 
-Delete resources in this order once you've captured whatever evidence you
-need — the workloads and workspace first, then TauGrid, then the whole
+Delete resources in this order after capturing the needed evidence: the
+workloads and workspace first, then TauGrid, then the whole
 resource group (fastest full teardown since everything created by this
 example lives in that one dedicated RG):
 
@@ -811,21 +836,21 @@ az group delete --name taugrid-cpu-quickstart-rg --yes --no-wait
 Two things to expect during teardown, both harmless here:
 
 - `tau run cancel` may print `signal: killed` from an internal Kueue-workload
-  wait step *after* it has already deleted the RayJob. Verify the real outcome
+  wait step after it has already deleted the RayJob. Verify the real outcome
   with `kubectl get rayjob -n taugrid-default` (should be empty) rather than trusting
   the exit code alone.
 - `tau cluster uninstall` can leave three cluster-scoped Kueue objects
   (`ClusterQueue/jobqueue`, `ResourceFlavor/taugrid-default`,
   `Topology/default-node-topology`) stuck `Terminating` with an orphaned
   `kueue.x-k8s.io/resource-in-use` finalizer, if its first phase could not
-  remove them while Kueue was still running — for example when the chart
+  remove them while Kueue was still running, for example when the chart
   reference cannot be resolved. Uninstall reports that when it happens and
   prints the recovery commands. Since the next command destroys the entire
-  cluster, it does not matter here — but it *would* matter if you were
-  uninstalling TauGrid from a cluster you intended to keep.
+  cluster, it does not matter here, but it would matter when
+  uninstalling TauGrid from a cluster intended to remain.
 
-Confirm the resource group is really gone (this is the step that actually stops
-the billing):
+Confirm that the resource group is deleted. Resource group deletion stops
+billing:
 
 ```bash
 az group show --name taugrid-cpu-quickstart-rg   # expect: ResourceGroupNotFound
@@ -836,7 +861,7 @@ az group show --name taugrid-cpu-quickstart-rg   # expect: ResourceGroupNotFound
 [`run.sh`](./run.sh) and [`cleanup.sh`](./cleanup.sh) execute exactly the
 commands documented above, in order, with `set -euo pipefail` and an echo of
 each command before it runs. They contain **no logic beyond sequencing** and
-invoke only `az`, `tau`, and `kubectl` — they exist to remove copy-paste error,
+invoke only `az`, `tau`, and `kubectl`. They exist to remove copy-paste error,
 not to hide any tool. Read them before running them.
 
 ```bash
@@ -847,38 +872,17 @@ not to hide any tool. Read them before running them.
 Both are idempotent enough to re-run: `run.sh` skips cluster creation if the
 cluster already exists, and `cleanup.sh` tolerates already-deleted resources.
 
-### Caveat 7: `runtime.pip` cannot install `torch` yet
+### Caveat 7: `runtime.pip` installs under a non-root runtime
 
-`tau.yaml` lists `torch>=2.4.0` under `runtime.pip`. On `main` the RayJob
-entrypoint runs a bare `pip install --quiet --no-cache-dir ${PIP_PACKAGES}`
-with no fallback, and that install fails before `train.py` is reached:
+The pinned Ray images run as uid 65532 and their system `site-packages` is
+root-owned. Tau first attempts the normal install, then retries with
+`pip install --user` when the system path is not writable and prepends the
+matching user-site `bin` directory to `PATH`. This supports packages such as
+`torch` that install console scripts as well as Python modules.
 
-```
-$ docker run --rm --platform linux/amd64 \
-    mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0 \
-    sh -c 'id; pip install --quiet --no-cache-dir "PyYAML>=6.0" "torch>=2.4.0"'
-uid=65532(nonroot) gid=65532(nonroot)
-ERROR: Could not install packages due to an OSError: [Errno 13]
-Permission denied: '/usr/lib/python3.12/site-packages/nvidia'
-```
-
-The image does not ship `torch`, and `torch` pulls `nvidia-*` wheels, so pip
-must **create** `site-packages/nvidia` inside a `drwxr-xr-x root root`
-directory while running as uid 65532. Despite the path name this is not
-CUDA-specific — it reproduces on the plain CPU image shown above.
-
-Note that `PyYAML>=6.0` on its own succeeds, because it is already present and
-pip writes nothing. A partial reproduction therefore looks green; `torch` is
-the package that fails.
-
-[#1294] fixes this with a `pip install --user` fallback plus the matching
-`PATH` export. Until it merges, bake `torch` into a custom `runtime.image` and
-drop it from `runtime.pip`.
-
-This blocks the `stellar-demo/` sweep configs too — all six list
-`torch>=2.4.0`, and `stellar-demo/train.py` imports `torch` directly.
-
-[#1294]: https://github.com/Azure/taugrid/pull/1294
+The fallback cannot compensate for a node with no package-index egress. In
+that environment, use a platform-approved image with its dependencies already
+installed.
 
 ## Non-goals
 

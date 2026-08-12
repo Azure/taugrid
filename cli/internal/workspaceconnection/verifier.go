@@ -53,6 +53,27 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			workspace.Metadata.Generation,
 		)
 	}
+	workspaceAuthorizationMode := tauworkspace.AuthorizationModeWorkspaceRBAC
+	if workspace.Spec.Authorization != nil && strings.TrimSpace(workspace.Spec.Authorization.Mode) != "" {
+		workspaceAuthorizationMode = strings.TrimSpace(workspace.Spec.Authorization.Mode)
+	}
+	if workspaceAuthorizationMode != descriptor.Authorization.Mode {
+		return Verification{}, fmt.Errorf(
+			"workspace connection authorization mode %q does not match TauWorkspace %q mode %q",
+			descriptor.Authorization.Mode,
+			descriptor.Workspace,
+			workspaceAuthorizationMode,
+		)
+	}
+	if workspaceAuthorizationMode == AuthorizationModeWorkspaceRBAC &&
+		strings.TrimSpace(workspace.Spec.Role) != descriptor.Authorization.RequiredRole {
+		return Verification{}, fmt.Errorf(
+			"workspace connection required role %q does not match TauWorkspace %q role %q",
+			descriptor.Authorization.RequiredRole,
+			descriptor.Workspace,
+			strings.TrimSpace(workspace.Spec.Role),
+		)
+	}
 	serviceAccount := ""
 	if workspace.Spec.WorkloadIdentity != nil {
 		serviceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
@@ -88,9 +109,20 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	}{
 		{verb: "create", resource: "jobs.batch", namespace: namespace},
 		{verb: "get", resource: "jobs.batch", namespace: namespace},
+		{verb: "list", resource: "jobs.batch", namespace: namespace},
+		{verb: "patch", resource: "jobs.batch", namespace: namespace},
+		{verb: "delete", resource: "jobs.batch", namespace: namespace},
+		{verb: "create", resource: "rayjobs.ray.io", namespace: namespace},
+		{verb: "get", resource: "rayjobs.ray.io", namespace: namespace},
+		{verb: "list", resource: "rayjobs.ray.io", namespace: namespace},
+		{verb: "patch", resource: "rayjobs.ray.io", namespace: namespace},
+		{verb: "delete", resource: "rayjobs.ray.io", namespace: namespace},
 		{verb: "get", resource: "pods", namespace: namespace},
+		{verb: "list", resource: "pods", namespace: namespace},
 		{verb: "get", resource: "pods/log", namespace: namespace},
 		{verb: "get", resource: "localqueues.kueue.x-k8s.io", namespace: namespace},
+		{verb: "get", resource: "workloads.kueue.x-k8s.io", namespace: namespace},
+		{verb: "list", resource: "workloads.kueue.x-k8s.io", namespace: namespace},
 	}
 	for _, check := range checks {
 		output, err := runner.Raw(ctx, []string{

@@ -5,12 +5,18 @@ weight: 2
 description: Validate subscription access, quota, cost controls, and choose an AKS provisioning path
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-08-11" >}}
 
 An Azure subscription is the first shared surface for an AKS-backed Tau
 environment. Tau does not create or govern the subscription. A platform owner
 prepares it with approved Azure tooling, provisions or selects an AKS cluster,
 and then enables Tau inside that cluster.
+
+This page covers **AKS setup**, the Azure/provider side of the boundary. It
+does not install Kueue, KubeRay, Tau controllers, queue policy, workspaces,
+Kubernetes RBAC, or workload objects. Those belong to
+[Kubernetes/TauGrid setup](../prerequisites/#aks-setup-versus-kubernetestaugrid-setup)
+after the AKS handoff gate passes.
 
 The subscription gate is the same whether the cluster is created with
 Terraform, Bicep, an ARM JSON template, Azure Developer CLI (`azd`), Azure CLI,
@@ -215,27 +221,31 @@ presented as a generic one-command Tau installer.
 
 ### Azure CLI or portal
 
-CLI and portal are useful for learning the Azure resource shape. They are not
-an excuse to leave a durable environment without an owner or reproducible
+CLI and portal are useful for learning the Azure resource shape. After using
+them, do not leave a durable environment without an owner or reproducible
 configuration. After validating a sandbox, move the accepted settings into the
 team's Terraform, Bicep/ARM, or platform pipeline.
 
-## 5. Require the same output contract from every path
+## 5. Require the same AKS handoff contract from every path
 
-Before Tau enablement, record these non-secret values:
+Before Kubernetes/TauGrid enablement, record these non-secret values. Rows
+marked **AKS** must exist at the provider handoff. Rows marked
+**Kubernetes/TauGrid** are created or confirmed after that handoff.
 
-| Output | Why Tau onboarding needs it |
-|---|---|
-| Subscription ID and tenant ID | Select the Azure authority and authenticate the researcher connection |
-| Region | Check SKU availability, quota, data locality, and cost |
-| AKS resource group and cluster name | Acquire cluster-user credentials and identify the platform owner |
-| Private-cluster and network access requirements | Explain how researchers reach the Kubernetes API |
-| OIDC issuer and workload-identity status | Federate workload ServiceAccounts without stored credentials |
-| Registry hostname and image ownership | Resolve immutable workload images and pull authorization |
-| StorageClass and durable storage owner | Back the workspace PVC and `/data` contract |
-| Kueue ClusterQueue owner | Supply quota and admission policy referenced by each workspace |
-| Monitoring and evidence endpoints | Route operational and experiment telemetry intentionally |
-| IaC repository, state/deployment record, and cleanup owner | Make updates, rollback, and teardown reproducible |
+| Layer | Output | Why Tau onboarding needs it |
+|---|---|---|
+| AKS | Subscription ID and tenant ID | Select the Azure authority and authenticate the researcher connection |
+| AKS | Region | Check SKU availability, quota, data locality, and cost |
+| AKS | AKS resource group and cluster name | Acquire cluster-user credentials and identify the platform owner |
+| AKS | Managed Entra and AKS authorization mode | Ensure normal cluster-user credentials and workspace authorization can work |
+| AKS | Private-cluster and network access requirements | Explain how operators and researchers reach the Kubernetes API |
+| AKS | OIDC issuer and workload-identity status | Federate workload ServiceAccounts without stored credentials |
+| AKS | Registry hostname and image ownership | Resolve immutable workload images and pull authorization |
+| AKS | Azure storage service, identity, network path, and CSI driver owner | Supply the provider capability behind Kubernetes storage |
+| Kubernetes/TauGrid | StorageClass, PVC, and durable storage owner | Back the workspace `/data` contract |
+| Kubernetes/TauGrid | Kueue ClusterQueue owner | Supply quota and admission policy referenced by each workspace |
+| Kubernetes/TauGrid | Monitoring and evidence endpoints | Route operational and experiment telemetry intentionally |
+| AKS | IaC repository, state/deployment record, and cleanup owner | Make Azure updates, rollback, and teardown reproducible |
 
 For an existing cluster, inspect the Azure identity features before continuing:
 
@@ -248,9 +258,22 @@ az aks show \
   --output yaml
 ```
 
-## 6. Continue from Azure infrastructure to Tau
+## 6. End AKS setup; begin Kubernetes/TauGrid setup
 
-An AKS cluster is not yet a Tau-enabled cluster. Continue with:
+AKS setup is complete only when:
+
+- the intended subscription, tenant, region, resource group, and AKS resource
+  are recorded;
+- a normal managed-Entra cluster-user identity can obtain credentials and reach
+  the API through the required network path;
+- required node pools are `Ready`, with provider GPU and CSI capabilities
+  enabled when the target workloads need them; and
+- Azure quota, identity, registry, storage, cost, and cleanup ownership are
+  explicit.
+
+An AKS cluster that passes that provider gate is still not a Tau-enabled
+cluster. Everything below is Kubernetes/TauGrid setup performed through the
+Kubernetes API:
 
 1. [Prerequisites and setup readiness](../prerequisites/) to install and
    validate Kueue, KubeRay when needed, storage, GPU support, and the

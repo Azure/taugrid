@@ -4,7 +4,7 @@ weight: 5
 description: Local-first run packets with optional hosted scalar projections
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau treats durable evidence as part of the workflow contract:
 

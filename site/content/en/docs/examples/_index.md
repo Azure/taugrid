@@ -5,12 +5,11 @@ weight: 25
 description: Choose a runnable Tau, Kueue, Ray, or AKS example by learning goal and prerequisite cost.
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
-
 Choose an example by the question you want to answer:
 
 | Goal | Example | Interface | Compute | Start here |
 |---|---|---|---|---|
+| Run repository-first GPU HPO and verify six Tune trials | Ray Tune smoke on AKS | Tau-first | One or more NVIDIA GPUs | [Run GPU Ray Tune HPO](gpu-ray-tune/) |
 | See queue admission and borrowing without GPU quota | CPU queueing | Raw KubeRay and Kueue YAML | CPU | [Explore CPU queueing](cpu-queueing/) |
 | Build a complete AKS, Kueue, and Ray baseline | Modular cluster deployment | Terraform, Helm, and kubectl | CPU or A100 GPU | [Provision the platform baseline](full-cluster/) |
 

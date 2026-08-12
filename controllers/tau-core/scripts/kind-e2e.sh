@@ -231,7 +231,7 @@ fi
 
 kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 
-# --- Mock Kueue CRDs -------------------------------------------------------
+# --- Mock workload CRDs ----------------------------------------------------
 #
 # LocalQueue is served in BOTH v1beta1 and v1beta2: the controller's own
 # queueStatus()/clusterQueueGPUQuota() (internal/controller/workspace_controller.go)
@@ -239,7 +239,9 @@ kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 # LocalQueue at v1beta2 (matching the production Kueue API). Both
 # schemas are intentionally x-kubernetes-preserve-unknown-fields so the
 # default "None" conversion strategy is a lossless passthrough between them.
-cat >"${SCRATCH_DIR}/mock-kueue-crds.yaml" <<'YAML'
+# RayJob is present so the researcher connection verifier can prove that the
+# workspace role covers every workload type supported by the Tau CLI.
+cat >"${SCRATCH_DIR}/mock-workload-crds.yaml" <<'YAML'
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -309,8 +311,29 @@ spec:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: rayjobs.ray.io
+spec:
+  group: ray.io
+  names:
+    kind: RayJob
+    listKind: RayJobList
+    plural: rayjobs
+    singular: rayjob
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
 YAML
-kubectl apply -f "${SCRATCH_DIR}/mock-kueue-crds.yaml"
+kubectl apply -f "${SCRATCH_DIR}/mock-workload-crds.yaml"
 
 # --- Establish the Tau APIs before applying the same full kustomization ArgoCD
 # applies. kubectl's RESTMapper cannot discover a CRD and its TauCluster
@@ -727,15 +750,22 @@ JSON
 # non-interactive path.
 if ! (
   cd "${tau_home}"
-  script -q -c \
+  script -q -e -c \
     "env HOME='${tau_home}/home' TAU_CONFIG_DIR='${tau_home}/tau-config' '${tau_home}/tau-bin' run train --dry-run=client" \
     /dev/null
 ) >"${tau_home}/verified-train.yaml"; then
   cat "${tau_home}/verified-train.yaml" >&2
   exit 1
 fi
-grep -q "name: project-train" "${tau_home}/verified-train.yaml"
-grep -q "kueue.x-k8s.io/queue-name: <unresolved-queue>" "${tau_home}/verified-train.yaml"
+for expected in \
+  "name: project-train" \
+  "kueue.x-k8s.io/queue-name: <unresolved-queue>"; do
+  if ! grep -qF "${expected}" "${tau_home}/verified-train.yaml"; then
+    echo "client dry-run output is missing: ${expected}" >&2
+    cat "${tau_home}/verified-train.yaml" >&2
+    exit 1
+  fi
+done
 
 kubectl -n "${TARGET_NAMESPACE}" delete jobs.batch \
   -l tau.azure.com/onboarding-smoke=true \

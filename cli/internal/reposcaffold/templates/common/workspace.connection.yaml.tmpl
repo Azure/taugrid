@@ -7,7 +7,8 @@ cluster:
 identity:
   tenantID: {{.AzureTenantID}}
 authorization:
-  mode: cluster-wide
+  mode: {{.AuthorizationMode}}
+  requiredRole: {{.RequiredRole}}
 requirements:
   minTauVersion: {{.MinTauVersion}}
 network:

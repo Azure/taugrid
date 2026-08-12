@@ -1,27 +1,80 @@
 ---
 title: Install Tau
 weight: 1
-description: Install the Tau CLI and optional Python SDK
+description: Install and verify the Tau CLI, then optionally add the Python SDK
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-08-12" >}}
 
 Tau consists of the Go `tau` CLI and an optional Python SDK package also
 imported as `tau`. The CLI is the canonical Kubernetes executor.
 
-## Install from a source checkout
+## Install the current CLI
+
+No GitHub Release is published. Install the CLI from source. Install Git and
+the Go version declared in `cli/go.mod`, then run:
 
 ```bash
 git clone https://github.com/Azure/taugrid.git
 cd taugrid
-make -C cli install
+make install-tau-cli
+
+TAU_BIN_DIR="$(go env GOBIN)"
+test -n "$TAU_BIN_DIR" || TAU_BIN_DIR="$(go env GOPATH)/bin"
+export PATH="$TAU_BIN_DIR:$PATH"
+
+command -v tau
+tau version --short
+tau --help >/dev/null
+```
+
+The Make target installs `tau` and `tau-gen` into `GOBIN`, or `GOPATH/bin` when
+`GOBIN` is unset. It warns if another binary takes precedence on `PATH`. Add the
+`export PATH=...` line to the shell startup file, such as `~/.profile`,
+`~/.bashrc`, or `~/.zshrc`, so later terminals resolve the same binary.
+
+A checkout build reports `dev` from `tau version --short`. `tau version` also
+prints the source commit and build date. Pin and record the validated source
+commit. To upgrade that installation:
+
+```bash
+git pull --ff-only
+make install-tau-cli
 tau version
 ```
 
-This installs `tau` and `tau-gen` into the active Go binary directory. Ensure
-that directory is on `PATH`.
+## Install a published release
 
-The Python SDK is optional — only `tau python` and the `@tau.train()` decorator
+When a version is published on the
+[GitHub Releases page](https://github.com/Azure/taugrid/releases), install that
+specific version for a reproducible user environment:
+
+```bash
+TAU_VERSION="<published-vX.Y.Z>"
+curl -fsSL \
+  "https://github.com/Azure/taugrid/releases/download/$TAU_VERSION/install.sh" |
+  TAU_VERSION="$TAU_VERSION" sh
+
+export PATH="$HOME/.local/bin:$PATH"
+command -v tau
+tau version --short
+```
+
+Do not substitute an unpublished version. The release installer supports Linux
+and macOS on amd64 and arm64, detects the current platform, downloads the
+matching binary, verifies it against the release's `SHA256SUMS`, checks that the
+binary reports the requested version, and only then installs it to
+`$HOME/.local/bin` without sudo. It installs the MIT license to
+`$HOME/.local/share/doc/tau/LICENSE`. Override these destinations with
+`TAU_INSTALL_DIR` and `TAU_LICENSE_DIR`.
+
+Run the command with a newer published `TAU_VERSION` to upgrade. Release assets
+also include `tau-gen`. The installer installs only the researcher-facing
+`tau` binary.
+
+## Install the optional Python SDK
+
+The Python SDK is optional. Only `tau python` and the `@tau.train()` decorator
 need it. On Debian and Ubuntu (Python 3.11 and later) the system interpreter is
 marked externally managed under [PEP 668](https://peps.python.org/pep-0668/) and
 pip refuses to install into it. `make install-tau` reports that as a skip and
@@ -41,36 +94,6 @@ make -C sdk/python/python install PYTHON=~/.venvs/tau/bin/python
 
 `tau python` resolves `python3` from `PATH`, so activate the virtual environment
 before using it.
-
-## Install the released CLI
-
-On Linux and macOS (amd64 or arm64), install the latest release without sudo:
-
-```bash
-curl -fsSL https://github.com/Azure/taugrid/releases/latest/download/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-tau version --short
-```
-
-The installer detects the current platform, downloads the matching binary,
-verifies it against the release's `SHA256SUMS`, and installs it to
-`$HOME/.local/bin`. It installs the MIT license to
-`$HOME/.local/share/doc/tau/LICENSE`. Override these destinations with
-`TAU_INSTALL_DIR` and `TAU_LICENSE_DIR`.
-
-To install a specific release:
-
-```bash
-curl -fsSL https://github.com/Azure/taugrid/releases/download/v0.1.3/install.sh |
-  TAU_VERSION=v0.1.3 sh
-```
-
-Tau releases publish `tau-{darwin,linux}-{amd64,arm64}`,
-`tau-gen-{darwin,linux}-{amd64,arm64}` (the standalone repo scaffold
-generator), `install.sh`, `LICENSE`, and `SHA256SUMS`. You can also download
-what you need plus the checksum file from the same
-[GitHub Release](https://github.com/Azure/taugrid/releases),
-verify the checksum, and install the binary on `PATH`.
 
 The Python SDK is installed from the same tagged source revision; releases do
 not currently contain Python wheels.

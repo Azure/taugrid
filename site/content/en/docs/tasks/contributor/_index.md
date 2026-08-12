@@ -5,8 +5,6 @@ weight: 4
 description: Extend Tau and its integrations
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
-
 - [Make a compatible change](change/)
 - Review [portable and provider boundaries](../../overview/provider-boundaries/)
 - Follow the [release contract](../../reference/releases/)

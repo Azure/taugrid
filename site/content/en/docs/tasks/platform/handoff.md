@@ -4,7 +4,7 @@ weight: 2
 description: The concrete, non-secret artifact and proof that ends platform Day 0
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Complete this checklist after the
 [TauWorkspace readiness gate](../../getting-started/prerequisites/#tauworkspace-readiness-gate)

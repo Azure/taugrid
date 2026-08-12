@@ -4,7 +4,7 @@ weight: 2
 description: Immediate lifecycle, durable experiment state, and fleet telemetry
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Use each evidence plane for its intended scope:
 

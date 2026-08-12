@@ -4,7 +4,7 @@ weight: 1
 description: How repository, project, workspace, target, run, workload, and experiment relate
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Full definitions for these terms live in the [glossary](../glossary/). This
 page only explains how they relate and who owns what.

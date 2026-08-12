@@ -4,7 +4,7 @@ weight: 3
 description: Governance for two separately maintained documentation surfaces
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 The Tau documentation site and GitHub Wiki are both maintained as complete
 surfaces. They are edited separately, so semantic parity is a human ownership

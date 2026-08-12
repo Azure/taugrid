@@ -5,7 +5,7 @@ weight: 30
 description: Build a modular AKS, Kueue, Ray, storage, and workload baseline before adding Tau policy.
 ---
 
-{{< maturity status="experimental" reviewed="2026-07-16" >}}
+{{< maturity status="alpha" reviewed="2026-07-16" >}}
 
 The `kueue-and-ray-on-aks` example is a three-module platform tutorial:
 

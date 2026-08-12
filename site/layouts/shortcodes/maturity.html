@@ -1,9 +1,25 @@
 <!-- Copyright (c) Microsoft Corporation.
      Licensed under the MIT License. -->
 
-{{- $status := .Get "status" | default "shipped" -}}
+{{- $requestedStatus := lower (.Get "status" | default "ga") -}}
+{{- $aliases := dict
+  "shipped" "ga"
+  "experimental" "alpha"
+  "implementing" "alpha"
+  "future" "planned"
+-}}
+{{- $status := default $requestedStatus (index $aliases $requestedStatus) -}}
+{{- $labels := dict
+  "alpha" "Alpha"
+  "beta" "Beta"
+  "ga" "GA"
+  "deprecated" "Deprecated"
+  "planned" "Planned"
+-}}
+{{- $label := default (upper $status) (index $labels $status) -}}
 {{- $reviewed := .Get "reviewed" | default "unknown" -}}
-<aside class="tau-maturity tau-maturity--{{ $status | anchorize }}" aria-label="Documentation maturity">
-  <strong>{{ $status | upper }}</strong>
-  <span>Last reviewed {{ $reviewed }}</span>
+<aside class="tau-maturity tau-maturity--{{ $status | anchorize }}" aria-label="Capability maturity: {{ $label }}">
+  <span class="tau-maturity__prefix">Feature state:</span>
+  <strong class="tau-maturity__status">{{ $label }}</strong>
+  <span class="tau-maturity__reviewed">Reviewed {{ $reviewed }}</span>
 </aside>

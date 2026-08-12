@@ -6,8 +6,6 @@ description: Complete workflows organized by Tau persona
 no_list: true
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
-
 ## Researcher
 
 A researcher authors and runs workloads. Start with [Run your first target](researcher/first-run/).

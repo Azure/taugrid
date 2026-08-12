@@ -4,8 +4,6 @@ weight: 1
 description: Tau's purpose, value, and explicit boundaries
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
-
 Tau turns checked-in workload intent into policy-aware Kubernetes Jobs or
 KubeRay RayJobs and provides one lifecycle surface for the resulting run.
 

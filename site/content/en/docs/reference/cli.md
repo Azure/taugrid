@@ -4,7 +4,7 @@ weight: 1
 description: Canonical Tau command families
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau has exactly seven public command roots. Every example in this site uses
 one of these roots and its current nested subcommand path:

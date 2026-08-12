@@ -4,7 +4,7 @@ weight: 6
 description: Separate human Kubernetes authorization from workload cloud identity
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Tau platforms answer two different questions:
 
@@ -23,6 +23,7 @@ storage account, or cloud RBAC assignment.
 controller binds the researcher subject in the workspace namespace.
 `cluster-wide` is an explicit opt-out that grants no researcher access, leaving
 the workspace to supply routing defaults only; some existing clusters run that
-way. What remains future is multi-workspace activation -- v0 activates exactly
-one workspace per cluster and blocks any additional one -- plus the
-negative-access and production rollout gates for researcher isolation.
+way. The [multiple-workspace lifecycle](../workspaces/#multiple-workspaces) is
+Alpha: v0 activates one workspace and blocks additional workspace objects until
+the active workspace is removed. Researcher isolation still requires its
+negative-access and production rollout gates.

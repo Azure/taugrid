@@ -4,7 +4,7 @@ weight: 2
 description: Render, deploy, inspect, and remove an online endpoint
 ---
 
-{{< maturity status="shipped" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 `tau serve` turns a project-owned image and optional durable checkpoint into a
 [service](../../concepts/glossary/#service). Choose:

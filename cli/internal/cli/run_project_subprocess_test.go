@@ -411,7 +411,7 @@ func installFakeRoutingKubectl(t *testing.T, namespace string) {
 	script := fmt.Sprintf(`#!/bin/sh
 case " $* " in
   *" get workspace.tau.azure.com sample "*|*" get workspaces.tau.azure.com sample "*)
-    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue"}}}'
+    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
     printf '%%s\n' 'localqueue.kueue.x-k8s.io/jobqueue'
@@ -460,7 +460,7 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) {
 		"kubeconfig_path":      kubeconfigPath,
 		"namespace":            namespace,
 		"queue":                "jobqueue",
-		"required_role":        "",
+		"required_role":        descriptor.Authorization.RequiredRole,
 		"descriptor_path":      descriptorPath,
 		"descriptor_digest":    digest,
 		"workspace_revision":   "1",
