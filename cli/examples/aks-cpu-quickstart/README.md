@@ -283,10 +283,9 @@ does not require ADX/Kusto:
 #     https://mcr.microsoft.com/v2/aks/ai-runtime/taugrid-portal/tags/list
 #
 # NOTE: the chart takes a tag only. templates/stellar.yaml renders
-# "{{ .repository }}:{{ .tag }}" and has no digest support, so a digest cannot
-# be pinned here even though AGENTS.md prefers one. Use a short-SHA tag, which
-# is immutable in practice, and verify it resolves before installing.
-STELLAR_TAG="fa495d944a33"
+# "{{ .repository }}:{{ .tag }}" and has no digest support. Use the release tag
+# matching the taugrid-core chart and verify it resolves before installing.
+STELLAR_TAG="0.2.4"
 
 # Preflight the public consumer path: fail here, not 5 minutes into a rollout.
 curl --fail --silent --show-error --output /dev/null \
@@ -305,10 +304,9 @@ tau cluster install \
   --wait --timeout 8m
 ```
 
-> **Note:** `fa495d944a33` resolved from public MCR to
-> `sha256:976a4f0c5da7d9284c99a2814b542da17d9cd0a3c6a610249d996ec6481c4ead`
-> when this example was written. If the preflight fails, use the discovery
-> command above to choose a current immutable tag.
+> **Note:** this release tag must be published to MCR before the chart is used.
+> If the preflight fails, wait for MCR syndication or choose another published
+> chart and matching image release.
 
 See [Caveat 2](#caveat-2-stellar-needs-a-pvc-created-out-of-band) for the one
 manual `kubectl` step this currently needs.

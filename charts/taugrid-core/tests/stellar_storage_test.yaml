@@ -18,7 +18,6 @@ tests:
       stellar.enabled: true
       stellar.source: kusto
       stellar.workspace: sample
-      stellar.image.tag: pinned
       stellar.kusto.metricsFile: /tmp/metrics.json
     asserts:
       - hasDocuments:
@@ -28,7 +27,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:pinned
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.2.4
         documentIndex: 0
       - isNull:
           path: spec.template.spec.volumes

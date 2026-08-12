@@ -46,17 +46,17 @@ render `/bin/sh -lc` for this image.
 
 1. Build and push the multi-arch image to the backing repository configured by
    the local Makefile.
-2. Verify the pushed short-SHA image with `docker buildx imagetools inspect` as
+2. Verify the pushed source image with `docker buildx imagetools inspect` as
    part of `the release pipeline`.
-3. Confirm the same short-SHA tag is available from
-   `mcr.microsoft.com/aks/ai-runtime/taugrid-portal:<short-sha>`.
-4. Pin downstream manifests to that MCR short-SHA tag or its immutable digest.
+3. Publish the tag matching the `taugrid-core` chart version and confirm it is
+   available from `mcr.microsoft.com/aks/ai-runtime/taugrid-portal:<version>`.
+4. Use that release tag in the chart; consumers that require immutable
+   references may override it with the release image digest.
 5. Keep `:latest` as a workflow convenience tag only. Do not use it for rollout
    manifests or test-cluster installs.
 
 ## Migration note
 
-The live TauGrid Portal overlays pin a published `taugrid-portal` digest. Keep
-that immutable digest contract when promoting a new build through
-`the release pipeline`; do not fall back to the pre-split `tau`
-image or a mutable tag.
+Do not fall back to the pre-split `tau` image. Release charts use the matching
+versioned `taugrid-portal` tag; deployment owners may replace it with the
+corresponding immutable digest.

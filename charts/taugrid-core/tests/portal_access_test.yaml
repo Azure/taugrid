@@ -5,14 +5,13 @@ tests:
   - it: pulls the portal from public MCR by default
     set:
       portal.enabled: true
-      portal.image.tag: pinned
     documentSelector:
       path: kind
       value: Deployment
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:pinned
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.2.4
 
   - it: keeps the default service cluster internal
     set:

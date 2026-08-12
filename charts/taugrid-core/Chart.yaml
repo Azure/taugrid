@@ -9,6 +9,7 @@ description: |
 type: application
 # taugrid-core starts an independent public release lineage.
 version: 0.2.4
+# The tau and taugrid-portal image release tags follow appVersion.
 appVersion: "0.2.4"
 keywords: [taugrid, ai, kueue, multi-cloud]
 maintainers:

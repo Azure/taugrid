@@ -173,8 +173,8 @@ if [[ ! -f "${IMAGE_DOCKERFILE}" ]]; then
   echo "controller image Dockerfile not found: ${IMAGE_DOCKERFILE}" >&2
   exit 1
 fi
-rendered_deployment="$(sed \
-  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
+rendered_deployment="$(sed -E \
+  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller(:[^[:space:]]+|@sha256:[a-f0-9]+)#image: ${LOCAL_IMAGE}#" \
   -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
   "${APP_BASE_DIR}/kustomize/deployment.yaml")"
@@ -336,8 +336,8 @@ load_local_image
 # imagePullPolicy: Never so nothing tries to reach the network, plus
 # --leader-elect=false since a single-replica Kind run has no need for the
 # extra Lease-acquisition startup latency.
-sed \
-  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller@sha256:[a-f0-9]*#image: ${LOCAL_IMAGE}#" \
+sed -E \
+  -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller(:[^[:space:]]+|@sha256:[a-f0-9]+)#image: ${LOCAL_IMAGE}#" \
   -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
   "${APP_BASE_DIR}/kustomize/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"

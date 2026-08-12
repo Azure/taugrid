@@ -162,8 +162,8 @@ the hosted experience now runs through Tau Portal. The retained values are an
 explicit compatibility/debug path in the `tau` namespace; keep that namespace
 distinct from the `ray` workload namespace used for researcher RayJobs, Kueue
 LocalQueues, and the `blob-training` `/data` PVC. To render the deprecated
-standalone path, opt in explicitly. The chart defaults to the latest immutable
-TauGrid Portal build promoted through MCR:
+standalone path, opt in explicitly. The chart defaults to the TauGrid Portal
+MCR release tag matching the chart version:
 
 ```bash
 # Keep the existing taugrid-core release name for this test-cluster upgrade.
@@ -239,12 +239,14 @@ identity defaults. Do not enable it on shared clusters until its dedicated
 ingestion identity, namespace scope, and recovery/TTL behavior have been
 reviewed.
 
-The chart requires an immutable promoted MCR Tau image digest, target namespace,
-cluster label, ADX endpoint, a chart-created dedicated ServiceAccount, and
-chart-created least-privilege RBAC. It creates a namespace-scoped Role granting
-only `get/list/watch` on Jobs, RayJobs, and Kueue Workloads in that target
-namespace. Workload Identity is mandatory; it requires a ServiceAccount client-id
-annotation and stamps the AKS workload-identity pod label.
+The chart defaults to the MCR Tau release tag matching the chart version and
+also accepts an immutable digest override when `lifecycleRecorder.image.tag` is
+set to an empty string. It additionally requires a target namespace, cluster
+label, ADX endpoint, a chart-created dedicated ServiceAccount, and chart-created
+least-privilege RBAC. It creates a namespace-scoped Role granting only
+`get/list/watch` on Jobs, RayJobs, and Kueue Workloads in that target namespace.
+Workload Identity is mandatory; it requires a ServiceAccount client-id annotation
+and stamps the AKS workload-identity pod label.
 
 Keep `portal.runHistory.enabled=false` until this recorder is deployed and
 successfully writing lifecycle rows. The Portal then reports Runs as `live-only`

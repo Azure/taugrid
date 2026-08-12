@@ -115,9 +115,9 @@ stellar:
     idempotencyKey: tau-stellar-expstore-init
   image:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
-    # fa495d944a33 is the immutable build currently promoted as latest in MCR.
+    # Release image tags follow this chart's version.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: fa495d944a33
+    tag: "0.2.4"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   deploymentAnnotations: {}
@@ -218,10 +218,11 @@ lifecycleRecorder:
     database: Metrics
     table: TauExpRunLifecycle
   image:
-    # fa495d944a33 is the immutable tag promoted as latest. Use its multi-arch
-    # digest because mutable tags are rejected for the recorder.
+    # Release image tags follow this chart's version. Set tag to "" when
+    # overriding digest with an immutable sha256 reference.
     repository: mcr.microsoft.com/aks/ai-runtime/tau
-    digest: sha256:fcf7b643c42f2abf3837e242b8d9f45607318f39f5bdaa203f62e12b8eaebe25
+    tag: "0.2.4"
+    digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   podLabels: {}
@@ -373,8 +374,8 @@ portal:
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    # Immutable build currently promoted as latest in MCR.
-    tag: fa495d944a33
+    # Release image tags follow this chart's version.
+    tag: "0.2.4"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []

@@ -56,7 +56,7 @@ render
 {{- end }}
 
 {{/*
-Render a first-party image from exactly one immutable digest or legacy tag.
+Render a first-party image from exactly one release tag or immutable digest.
 Call with: include "taugrid-core.image" (dict "component" "portal" "image" .Values.portal.image)
 */}}
 {{- define "taugrid-core.image" -}}

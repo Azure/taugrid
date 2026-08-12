@@ -2,11 +2,11 @@ suite: Controller deployment portability
 templates:
   - deployment.yaml
 tests:
-  - it: pins the public MCR image by digest and does not re-pull it
+  - it: uses the public MCR release image matching the chart version
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller@sha256:82d2dacb9912caae5b064c4a448de518de059030cbd7896f115e33eea42bb6f4
+          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:0.1.2
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
@@ -23,14 +23,14 @@ tests:
   - it: accepts a mirrored image
     set:
       image:
-        repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
+        repository: my-registry.example.com/tau-core-controller
         digest: ""
         tag: v0.1.0
         pullPolicy: IfNotPresent
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:v0.1.0
+          value: my-registry.example.com/tau-core-controller:v0.1.0
 
   - it: keeps the platform namespace consistent between metadata and args
     set:
