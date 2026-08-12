@@ -360,9 +360,12 @@ if [[ "${TAU_KIND_SKIP_BUILD:-0}" != "1" ]]; then
   make -C "$TAU_DIR" build
 fi
 
+"$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
+  "$REPO_ROOT/charts/taugrid"
+
 "$TAU_BIN" cluster install \
   --chart "$REPO_ROOT/charts/taugrid" \
-  --version 0.1.0 \
+  --version 0.2.2 \
   --release "$TAUGRID_RELEASE" \
   --namespace "$TAUGRID_NAMESPACE" \
   --context "$KUBE_CONTEXT" \

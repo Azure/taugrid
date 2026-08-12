@@ -95,7 +95,7 @@ const (
 	// for Tau-managed GPU workloads. It is used by the single-pod batch Job,
 	// GPU RayJobs, and the Job/RayJob payload init containers so shipped
 	// workloads stay on the repo's first-party image contract by default.
-	defaultRayJobImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0"
+	defaultRayJobImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
 )
 
 const (

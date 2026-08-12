@@ -47,7 +47,11 @@ export KUBECONFIG="${KUBECONFIG:-/tmp/${CLUSTER}.kubeconfig}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${HERE}/tau.yaml"
-CHART="${TAU_QUICKSTART_CHART:-./charts/taugrid}"
+CHART="${TAU_QUICKSTART_CHART:-}"
+CHART_ARGS=()
+if [[ -n "$CHART" ]]; then
+  CHART_ARGS=(--chart "$CHART")
+fi
 # Host-diagnostic image for the MIG probe/repair below. Deliberately a fixed,
 # digest-pinned MCR image rather than anything user-overridable: these pods run
 # privileged as root in the node's host namespaces, so an override would be
@@ -311,12 +315,9 @@ step "3. Install TauGrid"
 # the timeout would also roll the release back. Readiness is not skipped, only
 # moved to `tau cluster validate installation`, which is Tau's own gate.
 #
-# No --version: $CHART is a local chart directory, and Helm resolves the
-# version from its Chart.yaml. Passing --version against a local path is
-# silently ignored, so pinning it here would be dead text that drifts out of
-# date the moment charts/taugrid is bumped. Pin --version only when you point
-# --chart at the OCI registry default.
-run tau cluster install --chart "$CHART" --context "$CLUSTER" \
+# With no override, tau uses the public MCR chart and the version pinned in the
+# installed CLI. TAU_QUICKSTART_CHART remains available for contributor tests.
+run tau cluster install "${CHART_ARGS[@]}" --context "$CLUSTER" \
   --wait=false --atomic=false
 run tau cluster validate installation --context "$CLUSTER"
 

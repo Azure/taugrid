@@ -2232,7 +2232,7 @@ func multiGPUProfile(gpuCount int) profile.Profile {
 				"requests": map[string]any{"cpu": "64", "memory": "256Gi"},
 			},
 			"runtime": map[string]any{
-				"image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0",
+				"image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
 			},
 		},
 	}
@@ -2254,7 +2254,7 @@ func noGPUCountProfile() profile.Profile {
 				"requests": map[string]any{"cpu": "16", "memory": "64Gi"},
 			},
 			"runtime": map[string]any{
-				"image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0",
+				"image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
 			},
 		},
 	}

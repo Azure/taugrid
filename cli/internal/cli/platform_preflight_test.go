@@ -30,7 +30,7 @@ spec:
             claimName: blob-training
       containers:
         - name: main
-          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
           env:
             - name: HF_TOKEN
               valueFrom:
@@ -50,7 +50,7 @@ spec:
       serviceAccountName: tau-workload
       containers:
         - name: main
-          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
           env:
             - name: HF_TOKEN
               valueFrom:
@@ -91,7 +91,7 @@ spec:
             claimName: blob-training
       containers:
         - name: main
-          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
           env:
             - name: HF_TOKEN
               valueFrom:

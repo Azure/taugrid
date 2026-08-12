@@ -20,9 +20,13 @@ RG="${TAU_QUICKSTART_RG:-taugrid-gpu-quickstart-rg}"
 CLUSTER="${TAU_QUICKSTART_CLUSTER:-tau-gpu-quickstart}"
 WORKSPACE="${TAU_QUICKSTART_WORKSPACE:-taugrid-default}"
 NAMESPACE="${TAU_QUICKSTART_NAMESPACE:-taugrid-default}"
-# Same default as run.sh: uninstall re-renders the release to drain the queue
-# policy, so it needs the chart the release was installed from.
-CHART="${TAU_QUICKSTART_CHART:-./charts/taugrid}"
+# Empty uses Tau's public MCR default. Keep this aligned with run.sh when a
+# contributor explicitly overrides the chart.
+CHART="${TAU_QUICKSTART_CHART:-}"
+CHART_ARGS=()
+if [[ -n "$CHART" ]]; then
+  CHART_ARGS=(--chart "$CHART")
+fi
 RUN_NAME="tau-aks-gpu-quickstart"
 KEEP_CLUSTER="${TAU_QUICKSTART_KEEP_CLUSTER:-0}"
 
@@ -45,7 +49,7 @@ step "3. Uninstall TauGrid"
 # Uninstall drains the queue policy while Kueue still runs, so its finalizers
 # are released rather than stranded. Still `try`: the install-side half of
 # upstream issue #1288 is unfixed, and the resource group delete supersedes it.
-try tau cluster uninstall --context "$CLUSTER" --chart "$CHART" --yes
+try tau cluster uninstall --context "$CLUSTER" "${CHART_ARGS[@]}" --yes
 
 if [ "$KEEP_CLUSTER" = "1" ]; then
   step "4. Keeping the cluster (TAU_QUICKSTART_KEEP_CLUSTER=1)"

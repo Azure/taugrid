@@ -7,12 +7,13 @@
 # Usage:
 #   make docker-build-collector ADX_MON_VERSION=main
 #   make docker-build           ADX_MON_VERSION=v0.2.0
-#   make push REGISTRY=aksmcrimagescommon.azurecr.io/public/aks/ai-runtime/adx-mon TAG=v0.2.0
+#   make push PUBLISH_REGISTRY=<backing-registry>/public/aks/ai-runtime/adx-mon TAG=v0.3.0
 
-REGISTRY        ?= aksmcrimagescommon.azurecr.io/public/aks/ai-runtime/adx-mon
-TAG             ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
-ADX_MON_VERSION ?= main
-COMPONENTS      := collector ingestor alerter operator
+REGISTRY         ?= mcr.microsoft.com/aks/ai-runtime/adx-mon
+PUBLISH_REGISTRY ?=
+TAG              ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
+ADX_MON_VERSION  ?= main
+COMPONENTS       := collector ingestor alerter operator
 
 .PHONY: docker-build push docker-build-collector docker-build-ingestor docker-build-alerter docker-build-operator
 
@@ -34,7 +35,9 @@ docker-build: $(addprefix docker-build-,$(COMPONENTS))
 
 # Push all 4 images (builds first)
 push: docker-build
+	@test -n "$(PUBLISH_REGISTRY)" || { echo "PUBLISH_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	@for comp in $(COMPONENTS); do \
-	  echo "Pushing $(REGISTRY)/$$comp:$(TAG)"; \
-	  docker push $(REGISTRY)/$$comp:$(TAG); \
+	  echo "Pushing $(PUBLISH_REGISTRY)/$$comp:$(TAG)"; \
+	  docker tag $(REGISTRY)/$$comp:$(TAG) $(PUBLISH_REGISTRY)/$$comp:$(TAG); \
+	  docker push $(PUBLISH_REGISTRY)/$$comp:$(TAG); \
 	done

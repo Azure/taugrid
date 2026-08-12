@@ -1,0 +1,26 @@
+suite: Lifecycle recorder release image
+templates:
+  - templates/lifecycle-recorder.yaml
+values:
+  - lifecycle-recorder-values.yaml
+tests:
+  - it: uses the Tau release image matching the chart version
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/tau:0.2.4
+
+  - it: accepts an immutable digest override
+    set:
+      lifecycleRecorder.image.tag: ""
+      lifecycleRecorder.image.digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/tau@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

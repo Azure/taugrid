@@ -4,8 +4,9 @@
 IMAGE := gpu-metrics-collector
 TAG   ?= latest
 
-ACR_REGISTRY ?= aksmcrimagescommon.azurecr.io
-IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
+IMG ?= mcr.microsoft.com/aks/ai-runtime/$(IMAGE):$(TAG)
+ACR_REGISTRY ?=
+PUSH_IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 PLATFORMS ?= linux/amd64,linux/arm64
 
 # Source lives in the module directory; this directory only packages it.
@@ -33,9 +34,10 @@ docker-build:
 		$(SRC)
 
 docker-push:
+	@test -n "$(ACR_REGISTRY)" || { echo "ACR_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	docker buildx build \
 		--platform $(PLATFORMS) \
-		--tag $(IMG) \
+		--tag $(PUSH_IMG) \
 		--file Dockerfile \
 		--push \
 		$(SRC)

@@ -9,9 +9,7 @@
 {{- if ne $recorder.image.repository "mcr.microsoft.com/aks/ai-runtime/tau" -}}
 {{- fail "lifecycleRecorder.image.repository must be mcr.microsoft.com/aks/ai-runtime/tau when lifecycleRecorder.enabled=true" -}}
 {{- end -}}
-{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $recorder.image.digest)) -}}
-{{- fail "lifecycleRecorder.image.digest must be an immutable sha256 digest when lifecycleRecorder.enabled=true" -}}
-{{- end -}}
+{{- $image := include "taugrid-core.image" (dict "component" "lifecycleRecorder" "image" $recorder.image) -}}
 {{- if not $recorder.targetNamespace -}}
 {{- fail "lifecycleRecorder.targetNamespace is required when lifecycleRecorder.enabled=true" -}}
 {{- end -}}
@@ -145,7 +143,7 @@ spec:
         {{- toYaml $recorder.podSecurityContext | nindent 8 }}
       containers:
         - name: lifecycle-recorder
-          image: "{{ $recorder.image.repository }}@{{ $recorder.image.digest }}"
+          image: {{ $image | quote }}
           imagePullPolicy: {{ $recorder.image.pullPolicy }}
           {{- with $recorder.extraEnv }}
           env:

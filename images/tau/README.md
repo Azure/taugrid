@@ -28,22 +28,22 @@ make docker-build TAG="$(git rev-parse --short HEAD)"
 The public consumer reference is:
 
 ```text
-mcr.microsoft.com/aks/ai-runtime/tau:<short-sha>
+mcr.microsoft.com/aks/ai-runtime/tau:<taugrid-core-chart-version>
 ```
 
-`latest` is updated by the TauGrid core validation pipeline at
-`the release pipeline` after the
-short-SHA image has been pushed and verified.
+Release tags match the `taugrid-core` chart version. `latest` and short-SHA
+tags remain build/promotion conveniences and are not chart defaults.
 
 ## Publish and consume
 
-1. Build and push the multi-arch image to the backing repository,
-   `aksairuntime.azurecr.io/unlisted/aks/ai-runtime/tau:<short-sha>`.
-2. Verify that immutable source tag with `docker buildx imagetools inspect` in
+1. Build and push the multi-arch image to the backing repository configured by
+   the local Makefile.
+2. Verify the source image with `docker buildx imagetools inspect` in
    `the release pipeline`.
-3. Confirm the same short-SHA tag is available from
-   `mcr.microsoft.com/aks/ai-runtime/tau:<short-sha>` before updating consumers.
-4. Pin downstream manifests to that MCR short-SHA tag or its immutable digest.
+3. Publish the release tag matching the `taugrid-core` chart version.
+4. Confirm that version tag is available from MCR before publishing or using
+   the matching chart release. Consumers that require immutable references may
+   override the chart default with the release image digest.
 5. Keep `:latest` as a workflow convenience tag only; do not use it for rollout
    manifests or test-cluster installs.
 

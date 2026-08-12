@@ -28,7 +28,7 @@ spec:
           emptyDir: {}
       initContainers:
         - name: tau-payload
-          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
           env:
             - name: HF_TOKEN
               valueFrom:
@@ -37,7 +37,7 @@ spec:
                   key: token
       containers:
         - name: main
-          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+          image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
           env:
             - name: HF_TOKEN
               valueFrom:
@@ -91,7 +91,7 @@ func TestClassifyJob(t *testing.T) {
 	if img.Namespace != "" {
 		t.Fatalf("image dependency should not be namespaced: %+v", img)
 	}
-	if img.Name != "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0" {
+	if img.Name != "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0" {
 		t.Fatalf("unexpected image dependency: %+v", img)
 	}
 
@@ -152,10 +152,10 @@ spec:
               emptyDir: {}
           initContainers:
             - name: tau-payload
-              image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+              image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
           containers:
             - name: ray-head
-              image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+              image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
               env:
                 - name: HF_TOKEN
                   valueFrom:
@@ -173,7 +173,7 @@ spec:
                   claimName: blob-training
             containers:
               - name: ray-worker
-                image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+                image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
                 env:
                   - name: HF_TOKEN
                     valueFrom:
