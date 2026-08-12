@@ -286,7 +286,7 @@ does not require ADX/Kusto:
 # "{{ .repository }}:{{ .tag }}" and has no digest support, so a digest cannot
 # be pinned here even though AGENTS.md prefers one. Use a short-SHA tag, which
 # is immutable in practice, and verify it resolves before installing.
-STELLAR_TAG="b5f7e2b8b85f"
+STELLAR_TAG="fa495d944a33"
 
 # Preflight the public consumer path: fail here, not 5 minutes into a rollout.
 curl --fail --silent --show-error --output /dev/null \
@@ -305,8 +305,8 @@ tau cluster install \
   --wait --timeout 8m
 ```
 
-> **Note:** `b5f7e2b8b85f` resolved from public MCR to
-> `sha256:2ecc4b111416a370c024a24274cebaed85e2046ea301fe84d0327963503b190b`
+> **Note:** `fa495d944a33` resolved from public MCR to
+> `sha256:976a4f0c5da7d9284c99a2814b542da17d9cd0a3c6a610249d996ec6481c4ead`
 > when this example was written. If the preflight fails, use the discovery
 > command above to choose a current immutable tag.
 

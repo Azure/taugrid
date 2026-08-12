@@ -11,9 +11,9 @@ partOf: taugrid
 # or digest only to run a mirrored or pre-release build.
 image:
   repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
-  # b73a5762d54f is the immutable tag promoted as latest. Pin its multi-arch
+  # fa495d944a33 is the immutable tag promoted as latest. Pin its multi-arch
   # digest so deployments cannot drift if a mutable tag moves.
-  digest: sha256:0f1d58b3cb2a9297117670874ef2e7df35847f13e2a34edb02126f1a4a8dd766
+  digest: sha256:82d2dacb9912caae5b064c4a448de518de059030cbd7896f115e33eea42bb6f4
   tag: ""
   pullPolicy: IfNotPresent
 

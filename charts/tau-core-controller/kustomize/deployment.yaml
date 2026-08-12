@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: mcr.microsoft.com/aks/ai-runtime/tau-core-controller@sha256:0f1d58b3cb2a9297117670874ef2e7df35847f13e2a34edb02126f1a4a8dd766
+          image: mcr.microsoft.com/aks/ai-runtime/tau-core-controller@sha256:82d2dacb9912caae5b064c4a448de518de059030cbd7896f115e33eea42bb6f4
           imagePullPolicy: IfNotPresent
           args:
             - --leader-elect

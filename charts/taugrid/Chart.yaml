@@ -3,7 +3,7 @@ name: taugrid
 description: Kubernetes-native TauGrid distribution for fresh AKS clusters.
 type: application
 version: 0.2.2
-appVersion: "0.1.0"
+appVersion: "0.2.2"
 kubeVersion: ">=1.30.0-0"
 keywords:
   - taugrid
