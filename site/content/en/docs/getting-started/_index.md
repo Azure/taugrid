@@ -7,13 +7,29 @@ description: Install Tau and complete a first workflow
 
 {{< maturity status="shipped" reviewed="2026-07-16" >}}
 
-Choose the smallest path that proves the contract you care about:
+AKS is TauGrid's first-class deployment target. The primary path has three
+explicit phases:
 
-1. For AKS, [prepare an Azure subscription](azure-subscription/) and choose
-   Terraform, Bicep, ARM JSON, `azd`, CLI, Portal, or an existing-cluster path.
-2. [Install Tau](install/).
-3. [Evaluate locally or on Kind](kind/) when Azure is not required.
-4. Check [prerequisites and the readiness gate](prerequisites/) - the shared
-   contract for researchers and platform owners.
-5. [Connect to a platform workspace](workspace/) for a governed cluster.
-6. Complete the [researcher quickstart](quickstart/).
+1. **AKS setup (Azure/provider):** prepare the subscription, then provision or
+   select AKS, its node pools, network access, managed Entra integration,
+   provider add-ons, and Azure identities.
+2. **Kubernetes/TauGrid setup:** install Kueue, KubeRay, and the Tau
+   controllers and policies into that reachable cluster, then enable a
+   workspace.
+3. **Researcher workflow:** use the handed-off repository to submit and observe
+   workloads.
+
+Follow the first-class path in this order:
+
+1. [Install Tau](install/).
+2. [Prepare an Azure subscription and AKS](azure-subscription/).
+3. Check the [AKS versus Kubernetes/TauGrid boundary and readiness
+   gate](prerequisites/).
+4. [Connect to a platform workspace](workspace/).
+5. Complete the [researcher quickstart](quickstart/).
+6. For GPU HPO, continue with the canonical
+   [Ray Tune on AKS walkthrough](../examples/gpu-ray-tune/).
+
+[Local and Kind evaluation](kind/) verifies Tau's portable Kubernetes behavior
+when Azure is not required. It is not a substitute for validating AKS identity,
+networking, GPU, storage, or quota integrations.

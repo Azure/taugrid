@@ -3,18 +3,37 @@
 
 package rayjobrender
 
-const tuneDriverScript = `import json, os, sys
-
-sys.path.insert(0, "/script")
+const tuneDriverScript = `import importlib, importlib.util, json, os, sys
 
 module_name = os.environ["TAU_TUNE_TRAIN_MODULE"]
-mod = __import__(module_name)
-train_func = getattr(mod, "train_func")
+module_path = os.environ.get("TAU_TUNE_TRAIN_PATH")
+
+
+def load_train_func():
+    if module_path:
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load Tau Tune training module from {module_path}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = mod
+        spec.loader.exec_module(mod)
+    else:
+        mod = importlib.import_module(module_name)
+    train_func = getattr(mod, "train_func")
+    if not callable(train_func):
+        raise TypeError(f"{module_name}.train_func must be callable")
+    return train_func
+
+
+# Preserve the previous fail-fast behavior: syntax/import/contract errors are
+# reported by the driver before Tune allocates trial resources.
+load_train_func()
 
 import ray
 from ray import tune
 from ray.train.torch import TorchTrainer, TorchConfig
 from ray.train import ScalingConfig, RunConfig
+from ray.tune.integration.ray_train import TuneReportCallback
 
 param_space_raw = json.loads(os.environ["TAU_TUNE_PARAM_SPACE"])
 param_space = {}
@@ -33,13 +52,17 @@ num_samples = int(os.environ.get("TAU_TUNE_NUM_SAMPLES", "1"))
 max_concurrent = int(os.environ.get("TAU_TUNE_MAX_CONCURRENT_TRIALS", "1"))
 
 
+def train_loop(config):
+    return load_train_func()(config)
+
+
 def train_driver(config):
     trainer = TorchTrainer(
-        train_func,
+        train_loop,
         train_loop_config=config,
         torch_config=TorchConfig(backend=backend),
         scaling_config=ScalingConfig(num_workers=num_workers, use_gpu=use_gpu),
-        run_config=RunConfig(),
+        run_config=RunConfig(callbacks=[TuneReportCallback()]),
     )
     trainer.fit()
 

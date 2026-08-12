@@ -102,6 +102,15 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 			t.Fatalf("%s persisted workspace policy:\n%s", rel, raw)
 		}
 	}
+	connection := readWorkspaceTestFile(t, filepath.Join(dir, "tau/workspace.connection.yaml"))
+	for _, want := range []string{"mode: workspace-rbac", "requiredRole: tau-researcher-v1"} {
+		if !strings.Contains(connection, want) {
+			t.Fatalf("workspace connection missing %q:\n%s", want, connection)
+		}
+	}
+	if strings.Contains(connection, "mode: cluster-wide") {
+		t.Fatalf("workspace-scoped repository generated a cluster-wide connection:\n%s", connection)
+	}
 }
 
 func TestWorkspaceInitRepoRequiresImage(t *testing.T) {

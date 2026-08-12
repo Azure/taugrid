@@ -6,7 +6,9 @@
 // script is embedded directly in the RayJob's pod templates (see the
 // internal/payload package) instead of depending on a per-run ConfigMap, so
 // the workload can be dispatched to any MultiKueue worker without a separate
-// object to mirror or pre-provision.
+// object to mirror or pre-provision. Plain Ray drivers stage source only on the
+// head; Ray Tune also stages it on workers because TorchTrainer reloads the
+// researcher function there.
 package rayjobrender
 
 import (
@@ -64,6 +66,7 @@ var (
 	resourceNamePartRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 	rayImageVersionRE  = regexp.MustCompile(`-ray((\d+)\.(\d+)\.\d+)`)
 	migProfileRE       = regexp.MustCompile(`^\d+g\.\d+gb$`)
+	pythonModuleNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // payloadTargetDir is where the tau-payload initContainer materialises the
@@ -505,14 +508,12 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 }
 
 // buildPodSpec renders a pod template for either the Ray head or a worker
-// group. Only the head template carries the embedded payload (tau-payload
-// initContainer, "script" emptyDir, and its mount): the RayJob's entrypoint
-// is submitted via the Ray Job Submission API and runs as the driver process
-// on the head node, so only the head ever needs /script/<name> on local
-// disk. Workers receive their work from the driver over Ray's own RPC/object
-// store and never read the driver script file directly, so duplicating the
-// payload onto every worker template would only inflate the rendered
-// object's size without adding capability.
+// group. Plain Ray drivers carry the embedded payload only on the head because
+// the Ray Job Submission API runs their entrypoint there. Ray Tune is
+// different: TorchTrainer deserializes the generated train loop on execution
+// workers, where it reloads the researcher function from local staged source.
+// Project archives likewise have to exist on every node for Ray's file://
+// working_dir resolution.
 func buildPodSpec(o Options, image, containerName string, nodeSelector map[string]string, priorityClass string, encodedPayload, payloadDigest string, isHead bool) (map[string]any, error) {
 	env, err := envList(o, isHead)
 	if err != nil {
@@ -559,11 +560,11 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			raylogoffload.PrepareInitContainer(image),
 			payloadInitContainer(image, encodedPayload, payloadDigest),
 		}
-	} else if len(o.ProjectArchive) > 0 {
-		// Ray resolves a file:// working_dir separately on every node, so a
-		// worker can only join the job if the archive exists on its own
-		// filesystem. Workers get the payload initContainer and its emptyDir
-		// but none of the head-only log/metrics plumbing.
+	} else if workerNeedsSourcePayload(o) {
+		// Project archives must exist on every node for file:// working_dir
+		// resolution. Tune's single-file contract likewise needs the staged
+		// researcher module on every TorchTrainer worker. Neither case needs
+		// the head-only log/metrics plumbing.
 		pod["initContainers"] = []any{
 			payloadInitContainer(image, encodedPayload, payloadDigest),
 		}
@@ -790,6 +791,17 @@ func isTuneLauncher(launcher string) bool {
 	return strings.EqualFold(launcher, "ray-tune")
 }
 
+func tuneModuleName(o Options) (string, error) {
+	if len(o.ProjectArchive) > 0 {
+		return entrypointModule(o.ScriptName)
+	}
+	name := strings.TrimSuffix(o.ScriptName, ".py")
+	if pythonModuleNameRE.MatchString(name) {
+		return name, nil
+	}
+	return "_tau_user_train", nil
+}
+
 // runtimeEnvYAML renders the RayJob runtime environment.
 //
 // working_dir is emitted as a file:// URI rather than a bare path because Ray
@@ -919,7 +931,13 @@ func envList(o Options, isHead bool) ([]any, error) {
 	}
 
 	if isTuneLauncher(o.Launcher) {
-		moduleName := strings.TrimSuffix(o.ScriptName, ".py")
+		moduleName, moduleErr := tuneModuleName(o)
+		if moduleErr != nil {
+			return nil, moduleErr
+		}
+		if len(o.ProjectArchive) == 0 {
+			env["TAU_TUNE_TRAIN_PATH"] = filepath.ToSlash(filepath.Join(payloadTargetDir, o.ScriptName))
+		}
 		env["TAU_TUNE_TRAIN_MODULE"] = moduleName
 		env["TAU_TUNE_METRIC"] = o.TuneMetric
 		if o.TuneMode != "" {
@@ -957,9 +975,6 @@ func envList(o Options, isHead bool) ([]any, error) {
 }
 
 // volumes returns the pod-level volumes for a Ray head or worker template.
-// The "script" emptyDir (populated at runtime by the tau-payload
-// initContainer) is only needed on the head, which is where the RayJob's
-// entrypoint actually runs; see buildPodSpec.
 func volumes(o Options, isHead bool) []any {
 	data := map[string]any{"name": "data"}
 	if o.DataPVC != "" {
@@ -968,7 +983,7 @@ func volumes(o Options, isHead bool) []any {
 		data["emptyDir"] = map[string]any{}
 	}
 	vols := []any{}
-	if !isHead && len(o.ProjectArchive) > 0 {
+	if !isHead && workerNeedsSourcePayload(o) {
 		vols = append(vols, map[string]any{
 			"name":     "script",
 			"emptyDir": map[string]any{},
@@ -994,14 +1009,12 @@ func volumes(o Options, isHead bool) []any {
 	)
 }
 
-// volumeMounts returns the main container's volume mounts. The "script"
-// mount is head-only unless a project archive is in play: Ray's runtime_env
-// agent resolves the file:// working_dir from inside the ray container, so
-// every node that participates in the job needs the archive visible there,
-// not just in its initContainer.
+// volumeMounts returns the main container's volume mounts. The script mount is
+// head-only for plain Ray drivers. Project archives and Tune source are mounted
+// on workers for their respective distributed loading contracts.
 func volumeMounts(o Options, isHead bool) []any {
 	mounts := []any{}
-	if !isHead && len(o.ProjectArchive) > 0 {
+	if !isHead && workerNeedsSourcePayload(o) {
 		mounts = append(mounts,
 			map[string]any{"name": "script", "mountPath": payloadTargetDir, "readOnly": true},
 		)
@@ -1020,6 +1033,10 @@ func volumeMounts(o Options, isHead bool) []any {
 		map[string]any{"name": "tau-hot", "mountPath": storage.HotRoot},
 		map[string]any{"name": "dshm", "mountPath": "/dev/shm"},
 	)
+}
+
+func workerNeedsSourcePayload(o Options) bool {
+	return len(o.ProjectArchive) > 0 || isTuneLauncher(o.Launcher)
 }
 
 func stringMapFromAnyMap(m map[string]any) map[string]string {

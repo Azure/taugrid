@@ -18,6 +18,7 @@ import (
 	"text/template"
 	"unicode"
 
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/core/version"
 )
@@ -105,6 +106,8 @@ type templateData struct {
 	HasWorkspaceConnection bool
 	AKSResourceID          string
 	MinTauVersion          string
+	AuthorizationMode      string
+	RequiredRole           string
 	UsesDPR                bool
 }
 
@@ -290,6 +293,8 @@ func buildTemplateData(opts Options) templateData {
 		HasWorkspaceConnection: hasWorkspaceConnection,
 		AKSResourceID:          aksResourceID,
 		MinTauVersion:          minTauVersion(version.Version),
+		AuthorizationMode:      tauworkspace.AuthorizationModeWorkspaceRBAC,
+		RequiredRole:           tauworkspace.DefaultResearcherRole,
 		UsesDPR:                opts.Template == TemplateDPR,
 	}
 }

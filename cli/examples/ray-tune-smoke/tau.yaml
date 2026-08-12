@@ -22,7 +22,5 @@ compute:
   gpus_per_worker: 1
 
 policy:
-  namespace: ray
-  queue: team-a
   gpu_class: any
   disable_default_priorities: true

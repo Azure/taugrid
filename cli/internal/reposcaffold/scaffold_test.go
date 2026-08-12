@@ -137,14 +137,20 @@ func TestRenderPythonScaffold(t *testing.T) {
 	for _, want := range []string{
 		"schema: tau.workspace.connection.v1",
 		"workspace: research-ws",
-		"mode: cluster-wide",
+		"mode: workspace-rbac",
+		"requiredRole: tau-researcher-v1",
 		"resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-ai",
 		"tenantID: 11111111-1111-1111-1111-111111111111",
 	} {
 		assertContains(t, connection, want)
 	}
-	if _, err := workspaceconnection.Parse([]byte(connection)); err != nil {
+	descriptor, err := workspaceconnection.Parse([]byte(connection))
+	if err != nil {
 		t.Fatalf("generated workspace connection is invalid: %v\n%s", err, connection)
+	}
+	if descriptor.Authorization.Mode != workspaceconnection.AuthorizationModeWorkspaceRBAC ||
+		descriptor.Authorization.RequiredRole != "tau-researcher-v1" {
+		t.Fatalf("generated authorization = %#v, want workspace-rbac with tau-researcher-v1", descriptor.Authorization)
 	}
 
 	for _, rel := range []string{"scripts/setup.sh", "scripts/setup-azure.sh", "scripts/doctor.sh", "scripts/configure.sh", "scripts/smoke.sh", "scripts/train.sh"} {

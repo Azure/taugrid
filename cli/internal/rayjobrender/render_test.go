@@ -679,6 +679,119 @@ func TestRenderRayTuneSetsDistributedExecutionContract(t *testing.T) {
 	}
 }
 
+func TestRenderRayTuneShipsTrainingSourceToTorchWorkers(t *testing.T) {
+	const scriptName = "research train.py"
+	script := []byte("def train_func(config):\n    return config\n")
+	out, err := Render(Options{
+		Name:          "ray-tune-source",
+		Namespace:     "ray",
+		ScriptName:    scriptName,
+		Script:        script,
+		Launcher:      "ray-tune",
+		TuneMetric:    "loss",
+		Workers:       1,
+		GPUsPerWorker: 1,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	doc := decodeDocs(t, out)[0]
+	cluster := doc["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)
+	pod := worker["template"].(map[string]any)["spec"].(map[string]any)
+
+	if !hasVolume(pod, "script") {
+		t.Fatalf("Tune worker pod must stage researcher source: %v", pod["volumes"])
+	}
+	container := pod["containers"].([]any)[0].(map[string]any)
+	if !hasMount(container, "script", payloadTargetDir) {
+		t.Fatalf("Tune worker container must mount researcher source: %v", container["volumeMounts"])
+	}
+	if got := testEnvValue(t, container["env"], "TAU_TUNE_TRAIN_PATH"); got != payloadTargetDir+"/"+scriptName {
+		t.Fatalf("TAU_TUNE_TRAIN_PATH = %q, want exact staged path %q", got, payloadTargetDir+"/"+scriptName)
+	}
+	if got := testEnvValue(t, container["env"], "TAU_TUNE_TRAIN_MODULE"); got != "_tau_user_train" {
+		t.Fatalf("TAU_TUNE_TRAIN_MODULE = %q, want safe generated name for non-identifier filename", got)
+	}
+
+	inits, ok := pod["initContainers"].([]any)
+	if !ok {
+		t.Fatal("Tune worker pod must decode the embedded researcher source")
+	}
+	init := containerByName(t, inits, payload.InitContainerName)
+	encoded := testEnvValue(t, init["env"], payload.EnvB64)
+	digest := testEnvValue(t, init["env"], payload.EnvDigest)
+	files, err := payload.Decode(encoded, digest)
+	if err != nil {
+		t.Fatalf("decode worker payload: %v", err)
+	}
+	if got := files[scriptName]; !bytes.Equal(got, script) {
+		t.Fatalf("worker payload source = %q, want %q", got, script)
+	}
+}
+
+func TestRenderRayTuneProjectArchiveUsesWorkerWorkingDir(t *testing.T) {
+	out, err := Render(Options{
+		Name:           "ray-tune-project",
+		Namespace:      "ray",
+		ScriptName:     "package/train.py",
+		Script:         []byte("def train_func(config):\n    return config\n"),
+		ProjectArchive: []byte("PK\x03\x04 pretend zip"),
+		Launcher:       "ray-tune",
+		TuneMetric:     "loss",
+		Workers:        1,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	doc := decodeDocs(t, out)[0]
+	spec := doc["spec"].(map[string]any)
+	if runtimeEnv, _ := spec["runtimeEnvYAML"].(string); !strings.Contains(runtimeEnv, `working_dir: "file:///script/_tau_project.zip"`) {
+		t.Fatalf("Tune project archive must be a distributed Ray working_dir, got %q", runtimeEnv)
+	}
+	cluster := spec["rayClusterSpec"].(map[string]any)
+	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)
+	pod := worker["template"].(map[string]any)["spec"].(map[string]any)
+	container := pod["containers"].([]any)[0].(map[string]any)
+	if got := testEnvValue(t, container["env"], "TAU_TUNE_TRAIN_MODULE"); got != "package.train" {
+		t.Fatalf("TAU_TUNE_TRAIN_MODULE = %q, want archive-relative dotted module", got)
+	}
+	if got, ok := findTestEnvValue(t, container["env"], "TAU_TUNE_TRAIN_PATH"); ok {
+		t.Fatalf("project archive must load from Ray working_dir, not a head-local path: %q", got)
+	}
+	if !hasVolume(pod, "script") || !hasMount(container, "script", payloadTargetDir) {
+		t.Fatalf("worker must mount the project archive for file:// resolution: volumes=%v mounts=%v", pod["volumes"], container["volumeMounts"])
+	}
+}
+
+func testEnvValue(t *testing.T, raw any, name string) string {
+	t.Helper()
+	value, ok := findTestEnvValue(t, raw, name)
+	if ok {
+		return value
+	}
+	t.Fatalf("environment variable %s not found: %v", name, raw)
+	return ""
+}
+
+func findTestEnvValue(t *testing.T, raw any, name string) (string, bool) {
+	t.Helper()
+	env, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("environment has unexpected type %T", raw)
+	}
+	for _, item := range env {
+		entry, ok := item.(map[string]any)
+		if ok && entry["name"] == name {
+			value, _ := entry["value"].(string)
+			return value, true
+		}
+	}
+	return "", false
+}
+
 func TestRenderEnvSecretUsesSecretKeyRef(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "ray-secret",
@@ -1114,10 +1227,9 @@ func containerNames(t *testing.T, containers []any) string {
 // TestRenderIsSelfContained locks in the PR1 conversion: the rendered RayJob
 // must not depend on any external ConfigMap for its driver script. Instead
 // the payload is embedded and decoded at pod startup by a tau-payload
-// initContainer into an emptyDir mounted at /script. Only the head template
-// carries this wiring: the RayJob's entrypoint is submitted via the Ray Job
-// Submission API and runs as the driver process on the head node, so the
-// payload never needs to be duplicated onto worker templates.
+// initContainer into an emptyDir mounted at /script. This plain non-Tune run
+// keeps that wiring head-only: its entrypoint runs on the head and workers do
+// not reload researcher source.
 func TestRenderIsSelfContained(t *testing.T) {
 	script := []byte("print('hello from tau')\n")
 	out, err := Render(Options{
@@ -1213,12 +1325,8 @@ func TestRenderIsSelfContained(t *testing.T) {
 		}
 	}
 
-	// checkWorkerPodHasNoPayload is the regression guard for review blocker
-	// #2: the payload/initContainer/emptyDir/mount must exist on the head
-	// template only. Workers never read the driver script from local disk
-	// (they receive work from the driver over Ray's own RPC/object store),
-	// so duplicating the payload there would only inflate the rendered
-	// object's size for no benefit.
+	// checkWorkerPodHasNoPayload guards the plain Ray contract. Tune and
+	// project-archive runs have separate tests that require worker payloads.
 	checkWorkerPodHasNoPayload := func(tpl map[string]any) {
 		t.Helper()
 		pod := tpl["spec"].(map[string]any)

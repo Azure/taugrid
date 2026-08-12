@@ -8,9 +8,9 @@
 
 ---
 
-TauGrid makes it easier for teams to run GPU workloads on Kubernetes, spanning data preparation, distributed training, fine-tuning, and inference.
+TauGrid runs GPU workloads on Kubernetes, including data preparation, distributed training, fine-tuning, and inference.
 
-It brings together the **tau CLI**, workload queueing and admission with **Kueue**, Ray cluster orchestration with **KubeRay**, node-level **GPU health monitoring**, and cluster and workload **observability** into a cohesive stack. Platform teams get an integrated foundation instead of assembling these pieces from scratch, while researchers can focus on their code and experiments rather than Kubernetes plumbing.
+It combines the **tau CLI**, workload queueing and admission with **Kueue**, Ray cluster orchestration with **KubeRay**, node-level **GPU health monitoring**, and cluster and workload **observability**. Platform teams install this stack instead of assembling each component separately. Researchers use the CLI to submit and manage workloads without configuring Kubernetes directly.
 
 ## Features
 
@@ -54,10 +54,10 @@ TauGrid is built on open Kubernetes-native components:
 - `kubectl` configured for your cluster
 - Helm 3.0 or later
 
-TauGrid is built on Kubernetes and currently tested end-to-end on AKS, with
-some integrations—such as observability through Azure Data Explorer
-(Kusto)—remaining Azure-specific. Our goal is to make TauGrid provider-neutral
-across cloud and on-premises Kubernetes environments, and contributions toward
+TauGrid is built on Kubernetes and is tested end-to-end on AKS. Some
+integrations, such as observability through Azure Data Explorer (Kusto),
+remain Azure-specific. The project intends to support cloud and on-premises
+Kubernetes environments without an Azure dependency; contributions toward
 that goal are welcome.
 
 ### Install TauGrid
@@ -72,17 +72,27 @@ helm install taugrid \
 
 ### Install the tau CLI
 
+Until a GitHub Release is published, install the CLI from a source checkout:
+
 ```bash
-curl -fsSL https://github.com/Azure/taugrid/releases/latest/download/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+git clone https://github.com/Azure/taugrid.git
+cd taugrid
+make install-tau-cli
+
+TAU_BIN_DIR="$(go env GOBIN)"
+test -n "$TAU_BIN_DIR" || TAU_BIN_DIR="$(go env GOPATH)/bin"
+export PATH="$TAU_BIN_DIR:$PATH"
+
+command -v tau
 tau version --short
 ```
 
-The installer supports Linux and macOS on amd64 and arm64, verifies the binary
-against the release's `SHA256SUMS`, and installs to `$HOME/.local/bin` without
-sudo. It installs the MIT license under `$HOME/.local/share/doc/tau`. See the
-[installation guide](site/content/en/docs/getting-started/install.md)
-for the full release contract.
+Use the Go version declared in `cli/go.mod`. The Make target installs `tau` and
+`tau-gen` into `GOBIN`, or `GOPATH/bin` when `GOBIN` is unset, and warns when
+that directory is not on `PATH`. See the
+[installation guide](site/content/en/docs/getting-started/install.md) for PATH
+persistence, upgrades, the optional Python SDK, and the verified-binary path
+available after a GitHub Release is published.
 
 ### Submit Your First Workload
 
