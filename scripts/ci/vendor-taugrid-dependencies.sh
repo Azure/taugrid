@@ -4,7 +4,9 @@
 
 set -euo pipefail
 
-readonly CHART_DIR="${1:-charts/taugrid}"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+readonly CHART_DIR="${1:-${REPO_ROOT}/charts/taugrid}"
 readonly VENDOR_DIR="${CHART_DIR}/charts"
 
 if [[ ! -f "${CHART_DIR}/Chart.yaml" ]] ||
@@ -20,7 +22,7 @@ helm dependency list "$CHART_DIR" | tail -n +2 |
   while read -r name version repository _; do
     [[ -n "$name" ]] || continue
 
-    local_chart="charts/${name}"
+    local_chart="${REPO_ROOT}/charts/${name}"
     if [[ -f "${local_chart}/Chart.yaml" ]]; then
       local_version=$(awk '$1 == "version:" { print $2; exit }' "${local_chart}/Chart.yaml")
       if [[ "$local_version" != "$version" ]]; then

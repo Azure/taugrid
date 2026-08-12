@@ -18,9 +18,13 @@ CLUSTER="${TAU_QUICKSTART_CLUSTER:-tau-cpu-quickstart}"
 NAMESPACE="${TAU_QUICKSTART_NAMESPACE:-research}"
 WORKSPACE="${TAU_QUICKSTART_WORKSPACE:-research}"
 PLATFORM_NS="${TAU_QUICKSTART_PLATFORM_NS:-tau-platform}"
-# Same default as run.sh: uninstall re-renders the release to drain the queue
-# policy, so it needs the chart the release was installed from.
-CHART="${TAU_QUICKSTART_CHART:-./charts/taugrid}"
+# Empty uses Tau's public MCR default. Keep this aligned with run.sh when a
+# contributor explicitly overrides the chart.
+CHART="${TAU_QUICKSTART_CHART:-}"
+CHART_ARGS=()
+if [[ -n "$CHART" ]]; then
+  CHART_ARGS=(--chart "$CHART")
+fi
 
 export KUBECONFIG="${KUBECONFIG:-/tmp/${CLUSTER}.kubeconfig}"
 
@@ -51,7 +55,7 @@ step "3. Uninstall TauGrid"
 # --yes is required once TauWorkspace objects have existed on the cluster.
 # Uninstall drains the queue policy while Kueue still runs, so its finalizers
 # are released before the controller goes away. See README > Cleanup.
-run tau cluster uninstall --context "$CLUSTER" --chart "$CHART" --yes
+run tau cluster uninstall --context "$CLUSTER" "${CHART_ARGS[@]}" --yes
 
 step "4. Delete the resource group (this is what stops the billing)"
 # Guarded: only groups this quickstart created carry the ownership tag. If the

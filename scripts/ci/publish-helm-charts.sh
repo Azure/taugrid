@@ -88,6 +88,13 @@ verify_existing_chart() {
     --untardir "$existing_dir"
   tar -xzf "$archive" -C "$candidate_dir"
 
+  # Helm rewrites this timestamp on every dependency build. It is not part of
+  # the resolved dependency set, so ignore it when checking publish retries.
+  find \
+    "${existing_dir}/${chart_name}" \
+    "${candidate_dir}/${chart_name}" \
+    -type f -name Chart.lock -exec sed -i '/^generated:/d' {} +
+
   if ! diff -ru "${existing_dir}/${chart_name}" "${candidate_dir}/${chart_name}"; then
     echo "Chart ${chart_name}:${chart_version} already exists with different content." >&2
     echo "Bump version in charts/${chart_name}/Chart.yaml before publishing." >&2
