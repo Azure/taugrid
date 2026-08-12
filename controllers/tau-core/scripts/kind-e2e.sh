@@ -727,15 +727,22 @@ JSON
 # non-interactive path.
 if ! (
   cd "${tau_home}"
-  script -q -c \
+  script -q -e -c \
     "env HOME='${tau_home}/home' TAU_CONFIG_DIR='${tau_home}/tau-config' '${tau_home}/tau-bin' run train --dry-run=client" \
     /dev/null
 ) >"${tau_home}/verified-train.yaml"; then
   cat "${tau_home}/verified-train.yaml" >&2
   exit 1
 fi
-grep -q "name: project-train" "${tau_home}/verified-train.yaml"
-grep -q "kueue.x-k8s.io/queue-name: <unresolved-queue>" "${tau_home}/verified-train.yaml"
+for expected in \
+  "name: project-train" \
+  "kueue.x-k8s.io/queue-name: <unresolved-queue>"; do
+  if ! grep -qF "${expected}" "${tau_home}/verified-train.yaml"; then
+    echo "client dry-run output is missing: ${expected}" >&2
+    cat "${tau_home}/verified-train.yaml" >&2
+    exit 1
+  fi
+done
 
 kubectl -n "${TARGET_NAMESPACE}" delete jobs.batch \
   -l tau.azure.com/onboarding-smoke=true \
