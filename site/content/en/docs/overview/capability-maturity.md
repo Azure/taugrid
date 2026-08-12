@@ -47,6 +47,8 @@ No capabilities are currently labeled Beta.
 ### Alpha
 
 - Dataset registry and selected production data-plane integrations.
+- Multiple-workspace lifecycle. One workspace is active; additional workspace
+  objects remain blocked until the active workspace is removed.
 - MultiKueue preflight and constrained worker dispatch.
 - Hosted Stellar and selected provider-specific rollout surfaces.
 
@@ -56,7 +58,6 @@ No capabilities are currently labeled Deprecated.
 
 ### Planned
 
-- Multi-workspace activation. Version 0 activates one workspace per cluster.
 - Researcher isolation pending negative-access release gates.
 - A general released model-serving quickstart.
 - Automatic dataset replication.

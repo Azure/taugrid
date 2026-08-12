@@ -85,8 +85,10 @@ fail closed; an interactive caller must review and confirm the change.
 `workspace-rbac` is the API default and what `tau workspace create` writes; the
 controller binds your subject in the workspace namespace. `cluster-wide`
 is an explicit opt-out that grants no researcher access and supplies policy
-defaults only; some existing clusters run it. Multi-workspace activation is
-future work: v0 activates exactly one workspace per cluster.
+defaults only; some existing clusters run it. The
+[multiple-workspace lifecycle](../../concepts/workspaces/#multiple-workspaces)
+is Alpha: v0 activates one workspace and blocks additional workspace objects
+until the active workspace is removed.
 
 Platform engineers should use the
 [workspace enablement task](../../tasks/platform/enable-workspace/) and the

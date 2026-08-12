@@ -27,8 +27,10 @@ tau workspace status <name>
 Workspace RBAC is the API default and what `tau workspace create` writes; the
 controller binds the researcher subject in the workspace namespace.
 Cluster-wide authorization is an explicit opt-out that grants no researcher
-access, and some existing clusters run it. Multi-workspace activation is Planned
-work: v0 activates exactly one workspace per cluster.
+access, and some existing clusters run it. The
+[multiple-workspace lifecycle](../../concepts/workspaces/#multiple-workspaces)
+is Alpha: v0 activates one workspace and blocks additional workspace objects
+until the active workspace is removed.
 
 The controller source, image, CRDs, and supported install manifests are not
 publicly released yet. Until that

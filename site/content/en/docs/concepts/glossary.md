@@ -98,9 +98,11 @@ or live workspace-contract drift requires interactive review.
 that mode the controller binds the researcher subject in the workspace
 namespace. `cluster-wide` is an explicit opt-out: the controller grants no
 researcher access and the workspace supplies only routing and policy defaults,
-which is how some existing clusters are configured. What remains future is
-multi-workspace activation -- v0 activates exactly one workspace per cluster --
-and the negative-access isolation gate.
+which is how some existing clusters are configured. The
+[multiple-workspace lifecycle](../workspaces/#multiple-workspaces) is Alpha: v0
+activates one workspace and blocks additional workspace objects until the active
+workspace is removed. Researcher isolation still requires its negative-access
+gate.
 
 ## Status condition / Ready {#status-condition}
 

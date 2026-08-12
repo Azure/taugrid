@@ -164,8 +164,10 @@ in order; each stage assumes the previous one passed.
    `workspace-rbac` is the API default and is what `tau workspace create`
    writes; the controller binds the researcher subject in the workspace
    namespace. `cluster-wide` is an explicit opt-out that grants no researcher
-   access, and some existing clusters run it. Multi-workspace activation is
-   future work: v0 activates exactly one workspace per cluster.
+   access, and some existing clusters run it. The
+   [multiple-workspace lifecycle](../../concepts/workspaces/#multiple-workspaces)
+   is Alpha: v0 activates one workspace and blocks additional workspace objects
+   until the active workspace is removed.
 
 ## TauWorkspace readiness gate
 
