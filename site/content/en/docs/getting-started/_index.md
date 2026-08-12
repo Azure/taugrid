@@ -5,8 +5,6 @@ weight: 2
 description: Install Tau and complete a first workflow
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
-
 AKS is TauGrid's first-class deployment target. The primary path has three
 explicit phases:
 

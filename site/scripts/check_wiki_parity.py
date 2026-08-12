@@ -60,6 +60,7 @@ def main() -> int:
         seen.add(identifier)
 
         site_path = site_root / pair.get("site", "")
+        is_section = site_path.name == "_index.md"
         if not site_path.is_file():
             errors.append(f"{identifier}: missing site page {site_path}")
             site_metadata = None
@@ -67,8 +68,10 @@ def main() -> int:
             site_metadata = MATURITY_PATTERN.search(
                 site_path.read_text(encoding="utf-8")
             )
-            if not site_metadata:
-                errors.append(f"{identifier}: site page is missing maturity metadata")
+            if is_section and site_metadata:
+                errors.append(
+                    f"{identifier}: section index must not declare feature maturity"
+                )
 
         wiki = pair.get("wiki", "")
         parsed = urllib.parse.urlparse(wiki)
@@ -79,9 +82,19 @@ def main() -> int:
             errors.append(f"{identifier}: missing owner")
 
         maturity = pair.get("maturity")
-        if maturity not in ALLOWED_MATURITY:
+        if is_section and maturity is not None:
+            errors.append(
+                f"{identifier}: section index must not declare manifest maturity"
+            )
+        elif maturity is None and site_metadata:
+            errors.append(
+                f"{identifier}: manifest is missing maturity for a staged capability"
+            )
+        elif maturity is not None and maturity not in ALLOWED_MATURITY:
             errors.append(f"{identifier}: unsupported maturity {maturity!r}")
-        elif site_metadata and site_metadata.group("status") != maturity:
+        elif maturity is not None and not site_metadata:
+            errors.append(f"{identifier}: site page is missing maturity metadata")
+        elif maturity is not None and site_metadata.group("status") != maturity:
             errors.append(
                 f"{identifier}: manifest maturity {maturity!r} does not match "
                 f"site maturity {site_metadata.group('status')!r}"

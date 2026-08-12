@@ -7,8 +7,6 @@ menu:
     weight: 10
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
-
 Tau documentation is organized by reader intent:
 
 - **[Overview](overview/):** understand Tau, its boundaries, architecture, and maturity.

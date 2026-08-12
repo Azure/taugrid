@@ -5,8 +5,6 @@ weight: 6
 description: Diagnose and operate Tau workloads and integrations
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
-
 Start here if a run is stuck or failed:
 [**Troubleshooting by lifecycle layer**](troubleshooting/) is the canonical,
 diagnose-first decision path -- work it in order instead of guessing which

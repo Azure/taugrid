@@ -39,12 +39,19 @@ def main() -> int:
     today = datetime.date.today()
     errors: list[str] = []
     pages = sorted(args.content_dir.rglob("*.md"))
+    capability_pages = 0
     for page in pages:
         text = page.read_text(encoding="utf-8")
         match = MATURITY_PATTERN.search(text)
-        if not match:
-            errors.append(f"{page}: missing maturity and review metadata")
+        if page.name == "_index.md":
+            if match:
+                errors.append(
+                    f"{page}: section indexes must not declare feature maturity"
+                )
             continue
+        if not match:
+            continue
+        capability_pages += 1
         status = match.group("status")
         if status not in ALLOWED_STATUSES:
             errors.append(f"{page}: unsupported maturity status {status!r}")
@@ -60,7 +67,7 @@ def main() -> int:
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"Checked maturity metadata for {len(pages)} content pages")
+    print(f"Checked maturity metadata for {capability_pages} capability pages")
     return 0
 
 

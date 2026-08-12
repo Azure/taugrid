@@ -5,8 +5,6 @@ weight: 25
 description: Choose a runnable Tau, Kueue, Ray, or AKS example by learning goal and prerequisite cost.
 ---
 
-{{< maturity status="ga" reviewed="2026-08-11" >}}
-
 Choose an example by the question you want to answer:
 
 | Goal | Example | Interface | Compute | Start here |

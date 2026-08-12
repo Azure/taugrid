@@ -4,8 +4,6 @@ weight: 3
 description: Alpha, Beta, GA, Deprecated, and Planned Tau capabilities
 ---
 
-{{< maturity status="ga" reviewed="2026-08-12" >}}
-
 TauGrid uses Kubernetes-style feature stages. A stage applies to a capability,
 not to the entire release.
 
@@ -17,8 +15,9 @@ not to the entire release.
 | **Deprecated** | Still available during a documented migration period. A replacement and removal target must be provided. | Existing users should migrate. Do not start new use. |
 | **Planned** | Design or roadmap work without an available user contract. Planned is not a feature stage. | Do not depend on it. |
 
-Page-level feature-state banners describe the primary workflow on that page. A
-page can include an inline banner for a lower-maturity subsection.
+Feature-state banners appear only when a page's primary subject is a capability.
+Navigation, overview, and policy pages do not have a feature stage. A page can
+include an inline banner for a lower-maturity subsection.
 
 ## Promotion requirements
 
