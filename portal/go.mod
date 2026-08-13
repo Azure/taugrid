@@ -8,7 +8,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
 	github.com/Azure/taugrid/core v0.0.0
 	github.com/golang/snappy v1.0.0
-	github.com/parquet-go/parquet-go v0.30.1
+	github.com/parquet-go/parquet-go v0.31.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.47.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
