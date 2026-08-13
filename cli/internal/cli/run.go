@@ -67,7 +67,7 @@ Common examples:
   tau run
   tau run mc-rl --config experiments/mc-rl/tau.yaml
   tau run --dry-run=client
-  tau run --config examples/pufferlib-gpu-rl/tau.yaml --dry-run=client
+  tau run --config examples/market-policy/tau.yaml --dry-run=client
   tau run --config examples/ray-tune-smoke/tau.yaml --dry-run=client
   tau run status mc-rl`,
 		Args: cobra.MaximumNArgs(1),

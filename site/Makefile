@@ -10,7 +10,7 @@ BASE_URL ?=
 BASE_PATH ?= /taugrid
 HUGO_BASE_URL := $(if $(BASE_URL),--baseURL "$(BASE_URL)")
 
-.PHONY: deps build check serve clean
+.PHONY: deps build check serve train-market-policy clean
 
 deps: $(HUGO) node_modules
 
@@ -35,6 +35,11 @@ check: build
 
 serve: deps
 	GOPROXY=$(GOPROXY) HUGO_CACHEDIR=$(HUGO_CACHEDIR) $(HUGO) server --buildDrafts --disableFastRender $(HUGO_BASE_URL)
+
+train-market-policy:
+	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../cli/examples/market-policy/train.py \
+		--allow-cpu \
+		--output static/models/tau-market-policy.json
 
 clean:
 	rm -rf public resources .hugo_cache
