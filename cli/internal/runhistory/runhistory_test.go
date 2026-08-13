@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/expkusto"
 	portalruns "github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -495,11 +497,61 @@ func TestLifecycleMappingReferencesRecordFields(t *testing.T) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, mapping := range lifecycleMapping {
-		path := strings.TrimPrefix(mapping["path"], "$.")
+	for _, mapping := range expkusto.RunLifecycleIngestionMapping() {
+		path := strings.TrimPrefix(mapping.Path, "$.")
 		if _, ok := fields[path]; !ok {
-			t.Fatalf("ingestion mapping column %q references missing record field %q", mapping["column"], path)
+			t.Fatalf("ingestion mapping column %q references missing record field %q", mapping.Column, path)
 		}
+	}
+}
+
+func TestMarshalLifecycleRecordsUsesNDJSON(t *testing.T) {
+	data, err := marshalLifecycleRecords([]Record{
+		{ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "one", State: StateQueued},
+		{ObservedAt: time.Unix(2, 0).UTC(), ObservationID: "two", State: StateSucceeded},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("NDJSON line count = %d, want 2: %q", len(lines), data)
+	}
+	for _, line := range lines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("NDJSON line %q is not a JSON object: %v", line, err)
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {
+		t.Fatalf("payload must be NDJSON, not a JSON array: %q", data)
+	}
+}
+
+func TestMarshalLifecycleRecordsAllowsEmptyBatch(t *testing.T) {
+	data, err := marshalLifecycleRecords(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("empty batch encoded %q", data)
+	}
+}
+
+func TestIngestByTagIsStableForRecordOrder(t *testing.T) {
+	first := []Record{{ObservationID: "b"}, {ObservationID: "a"}}
+	second := []Record{{ObservationID: "a"}, {ObservationID: "b"}}
+	if got, want := ingestByTag(first), ingestByTag(second); got != want {
+		t.Fatalf("ingest-by tag depends on record order: %q != %q", got, want)
+	}
+}
+
+func TestSkippedIngestionStatusIsAccepted(t *testing.T) {
+	if !isSuccessfulIngestionStatusCode(azkustoingest.Skipped) {
+		t.Fatal("deduplicated ingestion status was not accepted")
+	}
+	if isSuccessfulIngestionStatusCode(azkustoingest.Failed) {
+		t.Fatal("failed ingestion status was accepted")
 	}
 }
 

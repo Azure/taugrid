@@ -72,6 +72,7 @@ type RunHistoryQueryOptions struct {
 	Namespace   string
 	LocalQueue  string
 	WorkspaceID string
+	Kind        string
 	Limit       int
 }
 
@@ -287,6 +288,7 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	opts.Namespace = strings.TrimSpace(opts.Namespace)
 	opts.LocalQueue = strings.TrimSpace(opts.LocalQueue)
 	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
+	opts.Kind = strings.TrimSpace(opts.Kind)
 	if opts.Limit == 0 {
 		opts.Limit = 200
 	}
@@ -312,6 +314,9 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	if opts.WorkspaceID != "" {
 		fmt.Fprintf(&b, "| where workspace_id == %s\n", kqlString(opts.WorkspaceID))
 	}
+	if opts.Kind != "" {
+		fmt.Fprintf(&b, "| where tolower(owning_resource_kind) == %s\n", kqlString(strings.ToLower(opts.Kind)))
+	}
 	b.WriteString("| extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))\n")
 	b.WriteString("| where isnotempty(durable_identity)\n")
 	b.WriteString("| extend observation_identity=iff(isnotempty(observation_id), observation_id, strcat(durable_identity, ':', state, ':', tostring(observed_at)))\n")
@@ -326,6 +331,53 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	b.WriteString("| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version\n")
 	b.WriteString("| order by observed_at desc, cluster asc, namespace asc, durable_id asc\n")
 	fmt.Fprintf(&b, "| take %d\n", opts.Limit)
+	return b.String(), nil
+}
+
+// BuildRunHistoryTimelineQuery returns every lifecycle observation for one
+// Kubernetes resource UID. It is deliberately separate from BuildRunHistoryQuery:
+// the latter collapses rows for a board, while this query backs a durable detail
+// page after the live RayJob and its Pods have disappeared.
+func BuildRunHistoryTimelineQuery(opts RunHistoryQueryOptions, resourceUID string) (string, error) {
+	resourceUID = strings.TrimSpace(resourceUID)
+	if resourceUID == "" {
+		return "", fmt.Errorf("resource UID is required")
+	}
+	table := strings.TrimSpace(opts.Table)
+	if table == "" {
+		table = DefaultRunLifecycleTable
+	}
+	if !isKQLIdentifier(table) {
+		return "", fmt.Errorf("--table must be a Kusto identifier")
+	}
+	if opts.Limit <= 0 {
+		opts.Limit = 200
+	}
+	if opts.Limit > 1000 {
+		opts.Limit = 1000
+	}
+	var b strings.Builder
+	b.WriteString(table + "\n")
+	if strings.TrimSpace(opts.Cluster) != "" {
+		fmt.Fprintf(&b, "| where cluster == %s\n", kqlString(strings.TrimSpace(opts.Cluster)))
+	}
+	if strings.TrimSpace(opts.Namespace) != "" {
+		fmt.Fprintf(&b, "| where namespace == %s\n", kqlString(strings.TrimSpace(opts.Namespace)))
+	}
+	if strings.TrimSpace(opts.LocalQueue) != "" {
+		fmt.Fprintf(&b, "| where local_queue == %s\n", kqlString(strings.TrimSpace(opts.LocalQueue)))
+	}
+	if strings.TrimSpace(opts.WorkspaceID) != "" {
+		fmt.Fprintf(&b, "| where workspace_id == %s\n", kqlString(strings.TrimSpace(opts.WorkspaceID)))
+	}
+	if kind := strings.TrimSpace(opts.Kind); kind != "" {
+		fmt.Fprintf(&b, "| where tolower(owning_resource_kind) == %s\n", kqlString(strings.ToLower(kind)))
+	}
+	fmt.Fprintf(&b, "| where resource_uid == %s\n", kqlString(resourceUID))
+	b.WriteString("| project observed_at, observation_id, run_id, durable_id, workspace_id, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, resource_uid, submit_time, created_time, kueue_admitted_time, pod_start_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, tau_command, result_path, result_pvc\n")
+	b.WriteString("| order by observed_at desc\n")
+	fmt.Fprintf(&b, "| take %d\n", opts.Limit)
+	b.WriteString("| order by observed_at asc\n")
 	return b.String(), nil
 }
 
