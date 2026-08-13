@@ -100,6 +100,7 @@ jobs:
           if [[ "${{ matrix.chart }}" == "charts/taugrid" ]]; then
             scripts/ci/vendor-taugrid-dependencies.sh "${{ matrix.chart }}"
           else
+            helm repo add --force-update prometheus-community https://prometheus-community.github.io/helm-charts
             helm dependency build "${{ matrix.chart }}"
           fi
 
