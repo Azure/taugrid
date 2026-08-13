@@ -1,0 +1,143 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
+<!--
+THESIS: Show the behavior of a model researchers can train with TauGrid, not an infrastructure decision.
+OWN-WORLD: Inherit TauGrid's restrained blue and documentation typography; let a live market trace carry the policy.
+STORY: A synthetic market evolves, the actor ranks Short, Flat, and Long, and the critic estimates immediate reward.
+FIRST VIEWPORT: The live trace and environment state lead beside policy probabilities; training facts stay directly below.
+FORM: A running actor-critic specimen loaded from the exact artifact exported by the TauGrid workload.
+-->
+{{- $id := printf "tau-inference-demo-%d" .Ordinal -}}
+<section class="tau-inference-demo tau-policy-demo tau-market-demo" data-tau-market-demo aria-labelledby="{{ $id }}-title">
+  <header class="tau-inference-demo__header">
+    <div>
+      <h3 id="{{ $id }}-title">Watch an actor-critic policy run live</h3>
+      <p>The exact 316-parameter model exported by the checked-in TauGrid training workload.</p>
+    </div>
+    <div class="tau-inference-demo__runtime" role="status" aria-live="polite">
+      <span aria-hidden="true"></span>
+      <span data-market-runtime-status>Loading market policy</span>
+    </div>
+  </header>
+
+  <div class="tau-inference-demo__workspace">
+    <section class="tau-inference-demo__request tau-market-demo__environment" aria-label="Synthetic market environment">
+      <canvas
+        class="tau-market-demo__canvas"
+        width="720"
+        height="420"
+        data-market-canvas
+        aria-label="Synthetic market price trace"
+      ></canvas>
+      <dl class="tau-market-demo__facts">
+        <div>
+          <dt>Price</dt>
+          <dd data-market-price>100.00</dd>
+        </div>
+        <div>
+          <dt>Signal</dt>
+          <dd data-market-signal>0.000</dd>
+        </div>
+        <div>
+          <dt>Volatility</dt>
+          <dd data-market-volatility>0.000</dd>
+        </div>
+        <div>
+          <dt>Inventory</dt>
+          <dd data-market-inventory>0.00</dd>
+        </div>
+        <div>
+          <dt>Step reward</dt>
+          <dd data-market-reward>0.000</dd>
+        </div>
+        <div>
+          <dt>Total reward</dt>
+          <dd data-market-total-reward>0.000</dd>
+        </div>
+      </dl>
+      <div class="tau-inference-demo__actions">
+        <button class="tau-button tau-button--primary" type="button" data-market-toggle disabled>Run policy</button>
+        <button class="tau-button" type="button" data-market-reset disabled>New market</button>
+      </div>
+      <p class="tau-inference-demo__hint">Synthetic environment only. No live market data and no financial advice.</p>
+    </section>
+
+    <section class="tau-inference-demo__response tau-policy-demo__analysis" aria-label="Live actor-critic output">
+      <div class="tau-inference-demo__response-header">
+        <strong>Actor and critic</strong>
+        <span data-market-phase>Loading</span>
+      </div>
+      <div class="tau-policy-demo__decision">
+        <strong data-market-decision>Preparing model</strong>
+        <p data-market-status>The Worker is loading trained weights.</p>
+      </div>
+      <div class="tau-policy-demo__value">
+        <div class="tau-policy-demo__value-labels">
+          <span>Predicted step reward</span>
+          <strong data-market-value>-</strong>
+        </div>
+        <div
+          class="tau-market-demo__signal-track"
+          role="img"
+          aria-label="Current latent market signal"
+          data-market-signal-track
+        >
+          <span data-market-signal-fill></span>
+        </div>
+      </div>
+      <div class="tau-policy-demo__policy">
+        <strong>Action probabilities</strong>
+        <ol data-market-actions>
+          <li>Available after the first inference.</li>
+        </ol>
+      </div>
+    </section>
+  </div>
+
+  <ol class="tau-inference-demo__trace" aria-label="Actor-critic inference path">
+    <li data-market-step="features">
+      <span>Observation</span>
+      <small>8 environment values</small>
+    </li>
+    <li data-market-step="worker">
+      <span>Worker inference</span>
+      <small>24-unit hidden layer</small>
+    </li>
+    <li data-market-step="policy">
+      <span>Policy + value</span>
+      <small>3 actions and reward</small>
+    </li>
+    <li data-market-step="render">
+      <span>Environment step</span>
+      <small>Price, inventory, reward</small>
+    </li>
+  </ol>
+
+  <dl class="tau-inference-demo__metrics">
+    <div>
+      <dt>Training device</dt>
+      <dd data-market-training-device>-</dd>
+    </div>
+    <div>
+      <dt>Parameters</dt>
+      <dd data-market-parameters>316</dd>
+    </div>
+    <div>
+      <dt>Held-out accuracy</dt>
+      <dd data-market-accuracy>-</dd>
+    </div>
+    <div>
+      <dt>Last inference</dt>
+      <dd data-market-latency>-</dd>
+    </div>
+  </dl>
+
+  <footer class="tau-inference-demo__footer">
+    <strong>Synthetic research workload.</strong>
+    The repository example trains this exact PyTorch architecture on a TauGrid GPU worker.
+    Its exported Short / Flat / Long actor and reward critic run here without a server.
+  </footer>
+  <noscript>This interactive example requires JavaScript.</noscript>
+</section>
+<script type="module" src="{{ "js/tau-market-policy-demo.js" | relURL }}"></script>
