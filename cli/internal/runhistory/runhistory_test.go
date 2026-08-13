@@ -555,6 +555,12 @@ func TestSkippedIngestionStatusIsAccepted(t *testing.T) {
 	}
 }
 
+func TestIngestIfNotExistsValueUsesSerializedExtentTagCollection(t *testing.T) {
+	if got, want := ingestIfNotExistsValue("tau-lifecycle-abc"), `["ingest-by:tau-lifecycle-abc"]`; got != want {
+		t.Fatalf("ingestIfNotExists value = %q, want %q", got, want)
+	}
+}
+
 func TestRecordJSONOmitsMissingTimestamps(t *testing.T) {
 	data, err := json.Marshal(Record{
 		ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "observation",

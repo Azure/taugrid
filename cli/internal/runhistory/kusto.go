@@ -74,14 +74,16 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 	result, err := ingestor.FromReader(writeCtx, bytes.NewReader(data),
 		azkustoingest.Database(w.database),
 		azkustoingest.Table(w.table),
-		// Keep the mapping inline for direct upgrades from releases that created
-		// only the table. The schema command also creates the same named mapping
-		// for operators and other ADX clients; both derive from expkusto.
-		azkustoingest.IngestionMapping(expkusto.RunLifecycleIngestionMapping(), azkustoingest.JSON),
+		// The schema command creates this server-side mapping from the same
+		// source-of-truth columns. Referencing it keeps the queued writer and the
+		// deployed schema on one explicit, operator-visible contract.
+		azkustoingest.IngestionMappingRef(expkusto.RunLifecycleIngestionMappingName, azkustoingest.JSON),
 		azkustoingest.FlushImmediately(),
 		azkustoingest.ReportResultToTable(),
 		azkustoingest.Tags([]string{"ingest-by:" + tag}),
-		azkustoingest.IfNotExists(tag),
+		// ADX expects ingestIfNotExists as a serialized collection of full extent
+		// tags, not as the bare tag value accepted by the SDK helper signature.
+		azkustoingest.IfNotExists(ingestIfNotExistsValue(tag)),
 	)
 	if err != nil {
 		_ = ingestor.Close()
@@ -131,4 +133,14 @@ func ingestByTag(records []Record) string {
 	sort.Strings(ids)
 	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
 	return "tau-lifecycle-" + hex.EncodeToString(sum[:])
+}
+
+func ingestIfNotExistsValue(tag string) string {
+	value, err := json.Marshal([]string{"ingest-by:" + tag})
+	if err != nil {
+		// json.Marshal of a string slice cannot fail. Keep the writer API simple
+		// while making an unexpected future change fail loudly.
+		panic(fmt.Sprintf("marshal ingestIfNotExists value: %v", err))
+	}
+	return string(value)
 }
