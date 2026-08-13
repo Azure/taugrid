@@ -100,6 +100,13 @@ Usage: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "opera
 {{- end }}
 
 {{/*
+Managed identity client ID required by Azure Workload Identity.
+*/}}
+{{- define "adx-mon.workloadIdentityClientId" -}}
+{{- .Values.adx.clientId | trim | required "adx.clientId must be set when adx.workloadIdentity.enabled is true" -}}
+{{- end }}
+
+{{/*
 Image tag helper — falls back to .Chart.AppVersion if tag is empty.
 Usage: {{ include "adx-mon.imageTag" (dict "image" .Values.operator.image "chart" .Chart) }}
 */}}

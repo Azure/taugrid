@@ -1,0 +1,86 @@
+suite: adx.workloadIdentity support
+templates:
+  - templates/alerter/serviceaccount.yaml
+  - templates/alerter/deployment.yaml
+  - templates/ingestor/serviceaccount.yaml
+  - templates/ingestor/statefulset.yaml
+tests:
+  - it: does not configure workload identity on service accounts by default
+    template: templates/ingestor/serviceaccount.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+
+  - it: does not configure workload identity on pods by default
+    template: templates/ingestor/statefulset.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+
+  - it: configures workload identity for the ingestor pod
+    template: templates/ingestor/statefulset.yaml
+    set:
+      adx.clientId: " test-client-id "
+      adx.workloadIdentity.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+          value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_CLIENT_ID
+            value: test-client-id
+
+  - it: configures workload identity for the ingestor service account
+    template: templates/ingestor/serviceaccount.yaml
+    set:
+      adx.clientId: " test-client-id "
+      adx.workloadIdentity.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+          value: test-client-id
+
+  - it: configures workload identity for the alerter pod
+    template: templates/alerter/deployment.yaml
+    set:
+      adx.clientId: " test-client-id "
+      adx.workloadIdentity.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+          value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_CLIENT_ID
+            value: test-client-id
+
+  - it: configures workload identity for the alerter service account
+    template: templates/alerter/serviceaccount.yaml
+    set:
+      adx.clientId: " test-client-id "
+      adx.workloadIdentity.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+          value: test-client-id
+
+  - it: rejects workload identity without a client ID
+    template: templates/ingestor/serviceaccount.yaml
+    set:
+      adx.workloadIdentity.enabled: true
+      adx.clientId: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: adx.clientId must be set when adx.workloadIdentity.enabled is true
+
+  - it: rejects workload identity with a whitespace-only client ID
+    template: templates/ingestor/serviceaccount.yaml
+    set:
+      adx.workloadIdentity.enabled: true
+      adx.clientId: "   "
+    asserts:
+      - failedTemplate:
+          errorMessage: adx.clientId must be set when adx.workloadIdentity.enabled is true

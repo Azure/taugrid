@@ -26,6 +26,9 @@ spec:
       labels:
         app: ingestor
         {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "ingestor") | nindent 8 }}
+        {{- if .Values.adx.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       automountServiceAccountToken: true
       serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "ingestor") }}
@@ -72,9 +75,9 @@ spec:
             - name: AZURE_RESOURCE
               value: $(ADX_CLUSTER_URL)
             {{- end }}
-            {{- if .Values.adx.clientId }}
+            {{- if (.Values.adx.clientId | trim) }}
             - name: AZURE_CLIENT_ID
-              value: {{ .Values.adx.clientId }}
+              value: {{ .Values.adx.clientId | trim | quote }}
             {{- else if and .Values.adx.configMapRef (not .Values.adx.clusterUrl) }}
             - name: AZURE_CLIENT_ID
               valueFrom:

@@ -63,6 +63,8 @@ cat > my-values.yaml <<EOF
 adx:
   clusterUrl: "https://mycluster.westus2.kusto.windows.net"
   clientId: "<managed-identity-client-id>"
+  workloadIdentity:
+    enabled: true
 global:
   clusterName: "my-cluster"
   region: "westus2"
@@ -108,6 +110,7 @@ Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific 
 |-----------|-------------|---------|
 | `adx.clusterUrl` | ADX cluster URL | `""` |
 | `adx.clientId` | Managed Identity client ID for ADX auth | `""` |
+| `adx.workloadIdentity.enabled` | Add AKS Azure Workload Identity annotations and labels to ingestor and alerter | `false` |
 | `adx.metricsDatabase` | Metrics database name | `Metrics` |
 | `adx.logsDatabase` | Logs database name | `Logs` |
 | `adx.costTrackingDatabase` | Cost tracking database name | `CostTracking` |
@@ -119,6 +122,12 @@ Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific 
 > **Cluster labels:** `global.clusterName` must still resolve at Helm render time. For normal ArgoCD deployments, set it explicitly in the per-cluster overlay. For Helm install/upgrade flows, the chart also falls back to `ADX_CLUSTER_NAME` from the referenced ConfigMap via Helm `lookup`. The collector does **not** expand `$(...)` variables inside `config.toml`.
 >
 > **Important:** When using kubelet managed identity (no explicit client ID), omit `adx.clientId` entirely — do not set it to `""`. The Azure SDK treats an empty string as an invalid client ID.
+>
+> **AKS Workload Identity:** Set `adx.workloadIdentity.enabled: true` together with
+> `adx.clientId` when the ingestor and alerter authenticate to ADX through an AKS
+> federated identity. The chart then annotates their ServiceAccounts with
+> `azure.workload.identity/client-id` and labels their Pods with
+> `azure.workload.identity/use: "true"`.
 
 ### Operator
 
