@@ -1,4 +1,5 @@
-# Managed test-cluster overlay for taugrid-core.
+# Managed test-cluster overlay for a deliberately standalone taugrid-core
+# release. Do not use this overlay with the taugrid umbrella release.
 #
 # Apply together with values.yaml. The base values pin the promoted TauGrid
 # Portal image tag; override it only to validate another published build:
