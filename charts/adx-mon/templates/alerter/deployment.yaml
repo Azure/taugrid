@@ -28,6 +28,9 @@ spec:
         prometheus.io/scrape: "true"
       labels:
         {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "alerter") | nindent 8 }}
+        {{- if .Values.adx.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       automountServiceAccountToken: true
       serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "alerter") }}
@@ -62,6 +65,11 @@ spec:
                 configMapKeyRef:
                   name: {{ .Values.adx.configMapRef }}
                   key: ADX_CLUSTER_URL
+            {{- end }}
+            {{- if .Values.adx.clientId }}
+            - name: AZURE_CLIENT_ID
+              value: {{ .Values.adx.clientId }}
+            {{- else if and .Values.adx.configMapRef (not .Values.adx.clusterUrl) }}
             - name: AZURE_CLIENT_ID
               valueFrom:
                 configMapKeyRef:

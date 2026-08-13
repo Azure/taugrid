@@ -26,6 +26,9 @@ spec:
       labels:
         app: ingestor
         {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "ingestor") | nindent 8 }}
+        {{- if .Values.adx.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       automountServiceAccountToken: true
       serviceAccountName: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "ingestor") }}

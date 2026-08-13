@@ -17,6 +17,9 @@ adx:
   clusterUrl: ""
   # -- Managed Identity client ID for ADX auth
   clientId: ""
+  workloadIdentity:
+    # -- Enable AKS Azure Workload Identity for the ingestor and alerter. Requires adx.clientId.
+    enabled: false
   # -- Metrics database name
   metricsDatabase: "Metrics"
   # -- Logs database name
