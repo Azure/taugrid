@@ -27,12 +27,48 @@ type HistoryScope struct {
 	Namespace   string
 	LocalQueue  string
 	WorkspaceID string
-	Limit       int
+	// Kind is an optional trusted workload-kind boundary applied before the
+	// durable-history limit. It must not be sourced from browser input.
+	Kind  string
+	Limit int
 }
 
 // HistoryReader lists durable lifecycle rows within one already-resolved scope.
 type HistoryReader interface {
 	ListHistory(ctx context.Context, scope HistoryScope) ([]Run, error)
+}
+
+// HistoryDetailReader supplies the immutable lifecycle observations for one
+// resource. It intentionally does not depend on Kubernetes reads.
+type HistoryDetailReader interface {
+	GetHistoryTimeline(ctx context.Context, scope HistoryScope, resourceUID string) ([]LifecycleEvent, error)
+}
+
+// LifecycleEvent is one Kusto lifecycle observation rendered by the durable
+// Ray history detail page.
+type LifecycleEvent struct {
+	ObservedAt     string `json:"observedAt"`
+	State          string `json:"state"`
+	Reason         string `json:"reason,omitempty"`
+	Message        string `json:"message,omitempty"`
+	CompletionTime string `json:"completionTime,omitempty"`
+	SubmitTime     string `json:"submitTime,omitempty"`
+	AdmittedTime   string `json:"admittedTime,omitempty"`
+	PodStartTime   string `json:"podStartTime,omitempty"`
+	RunID          string `json:"runId,omitempty"`
+	DurableID      string `json:"durableId,omitempty"`
+	ResourceUID    string `json:"resourceUid,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Namespace      string `json:"namespace,omitempty"`
+	Cluster        string `json:"cluster,omitempty"`
+	Queue          string `json:"queue,omitempty"`
+	Image          string `json:"image,omitempty"`
+	Command        string `json:"command,omitempty"`
+	ResultPath     string `json:"resultPath,omitempty"`
+	ResultPVC      string `json:"resultPvc,omitempty"`
+	ArtifactURI    string `json:"artifactUri,omitempty"`
+	CheckpointURI  string `json:"checkpointUri,omitempty"`
+	Kind           string `json:"kind,omitempty"`
 }
 
 // HistoryQueryBuilder builds the KQL for one scoped history request.
@@ -59,6 +95,7 @@ func NewKustoHistoryReader(querier kustoquery.Querier) KustoHistoryReader {
 				Namespace:   scope.Namespace,
 				LocalQueue:  scope.LocalQueue,
 				WorkspaceID: scope.WorkspaceID,
+				Kind:        scope.Kind,
 				Limit:       scope.Limit,
 			})
 		},
@@ -87,6 +124,37 @@ func (r KustoHistoryReader) ListHistory(ctx context.Context, scope HistoryScope)
 			continue
 		}
 		out = append(out, run)
+	}
+	return out, nil
+}
+
+// GetHistoryTimeline reads the append-only lifecycle rows without consulting
+// the Kubernetes API, so the result remains available after KubeRay cleanup.
+func (r KustoHistoryReader) GetHistoryTimeline(ctx context.Context, scope HistoryScope, resourceUID string) ([]LifecycleEvent, error) {
+	if r.Querier == nil {
+		return nil, fmt.Errorf("durable history querier is not configured")
+	}
+	kql, err := expkusto.BuildRunHistoryTimelineQuery(expkusto.RunHistoryQueryOptions{
+		Table: scope.Table, Cluster: scope.Cluster, Namespace: scope.Namespace,
+		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Kind: scope.Kind, Limit: scope.Limit,
+	}, resourceUID)
+	if err != nil {
+		return nil, fmt.Errorf("build durable history timeline query: %w", err)
+	}
+	rows, err := r.Querier.Query(ctx, kql)
+	if err != nil {
+		return nil, fmt.Errorf("query durable history timeline: %w", err)
+	}
+	out := make([]LifecycleEvent, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, LifecycleEvent{
+			ObservedAt: row.Str("observed_at"), State: row.Str("state"), Reason: row.Str("reason"), Message: row.Str("message"),
+			CompletionTime: row.Str("completion_time"), SubmitTime: row.Str("submit_time"), AdmittedTime: row.Str("kueue_admitted_time"), PodStartTime: row.Str("pod_start_time"),
+			RunID: row.Str("run_id"), DurableID: row.Str("durable_id"), ResourceUID: row.Str("resource_uid"), Name: row.Str("owning_resource_name"),
+			Namespace: row.Str("namespace"), Cluster: row.Str("cluster"), Queue: row.Str("local_queue"), Image: row.Str("image"),
+			Command: row.Str("tau_command"), ResultPath: row.Str("result_path"), ResultPVC: row.Str("result_pvc"), ArtifactURI: row.Str("artifact_uri"), CheckpointURI: row.Str("checkpoint_uri"),
+			Kind: row.Str("owning_resource_kind"),
+		})
 	}
 	return out, nil
 }

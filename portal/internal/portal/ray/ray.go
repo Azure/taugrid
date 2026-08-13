@@ -14,8 +14,11 @@
 // (http://<cluster>-head-svc.<ns>.svc:8265), so any RayCluster is reachable
 // while it is running.
 //
-// The live dashboard is only available while the RayCluster exists; a durable,
-// Kusto-backed RayJob history page is tracked separately (work item #941).
+// The live dashboard is only available while the RayCluster exists. Durable
+// RayJob history is served alongside it from the same TauExpRunLifecycle rows
+// the Jobs board reads: the lifecycle recorder watches RayJobs, so a finished
+// RayJob remains visible after KubeRay has garbage-collected its cluster,
+// Service, and head pod.
 package ray
 
 import (
@@ -23,8 +26,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
+	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/portal/links"
+)
+
+const (
+	historyKind             = "RayJob"
+	historyStateAvailable   = "available"
+	historyStateLiveOnly    = "live-only"
+	historyStateUnavailable = "history-unavailable"
 )
 
 // clusterLabel is the selector key the head Service carries; its value is the owning
@@ -53,7 +65,9 @@ type Reader interface {
 // Options scopes discovery. Namespace, when set, restricts the listing to one
 // namespace; empty lists cluster-wide.
 type Options struct {
-	Namespace string
+	Namespace    string
+	History      runs.HistoryReader
+	HistoryScope runs.HistoryScope
 }
 
 // Cluster is one discovered Ray head Service: the owning RayCluster's identity and
@@ -77,11 +91,15 @@ type Cluster struct {
 	Available bool `json:"available"`
 }
 
-// Snapshot is the Ray board payload: the discovered dashboards plus rollups.
+// Snapshot is the Ray board payload: live dashboards plus durable RayJob
+// history, which outlives them.
 type Snapshot struct {
-	Namespace string    `json:"namespace,omitempty"`
-	Total     int       `json:"total"`
-	Clusters  []Cluster `json:"clusters"`
+	Namespace         string     `json:"namespace,omitempty"`
+	Total             int        `json:"total"`
+	Clusters          []Cluster  `json:"clusters"`
+	History           []runs.Run `json:"history,omitempty"`
+	HistoryState      string     `json:"historyState"`
+	HistoryDiagnostic string     `json:"historyDiagnostic,omitempty"`
 }
 
 // Board lists Services via the Reader, keeps only the `<rc>-head-svc` ones, and
@@ -114,7 +132,49 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 		Namespace: opts.Namespace,
 		Total:     len(clusters),
 		Clusters:  clusters,
-	}, nil
+	}.withHistory(ctx, opts), nil
+}
+
+// withHistory attaches the durable RayJob rows without making the live board
+// unavailable when its Kusto query is temporarily unavailable.
+func (s Snapshot) withHistory(ctx context.Context, opts Options) Snapshot {
+	if opts.History == nil {
+		s.HistoryState = historyStateLiveOnly
+		return s
+	}
+	scope := opts.HistoryScope
+	// The durable-history boundary is resolved by a trusted caller. In
+	// particular, an empty namespace intentionally means cluster-wide history;
+	// do not replace it with the live-board namespace from a request.
+	scope.Kind = historyKind
+	history, err := opts.History.ListHistory(ctx, scope)
+	if err != nil {
+		s.HistoryState = historyStateUnavailable
+		s.HistoryDiagnostic = "durable RayJob history query failed"
+		return s
+	}
+	// The Kusto query is scoped, but keep the boundary enforced here as well so
+	// another HistoryReader implementation cannot widen a Portal response.
+	s.History = filterRayJobs(history, scope)
+	s.HistoryState = historyStateAvailable
+	return s
+}
+
+func filterRayJobs(rows []runs.Run, scope runs.HistoryScope) []runs.Run {
+	out := make([]runs.Run, 0, len(rows))
+	for _, run := range rows {
+		if !strings.EqualFold(run.Kind, historyKind) {
+			continue
+		}
+		if scope.Cluster != "" && !strings.EqualFold(run.Cluster, scope.Cluster) {
+			continue
+		}
+		if scope.Namespace != "" && !strings.EqualFold(run.Namespace, scope.Namespace) {
+			continue
+		}
+		out = append(out, run)
+	}
+	return out
 }
 
 // serviceList is the subset of the core v1 Service list the board reads.
