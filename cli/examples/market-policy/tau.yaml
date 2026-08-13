@@ -1,0 +1,40 @@
+name: market-policy
+engine: ray
+entrypoint: train.py
+
+experiment:
+  project: Tau examples
+  name: market-policy-training
+  group: browser-inference
+
+runtime:
+  # Immutable public TauGrid Ray + CUDA image from MCR. PyTorch and NumPy are
+  # pinned because the base image intentionally does not bundle frameworks.
+  image: mcr.microsoft.com/aks/ai-runtime/ray@sha256:5a5648f3e1b27eaa6e18b345aaf8ad06b6289543ee019a01ab9fa3a2d98749e3
+  pip:
+    - torch==2.11.0
+    - numpy==2.1.3
+  env:
+    MARKET_POLICY_REQUIRE_CUDA: "1"
+    MARKET_POLICY_USE_RAY: "1"
+    MARKET_POLICY_TRAINING_EXAMPLES: "8000"
+    MARKET_POLICY_VALIDATION_EXAMPLES: "2000"
+    MARKET_POLICY_STEPS: "4000"
+    MARKET_POLICY_BATCH_SIZE: "256"
+    MARKET_POLICY_OUTPUT: /data/market-policy/tau-market-policy.json
+    MARKET_POLICY_SEED: "20260626"
+
+compute:
+  workers: 1
+  gpus_per_worker: 1
+
+storage:
+  # Replace this with the writable PVC supplied for your workspace.
+  data_pvc: workspace-data
+  output: /data/market-policy
+
+policy:
+  workspace: default
+  gpu_class: h200-141gb
+  topology: single-node-nvlink
+  disable_default_priorities: true

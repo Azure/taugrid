@@ -56,6 +56,37 @@ tau serve status <service-name> \
   --context <context>
 ```
 
+## Preview the inference experience
+
+The strongest inference examples render real model behavior instead of replaying
+a canned response. This browser-only specimen loads the artifact produced by the
+[`market-policy`](https://github.com/Azure/taugrid/tree/main/cli/examples/market-policy)
+TauGrid workload: an 8-input, 24-hidden-unit policy and value network trained for
+a synthetic market-making environment, then exported for module Worker inference.
+
+{{< tau-inference-demo >}}
+
+Run the exact trainer on TauGrid:
+
+```bash
+tau run --config cli/examples/market-policy/tau.yaml --dry-run=client
+tau run --config cli/examples/market-policy/tau.yaml
+```
+
+Before submitting, set `storage.data_pvc` in the example to the writable PVC
+from your platform handoff. The RayJob resolves namespace and queue policy from
+the configured TauWorkspace, dispatches training to one `h200-141gb` worker,
+and writes the same `tau-market-policy.json` format loaded above to durable
+workspace storage. The manifest pins TauGrid's public MCR Ray/CUDA image by
+digest and installs exact PyTorch and NumPy versions through `runtime.pip`, so
+the workspace needs package-index access during startup. For deterministic site
+verification, `make train-market-policy` from `site/` invokes the same
+`train.py` twice with CPU explicitly selected and compares the exports without
+replacing the checked-in H200 artifact. The environment is synthetic and is not
+financial advice. To adapt the pattern to another endpoint, keep the same proof
+structure: accept real input, render domain-native output, expose useful model
+state, and identify the exact layer that measured latency.
+
 If a completed managed finetune or model-registry entry already records the
 checkpoint, use `--from-finetune <run>` or `--from-model <model-ref>` instead
 of `--checkpoint`. Those forms read Kubernetes metadata and therefore cannot

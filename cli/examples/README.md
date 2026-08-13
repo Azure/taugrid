@@ -19,8 +19,8 @@ from legacy `manifest.yaml` folders.
 ```bash
 # from the repository root
 make install-tau-cli
-tau run --config cli/examples/pufferlib-gpu-rl/tau.yaml --dry-run=client
-tau run --config cli/examples/pufferlib-gpu-rl/tau.yaml
+tau run --config cli/examples/market-policy/tau.yaml --dry-run=client
+tau run --config cli/examples/market-policy/tau.yaml
 ```
 
 For the supported repository-first GPU HPO path, follow the canonical
@@ -45,7 +45,7 @@ Standalone Tau example pages should include the same status block near the top:
 | --- | --- | --- |
 | [`aks-cpu-quickstart`](./aks-cpu-quickstart/) | `operator runbook` | Creates a new CPU-only AKS cluster and runs `az aks create`, `tau cluster install`, a real CPU PyTorch RayJob, and live Stellar metrics. Creates billable Azure resources. |
 | [`aks-gpu-quickstart`](./aks-gpu-quickstart/) | `operator runbook` | GPU counterpart to `aks-cpu-quickstart` on a single A100 node, including the AKS device plugin and MIG configuration issues. Verifies CUDA execution with evidence a CPU cannot produce. Creates expensive billable Azure resources. |
-| [`pufferlib-gpu-rl`](./pufferlib-gpu-rl/) | `production-shaped` | GPU-backed RL example using PufferLib vectorization, CUDA policy/value training, H200 scheduling, and durable metrics/checkpoint artifacts. |
+| [`market-policy`](./market-policy/) | `production-shaped` | Trains the exact compact actor-critic rendered in the documentation, requires CUDA on TauGrid, and exports browser-ready policy/value weights. |
 | [`kind-smoke`](./kind-smoke/) | `smoke/debug` | Verify the local Tau -> Kueue -> Kubernetes Job path on a disposable Kind cluster before trying AKS/GPU-specific prepare and storage flows. |
 | [`nanogpt-ray`](./nanogpt-ray/) | `smoke/debug` for local and small GPU runs; `production-shaped` for H200 target routes | Start with the 1-GPU smoke for onboarding, then use the pre-tokenized H200 configs for FineWeb target/regression work. |
 | [`ray-tune-smoke`](./ray-tune-smoke/) | `smoke/debug` | Minimal Ray Tune HPO path: the researcher supplies `train_func(config)` and a search space, and Tau generates the Tuner/TorchTrainer wrapper. Use the [canonical AKS walkthrough](../../site/content/en/docs/examples/gpu-ray-tune.md) for provider setup and the repository-first handoff. |
