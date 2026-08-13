@@ -21,6 +21,12 @@ Scoped identity, RBAC, quotas, shared queues, and an auditable record of
 workspace changes. Today a cluster runs one active workspace, and researcher
 isolation is still gated on negative-access tests.
 
+### Portal experience
+
+Grow the portal from a read-only view into a place where work happens: submit
+and act on workloads from the cluster and workload views, with the same
+workspace authorization the read paths already enforce.
+
 ### Provider-agnostic observability and cost attribution
 
 Workload health, alerts, and per-team cost attribution on any Kubernetes
@@ -47,20 +53,23 @@ platform integration project.
 A released model-serving quickstart, plus production-shaped examples for vLLM,
 SGLang, and TensorRT-LLM.
 
-### Multi-cluster dispatch
+### Cross-cloud and heterogeneous execution
 
 Take MultiKueue past constrained preview: secure worker credentials, portable
 data, images, checkpoints, and artifacts, and routing that is not restricted to
-preselected workers.
+preselected workers or to one cloud. On the capacity side, one submission
+spanning CPU, GPU, and specialized nodes, with topology and preemption decided
+by policy.
 
 ### Reinforcement learning and post-training
 
 Extend the existing PufferLib path with validated Verl and OpenRLHF examples.
 
-### Mixed and heterogeneous compute
+### Agent-driven research loops
 
-One submission spanning CPU, GPU, and specialized capacity, with topology and
-preemption decided by policy.
+Let an agent run the loop instead of a person: propose a configuration, submit
+it, read the evidence, decide the next run. The portal already summarizes a
+research loop; driving one is the open work.
 
 ## Not planned
 
