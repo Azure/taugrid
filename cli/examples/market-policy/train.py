@@ -214,9 +214,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
-        "--allow-cpu",
-        action="store_true",
-        help="Allow local deterministic regeneration without a CUDA device.",
+        "--device",
+        choices=("cpu", "cuda"),
+        default=None,
+        help="Training device. Defaults to CUDA unless MARKET_POLICY_REQUIRE_CUDA=0.",
     )
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--smoke-pairs", type=int, default=0)
@@ -226,15 +227,15 @@ def parse_args() -> argparse.Namespace:
 def train_and_export(
     config: TrainConfig,
     output_path: Path,
-    allow_cpu: bool,
+    device_name: str,
 ) -> dict[str, object]:
-    if not allow_cpu and not torch.cuda.is_available():
+    if device_name == "cuda" and not torch.cuda.is_available():
         raise SystemExit(
             "CUDA is required inside the Ray worker. Verify the RayJob requested "
             "a GPU and was admitted to the H200 resource flavor."
         )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(device_name)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     if device.type == "cuda":
@@ -330,7 +331,7 @@ def train_with_ray(config: TrainConfig, output_path: Path) -> dict[str, object]:
         return train_and_export(
             TrainConfig(**config_values),
             Path(output),
-            allow_cpu=False,
+            device_name="cuda",
         )
 
     try:
@@ -350,12 +351,18 @@ def main() -> int:
     require_cuda = os.environ.get("MARKET_POLICY_REQUIRE_CUDA", "1") == "1"
 
     if use_ray:
+        if args.device == "cpu":
+            raise SystemExit("Ray training requires CUDA; --device cpu is local-only.")
         summary = train_with_ray(config, output_path)
     else:
+        if require_cuda and args.device == "cpu":
+            raise SystemExit(
+                "CPU training requires MARKET_POLICY_REQUIRE_CUDA=0."
+            )
         summary = train_and_export(
             config,
             output_path,
-            allow_cpu=args.allow_cpu or not require_cuda,
+            device_name=args.device or ("cuda" if require_cuda else "cpu"),
         )
 
     print(json.dumps(summary, sort_keys=True), flush=True)

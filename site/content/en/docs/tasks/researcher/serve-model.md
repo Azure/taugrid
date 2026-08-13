@@ -78,12 +78,13 @@ tau run --config cli/examples/market-policy/tau.yaml \
 The RayJob dispatches training to one H200 worker on `aks-ai-runtime-flex` and
 writes the same `tau-market-policy.json` format loaded above to the workspace's
 durable `blob-training` PVC. Its image includes PyTorch and CUDA because Flex
-workers do not have PyPI egress. For deterministic site maintenance,
-`make train-market-policy` from `site/` invokes the same `train.py` with CPU
-explicitly allowed and replaces the checked-in artifact. The environment is
-synthetic and is not financial advice. To adapt the pattern to another endpoint,
-keep the same proof structure: accept real input, render domain-native output,
-expose useful model state, and identify the exact layer that measured latency.
+workers do not have PyPI egress. For deterministic site verification,
+`make train-market-policy` from `site/` invokes the same `train.py` twice with
+CPU explicitly selected and compares the exports without replacing the
+checked-in H200 artifact. The environment is synthetic and is not financial
+advice. To adapt the pattern to another endpoint, keep the same proof structure:
+accept real input, render domain-native output, expose useful model state, and
+identify the exact layer that measured latency.
 
 If a completed managed finetune or model-registry entry already records the
 checkpoint, use `--from-finetune <run>` or `--from-model <model-ref>` instead

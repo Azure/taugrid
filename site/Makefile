@@ -5,12 +5,14 @@ HUGO_VERSION ?= v0.164.0
 BIN_DIR := $(CURDIR)/.bin
 HUGO := $(BIN_DIR)/hugo
 HUGO_CACHEDIR := $(CURDIR)/.hugo_cache
+MARKET_POLICY_LOCAL := $(HUGO_CACHEDIR)/tau-market-policy.cpu.json
+MARKET_POLICY_REPEAT := $(HUGO_CACHEDIR)/tau-market-policy.cpu.repeat.json
 GOPROXY ?= https://proxy.golang.org,direct
 BASE_URL ?=
 BASE_PATH ?= /taugrid
 HUGO_BASE_URL := $(if $(BASE_URL),--baseURL "$(BASE_URL)")
 
-.PHONY: deps build check serve train-market-policy clean
+.PHONY: deps build check serve train-market-policy verify-market-policy clean
 
 deps: $(HUGO) node_modules
 
@@ -25,7 +27,7 @@ node_modules: package-lock.json
 build: deps
 	GOPROXY=$(GOPROXY) HUGO_CACHEDIR=$(HUGO_CACHEDIR) $(HUGO) --gc --minify $(HUGO_BASE_URL)
 
-check: build
+check: build verify-market-policy
 	python3 scripts/check_links.py public --base-path "$(BASE_PATH)"
 	python3 scripts/check_content.py content/en/docs
 	python3 scripts/check_wiki_parity.py
@@ -37,9 +39,19 @@ serve: deps
 	GOPROXY=$(GOPROXY) HUGO_CACHEDIR=$(HUGO_CACHEDIR) $(HUGO) server --buildDrafts --disableFastRender $(HUGO_BASE_URL)
 
 train-market-policy:
+	@mkdir -p $(HUGO_CACHEDIR)
 	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../cli/examples/market-policy/train.py \
-		--allow-cpu \
-		--output static/models/tau-market-policy.json
+		--device cpu \
+		--output $(MARKET_POLICY_LOCAL)
+	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../cli/examples/market-policy/train.py \
+		--device cpu \
+		--output $(MARKET_POLICY_REPEAT)
+	cmp $(MARKET_POLICY_LOCAL) $(MARKET_POLICY_REPEAT)
+	@rm -f $(MARKET_POLICY_REPEAT)
+	@echo "deterministic CPU artifact: $(MARKET_POLICY_LOCAL)"
+
+verify-market-policy:
+	python3 scripts/check_market_policy.py static/models/tau-market-policy.json
 
 clean:
 	rm -rf public resources .hugo_cache

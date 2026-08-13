@@ -25,7 +25,31 @@ const createWorkerClient = () => {
     type: "module",
   });
   const pendingRequests = new Map();
+  let failure = null;
   let requestId = 0;
+
+  const rejectPending = (error) => {
+    if (failure) {
+      return;
+    }
+
+    failure = error;
+    worker.terminate();
+
+    for (const pending of pendingRequests.values()) {
+      window.clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    pendingRequests.clear();
+  };
+
+  worker.addEventListener("error", (event) => {
+    event.preventDefault();
+    rejectPending(new Error("The market policy Worker failed to load."));
+  });
+  worker.addEventListener("messageerror", () => {
+    rejectPending(new Error("The market policy Worker returned an unreadable response."));
+  });
 
   worker.addEventListener("message", (event) => {
     const pending = pendingRequests.get(event.data.requestId);
@@ -35,6 +59,7 @@ const createWorkerClient = () => {
     }
 
     pendingRequests.delete(event.data.requestId);
+    window.clearTimeout(pending.timeout);
 
     if (event.data.type === "error") {
       pending.reject(new Error(event.data.error));
@@ -45,15 +70,31 @@ const createWorkerClient = () => {
 
   const request = (message) =>
     new Promise((resolve, reject) => {
+      if (failure) {
+        reject(failure);
+        return;
+      }
+
       const nextRequestId = requestId;
       requestId += 1;
-      pendingRequests.set(nextRequestId, { reject, resolve });
-      worker.postMessage({ ...message, requestId: nextRequestId });
+      const timeout = window.setTimeout(() => {
+        rejectPending(new Error("The market policy Worker did not respond."));
+      }, 10000);
+      pendingRequests.set(nextRequestId, { reject, resolve, timeout });
+
+      try {
+        worker.postMessage({ ...message, requestId: nextRequestId });
+      } catch (error) {
+        pendingRequests.delete(nextRequestId);
+        window.clearTimeout(timeout);
+        reject(error);
+      }
     });
 
   return {
     infer: (input) => request({ input, type: "infer" }),
     initialize: (modelUrl) => request({ modelUrl, type: "initialize" }),
+    terminate: () => rejectPending(new Error("The market policy Worker was closed.")),
   };
 };
 
@@ -91,7 +132,7 @@ const initializeMarketDemo = async (demo) => {
       element,
     ]),
   );
-  const workerClient = createWorkerClient();
+  let workerClient = null;
   let timer = null;
   let isReady = false;
   let isRunning = false;
@@ -319,13 +360,7 @@ const initializeMarketDemo = async (demo) => {
       drawChart();
       demo.dataset.tauState = "ready";
     } catch (error) {
-      stop();
-      demo.dataset.tauState = "error";
-      runtimeStatus.textContent = "Policy unavailable";
-      phaseElement.textContent = "Error";
-      decisionElement.textContent = "Inference failed";
-      statusElement.textContent =
-        error instanceof Error ? error.message : "The market policy Worker could not run.";
+      showFailure(error, "Inference failed");
     } finally {
       isInferring = false;
     }
@@ -362,6 +397,20 @@ const initializeMarketDemo = async (demo) => {
     phaseElement.textContent = "Paused";
   }
 
+  const showFailure = (error, heading) => {
+    stop();
+    isReady = false;
+    toggleButton.disabled = true;
+    resetButton.disabled = true;
+    demo.dataset.tauState = "error";
+    runtimeStatus.textContent = "Policy unavailable";
+    phaseElement.textContent = "Error";
+    decisionElement.textContent = heading;
+    statusElement.textContent =
+      error instanceof Error ? error.message : "The market policy Worker could not run.";
+    workerClient?.terminate();
+  };
+
   const reset = () => {
     stop();
     resetState();
@@ -392,6 +441,8 @@ const initializeMarketDemo = async (demo) => {
   drawChart();
 
   try {
+    workerClient = createWorkerClient();
+    window.addEventListener("pagehide", () => workerClient?.terminate(), { once: true });
     const initialized = await workerClient.initialize(
       new URL("../models/tau-market-policy.json", import.meta.url).href,
     );
@@ -413,12 +464,7 @@ const initializeMarketDemo = async (demo) => {
       start();
     }
   } catch (error) {
-    demo.dataset.tauState = "error";
-    runtimeStatus.textContent = "Policy unavailable";
-    phaseElement.textContent = "Error";
-    decisionElement.textContent = "Model failed to load";
-    statusElement.textContent =
-      error instanceof Error ? error.message : "Unable to load the market policy.";
+    showFailure(error, "Model failed to load");
   }
 };
 

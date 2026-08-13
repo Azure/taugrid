@@ -59,17 +59,19 @@ tau run get market-policy \
 The final log line reports the device, H200 model, Ray version, quality metrics,
 parameter count, and durable output path.
 
-## Regenerate the checked-in browser artifact
+## Verify a deterministic CPU export
 
 The site target invokes the same `train.py` entrypoint with CPU explicitly
-allowed:
+selected and trains twice to verify byte-for-byte deterministic output:
 
 ```bash
 cd site
 make train-market-policy
 ```
 
-This local path exists for deterministic docs maintenance. The TauGrid manifest
-sets `MARKET_POLICY_USE_RAY=1` and `MARKET_POLICY_REQUIRE_CUDA=1`, so submitted
-workloads run inside the Ray GPU worker and fail rather than silently falling
-back to CPU.
+The target writes `.hugo_cache/tau-market-policy.cpu.json`; it does not replace
+the checked-in H200 artifact. `make check` verifies that canonical artifact's
+H200 provenance, model contract, quality gates, parameter count, and SHA-256.
+The TauGrid manifest sets `MARKET_POLICY_USE_RAY=1` and
+`MARKET_POLICY_REQUIRE_CUDA=1`, so submitted workloads run inside the Ray GPU
+worker and fail rather than silently falling back to CPU.
