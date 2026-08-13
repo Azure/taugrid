@@ -8,8 +8,8 @@ experiment:
   group: browser-inference
 
 runtime:
-  # Immutable Ray image with PyTorch + CUDA already installed. Flex workers do
-  # not have PyPI egress, so runtime.pip would fail after admission.
+  # Immutable Ray image with PyTorch + CUDA already installed, so the workload
+  # does not depend on runtime package downloads.
   image: rayproject/ray-llm@sha256:296d0c9d6b5d3f41a645b77989ec2fabadd1425a0c2052da5b1943dfc8b31b51
   env:
     MARKET_POLICY_REQUIRE_CUDA: "1"
@@ -18,7 +18,7 @@ runtime:
     MARKET_POLICY_VALIDATION_EXAMPLES: "2000"
     MARKET_POLICY_STEPS: "4000"
     MARKET_POLICY_BATCH_SIZE: "256"
-    MARKET_POLICY_OUTPUT: /data/tau-workspaces/default/market-policy/tau-market-policy.json
+    MARKET_POLICY_OUTPUT: /data/market-policy/tau-market-policy.json
     MARKET_POLICY_SEED: "20260626"
 
 compute:
@@ -26,15 +26,12 @@ compute:
   gpus_per_worker: 1
 
 storage:
-  data_pvc: blob-training
-  output: /data/tau-workspaces/default/market-policy
+  # Replace this with the writable PVC supplied for your workspace.
+  data_pvc: workspace-data
+  output: /data/market-policy
 
 policy:
   workspace: default
-  namespace: tau-default
-  queue: jobqueue
-  gpu_class: any
+  gpu_class: h200-141gb
   topology: single-node-nvlink
-  node_selector:
-    kueue.azure.com/gpu-series: nd-h200-v5
   disable_default_priorities: true
