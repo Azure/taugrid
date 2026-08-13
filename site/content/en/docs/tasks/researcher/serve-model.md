@@ -77,8 +77,9 @@ Before submitting, set `storage.data_pvc` in the example to the writable PVC
 from your platform handoff. The RayJob resolves namespace and queue policy from
 the configured TauWorkspace, dispatches training to one `h200-141gb` worker,
 and writes the same `tau-market-policy.json` format loaded above to durable
-workspace storage. Its pinned image includes PyTorch and CUDA, so the workload
-does not depend on runtime package downloads. For deterministic site
+workspace storage. The manifest pins TauGrid's public MCR Ray/CUDA image by
+digest and installs exact PyTorch and NumPy versions through `runtime.pip`, so
+the workspace needs package-index access during startup. For deterministic site
 verification, `make train-market-policy` from `site/` invokes the same
 `train.py` twice with CPU explicitly selected and compares the exports without
 replacing the checked-in H200 artifact. The environment is synthetic and is not
