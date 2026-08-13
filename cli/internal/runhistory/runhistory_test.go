@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/expkusto"
 	portalruns "github.com/Azure/taugrid/core/runs"
@@ -542,6 +543,15 @@ func TestIngestByTagIsStableForRecordOrder(t *testing.T) {
 	second := []Record{{ObservationID: "a"}, {ObservationID: "b"}}
 	if got, want := ingestByTag(first), ingestByTag(second); got != want {
 		t.Fatalf("ingest-by tag depends on record order: %q != %q", got, want)
+	}
+}
+
+func TestSkippedIngestionStatusIsAccepted(t *testing.T) {
+	if !isSuccessfulIngestionStatusCode(azkustoingest.Skipped) {
+		t.Fatal("deduplicated ingestion status was not accepted")
+	}
+	if isSuccessfulIngestionStatusCode(azkustoingest.Failed) {
+		t.Fatal("failed ingestion status was accepted")
 	}
 }
 

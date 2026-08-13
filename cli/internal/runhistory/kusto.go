@@ -87,14 +87,26 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 		_ = ingestor.Close()
 		return fmt.Errorf("start queued ingestion: %w", err)
 	}
-	if err := <-result.Wait(writeCtx, azkustoingest.WithImmediateFirst()); err != nil {
+	if err := <-result.Wait(writeCtx, azkustoingest.WithImmediateFirst()); err != nil && !isSuccessfulIngestionStatus(err) {
 		_ = ingestor.Close()
 		return fmt.Errorf("wait for queued ingestion acknowledgement: %w", err)
 	}
 	if err := ingestor.Close(); err != nil {
-		return fmt.Errorf("close managed Kusto ingestor: %w", err)
+		return fmt.Errorf("close queued Kusto ingestor: %w", err)
 	}
 	return nil
+}
+
+// isSuccessfulIngestionStatus recognizes final ADX statuses that complete a
+// lifecycle write successfully. ADX reports an ingestIfNotExists duplicate as
+// Skipped; the original batch is already durable, so retrying it is incorrect.
+func isSuccessfulIngestionStatus(err error) bool {
+	status, statusErr := azkustoingest.GetIngestionStatus(err)
+	return statusErr == nil && isSuccessfulIngestionStatusCode(status)
+}
+
+func isSuccessfulIngestionStatusCode(status azkustoingest.StatusCode) bool {
+	return status == azkustoingest.Skipped
 }
 
 // marshalLifecycleRecords encodes the queued-ingestion payload as NDJSON: one
