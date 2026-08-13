@@ -103,7 +103,7 @@ Usage: {{ include "adx-mon.serviceAccountName" (dict "root" . "component" "opera
 Managed identity client ID required by Azure Workload Identity.
 */}}
 {{- define "adx-mon.workloadIdentityClientId" -}}
-{{- required "adx.clientId must be set when adx.workloadIdentity.enabled is true" .Values.adx.clientId -}}
+{{- .Values.adx.clientId | trim | required "adx.clientId must be set when adx.workloadIdentity.enabled is true" -}}
 {{- end }}
 
 {{/*

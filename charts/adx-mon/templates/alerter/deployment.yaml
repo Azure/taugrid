@@ -66,9 +66,9 @@ spec:
                   name: {{ .Values.adx.configMapRef }}
                   key: ADX_CLUSTER_URL
             {{- end }}
-            {{- if .Values.adx.clientId }}
+            {{- if (.Values.adx.clientId | trim) }}
             - name: AZURE_CLIENT_ID
-              value: {{ .Values.adx.clientId }}
+              value: {{ .Values.adx.clientId | trim | quote }}
             {{- else if and .Values.adx.configMapRef (not .Values.adx.clusterUrl) }}
             - name: AZURE_CLIENT_ID
               valueFrom:

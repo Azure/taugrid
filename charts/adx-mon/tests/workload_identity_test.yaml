@@ -20,7 +20,7 @@ tests:
   - it: configures workload identity for the ingestor pod
     template: templates/ingestor/statefulset.yaml
     set:
-      adx.clientId: test-client-id
+      adx.clientId: " test-client-id "
       adx.workloadIdentity.enabled: true
     asserts:
       - equal:
@@ -35,7 +35,7 @@ tests:
   - it: configures workload identity for the ingestor service account
     template: templates/ingestor/serviceaccount.yaml
     set:
-      adx.clientId: test-client-id
+      adx.clientId: " test-client-id "
       adx.workloadIdentity.enabled: true
     asserts:
       - equal:
@@ -45,7 +45,7 @@ tests:
   - it: configures workload identity for the alerter pod
     template: templates/alerter/deployment.yaml
     set:
-      adx.clientId: test-client-id
+      adx.clientId: " test-client-id "
       adx.workloadIdentity.enabled: true
     asserts:
       - equal:
@@ -60,7 +60,7 @@ tests:
   - it: configures workload identity for the alerter service account
     template: templates/alerter/serviceaccount.yaml
     set:
-      adx.clientId: test-client-id
+      adx.clientId: " test-client-id "
       adx.workloadIdentity.enabled: true
     asserts:
       - equal:
@@ -72,6 +72,15 @@ tests:
     set:
       adx.workloadIdentity.enabled: true
       adx.clientId: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: adx.clientId must be set when adx.workloadIdentity.enabled is true
+
+  - it: rejects workload identity with a whitespace-only client ID
+    template: templates/ingestor/serviceaccount.yaml
+    set:
+      adx.workloadIdentity.enabled: true
+      adx.clientId: "   "
     asserts:
       - failedTemplate:
           errorMessage: adx.clientId must be set when adx.workloadIdentity.enabled is true
