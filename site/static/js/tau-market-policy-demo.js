@@ -126,6 +126,7 @@ const initializeMarketDemo = async (demo) => {
   const inventoryElement = demo.querySelector("[data-market-inventory]");
   const rewardElement = demo.querySelector("[data-market-reward]");
   const totalRewardElement = demo.querySelector("[data-market-total-reward]");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const stepElements = new Map(
     [...demo.querySelectorAll("[data-market-step]")].map((element) => [
       element.dataset.marketStep,
@@ -424,7 +425,11 @@ const initializeMarketDemo = async (demo) => {
       element.classList.remove("is-active", "is-complete");
     }
 
-    start();
+    if (reducedMotion.matches) {
+      void step();
+    } else {
+      start();
+    }
   };
 
   toggleButton.addEventListener("click", () => {
@@ -442,7 +447,11 @@ const initializeMarketDemo = async (demo) => {
 
   try {
     workerClient = createWorkerClient();
-    window.addEventListener("pagehide", () => workerClient?.terminate(), { once: true });
+    window.addEventListener("pagehide", (event) => {
+      if (!event.persisted) {
+        workerClient?.terminate();
+      }
+    });
     const initialized = await workerClient.initialize(
       new URL("../models/tau-market-policy.json", import.meta.url).href,
     );
@@ -458,7 +467,7 @@ const initializeMarketDemo = async (demo) => {
     decisionElement.textContent = "Policy ready";
     statusElement.textContent = "Run the synthetic environment to inspect its actions.";
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (reducedMotion.matches) {
       await step();
     } else {
       start();

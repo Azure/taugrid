@@ -53,6 +53,8 @@ tau run get market-policy \
   --artifact tau-market-policy.json \
   --context aks-ai-runtime-flex-admin \
   --namespace tau-default \
+  --path /data/tau-workspaces/default/market-policy \
+  --pvc blob-training \
   --output raw
 ```
 
