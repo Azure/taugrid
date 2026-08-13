@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/taugrid/core/expkusto"
 )
 
 type kustoWriter struct {
@@ -49,17 +50,23 @@ func NewKustoWriter(config WriterConfig) (Writer, error) {
 }
 
 func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
-	data, err := json.Marshal(records)
+	data, err := marshalLifecycleRecords(records)
 	if err != nil {
-		return fmt.Errorf("marshal lifecycle records: %w", err)
+		return err
 	}
-	ingestor, err := azkustoingest.NewManaged(
+	if len(data) == 0 {
+		return nil
+	}
+	// Use queued ingestion directly. Managed ingestion may attempt streaming
+	// first and then fall back after consuming an io.Reader, which makes a
+	// lifecycle batch non-replayable. The recorder needs one durable path.
+	ingestor, err := azkustoingest.New(
 		azkustodata.NewConnectionStringBuilder(w.endpoint).WithTokenCredential(w.credential),
 		azkustoingest.WithDefaultDatabase(w.database),
 		azkustoingest.WithDefaultTable(w.table),
 	)
 	if err != nil {
-		return fmt.Errorf("create managed Kusto ingestor: %w", err)
+		return fmt.Errorf("create queued Kusto ingestor: %w", err)
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
@@ -67,7 +74,10 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 	result, err := ingestor.FromReader(writeCtx, bytes.NewReader(data),
 		azkustoingest.Database(w.database),
 		azkustoingest.Table(w.table),
-		azkustoingest.IngestionMapping(lifecycleMapping, azkustoingest.MultiJSON),
+		// Keep the mapping inline for direct upgrades from releases that created
+		// only the table. The schema command also creates the same named mapping
+		// for operators and other ADX clients; both derive from expkusto.
+		azkustoingest.IngestionMapping(expkusto.RunLifecycleIngestionMapping(), azkustoingest.JSON),
 		azkustoingest.FlushImmediately(),
 		azkustoingest.ReportResultToTable(),
 		azkustoingest.Tags([]string{"ingest-by:" + tag}),
@@ -75,16 +85,42 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 	)
 	if err != nil {
 		_ = ingestor.Close()
-		return fmt.Errorf("start managed ingestion: %w", err)
+		return fmt.Errorf("start queued ingestion: %w", err)
 	}
-	if err := <-result.Wait(writeCtx, azkustoingest.WithImmediateFirst()); err != nil {
+	if err := <-result.Wait(writeCtx, azkustoingest.WithImmediateFirst()); err != nil && !isSuccessfulIngestionStatus(err) {
 		_ = ingestor.Close()
-		return fmt.Errorf("wait for managed ingestion acknowledgement: %w", err)
+		return fmt.Errorf("wait for queued ingestion acknowledgement: %w", err)
 	}
 	if err := ingestor.Close(); err != nil {
-		return fmt.Errorf("close managed Kusto ingestor: %w", err)
+		return fmt.Errorf("close queued Kusto ingestor: %w", err)
 	}
 	return nil
+}
+
+// isSuccessfulIngestionStatus recognizes final ADX statuses that complete a
+// lifecycle write successfully. ADX reports an ingestIfNotExists duplicate as
+// Skipped; the original batch is already durable, so retrying it is incorrect.
+func isSuccessfulIngestionStatus(err error) bool {
+	status, statusErr := azkustoingest.GetIngestionStatus(err)
+	return statusErr == nil && isSuccessfulIngestionStatusCode(status)
+}
+
+func isSuccessfulIngestionStatusCode(status azkustoingest.StatusCode) bool {
+	return status == azkustoingest.Skipped
+}
+
+// marshalLifecycleRecords encodes the queued-ingestion payload as NDJSON: one
+// lifecycle observation per line. ADX JSON mappings consume each line as a
+// separate source record; a JSON array would require MultiJSON semantics.
+func marshalLifecycleRecords(records []Record) ([]byte, error) {
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
+	for _, record := range records {
+		if err := encoder.Encode(record); err != nil {
+			return nil, fmt.Errorf("marshal lifecycle record: %w", err)
+		}
+	}
+	return data.Bytes(), nil
 }
 
 func ingestByTag(records []Record) string {
@@ -95,48 +131,4 @@ func ingestByTag(records []Record) string {
 	sort.Strings(ids)
 	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
 	return "tau-lifecycle-" + hex.EncodeToString(sum[:])
-}
-
-// lifecycleMapping is inline and explicit so the recorder never relies on a
-// cluster-side default mapping that could silently drift.
-var lifecycleMapping = []map[string]string{
-	{"column": "observed_at", "path": "$.observed_at"},
-	{"column": "observation_id", "path": "$.observation_id"},
-	{"column": "durable_id", "path": "$.durable_id"},
-	{"column": "run_id", "path": "$.run_id"},
-	{"column": "workspace_id", "path": "$.workspace_id"},
-	{"column": "result_scope", "path": "$.result_scope"},
-	{"column": "project", "path": "$.project"},
-	{"column": "run_group_id", "path": "$.run_group_id"},
-	{"column": "tags", "path": "$.tags"},
-	{"column": "owning_resource_kind", "path": "$.owning_resource_kind"},
-	{"column": "owning_resource_name", "path": "$.owning_resource_name"},
-	{"column": "namespace", "path": "$.namespace"},
-	{"column": "cluster", "path": "$.cluster"},
-	{"column": "resource_uid", "path": "$.resource_uid"},
-	{"column": "resource_version", "path": "$.resource_version"},
-	{"column": "generation", "path": "$.generation"},
-	{"column": "submit_time", "path": "$.submit_time"},
-	{"column": "created_time", "path": "$.created_time"},
-	{"column": "kueue_admitted_time", "path": "$.kueue_admitted_time"},
-	{"column": "pod_start_time", "path": "$.pod_start_time"},
-	{"column": "completion_time", "path": "$.completion_time"},
-	{"column": "state", "path": "$.state"},
-	{"column": "reason", "path": "$.reason"},
-	{"column": "message", "path": "$.message"},
-	{"column": "local_queue", "path": "$.local_queue"},
-	{"column": "cluster_queue", "path": "$.cluster_queue"},
-	{"column": "workload_kind", "path": "$.workload_kind"},
-	{"column": "image", "path": "$.image"},
-	{"column": "image_digest", "path": "$.image_digest"},
-	{"column": "config_hash", "path": "$.config_hash"},
-	{"column": "code_sha", "path": "$.code_sha"},
-	{"column": "tau_command", "path": "$.tau_command"},
-	{"column": "result_path", "path": "$.result_path"},
-	{"column": "result_pvc", "path": "$.result_pvc"},
-	{"column": "artifact_uri", "path": "$.artifact_uri"},
-	{"column": "checkpoint_uri", "path": "$.checkpoint_uri"},
-	{"column": "controller_version", "path": "$.controller_version"},
-	{"column": "experiment_tracking", "path": "$.experiment_tracking"},
-	{"column": "experiment_source", "path": "$.experiment_source"},
 }
