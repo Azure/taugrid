@@ -24,10 +24,13 @@ az kusto cluster create --resource-group <resource-group> \
 for db in Metrics Logs CostTracking Audit; do
   az kusto database create --resource-group <resource-group> \
     --cluster-name <adx-cluster-name> --database-name "$db" \
-    --read-write-database kind=ReadWrite location=<region> \
+    --read-write-database location=<region> \
     soft-delete-period=P31D hot-cache-period=P7D
 done
 ```
+
+`kind=ReadWrite` is not accepted by current Azure CLI Kusto extensions; a
+read-write database is implied by `--read-write-database`.
 
 `Metrics` is needed by Portal Kusto views and lifecycle history. `Logs`,
 `CostTracking`, and `Audit` are required only for the corresponding adx-mon
@@ -51,6 +54,29 @@ production, use distinct principals: schema deployer (table/mapping/function
 management), Portal reader (`Viewer`), lifecycle recorder writer (`Ingestor`),
 and adx-mon identity (the current chart's documented management privileges).
 Azure RBAC, Kubernetes RBAC, and ADX database roles are independent.
+
+For example, an ADX administrator can grant the two least-privilege consumer
+roles in PowerShell or another approved Azure CLI environment:
+
+```powershell
+$tenant = az account show --query tenantId -o tsv
+
+az kusto database-principal-assignment create `
+  --resource-group <resource-group> --cluster-name <adx-cluster-name> `
+  --database-name Metrics --principal-assignment-name taugrid-portal-viewer `
+  --principal-id <portal-managed-identity-client-id> --principal-type App `
+  --role Viewer --tenant-id $tenant
+
+az kusto database-principal-assignment create `
+  --resource-group <resource-group> --cluster-name <adx-cluster-name> `
+  --database-name Metrics --principal-assignment-name taugrid-recorder-ingestor `
+  --principal-id <recorder-managed-identity-client-id> --principal-type App `
+  --role Ingestor --tenant-id $tenant
+```
+
+Use a stable, unique assignment name per database/principal/role. These
+commands grant ADX data-plane access only; they do not create the federated
+credential or Kubernetes RBAC.
 
 ## Generate, execute, and verify producer schemas
 

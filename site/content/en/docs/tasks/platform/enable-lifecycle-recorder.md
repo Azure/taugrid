@@ -47,6 +47,12 @@ an overlay can remove resources from previously enabled components.
 The chart accepts only the released Tau image on MCR. Pin the released image by
 tag, or set `tag: ""` and provide its immutable digest.
 
+Use a release that includes the recorder's current queued-ingestion contract.
+The recorder requires the named `TauExpRunLifecycleMapping` created by the
+lifecycle schema, and sends an idempotent ADX extent tag with each batch. Do
+not replace it with an arbitrary private image or hand-edit the Deployment as
+a production workaround; chart and image must be released together.
+
 ```text
 # Merge into the existing <platform-values.yaml>; not a complete Helm values file.
 # Preserve components, baselineQueue, Kueue/KubeRay/controller settings, and
@@ -107,3 +113,14 @@ Rows appear after the recorder's polling interval and ADX queued-ingestion
 latency. Check the recorder logs and the managed identity's database role if no
 rows appear. To expose these rows in Portal, follow [Enable Portal](../enable-portal/)
 and set its `portal.runHistory.enabled` only after recorder writes succeed.
+
+For an ADX-side diagnosis that distinguishes ingestion from Kubernetes
+discovery, a schema administrator can inspect recent ingestion failures:
+
+```kusto
+.show ingestion failures
+| where FailedOn > ago(1h)
+| where Database == "Metrics" and Table == "TauExpRunLifecycle"
+| project FailedOn, ErrorCode, Details
+| order by FailedOn desc
+```
