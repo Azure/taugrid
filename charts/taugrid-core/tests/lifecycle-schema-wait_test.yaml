@@ -1,0 +1,38 @@
+suite: Lifecycle schema readiness gate
+templates:
+  - templates/lifecycle-recorder.yaml
+values:
+  - lifecycle-recorder-values.yaml
+tests:
+  - it: waits for the adx-mon command before starting the recorder
+    set:
+      lifecycleRecorder.schemaManagement.enabled: true
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait-for-lifecycle-schema
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: mcr.microsoft.com/oss/kubernetes/kubectl@sha256:602c8e3ea5c92c8508510566e7ea2dcee65ffe89ca26738823138362753004ef
+      - contains:
+          path: spec.template.spec.initContainers[0].args
+          content: --for=condition=managementcommand.adx-mon.azure.com
+      - contains:
+          path: spec.template.spec.initContainers[0].args
+          content: --namespace=adx-mon
+      - contains:
+          path: spec.template.spec.initContainers[0].args
+          content: managementcommand/taugrid-lifecycle-schema
+
+  - it: keeps the recorder ungated when schema management is disabled
+    set:
+      lifecycleRecorder.schemaManagement.enabled: false
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers

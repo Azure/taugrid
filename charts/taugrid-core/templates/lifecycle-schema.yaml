@@ -1,0 +1,90 @@
+{{- if and .Values.lifecycleRecorder.enabled .Values.lifecycleRecorder.schemaManagement.enabled }}
+{{- $recorder := .Values.lifecycleRecorder -}}
+{{- $kusto := default dict $recorder.kusto -}}
+{{- $schemaManagement := default dict $recorder.schemaManagement -}}
+{{- $table := default "TauExpRunLifecycle" $kusto.table -}}
+{{- $database := default "Metrics" $kusto.database -}}
+{{- if ne $table "TauExpRunLifecycle" -}}
+{{- fail "lifecycleRecorder.kusto.table must be TauExpRunLifecycle when lifecycleRecorder.schemaManagement.enabled=true" -}}
+{{- end -}}
+{{- if ne $database "Metrics" -}}
+{{- fail "lifecycleRecorder.kusto.database must be Metrics when lifecycleRecorder.schemaManagement.enabled=true because adx-mon ManagementCommands run only against its configured database" -}}
+{{- end -}}
+{{- if not $schemaManagement.namespace -}}
+{{- fail "lifecycleRecorder.schemaManagement.namespace is required when lifecycleRecorder.schemaManagement.enabled=true" -}}
+{{- end -}}
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ default "taugrid-lifecycle-schema" $schemaManagement.resourceName }}
+  namespace: {{ $schemaManagement.namespace }}
+  labels:
+    app.kubernetes.io/component: lifecycle-schema
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  database: {{ $database | quote }}
+  body: |
+    // Tau/Stellar run lifecycle contract.
+    // A Tau-owned controller/operator appends or upserts one row per observed run state change.
+    // Metrics alone cannot answer queued/running/failed/stale states; Stellar joins this index with ExperimentMetrics rows.
+    // State values: submitted, queued, admitted, running, succeeded, failed, cancelled, stale.
+    .create-merge table TauExpRunLifecycle (
+        observed_at: datetime,
+        observation_id: string,
+        run_id: string,
+        durable_id: string,
+        workspace_id: string,
+        result_scope: string,
+        ['project']: string,
+        run_group_id: string,
+        tags: dynamic,
+        owning_resource_kind: string,
+        owning_resource_name: string,
+        namespace: string,
+        cluster: string,
+        local_queue: string,
+        cluster_queue: string,
+        workload_kind: string,
+        resource_uid: string,
+        resource_version: string,
+        generation: long,
+        submit_time: datetime,
+        created_time: datetime,
+        kueue_admitted_time: datetime,
+        pod_start_time: datetime,
+        first_metric_time: datetime,
+        latest_metric_time: datetime,
+        completion_time: datetime,
+        state: string,
+        reason: string,
+        message: string,
+        artifact_uri: string,
+        checkpoint_uri: string,
+        image: string,
+        image_digest: string,
+        config_hash: string,
+        code_sha: string,
+        tau_command: string,
+        result_path: string,
+        result_pvc: string,
+        experiment_tracking: string,
+        experiment_source: string,
+        controller_version: string
+    )
+
+    .create-or-alter table TauExpRunLifecycle ingestion json mapping "TauExpRunLifecycleMapping" '[{"column":"observed_at","datatype":"datetime","path":"$.observed_at"},{"column":"observation_id","datatype":"string","path":"$.observation_id"},{"column":"durable_id","datatype":"string","path":"$.durable_id"},{"column":"run_id","datatype":"string","path":"$.run_id"},{"column":"workspace_id","datatype":"string","path":"$.workspace_id"},{"column":"result_scope","datatype":"string","path":"$.result_scope"},{"column":"project","datatype":"string","path":"$.project"},{"column":"run_group_id","datatype":"string","path":"$.run_group_id"},{"column":"tags","datatype":"dynamic","path":"$.tags"},{"column":"owning_resource_kind","datatype":"string","path":"$.owning_resource_kind"},{"column":"owning_resource_name","datatype":"string","path":"$.owning_resource_name"},{"column":"namespace","datatype":"string","path":"$.namespace"},{"column":"cluster","datatype":"string","path":"$.cluster"},{"column":"resource_uid","datatype":"string","path":"$.resource_uid"},{"column":"resource_version","datatype":"string","path":"$.resource_version"},{"column":"generation","datatype":"long","path":"$.generation"},{"column":"submit_time","datatype":"datetime","path":"$.submit_time"},{"column":"created_time","datatype":"datetime","path":"$.created_time"},{"column":"kueue_admitted_time","datatype":"datetime","path":"$.kueue_admitted_time"},{"column":"pod_start_time","datatype":"datetime","path":"$.pod_start_time"},{"column":"completion_time","datatype":"datetime","path":"$.completion_time"},{"column":"state","datatype":"string","path":"$.state"},{"column":"reason","datatype":"string","path":"$.reason"},{"column":"message","datatype":"string","path":"$.message"},{"column":"local_queue","datatype":"string","path":"$.local_queue"},{"column":"cluster_queue","datatype":"string","path":"$.cluster_queue"},{"column":"workload_kind","datatype":"string","path":"$.workload_kind"},{"column":"image","datatype":"string","path":"$.image"},{"column":"image_digest","datatype":"string","path":"$.image_digest"},{"column":"config_hash","datatype":"string","path":"$.config_hash"},{"column":"code_sha","datatype":"string","path":"$.code_sha"},{"column":"tau_command","datatype":"string","path":"$.tau_command"},{"column":"result_path","datatype":"string","path":"$.result_path"},{"column":"result_pvc","datatype":"string","path":"$.result_pvc"},{"column":"artifact_uri","datatype":"string","path":"$.artifact_uri"},{"column":"checkpoint_uri","datatype":"string","path":"$.checkpoint_uri"},{"column":"controller_version","datatype":"string","path":"$.controller_version"},{"column":"experiment_tracking","datatype":"string","path":"$.experiment_tracking"},{"column":"experiment_source","datatype":"string","path":"$.experiment_source"}]'
+
+    .create-or-alter function with (folder = 'Tau/experiments', docstring = 'Return the latest Tau/Stellar lifecycle row per scoped durable run; terminal states remain monotonic.', skipvalidation = 'true') TauExpRunLifecycleDashboardRows()
+    {
+    TauExpRunLifecycle
+    | extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))
+    | where isnotempty(durable_identity)
+    | extend observation_identity=iff(isnotempty(observation_id), observation_id, strcat(durable_identity, ':', state, ':', tostring(observed_at)))
+    | summarize arg_max(observed_at, *) by cluster, namespace, durable_identity, observation_identity
+    | extend is_terminal=tolower(state) in ('succeeded', 'failed', 'cancelled')
+    | summarize arg_max(observed_at, *) by cluster, namespace, durable_identity, is_terminal
+    | extend terminal_rank=iff(is_terminal, 1, 0)
+    | summarize arg_max(terminal_rank, *) by cluster, namespace, durable_identity
+    | project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
+    }
+{{- end }}
