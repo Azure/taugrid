@@ -33,6 +33,8 @@ type FieldInfo struct {
 	DeprecatedValues []string
 	Default          string
 	Notes            string
+	Minimum          int64
+	Maximum          int64
 }
 
 var fieldCatalog = map[string]FieldInfo{
@@ -51,6 +53,7 @@ var fieldCatalog = map[string]FieldInfo{
 	"run.source":                     {Status: statusDirectOnly, Description: "Immutable source tree staged from a digest-pinned OCI image by an init container. Direct Jobs only."},
 	"run.source.image":               {Status: statusDirectOnly, Description: "Source OCI image pinned by an exact sha256 digest."},
 	"run.source.path":                {Status: statusDirectOnly, Description: "Clean absolute source directory inside the pinned image. Tau copies it into /tau/source."},
+	"run.execution_deadline_seconds": {Status: statusDirectOnly, Description: "Total execution and shutdown budget in seconds for a direct Kubernetes Job. Tau subtracts the effective pod termination grace, then sets both Job activeDeadlineSeconds and Kueue maximum execution time. Must exceed the effective termination grace.", Minimum: 1, Maximum: MaxExecutionDeadlineSeconds},
 	"run.ttl_seconds_after_finished": {Status: statusDirectOnly, Description: "Kubernetes Job retention in seconds after completion or failure (1-2147483647). Direct Jobs only.", Default: "28800"},
 	"run.working_dir":                {Status: statusSupported, Description: "Project directory shipped with the run so sibling modules and local packages import on workers; resolved relative to the config file."},
 	"run.working_dir_excludes":       {Status: statusSupported, Description: "Extra glob patterns excluded from the shipped project directory."},
@@ -325,6 +328,12 @@ func schemaForType(t reflect.Type, path string) map[string]any {
 		if info.Notes != "" {
 			schema["x-tau-notes"] = info.Notes
 		}
+		if info.Minimum != 0 {
+			schema["minimum"] = info.Minimum
+		}
+		if info.Maximum != 0 {
+			schema["maximum"] = info.Maximum
+		}
 	}
 	switch {
 	case t == reflect.TypeOf(Duration{}):
@@ -348,7 +357,11 @@ func schemaForType(t reflect.Type, path string) map[string]any {
 		schema["properties"] = props
 	case t.Kind() == reflect.String:
 		schema["type"] = "string"
-	case t.Kind() == reflect.Int:
+	case t.Kind() == reflect.Int ||
+		t.Kind() == reflect.Int8 ||
+		t.Kind() == reflect.Int16 ||
+		t.Kind() == reflect.Int32 ||
+		t.Kind() == reflect.Int64:
 		schema["type"] = "integer"
 	case t.Kind() == reflect.Bool:
 		schema["type"] = "boolean"

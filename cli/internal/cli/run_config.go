@@ -139,6 +139,9 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	} else {
 		o.script = configRelativePath(baseDir, entrypoint)
 	}
+	if c.Run.ExecutionDeadlineSeconds != nil {
+		o.executionDeadlineSeconds = *c.Run.ExecutionDeadlineSeconds
+	}
 	if c.Run.TTLSecondsAfterFinished != nil {
 		o.ttlSecondsAfterFinished = *c.Run.TTLSecondsAfterFinished
 	}

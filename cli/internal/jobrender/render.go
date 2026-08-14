@@ -130,7 +130,7 @@ type Options struct {
 	Retry int
 
 	// TerminationGracePeriodSeconds overrides the default pod grace
-	// period. Default is 60s (north-star §5.6: give training jobs time
+	// period. Default is 600s (north-star §5.6: give training jobs time
 	// to flush checkpoints on SIGTERM; k8s default of 30s is too short
 	// for multi-GB checkpoints to blob storage). Profile
 	// spec.policy.terminationGracePeriodSeconds sets a per-profile
@@ -143,6 +143,11 @@ type Options struct {
 	// profile policy. Overrides any value
 	// inherited from profile.spec.policy.activeDeadlineSeconds.
 	ActiveDeadlineSeconds int64
+
+	// ExecutionDeadlineSeconds is the total active execution and graceful
+	// shutdown budget. The renderer subtracts the effective pod termination
+	// grace before setting Kubernetes and Kueue execution limits.
+	ExecutionDeadlineSeconds int64
 
 	// TTLSecondsAfterFinished controls Kubernetes cleanup after completion.
 	// Zero uses the renderer's normal eight-hour retention.
@@ -434,6 +439,18 @@ func (o Options) validate() error {
 			"Options.TTLSecondsAfterFinished must be <= %d (Kubernetes int32 maximum)",
 			runconfig.MaxTTLSecondsAfterFinished,
 		)
+	}
+	if o.ExecutionDeadlineSeconds < 0 {
+		return errors.New("Options.ExecutionDeadlineSeconds must be >= 0")
+	}
+	if o.ExecutionDeadlineSeconds > runconfig.MaxExecutionDeadlineSeconds {
+		return fmt.Errorf(
+			"Options.ExecutionDeadlineSeconds must be <= %d (Kueue int32 maximum)",
+			runconfig.MaxExecutionDeadlineSeconds,
+		)
+	}
+	if o.ExecutionDeadlineSeconds > 0 && o.ActiveDeadlineSeconds > 0 {
+		return errors.New("Options.ExecutionDeadlineSeconds and Options.ActiveDeadlineSeconds are mutually exclusive")
 	}
 	switch strings.ToLower(o.Launcher) {
 	case "", "python", "torchrun":
@@ -779,20 +796,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if o.ServiceAccountName != "" {
 		pod["serviceAccountName"] = o.ServiceAccountName
 	}
-	// Grace period: default 600s for checkpoint flush on SIGTERM; profile
-	// may override via spec.policy.terminationGracePeriodSeconds; the
-	// CLI option (o.TerminationGracePeriodSeconds) wins over both.
-	grace := int64(600)
-	if pol, ok := p.Spec["policy"].(map[string]any); ok {
-		if g, ok := pol["terminationGracePeriodSeconds"]; ok {
-			if gi, ok := toInt64(g); ok && gi >= 0 {
-				grace = gi
-			}
-		}
-	}
-	if o.TerminationGracePeriodSeconds > 0 {
-		grace = o.TerminationGracePeriodSeconds
-	}
+	grace := effectiveTerminationGracePeriodSeconds(p, o)
 	pod["terminationGracePeriodSeconds"] = grace
 	var profileTolerations any
 	if sched, ok := p.Spec["scheduling"].(map[string]any); ok {
@@ -1075,12 +1079,30 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if o.ActiveDeadlineSeconds > 0 {
 		jobSpec["activeDeadlineSeconds"] = o.ActiveDeadlineSeconds
 	}
+	if o.ExecutionDeadlineSeconds > 0 {
+		if o.ExecutionDeadlineSeconds <= grace {
+			return nil, fmt.Errorf(
+				"execution deadline (%d seconds) must exceed effective pod termination grace (%d seconds)",
+				o.ExecutionDeadlineSeconds,
+				grace,
+			)
+		}
+		activeSeconds := o.ExecutionDeadlineSeconds - grace
+		if profileSeconds, ok := toInt64(jobSpec["activeDeadlineSeconds"]); ok &&
+			profileSeconds > 0 &&
+			profileSeconds < activeSeconds {
+			activeSeconds = profileSeconds
+		}
+		jobSpec["activeDeadlineSeconds"] = activeSeconds
+		labels["kueue.x-k8s.io/max-exec-time-seconds"] = strconv.FormatInt(activeSeconds, 10)
+	}
 
 	metadata := map[string]any{
 		"name":      o.Name,
 		"namespace": o.Namespace,
 		"labels":    labels,
 	}
+
 	hasExecution := o.Launcher == "torchrun"
 	// Records the declaration so `tau run get` can tell a run that produced
 	// nothing from one whose promised artifact is missing. Written into the
@@ -1131,6 +1153,21 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"metadata":   metadata,
 		"spec":       jobSpec,
 	}, nil
+}
+
+func effectiveTerminationGracePeriodSeconds(p profile.Profile, o Options) int64 {
+	grace := int64(600)
+	if pol, ok := p.Spec["policy"].(map[string]any); ok {
+		if g, ok := pol["terminationGracePeriodSeconds"]; ok {
+			if gi, ok := toInt64(g); ok && gi >= 0 {
+				grace = gi
+			}
+		}
+	}
+	if o.TerminationGracePeriodSeconds > 0 {
+		grace = o.TerminationGracePeriodSeconds
+	}
+	return grace
 }
 
 type storagePlan struct {

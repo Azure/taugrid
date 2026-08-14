@@ -100,6 +100,50 @@ printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 `spec.ttlSecondsAfterFinished`; omission keeps Tau's 28800-second default. The
 TTL does not start while any regular container is still running.
 
+Direct Jobs can declare a total execution and shutdown budget:
+
+```yaml
+name: h200-rl
+engine: job
+entrypoint: train.py
+
+run:
+  execution_deadline_seconds: 5100
+
+compute:
+  gpus: 2
+```
+
+`run.execution_deadline_seconds` is an optional integer from 1 through
+2,147,483,647 for direct Jobs. It must exceed the effective pod
+`terminationGracePeriodSeconds`, which defaults to 600. Tau subtracts that
+grace period and renders the remainder in both
+`Job.spec.activeDeadlineSeconds` and the
+`kueue.x-k8s.io/max-exec-time-seconds` label. For the example, the Job and
+Kueue active-execution limits are 4,500 seconds, followed by at most 600
+seconds of graceful termination. Two GPUs therefore consume at most 170
+GPU-minutes before Kubernetes control-loop latency; a 180 GPU-minute ceiling
+leaves 300 seconds of wall-clock safety margin. A lower
+profile-level `activeDeadlineSeconds` remains authoritative; a run config
+cannot extend an operator-provided cap.
+
+Kubernetes starts the Job deadline when the initially suspended Job is
+admitted and resumed, not while it waits in Kueue. Pod attempts and native Job
+backoff share that deadline. Suspending and resuming a Job resets the native
+Job timer, so Tau also emits Kueue's cumulative admitted-time limit; Tau's
+bundled Kueue 0.18 supports that label. Tau-level
+`resilience.max_retries` is rejected with an execution deadline because it
+submits a new Job with a fresh timer. Repeated Kueue eviction cycles can each
+incur pod termination grace outside admitted time; workloads that require a
+strict cumulative allocation cap across arbitrary evictions must use a profile
+with zero termination grace or reserve enough margin for those drains.
+
+At expiry, the Kubernetes Job controller requests pod deletion. The pod can
+continue holding GPUs during its termination grace, and controller/kubelet
+reconciliation is not instantaneous. Omission preserves existing behavior:
+Tau adds no config-driven deadline or Kueue maximum-execution label, and any
+existing profile-level policy remains unchanged.
+
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
 before workload creation. Tau's generated embedded-payload environment entries
 are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for

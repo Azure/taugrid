@@ -74,16 +74,17 @@ type managedConfigProjection struct {
 }
 
 type Run struct {
-	Name                    string  `yaml:"name"`
-	Engine                  string  `yaml:"engine"`
-	Entrypoint              string  `yaml:"entrypoint"`
-	Script                  string  `yaml:"script"`
-	Image                   string  `yaml:"image"`
-	MainScript              string  `yaml:"main_script"`
-	WorkloadKind            string  `yaml:"workload_kind"`
-	SmokePairs              *int    `yaml:"smoke_pairs"`
-	Source                  *Source `yaml:"source"`
-	TTLSecondsAfterFinished *int64  `yaml:"ttl_seconds_after_finished"`
+	Name                     string  `yaml:"name"`
+	Engine                   string  `yaml:"engine"`
+	Entrypoint               string  `yaml:"entrypoint"`
+	Script                   string  `yaml:"script"`
+	Image                    string  `yaml:"image"`
+	MainScript               string  `yaml:"main_script"`
+	WorkloadKind             string  `yaml:"workload_kind"`
+	SmokePairs               *int    `yaml:"smoke_pairs"`
+	Source                   *Source `yaml:"source"`
+	ExecutionDeadlineSeconds *int64  `yaml:"execution_deadline_seconds"`
+	TTLSecondsAfterFinished  *int64  `yaml:"ttl_seconds_after_finished"`
 
 	// WorkingDir ships a whole project directory with the run instead of the
 	// entrypoint alone, so sibling modules and local packages import on
@@ -130,6 +131,9 @@ const (
 	// MaxLiteralEnvTotalBytes bounds the control-plane amplification when a Job
 	// is copied into Kueue Workloads and Pods. Secret-backed values are excluded.
 	MaxLiteralEnvTotalBytes = 128 * 1024
+	// MaxExecutionDeadlineSeconds is Kueue's signed int32 ceiling for
+	// Workload spec.maximumExecutionTimeSeconds.
+	MaxExecutionDeadlineSeconds int64 = 1<<31 - 1
 	// MaxTTLSecondsAfterFinished is Kubernetes' signed int32 ceiling for
 	// batch/v1 Job spec.ttlSecondsAfterFinished.
 	MaxTTLSecondsAfterFinished int64 = 1<<31 - 1
@@ -719,6 +723,26 @@ func ValidateLiteralEnvPayloads(env map[string]string) error {
 // clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
 	engine = strings.ToLower(strings.TrimSpace(engine))
+	if c.Run.ExecutionDeadlineSeconds != nil {
+		if *c.Run.ExecutionDeadlineSeconds <= 0 {
+			return fmt.Errorf("run.execution_deadline_seconds must be > 0")
+		}
+		if *c.Run.ExecutionDeadlineSeconds > MaxExecutionDeadlineSeconds {
+			return fmt.Errorf(
+				"run.execution_deadline_seconds must be <= %d (Kueue int32 maximum)",
+				MaxExecutionDeadlineSeconds,
+			)
+		}
+		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
+			return fmt.Errorf("run.execution_deadline_seconds requires direct Job dispatch and cannot be used with workflow.file")
+		}
+		if engine != "job" {
+			return fmt.Errorf("run.execution_deadline_seconds requires engine: job")
+		}
+		if c.Resilience.MaxRetries > 0 {
+			return fmt.Errorf("run.execution_deadline_seconds cannot be combined with resilience.max_retries > 0 because each Tau retry submits a new Job with a fresh deadline")
+		}
+	}
 	if c.Run.TTLSecondsAfterFinished != nil {
 		if *c.Run.TTLSecondsAfterFinished <= 0 {
 			return fmt.Errorf("run.ttl_seconds_after_finished must be > 0")

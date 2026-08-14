@@ -316,6 +316,7 @@ type runDispatchOptions struct {
 	launcher                                                                                              string
 	processesPerNode                                                                                      int
 	nodes                                                                                                 int
+	executionDeadlineSeconds                                                                              int64
 	ttlSecondsAfterFinished                                                                               int64
 	tuneMetric, tuneMode, tuneParamSpace                                                                  string
 	tuneNumSamples, tuneMaxConcurrentTrials                                                               int

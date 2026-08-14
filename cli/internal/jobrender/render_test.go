@@ -398,6 +398,146 @@ func TestRender_ServiceAccountAndTTLOverrides(t *testing.T) {
 	}
 }
 
+func TestRenderExecutionDeadlineBudget(t *testing.T) {
+	p := trainProfile()
+	delete(p.Spec["policy"].(map[string]any), "activeDeadlineSeconds")
+	out, err := Render(p, Options{
+		Name:                     "bounded-h200",
+		Namespace:                "sample",
+		Command:                  []string{"true"},
+		ExecutionDeadlineSeconds: 5100,
+		Retry:                    2,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	m := parseYAML(t, out)
+	spec := m["spec"].(map[string]any)
+	if got := spec["activeDeadlineSeconds"]; got != 4500 {
+		t.Fatalf("activeDeadlineSeconds = %#v, want 4500", got)
+	}
+	if got := spec["backoffLimit"]; got != 2 {
+		t.Fatalf("backoffLimit = %#v, want 2", got)
+	}
+	if got := spec["suspend"]; got != true {
+		t.Fatalf("suspend = %#v, want true", got)
+	}
+	podSpec := spec["template"].(map[string]any)["spec"].(map[string]any)
+	if got := podSpec["terminationGracePeriodSeconds"]; got != 600 {
+		t.Fatalf("terminationGracePeriodSeconds = %#v, want 600", got)
+	}
+	labels := m["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got := labels["kueue.x-k8s.io/max-exec-time-seconds"]; got != "4500" {
+		t.Fatalf("Kueue maximum execution label = %#v, want 4500", got)
+	}
+}
+
+func TestRenderExecutionDeadlineDoesNotExtendProfileCap(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:                     "profile-capped",
+		Namespace:                "sample",
+		Command:                  []string{"true"},
+		ExecutionDeadlineSeconds: 5100,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	m := parseYAML(t, out)
+	spec := m["spec"].(map[string]any)
+	if got := spec["activeDeadlineSeconds"]; got != 3600 {
+		t.Fatalf("activeDeadlineSeconds = %#v, want profile cap 3600", got)
+	}
+	labels := m["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got := labels["kueue.x-k8s.io/max-exec-time-seconds"]; got != "3600" {
+		t.Fatalf("Kueue maximum execution label = %#v, want profile cap 3600", got)
+	}
+}
+
+func TestRenderExecutionDeadlineUsesEffectiveGrace(t *testing.T) {
+	p := trainProfile()
+	p.Spec["policy"].(map[string]any)["terminationGracePeriodSeconds"] = 120
+	delete(p.Spec["policy"].(map[string]any), "activeDeadlineSeconds")
+	out, err := Render(p, Options{
+		Name:                     "profile-grace",
+		Namespace:                "sample",
+		Command:                  []string{"true"},
+		ExecutionDeadlineSeconds: 5100,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	spec := parseYAML(t, out)["spec"].(map[string]any)
+	if got := spec["activeDeadlineSeconds"]; got != 4980 {
+		t.Fatalf("activeDeadlineSeconds = %#v, want 4980", got)
+	}
+}
+
+func TestRenderExecutionDeadlineValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		options Options
+		want    string
+	}{
+		{
+			name: "negative",
+			options: Options{
+				ExecutionDeadlineSeconds: -1,
+			},
+			want: "must be >= 0",
+		},
+		{
+			name: "Kueue int32 overflow",
+			options: Options{
+				ExecutionDeadlineSeconds: runconfig.MaxExecutionDeadlineSeconds + 1,
+			},
+			want: "must be <= 2147483647",
+		},
+		{
+			name: "does not cover grace",
+			options: Options{
+				ExecutionDeadlineSeconds: 600,
+			},
+			want: "must exceed effective pod termination grace",
+		},
+		{
+			name: "ambiguous raw and total deadline",
+			options: Options{
+				ExecutionDeadlineSeconds: 5100,
+				ActiveDeadlineSeconds:    4500,
+			},
+			want: "mutually exclusive",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.options.Name = "invalid-deadline"
+			tt.options.Namespace = "sample"
+			tt.options.Command = []string{"true"}
+			if _, err := Render(trainProfile(), tt.options); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Render() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderOmitsExecutionDeadlineByDefault(t *testing.T) {
+	p := trainProfile()
+	delete(p.Spec["policy"].(map[string]any), "activeDeadlineSeconds")
+	out, err := Render(p, Options{Name: "unbounded", Namespace: "sample", Command: []string{"true"}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	m := parseYAML(t, out)
+	spec := m["spec"].(map[string]any)
+	if _, ok := spec["activeDeadlineSeconds"]; ok {
+		t.Fatalf("activeDeadlineSeconds must be omitted: %#v", spec["activeDeadlineSeconds"])
+	}
+	labels := m["metadata"].(map[string]any)["labels"].(map[string]any)
+	if _, ok := labels["kueue.x-k8s.io/max-exec-time-seconds"]; ok {
+		t.Fatalf("Kueue maximum execution label must be omitted: %#v", labels)
+	}
+}
+
 func TestRenderRejectsTTLAboveKubernetesMaximum(t *testing.T) {
 	_, err := Render(trainProfile(), Options{
 		Name:                    "invalid-ttl",

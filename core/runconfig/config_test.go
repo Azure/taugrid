@@ -101,6 +101,75 @@ run:
 	}
 }
 
+func TestRunExecutionDeadlineSeconds(t *testing.T) {
+	cfg, err := parse([]byte(`name: bounded-job
+engine: job
+entrypoint: train.py
+run:
+  execution_deadline_seconds: 5100
+`), "tau.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Run.ExecutionDeadlineSeconds == nil || *cfg.Run.ExecutionDeadlineSeconds != 5100 {
+		t.Fatalf("execution deadline = %v, want 5100", cfg.Run.ExecutionDeadlineSeconds)
+	}
+	if err := cfg.ValidateExecution("job"); err != nil {
+		t.Fatalf("validate Job execution deadline: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		value   int64
+		wantErr string
+	}{
+		{name: "minimum schema value", value: 1},
+		{name: "maximum Kueue value", value: MaxExecutionDeadlineSeconds},
+		{name: "zero", value: 0, wantErr: "must be > 0"},
+		{name: "negative", value: -1, wantErr: "must be > 0"},
+		{name: "Kueue int32 overflow", value: MaxExecutionDeadlineSeconds + 1, wantErr: "must be <= 2147483647"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Config{Run: Run{ExecutionDeadlineSeconds: &tt.value}}).ValidateExecution("job")
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("ValidateExecution(%d): %v", tt.value, err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("ValidateExecution(%d) error = %v, want %q", tt.value, err, tt.wantErr)
+			}
+		})
+	}
+
+	if _, err := parse([]byte(`engine: job
+run:
+  execution_deadline_seconds: 9223372036854775808
+`), "tau.yaml"); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Fatalf("expected int64 overflow parse rejection, got %v", err)
+	}
+	if _, err := parse([]byte(`engine: job
+run:
+  execution_deadline_seconds: soon
+`), "tau.yaml"); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Fatalf("expected malformed deadline parse rejection, got %v", err)
+	}
+	if err := (Config{Run: Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds}}).ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
+		t.Fatalf("expected Ray deadline rejection, got %v", err)
+	}
+	if err := (Config{
+		Run:        Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+		Resilience: Resilience{MaxRetries: 1},
+	}).ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "fresh deadline") {
+		t.Fatalf("expected Tau retry deadline reset rejection, got %v", err)
+	}
+	if err := (Config{
+		Run:      Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+		Workflow: Workflow{File: "workflow.yaml"},
+	}).ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "direct Job dispatch") {
+		t.Fatalf("expected managed workflow deadline rejection, got %v", err)
+	}
+}
+
 func TestValidateLiteralEnvPayloadsRejectsContentTransport(t *testing.T) {
 	tooLarge := strings.Repeat("x", MaxLiteralEnvValueBytes+1)
 	if err := ValidateLiteralEnvPayloads(map[string]string{"KG_SOURCE_PATCH_B64": tooLarge}); err == nil || !strings.Contains(err.Error(), "run.source") {
@@ -689,6 +758,14 @@ func TestJSONSchemaCoversCoreFields(t *testing.T) {
 	envSecret := runtimeProps["env_secret"].(map[string]any)
 	if envSecret["x-tau-status"] != string(statusSupported) {
 		t.Fatalf("runtime.env_secret status = %v, want supported", envSecret["x-tau-status"])
+	}
+	run := props["run"].(map[string]any)["properties"].(map[string]any)
+	deadline := run["execution_deadline_seconds"].(map[string]any)
+	if deadline["type"] != "integer" || deadline["minimum"] != float64(1) || deadline["maximum"] != float64(MaxExecutionDeadlineSeconds) {
+		t.Fatalf("execution deadline schema = %#v", deadline)
+	}
+	if ttl := run["ttl_seconds_after_finished"].(map[string]any); ttl["type"] != "integer" {
+		t.Fatalf("TTL schema type = %v, want integer", ttl["type"])
 	}
 }
 

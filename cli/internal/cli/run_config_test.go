@@ -1155,6 +1155,7 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`run.execution_deadline_seconds` | direct-only",
 		"`run.ttl_seconds_after_finished` | direct-only",
 		"`storage.image_assets.name` | direct-only",
 		"`storage.image_assets.image` | direct-only",
@@ -1773,6 +1774,57 @@ policy:
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("source dry-run contains forbidden transport %q:\n%s", forbidden, rendered)
 		}
+	}
+}
+
+func TestRunConfigDryRunRendersConsumerExecutionDeadline(t *testing.T) {
+	dir := t.TempDir()
+	digest := strings.Repeat("e", 64)
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: h200-rl
+engine: job
+entrypoint: train.py
+run:
+  execution_deadline_seconds: 5100
+  source:
+    image: example.azurecr.io/h200-rl@sha256:`+digest+`
+    path: /workspace
+runtime:
+  image: example.azurecr.io/h200-runtime:latest
+compute:
+  gpus: 2
+policy:
+  namespace: tau-default
+  queue: research-training
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	var job map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &job); err != nil {
+		t.Fatalf("parse rendered Job: %v\n%s", err, rendered)
+	}
+	spec := job["spec"].(map[string]any)
+	if got := spec["activeDeadlineSeconds"]; got != 4500 {
+		t.Fatalf("activeDeadlineSeconds = %#v, want 4500", got)
+	}
+	if got := spec["backoffLimit"]; got != 0 {
+		t.Fatalf("backoffLimit = %#v, want 0", got)
+	}
+	if got := spec["suspend"]; got != true {
+		t.Fatalf("suspend = %#v, want true", got)
+	}
+	podSpec := spec["template"].(map[string]any)["spec"].(map[string]any)
+	if got := podSpec["terminationGracePeriodSeconds"]; got != 600 {
+		t.Fatalf("terminationGracePeriodSeconds = %#v, want 600", got)
+	}
+	labels := job["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got := labels["kueue.x-k8s.io/max-exec-time-seconds"]; got != "4500" {
+		t.Fatalf("Kueue maximum execution label = %#v, want 4500", got)
+	}
+	if !strings.Contains(rendered, "nvidia.com/gpu: 2") {
+		t.Fatalf("rendered Job does not request two GPUs:\n%s", rendered)
 	}
 }
 
