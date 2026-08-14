@@ -30,7 +30,7 @@ with a nonexistent `queryCommand` or manually patch the Deployment.
 |---|---|---|
 | Jobs / Queue, Cluster Nodes, live Ray | Kubernetes/Kueue; Ray is a live proxy | Portal Kubernetes RBAC; Ray head Service must exist |
 | Experiments (embedded Stellar), Cluster Health, Cost | ADX/Kusto | Configured endpoint and a query identity |
-| Durable Ray history | `Metrics.TauExpRunLifecycle` | Lifecycle recorder, schema, and `runHistory.enabled` |
+| Durable Ray history | `Metrics.TauExpRunLifecycle` | Lifecycle recorder, successful adx-mon schema management, and `runHistory.enabled` |
 
 The live Ray dashboard is not historical. Durable history remains available
 after KubeRay removes runtime Pods.
@@ -105,8 +105,9 @@ serviceAccount:
 ```
 
 Durable Ray history is optional. Follow [Enable lifecycle recorder](../enable-lifecycle-recorder/)
-after its lifecycle schema and writer identity are ready. Then merge the
-following field into the existing `portal` map:
+after adx-mon has successfully reconciled its lifecycle schema command and the
+writer identity is ready. Then merge the following field into the existing
+`portal` map:
 
 ```text
 runHistory:

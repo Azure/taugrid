@@ -8,7 +8,9 @@ description: Provision and authorize the optional Azure Data Explorer data plane
 
 ADX/Kusto is an optional platform data service. TauGrid does not create its
 cluster, databases, Entra identities, federation, or database roles. Prepare
-it once; Portal, lifecycle recorder, and adx-mon are separate consumers.
+those platform resources once; Portal, lifecycle recorder, and adx-mon are
+separate consumers. Their released charts manage the TauGrid/adx-mon schema
+objects that they own.
 
 ## Provision the service
 
@@ -50,10 +52,10 @@ az identity federated-credential create --resource-group <resource-group> \
 ```
 
 An authorized ADX administrator must separately grant database roles. In
-production, use distinct principals: schema deployer (table/mapping/function
-management), Portal reader (`Viewer`), lifecycle recorder writer (`Ingestor`),
-and adx-mon identity (the current chart's documented management privileges).
-Azure RBAC, Kubernetes RBAC, and ADX database roles are independent.
+production, use distinct principals: Portal reader (`Viewer`), lifecycle
+recorder writer (`Ingestor`), and adx-mon identity (currently ADX database
+`Admin` for the databases whose schema it reconciles). Azure RBAC, Kubernetes
+RBAC, and ADX database roles are independent.
 
 For example, an ADX administrator can grant the two least-privilege consumer
 roles in PowerShell or another approved Azure CLI environment:
@@ -78,59 +80,37 @@ Use a stable, unique assignment name per database/principal/role. These
 commands grant ADX data-plane access only; they do not create the federated
 credential or Kubernetes RBAC.
 
-## Generate, execute, and verify producer schemas
+## Let the platform charts manage producer schemas
 
-Tables are not created implicitly by Portal or lifecycle recorder. Apply each
-enabled producer's schema before it writes. Durable Ray history needs
-`Metrics.TauExpRunLifecycle`, its mapping, and function.
+Do not manually create TauGrid lifecycle tables, mappings, or functions, and
+do not make `taugrid-portal exp kusto schema --ingestion lifecycle` a platform
+deployment prerequisite. That command remains a development/release artifact
+generator; it does not execute KQL.
 
-### Step 1: Generate and review the KQL artifact
+For a release that includes lifecycle schema management, enable adx-mon first
+and grant its identity the ADX database `Admin` role on `Metrics`. Enabling
+`lifecycleRecorder` then creates an adx-mon `ManagementCommand` that
+idempotently creates or updates `Metrics.TauExpRunLifecycle`, its named JSON
+mapping, and `TauExpRunLifecycleDashboardRows()`. The recorder itself retains
+only the `Ingestor` role.
 
-The schema/release owner runs the matching `taugrid-portal` release tool and
-stores the generated artifact with the deployment inputs:
+Check that automation before enabling a Kusto-backed Portal capability:
 
 ```bash
-taugrid-portal exp kusto schema --ingestion lifecycle \
-  > lifecycle-schema.kql
+kubectl -n <adx-mon-namespace> get managementcommand \
+  <lifecycle-schema-resource-name> \
+  -o jsonpath='{.status.conditions[0].status}{" "}{.status.conditions[0].reason}{"\n"}'
 ```
 
-This is a pure text generator: it does not contact ADX, does not need a
-kubeconfig, and does not accept endpoint or database arguments. It must run
-from release engineering or the schema pipeline, not from a Portal Pod or the
-lifecycle recorder. The output is idempotent KQL; its essential shape is:
+Wait for a successful status. adx-mon reconciles commands periodically, so a
+new command is not necessarily complete immediately after a Helm upgrade. Set
+`lifecycleRecorder.schemaManagement.enabled=false` only when an existing
+platform-owned automation already manages the identical lifecycle contract.
 
-```kusto
-.create-merge table TauExpRunLifecycle (...)
-.create-or-alter function TauExpRunLifecycleDashboardRows() { ... }
-// plus the TauExpRunLifecycle JSON ingestion mapping
-```
-
-Review and deploy the complete generated file, never this abbreviated example.
-
-### Step 2: Execute the KQL in ADX
-
-A schema-deployment identity executes `lifecycle-schema.kql` against the
-**Metrics** database. For a guided/manual deployment, open the target ADX
-cluster in Azure Portal, select **Query**, choose the `Metrics` database, paste
-the complete file into a new query tab, and select **Run**. For production,
-commit the artifact to the approved IaC/KQL deployment pipeline and run that
-same file as the schema principal.
-
-### Step 3: Verify the applied objects
-
-In the same `Metrics` query tab, run:
-
-```kusto
-.show table TauExpRunLifecycle schema as json
-.show table TauExpRunLifecycle ingestion mappings
-```
-
-The emitted KQL is idempotent, so the reviewed schema deployment may run it
-again on an upgrade. Stellar uses the scalar metric tables supplied by its
-selected ingestion path (commonly adx-mon remote-write
-`Metrics.ExperimentMetrics`).
-For adx-mon, follow its published chart guide and enable Metrics/Logs table
-precreation before broad collection to avoid ADX control-plane throttling.
+Stellar uses scalar metric tables supplied by its selected ingestion path
+(commonly adx-mon remote-write `Metrics.ExperimentMetrics`). For adx-mon,
+follow its published chart guide and enable Metrics/Logs table precreation
+before broad collection to avoid ADX control-plane throttling.
 
 Only hand consumers a tested endpoint, database, ServiceAccount subject, and
 non-secret identity client ID. Then configure [Portal](../enable-portal/) or

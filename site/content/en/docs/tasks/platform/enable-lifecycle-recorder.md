@@ -12,15 +12,17 @@ records observations of Jobs, RayJobs, and Kueue Workloads in one workload
 namespace. Portal can optionally read the resulting rows as durable Ray
 history, but the recorder is useful independently of Portal.
 
-## Prepare the namespace, schema, and identity
+## Prepare the namespace, adx-mon, and identity
 
 Before enabling the recorder:
 
 1. Create the workload namespace. Usually, create its TauWorkspace first. The
    recorder chart deliberately does not create `targetNamespace`.
-2. [Prepare ADX/Kusto](../prepare-adx-kusto/) and execute the lifecycle schema
-   KQL against the selected database. The recorder does not create its table,
-   mapping, or function at startup.
+2. [Prepare ADX/Kusto](../prepare-adx-kusto/), deploy adx-mon, and grant its
+   identity the ADX database `Admin` role on `Metrics`. The TauGrid chart
+   creates an adx-mon `ManagementCommand` for the lifecycle table, mapping, and
+   function; do not manually run `taugrid-portal exp kusto schema` for this
+   deployment path.
 3. Create a dedicated managed identity and federate its exact ServiceAccount
    subject:
 
@@ -29,8 +31,8 @@ Before enabling the recorder:
    ```
 
 4. Grant that identity the ADX database `Ingestor` role. This role is separate
-   from Azure RBAC and Kubernetes RBAC. It is enough for queued ingestion; use
-   a separate schema principal for table, mapping, and function management.
+   from Azure RBAC and Kubernetes RBAC. It is enough for queued ingestion;
+   adx-mon, rather than the recorder, manages the table, mapping, and function.
 
 The recorder's Kubernetes Role is namespace-scoped and permits only
 `get/list/watch` for Jobs, RayJobs, and Kueue Workloads in `targetNamespace`.
@@ -47,11 +49,12 @@ an overlay can remove resources from previously enabled components.
 The chart accepts only the released Tau image on MCR. Pin the released image by
 tag, or set `tag: ""` and provide its immutable digest.
 
-Use a release that includes the recorder's current queued-ingestion contract.
-The recorder requires the named `TauExpRunLifecycleMapping` created by the
-lifecycle schema, and sends an idempotent ADX extent tag with each batch. Do
-not replace it with an arbitrary private image or hand-edit the Deployment as
-a production workaround; chart and image must be released together.
+Use a release that includes the recorder's current queued-ingestion contract
+and automatic lifecycle schema management. The chart's default schema
+management creates the named `TauExpRunLifecycleMapping` through adx-mon, and
+the recorder sends an idempotent ADX extent tag with each batch. Do not replace
+it with an arbitrary private image or hand-edit the Deployment as a production
+workaround; chart and image must be released together.
 
 ```text
 # Merge into the existing <platform-values.yaml>; not a complete Helm values file.
@@ -68,6 +71,10 @@ taugrid-core:
       endpoint: https://<adx>.<region>.kusto.windows.net
       database: Metrics
       table: TauExpRunLifecycle
+    schemaManagement:
+      enabled: true
+      namespace: <adx-mon-namespace>
+      resourceName: taugrid-lifecycle-schema
     image:
       repository: mcr.microsoft.com/aks/ai-runtime/tau
       tag: <released-tag>
@@ -97,8 +104,15 @@ tau cluster install --context <context> --version <taugrid-release-version> \
 
 kubectl -n <control-plane-namespace> rollout status \
   deploy/tau-lifecycle-recorder --timeout=180s
+kubectl -n <adx-mon-namespace> get managementcommand \
+  taugrid-lifecycle-schema \
+  -o jsonpath='{.status.conditions[0].status}{" "}{.status.conditions[0].reason}{"\n"}'
 kubectl -n <control-plane-namespace> logs deploy/tau-lifecycle-recorder --tail=100
 ```
+
+Wait for the ManagementCommand to report a successful status before expecting
+the recorder to ingest rows. adx-mon reconciles commands periodically, so this
+can take up to its polling interval after the Helm upgrade.
 
 Submit a workload in `targetNamespace`, then query the configured ADX database:
 
@@ -110,9 +124,10 @@ TauExpRunLifecycle
 ```
 
 Rows appear after the recorder's polling interval and ADX queued-ingestion
-latency. Check the recorder logs and the managed identity's database role if no
-rows appear. To expose these rows in Portal, follow [Enable Portal](../enable-portal/)
-and set its `portal.runHistory.enabled` only after recorder writes succeed.
+latency. Check the ManagementCommand, recorder logs, and managed identities'
+database roles if no rows appear. To expose these rows in Portal, follow
+[Enable Portal](../enable-portal/) and set its `portal.runHistory.enabled` only
+after recorder writes succeed.
 
 For an ADX-side diagnosis that distinguishes ingestion from Kubernetes
 discovery, a schema administrator can inspect recent ingestion failures:
