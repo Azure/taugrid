@@ -3,9 +3,10 @@
 # Licensed under the MIT License.
 
 # This plugin checks IB devices. Copied from Azure HPC again but with many bug fixes.
-readonly EXPECTED_IB_Gbps=400
+readonly EXPECTED_IB_Gbps="${EXPECTED_IB_GBPS:-400}"
 readonly EXPECTED_IB_DEVS="${IB_DEVICES:-}"
 readonly EXPECTED_IB_NUM_DEVS=`grep -o ":" <<<"$EXPECTED_IB_DEVS" | wc -l`
+readonly SYSFS_ROOT="${SYSFS_ROOT:-/sys}"
 
 # Only check for tenant PKEY on Mango PDX
 if [[ $EXPECTED_IB_NUM_DEVS -eq 8 ]]; then
@@ -28,7 +29,7 @@ function gather_ib_data() {
     # Gather IB info
     set +f
     IFS=''
-    IB_PORTS=( /sys/class/infiniband/*/ports/* )
+    IB_PORTS=( "$SYSFS_ROOT"/class/infiniband/*/ports/* )
     IFS=$' \t\n'
     set -f
     for PORT in "${IB_PORTS[@]}" ; do
@@ -47,17 +48,15 @@ function gather_ib_data() {
         read LINE < $PORT/pkeys/0
         FIELD=( $LINE )
         HW_IB_PKEY[$INDEX]=${FIELD[0]}
-        IFS=' /'
-        arr=( $PORT )
-        HW_IB_DEV[$INDEX]="${arr[4]}:${arr[6]}"
+        HW_IB_DEV[$INDEX]="$(basename "$(dirname "$(dirname "$PORT")")"):$(basename "$PORT")"
         IFS=$' \t\n'
 	 #echo "Found ${HW_IB_STATE[$INDEX]} (${HW_IB_PHYS_STATE[$INDEX]}) IB Port ${HW_IB_DEV[$INDEX]} (${HW_IB_RATE[$INDEX]} Gb/sec) with (${HW_IB_PKEY[$INDEX]}) PKEY"
     done
     export HW_IB_STATE HW_IB_PHYS_STATE HW_IB_RATE HW_IB_PKEY
 
     # Check if user-leved mad driver loaded and IB diag tools will succeed to run
-    if [[ -f /sys/class/infiniband_mad/abi_version ]]; then
-      read HW_IB_UMAD_ABI_VER < /sys/class/infiniband_mad/abi_version
+    if [[ -f "$SYSFS_ROOT/class/infiniband_mad/abi_version" ]]; then
+      read HW_IB_UMAD_ABI_VER < "$SYSFS_ROOT/class/infiniband_mad/abi_version"
     else
       HW_IB_UMAD_ABI_VER=0
     fi

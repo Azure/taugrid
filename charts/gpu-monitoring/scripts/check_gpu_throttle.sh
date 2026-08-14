@@ -4,6 +4,9 @@
 
 # This plugin checks GPU throttling
 
+readonly OK=0
+readonly NONOK=1
+
 readonly GPU_CLOCKS_THROTTLE_REASON_HW_SLOWDOWN=0x0000000000000008
 readonly GPU_CLOCKS_THROTTLE_REASON_HW_THERMAL_SLOWDOWN=0x000000000000004
 readonly GPU_CLOCKS_THROTTLE_REASON_APPLICATIONS_CLOCK_SETTINGS=0x0000000000000002
@@ -51,8 +54,8 @@ do
   IFS=$' \t\n'
   if [[ ${gpu_clock_throttle_out_line[0]} != $GPU_CLOCKS_THROTTLE_REASON_GPU_IDLE && ${gpu_clock_throttle_out_line[0]} != $GPU_CLOCKS_THROTTLE_REASON_NONE && ${gpu_clock_throttle_out_line[0]} != $GPU_CLOCKS_THROTTLE_REASON_SW_POWER_CAP ]]; then
     echo "Warning: GPU $i throttled, reason=${gpu_clock_throttle_out_line[0]}"
-    exit 0
+    exit $NONOK
   fi
 done
 echo "No GPU throttling detected"
-exit 0
+exit $OK

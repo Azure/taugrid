@@ -19,6 +19,12 @@ case "$*" in
   "topo -m")
     echo "NV18 NV18 NV18 NV18 NV18 NV18 NV18 NV18 NV18 NV18 NV18 NV18"
     ;;
+  "--id=0 --query-gpu=driver_version --format=csv,noheader")
+    echo "580.126.09"
+    ;;
+  "--query-gpu=clocks_event_reasons.active --format=csv,noheader,nounits")
+    echo "${NVIDIA_SMI_THROTTLE_OUTPUT:-0x0000000000000000}"
+    ;;
   *)
     exit 1
     ;;
@@ -53,10 +59,14 @@ printf '1\n' >"$TEST_ROOT/sys/class/infiniband_mad/abi_version"
 printf '400 Gb/sec (4X HDR)\n' >"$PORT_ROOT/rate"
 SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" \
   bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" \
+  bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
 
 printf '800 Gb/sec (8X NDR)\n' >"$PORT_ROOT/rate"
 SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
   bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
+  bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
 
 printf '400 Gb/sec (4X HDR)\n' >"$PORT_ROOT/rate"
 if mismatch_output="$(
@@ -67,3 +77,20 @@ if mismatch_output="$(
   exit 1
 fi
 [[ "$mismatch_output" == *"800 Gb/sec"* ]]
+
+if throttle_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
+    NVIDIA_SMI_THROTTLE_OUTPUT=0x0000000000000008 \
+    bash "$CHART_DIR/scripts/check_gpu_throttle.sh" 2>&1
+)"; then
+  echo "expected hardware slowdown to fail the GPU throttle check" >&2
+  exit 1
+fi
+[[ "$throttle_output" == *"GPU 0 throttled"* ]]
+
+PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
+  NVIDIA_SMI_THROTTLE_OUTPUT=0x0000000000000004 \
+  bash "$CHART_DIR/scripts/check_gpu_throttle.sh"
+PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
+  NVIDIA_SMI_THROTTLE_OUTPUT=0x0000000000000001 \
+  bash "$CHART_DIR/scripts/check_gpu_throttle.sh"
