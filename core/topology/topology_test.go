@@ -267,11 +267,17 @@ func TestNormalizeGPUClassLegacyAliases(t *testing.T) {
 			t.Errorf("NormalizeGPUClass(%q)=(%q,%t), want (%q,true)", legacy, got, deprecated, want)
 		}
 	}
-	for _, canonical := range []string{GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB} {
+	for _, canonical := range SupportedGPUClasses() {
 		got, deprecated := NormalizeGPUClass(canonical)
 		if got != canonical || deprecated {
 			t.Errorf("NormalizeGPUClass(%q)=(%q,%t), want (%q,false)", canonical, got, deprecated, canonical)
 		}
+		if !IsSupportedGPUClass(canonical) {
+			t.Errorf("IsSupportedGPUClass(%q)=false, want true", canonical)
+		}
+	}
+	if IsSupportedGPUClass("a100") {
+		t.Error("IsSupportedGPUClass(a100)=true, want false")
 	}
 }
 

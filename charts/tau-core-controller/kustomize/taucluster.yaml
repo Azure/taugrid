@@ -16,10 +16,49 @@ spec:
     labelRules:
       - match:
           vmSizes:
+            - Standard_NV6ads_A10_v5
+        labels:
+          kueue.azure.com/gpu-series: nvads-a10-v5
+          tau.azure.com/gpu-class: a10-4gb
+      - match:
+          vmSizes:
+            - Standard_NV12ads_A10_v5
+        labels:
+          kueue.azure.com/gpu-series: nvads-a10-v5
+          tau.azure.com/gpu-class: a10-8gb
+      - match:
+          vmSizes:
+            - Standard_NV18ads_A10_v5
+        labels:
+          kueue.azure.com/gpu-series: nvads-a10-v5
+          tau.azure.com/gpu-class: a10-12gb
+      - match:
+          vmSizes:
+            - Standard_NV36ads_A10_v5
+            - Standard_NV36adms_A10_v5
+            - Standard_NV72ads_A10_v5
+        labels:
+          kueue.azure.com/gpu-series: nvads-a10-v5
+          tau.azure.com/gpu-class: a10-24gb
+      - match:
+          vmSizes:
             - Standard_NC24ads_A100_v4
         labels:
           kueue.azure.com/gpu-series: nc24ads-a100-v4
           tau.azure.com/gpu-class: a100-80gb
+      - match:
+          vmSizes:
+            - Standard_NC48ads_A100_v4
+            - Standard_NC96ads_A100_v4
+        labels:
+          kueue.azure.com/gpu-series: nc-a100-v4
+          tau.azure.com/gpu-class: a100-80gb
+      - match:
+          vmSizes:
+            - Standard_ND96asr_v4
+        labels:
+          kueue.azure.com/gpu-series: nd-a100-v4
+          tau.azure.com/gpu-class: a100-40gb
       - match:
           vmSizes:
             - Standard_ND96amsr_A100_v4
@@ -29,14 +68,41 @@ spec:
       - match:
           vmSizes:
             - Standard_NC40ads_H100_v5
+            - Standard_NC80adis_H100_v5
         labels:
           kueue.azure.com/gpu-series: nc-h100-v5
           tau.azure.com/gpu-class: h100-95gb
+      - match:
+          vmSizes:
+            - Standard_NCC40ads_H100_v5
+        labels:
+          kueue.azure.com/gpu-series: ncc-h100-v5
+          tau.azure.com/gpu-class: h100-95gb
+      - match:
+          vmSizes:
+            - Standard_ND96isr_H100_v5
+        labels:
+          kueue.azure.com/gpu-series: nd-h100-v5
+          tau.azure.com/gpu-class: h100-80gb
       - match:
           vmSizes:
             - Standard_ND96isr_H200_v5
         labels:
           kueue.azure.com/gpu-series: nd-h200-v5
           tau.azure.com/gpu-class: h200-141gb
+      - match:
+          vmSizes:
+            - Standard_ND96isr_GB200_v6
+            - Standard_ND128isr_NDR_GB200_v6
+        labels:
+          kueue.azure.com/gpu-series: nd-gb200-v6
+          tau.azure.com/gpu-class: gb200-192gb
+      - match:
+          vmSizes:
+            - Standard_ND128isr_GB300_v6
+            - Standard_ND128isrG5_GB300_v6
+        labels:
+          kueue.azure.com/gpu-series: nd-gb300-v6
+          tau.azure.com/gpu-class: gb300-288gb
   queues:
     ownership: External
