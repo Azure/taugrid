@@ -1,6 +1,6 @@
 module github.com/Azure/taugrid/tests/e2e
 
-go 1.26.6
+go 1.26.5
 
 require (
 	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
