@@ -108,6 +108,18 @@ tests:
             value: "400"
           any: true
 
+  - it: A100 uses Azure HDR's 200-Gbps per-port expectation
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXPECTED_IB_GBPS
+            value: "200"
+          any: true
+
   - it: nodeExporter.enabled=false omits the node-exporter sidecar
     set:
       nodeExporter.enabled: false

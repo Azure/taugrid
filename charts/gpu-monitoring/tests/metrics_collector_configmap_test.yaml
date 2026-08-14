@@ -89,6 +89,33 @@ tests:
           path: data["rules.yaml"]
           pattern: 'metricName: node_infiniband_(link_downed|symbol_error)_total'
 
+  - it: all raw XID gauges use exporter err_code labels and instant thresholds
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError48\s+labels:\s+err_code: "48"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-48\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError63\s+labels:\s+err_code: "63"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-63\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError64\s+labels:\s+err_code: "64"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-64\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError79\s+labels:\s+err_code: "79"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-79\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError94\s+labels:\s+err_code: "94"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-94\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError95\s+labels:\s+err_code: "95"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-95\s+threshold: 0'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: '\bxid:'
+
   - it: per-SKU nodeExporter=false drops the node-exporter target from that SKU's ConfigMap
     set:
       gpuSkus.a100.nodeExporter: false

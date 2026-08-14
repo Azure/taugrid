@@ -205,11 +205,16 @@ analyze_flaps() {
             local ts
             ts=$(echo "$line" | awk '{print $1}')
             [[ ! "$ts" =~ ^[0-9]+$ ]] && continue
-            [[ "$ts" -lt "$time_window" ]] && { prev_state=$(get_device_state "$line" "$ib_dev"); continue; }
 
             local cur_state
             cur_state=$(get_device_state "$line" "$ib_dev")
             cur_state="${cur_state:-unknown}"
+            case "$cur_state" in
+                up|down) ;;
+                *) continue ;;
+            esac
+
+            [[ "$ts" -lt "$time_window" ]] && { prev_state="$cur_state"; continue; }
 
             if [[ -n "$prev_state" && "$prev_state" != "$cur_state" ]]; then
                 transitions=$((transitions + 1))

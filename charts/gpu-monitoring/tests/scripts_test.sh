@@ -200,6 +200,19 @@ if second_xid_output="$(
 fi
 [[ "$second_xid_output" == *"XID 79 already logged"* ]]
 
+readonly UNKNOWN_FLAP_STATE_FILE="$TEST_ROOT/ib-flap-unknown-state.txt"
+cat >"$UNKNOWN_FLAP_STATE_FILE" <<'EOF'
+7000 mlx5_0:1=up
+7600 mlx5_0:1=unknown
+8200 mlx5_0:1=error
+8800 mlx5_0:1=unknown
+9400 mlx5_0:1=up
+EOF
+PATH="$TEST_ROOT/bin:$PATH" TEST_NOW=10000 IB_DEVICES="mlx5_0:1" \
+  IB_FLAP_THRESHOLD_SHORT=1 IB_FLAP_CHECK_WINDOW=3600 \
+  IB_FLAP_STATE_FILE="$UNKNOWN_FLAP_STATE_FILE" \
+  bash "$CHART_DIR/scripts/check_ib_flaps.sh"
+
 readonly FLAP_STATE_FILE="$TEST_ROOT/ib-flap-state.txt"
 # Four transitions 700 seconds apart form two flaps inside the one-hour window.
 # More than ten newer stable samples prove retention is time-based, not count-based.

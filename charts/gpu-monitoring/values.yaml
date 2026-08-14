@@ -179,61 +179,49 @@ metricsCollector:
       threshold: 0
       window: 1m
       for: 1m
-    # Critical: XID Errors (any increase over 1m, specific codes → drain)
+    # Critical: XID Errors (current nonzero raw gauge, specific codes → drain)
     - name: xid-48
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
-        xid: "48"
+        err_code: "48"
       conditionType: XIDError48
-      mode: rate
+      mode: instant
       threshold: 0
-      window: 1m
-      for: 1m
     - name: xid-63
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
-        xid: "63"
+        err_code: "63"
       conditionType: XIDError63
-      mode: rate
+      mode: instant
       threshold: 0
-      window: 1m
-      for: 1m
     - name: xid-64
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
-        xid: "64"
+        err_code: "64"
       conditionType: XIDError64
-      mode: rate
+      mode: instant
       threshold: 0
-      window: 1m
-      for: 1m
     - name: xid-79
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
-        xid: "79"
+        err_code: "79"
       conditionType: XIDError79
-      mode: rate
+      mode: instant
       threshold: 0
-      window: 1m
-      for: 1m
     - name: xid-94
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
-        xid: "94"
+        err_code: "94"
       conditionType: XIDError94
-      mode: rate
+      mode: instant
       threshold: 0
-      window: 1m
-      for: 1m
     - name: xid-95
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
-        xid: "95"
+        err_code: "95"
       conditionType: XIDError95
-      mode: rate
+      mode: instant
       threshold: 0
-      window: 1m
-      for: 1m
     # Critical: InfiniBand (any increase over 1m → taint)
     - name: ib-link-down
       metricName: node_infiniband_port_link_downed_total
@@ -316,6 +304,7 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
+    ib_rate_gbps: 200
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     nvme_total: 0
