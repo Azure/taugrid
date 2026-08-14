@@ -5,6 +5,8 @@ values:
   - lifecycle-recorder-values.yaml
 tests:
   - it: creates the lifecycle schema through adx-mon
+    set:
+      lifecycleRecorder.schemaManagement.enabled: true
     asserts:
       - isKind:
           of: ManagementCommand
@@ -29,6 +31,7 @@ tests:
 
   - it: can place the ManagementCommand in a non-default adx-mon namespace
     set:
+      lifecycleRecorder.schemaManagement.enabled: true
       lifecycleRecorder.schemaManagement.namespace: observability
     asserts:
       - equal:
@@ -37,6 +40,7 @@ tests:
 
   - it: rejects a custom table because the generated schema is canonical
     set:
+      lifecycleRecorder.schemaManagement.enabled: true
       lifecycleRecorder.kusto.table: custom_lifecycle
     asserts:
       - failedTemplate:
@@ -48,3 +52,11 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: rejects a custom database because adx-mon only executes commands for its configured database
+    set:
+      lifecycleRecorder.schemaManagement.enabled: true
+      lifecycleRecorder.kusto.database: CustomMetrics
+    asserts:
+      - failedTemplate:
+          errorMessage: lifecycleRecorder.kusto.database must be Metrics when lifecycleRecorder.schemaManagement.enabled=true because adx-mon ManagementCommands run only against its configured database

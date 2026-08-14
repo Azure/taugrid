@@ -1,0 +1,41 @@
+{{- if and .Values.lifecycleRecorder.enabled .Values.lifecycleRecorder.schemaManagement.enabled }}
+{{- $recorder := .Values.lifecycleRecorder -}}
+{{- $serviceAccount := default dict $recorder.serviceAccount -}}
+{{- $schemaManagement := default dict $recorder.schemaManagement -}}
+{{- $resourceName := default "tau-lifecycle-recorder" $recorder.resourceName -}}
+{{- $schemaResourceName := default "taugrid-lifecycle-schema" $schemaManagement.resourceName -}}
+# The recorder may only read its own schema command. This lets its init
+# container wait for adx-mon to create the table before ingestion begins.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $resourceName }}-schema-read
+  namespace: {{ $schemaManagement.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["adx-mon.azure.com"]
+    resources: ["managementcommands"]
+    resourceNames: [{{ $schemaResourceName | quote }}]
+    # kubectl wait lists and watches with metadata.name=<resource name>, which
+    # Kubernetes RBAC permits with this resourceNames restriction.
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $resourceName }}-schema-read
+  namespace: {{ $schemaManagement.namespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccount.name }}
+    namespace: {{ $recorder.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $resourceName }}-schema-read
+{{- end }}

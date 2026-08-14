@@ -248,22 +248,31 @@ least-privilege RBAC. It creates a namespace-scoped Role granting only
 Workload Identity is mandatory; it requires a ServiceAccount client-id annotation
 and stamps the AKS workload-identity pod label.
 
-With the default `lifecycleRecorder.schemaManagement.enabled=true`, the chart
-creates an adx-mon `ManagementCommand` in
+With `lifecycleRecorder.schemaManagement.enabled=true`, the chart creates an
+adx-mon `ManagementCommand` in
 `lifecycleRecorder.schemaManagement.namespace` (default `adx-mon`). adx-mon
 idempotently creates the `TauExpRunLifecycle` table, its named JSON ingestion
 mapping, and the dashboard function. Install and authorize adx-mon before this
 chart: its identity needs database-management permission on the recorder's ADX
 database. The recorder retains only `Ingestor` permission and does not execute
-database-management commands itself. Check completion with:
+database-management commands itself. This is opt-in so existing recorder
+installs that do not have the adx-mon CRD continue to upgrade safely. Automatic
+schema management currently supports only adx-mon's conventional `Metrics`
+database and the canonical `TauExpRunLifecycle` table.
+
+When enabled, a recorder init container waits for the ManagementCommand's
+success condition before the recorder starts. This prevents short-lived runs
+from being missed while an empty ADX database is being initialized. Check
+completion with:
 
 ```bash
 kubectl -n <schema-management-namespace> get managementcommand <schema-management-resource-name>
 ```
 
-adx-mon reconciles ManagementCommands periodically (currently every 10 minutes),
-so wait for the command to report a successful status before enabling a
-Kusto-backed Portal feature or diagnosing a missing lifecycle table.
+adx-mon reconciles ManagementCommands periodically (currently every 10 minutes).
+The default readiness timeout is 25 minutes; a failed or unavailable command
+keeps the recorder from starting. Check the command status or adx-mon logs to
+resolve the error rather than disabling the gate.
 
 The ManagementCommand carries the same lifecycle table and mapping contract as
 the recorder's inline queued-ingestion mapping. Set

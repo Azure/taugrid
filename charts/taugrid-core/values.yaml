@@ -217,15 +217,27 @@ lifecycleRecorder:
     endpoint: ""
     database: Metrics
     table: TauExpRunLifecycle
-  # adx-mon owns database-management operations. When enabled, this chart
-  # creates a ManagementCommand in adx-mon's namespace which idempotently
-  # creates the lifecycle table, ingestion mapping, and dashboard function.
+  # adx-mon owns database-management operations. Opt in only after a compatible
+  # adx-mon ManagementCommand CRD is installed. When enabled, this chart creates
+  # a ManagementCommand in adx-mon's namespace which idempotently creates the
+  # canonical Metrics/TauExpRunLifecycle table, ingestion mapping, and dashboard
+  # function. The recorder waits for that command to succeed before it starts.
   # The adx-mon identity therefore needs database-management permission; the
   # recorder itself only needs Ingestor permission.
   schemaManagement:
-    enabled: true
+    enabled: false
     namespace: adx-mon
     resourceName: taugrid-lifecycle-schema
+    # adx-mon v0.3.0 reconciles ManagementCommands every 10 minutes. This
+    # timeout allows one normal reconciliation plus a retry while ensuring a
+    # failed schema command never lets the recorder begin ingestion.
+    waitTimeout: 25m
+    waitImage:
+      repository: mcr.microsoft.com/oss/kubernetes/kubectl
+      tag: ""
+      # v1.29.15 multi-architecture image index.
+      digest: sha256:602c8e3ea5c92c8508510566e7ea2dcee65ffe89ca26738823138362753004ef
+      pullPolicy: IfNotPresent
   image:
     # Release image tags follow this chart's version. Set tag to "" when
     # overriding digest with an immutable sha256 reference.

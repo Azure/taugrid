@@ -3,8 +3,12 @@
 {{- $kusto := default dict $recorder.kusto -}}
 {{- $schemaManagement := default dict $recorder.schemaManagement -}}
 {{- $table := default "TauExpRunLifecycle" $kusto.table -}}
+{{- $database := default "Metrics" $kusto.database -}}
 {{- if ne $table "TauExpRunLifecycle" -}}
 {{- fail "lifecycleRecorder.kusto.table must be TauExpRunLifecycle when lifecycleRecorder.schemaManagement.enabled=true" -}}
+{{- end -}}
+{{- if ne $database "Metrics" -}}
+{{- fail "lifecycleRecorder.kusto.database must be Metrics when lifecycleRecorder.schemaManagement.enabled=true because adx-mon ManagementCommands run only against its configured database" -}}
 {{- end -}}
 {{- if not $schemaManagement.namespace -}}
 {{- fail "lifecycleRecorder.schemaManagement.namespace is required when lifecycleRecorder.schemaManagement.enabled=true" -}}
@@ -18,7 +22,7 @@ metadata:
     app.kubernetes.io/component: lifecycle-schema
     {{- include "taugrid-core.labels" . | nindent 4 }}
 spec:
-  database: {{ default "Metrics" $kusto.database | quote }}
+  database: {{ $database | quote }}
   body: |
     // Tau/Stellar run lifecycle contract.
     // A Tau-owned controller/operator appends or upserts one row per observed run state change.
