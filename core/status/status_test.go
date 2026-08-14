@@ -1164,6 +1164,12 @@ func TestRenderSuccessfulRayJobTeardownUsesTerminalSuccessPrecedence(t *testing.
 	if strings.Contains(out, "[!]") {
 		t.Fatalf("successful terminal RayJob must not render startup warnings:\n%s", out)
 	}
+	if strings.Contains(out, "health:    degraded") {
+		t.Fatalf("successful RayJob teardown must not be marked degraded:\n%s", out)
+	}
+	if status := NewOutput(snap); status.Degraded {
+		t.Fatalf("successful RayJob teardown JSON marked degraded: %+v", status)
+	}
 
 	snap.Pods = nil
 	snap.PodsObserved = true

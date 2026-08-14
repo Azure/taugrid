@@ -29,6 +29,7 @@ func newRunStatusCmd() *cobra.Command {
 	var (
 		connection      runLifecycleConnectionFlags
 		runProfile      bool
+		output          string
 		watch           bool
 		watchInterval   time.Duration
 		maxIterations   int
@@ -36,13 +37,14 @@ func newRunStatusCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "status [job-name]",
-		Short: "Show job lifecycle and startup phases",
+		Short: "Show run admission, placement, containers, and lifecycle",
 		Long: `Show the full lifecycle of a tau-submitted job:
   - The batch/v1 Job or RayJob (state, conditions, deployment status).
   - Kueue Workload(s) (queue, admission, phase, blocking reason if any).
   - Startup phases: Kueue admission, pod scheduling, DRA allocation, image pull,
     init containers, container start, readiness, and RayJob status.
   - Pods (phase, ready, restarts, node).
+  - Init/application containers (state, ready, restarts, exit code, reason).
 
 For RayJobs, shows the deployment status (New/Initializing/Running/Complete/
 Failed/Suspended), the associated RayCluster name, and discovers pods via
@@ -50,6 +52,7 @@ the ray.io/cluster label.
 
 Examples:
   tau run status lora-7b-001 -n ray
+  tau run status lora-7b-001 -n ray -o json
   tau run status my-job --context research-admin -n ray
   tau run status my-rayjob --context research-admin -n ray
   tau run status sample-finetune --watch -n ray`,
@@ -66,6 +69,7 @@ Examples:
 				KubeContext:     resolvedContext,
 				Kubeconfig:      activeKubeconfigPath(),
 				RunProfile:      runProfile,
+				Output:          output,
 				Watch:           watch,
 				Interval:        watchInterval,
 				MaxIterations:   maxIterations,
@@ -76,6 +80,7 @@ Examples:
 	}
 	connection.add(cmd)
 	cmd.Flags().BoolVar(&runProfile, "run-profile", false, "include queue/runtime/artifact profiling for this run")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
 	cmd.Flags().BoolVar(&watch, "watch", false, "refresh startup phases until ready, failed, interrupted, or --max-iterations")
 	cmd.Flags().DurationVar(&watchInterval, "interval", 2*time.Second, "poll interval when --watch is set")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "maximum watch iterations; 0 runs until ready, failed, or interrupted")
@@ -99,10 +104,25 @@ type statusRunOptions struct {
 	Interval        time.Duration
 	MaxIterations   int
 	RunProfile      bool
+	Output          string
 	DiagnosticHints bool
 }
 
 func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) error {
+	switch opts.Output {
+	case "", "table", "json":
+	default:
+		return fmt.Errorf("--output must be one of: table, json")
+	}
+	if opts.Watch && opts.Output == "json" {
+		return fmt.Errorf("--output=json is not supported with --watch; poll `tau run status -o json` for discrete snapshots")
+	}
+	if opts.RunProfile && opts.Output == "json" {
+		return fmt.Errorf("--run-profile is not supported with --output=json")
+	}
+	if opts.DiagnosticHints && opts.Output == "json" {
+		return fmt.Errorf("--diagnostic-hints is not supported with --output=json")
+	}
 	resolvedNamespace, err := resolveWorkloadNamespace(cmd, opts.KubeContext, opts.Namespace)
 	if err != nil {
 		return err
@@ -119,7 +139,9 @@ func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) er
 	if err != nil {
 		return err
 	}
-	writeStatusSnapshot(cmd.OutOrStdout(), snap, opts.RunProfile)
+	if err := writeStatusSnapshot(cmd.OutOrStdout(), snap, opts.RunProfile, opts.Output); err != nil {
+		return err
+	}
 	if opts.DiagnosticHints {
 		fmt.Fprint(cmd.OutOrStdout(), renderKubectlDiagnosticHints(opts.KubeContext, opts.Kubeconfig, opts.Namespace, name, snap))
 	}
@@ -164,7 +186,9 @@ func watchStatusCommandWithHooks(cmd *cobra.Command, opts statusRunOptions, name
 		out := cmd.OutOrStdout()
 		hooks.clearScreen(out)
 		fmt.Fprintf(out, "watching %s/%s every %s\n\n", opts.Namespace, name, opts.Interval)
-		writeStatusSnapshot(out, snap, opts.RunProfile)
+		if err := writeStatusSnapshot(out, snap, opts.RunProfile, "table"); err != nil {
+			return err
+		}
 		if status.WatchFailed(snap) {
 			return fmt.Errorf("startup phase failed for %s/%s", opts.Namespace, name)
 		}
@@ -184,11 +208,19 @@ func clearStatusScreen(w io.Writer) {
 	fmt.Fprint(w, "\033[H\033[2J")
 }
 
-func writeStatusSnapshot(w io.Writer, snap status.Snapshot, runProfile bool) {
-	fmt.Fprint(w, status.Render(snap))
-	if runProfile {
-		fmt.Fprint(w, status.RenderRunProfile(snap, status.CostProfile{}))
+func writeStatusSnapshot(w io.Writer, snap status.Snapshot, runProfile bool, output string) error {
+	if output == "json" {
+		return writeJSON(w, status.NewOutput(snap))
 	}
+	if _, err := fmt.Fprint(w, status.Render(snap)); err != nil {
+		return err
+	}
+	if runProfile {
+		if _, err := fmt.Fprint(w, status.RenderRunProfile(snap, status.CostProfile{})); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) string {

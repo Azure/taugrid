@@ -86,6 +86,32 @@ type Snapshot struct {
 
 	// Events for the Job/RayJob, Kueue Workload, Pods, and ResourceClaims.
 	Events []Event
+
+	// Observations distinguish an absent resource from a read that Tau could
+	// not complete. They are intentionally separate from the hydrated objects
+	// so partial status remains useful without turning RBAC denial into
+	// "not found".
+	Observations Observations
+}
+
+type ObservationState string
+
+const (
+	ObservationObserved    ObservationState = "observed"
+	ObservationNotFound    ObservationState = "notFound"
+	ObservationUnavailable ObservationState = "unavailable"
+)
+
+type ResourceObservation struct {
+	State  ObservationState
+	Reason string
+}
+
+type Observations struct {
+	Job       ResourceObservation
+	RayJob    ResourceObservation
+	Workloads ResourceObservation
+	Pods      ResourceObservation
 }
 
 type Condition struct {
@@ -238,10 +264,7 @@ func Render(s Snapshot) string {
 
 	if rj.Found && !s.JobFound {
 		fmt.Fprintf(&b, "RayJob: %s/%s\n", s.Namespace, s.Name)
-		headline := dash(firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus))
-		if s.IsMultiKueue() {
-			headline = deriveState(s)
-		}
+		headline := deriveState(s)
 		fmt.Fprintf(&b, "  status:    %s\n", headline)
 		if rj.RayClusterName != "" {
 			fmt.Fprintf(&b, "  cluster:   %s\n", rj.RayClusterName)
@@ -257,7 +280,11 @@ func Render(s Snapshot) string {
 	}
 
 	if !s.JobFound && !rj.Found {
-		b.WriteString("  (no batch/v1 Job or RayJob found with that name)\n")
+		if detail := unavailableObjectReads(s); detail != "" {
+			fmt.Fprintf(&b, "  (status unavailable: %s)\n", detail)
+		} else {
+			b.WriteString("  (no batch/v1 Job or RayJob found with that name)\n")
+		}
 	} else if s.JobFound {
 		fmt.Fprintf(&b, "  state:     %s\n", deriveState(s))
 		fmt.Fprintf(&b, "  pods:      active=%d succeeded=%d failed=%d\n", s.JobActive, s.JobSucceeded, s.JobFailed)
@@ -275,11 +302,14 @@ func Render(s Snapshot) string {
 			}
 		}
 	}
+	if issue := firstCurrentContainerIssue(s); issue != nil {
+		fmt.Fprintf(&b, "  health:    degraded — %s\n", issue.summary())
+	}
 
 	if rj.Found && s.JobFound {
 		fmt.Fprintf(&b, "\nRayJob: %s/%s\n", s.Namespace, rj.Name)
 		fmt.Fprintf(&b, "  cluster:   %s\n", dash(rj.RayClusterName))
-		fmt.Fprintf(&b, "  job:       %s\n", dash(firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus)))
+		fmt.Fprintf(&b, "  job:       %s\n", deriveRayJobState(rj))
 		if rj.JobID != "" {
 			fmt.Fprintf(&b, "  job_id:    %s\n", rj.JobID)
 		}
@@ -300,7 +330,11 @@ func Render(s Snapshot) string {
 
 	b.WriteString("\nKueue Workloads:\n")
 	if len(s.Workloads) == 0 {
-		b.WriteString("  (none — Kueue did not see this workload; check the queue label)\n")
+		if s.Observations.Workloads.State == ObservationUnavailable {
+			fmt.Fprintf(&b, "  (status unavailable: %s)\n", observationReason(s.Observations.Workloads))
+		} else {
+			b.WriteString("  (none — Kueue did not see this workload; check the queue label)\n")
+		}
 	} else {
 		cols := []string{"NAME", "QUEUE", "PHASE", "ADMITTED", "REASON"}
 		tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
@@ -318,11 +352,16 @@ func Render(s Snapshot) string {
 			}
 		}
 		tw.Flush()
+		if s.Observations.Workloads.State == ObservationUnavailable {
+			fmt.Fprintf(&b, "  warning: workload status is partial: %s\n", observationReason(s.Observations.Workloads))
+		}
 	}
 
 	b.WriteString("\nPods:\n")
 	if len(s.Pods) == 0 {
-		if s.managerOnlyMultiKueueView() {
+		if s.Observations.Pods.State == ObservationUnavailable {
+			fmt.Fprintf(&b, "  (status unavailable: %s)\n", observationReason(s.Observations.Pods))
+		} else if s.managerOnlyMultiKueueView() {
 			b.WriteString("  (none — manager view only; worker-cluster pods are not visible here)\n")
 		} else if rayJobStatusSucceeded(rj) {
 			b.WriteString("  (none — RayCluster pods cleaned up after successful completion)\n")
@@ -348,9 +387,145 @@ func Render(s Snapshot) string {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\t%d\t%s\n", p.Name, podDisplayPhase(rj, p), p.Ready, p.Restarts, p.Node)
 		}
 		tw.Flush()
+		if s.Observations.Pods.State == ObservationUnavailable {
+			fmt.Fprintf(&b, "  warning: pod status is partial: %s\n", observationReason(s.Observations.Pods))
+		}
+	}
+
+	if containers := sortedContainers(s); len(containers) > 0 {
+		b.WriteString("\nContainers:\n")
+		tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  POD\tKIND\tNAME\tSTATE\tREADY\tRESTARTS\tEXIT\tREASON")
+		for _, item := range containers {
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%t\t%d\t%s\t%s\n",
+				item.Pod, item.Kind, item.Container.Name, dash(item.Container.State),
+				item.Container.Ready, item.Container.RestartCount, containerExit(item.Container),
+				dash(containerReason(item.Container)))
+		}
+		tw.Flush()
 	}
 
 	return b.String()
+}
+
+type containerItem struct {
+	Pod       string
+	Kind      string
+	Container Container
+	Teardown  bool
+}
+
+type containerIssue struct {
+	Pod       string
+	Kind      string
+	Container Container
+}
+
+func (i containerIssue) summary() string {
+	detail := fmt.Sprintf("%s/%s %s", i.Pod, i.Container.Name, dash(i.Container.State))
+	if reason := containerReason(i.Container); reason != "" {
+		detail += " reason=" + reason
+	}
+	if i.Container.ExitCode != nil {
+		detail += fmt.Sprintf(" exit=%d", *i.Container.ExitCode)
+	}
+	if i.Container.RestartCount > 0 {
+		detail += fmt.Sprintf(" restarts=%d", i.Container.RestartCount)
+	}
+	return detail
+}
+
+func sortedContainers(s Snapshot) []containerItem {
+	var out []containerItem
+	rayJob := snapshotRayJob(s)
+	for _, pod := range s.Pods {
+		teardown := podDisplayPhase(rayJob, pod) == "Teardown"
+		for _, container := range pod.InitContainers {
+			out = append(out, containerItem{Pod: pod.Name, Kind: "init", Container: container, Teardown: teardown})
+		}
+		for _, container := range pod.Containers {
+			out = append(out, containerItem{Pod: pod.Name, Kind: "app", Container: container, Teardown: teardown})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Pod != out[j].Pod {
+			return out[i].Pod < out[j].Pod
+		}
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Container.Name < out[j].Container.Name
+	})
+	return out
+}
+
+func currentContainerIssues(s Snapshot) []containerIssue {
+	var issues []containerIssue
+	for _, item := range sortedContainers(s) {
+		if item.Teardown {
+			continue
+		}
+		container := item.Container
+		failed := container.State == "terminated" && container.ExitCode != nil && *container.ExitCode != 0
+		failed = failed || container.State == "waiting" &&
+			(isContainerFailureReason(container.Reason) || isImagePullFailureReason(container.Reason))
+		if failed {
+			issues = append(issues, containerIssue{
+				Pod: item.Pod, Kind: item.Kind, Container: item.Container,
+			})
+		}
+	}
+	return issues
+}
+
+func firstCurrentContainerIssue(s Snapshot) *containerIssue {
+	issues := currentContainerIssues(s)
+	if len(issues) == 0 {
+		return nil
+	}
+	return &issues[0]
+}
+
+func containerExit(container Container) string {
+	if container.ExitCode != nil {
+		return fmt.Sprintf("%d", *container.ExitCode)
+	}
+	if container.LastExitCode != nil {
+		return fmt.Sprintf("last=%d", *container.LastExitCode)
+	}
+	return "-"
+}
+
+func containerReason(container Container) string {
+	return firstNonEmpty(container.Reason, container.LastReason)
+}
+
+func unavailableObjectReads(s Snapshot) string {
+	var parts []string
+	for _, item := range []struct {
+		name        string
+		observation ResourceObservation
+	}{
+		{name: "Job", observation: s.Observations.Job},
+		{name: "RayJob", observation: s.Observations.RayJob},
+	} {
+		if item.observation.State == ObservationUnavailable && !optionalResourceTypeMissing(item.observation) {
+			parts = append(parts, item.name+" "+observationReason(item.observation))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func optionalResourceTypeMissing(observation ResourceObservation) bool {
+	return observation.State == ObservationUnavailable &&
+		observation.Reason == "resource type is not installed"
+}
+
+func observationReason(observation ResourceObservation) string {
+	if strings.TrimSpace(observation.Reason) == "" {
+		return "query unavailable"
+	}
+	return observation.Reason
 }
 
 func podDisplayPhase(rj RayJob, p Pod) string {
@@ -428,22 +603,7 @@ func deriveState(s Snapshot) string {
 	}
 	rj := snapshotRayJob(s)
 	if rj.Found && !s.JobFound {
-		switch firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus) {
-		case "Failed":
-			return "Failed"
-		case "Complete":
-			return "Complete"
-		case "Running":
-			return "Running"
-		case "Suspended":
-			return "Pending (suspended; Kueue not yet admitted)"
-		case "Initializing":
-			return "Initializing"
-		case "New":
-			return "New"
-		default:
-			return dash(firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus))
-		}
+		return deriveRayJobState(rj)
 	}
 	for _, c := range s.JobConditions {
 		if c.Type == "Failed" && c.Status == "True" {
@@ -462,6 +622,28 @@ func deriveState(s Snapshot) string {
 		return "Pending (suspended; Kueue not yet admitted)"
 	}
 	return "Admitted (no active pods yet)"
+}
+
+func deriveRayJobState(rj RayJob) string {
+	switch {
+	case rayJobStatusFailed(rj):
+		return "Failed"
+	case rayJobStatusSucceeded(rj):
+		return "Complete"
+	}
+	raw := firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus)
+	switch strings.ToUpper(raw) {
+	case "RUNNING":
+		return "Running"
+	case "SUSPENDED":
+		return "Pending (suspended; Kueue not yet admitted)"
+	case "INITIALIZING":
+		return "Initializing"
+	case "NEW", "":
+		return "New"
+	default:
+		return raw
+	}
 }
 
 func managerMultiKueueJobState(s Snapshot) (string, bool) {

@@ -46,12 +46,14 @@ tau run get <run-name>
 ```
 
 `status --watch` renders the startup phase tree (Submitted, Kueue admission,
-scheduling, image pull, readiness) until the
+scheduling, image pull, readiness) plus pod/node placement and per-container
+readiness, restarts, exit codes, and reasons until the
 [workload](../../concepts/glossary/#workload) is ready, failed, or you
 interrupt it. For RayJobs, `logs` streams the Ray
 driver's execution output rather than head-pod logs; for batch Jobs it streams
 the Job pod logs. `get` fetches durable run results and artifacts once the run
-has produced them.
+has produced them. Use `tau run status <run-name> -o json` when a script needs
+the same normalized snapshot.
 
 Named `status` and `logs` also work for a batch Job submitted outside Tau. Such
 Jobs are hidden from the default Tau-owned list; opt in when investigating a
