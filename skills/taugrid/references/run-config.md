@@ -230,7 +230,7 @@ these are supplied by workspace policy — set them explicitly only to override.
 | `pod_priority_class` | Kubernetes PriorityClass override |
 | `workload_priority_class` | Kueue WorkloadPriorityClass override |
 | `disable_default_priorities` | Suppress Tau-managed default priority classes |
-| `gpu_class` | Hardware class: `any`, `a100-80gb`, `h100-95gb`, or `h200-141gb`. Specific classes match `tau.azure.com/gpu-class` exactly; legacy NVLink/standalone spellings are deprecated aliases. |
+| `gpu_class` | Hardware class, for example `any`, `a100-80gb`, `h100-95gb`, or `h200-141gb`. Use `tau run explain-config` or the generated `tau run schema -o json` output for the authoritative current set. Specific classes match `tau.azure.com/gpu-class` exactly; legacy NVLink/standalone spellings are deprecated aliases. |
 | `topology` | Placement/interconnect: `independent`, `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers` |
 | `lane`, `mode`, `shape`, `team` | Admission and placement hints |
 | `topology_policy` | Kueue topology policy override |

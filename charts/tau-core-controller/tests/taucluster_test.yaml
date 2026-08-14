@@ -58,6 +58,7 @@ tests:
               - Standard_ND96isr_H200_v5
           labels:
             kueue.azure.com/gpu-series: nd-h200-v5
+            tau.azure.com/gpu-class: h200-141gb
       tauCluster.extraNodeLabelRules:
         - match:
             vmSizes:
@@ -71,6 +72,9 @@ tests:
       - equal:
           path: spec.nodes.labelRules[0].labels["kueue.azure.com/gpu-series"]
           value: nd-h200-v5
+      - equal:
+          path: spec.nodes.labelRules[0].labels["tau.azure.com/gpu-class"]
+          value: h200-141gb
       - equal:
           path: spec.nodes.labelRules[1].match.vmSizes[0]
           value: Standard_NC40ads_H100_v5

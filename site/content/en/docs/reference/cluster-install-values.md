@@ -119,8 +119,13 @@ TauGrid's controller derives the node contract from
 | `Standard_NC40ads_H100_v5` | `nc-h100-v5` | `h100-95gb` |
 | `Standard_ND96isr_H200_v5` | `nd-h200-v5` | `h200-141gb` |
 
-Use `tau-core-controller.tauCluster.extraNodeLabelRules` for another reviewed
-VM size. Setting `nodeLabelRules` replaces the built-in catalog.
+**Warning:** Setting `tau-core-controller.tauCluster.nodeLabelRules` replaces
+the canonical built-in catalog; it does not merge entries. Class-specific
+admission requires the same canonical `tau.azure.com/gpu-class` value on the
+nodes and their ResourceFlavors. Prefer
+`tau-core-controller.tauCluster.extraNodeLabelRules` when adding reviewed VM
+sizes so the built-in mappings remain intact.
+
 CPU-only clusters and GPU pools scaled to zero remain ready when no catalog
 entry currently matches.
 
