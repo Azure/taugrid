@@ -7,7 +7,7 @@ AKS clusters.
 ## Install
 
 ```bash
-tau cluster install --version 0.2.2 --values taugrid-values.yaml
+tau cluster install --version 0.2.3 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -15,7 +15,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -116,9 +116,9 @@ baselineQueue:
           - {name: nvidia.com/gpu, nominalQuota: "1"}
 ```
 
-Canonical classes are `a100-80gb`, `h100-95gb`, and `h200-141gb`. Placement and
-interconnect requirements remain separate (`independent`,
-`single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`).
+Canonical classes cover the supported A10, A100, H100, H200, GB200, and GB300
+memory variants. Placement and interconnect requirements remain separate
+(`independent`, `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`).
 
 Default queue values:
 
@@ -223,10 +223,20 @@ and continuously reconciles both label contracts on current and future nodes:
 
 | AKS VM size | `kueue.azure.com/gpu-series` | `tau.azure.com/gpu-class` |
 |---|---|---|
+| `Standard_NV6ads_A10_v5` | `nvads-a10-v5` | `a10-4gb` |
+| `Standard_NV12ads_A10_v5` | `nvads-a10-v5` | `a10-8gb` |
+| `Standard_NV18ads_A10_v5` | `nvads-a10-v5` | `a10-12gb` |
+| `Standard_NV36ads_A10_v5`, `Standard_NV36adms_A10_v5`, `Standard_NV72ads_A10_v5` | `nvads-a10-v5` | `a10-24gb` |
 | `Standard_NC24ads_A100_v4` | `nc24ads-a100-v4` | `a100-80gb` |
+| `Standard_NC48ads_A100_v4`, `Standard_NC96ads_A100_v4` | `nc-a100-v4` | `a100-80gb` |
+| `Standard_ND96asr_v4` | `nd-a100-v4` | `a100-40gb` |
 | `Standard_ND96amsr_A100_v4` | `ndm-a100-v4` | `a100-80gb` |
-| `Standard_NC40ads_H100_v5` | `nc-h100-v5` | `h100-95gb` |
+| `Standard_NC40ads_H100_v5`, `Standard_NC80adis_H100_v5` | `nc-h100-v5` | `h100-95gb` |
+| `Standard_NCC40ads_H100_v5` | `ncc-h100-v5` | `h100-95gb` |
+| `Standard_ND96isr_H100_v5` | `nd-h100-v5` | `h100-80gb` |
 | `Standard_ND96isr_H200_v5` | `nd-h200-v5` | `h200-141gb` |
+| `Standard_ND96isr_GB200_v6`, `Standard_ND128isr_NDR_GB200_v6` | `nd-gb200-v6` | `gb200-192gb` |
+| `Standard_ND128isr_GB300_v6`, `Standard_ND128isrG5_GB300_v6` | `nd-gb300-v6` | `gb300-288gb` |
 
 CPU-only clusters and GPU pools scaled to zero remain ready when no catalog
 entry currently matches.
@@ -251,7 +261,7 @@ taugrid-core values reference.
 
 ### `gpu-monitoring`
 
-Node Problem Detector with GPU/InfiniBand/NVMe health checks, DCGM exporter,
+Node Problem Detector with GPU/InfiniBand/NVMe health checks, DCGM metrics,
 node-exporter, and the metrics collector that writes Kubernetes Node conditions.
 Deploys one DaemonSet per entry in `gpu-monitoring.gpuSkus`, each selecting nodes
 by `node.kubernetes.io/instance-type`. A cluster with no matching instance types
@@ -259,11 +269,17 @@ gets DaemonSets that schedule nothing, so bundling is safe on CPU-only clusters.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `gpu-monitoring.gpuSkus` | map | 7 SKUs (a100, h100, h100-nvl-1g, h100-nvl-2g, h200, gb200, spark) | Per-SKU DaemonSet definitions |
+| `gpu-monitoring.gpuSkus` | map | 13 profiles covering A10, A100, H100, H200, GB200, and GB300 | Per-SKU DaemonSet definitions |
+| `gpu-monitoring.gpuSkus.<profile>.scrapeTargets` | list | global collector targets | Per-profile DCGM/node-exporter endpoints for mixed managed and GPU Operator clusters |
 | `gpu-monitoring.daemonset.requireAcceleratorLabel` | bool | `false` | Also require `kubernetes.azure.com/accelerator=nvidia`. Externally-joined GPU nodes never receive that label, so requiring it leaves them unmonitored |
 | `gpu-monitoring.namespace` | string | `""` (release namespace) | Where the DaemonSets are installed |
 
 See `charts/gpu-monitoring/README.md` for the full reference.
+
+Managed GPU profiles use `http://localhost:19400/metrics` by default. Override
+only the profiles backed by GPU Operator with its port-9400 Service, and set
+that Service's `internalTrafficPolicy` to `Local` so collectors cannot scrape a
+different node.
 
 **Do not install this alongside a separately-managed `gpu-monitoring` release.**
 The subchart creates cluster-scoped `gpu-monitoring` ServiceAccount, ClusterRole,

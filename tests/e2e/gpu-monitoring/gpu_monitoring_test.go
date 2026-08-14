@@ -26,12 +26,18 @@ func TestMain(m *testing.M) {
 const gpuMonitoringNamespace = "gpu-monitoring"
 
 var gpuMonitoringSKUs = []string{
+	"a10-2g",
 	"a100",
+	"a100-pcie-1g",
+	"a100-pcie-2g",
+	"a100-pcie-4g",
 	"h100",
 	"h100-nvl-1g",
 	"h100-nvl-2g",
+	"h100-nvl-confidential-1g",
 	"h200",
 	"gb200",
+	"gb300",
 	"spark",
 }
 
@@ -53,10 +59,10 @@ func TestGPUMonitoringDaemonSetExists(t *testing.T) {
 }
 
 // TestGPUMonitoringCollectorConfigMaps verifies each per-SKU ConfigMap rendered
-// by the chart contains the expected scrape targets (NPD always, node-exporter
-// always, DCGM at the host systemd port 19400 used by the AKS managed GPU
-// experience) plus a non-empty rule set. Runs on a CPU-only CI cluster — the
-// DaemonSet pods do not schedule but the ConfigMaps are installed.
+// by the chart contains the expected scrape targets (NPD, node-exporter, and
+// either the managed GPU or GPU Operator DCGM endpoint) plus a non-empty rule
+// set. Runs on a CPU-only CI cluster — the DaemonSet pods do not schedule but
+// the ConfigMaps are installed.
 func TestGPUMonitoringCollectorConfigMaps(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 	ctx := context.Background()
@@ -78,13 +84,15 @@ func TestGPUMonitoringCollectorConfigMaps(t *testing.T) {
 			require.Contains(t, rules, "node-exporter",
 				"scrape targets should include node-exporter")
 
-			// DCGM: always scraped from the host systemd unit on port 19400,
-			// which the AKS managed GPU node image provides. See
-			// tests/e2e/managedgpu/harness/README.md for the source of truth.
+			// DCGM is either the managed host endpoint or the GPU Operator
+			// Service. The runtime test verifies the Service uses
+			// internalTrafficPolicy: Local before accepting it.
 			require.Contains(t, rules, "dcgm-exporter",
 				"scrape targets should include dcgm-exporter")
-			require.Contains(t, rules, "http://localhost:19400/metrics",
-				"DCGM scrape target should hit the host systemd exporter on :19400 for SKU %s", sku)
+			require.True(t,
+				strings.Contains(rules, "http://localhost:19400/metrics") ||
+					strings.Contains(rules, "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"),
+				"SKU %s should use a supported node-local DCGM endpoint", sku)
 			require.NotContains(t, rules, "http://localhost:9400/metrics",
 				"SKU %s should not scrape :9400 — the bundled dcgm-exporter container was removed", sku)
 

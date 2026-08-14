@@ -1,0 +1,232 @@
+{
+  "plugin": "custom",
+  "pluginConfig": {
+    "invoke_interval": "60s",
+    "timeout": "10s",
+    "max_output_length": 200,
+    "concurrency": 3,
+    "enable_message_change_based_condition_update": false
+  },
+  "source": "gpu-custom-plugin-monitor",
+  "metricsReporting": true,
+  "conditions": [
+    {
+      "type": "NvidiaSmiProblem",
+      "reason": "NvidiaSmiOk",
+      "message": "nvidia-smi ok"
+    },
+    {
+      "type": "NvidiaDeviceFilesProblem",
+      "reason": "NvidiaDeviceFilesOk",
+      "message": "nvidia device files ok"
+    },
+    {
+      "type": "DcgmHealthProblem",
+      "reason": "DcgmHealthOk",
+      "message": "dcgm health ok"
+    },
+    {
+      "type": "GPUMissing",
+      "reason": "GPUCountMatches",
+      "message": "Observed GPU count matches expected GPU count"
+    },
+    {
+      "type": "NVLinkStatusInactive",
+      "reason": "NVLinkStatusActive",
+      "message": "NVLink status active"
+    },
+    {
+      "type": "XIDErrors",
+      "reason": "NoXIDErrors",
+      "message": "No XID errors found"
+    },
+    {
+      "type": "GPUECCErrors",
+      "reason": "GPUECCOk",
+      "message": "GPU ECC ok"
+    },
+    {
+      "type": "GPUECC",
+      "reason": "GPUECCOk",
+      "message": "GPU ECC ok"
+    },
+    {
+      "type": "IBLinkIssue",
+      "reason": "IBLinkOk",
+      "message": "InfiniBand link ok"
+    },
+    {
+      "type": "IBPKeyIssue",
+      "reason": "IBPKeyOk",
+      "message": "InfiniBand PKey ok"
+    },
+    {
+      "type": "GPUVbiosMismatch",
+      "reason": "GPUVbiosOk",
+      "message": "GPU VBIOS ok"
+    },
+    {
+      "type": "GPUThrottle",
+      "reason": "GPUThrottleOk",
+      "message": "GPU throttle ok"
+    }
+  ],
+  "rules": [
+    {
+      "type": "temporary",
+      "reason": "NvidiaSmiError",
+      "path": "/custom-config/check-nvidia-smi.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NvidiaSmiProblem",
+      "reason": "NvidiaSmiError",
+      "path": "/custom-config/check-nvidia-smi.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NvidiaDeviceFilesError",
+      "path": "/custom-config/check-nvidia-device-files.sh",
+      "timeout": "5s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NvidiaDeviceFilesProblem",
+      "reason": "NvidiaDeviceFilesError",
+      "path": "/custom-config/check-nvidia-device-files.sh",
+      "timeout": "5s"
+    },
+    {
+      "type": "temporary",
+      "reason": "DcgmHealthError",
+      "path": "/custom-config/check-dcgm-health.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "DcgmHealthProblem",
+      "reason": "DcgmHealthError",
+      "path": "/custom-config/check-dcgm-health.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUMissing",
+      "path": "/custom-config/check_gpu_count.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUMissing",
+      "reason": "GPUMissing",
+      "path": "/custom-config/check_gpu_count.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NVLinkStatusInactive",
+      "path": "/custom-config/check_gpu_nvlink.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NVLinkStatusInactive",
+      "reason": "NVLinkStatusInactive",
+      "path": "/custom-config/check_gpu_nvlink.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "XIDErrors",
+      "path": "/custom-config/check_gpu_xid.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "XIDErrors",
+      "reason": "XIDErrors",
+      "path": "/custom-config/check_gpu_xid.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUECCErrors",
+      "path": "/custom-config/check_gpu_ecc_from_sai.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUECCErrors",
+      "reason": "GPUECCErrors",
+      "path": "/custom-config/check_gpu_ecc_from_sai.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUECC",
+      "path": "/custom-config/check_gpu_ecc.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUECC",
+      "reason": "GPUECC",
+      "path": "/custom-config/check_gpu_ecc.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "IBLinkIssue",
+      "path": "/custom-config/check_ib.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "IBLinkIssue",
+      "reason": "IBLinkIssue",
+      "path": "/custom-config/check_ib.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "IBPKeyIssue",
+      "path": "/custom-config/check_ib_pkeys.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "IBPKeyIssue",
+      "reason": "IBPKeyIssue",
+      "path": "/custom-config/check_ib_pkeys.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUVbiosMismatch",
+      "path": "/custom-config/check_gpu_vbios.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUVbiosMismatch",
+      "reason": "GPUVbiosMismatch",
+      "path": "/custom-config/check_gpu_vbios.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUThrottle",
+      "path": "/custom-config/check_gpu_throttle.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUThrottle",
+      "reason": "GPUThrottle",
+      "path": "/custom-config/check_gpu_throttle.sh",
+      "timeout": "10s"
+    }
+  ]
+}

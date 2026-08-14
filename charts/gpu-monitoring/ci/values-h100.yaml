@@ -1,0 +1,8 @@
+# CI test values — H100 (8-GPU SXM5, InfiniBand)
+# All SKU configs are baked into values.yaml. This file validates
+# that instance type overrides work correctly.
+gpuSkus:
+  h100:
+    instanceTypes:
+      - Standard_ND96isr_H100_v5
+

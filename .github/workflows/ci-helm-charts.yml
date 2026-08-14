@@ -122,6 +122,14 @@ jobs:
             echo "No unit tests found, skipping"
           fi
 
+      - name: Run chart script tests
+        run: |
+          if [[ -f "${{ matrix.chart }}/tests/scripts_test.sh" ]]; then
+            bash "${{ matrix.chart }}/tests/scripts_test.sh"
+          else
+            echo "No script tests found, skipping"
+          fi
+
       - name: Validate template rendering
         run: |
           # Render with default values.

@@ -1,0 +1,133 @@
+suite: metrics-collector per-SKU ConfigMap
+templates:
+  - metrics-collector-configmap.yaml
+
+tests:
+  - it: renders one ConfigMap per SKU (13 by default)
+    asserts:
+      - hasDocuments:
+          count: 13
+
+  - it: a100 ConfigMap has dcgm-exporter, node-exporter, and NPD scrape targets at expected URLs
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-exporter\s+url: http://localhost:9100/metrics'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-problem-detector\s+url: http://localhost:20261/metrics'
+
+  - it: profiles use the global localhost:19400 DCGM URL by default
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-spark
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-exporter\s+url: http://localhost:9100/metrics'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-problem-detector\s+url: http://localhost:20261/metrics'
+
+  - it: a per-SKU scrape target overrides the global DCGM URL
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h200
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'http://localhost:19400/metrics'
+
+  - it: a per-SKU override does not change another profile
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics'
+
+  - it: rules section is non-empty (ECC/NVLink/XID etc. all render)
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'ecc-dbe-retired'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_XID_ERRORS'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL'
+
+  - it: per-SKU nodeExporter=false drops the node-exporter target from that SKU's ConfigMap
+    set:
+      gpuSkus.a100.nodeExporter: false
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-exporter'
+
+  - it: metricsCollector.nodeExporterScrape=true keeps node-exporter target when sidecar is disabled
+    set:
+      nodeExporter.enabled: false
+      metricsCollector.nodeExporterScrape: true
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-exporter\s+url: http://localhost:9100/metrics'
+
+  - it: metricsCollector.npdScrape=false omits the NPD target
+    set:
+      metricsCollector.npdScrape: false
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'node-problem-detector'
+
+  - it: custom npdPort propagates (prometheus port = npdPort + 1)
+    set:
+      npdPort: 30000
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-problem-detector\s+url: http://localhost:30001/metrics'
+
+  - it: metricsCollector.enabled=false renders no ConfigMaps
+    set:
+      metricsCollector.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -1,0 +1,8 @@
+# CI test values — A100 (8-GPU SXM4, InfiniBand)
+# All SKU configs are baked into values.yaml. This file validates
+# that instance type overrides work correctly.
+gpuSkus:
+  a100:
+    instanceTypes:
+      - Standard_ND96asr_v4
+      - Standard_ND96amsr_A100_v4

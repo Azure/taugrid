@@ -77,7 +77,7 @@ func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec va
 	if spec.GPUClass != "" {
 		gpuClass, deprecated := topology.NormalizeGPUClass(spec.GPUClass)
 		if !topology.IsSupportedGPUClass(gpuClass) {
-			return fmt.Errorf("unsupported --gpu-class %q; use any, a100-80gb, h100-95gb, or h200-141gb", spec.GPUClass)
+			return fmt.Errorf("unsupported --gpu-class %q; use one of %s", spec.GPUClass, strings.Join(topology.SupportedGPUClasses(), ", "))
 		}
 		if deprecated {
 			fmt.Fprintf(errOut, "warning: gpu_class %q is deprecated; use %q instead\n", spec.GPUClass, gpuClass)
