@@ -58,7 +58,7 @@ func TestRunHelpIsConfigFirst(t *testing.T) {
 		t.Fatalf("run help failed: %v\nstderr:\n%s", err, stderr.String())
 	}
 	help := stdout.String()
-	for _, want := range []string{"--config", "--dry-run", "--context", "--namespace", "--project"} {
+	for _, want := range []string{"--config", "--dry-run", "--manifest-out", "--context", "--namespace", "--project"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("run help missing %q:\n%s", want, help)
 		}
@@ -66,6 +66,22 @@ func TestRunHelpIsConfigFirst(t *testing.T) {
 	for _, hidden := range []string{"--engine", "--script", "--file", "--queue", "--gpu-class", "--workload-kind", "--runtime-pip"} {
 		if strings.Contains(help, hidden) {
 			t.Fatalf("run help exposes internal flag %q:\n%s", hidden, help)
+		}
+	}
+}
+
+func TestRunSubmitManifestCommandIsPublicAndScoped(t *testing.T) {
+	root := NewRoot()
+	command, _, err := root.Find([]string{"run", "submit-manifest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Use != "submit-manifest" {
+		t.Fatalf("command use = %q", command.Use)
+	}
+	for _, flag := range []string{"manifest", "digest", "name", "namespace", "context"} {
+		if command.Flags().Lookup(flag) == nil {
+			t.Fatalf("submit-manifest missing --%s", flag)
 		}
 	}
 }

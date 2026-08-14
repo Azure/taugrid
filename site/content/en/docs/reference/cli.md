@@ -137,12 +137,43 @@ subcommand** — `tau run train --dry-run=client` runs the `run` root with
 | `validate [name]` | Validate `--config` (or the default `tau.yaml`); `name` overrides the config's `name:`, which is used when it is omitted |
 | `schema` | Print the JSON schema for the direct run config |
 | `explain-config` | Print the direct run config field reference |
+| `submit-manifest` | Submit one previously captured direct `batch/v1` Job after verifying its exact-byte SHA-256 and fixed name/namespace |
 | `list` | List Tau-managed Jobs/RayJobs in a namespace |
 | `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
 | `logs <job-name>` | Stream Ray driver logs or the batch Job pod logs |
 | `get <name>` | Fetch durable run results and artifacts |
 | `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |
 | `resume <name> --config tau.yaml` | Manually restart a failed run from its checkpoint |
+
+Safety-sensitive direct Jobs can bind admission review to submission without
+rerendering:
+
+```bash
+tau run --config tau.yaml --dry-run=server \
+  --manifest-out checked-job.yaml > admitted-job.yaml
+
+tau run submit-manifest \
+  --manifest checked-job.yaml \
+  --digest sha256:<digest-printed-by-the-first-command> \
+  --name <job-name> \
+  --namespace <namespace>
+```
+
+The first command resolves cluster-owned queue and topology inputs, renders
+once, sends those bytes to `kubectl create --dry-run=server -o yaml -f -`, and
+writes the identical original bytes to `--manifest-out` only after admission
+succeeds. Standard output is the API server's admitted/defaulted Job YAML;
+stderr reports the exact-byte SHA-256 of the saved input. The admitted response
+can differ from the input because admission webhooks and API defaulting may
+mutate it.
+
+`submit-manifest` does not load a config, profile, or environment and does not
+render. It accepts only one Tau-managed `batch/v1 Job`, recomputes the saved
+bytes' digest, requires the expected fixed name and namespace, and passes those
+unchanged bytes to `kubectl create -f -`. A changed byte, digest, identity,
+object kind, extra YAML document, or missing Tau submission identity fails
+before kubectl runs. Keep `checked-job.yaml` private: direct manifests can
+contain literal environment values.
 
 There is no `tau run retry` subcommand — automatic retry is driven entirely
 by the `resilience.*` fields in your run config. See

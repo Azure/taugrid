@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -65,6 +66,33 @@ func TestSubmitRunWorkloadFreshCreate(t *testing.T) {
 	}
 	if result.Output != "rayjob.ray.io/fresh created\n" || result.Recovered {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestSubmitRunWorkloadServerDryRunReturnsYAML(t *testing.T) {
+	manifest := []byte("exact-input")
+	runner := submissionRunnerFunc(func(_ context.Context, args []string, stdin []byte) (string, error) {
+		if got, want := fmt.Sprint(args), "[create -n research -f - --dry-run=server -o yaml]"; got != want {
+			t.Fatalf("args = %s, want %s", got, want)
+		}
+		if !bytes.Equal(stdin, manifest) {
+			t.Fatalf("stdin = %q, want exact input %q", stdin, manifest)
+		}
+		return "apiVersion: batch/v1\nkind: Job\n", nil
+	})
+	result, err := submitRunWorkload(context.Background(), runner, runSubmission{
+		Resource:     "job",
+		Name:         "bounded",
+		Namespace:    "research",
+		Manifest:     manifest,
+		DryRun:       "server",
+		OutputFormat: "yaml",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "apiVersion: batch/v1\nkind: Job\n" {
+		t.Fatalf("server dry-run output = %q", result.Output)
 	}
 }
 
@@ -289,7 +317,7 @@ func TestEnsureSubmissionIDIsFreshAndStableWithinOneCreateAttempt(t *testing.T) 
 	}
 }
 
-func TestEnsureSubmissionIDLeavesDryRunsDeterministic(t *testing.T) {
+func TestEnsureSubmissionIDLeavesOrdinaryDryRunsDeterministic(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.dryRun = "client"
 	if err := ensureSubmissionID(&options); err != nil {
@@ -297,6 +325,15 @@ func TestEnsureSubmissionIDLeavesDryRunsDeterministic(t *testing.T) {
 	}
 	if options.submissionID != "" {
 		t.Fatalf("client dry-run got submission ID %q", options.submissionID)
+	}
+
+	options.dryRun = "server"
+	options.manifestOut = "checked.yaml"
+	if err := ensureSubmissionID(&options); err != nil {
+		t.Fatal(err)
+	}
+	if options.submissionID == "" {
+		t.Fatal("exact-manifest server dry-run did not get a fixed submission ID")
 	}
 }
 

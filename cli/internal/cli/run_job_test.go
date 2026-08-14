@@ -840,6 +840,79 @@ func TestExecuteRunJobServerDryRunStillRequiresQueue(t *testing.T) {
 	}
 }
 
+func TestExecuteRunJobServerDryRunCapturesExactSingleRender(t *testing.T) {
+	captured := filepath.Join(t.TempDir(), "kubectl-stdin.yaml")
+	fakeKubectl(t, `
+case "$*" in
+  *"get localqueue.kueue.x-k8s.io team-queue -o json"*)
+    printf '%s\n' '{"metadata":{"name":"team-queue"},"spec":{"clusterQueue":"team-queue"}}'
+    ;;
+  *"get clusterqueue.kueue.x-k8s.io team-queue -o json"*)
+    printf '%s\n' '{"metadata":{"name":"team-queue"},"spec":{"resourceGroups":[]}}'
+    ;;
+  *"create -n team-ns -f - --dry-run=server -o yaml"*)
+    cat > "`+captured+`"
+    printf '%s\n' 'apiVersion: batch/v1' 'kind: Job' 'metadata:' '  name: h200-rl' '  namespace: team-ns'
+    ;;
+  *)
+    printf '%s\n' "unexpected kubectl call: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+	script := filepath.Join(t.TempDir(), "train.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho train\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestOut := filepath.Join(t.TempDir(), "h200-rl.yaml")
+	o := defaultRunDispatchOptions()
+	o.engine = "job"
+	o.profileName = "tau-cpu-smoke"
+	o.image = "mcr.microsoft.com/azurelinux/base/python:3.12"
+	o.script = script
+	o.dryRun = "server"
+	o.namespace = "team-ns"
+	o.queue = "team-queue"
+	o.manifestOut = manifestOut
+
+	renderCount := 0
+	renderer := func(p profile.Profile, options jobrender.Options) ([]byte, error) {
+		renderCount++
+		return jobrender.Render(p, options)
+	}
+	var stdout, stderr bytes.Buffer
+	err := executeRunJobWithRenderer(context.Background(), &stdout, &stderr, &runJobRequest{
+		Name:    "h200-rl",
+		Options: o,
+	}, "tau run --config tau.yaml --dry-run=server --manifest-out h200-rl.yaml", renderer)
+	if err != nil {
+		t.Fatalf("server dry-run capture: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if renderCount != 1 {
+		t.Fatalf("render count = %d, want exactly one", renderCount)
+	}
+	saved, err := os.ReadFile(manifestOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kubectlInput, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(saved, kubectlInput) {
+		t.Fatalf("saved/server input differ from one rendered manifest")
+	}
+	if _, err := validateExactJobManifest(saved, exactManifestDigest(saved), "h200-rl", "team-ns"); err != nil {
+		t.Fatalf("captured real-renderer manifest cannot be submitted: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "apiVersion: batch/v1\nkind: Job\n") {
+		t.Fatalf("stdout is not admitted YAML:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "manifest-digest: "+exactManifestDigest(saved)) {
+		t.Fatalf("stderr missing exact digest:\n%s", stderr.String())
+	}
+}
+
 // TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn is the end-to-end
 // counterpart: when the researcher supplied both values, nothing is substituted
 // and the render must not claim their inputs will be re-resolved.

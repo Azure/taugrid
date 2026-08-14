@@ -21,8 +21,9 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/core/kube"
-	"github.com/Azure/taugrid/core/resourceprofile"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -80,6 +81,12 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 }
 
 func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJobRequest, captureCommand string) error {
+	return executeRunJobWithRenderer(ctx, stdout, stderr, request, captureCommand, jobrender.Render)
+}
+
+type directJobRenderer func(profile.Profile, jobrender.Options) ([]byte, error)
+
+func executeRunJobWithRenderer(ctx context.Context, stdout, stderr io.Writer, request *runJobRequest, captureCommand string, renderer directJobRenderer) error {
 	if err := ensureSubmissionID(&request.Options); err != nil {
 		return err
 	}
@@ -87,6 +94,14 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	kubeContext := firstNonEmpty(o.kubeContext, defaultKubeContext())
 	if o.dryRun != "" && o.dryRun != "client" && o.dryRun != "server" {
 		return fmt.Errorf("--dry-run must be one of: client, server")
+	}
+	if o.manifestOut != "" {
+		if o.dryRun != "server" {
+			return fmt.Errorf("--manifest-out requires --dry-run=server")
+		}
+		if o.nodes > 1 {
+			return fmt.Errorf("--manifest-out supports only a single direct Job object; multi-node Jobs also render a Service")
+		}
 	}
 	if o.script != "" && o.source == nil {
 		if _, err := os.Stat(o.script); err != nil {
@@ -328,8 +343,10 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.metricsOffloadEnabled {
 		opts.Annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
+	renderCount := 0
 	renderJob := func() ([]byte, error) {
-		return jobrender.Render(p, opts)
+		renderCount++
+		return renderer(p, opts)
 	}
 	manifest, err := renderJob()
 	if err != nil {
@@ -351,6 +368,9 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		if err != nil {
 			return err
 		}
+	}
+	if o.manifestOut != "" && renderCount != 1 {
+		return fmt.Errorf("--manifest-out requires a single deterministic render; specify a fixed queue and topology instead of automatic render-time resolution")
 	}
 	for _, warning := range warnings {
 		fmt.Fprintln(stderr, warning)
@@ -375,10 +395,17 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 			SubmissionID: o.submissionID,
 			Manifest:     manifest,
 			DryRun:       o.dryRun,
+			OutputFormat: serverDryRunOutputFormat(o.dryRun, o.manifestOut),
 		})
 		fmt.Fprint(stdout, result.Output)
 		if err != nil {
 			return err
+		}
+		if o.manifestOut != "" {
+			if err := fileutil.WriteFileAtomic(o.manifestOut, manifest, 0o600); err != nil {
+				return fmt.Errorf("write exact Job manifest: %w", err)
+			}
+			fmt.Fprintf(stderr, "manifest: %s\nmanifest-digest: %s\n", o.manifestOut, exactManifestDigest(manifest))
 		}
 	}
 

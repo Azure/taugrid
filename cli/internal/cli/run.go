@@ -33,6 +33,7 @@ func newRunCmdWithConnectionFactory(connectionFactory runConnectionEnsurerFactor
 		workspace          string
 		kubeContext        string
 		dryRun             string
+		manifestOut        string
 		keyVault           string
 		kvTenantID         string
 		kvClientID         string
@@ -137,6 +138,7 @@ Common examples:
 			if cmd.Flags().Changed("dry-run") {
 				targetOptions.dryRun = dryRun
 			}
+			targetOptions.manifestOut = manifestOut
 			targetOptions.keyVault = keyVault
 			targetOptions.kvTenantID = kvTenantID
 			targetOptions.kvClientID = kvClientID
@@ -220,6 +222,14 @@ Common examples:
 			if err != nil {
 				return err
 			}
+			if targetOptions.manifestOut != "" {
+				if targetOptions.dryRun != "server" {
+					return fmt.Errorf("--manifest-out requires --dry-run=server")
+				}
+				if target.job == nil {
+					return fmt.Errorf("--manifest-out is supported only for direct engine: job runs")
+				}
+			}
 			if err := executeRunTarget(cmd, target, captureCommand, targetOptions.experiment); err != nil {
 				return err
 			}
@@ -260,13 +270,14 @@ Common examples:
 	cmd.Flags().StringVar(&workspace, "workspace", "", "TauWorkspace name to use for namespace, queue, priority, output, and workload identity defaults")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
+	cmd.Flags().StringVar(&manifestOut, "manifest-out", "", "save the exact direct-Job input bytes after a successful server dry-run")
 	cmd.Flags().StringVar(&keyVault, "key-vault", "", "Azure Key Vault name for runtime.env_kv secret references")
 	cmd.Flags().StringVar(&kvTenantID, "tenant-id", "", "Azure AD tenant ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&kvClientID, "workload-identity-client-id", "", "Managed identity client ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&serviceAccountName, "service-account", "", "pod ServiceAccount for workload cloud identity (overrides the TauWorkspace default; authorization remains server-side)")
 	cmd.PersistentFlags().StringVar(&projectName, "project", "", "Tau project name from the repository's tau.projects.yaml")
 
-	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
+	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunSubmitManifestCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
 	return cmd
 }
 
@@ -285,6 +296,7 @@ type runDispatchOptions struct {
 	imageAssets                                                                                     []runconfig.ImageAsset
 	topologyPolicy, workloadKind, upstreamCheckpoint                                                string
 	configDir                                                                                       string
+	manifestOut                                                                                     string
 	workingDir                                                                                      string
 	workingDirExcludes                                                                              []string
 	source                                                                                          *runconfig.Source
@@ -427,7 +439,8 @@ func newMetricsSessionID() (string, error) {
 }
 
 func ensureSubmissionID(options *runDispatchOptions) error {
-	if options.dryRun != "" || strings.TrimSpace(options.submissionID) != "" {
+	if strings.TrimSpace(options.submissionID) != "" ||
+		(options.dryRun != "" && strings.TrimSpace(options.manifestOut) == "") {
 		return nil
 	}
 	submissionID, err := newMetricsSessionID()

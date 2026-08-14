@@ -144,6 +144,12 @@ reconciliation is not instantaneous. Omission preserves existing behavior:
 Tau adds no config-driven deadline or Kueue maximum-execution label, and any
 existing profile-level policy remains unchanged.
 
+For a safety gate that inspects the API server's admitted/defaulted object and
+then creates the exact input that was checked, use `tau run --dry-run=server
+--manifest-out` followed by `tau run submit-manifest`. See the
+[CLI reference](../cli/#tau-run). This avoids a second render between review
+and creation.
+
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
 before workload creation. Tau's generated embedded-payload environment entries
 are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for

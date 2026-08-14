@@ -34,6 +34,7 @@ type runSubmission struct {
 	SubmissionID string
 	Manifest     []byte
 	DryRun       string
+	OutputFormat string
 }
 
 type runSubmissionResult struct {
@@ -92,10 +93,16 @@ func submitRunWorkload(ctx context.Context, runner kubeRawRunner, submission run
 	if submission.DryRun == "" && strings.TrimSpace(submission.SubmissionID) == "" {
 		return runSubmissionResult{}, fmt.Errorf("submit run workload: submission ID is required")
 	}
+	if submission.OutputFormat != "" && submission.OutputFormat != "yaml" && submission.OutputFormat != "json" {
+		return runSubmissionResult{}, fmt.Errorf("submit run workload: output format must be yaml or json")
+	}
 
 	args := []string{"create", "-n", submission.Namespace, "-f", "-"}
 	if submission.DryRun != "" {
 		args = append(args, "--dry-run="+submission.DryRun)
+	}
+	if submission.OutputFormat != "" {
+		args = append(args, "-o", submission.OutputFormat)
 	}
 	out, createErr := runner.Raw(ctx, args, submission.Manifest)
 	result := runSubmissionResult{Output: out}
