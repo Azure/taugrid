@@ -135,9 +135,13 @@ func (e ExperimentIdentity) empty() bool {
 
 // experimentIdentity extracts the Stellar identity from an object's annotations.
 func experimentIdentity(annotations map[string]string) ExperimentIdentity {
+	experimentID := strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentID])
+	if experimentID == "" {
+		experimentID = strings.TrimSpace(annotations[workloadmeta.AnnotationStellarQuestion])
+	}
 	return ExperimentIdentity{
 		Project:      strings.TrimSpace(annotations[workloadmeta.AnnotationStellarProject]),
-		ExperimentID: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentID]),
+		ExperimentID: experimentID,
 		Title:        strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentTitle]),
 		Group:        strings.TrimSpace(annotations[workloadmeta.AnnotationStellarGroup]),
 	}

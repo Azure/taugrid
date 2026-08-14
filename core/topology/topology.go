@@ -491,6 +491,9 @@ func (c contract) validate(profileName string) error {
 		if c.lane != "elastic" {
 			return fmt.Errorf("profile %q topology: mode=elastic must route through lane=elastic, got lane=%q", profileName, c.lane)
 		}
+		if c.checkpointEvery == "" {
+			return fmt.Errorf("profile %q topology: mode=elastic requires checkpoint/restart semantics (topology.checkpointEvery)", profileName)
+		}
 		if c.gpuClass == GPUClassH200141GB {
 			return fmt.Errorf("profile %q topology: elastic jobs cannot request scarce %s", profileName, GPUClassH200141GB)
 		}

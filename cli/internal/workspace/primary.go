@@ -34,6 +34,13 @@ var ErrNoWorkspaces = errors.New("no TauWorkspace found")
 // there would fail confusingly at admission instead of here.
 var ErrPrimaryTerminating = errors.New("primary TauWorkspace is terminating")
 
+func hasPrimaryWorkspaceHistory(item Workspace) bool {
+	if item.Status.Phase == "" && item.Status.ObservedGeneration == 0 && len(item.Status.Conditions) == 0 {
+		return false
+	}
+	return !isAdditionalWorkspaceBlocked(item)
+}
+
 // isAdditionalWorkspaceBlocked reports whether the controller has refused to
 // activate this workspace.
 func isAdditionalWorkspaceBlocked(item Workspace) bool {
@@ -55,13 +62,13 @@ func isAdditionalWorkspaceBlocked(item Workspace) bool {
 // workspace satisfies "oldest non-terminating" when it is the only one in the
 // list, including one the controller marked AdditionalWorkspaceBlocked.
 //
-// Only the controller's annotation is self-evident from one object. Everything
-// else has to be compared against peers.
+// A controller marker or reconciled, non-blocked status proves the object was
+// selected without requiring the list permission researcher RBAC omits.
 func ProvablyPrimary(item Workspace) bool {
 	if isAdditionalWorkspaceBlocked(item) {
 		return false
 	}
-	return item.Metadata.Annotations[AnnotationV0Primary] == "true"
+	return item.Metadata.Annotations[AnnotationV0Primary] == "true" || hasPrimaryWorkspaceHistory(item)
 }
 
 // reasonAdditionalWorkspaceBlocked is the condition reason the controller sets
@@ -77,7 +84,8 @@ const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"
 //
 //  1. an explicit AnnotationV0Primary marker, which an operator can set to
 //     override the default choice;
-//  2. otherwise the oldest workspace that is not terminating.
+//  2. otherwise the oldest workspace already reconciled as primary;
+//  3. otherwise the oldest workspace that is not terminating.
 //
 // Deletion is deliberately *not* a filter for the marker. The controller keeps a
 // terminating incumbent as primary and marks any replacement
@@ -86,12 +94,16 @@ const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"
 // A terminating selection is reported as ErrPrimaryTerminating instead.
 func SelectPrimary(list WorkspaceList) (Workspace, error) {
 	var marked []Workspace
+	var incumbent *Workspace
 	var fallback *Workspace
 
 	for i := range list.Items {
 		item := list.Items[i]
 		if item.Metadata.Annotations[AnnotationV0Primary] == "true" {
 			marked = append(marked, item)
+		}
+		if hasPrimaryWorkspaceHistory(item) && (incumbent == nil || precedes(item, *incumbent)) {
+			incumbent = &list.Items[i]
 		}
 		if strings.TrimSpace(item.Metadata.DeletionTimestamp) != "" {
 			continue
@@ -115,6 +127,8 @@ func SelectPrimary(list WorkspaceList) (Workspace, error) {
 	switch {
 	case len(marked) == 1:
 		selected = &marked[0]
+	case incumbent != nil:
+		selected = incumbent
 	case fallback != nil:
 		selected = fallback
 	default:

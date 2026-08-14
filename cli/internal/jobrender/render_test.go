@@ -1120,15 +1120,16 @@ func TestRender_DRAConvertedPresetOmitsTASAnnotations(t *testing.T) {
 func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 	p := trainProfile()
 	out, err := Render(p, Options{
-		Name:      "elastic",
-		Namespace: "tau",
-		Command:   []string{"true"},
-		Team:      "experimental",
-		Lane:      "elastic",
-		Mode:      "elastic",
-		Topology:  "independent",
-		GPUClass:  "h100-95gb",
-		Shape:     "1xh100-95gb",
+		Name:            "elastic",
+		Namespace:       "tau",
+		Command:         []string{"true"},
+		Team:            "experimental",
+		Lane:            "elastic",
+		Mode:            "elastic",
+		Topology:        "independent",
+		GPUClass:        "h100-95gb",
+		Shape:           "1xh100-95gb",
+		CheckpointEvery: "15m",
 	})
 	if err != nil {
 		t.Fatal(err)

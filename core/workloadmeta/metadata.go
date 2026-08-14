@@ -100,7 +100,10 @@ const (
 
 	LabelOnboardingSmoke = "tau.azure.com/onboarding-smoke"
 
-	AnnotationDurableID = "tau.azure.com/durable-id"
+	// Both spellings are read so workloads stamped by older CLI builds remain
+	// discoverable. New writers use AnnotationDurableID.
+	AnnotationDurableID           = "tau.azure.com/durable-id"
+	AnnotationDurableIDUnderscore = "tau.azure.com/durable_id"
 )
 
 // Scheduling, queueing, and topology placement.
@@ -188,6 +191,7 @@ const (
 	AnnotationStellarExperimentTitle = "tau.azure.com/stellar-experiment-title"
 	AnnotationStellarGroup           = "tau.azure.com/stellar-group-value"
 	AnnotationStellarProject         = "tau.azure.com/stellar-project-value"
+	AnnotationStellarQuestion        = "tau.azure.com/stellar-question"
 	AnnotationStellarTags            = "tau.azure.com/stellar-tags"
 
 	// StellarAnnotationPrefix matches the Stellar annotation family for bulk

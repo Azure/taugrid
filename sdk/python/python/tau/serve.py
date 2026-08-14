@@ -9,6 +9,7 @@ import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 from tau.config import runtime_env_entries
@@ -43,6 +44,7 @@ class ServeHandle:
     env: Mapping[str, Any] | Sequence[str] | None = None
     runtime_pip: tuple[str, ...] = field(default_factory=tuple)
     args: str | Sequence[str] | None = None
+    profiles_dir: tuple[str | Path, ...] = field(default_factory=tuple)
     port: Optional[int] = None
     volumes: tuple[str, ...] = field(default_factory=tuple)
     mounts: tuple[str, ...] = field(default_factory=tuple)
@@ -74,6 +76,7 @@ class ServeHandle:
         tau_binary: Optional[str] = None,
         dry_run: Optional[str] = None,
         kube_context: Optional[str] = None,
+        profiles_dir: Optional[str | Path | Sequence[str | Path]] = None,
         extra_args: Optional[Sequence[str]] = None,
         capture: bool = False,
     ) -> subprocess.CompletedProcess:
@@ -82,6 +85,7 @@ class ServeHandle:
             tau_binary=tau_binary,
             dry_run=dry_run,
             kube_context=kube_context,
+            profiles_dir=profiles_dir,
             extra_args=extra_args,
             capture=capture,
         )
@@ -93,6 +97,7 @@ class ServeHandle:
         namespace: Optional[str] = None,
         dry_run: Optional[str] = None,
         kube_context: Optional[str] = None,
+        profiles_dir: Optional[str | Path | Sequence[str | Path]] = None,
         capture: bool = False,
         extra_args: Optional[Sequence[str]] = None,
     ) -> subprocess.CompletedProcess:
@@ -102,6 +107,7 @@ class ServeHandle:
             namespace=namespace,
             dry_run=dry_run,
             kube_context=kube_context,
+            profiles_dir=profiles_dir,
             extra_args=extra_args,
             capture=capture,
         )
@@ -113,6 +119,7 @@ class ServeHandle:
         namespace: Optional[str] = None,
         dry_run: Optional[str],
         kube_context: Optional[str],
+        profiles_dir: Optional[str | Path | Sequence[str | Path]],
         extra_args: Optional[Sequence[str]],
         capture: bool,
     ) -> subprocess.CompletedProcess:
@@ -122,6 +129,7 @@ class ServeHandle:
             namespace=namespace,
             dry_run=dry_run,
             kube_context=kube_context,
+            profiles_dir=profiles_dir,
             extra_args=extra_args,
         )
         return subprocess.run(argv, **_completed_process_kwargs(capture))
@@ -133,6 +141,7 @@ class ServeHandle:
         namespace: Optional[str] = None,
         dry_run: Optional[str] = None,
         kube_context: Optional[str] = None,
+        profiles_dir: Optional[str | Path | Sequence[str | Path]] = None,
         extra_args: Optional[Sequence[str]] = None,
     ) -> list[str]:
         _check_dry_run(dry_run)
@@ -172,6 +181,10 @@ class ServeHandle:
             argv += ["--import-path", self.import_path]
         if self.port is not None:
             argv += ["--port", str(self.port)]
+        for profile_dir in self.profiles_dir:
+            argv += ["--profiles-dir", str(profile_dir)]
+        for profile_dir in _profiles_dirs(profiles_dir):
+            argv += ["--profiles-dir", str(profile_dir)]
         for volume in self.volumes:
             argv += ["--volume", volume]
         for mount in self.mounts:
@@ -209,6 +222,7 @@ def serve(
     env: Mapping[str, Any] | Sequence[str] | None = None,
     runtime_pip: Optional[Sequence[str]] = None,
     args: str | Sequence[str] | None = None,
+    profiles_dir: str | Path | Sequence[str | Path] | None = None,
     port: Optional[int] = None,
     volumes: Optional[Sequence[str]] = None,
     mounts: Optional[Sequence[str]] = None,
@@ -234,6 +248,7 @@ def serve(
         env=env,
         runtime_pip=tuple(str(pkg) for pkg in (runtime_pip or ())),
         args=args,
+        profiles_dir=_profiles_dirs(profiles_dir),
         port=port,
         volumes=tuple(volumes or ()),
         mounts=tuple(mounts or ()),
@@ -282,6 +297,14 @@ def _env_cli_flags(env: Mapping[str, Any] | Sequence[str] | None) -> list[tuple[
         else:
             out.append(("--env", f"{name}={entry.get('value', '')}"))
     return out
+
+
+def _profiles_dirs(value: str | Path | Sequence[str | Path] | None) -> tuple[str | Path, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, Path)):
+        return (value,)
+    return tuple(value)
 
 
 def _args_string(args: str | Sequence[str]) -> str:

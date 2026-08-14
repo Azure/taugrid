@@ -90,8 +90,8 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			workspace.Name,
 		)
 		conditions := []metav1.Condition{
-			condition(tauv1alpha1.ConditionRBACReady, metav1.ConditionFalse, "AdditionalWorkspaceBlocked", message, workspace.Generation),
-			condition(tauv1alpha1.ConditionQueueReady, metav1.ConditionFalse, "AdditionalWorkspaceBlocked", message, workspace.Generation),
+			condition(tauv1alpha1.ConditionRBACReady, metav1.ConditionFalse, reasonAdditionalWorkspaceBlocked, message, workspace.Generation),
+			condition(tauv1alpha1.ConditionQueueReady, metav1.ConditionFalse, reasonAdditionalWorkspaceBlocked, message, workspace.Generation),
 			condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionFalse, "NoDrift", "No owned resource drift detected", workspace.Generation),
 		}
 		desiredStatus := tauv1alpha1.TauWorkspaceStatus{

@@ -187,12 +187,13 @@ func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 	p := topologyProfile()
 	p.Topology.WorkloadPriorityClassName = ""
 	plan, err := Build(p, Options{
-		Team:      "Experimental",
-		Lane:      "elastic",
-		Mode:      "elastic",
-		Placement: "independent",
-		GPUClass:  GPUClassH10095GB,
-		Shape:     "1xh100-95gb",
+		Team:            "Experimental",
+		Lane:            "elastic",
+		Mode:            "elastic",
+		Placement:       "independent",
+		GPUClass:        GPUClassH10095GB,
+		Shape:           "1xh100-95gb",
+		CheckpointEvery: "15m",
 	})
 	if err != nil {
 		t.Fatal(err)

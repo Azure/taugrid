@@ -11,12 +11,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"
+
 func (r *TauWorkspaceReconciler) resolvePrimaryWorkspace(ctx context.Context) (string, error) {
 	var workspaces tauv1alpha1.TauWorkspaceList
 	if err := r.APIReader.List(ctx, &workspaces, client.InNamespace(platformNamespace(r.PlatformNamespace))); err != nil {
 		return "", err
 	}
 	var primary *tauv1alpha1.TauWorkspace
+	var incumbent *tauv1alpha1.TauWorkspace
 	var marked *tauv1alpha1.TauWorkspace
 	for i := range workspaces.Items {
 		candidate := &workspaces.Items[i]
@@ -30,6 +33,9 @@ func (r *TauWorkspaceReconciler) resolvePrimaryWorkspace(ctx context.Context) (s
 			}
 			marked = candidate
 		}
+		if hasPrimaryWorkspaceHistory(candidate) && (incumbent == nil || workspacePrecedes(candidate, incumbent)) {
+			incumbent = candidate
+		}
 		if !candidate.DeletionTimestamp.IsZero() {
 			continue
 		}
@@ -40,6 +46,9 @@ func (r *TauWorkspaceReconciler) resolvePrimaryWorkspace(ctx context.Context) (s
 	if marked != nil {
 		return marked.Name, nil
 	}
+	if incumbent != nil {
+		return incumbent.Name, nil
+	}
 	if primary == nil {
 		return "", fmt.Errorf("no non-terminating TauWorkspace exists")
 	}
@@ -49,4 +58,16 @@ func (r *TauWorkspaceReconciler) resolvePrimaryWorkspace(ctx context.Context) (s
 func workspacePrecedes(a, b *tauv1alpha1.TauWorkspace) bool {
 	return a.CreationTimestamp.Before(&b.CreationTimestamp) ||
 		(a.CreationTimestamp.Equal(&b.CreationTimestamp) && a.Name < b.Name)
+}
+
+func hasPrimaryWorkspaceHistory(workspace *tauv1alpha1.TauWorkspace) bool {
+	if workspace.Status.Phase == "" && workspace.Status.ObservedGeneration == 0 && len(workspace.Status.Conditions) == 0 {
+		return false
+	}
+	for _, condition := range workspace.Status.Conditions {
+		if condition.Reason == reasonAdditionalWorkspaceBlocked {
+			return false
+		}
+	}
+	return true
 }
