@@ -153,8 +153,71 @@ run:
 `), "tau.yaml"); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Fatalf("expected malformed deadline parse rejection, got %v", err)
 	}
-	if err := (Config{Run: Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds}}).ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
+	if err := (Config{Run: Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds}}).ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "requires direct Job dispatch") {
 		t.Fatalf("expected Ray deadline rejection, got %v", err)
+	}
+	for _, tt := range []struct {
+		name   string
+		config Config
+	}{
+		{
+			name: "compute workload kind Job",
+			config: Config{
+				Run:     Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+				Compute: Compute{WorkloadKind: "job"},
+			},
+		},
+		{
+			name:   "implicit Job",
+			config: Config{Run: Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.config.ValidateExecution(""); err != nil {
+				t.Fatalf("supported direct Job deadline rejected: %v", err)
+			}
+		})
+	}
+	workers := 2
+	gpusPerWorker := 1
+	for _, tt := range []struct {
+		name   string
+		config Config
+	}{
+		{
+			name: "Ray workload kind",
+			config: Config{
+				Run:     Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+				Compute: Compute{WorkloadKind: "rayjob"},
+			},
+		},
+		{
+			name: "implicit Ray workers",
+			config: Config{
+				Run:     Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+				Compute: Compute{Workers: &workers},
+			},
+		},
+		{
+			name: "implicit Ray GPUs per worker",
+			config: Config{
+				Run:     Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+				Compute: Compute{GPUsPerWorker: &gpusPerWorker},
+			},
+		},
+		{
+			name: "implicit Ray pip dependencies",
+			config: Config{
+				Run:     Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},
+				Runtime: Runtime{Pip: []string{"ray[train]"}},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.config.ValidateExecution(""); err == nil || !strings.Contains(err.Error(), "direct Job dispatch") {
+				t.Fatalf("expected Ray deadline rejection, got %v", err)
+			}
+		})
 	}
 	if err := (Config{
 		Run:        Run{ExecutionDeadlineSeconds: cfg.Run.ExecutionDeadlineSeconds},

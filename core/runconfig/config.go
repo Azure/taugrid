@@ -733,8 +733,8 @@ func (c Config) ValidateExecution(engine string) error {
 		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
 			return fmt.Errorf("run.execution_deadline_seconds requires direct Job dispatch and cannot be used with workflow.file")
 		}
-		if engine != "job" {
-			return fmt.Errorf("run.execution_deadline_seconds requires engine: job")
+		if !c.resolvesToDirectJob(engine) {
+			return fmt.Errorf("run.execution_deadline_seconds requires direct Job dispatch")
 		}
 		if c.Resilience.MaxRetries > 0 {
 			return fmt.Errorf("run.execution_deadline_seconds cannot be combined with resilience.max_retries > 0 because each Tau retry submits a new Job with a fresh deadline")
@@ -1037,6 +1037,37 @@ func (r Runtime) ValidateEnvKV() error {
 		}
 	}
 	return nil
+}
+
+func (c Config) resolvesToDirectJob(engine string) bool {
+	switch engine {
+	case "job":
+		return true
+	case "ray":
+		return false
+	case "":
+	default:
+		return false
+	}
+
+	workloadKind := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		c.Workflow.WorkloadKind,
+		c.Run.WorkloadKind,
+		c.Compute.WorkloadKind,
+	)))
+	switch workloadKind {
+	case "job":
+		return true
+	case "ray", "rayjob", "ray-train", "ray_train":
+		return false
+	case "":
+	default:
+		return false
+	}
+
+	return (c.Compute.Workers == nil || *c.Compute.Workers <= 1) &&
+		c.Compute.GPUsPerWorker == nil &&
+		len(c.Runtime.Pip) == 0
 }
 
 func (c Config) LooksLikeManagedWorkflow() bool {
