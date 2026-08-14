@@ -441,27 +441,49 @@ func (s KustoSource) BuildSnapshot(ctx context.Context, opts Options) (Snapshot,
 	return snapshot, nil
 }
 
-func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
+func normalizeKustoExperimentSearchOptions(opts expstore.ExperimentSearchOptions) expstore.ExperimentSearchOptions {
 	opts.Query = strings.TrimSpace(opts.Query)
 	opts.Workspace = strings.TrimSpace(opts.Workspace)
+	opts.Project = strings.TrimSpace(opts.Project)
+	opts.Lifecycle = strings.ToLower(strings.TrimSpace(opts.Lifecycle))
+	switch opts.Lifecycle {
+	case "success", "successful", "completed":
+		opts.Lifecycle = "succeeded"
+	}
+	return opts
+}
+
+func normalizeKustoRunSearchOptions(opts expstore.RunSearchOptions) expstore.RunSearchOptions {
+	opts.Query = strings.TrimSpace(opts.Query)
+	opts.Workspace = strings.TrimSpace(opts.Workspace)
+	opts.Project = strings.TrimSpace(opts.Project)
+	opts.RunGroupID = strings.TrimSpace(opts.RunGroupID)
+	opts.State = normalizeKustoLifecycle(opts.State)
+	opts.Lifecycle = normalizeKustoLifecycle(opts.Lifecycle)
+	return opts
+}
+
+func normalizeKustoSearchLimit(limit int) (int, error) {
+	switch {
+	case limit < 0:
+		return 0, fmt.Errorf("limit must be non-negative")
+	case limit == 0:
+		return 200, nil
+	default:
+		return min(limit, 1000), nil
+	}
+}
+
+func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
+	opts = normalizeKustoExperimentSearchOptions(opts)
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
 	if err != nil {
 		return expstore.ExperimentSearchResult{}, err
 	}
-	opts.Project = strings.TrimSpace(opts.Project)
-	opts.Lifecycle = strings.ToLower(strings.TrimSpace(opts.Lifecycle))
-	if opts.Lifecycle == "success" || opts.Lifecycle == "successful" || opts.Lifecycle == "completed" {
-		opts.Lifecycle = "succeeded"
-	}
-	if opts.Limit < 0 {
-		return expstore.ExperimentSearchResult{}, fmt.Errorf("limit must be non-negative")
-	}
-	if opts.Limit == 0 {
-		opts.Limit = 200
-	}
-	if opts.Limit > 1000 {
-		opts.Limit = 1000
+	opts.Limit, err = normalizeKustoSearchLimit(opts.Limit)
+	if err != nil {
+		return expstore.ExperimentSearchResult{}, err
 	}
 	if strings.TrimSpace(opts.Since) == "" && s.hasRemoteQuery() {
 		opts.Since = s.effectiveDiscoverySince()
@@ -517,25 +539,15 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 }
 
 func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
-	opts.Query = strings.TrimSpace(opts.Query)
-	opts.Workspace = strings.TrimSpace(opts.Workspace)
+	opts = normalizeKustoRunSearchOptions(opts)
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
 	if err != nil {
 		return expstore.RunSearchResult{}, err
 	}
-	opts.Project = strings.TrimSpace(opts.Project)
-	opts.RunGroupID = strings.TrimSpace(opts.RunGroupID)
-	opts.State = normalizeKustoLifecycle(opts.State)
-	opts.Lifecycle = normalizeKustoLifecycle(opts.Lifecycle)
-	if opts.Limit < 0 {
-		return expstore.RunSearchResult{}, fmt.Errorf("limit must be non-negative")
-	}
-	if opts.Limit == 0 {
-		opts.Limit = 200
-	}
-	if opts.Limit > 1000 {
-		opts.Limit = 1000
+	opts.Limit, err = normalizeKustoSearchLimit(opts.Limit)
+	if err != nil {
+		return expstore.RunSearchResult{}, err
 	}
 	if strings.TrimSpace(opts.Since) == "" && s.hasRemoteQuery() {
 		opts.Since = s.effectiveTargetSince()

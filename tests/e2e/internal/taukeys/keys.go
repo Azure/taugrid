@@ -22,8 +22,7 @@ const (
 	AnnotationWorkspaceID = "tau.azure.com/workspace-id"
 
 	// Render-time GPU contract keys, mirrored from workloadmeta.
-	LabelGPUCount     = "tau.azure.com/gpu-count"
-	LabelGPUPlacement = "tau.azure.com/gpu-placement"
+	LabelGPUCount = "tau.azure.com/gpu-count"
 
 	// LabelSchedulerTest marks pods created by the e2e packing/affinity suite.
 	LabelSchedulerTest = "tau.azure.com/scheduler-test"

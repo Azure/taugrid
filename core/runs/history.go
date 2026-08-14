@@ -162,18 +162,18 @@ func (r KustoHistoryReader) GetHistoryTimeline(ctx context.Context, scope Histor
 func runFromHistoryRow(row kustoquery.Row) Run {
 	created := firstHistoryTime(row, "created_time", "submit_time", "completion_time", "observed_at")
 	return Run{
-		Name:               firstRowValue(row, "owning_resource_name", "name"),
-		Kind:               firstRowValue(row, "owning_resource_kind", "kind"),
-		Status:             normalizeHistoryStatus(firstRowValue(row, "effective_state", "state", "status")),
+		Name:               rowValue(row, "owning_resource_name"),
+		Kind:               rowValue(row, "owning_resource_kind"),
+		Status:             normalizeHistoryStatus(rowValue(row, "state")),
 		Created:            created,
 		Age:                FormatAge(time.Now(), created),
-		RunID:              firstRowValue(row, "run_id", "runId"),
-		Queue:              firstRowValue(row, "local_queue", "localQueue", "queue"),
-		Namespace:          firstRowValue(row, "namespace"),
-		Cluster:            firstRowValue(row, "cluster"),
-		ResourceUID:        firstRowValue(row, "resource_uid", "resourceUid"),
-		DurableID:          firstRowValue(row, "durable_id", "durableId"),
-		ExperimentTracking: firstNonEmpty(firstRowValue(row, "experiment_tracking", "experimentTracking"), experimentTrackingUntracked),
+		RunID:              rowValue(row, "run_id"),
+		Queue:              rowValue(row, "local_queue"),
+		Namespace:          rowValue(row, "namespace"),
+		Cluster:            rowValue(row, "cluster"),
+		ResourceUID:        rowValue(row, "resource_uid"),
+		DurableID:          rowValue(row, "durable_id"),
+		ExperimentTracking: firstNonEmpty(rowValue(row, "experiment_tracking"), experimentTrackingUntracked),
 	}
 }
 
@@ -196,13 +196,8 @@ func normalizeHistoryStatus(state string) string {
 	}
 }
 
-func firstRowValue(row kustoquery.Row, columns ...string) string {
-	for _, column := range columns {
-		if value := strings.TrimSpace(row.Str(column)); value != "" {
-			return value
-		}
-	}
-	return ""
+func rowValue(row kustoquery.Row, column string) string {
+	return strings.TrimSpace(row.Str(column))
 }
 
 func firstHistoryTime(row kustoquery.Row, columns ...string) time.Time {

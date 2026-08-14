@@ -374,12 +374,7 @@ func runID(labels map[string]string) string {
 }
 
 func durableID(labels, annotations map[string]string) string {
-	return firstNonEmpty(
-		annotations[workloadmeta.AnnotationDurableID],
-		labels[workloadmeta.AnnotationDurableID],
-		annotations[workloadmeta.AnnotationDurableIDUnderscore],
-		labels[workloadmeta.AnnotationDurableIDUnderscore],
-	)
+	return annotations[workloadmeta.AnnotationDurableID]
 }
 
 func experimentTracking(annotations map[string]string) string {

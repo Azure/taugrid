@@ -702,9 +702,6 @@ func normalizeExpOutputAlias(output, format string, jsonOutput bool, allowed ...
 }
 
 func storePathValue(storePath *string) string {
-	if storePath == nil {
-		return ""
-	}
 	return *storePath
 }
 

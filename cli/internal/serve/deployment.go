@@ -16,8 +16,7 @@
 // V0 scope:
 //   - Single main container. Optional sidecar via Options.Sidecars.
 //   - Optional init containers via Options.InitContainers.
-//   - Profile-driven resources, scheduling, DRA (same path as submit/
-//     and rayservice).
+//   - Profile-driven CPU/memory and device-plugin GPU resources.
 //   - Kueue pod-integration annotations + queue label wired correctly.
 //
 // V0 non-goals:
@@ -123,7 +122,7 @@ type HTTPProbe struct {
 type DeploymentOptions struct {
 	Name         string // required
 	Namespace    string // required
-	Image        string // overrides profile.spec.runtime.image
+	Image        string // overrides Profile.Runtime.Image
 	Replicas     int32  // default 1
 	Command      []string
 	Args         []string
@@ -166,12 +165,12 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtimePip, err := resolveRuntimePip(p, o.RuntimePip)
+	runtimePip, err := resolveRuntimePip(o.RuntimePip)
 	if err != nil {
 		return nil, err
 	}
 	if len(runtimePip) > 0 {
-		return nil, fmt.Errorf("runtime.pip is only supported for --kind=rayservice; for --kind=deployment bake dependencies into the image or profile.spec.runtime.image")
+		return nil, fmt.Errorf("runtime.pip is only supported for --kind=rayservice; for --kind=deployment bake dependencies into the image or profile runtime image")
 	}
 	replicas := int64(o.Replicas)
 	if replicas <= 0 {
@@ -181,10 +180,9 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	if o.KueueManaged != nil {
 		kueueManaged = *o.KueueManaged
 	}
-	gpuPlan, err := profile.BuildGPUSchedulingPlan(p)
-	if err != nil {
-		return nil, err
-	}
+	gpu := p.Resources.GPU
+	gpuLabels := gpu.Labels()
+	gpuAnnotations := gpu.Annotations()
 
 	// Kueue's Deployment webhook writes the suspending-parent annotation, the
 	// managed label, and queue-name as one set, and only when it has a queue
@@ -207,11 +205,11 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		"app":                     o.Name,
 		workloadmeta.LabelService: o.Name,
 	}
-	for k, v := range gpuPlan.Labels {
+	for k, v := range gpuLabels {
 		deployLabels[k] = v
 		podLabels[k] = v
 	}
-	podAnnotations := stringMapToAny(gpuPlan.Annotations)
+	podAnnotations := stringMapToAny(gpuAnnotations)
 	if kueueManaged {
 		deployLabels["kueue.x-k8s.io/queue-name"] = queueName
 		podLabels["kueue.x-k8s.io/queue-name"] = queueName
@@ -246,11 +244,7 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	if probe := probeToAny(o.LivenessProbe, o.defaultProbePort()); len(probe) > 0 {
 		mainContainer["livenessProbe"] = probe
 	}
-	profileEnv, err := profileRuntimeEnvVars(p)
-	if err != nil {
-		return nil, err
-	}
-	env, err := envspec.Merge(profileEnv, envspec.FromMap(o.Env), o.EnvVars)
+	env, err := envspec.Merge(envspec.FromMap(o.Env), o.EnvVars)
 	if err != nil {
 		return nil, err
 	}
@@ -260,54 +254,18 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	if len(o.VolumeMounts) > 0 {
 		mainContainer["volumeMounts"] = volumeMountsToAny(o.VolumeMounts)
 	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if pp, ok := rt["imagePullPolicy"].(string); ok && pp != "" {
-			mainContainer["imagePullPolicy"] = pp
-		}
-	}
-
-	// Resources + GPU (device-plugin or DRA) from profile (same contract as
-	// submit/ and rayservice renderer).
+	// Resources plus device-plugin GPUs from the profile.
 	podSpec := map[string]any{}
 	resources := map[string]any{}
-	if res, ok := p.Spec["resources"].(map[string]any); ok {
-		if req, ok := res["requests"]; ok {
-			resources["requests"] = req
-		}
-		if lim, ok := res["limits"]; ok {
-			resources["limits"] = lim
-		}
+	if p.Resources.Requests != nil {
+		resources["requests"] = p.Resources.Requests
 	}
-	resourceClaims, err := profile.ApplyGPUResources(resources, profile.GPURequestPlanFromProfile(p))
-	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	if p.Resources.Limits != nil {
+		resources["limits"] = p.Resources.Limits
 	}
-	if len(resourceClaims) > 0 {
-		podSpec["resourceClaims"] = resourceClaims
-	}
+	profile.AddGPUResources(resources, gpu.Count)
 	if len(resources) > 0 {
 		mainContainer["resources"] = resources
-	}
-
-	// Scheduling (nodeSelector, tolerations, priorityClassName) from profile.
-	if sched, ok := p.Spec["scheduling"].(map[string]any); ok {
-		if ns, ok := sched["nodeSelector"]; ok {
-			podSpec["nodeSelector"] = ns
-		}
-		if tols, ok := sched["tolerations"]; ok {
-			podSpec["tolerations"] = tols
-		}
-		if pc, ok := sched["priorityClassName"].(string); ok && pc != "" {
-			podSpec["priorityClassName"] = pc
-		}
-	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if secrets := normalizeImagePullSecrets(rt["imagePullSecrets"]); len(secrets) > 0 {
-			podSpec["imagePullSecrets"] = secrets
-		}
-	}
-	if gpuPlan.PackingAffinity != nil {
-		podSpec["affinity"] = gpuPlan.PackingAffinity
 	}
 
 	// Assemble containers (init + main + sidecars).
@@ -353,7 +311,7 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 			"name":        o.Name,
 			"namespace":   o.Namespace,
 			"labels":      deployLabels,
-			"annotations": stringMapToAny(gpuPlan.Annotations),
+			"annotations": stringMapToAny(gpuAnnotations),
 		},
 		"spec": deploySpec,
 	}
@@ -364,7 +322,7 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		meta := tmpl["metadata"].(map[string]any)
 		delete(meta, "annotations")
 	}
-	if len(gpuPlan.Annotations) == 0 {
+	if len(gpuAnnotations) == 0 {
 		delete(deployment["metadata"].(map[string]any), "annotations")
 	}
 
@@ -580,12 +538,10 @@ func resolveDeploymentImage(p profile.Profile, o DeploymentOptions) (string, err
 	if o.Image != "" {
 		return o.Image, nil
 	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if img, ok := rt["image"].(string); ok && img != "" {
-			return img, nil
-		}
+	if p.Runtime.Image != "" {
+		return p.Runtime.Image, nil
 	}
-	return "", fmt.Errorf("no image: set --image or profile.spec.runtime.image")
+	return "", fmt.Errorf("no image: set --image or a profile runtime image")
 }
 
 func probeToAny(p HTTPProbe, defaultPort int) map[string]any {

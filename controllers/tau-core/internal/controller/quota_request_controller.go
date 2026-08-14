@@ -27,8 +27,8 @@ func (r *TauQuotaRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, &request); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if request.Namespace != r.platformNamespace() {
-		logger.Info("ignoring quota request outside platform namespace", "platformNamespace", r.platformNamespace())
+	if request.Namespace != platformNamespace(r.PlatformNamespace) {
+		logger.Info("ignoring quota request outside platform namespace", "platformNamespace", platformNamespace(r.PlatformNamespace))
 		return ctrl.Result{}, nil
 	}
 
@@ -71,11 +71,4 @@ func (r *TauQuotaRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tauv1alpha1.TauQuotaRequest{}).
 		Complete(r)
-}
-
-func (r *TauQuotaRequestReconciler) platformNamespace() string {
-	if r.PlatformNamespace == "" {
-		return tauv1alpha1.PlatformNamespace
-	}
-	return r.PlatformNamespace
 }

@@ -10,13 +10,9 @@
 //     HTTP-200-on-/healthz loop end-to-end. Workers come when there's
 //     real traffic pressure to justify scale-out; today users
 //     run a single-pod serve.
-//   - DRA claim wiring from profile.spec.resources.dra (same path as
-//     submit/render.go).
 //   - Kueue queue label (kueue.x-k8s.io/queue-name) from profile. Kueue
 //     RayService integration is enabled cluster-side; labelling
 //     the parent CR is how admission is requested.
-//   - Profile scheduling block (nodeSelector, tolerations, priorityClass)
-//     propagates to head pod template. KubeRay passes these through.
 //
 // V0 non-goals (deliberate, see anti-pattern #6 — ship all 5 commands
 // before the surface is locked):
@@ -51,7 +47,7 @@ const (
 type Options struct {
 	Name        string // required
 	Namespace   string // required
-	Image       string // overrides profile.spec.runtime.image
+	Image       string // overrides Profile.Runtime.Image
 	Replicas    int    // serve deployment replicas when ReplicasSet is true
 	ReplicasSet bool   // render a Ray Serve deployment override
 	ImportPath  string // Ray Serve import path (default serve:app)
@@ -91,22 +87,17 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if rayVersion == "" {
 		rayVersion = DefaultRayVersion
 	}
-	profileEnv, err := profileRuntimeEnvVars(p)
+	env, err := envspec.Merge(envspec.FromMap(o.Env), o.EnvVars)
 	if err != nil {
 		return nil, err
 	}
-	env, err := envspec.Merge(profileEnv, envspec.FromMap(o.Env), o.EnvVars)
+	runtimePip, err := resolveRuntimePip(o.RuntimePip)
 	if err != nil {
 		return nil, err
 	}
-	runtimePip, err := resolveRuntimePip(p, o.RuntimePip)
-	if err != nil {
-		return nil, err
-	}
-	gpuPlan, err := profile.BuildGPUSchedulingPlan(p)
-	if err != nil {
-		return nil, err
-	}
+	gpu := p.Resources.GPU
+	gpuLabels := gpu.Labels()
+	gpuAnnotations := gpu.Annotations()
 
 	// Kueue's RayService integration watches the CR for queue-name; without it
 	// the CR is never admitted, so an unlabelled RayService is a submit that
@@ -120,36 +111,17 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		workloadmeta.LabelProfile:   p.Name,
 		"kueue.x-k8s.io/queue-name": queueName,
 	}
-	for k, v := range gpuPlan.Labels {
+	for k, v := range gpuLabels {
 		labels[k] = v
 	}
 	headPodLabels := map[string]any{
 		workloadmeta.LabelService: o.Name,
 	}
-	for k, v := range gpuPlan.Labels {
+	for k, v := range gpuLabels {
 		headPodLabels[k] = v
 	}
 
 	headPodSpec := map[string]any{}
-	if sched, ok := p.Spec["scheduling"].(map[string]any); ok {
-		if ns, ok := sched["nodeSelector"]; ok {
-			headPodSpec["nodeSelector"] = ns
-		}
-		if tols, ok := sched["tolerations"]; ok {
-			headPodSpec["tolerations"] = tols
-		}
-		if pc, ok := sched["priorityClassName"].(string); ok && pc != "" {
-			headPodSpec["priorityClassName"] = pc
-		}
-	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if secrets := normalizeImagePullSecrets(rt["imagePullSecrets"]); len(secrets) > 0 {
-			headPodSpec["imagePullSecrets"] = secrets
-		}
-	}
-	if gpuPlan.PackingAffinity != nil {
-		headPodSpec["affinity"] = gpuPlan.PackingAffinity
-	}
 
 	headContainer := map[string]any{
 		"name":  "ray-head",
@@ -158,11 +130,6 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			map[string]any{"containerPort": int64(port), "name": "serve"},
 			map[string]any{"containerPort": int64(DashboardPort), "name": "dashboard"},
 		},
-	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if pp, ok := rt["imagePullPolicy"].(string); ok && pp != "" {
-			headContainer["imagePullPolicy"] = pp
-		}
 	}
 	if len(o.Args) > 0 {
 		headContainer["args"] = stringsToAny(o.Args)
@@ -174,24 +141,15 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		headContainer["volumeMounts"] = volumeMountsToAny(o.VolumeMounts)
 	}
 
-	// Resources: CPU/memory requests from profile, plus GPU via device-plugin
-	// or DRA.
+	// Resources: CPU/memory requests from profile, plus device-plugin GPUs.
 	resources := map[string]any{}
-	if res, ok := p.Spec["resources"].(map[string]any); ok {
-		if req, ok := res["requests"]; ok {
-			resources["requests"] = req
-		}
-		if lim, ok := res["limits"]; ok {
-			resources["limits"] = lim
-		}
+	if p.Resources.Requests != nil {
+		resources["requests"] = p.Resources.Requests
 	}
-	resourceClaims, err := profile.ApplyGPUResources(resources, profile.GPURequestPlanFromProfile(p))
-	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	if p.Resources.Limits != nil {
+		resources["limits"] = p.Resources.Limits
 	}
-	if len(resourceClaims) > 0 {
-		headPodSpec["resourceClaims"] = resourceClaims
-	}
+	profile.AddGPUResources(resources, gpu.Count)
 	if len(resources) > 0 {
 		headContainer["resources"] = resources
 	}
@@ -251,7 +209,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			"name":        o.Name,
 			"namespace":   o.Namespace,
 			"labels":      labels,
-			"annotations": stringMapToAny(gpuPlan.Annotations),
+			"annotations": stringMapToAny(gpuAnnotations),
 		},
 		"spec": map[string]any{
 			"serveConfigV2": serveConfig.String(),
@@ -264,7 +222,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 					"template": map[string]any{
 						"metadata": map[string]any{
 							"labels":      headPodLabels,
-							"annotations": stringMapToAny(gpuPlan.Annotations),
+							"annotations": stringMapToAny(gpuAnnotations),
 						},
 						"spec": headPodSpec,
 					},
@@ -272,7 +230,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			},
 		},
 	}
-	if len(gpuPlan.Annotations) == 0 {
+	if len(gpuAnnotations) == 0 {
 		delete(rayService["metadata"].(map[string]any), "annotations")
 		tmpl := rayService["spec"].(map[string]any)["rayClusterConfig"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)
 		delete(tmpl["metadata"].(map[string]any), "annotations")
@@ -334,12 +292,10 @@ func resolveImage(p profile.Profile, o Options) (string, error) {
 	if o.Image != "" {
 		return o.Image, nil
 	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if img, ok := rt["image"].(string); ok && img != "" {
-			return img, nil
-		}
+	if p.Runtime.Image != "" {
+		return p.Runtime.Image, nil
 	}
-	return "", fmt.Errorf("no image: profile %q declares no spec.runtime.image and --image was not set", p.Name)
+	return "", fmt.Errorf("no image: profile %q declares no runtime image and --image was not set", p.Name)
 }
 
 // yamlWriter is a minimal io.Writer → strings.Builder adapter that lets
@@ -356,100 +312,16 @@ func stringsToAny(ss []string) []any {
 	return out
 }
 
-// profileLocalQueue reads spec.queue.localQueue, returning "" when the profile
-// names none. Both serving renderers fail closed on that, so it is deliberately
-// not an error here.
 func profileLocalQueue(p profile.Profile) string {
-	q, ok := p.Spec["queue"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	lq, _ := q["localQueue"].(string)
-	return strings.TrimSpace(lq)
+	return strings.TrimSpace(p.Queue)
 }
 
-func profileRuntimeEnvVars(p profile.Profile) ([]envspec.Var, error) {
-	rt, ok := p.Spec["runtime"].(map[string]any)
-	if !ok {
-		return nil, nil
-	}
-	return envspec.ParseProfileEnv(rt["env"])
-}
-
-func resolveRuntimePip(p profile.Profile, override []string) ([]string, error) {
-	pip, err := profileRuntimePip(p)
-	if err != nil {
-		return nil, err
-	}
-	if len(override) > 0 {
-		pip = append([]string{}, override...)
-	}
+func resolveRuntimePip(override []string) ([]string, error) {
+	pip := append([]string{}, override...)
 	for i, pkg := range pip {
 		if strings.TrimSpace(pkg) == "" {
 			return nil, fmt.Errorf("runtime.pip[%d]: blank entry", i)
 		}
 	}
 	return pip, nil
-}
-
-func profileRuntimePip(p profile.Profile) ([]string, error) {
-	rt, ok := p.Spec["runtime"].(map[string]any)
-	if !ok {
-		return nil, nil
-	}
-	raw := rt["pip"]
-	if raw == nil {
-		return nil, nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return append([]string{}, v...), nil
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("profile %q spec.runtime.pip entries must be strings", p.Name)
-			}
-			out = append(out, s)
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("profile %q spec.runtime.pip must be a list", p.Name)
-	}
-}
-
-func normalizeImagePullSecrets(raw any) []any {
-	switch v := raw.(type) {
-	case string:
-		if v == "" {
-			return nil
-		}
-		return []any{map[string]any{"name": v}}
-	case []string:
-		out := make([]any, 0, len(v))
-		for _, name := range v {
-			if name != "" {
-				out = append(out, map[string]any{"name": name})
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(v))
-		for _, item := range v {
-			switch s := item.(type) {
-			case string:
-				if s != "" {
-					out = append(out, map[string]any{"name": s})
-				}
-			case map[string]any:
-				if name, ok := s["name"].(string); ok && name != "" {
-					out = append(out, map[string]any{"name": name})
-				}
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }

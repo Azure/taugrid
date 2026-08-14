@@ -69,6 +69,12 @@ def pvc_mount(name: str, *, pvc: str, mount_path: str, read_only: bool = False) 
     return {"name": name, "pvc": pvc, "mountPath": mount_path, "readOnly": bool(read_only)}
 
 
+def _copy_mapping(value: Any, *, error: str | None = None) -> dict[str, Any]:
+    if error is not None and not isinstance(value, Mapping):
+        raise ValueError(error)
+    return copy.deepcopy(dict(value))
+
+
 def load_config(source: str | Path | Mapping[str, Any] | Sequence[Any] | None) -> dict[str, Any]:
     """Load and deep-merge YAML/TOML/dict config sources.
 
@@ -79,7 +85,7 @@ def load_config(source: str | Path | Mapping[str, Any] | Sequence[Any] | None) -
     if source is None:
         return {}
     if isinstance(source, Mapping):
-        return copy.deepcopy(dict(source))
+        return _copy_mapping(source)
     if isinstance(source, (str, Path)):
         path = Path(source)
         if not path.exists():
@@ -91,9 +97,7 @@ def load_config(source: str | Path | Mapping[str, Any] | Sequence[Any] | None) -
             data = tomllib.loads(path.read_text())
         else:
             raise ValueError(f"tau config {path} must be .yaml, .yml, or .toml")
-        if not isinstance(data, Mapping):
-            raise ValueError(f"tau config {path} must contain a mapping")
-        return copy.deepcopy(dict(data))
+        return _copy_mapping(data, error=f"tau config {path} must contain a mapping")
     if isinstance(source, Sequence) and not isinstance(source, (str, bytes, bytearray)):
         merged: dict[str, Any] = {}
         for item in source:
@@ -163,12 +167,7 @@ def merge_runtime_env(existing: Any, extra: Sequence[Mapping[str, Any]]) -> list
 def normalize_mounts(mounts: Sequence[Any] | None) -> list[dict[str, Any]]:
     if not mounts:
         return []
-    out = []
-    for item in mounts:
-        if not isinstance(item, Mapping):
-            raise ValueError("tau mounts must be mappings; use tau.pvc_mount(...)")
-        out.append(copy.deepcopy(dict(item)))
-    return out
+    return [_copy_mapping(item, error="tau mounts must be mappings; use tau.pvc_mount(...)") for item in mounts]
 
 
 def _env_entry(name: str, value: Any) -> dict[str, Any]:

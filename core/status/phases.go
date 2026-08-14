@@ -28,11 +28,6 @@ type Phase struct {
 	StartedAt time.Time
 }
 
-// renderStartupPhases renders the startup phase tree from a single snapshot.
-func renderStartupPhases(s Snapshot) string {
-	return renderStartupPhasesAt(s, time.Now())
-}
-
 func renderStartupPhasesAt(s Snapshot, now time.Time) string {
 	phases := startupPhasesAt(s, now)
 	var b strings.Builder
@@ -56,13 +51,13 @@ func startupPhasesAt(s Snapshot, now time.Time) []Phase {
 		submittedPhase(s),
 		kueuePhase(s),
 	}
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		phases = append(phases, multiKueuePlacementPhase(s))
 	}
 	if rj.Found {
 		phases = append(phases, rayClusterPhase(s))
 	}
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		phases = append(phases, skippedManagerViewPodPhases()...)
 	} else {
 		phases = append(phases, podLifecyclePhases(s)...)
@@ -117,7 +112,7 @@ func StartupComplete(s Snapshot) bool {
 	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
 		return true
 	}
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		return false
 	}
 	for _, phase := range startupPhasesAt(s, time.Now()) {
@@ -140,7 +135,7 @@ func StartupFailed(s Snapshot) bool {
 	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
 		return false
 	}
-	if s.managerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
+	if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
 		return true
 	}
 	if s.JobFound || snapshotRayJob(s).Found {
@@ -179,7 +174,7 @@ func WatchComplete(s Snapshot) bool {
 	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
 		return true
 	}
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		if firstNonEmpty(snapshotRayJob(s).JobDeploymentStatus, snapshotRayJob(s).JobStatus) == "Suspended" {
 			return false
 		}
@@ -201,7 +196,7 @@ func WatchFailed(s Snapshot) bool {
 	if WorkloadFailed(s) {
 		return true
 	}
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		return s.AnyAdmissionCheckRejected()
 	}
 	return StartupFailed(s)
@@ -406,7 +401,7 @@ func computeReleasePhase(s Snapshot) Phase {
 			StartedAt: rj.CreatedAt,
 		}
 	}
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		return Phase{
 			Name:      "Compute release",
 			Status:    phaseSkipped,
@@ -1089,7 +1084,7 @@ func WorkloadFailed(s Snapshot) bool {
 			return true
 		}
 	}
-	if s.managerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
+	if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
 		return true
 	}
 	return rayJobStatusFailed(snapshotRayJob(s))

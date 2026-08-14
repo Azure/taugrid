@@ -13,9 +13,6 @@
 //   - The Job is created `suspend: true` and labelled with
 //     `kueue.x-k8s.io/queue-name` so Kueue admits it. This matches the
 //     pattern used by earlier shell-based submission workflows.
-//   - DRA ResourceClaim wiring: if the profile declares
-//     spec.resources.dra.claimTemplate, we attach a single claim named
-//     "gpu" and reference it from the container resources.claims slice.
 //   - Script handling: a local script path keeps the legacy TAU_SCRIPT_B64
 //     path. A run.source tree is copied from a digest-pinned OCI image into an
 //     emptyDir by an init container and never travels through an env var.
@@ -63,8 +60,8 @@ type Options struct {
 	// Namespace is the target namespace. Required.
 	Namespace string
 
-	// Image overrides the container image. If empty, the profile's
-	// spec.runtime.image is used; if that's empty too, the renderer
+	// Image overrides the container image. If empty, Profile.Runtime.Image is
+	// used; if that's empty too, the renderer
 	// returns an error (we refuse to ship a "default image" footgun).
 	Image string
 
@@ -132,16 +129,13 @@ type Options struct {
 	// TerminationGracePeriodSeconds overrides the default pod grace
 	// period. Default is 60s (north-star §5.6: give training jobs time
 	// to flush checkpoints on SIGTERM; k8s default of 30s is too short
-	// for multi-GB checkpoints to blob storage). Profile
-	// spec.policy.terminationGracePeriodSeconds sets a per-profile
-	// default; this option wins if > 0.
+	// for multi-GB checkpoints to blob storage).
 	TerminationGracePeriodSeconds int64
 
 	// ActiveDeadlineSeconds, if > 0, bounds the job's total wall-clock
 	// runtime. The k8s controller terminates the pod when exceeded. Used
 	// by long-running `tau run` Jobs that want a hard cap regardless of
-	// profile policy. Overrides any value
-	// inherited from profile.spec.policy.activeDeadlineSeconds.
+	// profile policy. Overrides Profile.ActiveDeadlineSeconds.
 	ActiveDeadlineSeconds int64
 
 	// TTLSecondsAfterFinished controls Kubernetes cleanup after completion.
@@ -153,9 +147,8 @@ type Options struct {
 	// already exist in Namespace.
 	PVCMount string
 
-	// Volumes and VolumeMounts are run-time storage overrides. They are
-	// additive with profile spec.resources.persistence and are intentionally a
-	// small PVC-only subset for researcher data volumes.
+	// Volumes and VolumeMounts are run-time storage overrides and are
+	// intentionally a small PVC-only subset for researcher data volumes.
 	Volumes      []Volume
 	VolumeMounts []VolumeMount
 	ImageAssets  []runconfig.ImageAsset
@@ -166,10 +159,9 @@ type Options struct {
 	Labels      map[string]string
 	Annotations map[string]string
 
-	// Env is a CLI-injected env-var map merged into the rendered container
-	// env after profile-declared env. CLI keys win on conflict but Tau
-	// reserves the TAU_ prefix for storage and profile-mode contracts;
-	// Render rejects user-supplied keys with that prefix.
+	// Env is a CLI-injected env-var map. Tau reserves the TAU_ prefix for
+	// storage and profile-mode contracts; Render rejects user-supplied keys
+	// with that prefix.
 	Env map[string]string
 	// EnvSecrets are secret-backed env vars rendered as valueFrom.secretKeyRef.
 	// RedactSecrets replaces the referenced Secret name/key in client dry-run
@@ -197,13 +189,13 @@ type Options struct {
 	// on local /mnt are copied and renamed into durable OutputDir after success.
 	ArtifactPublish artifactpublish.Runtime
 
-	// NodeSelector is a run-time placement override merged after profile and
-	// topology selectors. ClearNodeSelector drops profile selectors before the
+	// NodeSelector is a run-time placement override merged after topology
+	// selectors. ClearNodeSelector drops generated selectors before the
 	// protected topology contract and NodeSelector are applied.
 	NodeSelector      map[string]string
 	ClearNodeSelector bool
 
-	// Topology contract overrides. Profiles can declare spec.topology, while
+	// Topology contract overrides. Profiles can declare Topology, while
 	// CLI callers can override the researcher-facing intent here. Render turns
 	// this into protected Kueue queue/topology metadata and rejects unsafe
 	// combinations (for example elastic jobs without checkpoints, or eval on
@@ -226,9 +218,6 @@ type Options struct {
 	PodPriorityClassName            string
 	DisableKueueTopologyAnnotations bool
 	// DisableDefaultPriorities omits Tau-managed default priority classes.
-	// It also suppresses built-in profile scheduling.priorityClassName values
-	// that reference the same TauGrid defaults, so bring-your-own Kueue installs
-	// without those classes can still enqueue Jobs.
 	DisableDefaultPriorities bool
 }
 
@@ -295,11 +284,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		return nil, err
 	}
 
-	storageContract, hasStorageContract, err := profile.StorageContractFromProfile(p)
-	if err != nil {
-		return nil, err
-	}
-	storagePlan, err := buildStoragePlan(p, o, storageContract, hasStorageContract)
+	storagePlan, err := buildStoragePlan(o)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +295,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		return nil, err
 	}
 	if storagePlan.HasDurableData {
-		env = mergeEnv(storage.ContractEnv(storageContract, hasStorageContract), env)
+		env = mergeEnv(storage.RuntimeEnv(), env)
 		cmd = wrapCommandWithStoragePreflight(cmd)
 	}
 
@@ -387,19 +372,15 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		}
 	}
 
-	gpuPlan, err := profile.BuildGPUSchedulingPlan(p)
-	if err != nil {
-		return nil, err
+	gpu := p.Resources.GPU
+	if o.Launcher == "torchrun" && o.ProcessesPerNode > 1 && gpu.Count == 0 {
+		return nil, fmt.Errorf("processes_per_node (%d) with torchrun requires a known GPU count, but the profile does not declare one", o.ProcessesPerNode)
+	}
+	if o.Launcher == "torchrun" && o.ProcessesPerNode > 0 && gpu.Count > 0 && o.ProcessesPerNode > gpu.Count {
+		return nil, fmt.Errorf("processes_per_node (%d) exceeds profile GPU count (%d)", o.ProcessesPerNode, gpu.Count)
 	}
 
-	if o.Launcher == "torchrun" && o.ProcessesPerNode > 1 && gpuPlan.Contract.Count == 0 {
-		return nil, fmt.Errorf("processes_per_node (%d) with torchrun requires a known GPU count, but the profile does not declare one; set spec.resources.gpu.count in the profile", o.ProcessesPerNode)
-	}
-	if o.Launcher == "torchrun" && o.ProcessesPerNode > 0 && gpuPlan.Contract.Count > 0 && o.ProcessesPerNode > gpuPlan.Contract.Count {
-		return nil, fmt.Errorf("processes_per_node (%d) exceeds profile GPU count (%d)", o.ProcessesPerNode, gpuPlan.Contract.Count)
-	}
-
-	job, err := buildJob(p, o, image, cmd, env, topologyPlan, storagePlan, gpuPlan, storageContract, hasStorageContract)
+	job, err := buildJob(p, o, image, cmd, env, topologyPlan, storagePlan, gpu)
 	if err != nil {
 		return nil, err
 	}
@@ -509,12 +490,10 @@ func resolveImage(p profile.Profile, o Options) (string, error) {
 	if o.Image != "" {
 		return o.Image, nil
 	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if img, ok := rt["image"].(string); ok && img != "" {
-			return img, nil
-		}
+	if p.Runtime.Image != "" {
+		return p.Runtime.Image, nil
 	}
-	return "", fmt.Errorf("no image: profile %q declares no spec.runtime.image and --image was not set", p.Name)
+	return "", fmt.Errorf("no image: profile %q declares no runtime image and --image was not set", p.Name)
 }
 
 // RequirePythonEntrypoint rejects an entrypoint torchrun cannot execute.
@@ -731,7 +710,7 @@ func isPythonShebang(shebang string) bool {
 // We deliberately avoid k8s.io/api/batch/v1 to keep the binary small —
 // shelling out to kubectl with rendered YAML is the contract; we don't
 // need typed objects for V0.
-func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv map[string]string, topologyPlan topology.Plan, storagePlan storagePlan, gpuPlan profile.GPUSchedulingPlan, storageContract profile.StorageContract, hasStorageContract bool) (map[string]any, error) {
+func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv map[string]string, topologyPlan topology.Plan, storagePlan storagePlan, gpu profile.GPUContract) (map[string]any, error) {
 	if err := topology.ValidateGPUClassNodeSelector(topologyPlan.Labels[workloadmeta.LabelGPUClass], o.NodeSelector); err != nil {
 		return nil, err
 	}
@@ -746,25 +725,14 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			labels[k] = v
 		}
 	}
-	for k, v := range gpuPlan.Labels {
+	for k, v := range gpu.Labels() {
 		if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
 			labels[k] = v
 		}
 	}
-	if hasStorageContract {
-		for k, v := range storageContract.Labels() {
-			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
-				labels[k] = v
-			}
-		}
-	}
 	queueName := topologyPlan.QueueName
-	if q, ok := p.Spec["queue"].(map[string]any); ok {
-		if queueName == "" {
-			if lq, ok := q["localQueue"].(string); ok && lq != "" {
-				queueName = lq
-			}
-		}
+	if queueName == "" {
+		queueName = p.Queue
 	}
 	if strings.TrimSpace(queueName) == "" {
 		return nil, fmt.Errorf("render suspended Job: Kueue LocalQueue is required")
@@ -779,38 +747,14 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if o.ServiceAccountName != "" {
 		pod["serviceAccountName"] = o.ServiceAccountName
 	}
-	// Grace period: default 600s for checkpoint flush on SIGTERM; profile
-	// may override via spec.policy.terminationGracePeriodSeconds; the
-	// CLI option (o.TerminationGracePeriodSeconds) wins over both.
+	// Grace period: default 600s for checkpoint flush on SIGTERM; the CLI
+	// option overrides the default.
 	grace := int64(600)
-	if pol, ok := p.Spec["policy"].(map[string]any); ok {
-		if g, ok := pol["terminationGracePeriodSeconds"]; ok {
-			if gi, ok := toInt64(g); ok && gi >= 0 {
-				grace = gi
-			}
-		}
-	}
 	if o.TerminationGracePeriodSeconds > 0 {
 		grace = o.TerminationGracePeriodSeconds
 	}
 	pod["terminationGracePeriodSeconds"] = grace
-	var profileTolerations any
-	if sched, ok := p.Spec["scheduling"].(map[string]any); ok {
-		if ns, ok := sched["nodeSelector"]; ok {
-			if selector := profileNodeSelector(ns, topologyPlan); len(selector) > 0 {
-				pod["nodeSelector"] = selector
-			}
-		}
-		if tols, ok := sched["tolerations"]; ok {
-			profileTolerations = tols
-		}
-		if pc, ok := sched["priorityClassName"].(string); ok && pc != "" {
-			if !(o.DisableDefaultPriorities && isTauDefaultPriorityClass(pc)) {
-				pod["priorityClassName"] = pc
-			}
-		}
-	}
-	if tols := gpuTolerations(profileTolerations, profile.GPURequestPlanFromProfile(p)); len(tols) > 0 {
+	if tols := gpuTolerations(gpu.Count); len(tols) > 0 {
 		pod["tolerations"] = tols
 	}
 	if topologyPlan.PodPriorityClassName != "" {
@@ -847,33 +791,21 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		}
 		pod["nodeSelector"] = selector
 	}
-	if gpuPlan.PackingAffinity != nil {
-		pod["affinity"] = gpuPlan.PackingAffinity
-	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if secrets := normalizeImagePullSecrets(rt["imagePullSecrets"]); len(secrets) > 0 {
-			pod["imagePullSecrets"] = secrets
-		}
-	}
-
 	// Container spec.
 	container := map[string]any{
 		"name":  "main",
 		"image": image,
 	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if pp, ok := rt["imagePullPolicy"].(string); ok && pp != "" {
-			container["imagePullPolicy"] = pp
-		}
-		if securityContext, ok := rt["securityContext"]; ok {
-			container["securityContext"] = securityContext
-		}
+	if p.Runtime.ImagePullPolicy != "" {
+		container["imagePullPolicy"] = p.Runtime.ImagePullPolicy
+	}
+	if p.Runtime.SecurityContext != nil {
+		container["securityContext"] = p.Runtime.SecurityContext
 	}
 	if len(cmd) > 0 {
 		container["command"] = cmd
 	}
 
-	// Env: profile-declared env first, then extraEnv (script-injected) wins.
 	envList, err := buildEnvList(p, extraEnv, o.EnvSecrets, o.RedactSecrets)
 	if err != nil {
 		return nil, err
@@ -882,31 +814,22 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		container["env"] = envList
 	}
 
-	// Resources: CPU/memory requests, plus GPU via device-plugin or DRA.
+	// Resources: CPU/memory requests, plus device-plugin GPUs.
 	resources := map[string]any{}
-	if res, ok := p.Spec["resources"].(map[string]any); ok {
-		if req, ok := res["requests"]; ok {
-			resources["requests"] = req
-		}
-		if lim, ok := res["limits"]; ok {
-			resources["limits"] = lim
-		}
+	if p.Resources.Requests != nil {
+		resources["requests"] = p.Resources.Requests
+	}
+	if p.Resources.Limits != nil {
+		resources["limits"] = p.Resources.Limits
 	}
 	applyContainerResourceOverrides(resources, o)
-	resourceClaims, err := profile.ApplyGPUResources(resources, profile.GPURequestPlanFromProfile(p))
-	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
-	}
-
-	if len(resourceClaims) > 0 {
-		pod["resourceClaims"] = resourceClaims
-	}
+	profile.AddGPUResources(resources, gpu.Count)
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
-	// Optional persistent storage. Profile persistence and run overrides can
-	// mount arbitrary PVCs; durable /data also gets hot /mnt scratch with a
-	// command preflight that falls back to /data when /mnt is unavailable.
+	// Optional persistent storage. Run overrides can mount arbitrary PVCs;
+	// durable /data also gets hot /mnt scratch with a command preflight that
+	// falls back to /data when /mnt is unavailable.
 	if len(storagePlan.Volumes) > 0 {
 		volumes := make([]any, 0, len(storagePlan.Volumes))
 		for _, v := range storagePlan.Volumes {
@@ -994,16 +917,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			podLabels[k] = v
 		}
 	}
-	for k, v := range gpuPlan.Labels {
+	for k, v := range gpu.Labels() {
 		if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
 			podLabels[k] = v
-		}
-	}
-	if hasStorageContract {
-		for k, v := range storageContract.Labels() {
-			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
-				podLabels[k] = v
-			}
 		}
 	}
 	podLabels[workloadmeta.LabelManagedBy] = workloadmeta.ManagedByValue
@@ -1013,12 +929,8 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	podMetadata := map[string]any{
 		"labels": podLabels,
 	}
-	storageAnnotations := map[string]string{}
-	if hasStorageContract {
-		storageAnnotations = storageContract.Annotations()
-	}
 	correlationAnnotations := workloadmeta.PodCorrelationAnnotations(o.Annotations)
-	if len(correlationAnnotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpuPlan.Annotations) > 0 || len(storageAnnotations) > 0 {
+	if len(correlationAnnotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 {
 		podAnnotations := map[string]any{}
 		for k, v := range correlationAnnotations {
 			podAnnotations[k] = v
@@ -1028,12 +940,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 				podAnnotations[k] = v
 			}
 		}
-		for k, v := range gpuPlan.Annotations {
-			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
-				podAnnotations[k] = v
-			}
-		}
-		for k, v := range storageAnnotations {
+		for k, v := range gpu.Annotations() {
 			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
 				podAnnotations[k] = v
 			}
@@ -1066,10 +973,8 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		jobSpec["completions"] = int64(o.Nodes)
 		jobSpec["parallelism"] = int64(o.Nodes)
 	}
-	if pol, ok := p.Spec["policy"].(map[string]any); ok {
-		if d, ok := pol["activeDeadlineSeconds"]; ok {
-			jobSpec["activeDeadlineSeconds"] = d
-		}
+	if p.ActiveDeadlineSeconds > 0 {
+		jobSpec["activeDeadlineSeconds"] = p.ActiveDeadlineSeconds
 	}
 	// Options override wins over profile policy.
 	if o.ActiveDeadlineSeconds > 0 {
@@ -1087,7 +992,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	// local map below, not o.Annotations: Options is passed by value but its
 	// map header is shared, so stamping there leaks onto the next render.
 	checkpointArtifact := strings.TrimSpace(o.CheckpointArtifact)
-	if len(o.Annotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpuPlan.Annotations) > 0 || len(storageAnnotations) > 0 || hasExecution || checkpointArtifact != "" {
+	if len(o.Annotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 || hasExecution || checkpointArtifact != "" {
 		annotations := map[string]any{}
 		if checkpointArtifact != "" {
 			annotations[workloadmeta.AnnotationCheckpointArtifact] = checkpointArtifact
@@ -1102,12 +1007,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 				annotations[k] = v
 			}
 		}
-		for k, v := range gpuPlan.Annotations {
-			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
-				annotations[k] = v
-			}
-		}
-		for k, v := range storageAnnotations {
+		for k, v := range gpu.Annotations() {
 			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
 				annotations[k] = v
 			}
@@ -1116,9 +1016,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			nproc := max(o.ProcessesPerNode, 1)
 			nodes := max(o.Nodes, 1)
 			annotations[workloadmeta.AnnotationSpecExecution] = fmt.Sprintf(`{"launcher":%q,"processes_per_node":%d,"nodes":%d}`, o.Launcher, nproc, nodes)
-		}
-		if o.Nodes > 1 {
-			annotations[workloadmeta.AnnotationMultiKueueIncompatible] = "indexed-job-headless-service"
 		}
 		if len(annotations) > 0 {
 			metadata["annotations"] = annotations
@@ -1287,12 +1184,8 @@ func copyResourceQuantities(existing any) map[string]any {
 	return out
 }
 
-func buildStoragePlan(p profile.Profile, o Options, contract profile.StorageContract, hasContract bool) (storagePlan, error) {
+func buildStoragePlan(o Options) (storagePlan, error) {
 	var plan storagePlan
-	if err := addProfilePersistence(&plan, p); err != nil {
-		return storagePlan{}, err
-	}
-
 	if o.PVCMount != "" {
 		plan.removeMountPath(storage.DurableRoot)
 		plan.removeVolumeName("data")
@@ -1323,11 +1216,6 @@ func buildStoragePlan(p profile.Profile, o Options, contract profile.StorageCont
 		}
 	}
 	if plan.HasDurableData && !plan.hasMountPath(storage.HotRoot) {
-		if hasContract {
-			if hot, ok := contract.Role(profile.StorageRoleHotScratch); ok && hot.Type != "" && hot.Type != profile.StorageTypeEmptyDir {
-				return storagePlan{}, fmt.Errorf("profile %q storage.hot.type=%q at %s requires an explicit mount; the Job path only synthesizes empty-dir hot scratch", p.Name, hot.Type, storage.HotRoot)
-			}
-		}
 		if err := plan.addVolumeMount(
 			Volume{Name: "tau-hot"},
 			VolumeMount{Name: "tau-hot", MountPath: storage.HotRoot},
@@ -1338,149 +1226,24 @@ func buildStoragePlan(p profile.Profile, o Options, contract profile.StorageCont
 	return plan, nil
 }
 
-// gpuTolerations returns the pod tolerations for a workload, combining the
-// profile's spec.scheduling.tolerations with the two taints AKS GPU node pools
-// carry: the "sku=gpu" pool taint and the device plugin's "nvidia.com/gpu".
+// gpuTolerations returns the pod tolerations for the two taints AKS GPU node
+// pools carry: the "sku=gpu" pool taint and the device plugin's
+// "nvidia.com/gpu".
 // Kueue unions a pod set's own tolerations with the admitting ResourceFlavor's
 // before filtering nodes, so injecting these lets a GPU workload schedule onto
-// a tainted pool even when the flavor omits them. Tolerations only ever widen
-// where a pod may land, so profile entries are kept rather than replaced.
-//
-// The GPU test mirrors ApplyGPUResources: a device-plugin profile requests GPUs
-// through Count, a DRA profile through ClaimTemplate. Gating on Count alone
-// would leave DRA workloads without tolerations.
-func gpuTolerations(profileRaw any, gpu profile.GPURequestPlan) []any {
-	var out []any
-	seen := map[string]bool{}
-	add := func(t any) {
-		key := tolerationIdentity(t)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		out = append(out, t)
-	}
-	switch tols := profileRaw.(type) {
-	case nil:
-	case []any:
-		for _, t := range tols {
-			add(t)
-		}
-	default:
-		// An unrecognized shape is passed through so the API server rejects it
-		// loudly, rather than being dropped here where nothing reports it.
-		add(tols)
-	}
-	if gpu.Count > 0 || gpu.ClaimTemplate != "" {
-		add(map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"})
-		add(map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"})
-	}
-	return out
-}
-
-// tolerationIdentity keys a toleration by the fields Kubernetes matches on, so
-// a profile that already declares one of the GPU tolerations does not get a
-// duplicate. tolerationSeconds is part of the key because two entries differing
-// only in it are genuinely different. Entries that are not maps key on their
-// rendered value, so an unrecognized shape is passed through rather than
-// collapsed into another.
-func tolerationIdentity(t any) string {
-	m, ok := t.(map[string]any)
-	if !ok {
-		return fmt.Sprintf("%v", t)
-	}
-	return fmt.Sprintf("%v|%v|%v|%v|%v", m["key"], m["operator"], m["value"], m["effect"], m["tolerationSeconds"])
-}
-
-func profileNodeSelector(raw any, topologyPlan topology.Plan) map[string]any {
-	out := map[string]any{}
-	switch selector := raw.(type) {
-	case map[string]any:
-		for k, v := range selector {
-			if k != "" && v != nil && !strings.HasPrefix(k, workloadmeta.Domain) {
-				out[k] = v
-			}
-		}
-	case map[string]string:
-		for k, v := range selector {
-			if k != "" && v != "" && !strings.HasPrefix(k, workloadmeta.Domain) {
-				out[k] = v
-			}
-		}
-	default:
+// a tainted pool even when the flavor omits them.
+func gpuTolerations(count int) []any {
+	if count <= 0 {
 		return nil
 	}
-	return out
+	return []any{
+		map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},
+		map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
+	}
 }
 
 func isGeneratedTauMetadataKey(key string) bool {
 	return strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelGPUClass
-}
-
-func isTauDefaultPriorityClass(name string) bool {
-	return name == topology.DefaultTrainPodPriority || name == topology.DefaultElasticWorkloadPrio
-}
-
-func addProfilePersistence(plan *storagePlan, p profile.Profile) error {
-	res, ok := p.Spec["resources"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	raw, ok := res["persistence"]
-	if !ok {
-		return nil
-	}
-	switch v := raw.(type) {
-	case map[string]any:
-		if err := addPersistenceEntry(plan, v, 0); err != nil {
-			return fmt.Errorf("profile %q spec.resources.persistence: %w", p.Name, err)
-		}
-		return nil
-	case []any:
-		for i, item := range v {
-			entry, ok := item.(map[string]any)
-			if !ok {
-				return fmt.Errorf("profile %q spec.resources.persistence[%d] must be a map", p.Name, i)
-			}
-			if err := addPersistenceEntry(plan, entry, i); err != nil {
-				return fmt.Errorf("profile %q spec.resources.persistence[%d]: %w", p.Name, i, err)
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("profile %q spec.resources.persistence must be a map or list", p.Name)
-	}
-}
-
-func addPersistenceEntry(plan *storagePlan, entry map[string]any, idx int) error {
-	pvc, ok := entry["pvcName"].(string)
-	if !ok || pvc == "" {
-		return errors.New("pvcName is required")
-	}
-	mountPath, ok := entry["mountPath"].(string)
-	if !ok || mountPath == "" {
-		return errors.New("mountPath is required")
-	}
-	readOnly := false
-	if raw, ok := entry["readOnly"]; ok {
-		var boolOK bool
-		readOnly, boolOK = raw.(bool)
-		if !boolOK {
-			return errors.New("readOnly must be boolean")
-		}
-	}
-	name := generatedPersistenceVolumeName(mountPath, idx)
-	return plan.addVolumeMount(
-		Volume{Name: name, PVC: pvc},
-		VolumeMount{Name: name, MountPath: mountPath, ReadOnly: readOnly},
-	)
-}
-
-func generatedPersistenceVolumeName(mountPath string, idx int) string {
-	if mountPath == storage.DurableRoot {
-		return "data"
-	}
-	return fmt.Sprintf("persistence-%d", idx)
 }
 
 func (p *storagePlan) addVolumeMount(v Volume, vm VolumeMount) error {
@@ -1875,53 +1638,9 @@ exit "$status"
 `
 }
 
-func normalizeImagePullSecrets(raw any) []any {
-	switch v := raw.(type) {
-	case string:
-		if v == "" {
-			return nil
-		}
-		return []any{map[string]any{"name": v}}
-	case []string:
-		out := make([]any, 0, len(v))
-		for _, name := range v {
-			if name != "" {
-				out = append(out, map[string]any{"name": name})
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(v))
-		for _, item := range v {
-			switch s := item.(type) {
-			case string:
-				if s != "" {
-					out = append(out, map[string]any{"name": s})
-				}
-			case map[string]any:
-				if name, ok := s["name"].(string); ok && name != "" {
-					out = append(out, map[string]any{"name": name})
-				}
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
 func buildEnvList(p profile.Profile, extra map[string]string, secrets []envspec.Var, redactSecrets bool) ([]any, error) {
 	merged := map[string]string{
 		"TAU_PROFILE": p.Name,
-	}
-	if rt, ok := p.Spec["runtime"].(map[string]any); ok {
-		if envMap, ok := rt["env"].(map[string]any); ok {
-			for k, v := range envMap {
-				if s, ok := v.(string); ok {
-					merged[k] = s
-				}
-			}
-		}
 	}
 	for k, v := range extra {
 		merged[k] = v
@@ -2056,21 +1775,4 @@ func buildHeadlessService(o Options) map[string]any {
 			},
 		},
 	}
-}
-
-// toInt64 coerces numeric values that YAML/JSON decoders produce into
-// int64. YAML gives us `int`, `int64`, or `float64` depending on size
-// and source. Returns (0, false) for anything non-numeric.
-func toInt64(v any) (int64, bool) {
-	switch x := v.(type) {
-	case int:
-		return int64(x), true
-	case int32:
-		return int64(x), true
-	case int64:
-		return x, true
-	case float64:
-		return int64(x), true
-	}
-	return 0, false
 }

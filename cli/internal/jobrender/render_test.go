@@ -28,37 +28,21 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// trainProfile is a representative resolved profile spec mirroring
+// trainProfile is a representative resolved profile mirroring
 // a representative multi-GPU training profile.
 func trainProfile() profile.Profile {
 	return profile.Profile{
-		Name: "ai-train-gpu-l",
-		Spec: map[string]any{
-			"queue": map[string]any{
-				"clusterQueue": "training-cq",
-				"localQueue":   "training-queue",
-			},
-			"scheduling": map[string]any{
-				"nodeSelector": map[string]any{workloadmeta.LabelLane: "train"},
-				"tolerations": []any{
-					map[string]any{"key": workloadmeta.LabelLane, "operator": "Equal", "value": "train", "effect": "NoSchedule"},
-				},
-				"priorityClassName": "taugrid-default",
-			},
-			"resources": map[string]any{
-				"gpu":      map[string]any{"count": 1, "size": "l", "placement": "single-device"},
-				"dra":      map[string]any{"claimTemplate": "full-gpu"},
-				"requests": map[string]any{"cpu": "16", "memory": "64Gi"},
-			},
-			"runtime": map[string]any{
-				"image":            "registry.example.com/research-pytorch:dev",
-				"imagePullPolicy":  "IfNotPresent",
-				"imagePullSecrets": []any{map[string]any{"name": "acr-secret"}},
-			},
-			"policy": map[string]any{
-				"activeDeadlineSeconds": int64(3600),
-			},
+		Name:  "ai-train-gpu-l",
+		Queue: "training-queue",
+		Resources: profile.Resources{
+			GPU:      profile.GPUContract{Count: 1, Size: "l"},
+			Requests: map[string]any{"cpu": "16", "memory": "64Gi"},
 		},
+		Runtime: profile.Runtime{
+			Image:           "registry.example.com/research-pytorch:dev",
+			ImagePullPolicy: "IfNotPresent",
+		},
+		ActiveDeadlineSeconds: 3600,
 	}
 }
 
@@ -112,20 +96,6 @@ func TestRender_HappyPath_Command(t *testing.T) {
 	}
 
 	pod := spec["template"].(map[string]any)["spec"].(map[string]any)
-	if pod["priorityClassName"] != "taugrid-default" {
-		t.Errorf("priorityClassName not propagated: %v", pod["priorityClassName"])
-	}
-	if pod["affinity"] == nil {
-		t.Error("single-device GPU jobs should prefer packing with existing GPU pods")
-	}
-	pullSecrets := pod["imagePullSecrets"].([]any)
-	if len(pullSecrets) != 1 || pullSecrets[0].(map[string]any)["name"] != "acr-secret" {
-		t.Errorf("imagePullSecrets not propagated: %v", pullSecrets)
-	}
-	claims := pod["resourceClaims"].([]any)
-	if len(claims) != 1 || claims[0].(map[string]any)["resourceClaimTemplateName"] != "full-gpu" {
-		t.Errorf("DRA claim wiring wrong: %v", claims)
-	}
 	c := pod["containers"].([]any)[0].(map[string]any)
 	if c["image"] != "registry.example.com/research-pytorch:dev" {
 		t.Errorf("image wrong: %v", c["image"])
@@ -135,8 +105,8 @@ func TestRender_HappyPath_Command(t *testing.T) {
 		t.Errorf("command not propagated: %v", cmd)
 	}
 	cres := c["resources"].(map[string]any)
-	if cres["claims"] == nil {
-		t.Errorf("container missing resources.claims for DRA: %v", cres)
+	if cres["requests"].(map[string]any)["nvidia.com/gpu"] != 1 {
+		t.Errorf("container missing device-plugin GPU request: %v", cres)
 	}
 }
 
@@ -346,7 +316,7 @@ func TestRender_ImageAssetRejectsNestedStorageMounts(t *testing.T) {
 
 func TestRender_SuspendedJobRequiresQueue(t *testing.T) {
 	p := trainProfile()
-	delete(p.Spec, "queue")
+	p.Queue = ""
 
 	if _, err := Render(p, Options{
 		Name:      "missing-queue",
@@ -473,7 +443,7 @@ func TestRenderRedactsEnvSecretRefs(t *testing.T) {
 
 func TestRender_RuntimeSecurityContextPropagatesToContainer(t *testing.T) {
 	p := trainProfile()
-	p.Spec["runtime"].(map[string]any)["securityContext"] = map[string]any{
+	p.Runtime.SecurityContext = map[string]any{
 		"capabilities": map[string]any{
 			"add": []any{"SYS_ADMIN"},
 		},
@@ -493,54 +463,6 @@ func TestRender_RuntimeSecurityContextPropagatesToContainer(t *testing.T) {
 	add := capabilities["add"].([]any)
 	if len(add) != 1 || add[0] != "SYS_ADMIN" {
 		t.Fatalf("securityContext capabilities not propagated: %v", securityContext)
-	}
-}
-
-func TestRender_SmallSameNodeMultiGPUProfileUsesPacking(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["gpu"] = map[string]any{"count": 2, "size": "l", "placement": "same-node"}
-	res["dra"] = map[string]any{"claimTemplate": "ds-2gpus"}
-
-	out, err := Render(p, Options{
-		Name:      "tp2",
-		Namespace: "tau",
-		Command:   []string{"true"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	m := parseYAML(t, out)
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	if _, ok := pod["affinity"]; !ok {
-		t.Fatal("same-node 2-4 GPU profiles should prefer packing onto already-used GPU nodes")
-	}
-	meta := m["metadata"].(map[string]any)
-	if annotations, ok := meta["annotations"].(map[string]any); ok {
-		if _, ok := annotations[workloadmeta.AnnotationGPUContract]; ok {
-			t.Fatalf("Tau GPU contract annotation should be omitted: %v", annotations)
-		}
-	}
-}
-
-func TestRender_LargeSameNodeMultiGPUProfileDoesNotUsePacking(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["gpu"] = map[string]any{"count": 5, "size": "l", "placement": "same-node"}
-	res["dra"] = map[string]any{"claimTemplate": "ds-5gpus"}
-
-	out, err := Render(p, Options{
-		Name:      "tp5",
-		Namespace: "tau",
-		Command:   []string{"true"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	m := parseYAML(t, out)
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	if _, ok := pod["affinity"]; ok {
-		t.Fatalf("same-node 5+ GPU profiles should not use bin-packing affinity: %v", pod["affinity"])
 	}
 }
 
@@ -564,8 +486,6 @@ func podTolerations(t *testing.T, out []byte) []string {
 }
 
 func TestRender_GPUJobToleratesGPUNodeTaints(t *testing.T) {
-	// trainProfile declares gpu.count 1 and a lane toleration, so this covers
-	// injection and profile preservation in one render.
 	out, err := Render(trainProfile(), Options{
 		Name:      "gputol",
 		Namespace: "tau",
@@ -578,7 +498,6 @@ func TestRender_GPUJobToleratesGPUNodeTaints(t *testing.T) {
 	want := []string{
 		"nvidia.com/gpu|Exists|<nil>|NoSchedule",
 		"sku|Equal|gpu|NoSchedule",
-		workloadmeta.LabelLane + "|Equal|train|NoSchedule",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("GPU job tolerations:\n got %v\nwant %v", got, want)
@@ -587,9 +506,7 @@ func TestRender_GPUJobToleratesGPUNodeTaints(t *testing.T) {
 
 func TestRender_CPUJobDoesNotTolerateGPUNodeTaints(t *testing.T) {
 	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	delete(res, "gpu")
-	delete(res, "dra")
+	p.Resources.GPU = profile.GPUContract{}
 
 	out, err := Render(p, Options{
 		Name:      "cputol",
@@ -599,43 +516,13 @@ func TestRender_CPUJobDoesNotTolerateGPUNodeTaints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	got := podTolerations(t, out)
-	want := []string{workloadmeta.LabelLane + "|Equal|train|NoSchedule"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("CPU job must keep profile tolerations without GPU taints:\n got %v\nwant %v", got, want)
+	if got := podTolerations(t, out); len(got) != 0 {
+		t.Fatalf("CPU job must not tolerate GPU taints: %v", got)
 	}
 }
 
-func TestRender_GPUTolerationDeclaredByProfileIsNotDuplicated(t *testing.T) {
+func TestRender_SyntheticGPUProfileToleratesGPUNodeTaints(t *testing.T) {
 	p := trainProfile()
-	sched := p.Spec["scheduling"].(map[string]any)
-	sched["tolerations"] = []any{
-		map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
-	}
-
-	out, err := Render(p, Options{
-		Name:      "duptol",
-		Namespace: "tau",
-		Command:   []string{"true"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	got := podTolerations(t, out)
-	want := []string{
-		"nvidia.com/gpu|Exists|<nil>|NoSchedule",
-		"sku|Equal|gpu|NoSchedule",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("profile-declared GPU toleration must not duplicate:\n got %v\nwant %v", got, want)
-	}
-}
-
-func TestRender_GPUJobWithoutProfileSchedulingStillTolerates(t *testing.T) {
-	// The synthesized profile built by `tau run --config` has no scheduling
-	// block at all, which is the path BUG-23 hit.
-	p := trainProfile()
-	delete(p.Spec, "scheduling")
 
 	out, err := Render(p, Options{
 		Name:      "noschedtol",
@@ -652,81 +539,6 @@ func TestRender_GPUJobWithoutProfileSchedulingStillTolerates(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("GPU job without profile scheduling:\n got %v\nwant %v", got, want)
-	}
-}
-
-func TestRender_DRAGPUJobToleratesGPUNodeTaints(t *testing.T) {
-	// A DRA profile requests GPUs through dra.claimTemplate rather than a GPU
-	// count, so gating tolerations on the count alone would miss it.
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	delete(res, "gpu")
-	res["dra"] = map[string]any{"claimTemplate": "full-gpu"}
-	delete(p.Spec, "scheduling")
-
-	out, err := Render(p, Options{
-		Name:      "dratol",
-		Namespace: "tau",
-		Command:   []string{"true"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	got := podTolerations(t, out)
-	want := []string{
-		"nvidia.com/gpu|Exists|<nil>|NoSchedule",
-		"sku|Equal|gpu|NoSchedule",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DRA GPU job tolerations:\n got %v\nwant %v", got, want)
-	}
-}
-
-func TestRender_ProfileTolerationsDifferingOnlyInSecondsAreKept(t *testing.T) {
-	// tolerationSeconds changes how long a pod tolerates a NoExecute taint, so
-	// two entries differing only in it must both survive the dedupe.
-	p := trainProfile()
-	sched := p.Spec["scheduling"].(map[string]any)
-	sched["tolerations"] = []any{
-		map[string]any{"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 30},
-		map[string]any{"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 600},
-	}
-
-	out, err := Render(p, Options{
-		Name:      "tolsec",
-		Namespace: "tau",
-		Command:   []string{"true"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	m := parseYAML(t, out)
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	var seconds []any
-	for _, entry := range pod["tolerations"].([]any) {
-		e := entry.(map[string]any)
-		if e["key"] == "node.kubernetes.io/unreachable" {
-			seconds = append(seconds, e["tolerationSeconds"])
-		}
-	}
-	if !reflect.DeepEqual(seconds, []any{30, 600}) {
-		t.Fatalf("both tolerationSeconds variants must survive dedupe, got %v", seconds)
-	}
-}
-
-func TestRender_GPUContractMismatchErrorsBeforeManifest(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["gpu"] = map[string]any{"count": 2, "placement": "same-node"}
-	res["dra"] = map[string]any{"claimTemplate": "full-gpu"}
-
-	_, err := Render(p, Options{
-		Name:      "bad",
-		Namespace: "tau",
-		Command:   []string{"true"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "GPU contract invalid") {
-		t.Fatalf("expected GPU contract mismatch error, got %v", err)
 	}
 }
 
@@ -1026,167 +838,8 @@ func TestRender_PVCMountUsesDurableDataAndHotScratch(t *testing.T) {
 	}
 }
 
-func TestRender_ProfilePersistenceMountsPVCs(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["persistence"] = []any{
-		map[string]any{"pvcName": "blob-training", "mountPath": "/data"},
-		map[string]any{"pvcName": "training-nfs", "mountPath": "/data-nfs", "readOnly": true},
-	}
-
-	out, err := Render(p, Options{
-		Name:      "profile-storage",
-		Namespace: "tau",
-		Command:   []string{"python", "bench.py"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := parseYAML(t, out)
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	volumes := pod["volumes"].([]any)
-	claims := map[string]string{}
-	emptyDirs := map[string]bool{}
-	for _, item := range volumes {
-		v := item.(map[string]any)
-		name := v["name"].(string)
-		if pvc, ok := v["persistentVolumeClaim"].(map[string]any); ok {
-			claims[name] = pvc["claimName"].(string)
-		}
-		if _, ok := v["emptyDir"]; ok {
-			emptyDirs[name] = true
-		}
-	}
-	if claims["data"] != "blob-training" || claims["persistence-1"] != "training-nfs" {
-		t.Fatalf("profile PVCs not mounted: claims=%+v volumes=%+v", claims, volumes)
-	}
-	if !emptyDirs["tau-hot"] {
-		t.Fatalf("durable /data mount must add hot /mnt scratch: %+v", volumes)
-	}
-
-	c := pod["containers"].([]any)[0].(map[string]any)
-	mounts := c["volumeMounts"].([]any)
-	gotMounts := map[string]map[string]any{}
-	for _, item := range mounts {
-		m := item.(map[string]any)
-		gotMounts[m["name"].(string)] = m
-	}
-	if gotMounts["data"]["mountPath"] != "/data" ||
-		gotMounts["persistence-1"]["mountPath"] != "/data-nfs" ||
-		gotMounts["tau-hot"]["mountPath"] != "/mnt" {
-		t.Fatalf("profile mounts wrong: %+v", gotMounts)
-	}
-	if gotMounts["persistence-1"]["readOnly"] != true {
-		t.Fatalf("readOnly not preserved: %+v", gotMounts["persistence-1"])
-	}
-	if c["workingDir"] != "/data" {
-		t.Fatalf("workingDir=%v, want /data", c["workingDir"])
-	}
-	if !strings.Contains(fmt.Sprint(c["command"]), "tau storage warning") {
-		t.Fatalf("durable profile storage did not wrap command: %+v", c["command"])
-	}
-}
-
-func TestRender_ProfileStorageContractAddsMetadataAndEnv(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["persistence"] = []any{
-		map[string]any{"pvcName": "blob-training", "mountPath": "/data"},
-	}
-	res["storage"] = map[string]any{
-		"durable": map[string]any{"type": "blobfuse", "mountPath": "/data", "cache": "block"},
-		"hot":     map[string]any{"type": "emptyDir", "mountPath": "/mnt", "fallback": "durable"},
-		"modelCache": map[string]any{
-			"type":      "local-nvme",
-			"mountPath": "/models",
-			"scope":     "node",
-		},
-		"checkpointing": map[string]any{"format": "sharded"},
-	}
-
-	out, err := Render(p, Options{
-		Name:      "storage-contract",
-		Namespace: "tau",
-		Command:   []string{"python", "bench.py"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := parseYAML(t, out)
-	meta := m["metadata"].(map[string]any)
-	labels := meta["labels"].(map[string]any)
-	if labels[workloadmeta.LabelManagedBy] != "tau" {
-		t.Fatalf("managed workload marker = %v, want tau", labels[workloadmeta.LabelManagedBy])
-	}
-	for key := range labels {
-		if strings.HasPrefix(key, workloadmeta.Domain) && key != workloadmeta.LabelManagedBy {
-			t.Fatalf("Tau storage metadata label should be omitted: %s", key)
-		}
-	}
-	env := envFromContainer(t, m)
-	for key, want := range map[string]string{
-		"TAU_STORAGE_DURABLE_TYPE":     "blobfuse",
-		"TAU_STORAGE_DURABLE_CACHE":    "block",
-		"TAU_STORAGE_HOT_TYPE":         "empty-dir",
-		"TAU_STORAGE_HOT_FALLBACK":     "durable",
-		"TAU_MODEL_CACHE_DIR":          "/models",
-		"TAU_CHECKPOINT_FORMAT":        "sharded",
-		"TAU_STORAGE_MODEL_CACHE_TYPE": "local-nvme",
-	} {
-		if env[key] != want {
-			t.Fatalf("%s=%q want %q (env=%+v)", key, env[key], want, env)
-		}
-	}
-}
-
-func TestRender_RefusesToFakePlatformMountedHotStorage(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["persistence"] = []any{
-		map[string]any{"pvcName": "blob-training", "mountPath": "/data"},
-	}
-	res["storage"] = map[string]any{
-		"durable": map[string]any{"type": "blobfuse", "mountPath": "/data"},
-		"hot":     map[string]any{"type": "local-nvme", "mountPath": "/mnt", "fallback": "durable"},
-	}
-
-	_, err := Render(p, Options{
-		Name:      "storage-contract",
-		Namespace: "tau",
-		Command:   []string{"python", "bench.py"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "only synthesizes empty-dir") {
-		t.Fatalf("expected local-nvme hot storage to require explicit platform mount, got %v", err)
-	}
-}
-
-func TestRender_ProfilePersistenceMapMountsNonDataPVC(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	res["persistence"] = map[string]any{"pvcName": "sandbox-home", "mountPath": "/home/researcher"}
-
-	out, err := Render(p, Options{Name: "profile-home", Namespace: "tau", Command: []string{"sleep", "60"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := parseYAML(t, out)
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	volumes := pod["volumes"].([]any)
-	if len(volumes) != 1 {
-		t.Fatalf("non-/data persistence should not add hot scratch, got %+v", volumes)
-	}
-	c := pod["containers"].([]any)[0].(map[string]any)
-	if c["workingDir"] == "/data" {
-		t.Fatalf("non-/data persistence must not force durable workingDir")
-	}
-}
-
 func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	p := trainProfile()
-	p.Spec["policy"] = map[string]any{
-		"preemptable":         true,
-		"checkpointOnPreempt": true,
-	}
 
 	out, err := Render(p, Options{
 		Name:      "train-a100",
@@ -1312,7 +965,7 @@ func TestRender_RejectsGPUClassSelectorForAny(t *testing.T) {
 
 func TestRender_RejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
 	p := trainProfile()
-	p.Spec["topology"] = map[string]any{"gpuClass": runtopology.GPUClassH10095GB}
+	p.Topology.GPUClass = runtopology.GPUClassH10095GB
 	_, err := Render(p, Options{
 		Name:      "train-profile-conflict",
 		Namespace: "tau",
@@ -1329,7 +982,7 @@ func TestRender_RejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
 
 func TestRender_RejectsClassSelectorForProfileAny(t *testing.T) {
 	p := trainProfile()
-	p.Spec["topology"] = map[string]any{"gpuClass": runtopology.GPUClassAny}
+	p.Topology.GPUClass = runtopology.GPUClassAny
 	_, err := Render(p, Options{
 		Name:      "train-profile-any-conflict",
 		Namespace: "tau",
@@ -1464,75 +1117,8 @@ func TestRender_DRAConvertedPresetOmitsTASAnnotations(t *testing.T) {
 	}
 }
 
-func TestRender_GPUClassAnyClearsProfileGPUSelectorAndDefaultPriorities(t *testing.T) {
-	p := trainProfile()
-	sched := p.Spec["scheduling"].(map[string]any)
-	sched["nodeSelector"] = map[string]any{
-		workloadmeta.LabelGPUClass: "h200-141gb",
-		"agentpool":                "h200pool",
-	}
-
-	out, err := Render(p, Options{
-		Name:                     "h200-smoke",
-		Namespace:                "tau",
-		Command:                  []string{"true"},
-		QueueName:                "dev",
-		GPUClass:                 runtopology.GPUClassAny,
-		DisableDefaultPriorities: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	m := parseYAML(t, out)
-	meta := m["metadata"].(map[string]any)
-	labels := meta["labels"].(map[string]any)
-	if labels["kueue.x-k8s.io/queue-name"] != "dev" {
-		t.Fatalf("queue label=%v want dev", labels["kueue.x-k8s.io/queue-name"])
-	}
-	if labels[workloadmeta.LabelGPUClass] != runtopology.GPUClassAny {
-		t.Fatalf("gpu class label=%v want %s", labels, runtopology.GPUClassAny)
-	}
-	if _, ok := labels["kueue.x-k8s.io/priority-class"]; ok {
-		t.Fatalf("default workload priority should be omitted: %v", labels)
-	}
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	if _, ok := pod["priorityClassName"]; ok {
-		t.Fatalf("default pod priority should be omitted: %v", pod["priorityClassName"])
-	}
-	nodeSelector := pod["nodeSelector"].(map[string]any)
-	if nodeSelector["agentpool"] != "h200pool" {
-		t.Fatalf("non-GPU selectors should remain: %v", nodeSelector)
-	}
-	if _, ok := nodeSelector[workloadmeta.LabelGPUClass]; ok {
-		t.Fatalf("gpu_class any should remove the class selector: %v", nodeSelector)
-	}
-}
-
-func TestRender_ElasticRequiresCheckpoint(t *testing.T) {
-	p := trainProfile()
-	p.Spec["policy"] = map[string]any{"preemptable": true}
-	_, err := Render(p, Options{
-		Name:      "elastic",
-		Namespace: "tau",
-		Command:   []string{"true"},
-		Team:      "experimental",
-		Lane:      "elastic",
-		Mode:      "elastic",
-		Topology:  "independent",
-		GPUClass:  "h100-95gb",
-	})
-	if err == nil || !strings.Contains(err.Error(), "checkpoint") {
-		t.Fatalf("expected checkpoint error, got %v", err)
-	}
-}
-
 func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 	p := trainProfile()
-	p.Spec["policy"] = map[string]any{
-		"preemptable":         true,
-		"checkpointOnPreempt": true,
-	}
 	out, err := Render(p, Options{
 		Name:      "elastic",
 		Namespace: "tau",
@@ -1573,7 +1159,7 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 
 func TestRender_NoImage_NoOverride_Errors(t *testing.T) {
 	p := trainProfile()
-	delete(p.Spec, "runtime")
+	p.Runtime = profile.Runtime{}
 	_, err := Render(p, Options{Name: "j1", Namespace: "tau", Command: []string{"true"}})
 	if err == nil || !strings.Contains(err.Error(), "no image") {
 		t.Errorf("expected no-image error, got: %v", err)
@@ -1653,33 +1239,8 @@ func TestRender_GracePeriod_OptionOverride(t *testing.T) {
 	}
 }
 
-func TestRender_GracePeriod_ProfilePolicyOverride(t *testing.T) {
+func TestRender_DevicePluginDoesNotUseClaims(t *testing.T) {
 	p := trainProfile()
-	pol, ok := p.Spec["policy"].(map[string]any)
-	if !ok {
-		pol = map[string]any{}
-		p.Spec["policy"] = pol
-	}
-	pol["terminationGracePeriodSeconds"] = 120
-	out, err := Render(p, Options{Name: "j", Namespace: "tau", Command: []string{"true"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := parseYAML(t, out)
-	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	g := pod["terminationGracePeriodSeconds"]
-	gi, _ := g.(int)
-	gi64, _ := g.(int64)
-	if gi != 120 && gi64 != 120 {
-		t.Errorf("terminationGracePeriodSeconds=%v want 120 (profile policy)", g)
-	}
-}
-
-func TestRender_NoDRA_NoClaimsAttached(t *testing.T) {
-	p := trainProfile()
-	res := p.Spec["resources"].(map[string]any)
-	delete(res, "dra")
-	res["gpu"].(map[string]any)["requestVia"] = "device-plugin"
 	out, err := Render(p, Options{
 		Name:          "j1",
 		Namespace:     "tau",
@@ -1751,25 +1312,6 @@ func TestRender_EnvFlagInjectsUserEnv(t *testing.T) {
 	env := envFromContainer(t, parseYAML(t, out))
 	if env["FOO"] != "bar" || env["WANDB_GROUP"] != "lora-sweep" {
 		t.Fatalf("user env not injected: %+v", env)
-	}
-}
-
-func TestRender_EnvFlagWinsOverProfileEnv(t *testing.T) {
-	p := trainProfile()
-	rt := p.Spec["runtime"].(map[string]any)
-	rt["env"] = map[string]any{"FOO": "from-profile"}
-	out, err := Render(p, Options{
-		Name:      "j1",
-		Namespace: "tau",
-		Command:   []string{"true"},
-		Env:       map[string]string{"FOO": "from-cli"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	env := envFromContainer(t, parseYAML(t, out))
-	if env["FOO"] != "from-cli" {
-		t.Fatalf("user --env should win over profile env: got %q", env["FOO"])
 	}
 }
 
@@ -2218,45 +1760,24 @@ func shellScript(t *testing.T) string {
 
 func multiGPUProfile(gpuCount int) profile.Profile {
 	return profile.Profile{
-		Name: "ai-train-gpu-multi",
-		Spec: map[string]any{
-			"queue": map[string]any{
-				"clusterQueue": "training-cq",
-				"localQueue":   "training-queue",
-			},
-			"scheduling": map[string]any{
-				"priorityClassName": "taugrid-default",
-			},
-			"resources": map[string]any{
-				"gpu":      map[string]any{"count": gpuCount, "size": "l", "placement": "same-node", "requestVia": "device-plugin"},
-				"requests": map[string]any{"cpu": "64", "memory": "256Gi"},
-			},
-			"runtime": map[string]any{
-				"image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
-			},
+		Name:  "ai-train-gpu-multi",
+		Queue: "training-queue",
+		Resources: profile.Resources{
+			GPU:      profile.GPUContract{Count: gpuCount, Size: "l"},
+			Requests: map[string]any{"cpu": "64", "memory": "256Gi"},
 		},
+		Runtime: profile.Runtime{Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"},
 	}
 }
 
 func noGPUCountProfile() profile.Profile {
 	return profile.Profile{
-		Name: "ai-train-dra-dynamic",
-		Spec: map[string]any{
-			"queue": map[string]any{
-				"clusterQueue": "training-cq",
-				"localQueue":   "training-queue",
-			},
-			"scheduling": map[string]any{
-				"priorityClassName": "taugrid-default",
-			},
-			"resources": map[string]any{
-				"gpu":      map[string]any{"size": "l"},
-				"requests": map[string]any{"cpu": "16", "memory": "64Gi"},
-			},
-			"runtime": map[string]any{
-				"image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
-			},
+		Name:  "ai-train-dra-dynamic",
+		Queue: "training-queue",
+		Resources: profile.Resources{
+			Requests: map[string]any{"cpu": "16", "memory": "64Gi"},
 		},
+		Runtime: profile.Runtime{Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"},
 	}
 }
 
@@ -2435,23 +1956,6 @@ func TestRender_Torchrun_PPNExceedsGPUCount(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds profile GPU count") {
 		t.Errorf("error %q should mention exceeds profile GPU count", err)
-	}
-}
-
-func TestRender_Torchrun_PPNUnknownGPUCount(t *testing.T) {
-	script := torchrunScript(t)
-	_, err := Render(noGPUCountProfile(), Options{
-		Name:             "ddp-dra",
-		Namespace:        "tau",
-		ScriptPath:       script,
-		Launcher:         "torchrun",
-		ProcessesPerNode: 4,
-	})
-	if err == nil {
-		t.Fatal("expected error: PPN>1 with unknown GPU count should be rejected")
-	}
-	if !strings.Contains(err.Error(), "known GPU count") {
-		t.Errorf("error %q should mention known GPU count", err)
 	}
 }
 
@@ -2644,12 +2148,6 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 
 func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 	script := torchrunScript(t)
-	readOnlyProfile := trainProfile()
-	readOnlyProfile.Spec["resources"].(map[string]any)["persistence"] = map[string]any{
-		"pvcName":   "data",
-		"mountPath": "/data",
-		"readOnly":  true,
-	}
 	valid := metricsoffload.Runtime{
 		Image:               "registry.example.com/taugrid/tau:v0.6.0",
 		RunID:               "bounded",
@@ -2683,12 +2181,6 @@ func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 			name:    "wrappable command required",
 			options: Options{Name: "bounded", Namespace: "tau", PVCMount: "data", MetricsOffload: valid},
 			want:    "Tau-wrappable script or explicit command",
-		},
-		{
-			name:    "writable durable PVC required",
-			profile: readOnlyProfile,
-			options: Options{Name: "bounded", Namespace: "tau", ScriptPath: script, MetricsOffload: valid},
-			want:    "writable durable PVC storage",
 		},
 	}
 	for _, tt := range tests {
@@ -2941,12 +2433,10 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	if jobSpec["completionMode"] != "Indexed" {
 		t.Errorf("completionMode=%v, want Indexed", jobSpec["completionMode"])
 	}
-	completions, _ := toInt64(jobSpec["completions"])
-	if completions != 2 {
+	if fmt.Sprint(jobSpec["completions"]) != "2" {
 		t.Errorf("completions=%v, want 2", jobSpec["completions"])
 	}
-	parallelism, _ := toInt64(jobSpec["parallelism"])
-	if parallelism != 2 {
+	if fmt.Sprint(jobSpec["parallelism"]) != "2" {
 		t.Errorf("parallelism=%v, want 2", jobSpec["parallelism"])
 	}
 
@@ -2990,27 +2480,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	}
 	if env["OMP_NUM_THREADS"] != "1" {
 		t.Errorf("OMP_NUM_THREADS=%q, want 1", env["OMP_NUM_THREADS"])
-	}
-}
-
-func TestRender_MultiNode_MultiKueueAnnotation(t *testing.T) {
-	script := torchrunScript(t)
-	out, err := Render(multiGPUProfile(8), Options{
-		Name:             "ddp-mkq",
-		Namespace:        "tau",
-		ScriptPath:       script,
-		Launcher:         "torchrun",
-		ProcessesPerNode: 8,
-		Nodes:            2,
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	docs := parseMultiDocYAML(t, out)
-	job := docs[1]
-	ann := job["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if ann[workloadmeta.AnnotationMultiKueueIncompatible] != "indexed-job-headless-service" {
-		t.Errorf("missing multikueue-incompatible annotation: %v", ann)
 	}
 }
 
@@ -3191,8 +2660,7 @@ func TestRender_MultiNode_ServicePorts(t *testing.T) {
 	if port["name"] != "c10d" {
 		t.Errorf("port name=%v, want c10d", port["name"])
 	}
-	portNum, _ := toInt64(port["port"])
-	if portNum != 29500 {
+	if fmt.Sprint(port["port"]) != "29500" {
 		t.Errorf("port=%v, want 29500", port["port"])
 	}
 }

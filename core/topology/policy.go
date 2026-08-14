@@ -176,13 +176,13 @@ type presetDoc struct {
 // name. It fails on disabled presets so researcher submits don't silently land
 // on unavailable Azure capacity.
 func ResolvePreset(policyPath, name string) (ResolvedPreset, error) {
-	pol, err := LoadPolicy(policyPath)
+	policy, err := LoadPolicy(policyPath)
 	if err != nil {
 		return ResolvedPreset{}, err
 	}
-	preset, ok := pol.Presets[name]
+	preset, ok := policy.Presets[name]
 	if !ok {
-		return ResolvedPreset{}, fmt.Errorf("topology preset %q not found in %s (available: %s)", name, pol.SourceFile, strings.Join(pol.Names(), ", "))
+		return ResolvedPreset{}, fmt.Errorf("topology preset %q not found in %s (available: %s)", name, policy.SourceFile, strings.Join(policy.Names(), ", "))
 	}
 	if preset.Disabled {
 		reason := preset.DisabledReason
@@ -191,7 +191,7 @@ func ResolvePreset(policyPath, name string) (ResolvedPreset, error) {
 		}
 		return ResolvedPreset{}, fmt.Errorf("topology preset %q is disabled: %s", name, reason)
 	}
-	return pol.resolve(preset), nil
+	return policy.resolve(preset), nil
 }
 
 // SuggestPreset infers the preset that fits a researcher's intent expressed
@@ -222,38 +222,18 @@ func SuggestPreset(policyPath, team, lane string, gpus, workers int) (ResolvedPr
 	if workers < 1 {
 		return ResolvedPreset{}, fmt.Errorf("preset suggestion requires workers>=1 (got %d)", workers)
 	}
-	pol, err := LoadPolicy(policyPath)
+
+	policy, err := LoadPolicy(policyPath)
 	if err != nil {
 		return ResolvedPreset{}, err
 	}
-	var matches []Preset
-	for _, name := range pol.Names() {
-		p := pol.Presets[name]
-		if p.Disabled || p.Team != team || p.Lane != lane {
-			continue
-		}
-		n, ok, _ := GPUCountFromShape(p.Shape)
-		if !ok || n != gpus {
-			continue
-		}
-		if p.Workers != workers {
-			continue
-		}
-		matches = append(matches, p)
-	}
+
+	matches := matchingPresets(policy, team, lane, gpus, workers)
 	if len(matches) == 0 {
-		return ResolvedPreset{}, fmt.Errorf("%w: team=%s lane=%s gpus=%d workers=%d in %s; pass --preset explicitly or inspect the platform topology policy for available presets", errNoPresetMatch, team, lane, gpus, workers, pol.SourceFile)
+		return ResolvedPreset{}, fmt.Errorf("%w: team=%s lane=%s gpus=%d workers=%d in %s; pass --preset explicitly or inspect the platform topology policy for available presets", errNoPresetMatch, team, lane, gpus, workers, policy.SourceFile)
 	}
 	if len(matches) > 1 {
-		var nonReclaim []Preset
-		for _, p := range matches {
-			if !p.Reclaimable {
-				nonReclaim = append(nonReclaim, p)
-			}
-		}
-		if len(nonReclaim) >= 1 {
-			matches = nonReclaim
-		}
+		matches = preferNonReclaimable(matches)
 	}
 	if len(matches) > 1 {
 		names := make([]string, len(matches))
@@ -261,9 +241,41 @@ func SuggestPreset(policyPath, team, lane string, gpus, workers int) (ResolvedPr
 			names[i] = p.Name
 		}
 		sort.Strings(names)
-		return ResolvedPreset{}, fmt.Errorf("multiple presets match team=%s lane=%s gpus=%d workers=%d in %s: %s; pass --preset explicitly", team, lane, gpus, workers, pol.SourceFile, strings.Join(names, ", "))
+		return ResolvedPreset{}, fmt.Errorf("multiple presets match team=%s lane=%s gpus=%d workers=%d in %s: %s; pass --preset explicitly", team, lane, gpus, workers, policy.SourceFile, strings.Join(names, ", "))
 	}
-	return pol.resolve(matches[0]), nil
+	return policy.resolve(matches[0]), nil
+}
+
+func matchingPresets(policy Policy, team, lane string, gpus, workers int) []Preset {
+	var matches []Preset
+	for _, name := range policy.Names() {
+		preset := policy.Presets[name]
+		if preset.Disabled || preset.Team != team || preset.Lane != lane {
+			continue
+		}
+		count, ok, _ := GPUCountFromShape(preset.Shape)
+		if !ok || count != gpus {
+			continue
+		}
+		if preset.Workers != workers {
+			continue
+		}
+		matches = append(matches, preset)
+	}
+	return matches
+}
+
+func preferNonReclaimable(matches []Preset) []Preset {
+	var nonReclaim []Preset
+	for _, p := range matches {
+		if !p.Reclaimable {
+			nonReclaim = append(nonReclaim, p)
+		}
+	}
+	if len(nonReclaim) >= 1 {
+		return nonReclaim
+	}
+	return matches
 }
 
 // errNoPresetMatch is returned by SuggestPreset when no enabled preset matches
@@ -296,14 +308,12 @@ func LoadPolicy(path string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	data := embeddedDefaultPolicy
-	if resolved != embeddedPolicySource {
-		var err error
-		data, err = os.ReadFile(resolved)
-		if err != nil {
-			return Policy{}, fmt.Errorf("read topology policy %s: %w", resolved, err)
-		}
+
+	data, err := readPolicyBytes(resolved)
+	if err != nil {
+		return Policy{}, err
 	}
+
 	var doc policyDoc
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return Policy{}, fmt.Errorf("parse topology policy %s: %w", resolved, err)
@@ -311,56 +321,73 @@ func LoadPolicy(path string) (Policy, error) {
 	if doc.Kind != "TopologyPolicy" {
 		return Policy{}, fmt.Errorf("topology policy %s: kind must be TopologyPolicy, got %q", resolved, doc.Kind)
 	}
-	pol := Policy{
-		Name:        doc.Metadata.Name,
-		Description: doc.Spec.Description,
-		SourceFile:  resolved,
-		Presets:     map[string]Preset{},
-	}
-	if pol.Name == "" {
+	if doc.Metadata.Name == "" {
 		return Policy{}, fmt.Errorf("topology policy %s: metadata.name is required", resolved)
 	}
 	if len(doc.Spec.Presets) == 0 {
 		return Policy{}, fmt.Errorf("topology policy %s: spec.presets is required", resolved)
 	}
+
+	policy := Policy{
+		Name:        doc.Metadata.Name,
+		Description: doc.Spec.Description,
+		SourceFile:  resolved,
+		Presets:     make(map[string]Preset, len(doc.Spec.Presets)),
+	}
 	for name, raw := range doc.Spec.Presets {
-		preset := Preset{
-			Name:                      normalizePresetName(name),
-			Description:               strings.TrimSpace(raw.Description),
-			Profile:                   normalizeLabelValue(raw.Profile),
-			Team:                      normalizeLabelValue(raw.Team),
-			Lane:                      normalizeLabelValue(raw.Lane),
-			Mode:                      normalizeLabelValue(raw.Mode),
-			Placement:                 normalizeLabelValue(raw.Placement),
-			Shape:                     normalizeLabelValue(raw.Shape),
-			GPUClass:                  canonicalGPUClass(raw.GPUClass),
-			QueueName:                 normalizeLabelValue(raw.QueueName),
-			ClusterQueue:              normalizeLabelValue(raw.ClusterQueue),
-			Namespace:                 normalizeLabelValue(raw.Namespace),
-			ResourceFlavor:            normalizeLabelValue(raw.ResourceFlavor),
-			TopologyName:              normalizeLabelValue(raw.TopologyName),
-			CheckpointEvery:           strings.TrimSpace(raw.CheckpointEvery),
-			WorkloadPriorityClassName: normalizeLabelValue(raw.WorkloadPriorityClassName),
-			PodPriorityClassName:      normalizeLabelValue(raw.PodPriorityClassName),
-			Reclaimable:               raw.Reclaimable,
-			Disabled:                  raw.Disabled,
-			DisabledReason:            strings.TrimSpace(raw.DisabledReason),
-			Explain:                   strings.TrimSpace(raw.Explain),
-			Workers:                   raw.Workers,
-		}
-		if preset.Workers == 0 {
-			preset.Workers = 1
-		}
-		preset.defaultPriorities()
+		preset := presetFromDoc(name, raw)
 		if preset.Name == "" {
 			return Policy{}, fmt.Errorf("topology policy %s: preset name %q normalizes to empty", resolved, name)
 		}
 		if err := preset.validate(); err != nil {
 			return Policy{}, fmt.Errorf("topology policy %s preset %q: %w", resolved, name, err)
 		}
-		pol.Presets[preset.Name] = preset
+		policy.Presets[preset.Name] = preset
 	}
-	return pol, nil
+	return policy, nil
+}
+
+func readPolicyBytes(source string) ([]byte, error) {
+	if source == embeddedPolicySource {
+		return embeddedDefaultPolicy, nil
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return nil, fmt.Errorf("read topology policy %s: %w", source, err)
+	}
+	return data, nil
+}
+
+func presetFromDoc(name string, raw presetDoc) Preset {
+	preset := Preset{
+		Name:                      normalizePresetName(name),
+		Description:               strings.TrimSpace(raw.Description),
+		Profile:                   normalizeLabelValue(raw.Profile),
+		Team:                      normalizeLabelValue(raw.Team),
+		Lane:                      normalizeLabelValue(raw.Lane),
+		Mode:                      normalizeLabelValue(raw.Mode),
+		Placement:                 normalizeLabelValue(raw.Placement),
+		Shape:                     normalizeLabelValue(raw.Shape),
+		GPUClass:                  canonicalGPUClass(raw.GPUClass),
+		QueueName:                 normalizeLabelValue(raw.QueueName),
+		ClusterQueue:              normalizeLabelValue(raw.ClusterQueue),
+		Namespace:                 normalizeLabelValue(raw.Namespace),
+		ResourceFlavor:            normalizeLabelValue(raw.ResourceFlavor),
+		TopologyName:              normalizeLabelValue(raw.TopologyName),
+		CheckpointEvery:           strings.TrimSpace(raw.CheckpointEvery),
+		WorkloadPriorityClassName: normalizeLabelValue(raw.WorkloadPriorityClassName),
+		PodPriorityClassName:      normalizeLabelValue(raw.PodPriorityClassName),
+		Reclaimable:               raw.Reclaimable,
+		Disabled:                  raw.Disabled,
+		DisabledReason:            strings.TrimSpace(raw.DisabledReason),
+		Explain:                   strings.TrimSpace(raw.Explain),
+		Workers:                   raw.Workers,
+	}
+	if preset.Workers == 0 {
+		preset.Workers = 1
+	}
+	preset.defaultPriorities()
+	return preset
 }
 
 // canonicalGPUClass normalizes a policy-declared gpuClass value to its
@@ -368,7 +395,7 @@ func LoadPolicy(path string) (Policy, error) {
 // platform-authored (not a live per-request researcher input), so this
 // migrates them without a warning; a warning is emitted instead when a
 // researcher supplies a legacy alias directly via CLI flag, run config, or
-// profile spec.topology.gpuClass (see contract.normalize in topology.go).
+// profile Topology.GPUClass (see contract.normalize in topology.go).
 func canonicalGPUClass(v string) string {
 	canonical, _ := NormalizeGPUClass(v)
 	return canonical
@@ -518,6 +545,9 @@ func (p Preset) validate() error {
 	if p.Workers > 1 && p.Placement != "multi-node-nccl" {
 		return fmt.Errorf("workers > 1 (got %d) requires placement=multi-node-nccl (got %q)", p.Workers, p.Placement)
 	}
+	if p.Mode == "elastic" && p.CheckpointEvery == "" {
+		return errors.New("elastic presets require checkpointEvery")
+	}
 	c := contract{
 		team:            p.Team,
 		lane:            p.Lane,
@@ -527,8 +557,6 @@ func (p Preset) validate() error {
 		gpuClass:        p.GPUClass,
 		checkpointEvery: p.CheckpointEvery,
 		queue:           p.QueueName,
-		preemptible:     true,
-		hasCheckpoint:   p.CheckpointEvery != "" || p.Mode != "elastic",
 	}
 	if err := c.validate(p.Name); err != nil {
 		return err

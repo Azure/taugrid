@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"strings"
@@ -26,6 +27,22 @@ func newExpKustoCmd() *cobra.Command {
 	return cmd
 }
 
+func defaultKustoMetricsQueryResult(result expkusto.MetricsQueryResult) expkusto.MetricsQueryResult {
+	result.Endpoint = cmp.Or(result.Endpoint, expkusto.DefaultEndpoint)
+	result.Database = cmp.Or(result.Database, expkusto.DefaultDatabase)
+	result.TargetPoints = cmp.Or(result.TargetPoints, expkusto.DefaultTargetPoints)
+	return result
+}
+
+func defaultKustoLifecycleQueryResult(result expkusto.RunLifecycleQueryResult) expkusto.RunLifecycleQueryResult {
+	result.Endpoint = cmp.Or(result.Endpoint, expkusto.DefaultEndpoint)
+	result.Database = cmp.Or(result.Database, expkusto.DefaultDatabase)
+	if strings.TrimSpace(result.StaleAfter) == "" {
+		result.StaleAfter = expkusto.DefaultLifecycleStaleAfter
+	}
+	return result
+}
+
 func newExpKustoMetricsQueryCmd() *cobra.Command {
 	var opts expkusto.MetricsQueryOptions
 	var endpoint, database, output string
@@ -45,22 +62,12 @@ func newExpKustoMetricsQueryCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if endpoint == "" {
-				endpoint = expkusto.DefaultEndpoint
-			}
-			if database == "" {
-				database = expkusto.DefaultDatabase
-			}
-			targetPoints := opts.TargetPoints
-			if targetPoints == 0 {
-				targetPoints = expkusto.DefaultTargetPoints
-			}
-			result := expkusto.MetricsQueryResult{
+			result := defaultKustoMetricsQueryResult(expkusto.MetricsQueryResult{
 				Endpoint:     endpoint,
 				Database:     database,
 				Query:        query,
-				TargetPoints: targetPoints,
-			}
+				TargetPoints: opts.TargetPoints,
+			})
 			switch out {
 			case "json":
 				return writeExpJSON(cmd.OutOrStdout(), result)
@@ -104,22 +111,12 @@ func newExpKustoLifecycleQueryCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if endpoint == "" {
-				endpoint = expkusto.DefaultEndpoint
-			}
-			if database == "" {
-				database = expkusto.DefaultDatabase
-			}
-			staleAfter := opts.StaleAfter
-			if strings.TrimSpace(staleAfter) == "" {
-				staleAfter = expkusto.DefaultLifecycleStaleAfter
-			}
-			result := expkusto.RunLifecycleQueryResult{
+			result := defaultKustoLifecycleQueryResult(expkusto.RunLifecycleQueryResult{
 				Endpoint:   endpoint,
 				Database:   database,
 				Query:      query,
-				StaleAfter: staleAfter,
-			}
+				StaleAfter: opts.StaleAfter,
+			})
 			switch out {
 			case "json":
 				return writeExpJSON(cmd.OutOrStdout(), result)
@@ -170,10 +167,7 @@ func newExpKustoSchemaCmd() *cobra.Command {
 		Short: "Write Kusto schema and Stellar normalization functions",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ingestion = strings.ToLower(strings.TrimSpace(ingestion))
-			if ingestion == "" {
-				ingestion = "all"
-			}
+			ingestion = cmp.Or(strings.ToLower(strings.TrimSpace(ingestion)), "all")
 			var sections []string
 			switch ingestion {
 			case "projection":

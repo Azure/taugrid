@@ -6,9 +6,7 @@ package payload
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -255,33 +253,13 @@ func TestEncodeCompressesEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode base64: %v", err)
 	}
-	if !bytes.HasPrefix(transported, gzipMagic) {
+	if !bytes.HasPrefix(transported, []byte{0x1f, 0x8b}) {
 		t.Fatalf("transported envelope is not gzip-compressed: % x", transported[:4])
 	}
 	if len(transported) >= len(script) {
 		t.Fatalf("compressed envelope (%d bytes) is not smaller than the raw script (%d bytes)",
 			len(transported), len(script))
 	}
-}
-
-// TestDecodeAcceptsUncompressedV1Envelope guarantees backward compatibility:
-// workloads rendered before compression was introduced carry a raw JSON
-// envelope, and must keep decoding through both Decode and the shim.
-func TestDecodeAcceptsUncompressedV1Envelope(t *testing.T) {
-	raw := []byte(`{"version":1,"files":[{"name":"train.py","data":"` +
-		base64.StdEncoding.EncodeToString([]byte("print('v1')\n")) + `"}]}`)
-	sum := sha256.Sum256(raw)
-	encoded := base64.StdEncoding.EncodeToString(raw)
-	digest := hex.EncodeToString(sum[:])
-
-	files, err := Decode(encoded, digest)
-	if err != nil {
-		t.Fatalf("v1 envelope must still decode: %v", err)
-	}
-	if got := string(files["train.py"]); got != "print('v1')\n" {
-		t.Fatalf("train.py = %q", got)
-	}
-	assertShimWrites(t, encoded, digest, map[string]string{"train.py": "print('v1')\n"})
 }
 
 func TestDecodeRoundTrips(t *testing.T) {

@@ -5,17 +5,37 @@
 // Tau manifest builders. It intentionally does not load legacy profile catalogs.
 package profile
 
-import "regexp"
-
-var profileNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
-
 // Profile is the in-memory resource contract consumed by renderers.
 type Profile struct {
-	Name        string
-	SourceFile  string
-	Extends     string
-	Description string
-	Lane        string
-	Catalog     string
-	Spec        map[string]any
+	Name                  string
+	Lane                  string
+	Queue                 string
+	Topology              Topology
+	Resources             Resources
+	Runtime               Runtime
+	ActiveDeadlineSeconds int64
+}
+
+type Topology struct {
+	Team                      string
+	Mode                      string
+	Placement                 string
+	Shape                     string
+	GPUClass                  string
+	PriorityTier              string
+	PodPriorityClassName      string
+	WorkloadPriorityClassName string
+	DisableDefaultPriorities  bool
+}
+
+type Resources struct {
+	Requests map[string]any
+	Limits   map[string]any
+	GPU      GPUContract
+}
+
+type Runtime struct {
+	Image           string
+	ImagePullPolicy string
+	SecurityContext map[string]any
 }

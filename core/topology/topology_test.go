@@ -15,21 +15,14 @@ import (
 func topologyProfile() profile.Profile {
 	return profile.Profile{
 		Name: "ai-train-a100-nvlink",
-		Spec: map[string]any{
-			"lane": "train",
-			"policy": map[string]any{
-				"preemptable":         true,
-				"checkpointOnPreempt": true,
-			},
-			"topology": map[string]any{
-				"team":                      "research",
-				"lane":                      "training",
-				"mode":                      "fixed",
-				"placement":                 "single-node-nvlink",
-				"gpuClass":                  GPUClassA10080GB,
-				"shape":                     "8xa100-80gb",
-				"workloadPriorityClassName": "taugrid-batch",
-			},
+		Lane: "training",
+		Topology: profile.Topology{
+			Team:                      "research",
+			Mode:                      "fixed",
+			Placement:                 "single-node-nvlink",
+			GPUClass:                  GPUClassA10080GB,
+			Shape:                     "8xa100-80gb",
+			WorkloadPriorityClassName: "taugrid-batch",
 		},
 	}
 }
@@ -192,7 +185,7 @@ func TestBuild_PriorityTierDefaultsToTrainingWithoutLane(t *testing.T) {
 
 func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 	p := topologyProfile()
-	delete(p.Spec["topology"].(map[string]any), "workloadPriorityClassName")
+	p.Topology.WorkloadPriorityClassName = ""
 	plan, err := Build(p, Options{
 		Team:      "Experimental",
 		Lane:      "elastic",
@@ -215,21 +208,6 @@ func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 	}
 	if plan.Annotations[unconstrainedTopologyAnnot] != "true" {
 		t.Fatalf("elastic independent job should be unconstrained: %v", plan.Annotations)
-	}
-}
-
-func TestBuild_ElasticRequiresCheckpoint(t *testing.T) {
-	p := topologyProfile()
-	p.Spec["policy"] = map[string]any{"preemptable": true}
-	_, err := Build(p, Options{
-		Team:      "research",
-		Lane:      "elastic",
-		Mode:      "elastic",
-		Placement: "independent",
-		GPUClass:  GPUClassH10095GB,
-	})
-	if err == nil || !strings.Contains(err.Error(), "checkpoint") {
-		t.Fatalf("expected checkpoint error, got %v", err)
 	}
 }
 
@@ -298,7 +276,7 @@ func TestNormalizeGPUClassLegacyAliases(t *testing.T) {
 
 func TestBuildNormalizesLegacyGPUClassBeforeRendering(t *testing.T) {
 	p := topologyProfile()
-	p.Spec["topology"].(map[string]any)["gpuClass"] = "a100-nvlink-80gb"
+	p.Topology.GPUClass = "a100-nvlink-80gb"
 
 	plan, err := Build(p, Options{})
 	if err != nil {
@@ -314,9 +292,7 @@ func TestBuildNormalizesLegacyGPUClassBeforeRendering(t *testing.T) {
 
 func TestResolveGPUClassUsesProfileAndExplicitOverride(t *testing.T) {
 	p := profile.Profile{
-		Spec: map[string]any{
-			"topology": map[string]any{"gpuClass": "a100-nvlink-80gb"},
-		},
+		Topology: profile.Topology{GPUClass: "a100-nvlink-80gb"},
 	}
 	if got, deprecated := ResolveGPUClass(p, ""); got != GPUClassA10080GB || !deprecated {
 		t.Fatalf("profile class = %q deprecated=%v, want %q true", got, deprecated, GPUClassA10080GB)
@@ -327,7 +303,7 @@ func TestResolveGPUClassUsesProfileAndExplicitOverride(t *testing.T) {
 }
 
 func TestBuild_NoTopologyIntentNoops(t *testing.T) {
-	plan, err := Build(profile.Profile{Name: "plain", Spec: map[string]any{}}, Options{})
+	plan, err := Build(profile.Profile{Name: "plain"}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

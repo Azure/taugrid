@@ -136,27 +136,11 @@ func (e ExperimentIdentity) empty() bool {
 // experimentIdentity extracts the Stellar identity from an object's annotations.
 func experimentIdentity(annotations map[string]string) ExperimentIdentity {
 	return ExperimentIdentity{
-		Project: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarProject]),
-		// The question annotation is the pre-rename spelling of the experiment:
-		// a question always *was* the named experiment. Workloads stamped before
-		// the rename carry only that key, so it is read as a fallback rather
-		// than surfaced as an axis of its own.
-		ExperimentID: firstNonEmpty(
-			strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentID]),
-			strings.TrimSpace(annotations[workloadmeta.AnnotationStellarQuestion]),
-		),
+		Project:      strings.TrimSpace(annotations[workloadmeta.AnnotationStellarProject]),
+		ExperimentID: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentID]),
 		Title: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentTitle]),
 		Group: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarGroup]),
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // ObjectDetail is the tier-1 object header: identity fields plus the RayJob-

@@ -26,16 +26,15 @@ func buildJobCaptureMetadata(ctx context.Context, captureCommand, name, namespac
 		}
 	}
 	metadata := experiment.Metadata{
-		RunID:            name,
-		Namespace:        namespace,
-		WorkloadKind:     experiment.WorkloadKindJob,
-		TauCommand:       experiment.RedactCommandArgs(strings.Fields(captureCommand)),
-		Image:            firstNonEmpty(image, profileRuntimeImage(p)),
-		CodeSHA:          experiment.GitHeadSHA("."),
-		ConfigHash:       configHash,
-		GPUCount:         gpuCountFromProfile(p),
-		DRAClaimTemplate: profile.DRAClaimTemplate(p),
-		StorageMounts:    jobStorageMounts(p, pvcMount, volumes, volumeMounts),
+		RunID:         name,
+		Namespace:     namespace,
+		WorkloadKind:  experiment.WorkloadKindJob,
+		TauCommand:    experiment.RedactCommandArgs(strings.Fields(captureCommand)),
+		Image:         firstNonEmpty(image, p.Runtime.Image),
+		CodeSHA:       experiment.GitHeadSHA("."),
+		ConfigHash:    configHash,
+		GPUCount:      gpuCountFromProfile(p),
+		StorageMounts: jobStorageMounts(pvcMount, volumes, volumeMounts),
 	}
 	metadata.Stellar = runExperimentMetadataFromContext(ctx).StellarMetadata()
 	return metadata, nil
@@ -78,25 +77,14 @@ func firstNonEmpty(values ...string) string {
 }
 
 func gpuCountFromProfile(p profile.Profile) int {
-	if contract, ok, err := profile.GPUContractFromProfile(p); err == nil && ok && contract.Count > 0 {
-		return contract.Count
-	}
-	if count, ok := profile.GPUCountFromClaimTemplate(profile.DRAClaimTemplate(p)); ok {
-		return count
+	if p.Resources.GPU.Count > 0 {
+		return p.Resources.GPU.Count
 	}
 	return 0
 }
 
-func jobStorageMounts(p profile.Profile, pvcMount string, volumes []jobrender.Volume, volumeMounts []jobrender.VolumeMount) []experiment.StorageMount {
+func jobStorageMounts(pvcMount string, volumes []jobrender.Volume, volumeMounts []jobrender.VolumeMount) []experiment.StorageMount {
 	var mounts []experiment.StorageMount
-	for _, mount := range profilePersistenceMounts(p) {
-		mounts = append(mounts, experiment.StorageMount{
-			Source:    "pvc",
-			SourceRef: mount.PVC,
-			Path:      mount.MountPath,
-			ReadOnly:  mount.ReadOnly,
-		})
-	}
 	if pvcMount != "" {
 		mounts = append(mounts, experiment.StorageMount{Source: "pvc", SourceRef: pvcMount, Path: "/data"})
 	}

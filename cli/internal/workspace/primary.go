@@ -34,18 +34,6 @@ var ErrNoWorkspaces = errors.New("no TauWorkspace found")
 // there would fail confusingly at admission instead of here.
 var ErrPrimaryTerminating = errors.New("primary TauWorkspace is terminating")
 
-// hasPrimaryWorkspaceHistory reports whether a workspace has previously been
-// reconciled as the primary, mirroring the controller predicate of the same
-// name. A workspace with no status at all has never been reconciled, and one
-// carrying an AdditionalWorkspaceBlocked condition was reconciled as the
-// blocked replacement rather than the incumbent.
-func hasPrimaryWorkspaceHistory(item Workspace) bool {
-	if item.Status.Phase == "" && item.Status.ObservedGeneration == 0 && len(item.Status.Conditions) == 0 {
-		return false
-	}
-	return !isAdditionalWorkspaceBlocked(item)
-}
-
 // isAdditionalWorkspaceBlocked reports whether the controller has refused to
 // activate this workspace.
 func isAdditionalWorkspaceBlocked(item Workspace) bool {
@@ -60,23 +48,20 @@ func isAdditionalWorkspaceBlocked(item Workspace) bool {
 // ProvablyPrimary reports whether a workspace can be accepted as the v0 primary
 // from the object alone, without comparing it against its peers.
 //
-// SelectPrimary's third rule — the oldest workspace that is not terminating —
+// SelectPrimary's fallback — the oldest workspace that is not terminating —
 // is a statement about a population, so it is only meaningful once every
 // candidate is present. A caller holding a single object (a named `get`, which
 // is all a researcher's RBAC permits) therefore cannot use it: any live
 // workspace satisfies "oldest non-terminating" when it is the only one in the
 // list, including one the controller marked AdditionalWorkspaceBlocked.
 //
-// Only the first two rules are self-evident from one object, so only they may
-// short-circuit the list. Everything else has to be compared against peers.
+// Only the controller's annotation is self-evident from one object. Everything
+// else has to be compared against peers.
 func ProvablyPrimary(item Workspace) bool {
 	if isAdditionalWorkspaceBlocked(item) {
 		return false
 	}
-	if item.Metadata.Annotations[AnnotationV0Primary] == "true" {
-		return true
-	}
-	return hasPrimaryWorkspaceHistory(item)
+	return item.Metadata.Annotations[AnnotationV0Primary] == "true"
 }
 
 // reasonAdditionalWorkspaceBlocked is the condition reason the controller sets
@@ -87,38 +72,26 @@ const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"
 //
 // TauGrid v0 runs exactly one workspace per cluster, so a researcher should
 // never have to name it. This mirrors the precedence in the tau-core workspace
-// controller's own primaryWorkspace, because the two disagreeing about which
+// controller's own selection, because the two disagreeing about which
 // workspace is live is worse than either being wrong alone:
 //
 //  1. an explicit AnnotationV0Primary marker, which an operator can set to
 //     override the default choice;
-//  2. otherwise the incumbent — the oldest workspace the controller has
-//     already reconciled as primary, ties broken by name;
-//  3. otherwise the oldest workspace that is not terminating.
+//  2. otherwise the oldest workspace that is not terminating.
 //
-// Deletion is deliberately *not* a filter at step 2. The controller keeps a
+// Deletion is deliberately *not* a filter for the marker. The controller keeps a
 // terminating incumbent as primary and marks any replacement
 // AdditionalWorkspaceBlocked, so skipping it here would select the blocked
 // replacement and route work to a namespace whose access was never activated.
 // A terminating selection is reported as ErrPrimaryTerminating instead.
-//
-// One controller step has no client-side equivalent: when nothing has status
-// yet, the controller can fall back to probing for workspace-derived state
-// (namespaces, bindings) that a researcher identity cannot read. That step
-// only ever picks among the same workspaces, so the ordering below is a subset
-// of the controller's, never a contradiction of it.
 func SelectPrimary(list WorkspaceList) (Workspace, error) {
 	var marked []Workspace
-	var incumbent *Workspace
 	var fallback *Workspace
 
 	for i := range list.Items {
 		item := list.Items[i]
 		if item.Metadata.Annotations[AnnotationV0Primary] == "true" {
 			marked = append(marked, item)
-		}
-		if hasPrimaryWorkspaceHistory(item) && (incumbent == nil || precedes(item, *incumbent)) {
-			incumbent = &list.Items[i]
 		}
 		if strings.TrimSpace(item.Metadata.DeletionTimestamp) != "" {
 			continue
@@ -142,8 +115,6 @@ func SelectPrimary(list WorkspaceList) (Workspace, error) {
 	switch {
 	case len(marked) == 1:
 		selected = &marked[0]
-	case incumbent != nil:
-		selected = incumbent
 	case fallback != nil:
 		selected = fallback
 	default:

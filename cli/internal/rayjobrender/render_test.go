@@ -318,9 +318,7 @@ func TestRenderRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
 		Workers:       1,
 		GPUsPerWorker: 1,
 		Profile: profile.Profile{
-			Spec: map[string]any{
-				"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
-			},
+			Topology: profile.Topology{GPUClass: topology.GPUClassH10095GB},
 		},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 		NodeSelector: map[string]string{
@@ -341,9 +339,7 @@ func TestRenderRejectsClassSelectorForProfileAny(t *testing.T) {
 		Workers:       1,
 		GPUsPerWorker: 1,
 		Profile: profile.Profile{
-			Spec: map[string]any{
-				"topology": map[string]any{"gpuClass": topology.GPUClassAny},
-			},
+			Topology: profile.Topology{GPUClass: topology.GPUClassAny},
 		},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 		NodeSelector: map[string]string{

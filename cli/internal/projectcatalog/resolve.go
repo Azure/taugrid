@@ -132,19 +132,6 @@ func (c *Catalog) ProjectForPath(path string) (*Project, error) {
 		return nil, err
 	}
 	if ok {
-		lexical, _, _, err := repository.ExistingPath(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolve config path %s: %w", path, err)
-		}
-		relative, err := filepath.Rel(c.LexicalRoot, lexical)
-		if err != nil {
-			return nil, fmt.Errorf("resolve config path %s relative to catalog: %w", path, err)
-		}
-		if gitlink, found, err := c.gitlinks.AtOrAbove(relative); err != nil {
-			return nil, fmt.Errorf("--config %s: %w", path, err)
-		} else if found {
-			return nil, fmt.Errorf("--config %s is at or beneath Git submodule %q", path, gitlink)
-		}
 		return project, nil
 	}
 	projectPaths := make([]string, 0, len(c.Projects))

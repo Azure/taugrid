@@ -58,9 +58,6 @@ func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	mode := cluster.Spec.ManagementMode
-	if mode == "" {
-		mode = tauv1alpha1.ClusterManagementModeObserve
-	}
 
 	var (
 		nodeState nodeReconcileState
@@ -413,15 +410,6 @@ func clusterSpecHash(spec tauv1alpha1.TauClusterSpec) string {
 }
 
 func normalizeClusterSpec(spec tauv1alpha1.TauClusterSpec) tauv1alpha1.TauClusterSpec {
-	if spec.ManagementMode == "" {
-		spec.ManagementMode = tauv1alpha1.ClusterManagementModeObserve
-	}
-	if spec.DeletionPolicy == "" {
-		spec.DeletionPolicy = tauv1alpha1.ClusterDeletionPolicyRetain
-	}
-	if spec.Queues.Ownership == "" {
-		spec.Queues.Ownership = tauv1alpha1.ClusterOwnershipExternal
-	}
 	if spec.WorkspaceDefaults.DefaultQueue == "" {
 		spec.WorkspaceDefaults.DefaultQueue = "jobqueue"
 	}

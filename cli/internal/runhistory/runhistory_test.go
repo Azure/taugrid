@@ -248,7 +248,7 @@ func TestRayJobShapeAndKueueAdmission(t *testing.T) {
 	metadata.Labels[experiment.LabelWorkloadKind] = experiment.WorkloadKindRayJobEval
 	metadata.Annotations[experiment.AnnotationStellarProject] = "research"
 	metadata.Annotations[experiment.AnnotationExperimentSource] = "stellar"
-	metadata.Annotations[experiment.AnnotationStellarQuestion] = "q-42"
+	metadata.Annotations[experiment.AnnotationStellarExperimentID] = "q-42"
 	metadata.Annotations[experiment.AnnotationStellarGroup] = "baseline"
 	metadata.Annotations[experiment.AnnotationStellarTags] = `{"dataset":"fineweb"}`
 	metadata.Annotations[experiment.AnnotationResultScope] = "az://results/research"

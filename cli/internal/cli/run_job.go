@@ -22,7 +22,6 @@ import (
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kube"
-	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -152,7 +151,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if err != nil {
 		return err
 	}
-	annotations, outputDir, outputWritable, err := buildRunJobOutputAnnotations(request.Name, o.output, pvcMount, volumes, volumeMounts, p)
+	annotations, outputDir, outputWritable, err := buildRunJobOutputAnnotations(request.Name, o.output, pvcMount, volumes, volumeMounts)
 	if err != nil {
 		return err
 	}
@@ -282,7 +281,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		}
 	}
 	if o.metricsOffloadEnabled {
-		runtime, err := resolveMetricsOffload(o, p, request.Name, ns, kubeContext, outputDir, outputWritable, annotations)
+		runtime, err := resolveMetricsOffload(o, request.Name, ns, kubeContext, outputDir, outputWritable, annotations)
 		if err != nil {
 			return err
 		}
@@ -522,7 +521,7 @@ func resolveRunJobStorage(o runDispatchOptions) (string, []jobrender.Volume, []j
 	return resolvePVCMounts(volumeSpecs, o.mountSpecs)
 }
 
-func resolveMetricsOffload(o runDispatchOptions, p profile.Profile, runID, namespace, cluster, outputDir string, outputWritable bool, annotations map[string]string) (metricsoffload.Runtime, error) {
+func resolveMetricsOffload(o runDispatchOptions, runID, namespace, cluster, outputDir string, outputWritable bool, annotations map[string]string) (metricsoffload.Runtime, error) {
 	if strings.TrimSpace(o.workspace) == "" {
 		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires a resolved TauWorkspace; set policy.workspace, --workspace, or a workspace connection")
 	}
@@ -534,15 +533,12 @@ func resolveMetricsOffload(o runDispatchOptions, p profile.Profile, runID, names
 		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires storage.output backed by a writable PVC")
 	}
 
-	policy, err := metricsoffload.OptionsFromProfile(p)
-	if err != nil {
-		return metricsoffload.Runtime{}, err
-	}
+	var policy metricsoffload.Options
 	if err := applyDirectMetricsOffloadEnvPolicy(&policy); err != nil {
 		return metricsoffload.Runtime{}, err
 	}
 	if strings.TrimSpace(policy.Image) == "" {
-		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires profile spec.metrics.offload.image or TAU_METRICS_OFFLOAD_IMAGE")
+		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires TAU_METRICS_OFFLOAD_IMAGE")
 	}
 	if err := metricsoffload.ValidatePinnedImage(policy.Image); err != nil {
 		return metricsoffload.Runtime{}, err
@@ -780,7 +776,7 @@ func buildRunJobProfileAnnotations(outputDir, pvc string, profileOptions jobrend
 	return annotations
 }
 
-func buildRunJobOutputAnnotations(name, output, pvcMount string, volumes []jobrender.Volume, mounts []jobrender.VolumeMount, p profile.Profile) (map[string]string, string, bool, error) {
+func buildRunJobOutputAnnotations(name, output, pvcMount string, volumes []jobrender.Volume, mounts []jobrender.VolumeMount) (map[string]string, string, bool, error) {
 	type mountedPVC struct {
 		path     string
 		pvc      string
@@ -801,9 +797,6 @@ func buildRunJobOutputAnnotations(name, output, pvcMount string, volumes []jobre
 			}
 		}
 	}
-	for _, mount := range profilePersistenceMounts(p) {
-		mounted = append(mounted, mountedPVC{path: mount.MountPath, pvc: mount.PVC, readOnly: mount.ReadOnly})
-	}
 	if output == "" {
 		if len(mounted) == 0 {
 			return nil, "", false, nil
@@ -819,7 +812,7 @@ func buildRunJobOutputAnnotations(name, output, pvcMount string, volumes []jobre
 		return nil, "", false, fmt.Errorf("storage.output %q: must be an absolute path", output)
 	}
 	if len(mounted) == 0 {
-		return nil, "", false, fmt.Errorf("storage.output %q: no PVC supplied by storage.data_pvc, storage.volumes/mounts, or profile persistence; output cannot be retrieved by `tau run get`", output)
+		return nil, "", false, fmt.Errorf("storage.output %q: no PVC supplied by storage.data_pvc or storage.volumes/mounts; output cannot be retrieved by `tau run get`", output)
 	}
 	cleanOutput := filepath.Clean(output)
 	for _, mount := range mounted {
@@ -839,7 +832,7 @@ func buildRunJobOutputAnnotations(name, output, pvcMount string, volumes []jobre
 }
 
 func buildPrimaryPVCOutputAnnotations(name, output, pvc string) (map[string]string, string, bool, error) {
-	return buildRunJobOutputAnnotations(name, output, pvc, nil, nil, profile.Profile{})
+	return buildRunJobOutputAnnotations(name, output, pvc, nil, nil)
 }
 
 func patchRunJobHeadlessServiceOwnerRef(ctx context.Context, runner kubeRawRunner, namespace, jobName string) error {

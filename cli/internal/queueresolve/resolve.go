@@ -4,6 +4,7 @@
 package queueresolve
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,13 @@ type ResolveAccessibleQueueOptions struct {
 	WorkloadResource string
 }
 
+func normalizeOptions(opts ResolveAccessibleQueueOptions) ResolveAccessibleQueueOptions {
+	opts.Namespace = strings.TrimSpace(opts.Namespace)
+	opts.QueueName = strings.TrimSpace(opts.QueueName)
+	opts.WorkloadResource = cmp.Or(strings.TrimSpace(opts.WorkloadResource), "rayjobs.ray.io")
+	return opts
+}
+
 type AccessibleQueue struct {
 	Namespace string
 	QueueName string
@@ -37,6 +45,11 @@ type AccessibleQueue struct {
 type rejection struct {
 	namespace string
 	reason    string
+}
+
+type authorizationCheck struct {
+	verb     string
+	resource string
 }
 
 type namespaceList struct {
@@ -54,25 +67,23 @@ type namespaceItem struct {
 // identity can use. Kubernetes RBAC is the source of truth; Tau does not read
 // Entra group membership.
 func ResolveAccessibleQueue(ctx context.Context, r RawRunner, opts ResolveAccessibleQueueOptions) (AccessibleQueue, []AccessibleQueue, error) {
-	resource := strings.TrimSpace(opts.WorkloadResource)
-	if resource == "" {
-		resource = "rayjobs.ray.io"
-	}
+	opts = normalizeOptions(opts)
+	resource := opts.WorkloadResource
 	namespaces, err := listQueueNamespaces(ctx, r)
 	if err != nil {
 		return AccessibleQueue{}, nil, err
 	}
-	if namespace := strings.TrimSpace(opts.Namespace); namespace != "" {
+	if opts.Namespace != "" {
 		var selected []AccessibleQueue
 		for _, ns := range namespaces {
-			if ns.Namespace == namespace {
+			if ns.Namespace == opts.Namespace {
 				selected = append(selected, ns)
 			}
 		}
 		if len(selected) == 0 {
 			return AccessibleQueue{}, nil, fmt.Errorf(
 				"namespace %q does not declare a default Kueue LocalQueue with label %s; ask the platform owner to configure the namespace",
-				namespace, DefaultLocalQueueLabel,
+				opts.Namespace, DefaultLocalQueueLabel,
 			)
 		}
 		namespaces = selected
@@ -80,46 +91,45 @@ func ResolveAccessibleQueue(ctx context.Context, r RawRunner, opts ResolveAccess
 	var candidates []AccessibleQueue
 	var rejected []rejection
 	var teamFiltered int
+namespaceLoop:
 	for _, ns := range namespaces {
 		if !teamMatches(opts.Team, ns.Team, ns.Namespace) {
 			teamFiltered++
 			continue
 		}
-		queueName := strings.TrimSpace(opts.QueueName)
+		queueName := opts.QueueName
 		if queueName == "" || strings.EqualFold(queueName, "auto") {
 			queueName = ns.QueueName
 		}
 		if queueName == "" {
 			queueName = DefaultQueueName
 		}
-		allowed, err := canI(ctx, r, "create", resource, ns.Namespace)
-		if err != nil {
-			rejected = append(rejected, rejection{ns.Namespace,
-				fmt.Sprintf("authorization check for create %s failed: %s", resource, firstErrorLine(err))})
-			continue
-		}
-		if !allowed {
-			rejected = append(rejected, rejection{ns.Namespace,
-				fmt.Sprintf("not authorized to create %s (RBAC)", resource)})
-			continue
-		}
-		allowed, err = canI(ctx, r, "get", "localqueues.kueue.x-k8s.io", ns.Namespace)
-		if err != nil {
-			rejected = append(rejected, rejection{ns.Namespace,
-				"authorization check for get localqueues.kueue.x-k8s.io failed: " + firstErrorLine(err)})
-			continue
-		}
-		if !allowed {
-			rejected = append(rejected, rejection{ns.Namespace,
-				"not authorized to get localqueues.kueue.x-k8s.io (RBAC)"})
-			continue
+		for _, auth := range [...]authorizationCheck{
+			{verb: "create", resource: resource},
+			{verb: "get", resource: "localqueues.kueue.x-k8s.io"},
+		} {
+			allowed, err := canI(ctx, r, auth.verb, auth.resource, ns.Namespace)
+			if err != nil {
+				rejected = append(rejected, rejection{
+					namespace: ns.Namespace,
+					reason:    fmt.Sprintf("authorization check for %s %s failed: %s", auth.verb, auth.resource, firstErrorLine(err)),
+				})
+				continue namespaceLoop
+			}
+			if !allowed {
+				rejected = append(rejected, rejection{
+					namespace: ns.Namespace,
+					reason:    fmt.Sprintf("not authorized to %s %s (RBAC)", auth.verb, auth.resource),
+				})
+				continue namespaceLoop
+			}
 		}
 		if _, err := getLocalQueue(ctx, r, ns.Namespace, queueName); err != nil {
 			reason := fmt.Sprintf("cannot read LocalQueue %q: %s", queueName, firstErrorLine(err))
 			if isNotFoundError(err) {
 				reason = fmt.Sprintf("LocalQueue %q not found", queueName)
 			}
-			rejected = append(rejected, rejection{ns.Namespace, reason})
+			rejected = append(rejected, rejection{namespace: ns.Namespace, reason: reason})
 			continue
 		}
 		ns.QueueName = queueName
