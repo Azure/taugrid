@@ -27,12 +27,6 @@ Grow the portal from a read-only view into a place where work happens: submit
 and act on workloads from the cluster and workload views, with the same
 workspace authorization the read paths already enforce.
 
-### Provider-agnostic observability and cost attribution
-
-Workload health, alerts, and per-team cost attribution on any Kubernetes
-cluster. Azure Data Explorer becomes one supported backend among several,
-alongside other clouds and self-managed open-source stacks.
-
 ### Dataset and data-preparation lifecycle
 
 A public path through fetch, staging, validation, tokenization, registration,
@@ -45,6 +39,12 @@ is not driven by hand.
 Validated end-to-end examples for PyTorch DDP, FSDP, DeepSpeed, and Hugging
 Face LoRA or QLoRA, so framework choice is a project decision rather than a
 platform integration project.
+
+### Provider-agnostic observability and cost attribution
+
+Workload health, alerts, and per-team cost attribution on any Kubernetes
+cluster. Azure Data Explorer becomes one supported backend among several,
+alongside other clouds and self-managed open-source stacks.
 
 ## Exploring
 
