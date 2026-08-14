@@ -343,7 +343,7 @@ spec:
             path: {{ $.Values.volumes.localtime.hostPath }}
         - name: custom-config
           configMap:
-            name: {{ $.Values.configMap.name }}
+            name: {{ include "gpu-monitoring.configMapName" $ }}
             defaultMode: 0755
         {{- if $.Values.metricsCollector.enabled }}
         - name: collector-config

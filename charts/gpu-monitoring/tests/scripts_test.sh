@@ -23,6 +23,10 @@ case "$*" in
     echo "580.126.09"
     ;;
   "--query-gpu=clocks_event_reasons.active --format=csv,noheader,nounits")
+    if [[ "${NVIDIA_SMI_THROTTLE_FAIL:-0}" == "1" ]]; then
+      echo "active reason query failed" >&2
+      exit 1
+    fi
     echo "${NVIDIA_SMI_THROTTLE_OUTPUT:-0x0000000000000000}"
     ;;
   *)
@@ -37,6 +41,57 @@ cat >"$TEST_ROOT/bin/pgrep" <<'EOF'
 exit 0
 EOF
 chmod +x "$TEST_ROOT/bin/pgrep"
+
+cat >"$TEST_ROOT/bin/dcgmi" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "health -c")
+    exit 0
+    ;;
+  "health -t")
+    echo "${DCGMI_HEALTH_OUTPUT:-DCGM health check passed}"
+    exit "${DCGMI_HEALTH_EXIT_CODE:-0}"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+chmod +x "$TEST_ROOT/bin/dcgmi"
+
+cat >"$TEST_ROOT/bin/journalctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${JOURNALCTL_OUTPUT:-}"
+exit "${JOURNALCTL_EXIT_CODE:-0}"
+EOF
+chmod +x "$TEST_ROOT/bin/journalctl"
+
+cat >"$TEST_ROOT/bin/date" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "+%s" && -n "${TEST_NOW:-}" ]]; then
+  echo "$TEST_NOW"
+  exit 0
+fi
+exec /bin/date "$@"
+EOF
+chmod +x "$TEST_ROOT/bin/date"
+
+cat >"$TEST_ROOT/bin/ibstat" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUTPUT'
+CA 'mlx5_0'
+  Port 1:
+    State: Active
+OUTPUT
+EOF
+chmod +x "$TEST_ROOT/bin/ibstat"
+
+cat >"$TEST_ROOT/bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+shift
+exec "$@"
+EOF
+chmod +x "$TEST_ROOT/bin/timeout"
 
 PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
   bash "$CHART_DIR/scripts/check_gpu_nvlink_b200.sh"
@@ -94,3 +149,115 @@ PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
 PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
   NVIDIA_SMI_THROTTLE_OUTPUT=0x0000000000000001 \
   bash "$CHART_DIR/scripts/check_gpu_throttle.sh"
+
+empty_version_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("")' \
+    bash "$CHART_DIR/scripts/check_gpu_throttle.sh"
+)"
+[[ "$empty_version_output" == *"No GPU throttling detected"* ]]
+if throttle_query_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("")' \
+    NVIDIA_SMI_THROTTLE_FAIL=1 \
+    bash "$CHART_DIR/scripts/check_gpu_throttle.sh" 2>&1
+)"; then
+  echo "expected an active-reason query failure to fail the GPU throttle check" >&2
+  exit 1
+fi
+[[ "$throttle_query_output" == *"return code is 1"* ]]
+
+PATH="$TEST_ROOT/bin:$PATH" NPD_DCGM_REQUIRED=1 \
+  DCGMI_HEALTH_OUTPUT="DCGM health check passed" \
+  bash "$CHART_DIR/scripts/check-dcgm-health.sh"
+if dcgm_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" NPD_DCGM_REQUIRED=1 \
+    DCGMI_HEALTH_OUTPUT="DCGM diagnostic failure" DCGMI_HEALTH_EXIT_CODE=3 \
+    bash "$CHART_DIR/scripts/check-dcgm-health.sh" 2>&1
+)"; then
+  echo "expected a failed dcgmi health command to fail the check" >&2
+  exit 1
+fi
+[[ "$dcgm_output" == *"DCGM diagnostic failure"* ]]
+[[ "$dcgm_output" == *"return code 3"* ]]
+
+readonly XID_LOGFILE="$TEST_ROOT/gpu-xid.log"
+readonly XID_EVENT="kernel: NVRM: Xid (PCI:0000:01:00): 79, pid=1234"
+if first_xid_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_XID_LOGFILE="$XID_LOGFILE" \
+    JOURNALCTL_OUTPUT="$XID_EVENT" \
+    bash "$CHART_DIR/scripts/check_gpu_xid.sh" 2>&1
+)"; then
+  echo "expected an active XID to fail the first check" >&2
+  exit 1
+fi
+[[ "$first_xid_output" == *"GPU Xid errors detected"* ]]
+if second_xid_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_XID_LOGFILE="$XID_LOGFILE" \
+    JOURNALCTL_OUTPUT="$XID_EVENT" \
+    bash "$CHART_DIR/scripts/check_gpu_xid.sh" 2>&1
+)"; then
+  echo "expected a deduplicated active XID to remain unhealthy" >&2
+  exit 1
+fi
+[[ "$second_xid_output" == *"XID 79 already logged"* ]]
+
+readonly FLAP_STATE_FILE="$TEST_ROOT/ib-flap-state.txt"
+# Four transitions 700 seconds apart form two flaps inside the one-hour window.
+# More than ten newer stable samples prove retention is time-based, not count-based.
+cat >"$FLAP_STATE_FILE" <<'EOF'
+6300 mlx5_0:1=up
+6500 mlx5_0:1=up
+7200 mlx5_0:1=down
+7900 mlx5_0:1=up
+8600 mlx5_0:1=down
+9300 mlx5_0:1=up
+9350 mlx5_0:1=up
+9400 mlx5_0:1=up
+9450 mlx5_0:1=up
+9500 mlx5_0:1=up
+9550 mlx5_0:1=up
+9600 mlx5_0:1=up
+9650 mlx5_0:1=up
+9700 mlx5_0:1=up
+9750 mlx5_0:1=up
+9800 mlx5_0:1=up
+9850 mlx5_0:1=up
+9900 mlx5_0:1=up
+EOF
+if first_flap_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" TEST_NOW=10000 IB_DEVICES="mlx5_0:1" \
+    IB_FLAP_THRESHOLD_SHORT=2 IB_FLAP_CHECK_WINDOW=3600 \
+    IB_FLAP_STATE_FILE="$FLAP_STATE_FILE" \
+    bash "$CHART_DIR/scripts/check_ib_flaps.sh" 2>&1
+)"; then
+  echo "expected two hour-window IB flaps to fail the first check" >&2
+  exit 1
+fi
+[[ "$first_flap_output" == *"2 ibstat state flaps"* ]]
+! grep -q '^6300 ' "$FLAP_STATE_FILE"
+grep -q '^6500 ' "$FLAP_STATE_FILE"
+[[ "$(wc -l < "$FLAP_STATE_FILE" | tr -d ' ')" -gt 10 ]]
+if second_flap_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" TEST_NOW=10000 IB_DEVICES="mlx5_0:1" \
+    IB_FLAP_THRESHOLD_SHORT=2 IB_FLAP_CHECK_WINDOW=3600 \
+    IB_FLAP_STATE_FILE="$FLAP_STATE_FILE" \
+    bash "$CHART_DIR/scripts/check_ib_flaps.sh" 2>&1
+)"; then
+  echo "expected retained hour-window IB flaps to fail the repeat check" >&2
+  exit 1
+fi
+[[ "$second_flap_output" == *"2 ibstat state flaps"* ]]
+
+readonly ORIGINAL_CONFIG_NAME="$(
+  helm template content-hash "$CHART_DIR" --show-only templates/configmap.yaml |
+    awk '$1 == "name:" { print $2; exit }'
+)"
+readonly MUTATED_CHART_DIR="$TEST_ROOT/gpu-monitoring"
+cp -R "$CHART_DIR" "$MUTATED_CHART_DIR"
+printf '\n# content hash regression probe\n' >>"$MUTATED_CHART_DIR/scripts/check_gpu_xid.sh"
+readonly MUTATED_CONFIG_NAME="$(
+  helm template content-hash "$MUTATED_CHART_DIR" --show-only templates/configmap.yaml |
+    awk '$1 == "name:" { print $2; exit }'
+)"
+[[ "$ORIGINAL_CONFIG_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
+[[ "$MUTATED_CONFIG_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
+[[ "$ORIGINAL_CONFIG_NAME" != "$MUTATED_CONFIG_NAME" ]]

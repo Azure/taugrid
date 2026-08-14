@@ -49,7 +49,7 @@ charts/gpu-monitoring/
 1. **ServiceAccount**: `gpu-monitoring` - Identity for the DaemonSet pods
 2. **ClusterRole**: Permissions to read nodes, create events, and update node status
 3. **ClusterRoleBinding**: Binds the ClusterRole to the ServiceAccount
-4. **ConfigMap**: `gpu-monitoring-gpu` - Bundles all scripts and monitor configs
+4. **ConfigMap**: `gpu-monitoring-gpu-<content-hash>` - Immutable bundle of all scripts and monitor configs
 5. **DaemonSet**: `gpu-monitoring-gpu` - Runs on GPU nodes with custom checks
 
 ## Key Features
@@ -59,7 +59,7 @@ charts/gpu-monitoring/
 - **System Monitoring**: Log and stats monitoring
 - **Node Affinity**: Targets GPU worker nodes (excludes system nodes)
 - **Privileged Access**: Required for GPU and IB device access
-- **ConfigMap Mode 0755**: Scripts are executable
+- **Immutable Executable Bundle**: Scripts use mode 0755 and a content-addressed ConfigMap name, so updates roll pods to a new immutable object
 
 ## Installation
 

@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+readonly OK=0
+readonly NONOK=1
+
 case "${NPD_DCGM_SIMULATION:-}" in
   healthy)
     echo "dcgm health ok"
@@ -39,10 +42,19 @@ if ! dcgmi health -c >/dev/null 2>&1; then
   exit 1
 fi
 
-output="$(dcgmi health -t 2>/dev/null || true)"
+if output="$(dcgmi health -t 2>&1)"; then
+  health_rc=$OK
+else
+  health_rc=$?
+fi
+if [[ $health_rc -ne $OK ]]; then
+  [[ -n "${output}" ]] && echo "${output}"
+  echo "dcgmi health check failed with return code ${health_rc}"
+  exit $NONOK
+fi
 if [[ -z "${output}" ]]; then
   echo "dcgmi health check failed"
-  exit 1
+  exit $NONOK
 fi
 
 echo "${output}"

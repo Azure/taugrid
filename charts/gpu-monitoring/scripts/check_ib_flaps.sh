@@ -25,10 +25,8 @@ readonly CHECK_WINDOW="${IB_FLAP_CHECK_WINDOW:-3600}"
 readonly JOURNAL_FLAP_WINDOW=120
 
 # Storage configuration (host path volume mount)
-readonly STATE_FILE="/var/lib/ib-state/ib_flap_state.txt"
-readonly TEMP_STATE_FILE="/tmp/ib_flap_state.txt"
-readonly LOG_RETENTION_SECONDS=$((CHECK_WINDOW * 2))
-readonly MAX_ENTRIES=10
+readonly STATE_FILE="${IB_FLAP_STATE_FILE:-/var/lib/ib-state/ib_flap_state.txt}"
+readonly TEMP_STATE_FILE="${IB_FLAP_TEMP_STATE_FILE:-/tmp/ib_flap_state.txt}"
 
 # Logging functions
 log_warn() {
@@ -97,18 +95,12 @@ save_state() {
 
     local current_time
     current_time=$(date +%s)
-    local cutoff=$((current_time - LOG_RETENTION_SECONDS))
+    local cutoff=$((current_time - CHECK_WINDOW))
 
-    # Filter old entries and keep only last MAX_ENTRIES via awk
+    # Keep every timestamped sample in the configured analysis window.
     local cleaned
-    cleaned=$(echo "$state_data" | awk -v cutoff="$cutoff" -v max="$MAX_ENTRIES" '
-        NF > 0 && $1 ~ /^[0-9]+$/ && $1 > cutoff { count++; lines[count] = $0 }
-        END {
-            start = 1
-            if (count > max) start = count - max + 1
-            for (k = start; k <= count; k++) print lines[k]
-        }
-    ')
+    cleaned=$(echo "$state_data" | awk -v cutoff="$cutoff" \
+        'NF > 0 && $1 ~ /^[0-9]+$/ && $1 >= cutoff')
 
     # Atomic write via temp + mv
     local temp_file="${state_file}.tmp.$$"

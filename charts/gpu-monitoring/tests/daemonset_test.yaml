@@ -262,3 +262,12 @@ tests:
             operator: Exists
             effect: NoExecute
           any: true
+
+  - it: references the shared content-addressed executable ConfigMap
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.volumes[?(@.name=="custom-config")].configMap.name
+          pattern: '^gpu-monitoring-gpu-[a-f0-9]{10}$'

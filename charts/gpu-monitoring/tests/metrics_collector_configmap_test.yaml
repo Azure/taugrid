@@ -79,6 +79,15 @@ tests:
       - matchRegex:
           path: data["rules.yaml"]
           pattern: 'DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_port_link_downed_total'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_port_symbol_error_total'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_(link_downed|symbol_error)_total'
 
   - it: per-SKU nodeExporter=false drops the node-exporter target from that SKU's ConfigMap
     set:

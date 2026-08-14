@@ -48,6 +48,8 @@ securityContext:
 resources: {}
 
 configMap:
+  # Base for the immutable executable/config bundle; the chart appends a
+  # content hash and points every per-SKU DaemonSet at that exact object.
   name: gpu-monitoring-gpu
 
 monitors:
@@ -234,14 +236,14 @@ metricsCollector:
       for: 1m
     # Critical: InfiniBand (any increase over 1m → taint)
     - name: ib-link-down
-      metricName: node_infiniband_link_downed_total
+      metricName: node_infiniband_port_link_downed_total
       conditionType: IBLinkDown
       mode: rate
       threshold: 0
       window: 1m
       for: 1m
     - name: ib-symbol-error
-      metricName: node_infiniband_symbol_error_total
+      metricName: node_infiniband_port_symbol_error_total
       conditionType: IBSymbolError
       mode: rate
       threshold: 0

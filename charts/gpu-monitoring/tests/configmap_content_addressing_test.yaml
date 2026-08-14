@@ -1,0 +1,40 @@
+suite: executable ConfigMap content addressing
+templates:
+  - configmap.yaml
+
+tests:
+  - it: renders immutable bundled content under a hashed name
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: immutable
+          value: true
+      - matchRegex:
+          path: metadata.name
+          pattern: '^gpu-monitoring-gpu-[a-f0-9]{10}$'
+      - isNotEmpty:
+          path: data
+      - isNotEmpty:
+          path: data["custom-plugin-monitor.json"]
+      - isNotEmpty:
+          path: data["check_gpu_xid.sh"]
+
+  - it: truncates a custom base so the hashed name remains a DNS label
+    set:
+      configMap.name: this-custom-configmap-name-is-far-too-long-to-fit-with-a-content-hash
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: '^this-custom-configmap-name-is-far-too-long-to-fit-wi-[a-f0-9]{10}$'
+
+  - it: custom labels do not contaminate the content-addressed name
+    set:
+      labels.team: infra
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: '^gpu-monitoring-gpu-[a-f0-9]{10}$'
+      - equal:
+          path: metadata.labels.team
+          value: infra

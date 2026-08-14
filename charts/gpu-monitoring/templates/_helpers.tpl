@@ -51,6 +51,80 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Render the executable scripts and monitor configs stored in the shared ConfigMap.
+The same rendered block is hashed for the ConfigMap name so its identity cannot
+drift from its data.
+*/}}
+{{- define "gpu-monitoring.configMapData" -}}
+{{- range $name := list "custom-plugin-monitor.json" "custom-plugin-monitor-h100.json" "custom-plugin-monitor-h100-nvl.json" "custom-plugin-monitor-gb200.json" "custom-plugin-monitor-spark.json" }}
+{{ $name }}: |
+{{ tpl ($.Files.Get (printf "configs/%s" $name)) $ | indent 2 }}
+{{- end }}
+system-log-monitor.json: |
+{{ tpl (.Files.Get "configs/system-log-monitor.json") . | indent 2 }}
+system-stats-monitor.json: |
+{{ tpl (.Files.Get "configs/system-stats-monitor.json") . | indent 2 }}
+kernel-monitor.json: |
+{{ tpl (.Files.Get "configs/kernel-monitor.json") . | indent 2 }}
+known-modules.json: |
+{{ tpl (.Files.Get "configs/known-modules.json") . | indent 2 }}
+check-nvidia-smi.sh: |
+{{ tpl (.Files.Get "scripts/check-nvidia-smi.sh") . | indent 2 }}
+check-nvidia-device-files.sh: |
+{{ tpl (.Files.Get "scripts/check-nvidia-device-files.sh") . | indent 2 }}
+check-dcgm-health.sh: |
+{{ tpl (.Files.Get "scripts/check-dcgm-health.sh") . | indent 2 }}
+check_gpu_count.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_count.sh") . | indent 2 }}
+check_gpu_nvlink.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_nvlink.sh") . | indent 2 }}
+check_gpu_xid.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_xid.sh") . | indent 2 }}
+check_gpu_ecc.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_ecc.sh") . | indent 2 }}
+check_gpu_ecc_from_sai.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_ecc_from_sai.sh") . | indent 2 }}
+check_ib.sh: |
+{{ tpl (.Files.Get "scripts/check_ib.sh") . | indent 2 }}
+check_ib_pkeys.sh: |
+{{ tpl (.Files.Get "scripts/check_ib_pkeys.sh") . | indent 2 }}
+check_gpu_vbios.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_vbios.sh") . | indent 2 }}
+check_gpu_throttle.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_throttle.sh") . | indent 2 }}
+check_gpu_driver.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_driver.sh") . | indent 2 }}
+check_gpu_ecc_remap_pending.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_ecc_remap_pending.sh") . | indent 2 }}
+check_gpu_ecc_remap_failure.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_ecc_remap_failure.sh") . | indent 2 }}
+check_gpu_nvlink_b200.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_nvlink_b200.sh") . | indent 2 }}
+check_gpu_xid_always_fail.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_xid_always_fail.sh") . | indent 2 }}
+check_ib_flaps.sh: |
+{{ tpl (.Files.Get "scripts/check_ib_flaps.sh") . | indent 2 }}
+check_nvme_mount.sh: |
+{{ tpl (.Files.Get "scripts/check_nvme_mount.sh") . | indent 2 }}
+check_temp_imex.sh: |
+{{ tpl (.Files.Get "scripts/check_temp_imex.sh") . | indent 2 }}
+nvidia-smi-wrapper.sh: |
+{{ tpl (.Files.Get "scripts/nvidia-smi-wrapper.sh") . | indent 2 }}
+check_roce.sh: |
+{{ tpl (.Files.Get "scripts/check_roce.sh") . | indent 2 }}
+{{- end }}
+
+{{/*
+Content-address the executable ConfigMap so updates create a new immutable object.
+Truncating the configurable base keeps the complete DNS label within 63 bytes.
+*/}}
+{{- define "gpu-monitoring.configMapName" -}}
+{{- $dataHash := include "gpu-monitoring.configMapData" . | sha256sum | trunc 10 -}}
+{{- $baseName := .Values.configMap.name | default "gpu-monitoring-gpu" | trunc 52 | trimSuffix "-" -}}
+{{- printf "%s-%s" $baseName $dataHash -}}
+{{- end }}
+
+{{/*
 Selector labels
 */}}
 {{- define "gpu-monitoring.selectorLabels" -}}

@@ -23,22 +23,26 @@ function collect_gpu_clock_throttle_data() {
   # build proper command based on nvidia-smi version
   # GPU_DRIVER_VERSIONS format: ("ver1" "ver2") — strip bash array syntax
   desired_versions=$(echo "${GPU_DRIVER_VERSIONS:-}" | tr -d '()"')
-  nvidia_smi_version=$(nvidia-smi --id=0 --query-gpu=driver_version --format=csv,noheader)
-  for desired_version in $desired_versions; do
-    if [[ "$(echo -e "$nvidia_smi_version\n$desired_version" | sort -V | head -n1)" == "$desired_version" ]]; then
-      GPU_THROTTLE_QUERY="clocks_event_reasons.active"
-      break
-    else
-      GPU_THROTTLE_QUERY="clocks_throttle_reasons.active"
+  GPU_THROTTLE_QUERY="clocks_event_reasons.active"
+  if [[ -n "$desired_versions" ]]; then
+    if ! nvidia_smi_version=$(nvidia-smi --id=0 --query-gpu=driver_version --format=csv,noheader); then
+      echo "GPU throttle check failed to query the driver version."
+      exit $NONOK
     fi
-  done
+    for desired_version in $desired_versions; do
+      if [[ "$(echo -e "$nvidia_smi_version\n$desired_version" | sort -V | head -n1)" == "$desired_version" ]]; then
+        break
+      fi
+      GPU_THROTTLE_QUERY="clocks_throttle_reasons.active"
+    done
+  fi
 
   gpu_clock_throttle_query_out=$(nvidia-smi --query-gpu=$GPU_THROTTLE_QUERY --format=csv,noheader,nounits)
   gpu_clock_throttle_query_rc=$?
   if [[ $gpu_clock_throttle_query_rc != 0 ]]; then
       echo "$gpu_clock_throttle_query_out"
-      echo "Warning GPU throttle check test failed to run. In most cases this is due to nvidia-smi query options not being available in the installed version. The reported return code is $gpu_clock_throttle_query_rc. The remainder of the tests will continue."
-      exit 0
+      echo "GPU throttle check failed to query active reasons. The reported return code is $gpu_clock_throttle_query_rc."
+      exit $NONOK
   fi
 #  echo "gpu_clock_throttle_query_out=$gpu_clock_throttle_query_out"
   IFS=$'\n'
