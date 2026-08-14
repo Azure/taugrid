@@ -114,7 +114,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: cli/go.mod
+          go-version-file: .go-version
           cache-dependency-path: |
             cli/go.sum
             core/go.sum
@@ -159,7 +159,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: cli/go.mod
+          go-version-file: .go-version
           cache-dependency-path: |
             cli/go.sum
             core/go.sum

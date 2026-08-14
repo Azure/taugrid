@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
@@ -390,23 +389,6 @@ func TestNodeWatchIgnoresStatusOnlyUpdates(t *testing.T) {
 	}
 }
 
-func TestTauClusterSpecHashCanonicalizesDefaults(t *testing.T) {
-	implicit := tauv1alpha1.TauClusterSpec{}
-	explicit := tauv1alpha1.TauClusterSpec{
-		ManagementMode: tauv1alpha1.ClusterManagementModeObserve,
-		DeletionPolicy: tauv1alpha1.ClusterDeletionPolicyRetain,
-		Queues: tauv1alpha1.TauClusterQueuesSpec{
-			Ownership: tauv1alpha1.ClusterOwnershipExternal,
-		},
-		WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{
-			DefaultQueue: "jobqueue",
-		},
-	}
-	if got, want := clusterSpecHash(implicit), clusterSpecHash(explicit); got != want {
-		t.Fatalf("implicit defaults hash = %q, explicit defaults hash = %q", got, want)
-	}
-}
-
 func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -417,7 +399,7 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 		WithObjects(workspace, localQueue, testClusterQueue("aurora-cq")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 	// The first reconcile adds the finalizer, the second persists the primary
@@ -552,7 +534,7 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 		).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -610,7 +592,7 @@ func TestWorkspaceClusterWideAuthorizationDoesNotDeleteForeignRBAC(t *testing.T)
 		).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -644,7 +626,7 @@ func TestCleanupPlatformReaderRBACDoesNotDeleteForeignObject(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreignRole).Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	err := reconciler.cleanupPlatformReaderRBAC(ctx, "aurora")
 	if err == nil || !strings.Contains(err.Error(), "refusing to delete") {
@@ -663,7 +645,7 @@ func TestCleanupClusterQueueReaderRBACDoesNotDeleteForeignObject(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName("aurora")},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreignBinding).Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	err := reconciler.cleanupClusterQueueReaderRBAC(ctx, "aurora")
 	if err == nil || !strings.Contains(err.Error(), "refusing to delete") {
@@ -693,7 +675,7 @@ func TestWorkspaceReconcilePreservesExistingNamespaceMetadata(t *testing.T) {
 		WithObjects(workspace, namespace, localQueue, existingBinding).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -740,7 +722,7 @@ func TestWorkspaceReconcileReportsNamespaceOwnedByAnotherWorkspace(t *testing.T)
 		WithObjects(workspace, namespace, foreignBinding, foreignServiceAccount, otherWorkspace, testClusterQueue("aurora")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{
 		Name:      "aurora",
@@ -800,7 +782,7 @@ func TestWorkspaceNamespaceMutationFailureBlocksNamespacedResources(t *testing.T
 		Client:    baseClient,
 		createErr: errors.New("injected namespace create failure"),
 	}
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{
 		Name:      "aurora",
@@ -842,7 +824,7 @@ func TestWorkspaceReconcileRefusesToAdoptForeignAccessObjects(t *testing.T) {
 		WithObjects(workspace, foreignBinding, foreignServiceAccount, testClusterQueue("aurora")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -899,7 +881,7 @@ func TestWorkspaceReconcileCleansStaleTargetRBAC(t *testing.T) {
 		WithObjects(workspace, localQueue, staleRole, staleBinding, staleServiceAccount, staleNamespace).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: "old-aurora"}, &rbacv1.Role{}); !apierrors.IsNotFound(err) {
@@ -938,7 +920,7 @@ func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T)
 		WithObjects(workspace, localQueue, testClusterQueue("aurora-cq")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -995,7 +977,7 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(workspace, targetNamespace, targetRole, targetBinding, targetServiceAccount, readerRole, readerBinding, clusterQueueBinding, localQueue).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}); err != nil {
 		t.Fatalf("Reconcile delete error = %v", err)
@@ -1057,7 +1039,7 @@ func TestWorkspaceRefusesReservedTargetNamespace(t *testing.T) {
 				WithObjects(workspace, namespace, localQueue).
 				WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 				Build()
-			reconciler := &TauWorkspaceReconciler{Client: c}
+			reconciler := newTestWorkspaceReconciler(c)
 
 			reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1107,7 +1089,7 @@ func TestWorkspaceRetargetDoesNotStripReservedNamespaceMetadata(t *testing.T) {
 		WithObjects(workspace, platform, localQueue).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1129,7 +1111,7 @@ func TestWorkspaceReconcileReportsMissingQueue(t *testing.T) {
 		WithObjects(workspace, testNamespace("aurora")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1153,7 +1135,7 @@ func TestWorkspaceReconcileCreatesWorkspaceLocalQueue(t *testing.T) {
 		WithObjects(workspace, testClusterQueue("jobqueue")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1183,56 +1165,6 @@ func TestWorkspaceReconcileCreatesWorkspaceLocalQueue(t *testing.T) {
 	}
 }
 
-func TestWorkspaceReconcileBlocksAdditionalV0Workspace(t *testing.T) {
-	ctx := context.Background()
-	scheme := testScheme(t)
-	primary := testWorkspace("zeta")
-	primary.CreationTimestamp = metav1.NewTime(time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC))
-	primaryNamespace := testNamespace("zeta")
-	primaryNamespace.Labels = workspaceNamespaceLabels("zeta", primary.Spec.Queue)
-	additional := testWorkspace("alpha")
-	additional.CreationTimestamp = primary.CreationTimestamp
-	additional.Spec.Queue = "jobqueue"
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(primary, primaryNamespace, additional, testClusterQueue("jobqueue")).
-		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
-		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
-
-	reconcileWorkspace(t, reconciler, ctx, "alpha")
-
-	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "alpha", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
-		t.Fatalf("Get additional workspace: %v", err)
-	}
-	if got.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded {
-		t.Fatalf("phase = %q, want Degraded; conditions=%#v", got.Status.Phase, got.Status.Conditions)
-	}
-	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionRBACReady, metav1.ConditionFalse)
-	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionFalse)
-	for _, condition := range got.Status.Conditions {
-		if (condition.Type == tauv1alpha1.ConditionRBACReady || condition.Type == tauv1alpha1.ConditionQueueReady) &&
-			condition.Reason != "AdditionalWorkspaceBlocked" {
-			t.Fatalf("%s reason = %q, want AdditionalWorkspaceBlocked", condition.Type, condition.Reason)
-		}
-	}
-
-	var namespace corev1.Namespace
-	if err := c.Get(ctx, client.ObjectKey{Name: "alpha"}, &namespace); !apierrors.IsNotFound(err) {
-		t.Fatalf("additional workspace Namespace exists or lookup failed: %v", err)
-	}
-	localQueue := &unstructured.Unstructured{}
-	localQueue.SetGroupVersionKind(localQueueGVK)
-	if err := c.Get(ctx, client.ObjectKey{Name: "jobqueue", Namespace: "alpha"}, localQueue); !apierrors.IsNotFound(err) {
-		t.Fatalf("additional workspace LocalQueue exists or lookup failed: %v", err)
-	}
-	var binding rbacv1.RoleBinding
-	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: "alpha"}, &binding); !apierrors.IsNotFound(err) {
-		t.Fatalf("additional workspace RoleBinding exists or lookup failed: %v", err)
-	}
-}
-
 func TestWorkspacePersistsPrimaryMarkerBeforeCreatingAccessResources(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -1243,7 +1175,7 @@ func TestWorkspacePersistsPrimaryMarkerBeforeCreatingAccessResources(t *testing.
 		WithObjects(workspace, testClusterQueue("jobqueue")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{
 		Name:      "research",
 		Namespace: tauv1alpha1.PlatformNamespace,
@@ -1293,7 +1225,7 @@ func TestWorkspacePromotionWaitsForTerminatingPrimaryCleanup(t *testing.T) {
 		WithObjects(primary, primaryBinding, primaryQueue, additional, testClusterQueue("jobqueue")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "alpha")
 	var alphaNamespace corev1.Namespace
@@ -1338,7 +1270,7 @@ func TestWorkspaceReconcileRestoresOwnedLocalQueueClusterQueue(t *testing.T) {
 		WithObjects(workspace, localQueue, testClusterQueue("aurora"), testClusterQueue("other-cq")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1364,7 +1296,7 @@ func TestWorkspaceReconcileDegradesWhenBackingClusterQueueDisappears(t *testing.
 		WithObjects(workspace, localQueue, clusterQueue).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 	if err := c.Delete(ctx, clusterQueue); err != nil {
@@ -1395,7 +1327,7 @@ func TestWorkspaceReconcileDoesNotRequireStorage(t *testing.T) {
 		WithObjects(workspace, testNamespace("aurora"), localQueue, testClusterQueue("aurora-cq")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1419,7 +1351,7 @@ func TestWorkspaceReconcileRequeuesWhileNotReady(t *testing.T) {
 		WithObjects(testWorkspace("aurora"), testNamespace("aurora")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 
 	var result ctrl.Result
@@ -1522,6 +1454,10 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+func newTestWorkspaceReconciler(c client.Client) *TauWorkspaceReconciler {
+	return &TauWorkspaceReconciler{Client: c, APIReader: c}
+}
+
 type resourceMutationRecordingClient struct {
 	client.Client
 	mutations []string
@@ -1593,7 +1529,7 @@ func TestWorkspaceWithoutQueueResolvesTauClusterDefault(t *testing.T) {
 		WithObjects(workspace, cluster, testClusterQueue("jobqueue")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -1646,7 +1582,7 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	recordingClient := &resourceMutationRecordingClient{Client: c}
-	reconciler := &TauWorkspaceReconciler{Client: recordingClient}
+	reconciler := newTestWorkspaceReconciler(recordingClient)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -1816,7 +1752,7 @@ func TestWorkspaceReclaimsNamespaceFromDeletedOwner(t *testing.T) {
 		WithObjects(workspace, localQueue, stranded).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := &TauWorkspaceReconciler{Client: c}
+	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
 
 	for i := 0; i < 3; i++ {

@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 // fakeKubectl installs a kubectl on PATH that records every invocation's
@@ -46,7 +48,8 @@ case "$*" in
   *"get workspaces.tau.azure.com taugrid-default"*)
     cat <<'JSON'
 {"apiVersion":"tau.azure.com/v1alpha1","kind":"TauWorkspace",
- "metadata":{"name":"taugrid-default","creationTimestamp":"2026-01-01T00:00:00Z"},
+ "metadata":{"name":"taugrid-default","creationTimestamp":"2026-01-01T00:00:00Z",
+  "annotations":{"`+workloadmeta.AnnotationV0PrimaryWorkspace+`":"true"}},
  "status":{"phase":"Ready"}}
 JSON
     exit 0;;
@@ -118,7 +121,8 @@ case "$*" in
   *"get workspaces.tau.azure.com research"*)
     cat <<'JSON'
 {"apiVersion":"tau.azure.com/v1alpha1","kind":"TauWorkspace",
- "metadata":{"name":"research","creationTimestamp":"2026-01-01T00:00:00Z"},
+ "metadata":{"name":"research","creationTimestamp":"2026-01-01T00:00:00Z",
+  "annotations":{"`+workloadmeta.AnnotationV0PrimaryWorkspace+`":"true"}},
  "status":{"phase":"Ready"}}
 JSON
     exit 0;;
@@ -172,7 +176,8 @@ JSON
  {"metadata":{"name":"taugrid-default","creationTimestamp":"2026-01-01T00:00:00Z"},
   "status":{"phase":"Blocked","conditions":[
     {"type":"RBACReady","status":"False","reason":"AdditionalWorkspaceBlocked"}]}},
- {"metadata":{"name":"research-primary","creationTimestamp":"2026-02-01T00:00:00Z"},
+ {"metadata":{"name":"research-primary","creationTimestamp":"2026-02-01T00:00:00Z",
+   "annotations":{"`+workloadmeta.AnnotationV0PrimaryWorkspace+`":"true"}},
   "status":{"phase":"Ready"}}]}
 JSON
     exit 0;;

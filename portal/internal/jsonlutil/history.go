@@ -173,7 +173,7 @@ func ExpandInputs(patterns []string) ([]string, error) {
 			continue
 		}
 		var matches []string
-		if hasGlobMeta(pattern) {
+		if strings.ContainsAny(pattern, "*?[") {
 			globbed, err := filepath.Glob(pattern)
 			if err != nil {
 				return nil, err
@@ -311,10 +311,6 @@ func WriteHistoryChunk(rootDir, partition string, chunk HistoryChunk) (string, s
 		_ = os.Chtimes(path, chunk.ExportedAt, chunk.ExportedAt)
 	}
 	return path, chunkKey, nil
-}
-
-func hasGlobMeta(value string) bool {
-	return strings.ContainsAny(value, "*?[")
 }
 
 func filePrefixSHA256(f *os.File, offset int64) (string, error) {

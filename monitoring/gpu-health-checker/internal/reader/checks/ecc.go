@@ -107,17 +107,13 @@ func (r *ECCReader) checkRetiredSBE(ctx context.Context, db *store.DB, f *reader
 
 func (r *ECCReader) checkSBERate(ctx context.Context, db *store.DB, cfg *config.Config, f *reader.CheckFindings) error {
 	sbeWindow := cfg.Checks.ECC.SBERateWindow
-	since := time.Now().Add(-sbeWindow)
-	sbeVol, err := db.QuerySamples(ctx, fieldnames.ECCSBEVol, -1, since)
+	samples, err := db.QuerySamples(ctx, fieldnames.ECCSBEVol, -1, time.Now().Add(-sbeWindow))
 	if err != nil {
 		return fmt.Errorf("query ECC_SBE_VOL: %w", err)
 	}
-	sbeRates := reader.ComputeDeltas(sbeVol)
-	for gpu, rate := range sbeRates {
-		if rate > cfg.Checks.ECC.SBERateThreshold {
-			f.AddWarning(gpu, fmt.Sprintf("GPU %d: SBE rate=%.1f in %s (threshold=%.0f)",
-				gpu, rate, sbeWindow, cfg.Checks.ECC.SBERateThreshold))
-		}
+	for _, delta := range deltasAboveThreshold(samples, cfg.Checks.ECC.SBERateThreshold) {
+		f.AddWarning(delta.gpu, fmt.Sprintf("GPU %d: SBE rate=%.1f in %s (threshold=%.0f)",
+			delta.gpu, delta.value, sbeWindow, cfg.Checks.ECC.SBERateThreshold))
 	}
 	return nil
 }

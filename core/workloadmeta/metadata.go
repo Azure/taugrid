@@ -100,10 +100,8 @@ const (
 
 	LabelOnboardingSmoke = "tau.azure.com/onboarding-smoke"
 
-	// AnnotationDurableID and AnnotationDurableIDUnderscore are an
-	// intentional alias pair, not a typo. Both spellings are read so that
-	// runs stamped by older CLI builds stay discoverable. Do not "fix" one
-	// into the other.
+	// Both spellings are read so workloads stamped by older CLI builds remain
+	// discoverable. New writers use AnnotationDurableID.
 	AnnotationDurableID           = "tau.azure.com/durable-id"
 	AnnotationDurableIDUnderscore = "tau.azure.com/durable_id"
 )
@@ -120,12 +118,11 @@ const (
 	LabelReclaimable = "tau.azure.com/reclaimable"
 	LabelQueueRole   = "tau.azure.com/queue-role"
 
-	AnnotationClusterQueue           = "tau.azure.com/cluster-queue"
-	AnnotationResourceFlavor         = "tau.azure.com/resource-flavor"
-	AnnotationPodPriorityClass       = "tau.azure.com/pod-priority-class"
-	AnnotationWorkloadPriorityClass  = "tau.azure.com/workload-priority-class"
-	AnnotationKueueTopology          = "tau.azure.com/kueue-topology"
-	AnnotationMultiKueueIncompatible = "tau.azure.com/multikueue-incompatible"
+	AnnotationClusterQueue          = "tau.azure.com/cluster-queue"
+	AnnotationResourceFlavor        = "tau.azure.com/resource-flavor"
+	AnnotationPodPriorityClass      = "tau.azure.com/pod-priority-class"
+	AnnotationWorkloadPriorityClass = "tau.azure.com/workload-priority-class"
+	AnnotationKueueTopology         = "tau.azure.com/kueue-topology"
 
 	AnnotationPresetDesc         = "tau.azure.com/preset-description"
 	AnnotationPresetExplain      = "tau.azure.com/preset-explain"
@@ -147,25 +144,17 @@ const (
 
 // GPU resource contract.
 const (
-	LabelGPUCount     = "tau.azure.com/gpu-count"
-	LabelGPUSize      = "tau.azure.com/gpu-size"
-	LabelGPUPlacement = "tau.azure.com/gpu-placement"
+	LabelGPUCount = "tau.azure.com/gpu-count"
+	LabelGPUSize  = "tau.azure.com/gpu-size"
 
-	AnnotationGPUContract     = "tau.azure.com/gpu-contract"
-	AnnotationGPUMemoryGiBMin = "tau.azure.com/gpu-memory-gib-min"
-	AnnotationGPUCount        = "tau.azure.com/gpu-count"
-	AnnotationDRAClaim        = "tau.azure.com/dra-claim-template"
+	AnnotationGPUContract = "tau.azure.com/gpu-contract"
+	AnnotationGPUCount    = "tau.azure.com/gpu-count"
+	AnnotationDRAClaim    = "tau.azure.com/dra-claim-template"
 )
 
-// Storage contract.
+// Storage mounts.
 const (
-	LabelStorageDurableType      = "tau.azure.com/storage-durable"
-	LabelStorageHotType          = "tau.azure.com/storage-hot"
-	LabelStorageModelCacheType   = "tau.azure.com/storage-model-cache"
-	LabelStorageCheckpointFormat = "tau.azure.com/storage-checkpoint-format"
-
-	AnnotationStorageContract = "tau.azure.com/storage-contract"
-	AnnotationStorageMounts   = "tau.azure.com/storage-mounts"
+	AnnotationStorageMounts = "tau.azure.com/storage-mounts"
 )
 
 // Durable results and artifacts.

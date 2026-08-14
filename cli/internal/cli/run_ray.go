@@ -207,7 +207,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	if o.metricsOffloadEnabled {
 		offload := o
 		offload.checkpointPath = runDispatchEnvValue(o.env, "TAU_RESUME_FROM")
-		metricsRuntime, err = resolveMetricsOffload(offload, p, name, namespace, kubeContext, outputDir, outputWritable, annotations)
+		metricsRuntime, err = resolveMetricsOffload(offload, name, namespace, kubeContext, outputDir, outputWritable, annotations)
 		if err != nil {
 			return err
 		}

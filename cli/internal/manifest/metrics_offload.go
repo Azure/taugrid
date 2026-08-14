@@ -10,7 +10,6 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/storage"
-	"github.com/Azure/taugrid/core/resourceprofile"
 )
 
 const (
@@ -60,13 +59,6 @@ type metricsOffloadTemplateData struct {
 	DoneTimeoutSeconds      int64
 	RemoteWriteEndpointYAML string
 	IntervalYAML            string
-}
-
-// MetricsOffloadOptionsFromProfile reads spec.metrics.offload from a resolved
-// Profile. Missing blocks return zero options so profiles remain backwards
-// compatible.
-func MetricsOffloadOptionsFromProfile(p profile.Profile) (MetricsOffloadOptions, error) {
-	return metricsoffload.OptionsFromProfile(p)
 }
 
 func (opts RenderOptions) metricsOffloadRuntime(kind string) (metricsOffloadRuntime, error) {

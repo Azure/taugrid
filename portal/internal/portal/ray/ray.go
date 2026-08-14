@@ -287,35 +287,6 @@ func readyHeadClusters(ctx context.Context, r Reader, namespace string) map[stri
 	return ready
 }
 
-// HeadPodReady reports whether the Ray head pod of <namespace>/<cluster> is
-// currently Ready, operating on an already-fetched core v1 Pod list JSON so
-// callers (e.g. the Job-detail board) can reuse pod bytes they already read
-// instead of issuing a second ListPods call.
-//
-// It returns known=false when the JSON cannot be decoded or no head pod for the
-// cluster is present in the list; callers should then default to "reachable"
-// rather than hide a healthy dashboard link on a transient/absent signal. When
-// known=true, ready reflects the head pod's Ready condition.
-func HeadPodReady(podsJSON []byte, namespace, cluster string) (ready, known bool) {
-	var list podList
-	if err := json.Unmarshal(podsJSON, &list); err != nil {
-		return false, false
-	}
-	for _, pod := range list.Items {
-		if pod.Metadata.Labels[nodeTypeLabel] != nodeTypeHead {
-			continue
-		}
-		if pod.Metadata.Labels[clusterLabel] != cluster {
-			continue
-		}
-		if pod.Metadata.Namespace != namespace {
-			continue
-		}
-		return isPodReady(pod), true
-	}
-	return false, false
-}
-
 // isPodReady reports whether the pod carries a Ready condition set to True.
 func isPodReady(pod podObj) bool {
 	for _, c := range pod.Status.Conditions {

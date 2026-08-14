@@ -45,7 +45,7 @@ const (
 	// GPUClassA10080GB, GPUClassH10095GB, and GPUClassH200141GB are the
 	// canonical, hardware-only gpu_class values. They name capacity/memory
 	// only ("80gb", "95gb", "141gb"); interconnect/placement concerns
-	// (NVLink, same-host, multi-node) belong solely to spec.topology.placement
+	// (NVLink, same-host, multi-node) belong solely to Topology.Placement
 	// and must never be re-encoded into a gpu_class name. Each canonical value
 	// is also the exact tau.azure.com/gpu-class node-label/ResourceFlavor
 	// contract Tau uses to select a Kueue ResourceFlavor -- resolution must
@@ -122,7 +122,7 @@ var legacyGPUClassAliases = map[string]string{
 }
 
 // NormalizeGPUClass maps a researcher-supplied gpu_class value (from a CLI
-// flag, run config, preset, or profile spec.topology.gpuClass) to its
+// flag, run config, preset, or profile Topology.GPUClass) to its
 // canonical hardware-only spelling. It returns the canonical value and
 // whether the input was a deprecated legacy alias that should be migrated.
 // Unrecognized values (including "any" and already-canonical values) are
@@ -164,8 +164,7 @@ func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) e
 // ResolveGPUClass returns the effective canonical gpu_class after applying an
 // explicit override to a profile's topology contract.
 func ResolveGPUClass(p profile.Profile, override string) (string, bool) {
-	raw, _ := asMap(p.Spec["topology"])
-	gpuClass := stringFrom(raw, "gpuClass", "gpuFlavor", "flavor")
+	gpuClass := p.Topology.GPUClass
 	if override != "" {
 		gpuClass = override
 	}
@@ -212,24 +211,15 @@ type Plan struct {
 	PodPriorityClassName string
 }
 
-// Build returns the Tau/Kueue metadata implied by a profile's spec.topology
+// Build returns the Tau/Kueue metadata implied by a profile's Topology
 // and any caller overrides. Profiles without topology intent and calls without
 // topology flags produce an empty Plan.
 func Build(p profile.Profile, o Options) (Plan, error) {
-	raw, hasSpec := asMap(p.Spec["topology"])
-	if !hasSpec && !o.hasValues() {
+	if p.Topology == (profile.Topology{}) && p.Lane == "" && !o.hasValues() {
 		return Plan{}, nil
 	}
 
-	if enabled, ok := boolFrom(raw, "enabled"); ok && !enabled {
-		reason := stringFrom(raw, "disabledReason", "reason")
-		if reason == "" {
-			reason = "profile topology contract is disabled"
-		}
-		return Plan{}, fmt.Errorf("profile %q topology disabled: %s", p.Name, reason)
-	}
-
-	spec := contractFromProfile(p, raw)
+	spec := contractFromProfile(p)
 	spec.apply(o)
 	spec.normalize()
 	spec.defaultMode()
@@ -315,48 +305,23 @@ type contract struct {
 	workloadPriorityClassName string
 	priorityTier              string
 	requiredTopology          string
-	disabledReason            string
-	preemptible               bool
-	hasCheckpoint             bool
 	disableKueueTopology      bool
 	disableDefaultPriorities  bool
 }
 
-func contractFromProfile(p profile.Profile, raw map[string]any) contract {
-	c := contract{
-		team:                      stringFrom(raw, "team"),
-		lane:                      firstNonEmpty(stringFrom(raw, "lane"), laneFromProfile(p)),
-		mode:                      stringFrom(raw, "mode"),
-		placement:                 stringFrom(raw, "placement", "class", "type", "topologyClass"),
-		shape:                     stringFrom(raw, "shape"),
-		gpuClass:                  stringFrom(raw, "gpuClass", "gpuFlavor", "flavor"),
-		checkpointEvery:           stringFrom(raw, "checkpointEvery", "checkpointInterval"),
-		queue:                     stringFrom(raw, "queueName", "localQueue"),
-		podPriorityClassName:      stringFrom(raw, "podPriorityClassName"),
-		workloadPriorityClassName: stringFrom(raw, "workloadPriorityClassName"),
-		priorityTier:              stringFrom(raw, "priorityTier", "priority"),
-		disabledReason:            stringFrom(raw, "disabledReason", "reason"),
+func contractFromProfile(p profile.Profile) contract {
+	return contract{
+		team:                      p.Topology.Team,
+		lane:                      p.Lane,
+		mode:                      p.Topology.Mode,
+		placement:                 p.Topology.Placement,
+		shape:                     p.Topology.Shape,
+		gpuClass:                  p.Topology.GPUClass,
+		podPriorityClassName:      p.Topology.PodPriorityClassName,
+		workloadPriorityClassName: p.Topology.WorkloadPriorityClassName,
+		priorityTier:              p.Topology.PriorityTier,
+		disableDefaultPriorities:  p.Topology.DisableDefaultPriorities,
 	}
-	if pol, ok := asMap(p.Spec["policy"]); ok {
-		if preemptible, ok := boolFrom(pol, "preemptable", "preemptible"); ok {
-			c.preemptible = preemptible
-		}
-		if checkpoint, ok := boolFrom(pol, "checkpointOnPreempt", "resumeFromCheckpoint"); ok && checkpoint {
-			c.hasCheckpoint = true
-		}
-		if retry, ok := asMap(pol["retry"]); ok {
-			if checkpoint, ok := boolFrom(retry, "resumeFromCheckpoint", "checkpointOnRetry"); ok && checkpoint {
-				c.hasCheckpoint = true
-			}
-		}
-	}
-	if checkpoint, ok := boolFrom(raw, "checkpointOnPreempt", "resumeFromCheckpoint"); ok && checkpoint {
-		c.hasCheckpoint = true
-	}
-	if c.checkpointEvery != "" {
-		c.hasCheckpoint = true
-	}
-	return c
 }
 
 func (c *contract) apply(o Options) {
@@ -380,7 +345,6 @@ func (c *contract) apply(o Options) {
 	}
 	if o.CheckpointEvery != "" {
 		c.checkpointEvery = o.CheckpointEvery
-		c.hasCheckpoint = true
 	}
 	if o.QueueName != "" {
 		c.queue = o.QueueName
@@ -527,11 +491,8 @@ func (c contract) validate(profileName string) error {
 		if c.lane != "elastic" {
 			return fmt.Errorf("profile %q topology: mode=elastic must route through lane=elastic, got lane=%q", profileName, c.lane)
 		}
-		if !c.preemptible {
-			return fmt.Errorf("profile %q topology: mode=elastic requires policy.preemptable=true", profileName)
-		}
-		if !c.hasCheckpoint {
-			return fmt.Errorf("profile %q topology: mode=elastic requires checkpoint/restart semantics (policy.checkpointOnPreempt=true or topology.checkpointEvery)", profileName)
+		if c.checkpointEvery == "" {
+			return fmt.Errorf("profile %q topology: mode=elastic requires checkpoint/restart semantics (topology.checkpointEvery)", profileName)
 		}
 		if c.gpuClass == GPUClassH200141GB {
 			return fmt.Errorf("profile %q topology: elastic jobs cannot request scarce %s", profileName, GPUClassH200141GB)
@@ -566,14 +527,7 @@ func (o Options) hasValues() bool {
 	return o.Team != "" || o.Lane != "" || o.Mode != "" || o.Placement != "" ||
 		o.Shape != "" || o.GPUClass != "" || o.CheckpointEvery != "" || o.QueueName != "" ||
 		o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.PriorityTier != "" ||
-		o.RequiredTopology != "" || o.DisableDefaultPriorities
-}
-
-func laneFromProfile(p profile.Profile) string {
-	if v, ok := p.Spec["lane"].(string); ok && v != "" {
-		return v
-	}
-	return p.Lane
+		o.RequiredTopology != "" || o.DisableKueueTopologyAnnotations || o.DisableDefaultPriorities
 }
 
 func normalizeLabelValue(v string) string {
@@ -597,56 +551,4 @@ func validEnum(name, got string, allowed ...string) error {
 		}
 	}
 	return fmt.Errorf("%s=%q is invalid (allowed: %s)", name, got, strings.Join(allowed, "|"))
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func stringFrom(m map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := m[key].(string); ok {
-			return v
-		}
-	}
-	return ""
-}
-
-func boolFrom(m map[string]any, keys ...string) (bool, bool) {
-	for _, key := range keys {
-		switch v := m[key].(type) {
-		case bool:
-			return v, true
-		case string:
-			switch strings.ToLower(strings.TrimSpace(v)) {
-			case "true", "yes", "1":
-				return true, true
-			case "false", "no", "0":
-				return false, true
-			}
-		}
-	}
-	return false, false
-}
-
-func asMap(v any) (map[string]any, bool) {
-	switch m := v.(type) {
-	case map[string]any:
-		return m, true
-	case map[any]any:
-		out := map[string]any{}
-		for k, v := range m {
-			if s, ok := k.(string); ok {
-				out[s] = v
-			}
-		}
-		return out, len(out) > 0
-	default:
-		return nil, false
-	}
 }

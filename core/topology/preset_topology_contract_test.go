@@ -29,15 +29,7 @@ func managedDevicePluginGPUPresets(t *testing.T, policy Policy) map[string]Prese
 }
 
 func topologyContractProfile() profile.Profile {
-	return profile.Profile{
-		Name: "topology-contract",
-		Spec: map[string]any{
-			"policy": map[string]any{
-				"preemptable":         true,
-				"checkpointOnPreempt": true,
-			},
-		},
-	}
+	return profile.Profile{Name: "topology-contract"}
 }
 
 func TestEmbeddedDevicePluginGPUPresetsEnableTAS(t *testing.T) {

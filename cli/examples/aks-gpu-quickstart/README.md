@@ -158,11 +158,11 @@ kubectl get nodes -l agentpool=a100 \
 > `ResourceSlice` nodes, would improve `tau cluster validate nodes`. This is
 > not implemented today.
 
-> Use MIG only for many small single-GPU jobs. For jobs that request one or
-> more whole GPUs, the common case, and what this example does, leave MIG
-> off. On A100s, changing MIG mode requires a node restart. MIG with instances
-> configured is a supported request mode (`requestVia: mig`); only the empty
-> state is a fault.
+> MIG is worth it only when you have many small single-GPU jobs. For jobs asking
+> for one or more whole GPUs — the common case, and what this example does —
+> leave MIG off. On A100s, changing MIG mode requires a node restart. MIG *with*
+> instances configured is supported through `compute.gpu_resource_mode: mig`;
+> only the empty state is a fault.
 
 The only GPU-specific settings live in the researcher's `tau.yaml`:
 

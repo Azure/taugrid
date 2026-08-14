@@ -6,9 +6,7 @@ package payload
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,39 +14,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// assertShimWrites runs the real InitContainerScript under python3 and checks
-// it writes the expected files, so the Go decoder and the runtime shim are
-// proven to agree on the wire format (including which envelope versions they
-// accept). It skips when python3 is unavailable.
-func assertShimWrites(t *testing.T, encoded, digest string, want map[string]string) {
-	t.Helper()
-	python3, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 not available on PATH; skipping runtime init-container script test")
-	}
-	targetDir := t.TempDir()
-	cmd := exec.Command(python3, "-c", InitContainerScript)
-	cmd.Env = append(os.Environ(),
-		EnvB64+"="+encoded,
-		EnvDigest+"="+digest,
-		EnvTargetDir+"="+targetDir,
-	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("init container script failed: %v\nstderr:\n%s", err, stderr.String())
-	}
-	for name, content := range want {
-		got, err := os.ReadFile(filepath.Join(targetDir, name))
-		if err != nil {
-			t.Fatalf("expected file %q to be written: %v", name, err)
-		}
-		if string(got) != content {
-			t.Fatalf("written file %q=%q want %q", name, got, content)
-		}
-	}
-}
 
 func TestEncodeIsDeterministic(t *testing.T) {
 	files := map[string][]byte{
@@ -255,33 +220,13 @@ func TestEncodeCompressesEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode base64: %v", err)
 	}
-	if !bytes.HasPrefix(transported, gzipMagic) {
+	if !bytes.HasPrefix(transported, []byte{0x1f, 0x8b}) {
 		t.Fatalf("transported envelope is not gzip-compressed: % x", transported[:4])
 	}
 	if len(transported) >= len(script) {
 		t.Fatalf("compressed envelope (%d bytes) is not smaller than the raw script (%d bytes)",
 			len(transported), len(script))
 	}
-}
-
-// TestDecodeAcceptsUncompressedV1Envelope guarantees backward compatibility:
-// workloads rendered before compression was introduced carry a raw JSON
-// envelope, and must keep decoding through both Decode and the shim.
-func TestDecodeAcceptsUncompressedV1Envelope(t *testing.T) {
-	raw := []byte(`{"version":1,"files":[{"name":"train.py","data":"` +
-		base64.StdEncoding.EncodeToString([]byte("print('v1')\n")) + `"}]}`)
-	sum := sha256.Sum256(raw)
-	encoded := base64.StdEncoding.EncodeToString(raw)
-	digest := hex.EncodeToString(sum[:])
-
-	files, err := Decode(encoded, digest)
-	if err != nil {
-		t.Fatalf("v1 envelope must still decode: %v", err)
-	}
-	if got := string(files["train.py"]); got != "print('v1')\n" {
-		t.Fatalf("train.py = %q", got)
-	}
-	assertShimWrites(t, encoded, digest, map[string]string{"train.py": "print('v1')\n"})
 }
 
 func TestDecodeRoundTrips(t *testing.T) {

@@ -490,28 +490,25 @@ def _with_runtime_env(
     return out
 
 
+def _storage_block(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    raw_storage = manifest.get("storage") or {}
+    if not isinstance(raw_storage, dict):
+        raise ValueError("tau-py: config/extra_manifest['storage'] must be a dict")
+    return dict(raw_storage)
+
+
 def _with_storage_mounts(manifest: Dict[str, Any], mounts: Optional[Sequence[Any]]) -> Dict[str, Any]:
     normalized = normalize_mounts(mounts)
     if not normalized:
         return manifest
     out = dict(manifest)
-    raw_storage = out.get("storage") or {}
-    if not isinstance(raw_storage, dict):
-        raise ValueError("tau-py: config/extra_manifest['storage'] must be a dict")
-    storage = dict(raw_storage)
+    storage = _storage_block(out)
     existing = storage.get("mounts") or []
     if not isinstance(existing, list):
         raise ValueError("tau-py: storage.mounts must be a list")
     storage["mounts"] = [*existing, *normalized]
     out["storage"] = storage
     return out
-
-
-def _validate_data_pvc(data_pvc: str) -> str:
-    pvc = str(data_pvc)
-    if pvc.strip() != pvc or not pvc:
-        raise ValueError("tau-py: data_pvc must not be empty or have surrounding whitespace")
-    return pvc
 
 
 def _with_data_pvc(
@@ -522,12 +519,9 @@ def _with_data_pvc(
 ) -> Dict[str, Any]:
     if data_pvc is None:
         return manifest
-    pvc = _validate_data_pvc(data_pvc)
+    pvc = _nonblank_text(data_pvc, "data_pvc")
     out = dict(manifest)
-    raw_storage = out.get("storage") or {}
-    if not isinstance(raw_storage, dict):
-        raise ValueError("tau-py: config/extra_manifest['storage'] must be a dict")
-    storage = dict(raw_storage)
+    storage = _storage_block(out)
     existing = storage.get("data_pvc")
     if existing is not None and str(existing) != pvc and not override:
         raise ValueError(
@@ -548,7 +542,7 @@ def _positive_int(value: Optional[int], name: str) -> Optional[int]:
     return normalized
 
 
-def _resource_quantity(value: Optional[str], name: str) -> Optional[str]:
+def _nonblank_text(value: Optional[str], name: str) -> Optional[str]:
     if value is None:
         return None
     normalized = str(value)
@@ -570,15 +564,22 @@ def _compute_resource_overrides(
 ) -> Dict[str, Any]:
     raw = {
         "cpus": _positive_int(cpu_request, "cpu_request"),
-        "memory": _resource_quantity(memory_request, "memory_request"),
+        "memory": _nonblank_text(memory_request, "memory_request"),
         "cpu_limit": _positive_int(cpu_limit, "cpu_limit"),
-        "memory_limit": _resource_quantity(memory_limit, "memory_limit"),
+        "memory_limit": _nonblank_text(memory_limit, "memory_limit"),
         "worker_cpus": _positive_int(worker_cpu_request, "worker_cpu_request"),
-        "worker_memory": _resource_quantity(worker_memory_request, "worker_memory_request"),
+        "worker_memory": _nonblank_text(worker_memory_request, "worker_memory_request"),
         "worker_cpu_limit": _positive_int(worker_cpu_limit, "worker_cpu_limit"),
-        "worker_memory_limit": _resource_quantity(worker_memory_limit, "worker_memory_limit"),
+        "worker_memory_limit": _nonblank_text(worker_memory_limit, "worker_memory_limit"),
     }
     return {k: v for k, v in raw.items() if v is not None}
+
+
+def _compute_block(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    raw_compute = manifest.get("compute") or {}
+    if not isinstance(raw_compute, dict):
+        raise ValueError("tau-py: config['compute'] must be a dict")
+    return dict(raw_compute)
 
 
 def _with_compute_resources(
@@ -588,10 +589,7 @@ def _with_compute_resources(
     if not resources:
         return manifest
     out = dict(manifest)
-    raw_compute = out.get("compute") or {}
-    if not isinstance(raw_compute, dict):
-        raise ValueError("tau-py: config['compute'] must be a dict")
-    compute = dict(raw_compute)
+    compute = _compute_block(out)
     for key, value in resources.items():
         if value is not None:
             compute[str(key)] = value
@@ -989,7 +987,7 @@ class _TrainHandle:
             gpu_class=gpu_class,
             gpu_resource_mode=gpu_resource_mode,
             node_selector=node_selector,
-            data_pvc=_validate_data_pvc(data_pvc) if data_pvc is not None else None,
+            data_pvc=_nonblank_text(data_pvc, "data_pvc"),
             compute_resources=_compute_resource_overrides(
                 cpu_request=cpu_request,
                 memory_request=memory_request,
@@ -1044,10 +1042,7 @@ class _TrainHandle:
         """The YAML-shaped dict tau's Go side will parse."""
         m: Dict[str, Any] = load_config(self._config_manifest)
         m.setdefault("schema_version", 1)
-        raw_compute = m.get("compute") or {}
-        if not isinstance(raw_compute, dict):
-            raise ValueError("tau-py: config['compute'] must be a dict")
-        compute: Dict[str, Any] = dict(raw_compute)
+        compute = _compute_block(m)
         params = self._params
         compute["gpus"] = int(params.gpus)
         workers = int(params.workers)
@@ -1503,7 +1498,7 @@ class _EvalHandle:
             gpu_class=gpu_class,
             gpu_resource_mode=gpu_resource_mode,
             node_selector=node_selector,
-            data_pvc=_validate_data_pvc(data_pvc) if data_pvc is not None else None,
+            data_pvc=_nonblank_text(data_pvc, "data_pvc"),
             compute_resources=_compute_resource_overrides(
                 cpu_request=cpu_request,
                 memory_request=memory_request,

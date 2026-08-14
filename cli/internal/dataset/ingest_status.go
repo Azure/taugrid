@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -199,12 +200,7 @@ func (s IngestStatus) Validate() error {
 }
 
 func hasTraversalSegment(p string) bool {
-	for _, segment := range strings.Split(p, "/") {
-		if segment == ".." {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(p, "/"), "..")
 }
 
 // isHex reports whether s is entirely lowercase/uppercase hexadecimal digits.

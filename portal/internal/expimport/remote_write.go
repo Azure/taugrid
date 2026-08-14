@@ -195,7 +195,7 @@ func replayRemoteWrite(ctx context.Context, opts RemoteWriteOptions) (RemoteWrit
 		result.Samples += len(batch)
 	}
 	if checkpointFile != "" {
-		if err := writeRemoteWriteCheckpoint(checkpointFile, remoteWriteCheckpoint{
+		if err := writeJSONFileAtomic(checkpointFile, remoteWriteCheckpoint{
 			SchemaVersion: strings.TrimSpace(opts.CheckpointSchemaVersion),
 			MetricsFile:   metricsFile,
 			MetricsSHA256: metricsSHA256,
@@ -242,10 +242,6 @@ func (c remoteWriteCheckpoint) matches(metricsFile, metricsSHA256, endpoint stri
 		c.Endpoint == endpoint &&
 		c.BatchSize == batchSize &&
 		c.Samples > 0
-}
-
-func writeRemoteWriteCheckpoint(path string, checkpoint remoteWriteCheckpoint) error {
-	return writeJSONFileAtomic(path, checkpoint)
 }
 
 func remoteWriteSeries(row remoteWriteMetricRow) remoteWriteTimeSeries {

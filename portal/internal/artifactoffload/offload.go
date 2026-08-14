@@ -382,7 +382,7 @@ func updatedArtifactRecord(artifact expstore.ArtifactRecord, ref blobstore.Durab
 		return nil, err
 	}
 	contentType := contentTypeForArtifact(artifact, sourcePath)
-	if artifact.DurableRef == refString && artifact.ContentType == contentType && artifact.Digest == digest && int64PtrValueEqual(artifact.SizeBytes, size) {
+	if artifact.DurableRef == refString && artifact.ContentType == contentType && artifact.Digest == digest && artifact.SizeBytes != nil && *artifact.SizeBytes == size {
 		return nil, nil
 	}
 	updated := artifact
@@ -391,10 +391,6 @@ func updatedArtifactRecord(artifact expstore.ArtifactRecord, ref blobstore.Durab
 	updated.Digest = digest
 	updated.SizeBytes = &size
 	return &updated, nil
-}
-
-func int64PtrValueEqual(value *int64, want int64) bool {
-	return value != nil && *value == want
 }
 
 func validateArtifactIdentity(artifact expstore.ArtifactRecord, digest string, size int64) error {

@@ -42,17 +42,13 @@ func (r *ThermalReader) Read(ctx context.Context, db *store.DB, cfg *config.Conf
 }
 
 func (r *ThermalReader) checkThermalViolations(ctx context.Context, db *store.DB, cfg *config.Config, f *reader.CheckFindings) error {
-	since := time.Now().Add(-cfg.CheckInterval)
-	thermalSamples, err := db.QuerySamples(ctx, fieldnames.ThermalViolation, -1, since)
+	samples, err := db.QuerySamples(ctx, fieldnames.ThermalViolation, -1, time.Now().Add(-cfg.CheckInterval))
 	if err != nil {
 		return fmt.Errorf("query THERMAL_VIOLATION: %w", err)
 	}
-	thermalRates := reader.ComputeDeltas(thermalSamples)
-	for gpu, rate := range thermalRates {
-		if rate > 0 {
-			tempStr := getLatestTemp(ctx, db, gpu)
-			f.AddWarning(gpu, fmt.Sprintf("GPU %d: thermal violations delta=%.0f%s", gpu, rate, tempStr))
-		}
+	for _, delta := range deltasAboveThreshold(samples, 0) {
+		tempStr := getLatestTemp(ctx, db, delta.gpu)
+		f.AddWarning(delta.gpu, fmt.Sprintf("GPU %d: thermal violations delta=%.0f%s", delta.gpu, delta.value, tempStr))
 	}
 	return nil
 }
@@ -71,16 +67,12 @@ func (r *ThermalReader) logMemoryTemps(ctx context.Context, db *store.DB) {
 }
 
 func (r *ThermalReader) checkPowerViolations(ctx context.Context, db *store.DB, cfg *config.Config, f *reader.CheckFindings) error {
-	since := time.Now().Add(-cfg.CheckInterval)
-	powerSamples, err := db.QuerySamples(ctx, fieldnames.PowerViolation, -1, since)
+	samples, err := db.QuerySamples(ctx, fieldnames.PowerViolation, -1, time.Now().Add(-cfg.CheckInterval))
 	if err != nil {
 		return fmt.Errorf("query POWER_VIOLATION: %w", err)
 	}
-	powerRates := reader.ComputeDeltas(powerSamples)
-	for gpu, rate := range powerRates {
-		if rate > 0 {
-			f.AddWarning(gpu, fmt.Sprintf("GPU %d: power violations delta=%.0f", gpu, rate))
-		}
+	for _, delta := range deltasAboveThreshold(samples, 0) {
+		f.AddWarning(delta.gpu, fmt.Sprintf("GPU %d: power violations delta=%.0f", delta.gpu, delta.value))
 	}
 	return nil
 }

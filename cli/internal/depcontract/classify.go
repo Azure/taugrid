@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 
 	"gopkg.in/yaml.v3"
@@ -109,12 +110,7 @@ type Dependency struct {
 
 // HasRole reports whether role is one of the pod roles that reference d.
 func (d Dependency) HasRole(role Role) bool {
-	for _, r := range d.Roles {
-		if r == role {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.Roles, role)
 }
 
 // IsRedactedPlaceholder reports whether d.Name is the client dry-run

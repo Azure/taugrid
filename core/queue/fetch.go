@@ -325,10 +325,7 @@ func (f filter) matches(g Group) bool {
 	if f.lane != "" && f.lane != g.Lane {
 		return false
 	}
-	if f.gpuClass != "" && f.gpuClass != g.GPUClass {
-		return false
-	}
-	return true
+	return f.gpuClass == "" || f.gpuClass == g.GPUClass
 }
 
 func normalize(v string) string {

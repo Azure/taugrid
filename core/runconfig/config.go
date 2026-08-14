@@ -403,10 +403,7 @@ func (c Config) ValidateDirect() error {
 	if err := c.Metrics.Validate(c.Experiment); err != nil {
 		return err
 	}
-	if err := c.Storage.Validate(); err != nil {
-		return err
-	}
-	return nil
+	return c.Storage.Validate()
 }
 
 func (s Storage) Validate() error {
@@ -835,11 +832,7 @@ func (c Config) ValidateExecution(engine string) error {
 		}
 	}
 
-	if err := c.validateConfigs(engine, launcher); err != nil {
-		return err
-	}
-
-	return nil
+	return c.validateConfigs(engine, launcher)
 }
 
 var torchrunDenylist = map[string]bool{

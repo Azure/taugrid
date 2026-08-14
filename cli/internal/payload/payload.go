@@ -60,10 +60,7 @@ const (
 	// per-environment-entry size limit enforced by execve(2).
 	maxArgStrlen = 131072
 
-	// envelopeVersion identifies the wire format produced by Encode. Version
-	// 1 was an uncompressed JSON envelope; version 2 gzips those same bytes
-	// before the outer base64. Decoders sniff the gzip magic rather than
-	// branching on this field, so v1 envelopes still decode.
+	// envelopeVersion identifies the wire format produced by Encode.
 	envelopeVersion = 2
 
 	// AnnotationDigest is stamped on rendered workloads carrying an embedded
@@ -194,11 +191,6 @@ func sizeError(what string, actual, limit int) error {
 	)
 }
 
-// gzipMagic is the two-byte gzip header that distinguishes a v2 (compressed)
-// envelope from a v1 (raw JSON) one. JSON always starts with '{', so the two
-// formats can never be confused.
-var gzipMagic = []byte{0x1f, 0x8b}
-
 // compress gzips raw deterministically: a fixed compression level, and no
 // header name or modification time, so identical inputs always produce
 // byte-identical output (and therefore a stable digest and a stable rendered
@@ -218,29 +210,10 @@ func compress(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// decompress reverses compress, passing through uncompressed v1 envelopes
-// unchanged so previously rendered workloads keep decoding.
-func decompress(raw []byte) ([]byte, error) {
-	if !bytes.HasPrefix(raw, gzipMagic) {
-		return raw, nil
-	}
-	r, err := gzip.NewReader(bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("decompress payload envelope: %w", err)
-	}
-	defer r.Close()
-	out, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("decompress payload envelope: %w", err)
-	}
-	return out, nil
-}
-
 // Decode reverses Encode, verifying the digest before returning file
 // contents keyed by name. It mirrors the runtime integrity check performed
 // by the tau-payload initContainer (see InitContainerScript) and is used by
-// tests to assert the two implementations agree. Both the v2 (gzip) and v1
-// (raw JSON) envelope formats are accepted.
+// tests to assert the two implementations agree.
 func Decode(encoded, digest string) (map[string][]byte, error) {
 	transported, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -251,9 +224,14 @@ func Decode(encoded, digest string) (map[string][]byte, error) {
 	if got != digest {
 		return nil, fmt.Errorf("payload integrity check failed: digest=%s want=%s", got, digest)
 	}
-	raw, err := decompress(transported)
+	r, err := gzip.NewReader(bytes.NewReader(transported))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decompress payload envelope: %w", err)
+	}
+	defer r.Close()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("decompress payload envelope: %w", err)
 	}
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
@@ -278,11 +256,8 @@ func Decode(encoded, digest string) (map[string][]byte, error) {
 // workload's own image rather than pulling an additional one.
 //
 // The script intentionally mirrors Decode's verification logic (base64
-// decode, SHA-256 digest compare, optional gzip decompression, JSON envelope
-// parse) so the two stay in lockstep; render_test.go and payload_test.go both
-// assert this. Like Decode, it sniffs the gzip magic rather than branching on
-// the envelope version field, so workloads rendered before compression was
-// introduced keep decoding.
+// decode, SHA-256 digest compare, gzip decompression, JSON envelope parse) so
+// the two stay in lockstep; render_test.go and payload_test.go both assert this.
 const InitContainerScript = `import base64
 import gzip
 import hashlib
@@ -302,8 +277,7 @@ if got_digest != want_digest:
     )
     sys.exit(1)
 
-if raw[:2] == b"\x1f\x8b":
-    raw = gzip.decompress(raw)
+raw = gzip.decompress(raw)
 
 envelope = json.loads(raw)
 files = envelope.get("files", [])

@@ -129,14 +129,10 @@ func (s Snapshot) MultiKueueState() MultiKueueState {
 	return MultiKueueStatePending
 }
 
-func (s Snapshot) managerOnlyMultiKueueView() bool {
-	return s.IsMultiKueue() && len(s.Pods) == 0
-}
-
 // ManagerOnlyMultiKueueView reports the manager-cluster view for a MultiKueue
 // workload: placement state is visible but no local execution pods exist.
 func (s Snapshot) ManagerOnlyMultiKueueView() bool {
-	return s.managerOnlyMultiKueueView()
+	return s.IsMultiKueue() && len(s.Pods) == 0
 }
 
 func workloadMultiKueueReady(workload Workload) bool {

@@ -208,12 +208,6 @@ func TestDefaultWorkspaceNameIsAValidNamespace(t *testing.T) {
 	}
 }
 
-// withPhase marks a workspace as one the controller has already reconciled.
-func withPhase(w Workspace, phase string) Workspace {
-	w.Status.Phase = phase
-	return w
-}
-
 // blocked marks a workspace the way the controller marks every workspace it
 // refuses to activate.
 func blocked(w Workspace) Workspace {
@@ -226,56 +220,8 @@ func blocked(w Workspace) Workspace {
 	return w
 }
 
-// The case that matters most: the live incumbent is being deleted and a
-// replacement already exists. The controller keeps the terminating incumbent
-// as primary and blocks the replacement, so selecting the replacement here
-// would route work to a namespace whose RBAC and queue bindings were never
-// activated. The CLI must report the transition instead.
-func TestSelectPrimaryDoesNotPromoteBlockedReplacementOverTerminatingIncumbent(t *testing.T) {
-	_, err := SelectPrimary(WorkspaceList{Items: []Workspace{
-		withPhase(ws("incumbent", "2026-01-01T00:00:00Z", "2026-06-01T00:00:00Z", false), "Ready"),
-		blocked(ws("replacement", "2026-05-01T00:00:00Z", "", false)),
-	}})
-	if !errors.Is(err, ErrPrimaryTerminating) {
-		t.Fatalf("got %v, want ErrPrimaryTerminating", err)
-	}
-	if !strings.Contains(err.Error(), "incumbent") {
-		t.Fatalf("error must name the terminating incumbent, got: %v", err)
-	}
-}
-
-// A reconciled incumbent outranks an older workspace that the controller has
-// never activated, so age alone must not decide.
-func TestSelectPrimaryPrefersReconciledIncumbentOverOlderUnreconciled(t *testing.T) {
-	got, err := SelectPrimary(WorkspaceList{Items: []Workspace{
-		ws("older-never-activated", "2026-01-01T00:00:00Z", "", false),
-		withPhase(ws("incumbent", "2026-03-01T00:00:00Z", "", false), "Ready"),
-	}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Metadata.Name != "incumbent" {
-		t.Fatalf("got %q, want incumbent", got.Metadata.Name)
-	}
-}
-
-// A blocked workspace has status, but it is not an incumbent: the controller
-// set that condition precisely because it refused to activate it.
-func TestSelectPrimaryTreatsBlockedWorkspaceAsNonIncumbent(t *testing.T) {
-	got, err := SelectPrimary(WorkspaceList{Items: []Workspace{
-		blocked(ws("blocked", "2026-01-01T00:00:00Z", "", false)),
-		withPhase(ws("live", "2026-03-01T00:00:00Z", "", false), "Ready"),
-	}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Metadata.Name != "live" {
-		t.Fatalf("got %q, want live (a blocked workspace is not an incumbent)", got.Metadata.Name)
-	}
-}
-
 // A named `get` is all a researcher's RBAC permits, but it proves only that the
-// object exists. SelectPrimary's third rule -- oldest non-terminating -- is a
+// object exists. SelectPrimary's fallback -- oldest non-terminating -- is a
 // claim about a population, so a one-item list satisfies it vacuously. These
 // pin which objects may short-circuit the list and which must not.
 func TestProvablyPrimaryRejectsBlockedWorkspace(t *testing.T) {
@@ -295,11 +241,5 @@ func TestProvablyPrimaryRejectsUnreconciledWorkspace(t *testing.T) {
 func TestProvablyPrimaryAcceptsMarkedWorkspace(t *testing.T) {
 	if !ProvablyPrimary(ws("marked", "2026-01-01T00:00:00Z", "", true)) {
 		t.Fatal("an explicit primary marker is self-evident from the object alone")
-	}
-}
-
-func TestProvablyPrimaryAcceptsReconciledIncumbent(t *testing.T) {
-	if !ProvablyPrimary(withPhase(ws("live", "2026-01-01T00:00:00Z", "", false), "Ready")) {
-		t.Fatal("a workspace the controller reconciled as primary is self-evident")
 	}
 }

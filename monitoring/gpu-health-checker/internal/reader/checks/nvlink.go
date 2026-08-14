@@ -47,24 +47,21 @@ func (r *NVLinkReader) checkCRCErrors(ctx context.Context, db *store.DB, cfg *co
 		if err != nil {
 			return fmt.Errorf("query %s: %w", field, err)
 		}
-		rates := reader.ComputeDeltas(samples)
-		for gpu, rate := range rates {
-			if rate > 0 {
-				f.AddWarning(gpu, fmt.Sprintf("GPU %d: %s delta=%.0f", gpu, field, rate))
-			}
+		for _, delta := range deltasAboveThreshold(samples, 0) {
+			f.AddWarning(delta.gpu, fmt.Sprintf("GPU %d: %s delta=%.0f", delta.gpu, field, delta.value))
 		}
 	}
 	return nil
 }
 
 func (r *NVLinkReader) checkNVLinkErrors(ctx context.Context, db *store.DB, f *reader.CheckFindings) error {
-	nvlinkErrors, err := db.QueryLatestSamples(ctx, fieldnames.GPUNVLinkErrors)
+	samples, err := db.QueryLatestSamples(ctx, fieldnames.GPUNVLinkErrors)
 	if err != nil {
 		return fmt.Errorf("query GPU_NVLINK_ERRORS: %w", err)
 	}
-	for _, s := range nvlinkErrors {
-		if s.Value > 0 {
-			f.AddCritical(s.GPU, fmt.Sprintf("GPU %d: NVLink errors=%.0f", s.GPU, s.Value))
+	for _, sample := range samples {
+		if sample.Value > 0 {
+			f.AddCritical(sample.GPU, fmt.Sprintf("GPU %d: NVLink errors=%.0f", sample.GPU, sample.Value))
 		}
 	}
 	return nil

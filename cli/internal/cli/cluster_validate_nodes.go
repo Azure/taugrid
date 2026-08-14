@@ -173,9 +173,9 @@ func selectorReferencesGPUClass(selector string) bool {
 	return false
 }
 
-// gpuSource records how a node's GPUs reach the scheduler. Researchers submit
-// against any of these (core/resourceprofile supports requestVia
-// device-plugin|dra|mig), so detection has to understand all of them.
+// gpuSource records how a node's GPUs reach the scheduler. Managed workflows
+// can submit against device-plugin, DRA, or MIG resources, so detection has to
+// understand all of them.
 type gpuSource string
 
 const (
@@ -339,9 +339,9 @@ func discoverStrandedGPUNodes(ctx context.Context, r validateNodesRunner, select
 func classifyStrandedGPUNodes(items []nodeItem, draDevices map[string]int) []gpuNodeInfo {
 	var nodes []gpuNodeInfo
 	for _, it := range items {
-		// Not just nvidia.com/gpu: MIG advertises per-profile resources such as
-		// nvidia.com/mig-1g.10gb, and profiles may override resourceName. Any
-		// nvidia.com/* resource means something has registered the devices.
+		// Not just nvidia.com/gpu: MIG advertises partition resources such as
+		// nvidia.com/mig-1g.10gb. Any nvidia.com/* resource means something has
+		// registered the devices.
 		if advertisesNVIDIAResource(it.Status.Allocatable) {
 			continue
 		}
@@ -368,8 +368,8 @@ func classifyStrandedGPUNodes(items []nodeItem, draDevices map[string]int) []gpu
 }
 
 // advertisesNVIDIAResource reports whether any nvidia.com/* extended resource is
-// allocatable on the node. Covers whole GPUs (nvidia.com/gpu), MIG profiles
-// (nvidia.com/mig-1g.10gb), and profile-specific resourceName overrides.
+// allocatable on the node. Covers whole GPUs (nvidia.com/gpu) and MIG
+// partitions (nvidia.com/mig-1g.10gb).
 func advertisesNVIDIAResource(allocatable map[string]string) bool {
 	for name, qty := range allocatable {
 		if !strings.HasPrefix(name, "nvidia.com/") {
@@ -781,9 +781,8 @@ func assessHealth(d validationData, node gpuNodeInfo) nodeHealthResult {
 		return res
 	}
 
-	// MIG is a supported way to run GPUs (profiles select it via
-	// requestVia: mig), so MIG being enabled is not itself a fault. What is a
-	// fault is MIG enabled with zero instances configured: nvidia-smi still
+	// MIG being enabled is not itself a fault. What is a fault is MIG enabled
+	// with zero instances configured: nvidia-smi still
 	// reports a healthy GPU, but there is no device to open, so every workload
 	// dies at the first cuInit() with 100 CUDA_ERROR_NO_DEVICE. That state is
 	// the AKS default on some A100 SKUs and is otherwise very hard to read.

@@ -109,18 +109,10 @@ func managedWorkflowProfileOptions(o runDispatchOptions) (manifest.ProfileOption
 	return manifest.ProfileOptions{Mode: resolvedProfiler, Rank: rank, Warmup: warmup, Duration: duration}, nil
 }
 
-// managedWorkflowMetricsOffload resolves sidecar metrics offload options. The
-// managed workflow path is configured entirely by the resolved profile plus the
-// TAU_METRICS_OFFLOAD_* environment contract.
-func managedWorkflowMetricsOffload(ctx context.Context, p *profile.Profile) (manifest.MetricsOffloadOptions, error) {
+// managedWorkflowMetricsOffload resolves sidecar metrics offload options from
+// the TAU_METRICS_OFFLOAD_* environment contract.
+func managedWorkflowMetricsOffload(ctx context.Context) (manifest.MetricsOffloadOptions, error) {
 	var opts manifest.MetricsOffloadOptions
-	if p != nil {
-		profileOpts, err := manifest.MetricsOffloadOptionsFromProfile(*p)
-		if err != nil {
-			return manifest.MetricsOffloadOptions{}, err
-		}
-		opts = profileOpts
-	}
 	fromEnv := func(name string, dest *string) {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			*dest = value
@@ -351,7 +343,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 		}
 	}
 
-	metricsOffloadOptions, err := managedWorkflowMetricsOffload(ctx, topologyProfile)
+	metricsOffloadOptions, err := managedWorkflowMetricsOffload(ctx)
 	if err != nil {
 		return err
 	}

@@ -121,12 +121,7 @@ func newModelListCmd() *cobra.Command {
 			records = filterModelRecords(records, tagFilters, metricName)
 			sortModelRecords(records, metricName, sortDir)
 			if output == "json" {
-				raw, err := json.MarshalIndent(records, "", "  ")
-				if err != nil {
-					return err
-				}
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
-				return err
+				return writeJSON(cmd.OutOrStdout(), records)
 			}
 			return printModelRecordsTable(cmd.OutOrStdout(), records, metricName)
 		},
@@ -163,12 +158,7 @@ func newModelShowCmd() *cobra.Command {
 			if output == "summary" {
 				return printModelRecordsTable(cmd.OutOrStdout(), []modelRegistryRecord{record}, "")
 			}
-			raw, err := json.MarshalIndent(record, "", "  ")
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
-			return err
+			return writeJSON(cmd.OutOrStdout(), record)
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "json", "json|summary")
@@ -205,11 +195,7 @@ func newModelBestCmd() *cobra.Command {
 			case "ref":
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s@%s\n", best.Model, best.Run)
 			case "json":
-				var raw []byte
-				raw, err = json.MarshalIndent(best, "", "  ")
-				if err == nil {
-					_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
-				}
+				err = writeJSON(cmd.OutOrStdout(), best)
 			default:
 				err = fmt.Errorf("--output must be one of: ref, json")
 			}
@@ -308,12 +294,7 @@ func newModelAliasGetCmd() *cobra.Command {
 				return err
 			}
 			if output == "json" {
-				raw, err := json.MarshalIndent(aliasRecord, "", "  ")
-				if err != nil {
-					return err
-				}
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
-				return err
+				return writeJSON(cmd.OutOrStdout(), aliasRecord)
 			}
 			if output != "ref" {
 				return fmt.Errorf("--output must be one of: ref, json")
