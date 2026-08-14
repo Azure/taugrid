@@ -138,8 +138,8 @@ func experimentIdentity(annotations map[string]string) ExperimentIdentity {
 	return ExperimentIdentity{
 		Project:      strings.TrimSpace(annotations[workloadmeta.AnnotationStellarProject]),
 		ExperimentID: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentID]),
-		Title: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentTitle]),
-		Group: strings.TrimSpace(annotations[workloadmeta.AnnotationStellarGroup]),
+		Title:        strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentTitle]),
+		Group:        strings.TrimSpace(annotations[workloadmeta.AnnotationStellarGroup]),
 	}
 }
 

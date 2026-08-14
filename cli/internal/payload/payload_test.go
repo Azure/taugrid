@@ -15,39 +15,6 @@ import (
 	"testing"
 )
 
-// assertShimWrites runs the real InitContainerScript under python3 and checks
-// it writes the expected files, so the Go decoder and the runtime shim are
-// proven to agree on the wire format (including which envelope versions they
-// accept). It skips when python3 is unavailable.
-func assertShimWrites(t *testing.T, encoded, digest string, want map[string]string) {
-	t.Helper()
-	python3, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 not available on PATH; skipping runtime init-container script test")
-	}
-	targetDir := t.TempDir()
-	cmd := exec.Command(python3, "-c", InitContainerScript)
-	cmd.Env = append(os.Environ(),
-		EnvB64+"="+encoded,
-		EnvDigest+"="+digest,
-		EnvTargetDir+"="+targetDir,
-	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("init container script failed: %v\nstderr:\n%s", err, stderr.String())
-	}
-	for name, content := range want {
-		got, err := os.ReadFile(filepath.Join(targetDir, name))
-		if err != nil {
-			t.Fatalf("expected file %q to be written: %v", name, err)
-		}
-		if string(got) != content {
-			t.Fatalf("written file %q=%q want %q", name, got, content)
-		}
-	}
-}
-
 func TestEncodeIsDeterministic(t *testing.T) {
 	files := map[string][]byte{
 		"train.py":         []byte("print('train')\n"),

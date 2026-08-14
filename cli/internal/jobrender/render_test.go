@@ -1770,17 +1770,6 @@ func multiGPUProfile(gpuCount int) profile.Profile {
 	}
 }
 
-func noGPUCountProfile() profile.Profile {
-	return profile.Profile{
-		Name:  "ai-train-dra-dynamic",
-		Queue: "training-queue",
-		Resources: profile.Resources{
-			Requests: map[string]any{"cpu": "16", "memory": "64Gi"},
-		},
-		Runtime: profile.Runtime{Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"},
-	}
-}
-
 func TestRender_Torchrun_DefaultPPN(t *testing.T) {
 	script := torchrunScript(t)
 	out, err := Render(trainProfile(), Options{

@@ -549,12 +549,3 @@ func validEnum(name, got string, allowed ...string) error {
 	}
 	return fmt.Errorf("%s=%q is invalid (allowed: %s)", name, got, strings.Join(allowed, "|"))
 }
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}

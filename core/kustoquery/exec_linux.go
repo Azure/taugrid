@@ -28,6 +28,9 @@ const (
 	supervisorExitError = 125
 )
 
+// processTreeReapDelay bounds supervisor cleanup after the command exits.
+const processTreeReapDelay = time.Second
+
 func init() {
 	if len(os.Args) < 3 || os.Args[1] != supervisorArg {
 		return
