@@ -204,7 +204,7 @@ type RenderOptions struct {
 	// CSI volume/mount + workload-identity pod label into the workload.
 	KVSpec *kvspec.Spec
 	// ServiceAccountName sets the pod spec's serviceAccountName field.
-	// Typically sourced from a profile's spec.secrets.serviceAccount.
+	// Typically sourced from the resolved workload identity.
 	ServiceAccountName string
 }
 

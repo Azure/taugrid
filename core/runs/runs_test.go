@@ -101,7 +101,7 @@ func TestBoardMergesDurableHistoryWithLiveStateWinning(t *testing.T) {
 		RunID: "deleted", DurableID: "durable-deleted", Queue: "queue-a",
 	}}}
 	reader := fakeReader{
-		jobs: []byte(`{"items":[{"metadata":{"name":"train","namespace":"team-a","uid":"uid-a","creationTimestamp":"2026-07-03T12:00:00Z","labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"shared","` + workloadmeta.AnnotationDurableID + `":"durable-a","kueue.x-k8s.io/queue-name":"queue-a"}},"status":{"active":1}}]}`),
+		jobs: []byte(`{"items":[{"metadata":{"name":"train","namespace":"team-a","uid":"uid-a","creationTimestamp":"2026-07-03T12:00:00Z","labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"shared","kueue.x-k8s.io/queue-name":"queue-a"},"annotations":{"` + workloadmeta.AnnotationDurableID + `":"durable-a"}},"status":{"active":1}}]}`),
 		ray:  []byte(`{"items":[]}`),
 	}
 	snap, err := Board(context.Background(), reader, Options{
@@ -291,7 +291,7 @@ func (q *fakeKustoQuerier) Query(_ context.Context, kql string) ([]kustoquery.Ro
 func TestKustoHistoryReaderParsesLifecycleRows(t *testing.T) {
 	querier := &fakeKustoQuerier{rows: []kustoquery.Row{{
 		"owning_resource_name": "terminal", "owning_resource_kind": "Job",
-		"effective_state": "succeeded", "created_time": "2026-07-01T12:00:00Z",
+		"state": "succeeded", "created_time": "2026-07-01T12:00:00Z",
 		"namespace": "team-a", "cluster": "cluster-a", "resource_uid": "uid-a",
 		"run_id": "run-a", "durable_id": "durable-a", "experiment_tracking": "tracked",
 	}}}

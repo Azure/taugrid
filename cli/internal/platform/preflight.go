@@ -317,16 +317,18 @@ func checkNamedObject(ctx context.Context, workers []Worker, resource, namespace
 			args = append([]string{"-n", namespace}, args...)
 		}
 		_, err := w.Runner.Raw(ctx, args, nil)
-		if err != nil {
-			report.Results = append(report.Results, Result{
-				Kind: kind, Namespace: namespace, Name: name, Context: w.Context, Status: StatusFail,
-				Message: fmt.Sprintf("not found: %v", err),
-			})
-			continue
+		result := Result{
+			Kind:      kind,
+			Namespace: namespace,
+			Name:      name,
+			Context:   w.Context,
+			Status:    StatusOK,
 		}
-		report.Results = append(report.Results, Result{
-			Kind: kind, Namespace: namespace, Name: name, Context: w.Context, Status: StatusOK,
-		})
+		if err != nil {
+			result.Status = StatusFail
+			result.Message = fmt.Sprintf("not found: %v", err)
+		}
+		report.Results = append(report.Results, result)
 	}
 }
 

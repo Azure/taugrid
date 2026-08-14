@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/Azure/taugrid/core/resourceprofile"
 )
 
 const (
@@ -106,70 +104,6 @@ func (r Runtime) Validate() error {
 	return nil
 }
 
-// OptionsFromProfile reads spec.metrics.offload from a resolved Profile.
-func OptionsFromProfile(p profile.Profile) (Options, error) {
-	rawMetrics, ok := p.Spec["metrics"]
-	if !ok || rawMetrics == nil {
-		return Options{}, nil
-	}
-	metrics, ok := rawMetrics.(map[string]any)
-	if !ok {
-		return Options{}, fmt.Errorf("profile %q spec.metrics must be a map", p.Name)
-	}
-	rawOffload, ok := metrics["offload"]
-	if !ok || rawOffload == nil {
-		return Options{}, nil
-	}
-	offload, ok := rawOffload.(map[string]any)
-	if !ok {
-		return Options{}, fmt.Errorf("profile %q spec.metrics.offload must be a map", p.Name)
-	}
-	var out Options
-	for key, value := range offload {
-		s, ok := value.(string)
-		if !ok {
-			return Options{}, fmt.Errorf("profile %q spec.metrics.offload.%s must be a string", p.Name, key)
-		}
-		s = strings.TrimSpace(s)
-		switch normalizedKey(key) {
-		case "image":
-			out.Image = s
-		case "project":
-			out.Project = s
-		case "experiment":
-			out.Experiment = s
-		case "group":
-			out.Group = s
-		case "tags":
-			tags, err := ParseTags(s)
-			if err != nil {
-				return Options{}, fmt.Errorf("profile %q spec.metrics.offload.%s: %w", p.Name, key, err)
-			}
-			out.Tags = tags
-		case "source":
-			out.Source = s
-		case "store":
-			out.Store = s
-		case "out", "output":
-			out.Out = s
-		case "remotewriteendpoint", "remotewrite", "endpoint":
-			out.RemoteWriteEndpoint = s
-		case "interval":
-			if s == "" {
-				continue
-			}
-			d, err := time.ParseDuration(s)
-			if err != nil {
-				return Options{}, fmt.Errorf("profile %q spec.metrics.offload.%s: %w", p.Name, key, err)
-			}
-			out.Interval = d
-		default:
-			return Options{}, fmt.Errorf("profile %q spec.metrics.offload.%s: unknown field", p.Name, key)
-		}
-	}
-	return out, nil
-}
-
 // ValidatePinnedImage rejects mutable or implicit sidecar image references.
 func ValidatePinnedImage(image string) error {
 	image = strings.TrimSpace(image)
@@ -228,31 +162,4 @@ func TagArgs(tags map[string]string) []string {
 
 func FormatTags(tags map[string]string) string {
 	return strings.Join(TagArgs(tags), ",")
-}
-
-// ParseTags parses a comma-separated profile tag string.
-func ParseTags(raw string) (map[string]string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	out := map[string]string{}
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(part, "=")
-		if !ok || strings.TrimSpace(key) == "" {
-			return nil, fmt.Errorf("expected comma-separated key=value tags")
-		}
-		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
-	}
-	return out, nil
-}
-
-func normalizedKey(key string) string {
-	key = strings.ToLower(strings.TrimSpace(key))
-	key = strings.ReplaceAll(key, "_", "")
-	return strings.ReplaceAll(key, "-", "")
 }

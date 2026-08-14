@@ -15,8 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/cli/internal/jobrender"
-	"github.com/Azure/taugrid/core/resourceprofile"
-	"github.com/Azure/taugrid/core/runconfig"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -174,19 +173,8 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 		},
 	}
 	o.env = []string{"TAU_RETRY_ATTEMPT=2"}
-	p := profile.Profile{
-		Name: "direct",
-		Spec: map[string]any{
-			"metrics": map[string]any{
-				"offload": map[string]any{
-					"tags": "owner=platform,tau_workspace=profile-override",
-				},
-			},
-		},
-	}
 	runtime, err := resolveMetricsOffload(
 		o,
-		p,
 		"modernbert-bounded",
 		"research-workspace",
 		"sample-gpu-cluster",
@@ -209,7 +197,6 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 		"tau_cluster":       "sample-gpu-cluster",
 		"tau_retry_attempt": "2",
 		"dataset":           "fineweb-edu",
-		"owner":             "platform",
 	} {
 		if got := runtime.Tags[key]; got != want {
 			t.Fatalf("tag %s = %q, want %q; tags=%v", key, got, want, runtime.Tags)
@@ -234,53 +221,6 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 	}
 }
 
-func TestConfigMetricsOffloadUsesProfileGroupWhenConfigOmitsGroup(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/tau:v0.6.0")
-	o, err := configToDispatch(runconfig.Config{
-		Engine: "job",
-		Metrics: runconfig.Metrics{
-			History: []string{"metrics-history.jsonl"},
-			Offload: runconfig.MetricsOffload{Enabled: true},
-		},
-		Experiment: runconfig.Experiment{
-			Project: "pretraining",
-			Name:    "modernbert-bounded",
-		},
-	}, filepath.Join(t.TempDir(), "tau.yaml"))
-	if err != nil {
-		t.Fatalf("configToDispatch: %v", err)
-	}
-	o.workspace = "research-workspace"
-	o.metricsSessionID = "session-profile-group"
-	p := profile.Profile{
-		Name: "direct",
-		Spec: map[string]any{
-			"metrics": map[string]any{
-				"offload": map[string]any{
-					"group": "profile-arm",
-				},
-			},
-		},
-	}
-
-	runtime, err := resolveMetricsOffload(
-		o,
-		p,
-		"modernbert-bounded",
-		"research-workspace",
-		"sample-gpu-cluster",
-		"/data/research-workspace/modernbert-bounded",
-		true,
-		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
-	)
-	if err != nil {
-		t.Fatalf("resolveMetricsOffload: %v", err)
-	}
-	if runtime.Group != "profile-arm" {
-		t.Fatalf("group = %q, want profile-arm", runtime.Group)
-	}
-}
-
 func TestResolveDirectJobMetricsOffloadRejectsReadOnlyOutput(t *testing.T) {
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/tau:v0.6.0")
 	o := defaultRunDispatchOptions()
@@ -294,7 +234,6 @@ func TestResolveDirectJobMetricsOffloadRejectsReadOnlyOutput(t *testing.T) {
 
 	_, err := resolveMetricsOffload(
 		o,
-		profile.Profile{},
 		"modernbert-bounded",
 		"research-workspace",
 		"sample-gpu-cluster",
@@ -676,7 +615,6 @@ func TestBuildRunJobOutputAnnotationsAcceptsExplicitMountPath(t *testing.T) {
 		"",
 		[]jobrender.Volume{{Name: "nfs", PVC: "training-nfs"}},
 		[]jobrender.VolumeMount{{Name: "nfs", MountPath: "/data-nfs"}},
-		profile.Profile{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -698,41 +636,9 @@ func TestBuildRunJobOutputAnnotationsRejectsOutsidePVC(t *testing.T) {
 		"training-nfs",
 		nil,
 		nil,
-		profile.Profile{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "not under any mounted PVC path") {
 		t.Fatalf("expected mounted PVC validation error, got %v", err)
-	}
-}
-
-func TestBuildRunJobOutputAnnotationsReportsReadOnlyProfilePersistence(t *testing.T) {
-	p := profile.Profile{
-		Spec: map[string]any{
-			"resources": map[string]any{
-				"persistence": map[string]any{
-					"pvcName":   "data",
-					"mountPath": "/data",
-					"readOnly":  true,
-				},
-			},
-		},
-	}
-	annotations, outputDir, writable, err := buildRunJobOutputAnnotations(
-		"j1",
-		"/data/runs/j1",
-		"",
-		nil,
-		nil,
-		p,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if writable {
-		t.Fatal("read-only profile persistence must not be reported as writable")
-	}
-	if annotations[workloadmeta.AnnotationResultPVC] != "data" || outputDir != "/data/runs/j1" {
-		t.Fatalf("output metadata = %#v, outputDir=%q", annotations, outputDir)
 	}
 }
 

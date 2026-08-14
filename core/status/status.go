@@ -292,8 +292,8 @@ func Render(s Snapshot) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(renderStartupPhases(s))
-	if s.managerOnlyMultiKueueView() {
+	b.WriteString(renderStartupPhasesAt(s, time.Now()))
+	if s.ManagerOnlyMultiKueueView() {
 		b.WriteString("\n")
 		b.WriteString(renderMultiKueueSection(s))
 	}
@@ -322,7 +322,7 @@ func Render(s Snapshot) string {
 
 	b.WriteString("\nPods:\n")
 	if len(s.Pods) == 0 {
-		if s.managerOnlyMultiKueueView() {
+		if s.ManagerOnlyMultiKueueView() {
 			b.WriteString("  (none — manager view only; worker-cluster pods are not visible here)\n")
 		} else if rayJobStatusSucceeded(rj) {
 			b.WriteString("  (none — RayCluster pods cleaned up after successful completion)\n")
@@ -414,7 +414,7 @@ func multiKueuePlacementDisplayState(s Snapshot) string {
 //	Pending    — Job exists, suspended (Kueue not yet admitted)
 //	Admitted   — Job exists, not suspended, no active pods yet
 func deriveState(s Snapshot) string {
-	if s.managerOnlyMultiKueueView() {
+	if s.ManagerOnlyMultiKueueView() {
 		if state, ok := multiKueueTerminalState(s); ok {
 			return state
 		}

@@ -11,10 +11,6 @@ import (
 
 const commandWaitDelay = 2 * time.Second
 
-// processTreeReapDelay bounds how long the Linux command supervisor spends
-// terminating and reaping adopted descendants after the command exits.
-const processTreeReapDelay = 1 * time.Second
-
 // RunCommand executes an external Kusto command with bounded cancellation and
 // pipe waits. Linux uses a dedicated child-subreaper process for each command,
 // so cleanup owns every adopted descendant without making the portal itself a

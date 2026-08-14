@@ -86,29 +86,27 @@ func RenderSmoke(options SmokeOptions) ([]byte, error) {
 		},
 	)
 	smokeProfile := profile.Profile{
-		Name: "tau-onboarding-smoke",
-		Spec: map[string]any{
-			"queue": map[string]any{"localQueue": options.Queue},
-			"resources": map[string]any{
-				"requests": map[string]any{"cpu": "50m", "memory": "64Mi"},
-				"limits":   map[string]any{"cpu": "250m", "memory": "128Mi"},
-			},
-			"runtime": map[string]any{
-				"image":           image,
-				"imagePullPolicy": "IfNotPresent",
-				"securityContext": map[string]any{
-					"allowPrivilegeEscalation": false,
-					"runAsNonRoot":             true,
-					"runAsUser":                int64(65532),
-					"runAsGroup":               int64(65532),
-					"capabilities": map[string]any{
-						"drop": []any{"ALL"},
-					},
-					"seccompProfile": map[string]any{"type": "RuntimeDefault"},
-				},
-			},
-			"policy": map[string]any{"activeDeadlineSeconds": int64(300)},
+		Name:  "tau-onboarding-smoke",
+		Queue: options.Queue,
+		Resources: profile.Resources{
+			Requests: map[string]any{"cpu": "50m", "memory": "64Mi"},
+			Limits:   map[string]any{"cpu": "250m", "memory": "128Mi"},
 		},
+		Runtime: profile.Runtime{
+			Image:           image,
+			ImagePullPolicy: "IfNotPresent",
+			SecurityContext: map[string]any{
+				"allowPrivilegeEscalation": false,
+				"runAsNonRoot":             true,
+				"runAsUser":                int64(65532),
+				"runAsGroup":               int64(65532),
+				"capabilities": map[string]any{
+					"drop": []any{"ALL"},
+				},
+				"seccompProfile": map[string]any{"type": "RuntimeDefault"},
+			},
+		},
+		ActiveDeadlineSeconds: 300,
 	}
 	return jobrender.Render(smokeProfile, jobrender.Options{
 		Name:                          options.Name,

@@ -263,10 +263,9 @@ func (r *Reconciler) write(ctx context.Context, records []Record) error {
 	attempts := r.WriterRetries + 1
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		if err := r.Writer.Write(ctx, records); err == nil {
+		lastErr = r.Writer.Write(ctx, records)
+		if lastErr == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
 		if attempt+1 < attempts {
 			timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)

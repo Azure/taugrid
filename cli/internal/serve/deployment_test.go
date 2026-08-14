@@ -17,40 +17,13 @@ import (
 
 func deployBaseProfile() profile.Profile {
 	return profile.Profile{
-		Name: "ai-serve-gpu-a100",
-		Spec: map[string]any{
-			"runtime": map[string]any{
-				"image":           "my-registry/my-serve:latest",
-				"imagePullPolicy": "IfNotPresent",
-				"imagePullSecrets": []any{
-					map[string]any{"name": "acr-secret"},
-				},
-				"env": []any{
-					map[string]any{"name": "MODEL_FAMILY", "value": "research"},
-				},
-			},
-			"resources": map[string]any{
-				"requests": map[string]any{"cpu": "4", "memory": "16Gi"},
-				"limits":   map[string]any{"cpu": "8", "memory": "32Gi"},
-				"gpu": map[string]any{
-					"count":     1,
-					"size":      "l",
-					"placement": "single-device",
-				},
-				"dra": map[string]any{
-					"claimTemplate": "ds-full-gpu",
-				},
-			},
-			"scheduling": map[string]any{
-				"nodeSelector":      map[string]any{"agentpool": "gpu"},
-				"priorityClassName": "serving-priority",
-				"tolerations": []any{
-					map[string]any{
-						"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule",
-					},
-				},
-			},
-			"queue": map[string]any{"localQueue": "serving-queue"},
+		Name:    "ai-serve-gpu-a100",
+		Queue:   "serving-queue",
+		Runtime: profile.Runtime{Image: "my-registry/my-serve:latest"},
+		Resources: profile.Resources{
+			Requests: map[string]any{"cpu": "4", "memory": "16Gi"},
+			Limits:   map[string]any{"cpu": "8", "memory": "32Gi"},
+			GPU:      profile.GPUContract{Count: 1, Size: "l"},
 		},
 	}
 }
@@ -125,11 +98,11 @@ func TestRenderDeployment_Defaults(t *testing.T) {
 	if labels["kueue.x-k8s.io/queue-name"] != "serving-queue" {
 		t.Fatalf("missing queue-name label: %v", labels)
 	}
-	if labels[workloadmeta.AnnotationGPUCount] != "1" || labels[workloadmeta.LabelGPUPlacement] != "single-device" {
+	if labels[workloadmeta.AnnotationGPUCount] != "1" {
 		t.Fatalf("deployment labels should expose GPU contract: %v", labels)
 	}
 	deployAnn := getPath(t, doc, "metadata", "annotations").(map[string]any)
-	if deployAnn[workloadmeta.AnnotationGPUContract] != "count=1,size=l,placement=single-device" {
+	if deployAnn[workloadmeta.AnnotationGPUContract] != "count=1,size=l" {
 		t.Fatalf("deployment annotations should expose GPU contract: %v", deployAnn)
 	}
 	// Pod-template Kueue managed label + suspending-parent annotation
@@ -149,7 +122,7 @@ func TestRenderDeployment_Defaults(t *testing.T) {
 	if podLabels["kueue.x-k8s.io/queue-name"] != "serving-queue" {
 		t.Fatalf("pod template must carry queue-name or its pods gate forever: %v", podLabels)
 	}
-	if podAnn[workloadmeta.AnnotationGPUContract] != "count=1,size=l,placement=single-device" {
+	if podAnn[workloadmeta.AnnotationGPUContract] != "count=1,size=l" {
 		t.Fatalf("pod template annotations should expose GPU contract: %v", podAnn)
 	}
 	// Main container image from profile runtime.image
@@ -161,52 +134,18 @@ func TestRenderDeployment_Defaults(t *testing.T) {
 	if c["image"] != "my-registry/my-serve:latest" {
 		t.Fatalf("image not pulled from profile: %v", c["image"])
 	}
-	if c["imagePullPolicy"] != "IfNotPresent" {
-		t.Fatalf("imagePullPolicy not pulled from profile: %v", c["imagePullPolicy"])
-	}
-	env := c["env"].([]any)
-	if len(env) != 1 || env[0].(map[string]any)["name"] != "MODEL_FAMILY" || env[0].(map[string]any)["value"] != "research" {
-		t.Fatalf("profile runtime env not propagated: %v", env)
-	}
-	// DRA wiring: resourceClaims at pod level + claims on container
-	claims := getPath(t, doc, "spec", "template", "spec", "resourceClaims").([]any)
-	if len(claims) != 1 {
-		t.Fatalf("want 1 resourceClaim, got %d", len(claims))
-	}
-	claim := claims[0].(map[string]any)
-	if claim["resourceClaimTemplateName"] != "ds-full-gpu" {
-		t.Fatalf("DRA claim not wired: %v", claim)
-	}
 	resources := c["resources"].(map[string]any)
-	cclaims := resources["claims"].([]any)
-	if len(cclaims) != 1 || cclaims[0].(map[string]any)["name"] != "gpu" {
-		t.Fatalf("container claims not wired: %v", cclaims)
-	}
-	// Scheduling propagation
 	spec := getPath(t, doc, "spec", "template", "spec").(map[string]any)
-	if spec["priorityClassName"] != "serving-priority" {
-		t.Fatalf("priorityClassName not propagated: %v", spec["priorityClassName"])
+	if _, ok := spec["resourceClaims"]; ok {
+		t.Fatalf("device-plugin deployment must not have resourceClaims: %v", spec)
 	}
-	pullSecrets := spec["imagePullSecrets"].([]any)
-	if len(pullSecrets) != 1 || pullSecrets[0].(map[string]any)["name"] != "acr-secret" {
-		t.Fatalf("imagePullSecrets not propagated: %v", pullSecrets)
-	}
-	if spec["nodeSelector"] == nil {
-		t.Fatal("nodeSelector not propagated")
-	}
-	if spec["tolerations"] == nil {
-		t.Fatal("tolerations not propagated")
-	}
-	if spec["affinity"] == nil {
-		t.Fatal("GPU profile should prefer packing onto already-used GPU nodes")
+	if _, ok := resources["claims"]; ok {
+		t.Fatalf("device-plugin container must not have resource claims: %v", resources)
 	}
 }
 
 func TestRenderDeployment_DevicePlugin(t *testing.T) {
 	p := deployBaseProfile()
-	res := p.Spec["resources"].(map[string]any)
-	delete(res, "dra")
-	res["gpu"].(map[string]any)["requestVia"] = "device-plugin"
 	b, err := RenderDeployment(p, DeploymentOptions{Name: "dp-serve", Namespace: "tau"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -263,7 +202,7 @@ func TestRenderDeployment_KueueOptOut(t *testing.T) {
 	if _, ok := annotations["kueue.x-k8s.io/pod-suspending-parent"]; ok {
 		t.Fatal("KueueManaged=false should not emit Kueue pod-suspending-parent annotation")
 	}
-	if annotations[workloadmeta.AnnotationGPUContract] != "count=1,size=l,placement=single-device" {
+	if annotations[workloadmeta.AnnotationGPUContract] != "count=1,size=l" {
 		t.Fatalf("GPU contract annotations should remain with KueueManaged=false: %v", annotations)
 	}
 }
@@ -555,10 +494,7 @@ func TestRenderDeployment_Validation(t *testing.T) {
 }
 
 func TestRenderDeployment_NoImageNoProfileRuntime(t *testing.T) {
-	p := profile.Profile{
-		Name: "bare",
-		Spec: map[string]any{}, // no runtime.image
-	}
+	p := profile.Profile{Name: "bare"}
 	o := DeploymentOptions{Name: "x", Namespace: "y"}
 	_, err := RenderDeployment(p, o)
 	if err == nil || !strings.Contains(err.Error(), "no image") {
@@ -727,7 +663,7 @@ func TestRenderDeployment_Autoscaling_Validation(t *testing.T) {
 // find (#1317). Refuse to render it.
 func TestRenderDeployment_ProfileWithoutQueue_IsRejected(t *testing.T) {
 	p := deployBaseProfile()
-	delete(p.Spec, "queue")
+	p.Queue = ""
 	_, err := RenderDeployment(p, DeploymentOptions{Name: "x", Namespace: "tau"})
 	if err == nil {
 		t.Fatal("Kueue-managed render without a LocalQueue must fail, not emit a permanently-gated Deployment")

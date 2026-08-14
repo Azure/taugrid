@@ -1033,34 +1033,6 @@ runtime:
 	}
 }
 
-func TestMetricsOffloadOptionsFromProfile(t *testing.T) {
-	p := profile.Profile{
-		Name: "demo-profile",
-		Spec: map[string]any{
-			"metrics": map[string]any{
-				"offload": map[string]any{
-					"image":               "registry.example.com/tau:v1",
-					"project":             "vit-enc-vision",
-					"group":               "demo-experiment",
-					"remoteWriteEndpoint": "http://${NODE_IP}:3100/receive",
-					"interval":            "15s",
-				},
-			},
-		},
-	}
-	opts, err := MetricsOffloadOptionsFromProfile(p)
-	if err != nil {
-		t.Fatalf("MetricsOffloadOptionsFromProfile: %v", err)
-	}
-	if opts.Image != "registry.example.com/tau:v1" ||
-		opts.Project != "vit-enc-vision" ||
-		opts.Group != "demo-experiment" ||
-		opts.RemoteWriteEndpoint != "http://${NODE_IP}:3100/receive" ||
-		opts.Interval != 15*time.Second {
-		t.Fatalf("profile metrics offload parsed incorrectly: %+v", opts)
-	}
-}
-
 func TestRenderRayJobRejectsKubeRayNameTooLong(t *testing.T) {
 	long := strings.Repeat("a", 44)
 	src := `
@@ -1688,10 +1660,8 @@ func TestBuildSchedulingMetadataRejectsGPUClassSelectorForAny(t *testing.T) {
 
 func TestBuildSchedulingMetadataRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
 	p := profile.Profile{
-		Name: "profile-h100",
-		Spec: map[string]any{
-			"topology": map[string]any{"gpuClass": topology.GPUClassH10095GB},
-		},
+		Name:     "profile-h100",
+		Topology: profile.Topology{GPUClass: topology.GPUClassH10095GB},
 	}
 	_, err := buildSchedulingMetadata(RenderOptions{
 		TopologyProfile: &p,
@@ -1706,10 +1676,8 @@ func TestBuildSchedulingMetadataRejectsSelectorConflictingWithProfileGPUClass(t 
 
 func TestBuildSchedulingMetadataRejectsClassSelectorForProfileAny(t *testing.T) {
 	p := profile.Profile{
-		Name: "profile-any",
-		Spec: map[string]any{
-			"topology": map[string]any{"gpuClass": topology.GPUClassAny},
-		},
+		Name:     "profile-any",
+		Topology: profile.Topology{GPUClass: topology.GPUClassAny},
 	}
 	_, err := buildSchedulingMetadata(RenderOptions{
 		TopologyProfile: &p,
@@ -4479,7 +4447,7 @@ func TestRenderAcceptsWorkloadUnderRenderedSizeLimit(t *testing.T) {
 func TestRenderRejectsWorkloadOverRenderedSizeLimit(t *testing.T) {
 	// Keep enough margin that public identifier length changes cannot move this
 	// fixture back below the rendered-workload limit.
-	out, err := renderSizeLimitProbe(t, 50600)
+	out, err := renderSizeLimitProbe(t, 52000)
 	if err == nil {
 		doc := unmarshalLast(t, out)
 		jsonBytes, marshalErr := json.Marshal(doc)

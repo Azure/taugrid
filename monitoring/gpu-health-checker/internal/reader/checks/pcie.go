@@ -35,17 +35,13 @@ func (r *PCIeReader) Read(ctx context.Context, db *store.DB, cfg *config.Config)
 
 func (r *PCIeReader) checkReplayRate(ctx context.Context, db *store.DB, cfg *config.Config, f *reader.CheckFindings) error {
 	window := cfg.Checks.PCIe.ReplayRateWindow
-	since := time.Now().Add(-window)
-	samples, err := db.QuerySamples(ctx, fieldnames.PCIeReplay, -1, since)
+	samples, err := db.QuerySamples(ctx, fieldnames.PCIeReplay, -1, time.Now().Add(-window))
 	if err != nil {
 		return fmt.Errorf("query PCIE_REPLAY: %w", err)
 	}
-	rates := reader.ComputeDeltas(samples)
-	for gpu, rate := range rates {
-		if rate > cfg.Checks.PCIe.ReplayRateThreshold {
-			f.AddWarning(gpu, fmt.Sprintf("GPU %d: PCIe replay delta=%.0f in %s (threshold=%.0f)",
-				gpu, rate, window, cfg.Checks.PCIe.ReplayRateThreshold))
-		}
+	for _, delta := range deltasAboveThreshold(samples, cfg.Checks.PCIe.ReplayRateThreshold) {
+		f.AddWarning(delta.gpu, fmt.Sprintf("GPU %d: PCIe replay delta=%.0f in %s (threshold=%.0f)",
+			delta.gpu, delta.value, window, cfg.Checks.PCIe.ReplayRateThreshold))
 	}
 	return nil
 }

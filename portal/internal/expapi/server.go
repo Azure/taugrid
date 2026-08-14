@@ -139,7 +139,6 @@ type Server struct {
 	kustoMetricsFile       string
 	kustoProject           string
 	workspace              string
-	kustoWorkspace         string
 	kustoAllowedProjects   []string
 	kustoFeaturedProjects  []string
 	kustoEndpoint          string
@@ -200,7 +199,6 @@ func NewServer(opts Options) (*Server, error) {
 		kustoMetricsFile:       strings.TrimSpace(opts.KustoMetricsFile),
 		kustoProject:           strings.TrimSpace(opts.KustoProject),
 		workspace:              defaultWorkspace(opts),
-		kustoWorkspace:         defaultWorkspace(opts),
 		kustoAllowedProjects:   compactStrings(opts.KustoAllowedProjects),
 		kustoFeaturedProjects:  compactStrings(opts.KustoFeaturedProjects),
 		kustoEndpoint:          strings.TrimSpace(opts.KustoEndpoint),
@@ -661,7 +659,7 @@ func (s *Server) baseKustoSource() expcockpit.KustoSource {
 		MetricsFile:       s.kustoMetricsFile,
 		StorePath:         expcockpit.KustoStorePathForIngestion(s.kustoIngestion),
 		Project:           s.kustoProject,
-		WorkspaceID:       s.kustoWorkspace,
+		WorkspaceID:       s.workspace,
 		AllowedProjects:   append([]string(nil), s.kustoAllowedProjects...),
 		FeaturedProjects:  append([]string(nil), s.kustoFeaturedProjects...),
 		Endpoint:          s.kustoEndpoint,

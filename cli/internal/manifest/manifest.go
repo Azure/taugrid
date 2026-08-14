@@ -255,10 +255,8 @@ func (m *Manifest) Validate() error {
 		if err := validateEffectiveResourcePair("compute.worker", m.Compute.WorkerCPUs, m.Compute.WorkerCPULimit, m.Compute.WorkerMemory, m.Compute.WorkerMemoryLimit); err != nil {
 			return err
 		}
-	} else {
-		if g < 1 || g > 8 {
-			return fmt.Errorf("compute.gpus: want 1..8 (per-worker), got %d", g)
-		}
+	} else if g < 1 || g > 8 {
+		return fmt.Errorf("compute.gpus: want 1..8 (per-worker), got %d", g)
 	}
 	// Eval-only optional fields. cpu_workers must be non-negative when set;
 	// the dispatch layer (render.go) is responsible for cross-checking that
@@ -294,10 +292,7 @@ func (m *Manifest) Validate() error {
 			return err
 		}
 	}
-	if err := validateModelMetadata(m.Model); err != nil {
-		return err
-	}
-	return nil
+	return validateModelMetadata(m.Model)
 }
 
 func validateRuntimeRDMA(r RuntimeRDMA) error {

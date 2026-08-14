@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/Azure/taugrid/core/resourceprofile"
@@ -22,53 +21,29 @@ func resourceProfileForRender(profileName string, preset *runtopology.ResolvedPr
 		}
 	}
 
-	spec := map[string]any{}
-	if topologySpec := topologyProfileSpec(opts); len(topologySpec) > 0 {
-		spec["topology"] = topologySpec
-	}
-	if queueName := firstNonEmpty(opts.QueueName, presetValue(preset, func(p runtopology.Preset) string { return p.QueueName })); queueName != "" {
-		spec["queue"] = map[string]any{"localQueue": queueName}
-	}
-	if resourceSpec := resourceProfileSpec(opts, preset, gpuCount); len(resourceSpec) > 0 {
-		spec["resources"] = resourceSpec
-	}
-	spec["runtime"] = map[string]any{"image": defaultSyntheticResourceProfileImage}
-
 	return profile.Profile{
-		Name: name,
-		Lane: firstNonEmpty(opts.Lane, presetValue(preset, func(p runtopology.Preset) string { return p.Lane })),
-		Spec: spec,
+		Name:  name,
+		Lane:  firstNonEmpty(opts.Lane, presetValue(preset, func(p runtopology.Preset) string { return p.Lane })),
+		Queue: firstNonEmpty(opts.QueueName, presetValue(preset, func(p runtopology.Preset) string { return p.QueueName })),
+		Topology: profile.Topology{
+			Team:                      strings.TrimSpace(opts.Team),
+			Mode:                      strings.TrimSpace(opts.Mode),
+			Placement:                 strings.TrimSpace(opts.Placement),
+			Shape:                     strings.TrimSpace(opts.Shape),
+			GPUClass:                  strings.TrimSpace(opts.GPUClass),
+			PriorityTier:              strings.TrimSpace(opts.PriorityTier),
+			PodPriorityClassName:      strings.TrimSpace(opts.PodPriorityClassName),
+			WorkloadPriorityClassName: strings.TrimSpace(opts.WorkloadPriorityClassName),
+			DisableDefaultPriorities:  opts.DisableDefaultPriorities,
+		},
+		Resources: profile.Resources{
+			GPU: resourceProfileGPU(opts, preset, gpuCount),
+		},
+		Runtime: profile.Runtime{Image: defaultSyntheticResourceProfileImage},
 	}
 }
 
-func topologyProfileSpec(opts runtopology.Options) map[string]any {
-	spec := map[string]any{}
-	add := func(key, value string) {
-		if strings.TrimSpace(value) != "" {
-			spec[key] = strings.TrimSpace(value)
-		}
-	}
-	add("team", opts.Team)
-	add("lane", opts.Lane)
-	add("mode", opts.Mode)
-	add("placement", opts.Placement)
-	add("shape", opts.Shape)
-	add("gpuClass", opts.GPUClass)
-	add("checkpointEvery", opts.CheckpointEvery)
-	add("queueName", opts.QueueName)
-	add("priorityTier", opts.PriorityTier)
-	add("podPriorityClassName", opts.PodPriorityClassName)
-	add("workloadPriorityClassName", opts.WorkloadPriorityClassName)
-	if opts.DisableKueueTopologyAnnotations {
-		spec["disableKueueTopologyAnnotations"] = true
-	}
-	if opts.DisableDefaultPriorities {
-		spec["disableDefaultPriorities"] = true
-	}
-	return spec
-}
-
-func resourceProfileSpec(opts runtopology.Options, preset *runtopology.ResolvedPreset, gpuCount int) map[string]any {
+func resourceProfileGPU(opts runtopology.Options, preset *runtopology.ResolvedPreset, gpuCount int) profile.GPUContract {
 	if gpuCount <= 0 {
 		if count, ok, err := runtopology.GPUCountFromShape(opts.Shape); err == nil && ok {
 			gpuCount = count
@@ -80,17 +55,14 @@ func resourceProfileSpec(opts runtopology.Options, preset *runtopology.ResolvedP
 		}
 	}
 	if gpuCount <= 0 {
-		return nil
+		return profile.GPUContract{}
 	}
-	gpu := map[string]any{
-		"count":      gpuCount,
-		"requestVia": profile.GPURequestDevicePlugin,
-	}
+	gpu := profile.GPUContract{Count: gpuCount}
 	gpuClass := firstNonEmpty(opts.GPUClass, presetValue(preset, func(p runtopology.Preset) string { return p.GPUClass }))
 	if gpuClass != "" && gpuClass != runtopology.GPUClassAny {
-		gpu["size"] = gpuClass
+		gpu.Size = gpuClass
 	}
-	return map[string]any{"gpu": gpu}
+	return gpu
 }
 
 func presetValue(preset *runtopology.ResolvedPreset, get func(runtopology.Preset) string) string {
@@ -121,56 +93,4 @@ func (f topologyFlags) resourceProfileOptions() runtopology.Options {
 		PodPriorityClassName:      f.podPriorityClass,
 		DisableDefaultPriorities:  f.disableDefaultPriorities,
 	}
-}
-
-func profileRuntimeImage(p profile.Profile) string {
-	rt, ok := p.Spec["runtime"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	image, _ := rt["image"].(string)
-	return image
-}
-
-type profilePersistenceMount struct {
-	PVC       string
-	MountPath string
-	ReadOnly  bool
-}
-
-func profilePersistenceMounts(p profile.Profile) []profilePersistenceMount {
-	res, ok := p.Spec["resources"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	raw, ok := res["persistence"]
-	if !ok {
-		return nil
-	}
-	var mounts []profilePersistenceMount
-	add := func(entry map[string]any) {
-		pvc, _ := entry["pvcName"].(string)
-		mountPath, _ := entry["mountPath"].(string)
-		readOnly, _ := entry["readOnly"].(bool)
-		if pvc != "" && mountPath != "" {
-			mounts = append(mounts, profilePersistenceMount{PVC: pvc, MountPath: mountPath, ReadOnly: readOnly})
-		}
-	}
-	switch v := raw.(type) {
-	case map[string]any:
-		add(v)
-	case []any:
-		for _, item := range v {
-			if entry, ok := item.(map[string]any); ok {
-				add(entry)
-			}
-		}
-	}
-	sort.Slice(mounts, func(i, j int) bool {
-		if mounts[i].PVC == mounts[j].PVC {
-			return mounts[i].MountPath < mounts[j].MountPath
-		}
-		return mounts[i].PVC < mounts[j].PVC
-	})
-	return mounts
 }

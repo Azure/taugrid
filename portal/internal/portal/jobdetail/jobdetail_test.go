@@ -525,8 +525,7 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
             "` + workloadmeta.AnnotationStellarProject + `":"NanoGPT FineWeb",
             "` + workloadmeta.AnnotationStellarExperimentID + `":"nanogpt-api-surface",
             "` + workloadmeta.AnnotationStellarExperimentTitle + `":"NanoGPT API surface",
-            "` + workloadmeta.AnnotationStellarGroup + `":"safe-stack-h200",
-            "` + workloadmeta.AnnotationStellarQuestion + `":"does the API hold?"}},
+            "` + workloadmeta.AnnotationStellarGroup + `":"safe-stack-h200"}},
         "status":{"conditions":[{"type":"Complete","status":"True"}]}}`),
 	}
 	// A lifecycle row with no project_id: the marker proves durability, the
@@ -598,29 +597,5 @@ func TestDetailNoStellarIdentityOmitsExperiment(t *testing.T) {
 	}
 	if snap.Links.StellarPath != "" {
 		t.Fatalf("StellarPath = %q, want empty without a durable lifecycle row", snap.Links.StellarPath)
-	}
-}
-
-// A question always *was* the named experiment -- the rename promoted it rather
-// than deleting it. Workloads stamped before the rename carry only the question
-// annotation, so it has to resolve to the experiment or their Stellar identity
-// reads as empty in the portal.
-func TestExperimentIdentityFallsBackToLegacyQuestionAnnotation(t *testing.T) {
-	got := experimentIdentity(map[string]string{
-		workloadmeta.AnnotationStellarProject:  "project-alpha",
-		workloadmeta.AnnotationStellarQuestion: "experiment-alpha",
-	})
-	if got.ExperimentID != "experiment-alpha" {
-		t.Fatalf("ExperimentID = %q, want the legacy question annotation", got.ExperimentID)
-	}
-
-	// The current spelling must win when both are present, so a re-stamped
-	// workload is not dragged back to a stale value.
-	got = experimentIdentity(map[string]string{
-		workloadmeta.AnnotationStellarExperimentID: "current",
-		workloadmeta.AnnotationStellarQuestion:     "legacy",
-	})
-	if got.ExperimentID != "current" {
-		t.Fatalf("ExperimentID = %q, want the current annotation to win", got.ExperimentID)
 	}
 }

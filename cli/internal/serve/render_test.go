@@ -14,43 +14,11 @@ import (
 
 func makeServeProfile() profile.Profile {
 	return profile.Profile{
-		Name: "ai-serve-gpu-l",
-		Spec: map[string]any{
-			"queue": map[string]any{
-				"clusterQueue": "serving-cq",
-				"localQueue":   "serving-queue",
-			},
-			"scheduling": map[string]any{
-				"nodeSelector": map[string]any{workloadmeta.LabelLane: "serve"},
-				"tolerations": []any{
-					map[string]any{
-						"key": workloadmeta.LabelLane, "operator": "Equal",
-						"value": "serve", "effect": "NoSchedule",
-					},
-				},
-				"priorityClassName": "taugrid-serve-critical",
-			},
-			"resources": map[string]any{
-				"requests": map[string]any{"cpu": "4", "memory": "16Gi"},
-				"gpu": map[string]any{
-					"count":     1,
-					"size":      "l",
-					"placement": "single-device",
-				},
-				"dra": map[string]any{
-					"deviceClass":   "gpu.nvidia.com",
-					"claimTemplate": "full-gpu",
-				},
-			},
-			"runtime": map[string]any{
-				"imagePullPolicy": "IfNotPresent",
-				"imagePullSecrets": []any{
-					map[string]any{"name": "acr-secret"},
-				},
-				"env": []any{
-					map[string]any{"name": "SAMPLE_SERVE_VARIANT", "value": "SamplePretrained"},
-				},
-			},
+		Name:  "ai-serve-gpu-l",
+		Queue: "serving-queue",
+		Resources: profile.Resources{
+			Requests: map[string]any{"cpu": "4", "memory": "16Gi"},
+			GPU:      profile.GPUContract{Count: 1, Size: "l"},
 		},
 	}
 }
@@ -60,6 +28,7 @@ func TestRender_HappyPath(t *testing.T) {
 	out, err := Render(p, Options{
 		Name: "my-7b", Namespace: "ray",
 		Image: "vllm/vllm-openai:v0.6.3",
+		Env:   map[string]string{"SAMPLE_SERVE_VARIANT": "SamplePretrained"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,16 +44,11 @@ func TestRender_HappyPath(t *testing.T) {
 		"image: vllm/vllm-openai:v0.6.3",
 		"name: SAMPLE_SERVE_VARIANT",
 		"value: SamplePretrained",
-		workloadmeta.AnnotationGPUContract + ": count=1,size=l,placement=single-device",
+		workloadmeta.AnnotationGPUContract + ": count=1,size=l",
 		workloadmeta.LabelGPUCount + ": \"1\"",
-		workloadmeta.LabelGPUPlacement + ": single-device",
-		"preferredDuringSchedulingIgnoredDuringExecution:",
 		"runtime_env:",
 		"SAMPLE_SERVE_VARIANT: \"SamplePretrained\"",
-		"imagePullSecrets:",
-		"name: acr-secret",
-		"resourceClaimTemplateName: full-gpu",
-		"priorityClassName: taugrid-serve-critical",
+		"nvidia.com/gpu: 1",
 		"dashboard-host:",
 		"containerPort: 8000",
 		"import_path: serve:app",
@@ -231,8 +195,7 @@ func TestRender_NoImage_Errors(t *testing.T) {
 
 func TestRender_ProfileImageFallback(t *testing.T) {
 	p := makeServeProfile()
-	rt := p.Spec["runtime"].(map[string]any)
-	rt["image"] = "acr.io/fallback:v1"
+	p.Runtime.Image = "acr.io/fallback:v1"
 	out, err := Render(p, Options{Name: "x", Namespace: "n"})
 	if err != nil {
 		t.Fatal(err)
@@ -242,11 +205,8 @@ func TestRender_ProfileImageFallback(t *testing.T) {
 	}
 }
 
-func TestRender_NoDRA_NoClaimBlock(t *testing.T) {
+func TestRender_DevicePluginHasNoClaimBlock(t *testing.T) {
 	p := makeServeProfile()
-	res := p.Spec["resources"].(map[string]any)
-	delete(res, "dra")
-	res["gpu"].(map[string]any)["requestVia"] = "device-plugin"
 	out, err := Render(p, Options{Name: "x", Namespace: "n", Image: "i"})
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +228,7 @@ func TestRender_NoDRA_NoClaimBlock(t *testing.T) {
 // one produces a submit that silently never runs.
 func TestRender_NoQueue_IsRejected(t *testing.T) {
 	p := makeServeProfile()
-	delete(p.Spec, "queue")
+	p.Queue = ""
 	_, err := Render(p, Options{Name: "x", Namespace: "n", Image: "i"})
 	if err == nil {
 		t.Fatal("render without a LocalQueue must fail, not emit a RayService that is never admitted")

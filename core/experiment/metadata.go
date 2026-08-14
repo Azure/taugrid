@@ -41,7 +41,6 @@ const (
 	AnnotationStellarExperimentID    = workloadmeta.AnnotationStellarExperimentID
 	AnnotationStellarGroup           = workloadmeta.AnnotationStellarGroup
 	AnnotationStellarTags            = workloadmeta.AnnotationStellarTags
-	AnnotationStellarQuestion        = workloadmeta.AnnotationStellarQuestion
 	AnnotationExperimentSource       = workloadmeta.AnnotationExperimentSource
 	AnnotationWorkspaceID            = workloadmeta.AnnotationWorkspaceID
 	AnnotationResultScope            = workloadmeta.AnnotationResultScope

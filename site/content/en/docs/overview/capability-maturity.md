@@ -65,3 +65,6 @@ No capabilities are currently labeled Deprecated.
 
 A design document or partial implementation does not change a capability's
 feature stage.
+
+Longer-term direction, including what is deliberately out of scope, is described
+in the [roadmap](https://github.com/Azure/taugrid/blob/main/ROADMAP.md).

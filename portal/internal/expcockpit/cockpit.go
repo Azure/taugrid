@@ -1764,11 +1764,7 @@ func buildChart(points []metricPoint, requested string, groupClasses map[string]
 }
 
 func buildChartWithRunColors(points []metricPoint, requested string, groupClasses map[string]string, runColors map[string]string) ChartView {
-	return buildChartWithRunColorsAndBudget(points, requested, groupClasses, runColors, chartMaxRenderedPoints)
-}
-
-func buildChartWithRunColorsAndBudget(points []metricPoint, requested string, groupClasses map[string]string, runColors map[string]string, maxRenderedPoints int) ChartView {
-	return buildChartWithRunColorsBudgetAndInterval(points, requested, groupClasses, runColors, maxRenderedPoints, 0)
+	return buildChartWithRunColorsBudgetAndInterval(points, requested, groupClasses, runColors, chartMaxRenderedPoints, 0)
 }
 
 func buildChartWithRunColorsBudgetAndInterval(points []metricPoint, requested string, groupClasses map[string]string, runColors map[string]string, maxRenderedPoints int, stepInterval int) ChartView {

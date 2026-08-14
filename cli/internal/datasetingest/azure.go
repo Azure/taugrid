@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -709,10 +710,5 @@ func ValidateAzureURL(u string) error {
 
 // hasTraversal reports whether p contains a ".." path segment.
 func hasTraversal(p string) bool {
-	for _, seg := range strings.Split(p, "/") {
-		if seg == ".." {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(p, "/"), "..")
 }

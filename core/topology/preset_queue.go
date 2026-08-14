@@ -37,7 +37,7 @@ func ReconcilePresetQueueOverride(preset ResolvedPreset, queueName, team, lane s
 		return result, nil
 	}
 	trimmedTeam := strings.TrimSpace(team)
-	if queueMatchesTeam(queue, trimmedTeam) {
+	if trimmedTeam != "" && (queue == trimmedTeam || strings.HasPrefix(queue, trimmedTeam+"-")) {
 		return result, nil
 	}
 	if teamChanged {
@@ -49,13 +49,6 @@ func ReconcilePresetQueueOverride(preset ResolvedPreset, queueName, team, lane s
 		return result, nil
 	}
 	return result, fmt.Errorf("--queue=%q overrides preset %s queue %q but leaves team=%q from the preset; pass --team for the queue owner so Kueue LocalQueue and team intent stay consistent", queue, preset.Preset.Name, preset.Options.QueueName, trimmedTeam)
-}
-
-func queueMatchesTeam(queue, team string) bool {
-	if queue == "" || team == "" {
-		return false
-	}
-	return queue == team || strings.HasPrefix(queue, team+"-")
 }
 
 func inferTeamFromQueue(queue, lane string) string {

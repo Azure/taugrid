@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -247,21 +248,10 @@ func buildTrackRunRecord(runID string, opts expTrackOptions) (expstore.RunRecord
 }
 
 func defaultTrackRunRecord(manifest expstore.Manifest, run expstore.RunRecord) expstore.RunRecord {
-	if run.Project == "" {
-		run.Project = manifest.Project
-	}
-	if run.Project == "" {
-		run.Project = "default"
-	}
-	if run.RunGroupID == "" {
-		run.RunGroupID = "default"
-	}
-	if run.State == "" {
-		run.State = "succeeded"
-	}
-	if run.IndexVersion == "" {
-		run.IndexVersion = expstore.SchemaVersion
-	}
+	run.Project = cmp.Or(run.Project, manifest.Project, "default")
+	run.RunGroupID = cmp.Or(run.RunGroupID, "default")
+	run.State = cmp.Or(run.State, "succeeded")
+	run.IndexVersion = cmp.Or(run.IndexVersion, expstore.SchemaVersion)
 	return run
 }
 

@@ -6,6 +6,7 @@ package checks
 
 import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/reader"
+	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
 // All returns all available readers.
@@ -30,4 +31,20 @@ func ByName(name string) reader.Reader {
 		}
 	}
 	return nil
+}
+
+type gpuDelta struct {
+	gpu   int
+	value float64
+}
+
+// deltasAboveThreshold returns GPU counter deltas strictly greater than threshold.
+func deltasAboveThreshold(samples []store.Sample, threshold float64) []gpuDelta {
+	var result []gpuDelta
+	for gpu, delta := range reader.ComputeDeltas(samples) {
+		if delta > threshold {
+			result = append(result, gpuDelta{gpu: gpu, value: delta})
+		}
+	}
+	return result
 }

@@ -371,7 +371,7 @@ func (s *Store) ExportADX(ctx context.Context, opts ADXExportOptions) (ADXExport
 		}
 		result.Tables = append(result.Tables, table)
 	}
-	metricRows, err := s.adxMetricRows(ctx)
+	metricRows, err := s.adxMetricRowsForFiles(ctx, nil)
 	if err != nil {
 		return ADXExportResult{}, err
 	}
@@ -476,10 +476,6 @@ func (s *Store) ExportADXMetrics(ctx context.Context, opts ADXMetricsExportOptio
 		return ADXMetricsExportResult{}, err
 	}
 	return result, nil
-}
-
-func (s *Store) adxMetricRows(ctx context.Context) ([]map[string]any, error) {
-	return s.adxMetricRowsForFiles(ctx, nil)
 }
 
 func (s *Store) adxMetricRowsForFiles(ctx context.Context, metricFileIDs []string) ([]map[string]any, error) {

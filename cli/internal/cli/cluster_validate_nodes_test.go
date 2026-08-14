@@ -496,8 +496,8 @@ func TestAssessHealthFlagsMIGEnabledWithNoInstancesAsUnhealthy(t *testing.T) {
 	}
 }
 
-// MIG with instances configured is a supported way to run GPUs (profiles select
-// it via requestVia: mig), so it must not be reported as a fault.
+// MIG with instances configured is a supported way to run GPUs, so it must not
+// be reported as a fault.
 func TestAssessHealthAllowsMIGWithConfiguredInstances(t *testing.T) {
 	d := validationData{HasOutput: true, GPUCount: 1, MIGMode: "Enabled", MIGInstances: 7}
 	res := assessHealth(d, gpuNodeInfo{Name: "n1", AllocGPU: 1})
@@ -593,10 +593,10 @@ func TestDiscoverStrandedGPUNodesIgnoresMIGAdvertisedNodes(t *testing.T) {
 
 // --- GPU source detection -------------------------------------------------
 //
-// Researchers submit against device-plugin, DRA, or MIG (core/resourceprofile
-// requestVia), so discovery has to account for all three. These tests pin the
-// four properties that matter: device-plugin parity, DRA-only detection, no
-// double counting when a node offers both, and a sane MIG count.
+// Managed workflows submit against device-plugin, DRA, or MIG resources, so
+// discovery has to account for all three. These tests pin the four properties
+// that matter: device-plugin parity, DRA-only detection, no double counting
+// when a node offers both, and a sane MIG count.
 
 func nodeItemsFromJSON(t *testing.T, raw string) []nodeItem {
 	t.Helper()

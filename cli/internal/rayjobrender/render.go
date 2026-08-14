@@ -187,11 +187,7 @@ func Render(o Options) ([]byte, error) {
 		return nil, err
 	}
 	if plan.QueueName == "" {
-		if q, ok := o.Profile.Spec["queue"].(map[string]any); ok {
-			if local, ok := q["localQueue"].(string); ok && local != "" {
-				plan.QueueName = local
-			}
-		}
+		plan.QueueName = o.Profile.Queue
 	}
 	if plan.QueueName == "" {
 		plan.QueueName = topology.SharedGPUQueueName

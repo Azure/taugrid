@@ -136,6 +136,12 @@ chart's `Chart.yaml`; published versions are immutable.
 
 Full documentation is available at [https://azure.github.io/taugrid](https://azure.github.io/taugrid).
 
+## Roadmap
+
+[ROADMAP.md](ROADMAP.md) describes where the project is going and what is
+deliberately out of scope. For the stage of each capability today, see
+[Capability maturity](https://azure.github.io/taugrid/docs/overview/capability-maturity/).
+
 ## Telemetry
 
 TauGrid does not send telemetry to Microsoft by default. Platform operators can explicitly enable optional observability components and configure destinations such as Azure Data Explorer. To prevent remote telemetry export, keep those integrations disabled and do not configure a remote telemetry endpoint. Local Kubernetes logs, events, and metrics remain under the cluster operator's control.

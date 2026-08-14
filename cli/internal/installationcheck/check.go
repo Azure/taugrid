@@ -504,7 +504,7 @@ func checkQuotaGuard(ctx context.Context, runner Runner) Result {
 	if err := getJSON(ctx, runner, bindingArgs, &binding); err != nil {
 		return fail("Quota guard", fmt.Sprintf("%v; the quota decision guard binding must be installed", err))
 	}
-	if binding.Spec.PolicyName != quotaGuardName || !contains(binding.Spec.ValidationActions, "Deny") {
+	if binding.Spec.PolicyName != quotaGuardName || !slices.Contains(binding.Spec.ValidationActions, "Deny") {
 		return fail("Quota guard", fmt.Sprintf(
 			"binding policyName=%q validationActions=%v; expected %s with Deny",
 			binding.Spec.PolicyName,
@@ -524,21 +524,12 @@ func findCondition(conditions []conditionDoc, conditionType string) (conditionDo
 	return conditionDoc{}, false
 }
 
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func sameStringSet(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
 	}
 	for _, value := range want {
-		if !contains(got, value) {
+		if !slices.Contains(got, value) {
 			return false
 		}
 	}

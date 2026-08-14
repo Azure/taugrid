@@ -4,6 +4,7 @@
 package expstore
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -994,19 +995,15 @@ func readManifest(root string) (Manifest, error) {
 	if manifest.Kind != StoreKind {
 		return Manifest{}, fmt.Errorf("unsupported experiment store kind %q", manifest.Kind)
 	}
-	if manifest.Index == "" {
-		manifest.Index = IndexFile
-	}
-	if manifest.AppendLogDir == "" {
-		manifest.AppendLogDir = AppendLogDir
-	}
-	if manifest.MetricsDir == "" {
-		manifest.MetricsDir = MetricsDir
-	}
-	if manifest.ArtifactsDir == "" {
-		manifest.ArtifactsDir = ArtifactsDir
-	}
-	return manifest, nil
+	return defaultManifestPaths(manifest), nil
+}
+
+func defaultManifestPaths(manifest Manifest) Manifest {
+	manifest.Index = cmp.Or(manifest.Index, IndexFile)
+	manifest.AppendLogDir = cmp.Or(manifest.AppendLogDir, AppendLogDir)
+	manifest.MetricsDir = cmp.Or(manifest.MetricsDir, MetricsDir)
+	manifest.ArtifactsDir = cmp.Or(manifest.ArtifactsDir, ArtifactsDir)
+	return manifest
 }
 
 func openDB(path string) (*sql.DB, error) {

@@ -5,6 +5,7 @@ package expimport
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,7 +89,7 @@ func ImportJSONL(ctx context.Context, store *expstore.Store, opts JSONLImportOpt
 	if len(historyPaths) == 0 {
 		return JSONLImportResult{}, fmt.Errorf("at least one --history is required")
 	}
-	opts = defaultJSONLImportOptions(store, opts)
+	opts = defaultJSONLImportOptions(store.Manifest(), opts)
 
 	var scalars []jsonlScalar
 	historyFiles := make([]JSONLHistoryFile, 0, len(historyPaths))
@@ -195,32 +196,14 @@ func ImportJSONL(ctx context.Context, store *expstore.Store, opts JSONLImportOpt
 	return result, nil
 }
 
-func defaultJSONLImportOptions(store *expstore.Store, opts JSONLImportOptions) JSONLImportOptions {
-	manifest := store.Manifest()
-	if opts.Project == "" {
-		opts.Project = manifest.Project
-	}
-	if opts.Project == "" {
-		opts.Project = "default"
-	}
-	if opts.RunGroupID == "" {
-		opts.RunGroupID = "default"
-	}
-	if opts.State == "" {
-		opts.State = "succeeded"
-	}
-	if opts.Owner == "" {
-		opts.Owner = "jsonl-import"
-	}
-	if opts.Source == "" {
-		opts.Source = "jsonl"
-	}
-	if opts.StepField == "" {
-		opts.StepField = "_step"
-	}
-	if opts.TimeField == "" {
-		opts.TimeField = "_timestamp"
-	}
+func defaultJSONLImportOptions(manifest expstore.Manifest, opts JSONLImportOptions) JSONLImportOptions {
+	opts.Project = cmp.Or(opts.Project, manifest.Project, "default")
+	opts.RunGroupID = cmp.Or(opts.RunGroupID, "default")
+	opts.State = cmp.Or(opts.State, "succeeded")
+	opts.Owner = cmp.Or(opts.Owner, "jsonl-import")
+	opts.Source = cmp.Or(opts.Source, "jsonl")
+	opts.StepField = cmp.Or(opts.StepField, "_step")
+	opts.TimeField = cmp.Or(opts.TimeField, "_timestamp")
 	return opts
 }
 

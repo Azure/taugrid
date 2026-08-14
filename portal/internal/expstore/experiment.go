@@ -47,7 +47,6 @@ func (s *Store) EnsureExperimentIndex(ctx context.Context) (ExperimentIndexResul
 	}
 	defer tx.Rollback()
 
-	now := time.Now().UTC().Format(time.RFC3339)
 	// Experiments are the named unit researchers compare runs within, and
 	// runs.experiment_id is the link. run_group is an arm/variant label on a
 	// run, NOT a level of its own -- a baseline arm and an ablation arm belong
@@ -96,7 +95,7 @@ ORDER BY g.run_group_id`)
 			result.Experiments++
 		}
 	}
-	assignments, err := ensureRunGroupExperimentAssignmentsTx(ctx, tx, now)
+	assignments, err := ensureRunGroupExperimentAssignmentsTx(ctx, tx)
 	if err != nil {
 		return result, err
 	}
@@ -145,7 +144,7 @@ func (s *Store) AssignRunToExperiment(ctx context.Context, experiment Experiment
 	if err := upsertExperimentTx(ctx, tx, experiment); err != nil {
 		return err
 	}
-	if err := setRunExperimentTx(ctx, tx, experiment.ExperimentID, runID, now); err != nil {
+	if err := setRunExperimentTx(ctx, tx, experiment.ExperimentID, runID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -451,7 +450,7 @@ func ensureRunExperimentIndexesTx(ctx context.Context, tx *sql.Tx, run RunRecord
 	}
 	// An explicitly named experiment wins over whatever a fallback may have
 	// assigned earlier, so this overwrites rather than claiming only-if-unset.
-	if err := setRunExperimentTx(ctx, tx, experimentID, run.RunID, now); err != nil {
+	if err := setRunExperimentTx(ctx, tx, experimentID, run.RunID); err != nil {
 		return 0, err
 	}
 	return 1, nil
@@ -516,8 +515,7 @@ ON CONFLICT(experiment_id) DO UPDATE SET
 // to the implicit experiment named after their run group. Runs already linked
 // to a named experiment are left alone, so arms of one experiment are never
 // split apart.
-func ensureRunGroupExperimentAssignmentsTx(ctx context.Context, tx *sql.Tx, now string) (int, error) {
-	_ = now
+func ensureRunGroupExperimentAssignmentsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	result, err := tx.ExecContext(ctx, `
 UPDATE runs SET experiment_id = run_group_id
 WHERE experiment_id = '' AND coalesce(run_group_id, '') != ''`)
@@ -531,14 +529,13 @@ WHERE experiment_id = '' AND coalesce(run_group_id, '') != ''`)
 // setRunExperimentTx points a run at its experiment. It is an UPDATE rather
 // than an insert into a join table because a run belongs to exactly one
 // experiment; the previous M:N table let a run appear under several.
-func setRunExperimentTx(ctx context.Context, tx *sql.Tx, experimentID, runID, now string) error {
+func setRunExperimentTx(ctx context.Context, tx *sql.Tx, experimentID, runID string) error {
 	if err := validateID("experiment", experimentID); err != nil {
 		return err
 	}
 	if err := validateID("run", runID); err != nil {
 		return err
 	}
-	_ = now
 	_, err := tx.ExecContext(ctx, `UPDATE runs SET experiment_id = ? WHERE run_id = ?`, experimentID, runID)
 	return err
 }
