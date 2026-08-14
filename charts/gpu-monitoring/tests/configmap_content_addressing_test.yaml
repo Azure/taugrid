@@ -19,6 +19,8 @@ tests:
           path: data["custom-plugin-monitor.json"]
       - isNotEmpty:
           path: data["check_gpu_xid.sh"]
+      - isNotEmpty:
+          path: data["dcgmi-wrapper.sh"]
 
   - it: truncates a custom base so the hashed name remains a DNS label
     set:

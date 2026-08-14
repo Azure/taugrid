@@ -110,8 +110,52 @@ check_temp_imex.sh: |
 {{ tpl (.Files.Get "scripts/check_temp_imex.sh") . | indent 2 }}
 nvidia-smi-wrapper.sh: |
 {{ tpl (.Files.Get "scripts/nvidia-smi-wrapper.sh") . | indent 2 }}
+dcgmi-wrapper.sh: |
+{{ tpl (.Files.Get "scripts/dcgmi-wrapper.sh") . | indent 2 }}
 check_roce.sh: |
 {{ tpl (.Files.Get "scripts/check_roce.sh") . | indent 2 }}
+{{- end }}
+
+{{/*
+Render one SKU's metrics collector rules. The DaemonSet hashes this exact payload
+so ConfigMap changes roll only the affected profile.
+*/}}
+{{- define "gpu-monitoring.metricsCollectorConfig" -}}
+{{- $root := .root }}
+{{- $sku := .sku }}
+{{- $scrapeTargets := $root.Values.metricsCollector.scrapeTargets }}
+{{- if hasKey $sku "scrapeTargets" }}
+{{- $scrapeTargets = $sku.scrapeTargets }}
+{{- end }}
+{{- $nodeExporterEnabled := $root.Values.nodeExporter.enabled }}
+{{- if hasKey $sku "nodeExporter" }}
+{{- $nodeExporterEnabled = $sku.nodeExporter }}
+{{- end }}
+{{- $nodeExporterScrapeEnabled := $nodeExporterEnabled }}
+{{- if hasKey $root.Values.metricsCollector "nodeExporterScrape" }}
+{{- $nodeExporterScrapeEnabled = $root.Values.metricsCollector.nodeExporterScrape }}
+{{- end }}
+{{- if hasKey $sku "nodeExporterScrape" }}
+{{- $nodeExporterScrapeEnabled = $sku.nodeExporterScrape }}
+{{- end }}
+scrapeTargets:
+  {{- range $scrapeTargets }}
+  {{- if eq .name "node-exporter" }}
+  {{- if $nodeExporterScrapeEnabled }}
+  - name: {{ .name }}
+    url: {{ .url }}
+  {{- end }}
+  {{- else }}
+  - name: {{ .name }}
+    url: {{ .url }}
+  {{- end }}
+  {{- end }}
+  {{- if $root.Values.metricsCollector.npdScrape }}
+  - name: node-problem-detector
+    url: http://localhost:{{ add $root.Values.npdPort 1 }}/metrics
+  {{- end }}
+rules:
+  {{- toYaml $root.Values.metricsCollector.rules | nindent 2 }}
 {{- end }}
 
 {{/*

@@ -146,6 +146,52 @@ tests:
               name: gpu-monitoring-gpu-metrics-collector-a100
           any: true
 
+  - it: collector configuration is hashed into the pod template
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
+          value: 714235a3faae83eb79646a80360716e2eebd8341ff83f0184bd3668f3bedc1cf
+
+  - it: per-profile scrape target changes update only that profile checksum
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
+          value: 8bceeb43852f6747a2f33b8efb080a175720b7108d27ee0ecda8abb8ccff4fec
+
+  - it: GPU device-file and host DCGM health checks are required
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_GPU_REQUIRED
+            value: "1"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_DCGM_REQUIRED
+            value: "1"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /usr/local/bin/dcgmi
+            subPath: dcgmi-wrapper.sh
+            readOnly: true
+          any: true
+
   - it: spark DaemonSet mounts the spark per-SKU collector-config ConfigMap (not shared)
     documentSelector:
       path: metadata.name
@@ -256,6 +302,8 @@ tests:
           content:
             name: collector-config
           any: true
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
 
   - it: nodeTainter.enabled=true adds tolerations for NoSchedule and NoExecute
     documentSelector:

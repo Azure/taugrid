@@ -33,4 +33,5 @@ kubectl -n "${namespace}" create configmap gpu-monitoring-gpu \
   --from-file=check_ib_flaps.sh="${root}/scripts/check_ib_flaps.sh" \
   --from-file=check_nvme_mount.sh="${root}/scripts/check_nvme_mount.sh" \
   --from-file=check_temp_imex.sh="${root}/scripts/check_temp_imex.sh" \
+  --from-file=dcgmi-wrapper.sh="${root}/scripts/dcgmi-wrapper.sh" \
   --dry-run=client -o yaml | kubectl apply -f -

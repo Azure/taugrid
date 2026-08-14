@@ -59,6 +59,12 @@ esac
 EOF
 chmod +x "$TEST_ROOT/bin/dcgmi"
 
+cat >"$TEST_ROOT/bin/nsenter" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$NSENTER_ARGS_FILE"
+EOF
+chmod +x "$TEST_ROOT/bin/nsenter"
+
 cat >"$TEST_ROOT/bin/journalctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "${JOURNALCTL_OUTPUT:-}"
@@ -178,6 +184,11 @@ if dcgm_output="$(
 fi
 [[ "$dcgm_output" == *"DCGM diagnostic failure"* ]]
 [[ "$dcgm_output" == *"return code 3"* ]]
+
+readonly NSENTER_LOG="$TEST_ROOT/nsenter-args"
+PATH="$TEST_ROOT/bin:$PATH" NSENTER_ARGS_FILE="$NSENTER_LOG" \
+  bash "$CHART_DIR/scripts/dcgmi-wrapper.sh" health -t
+[[ "$(<"$NSENTER_LOG")" == "--target 1 --mount -- dcgmi health -t" ]]
 
 readonly XID_LOGFILE="$TEST_ROOT/gpu-xid.log"
 readonly XID_EVENT="kernel: NVRM: Xid (PCI:0000:01:00): 79, pid=1234"
