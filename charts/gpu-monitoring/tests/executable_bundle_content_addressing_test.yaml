@@ -1,26 +1,29 @@
-suite: executable ConfigMap content addressing
+suite: executable bundle security boundary
 templates:
-  - configmap.yaml
+  - executable-bundle-secret.yaml
 
 tests:
-  - it: renders immutable bundled content under a hashed name
+  - it: renders immutable bundled content in an RBAC-separated Secret under a hashed name
     asserts:
       - isKind:
-          of: ConfigMap
+          of: Secret
       - equal:
           path: immutable
           value: true
+      - equal:
+          path: type
+          value: Opaque
       - matchRegex:
           path: metadata.name
           pattern: '^gpu-monitoring-gpu-[a-f0-9]{10}$'
       - isNotEmpty:
-          path: data
+          path: stringData
       - isNotEmpty:
-          path: data["custom-plugin-monitor.json"]
+          path: stringData["custom-plugin-monitor.json"]
       - isNotEmpty:
-          path: data["check_gpu_xid.sh"]
+          path: stringData["check_gpu_xid.sh"]
       - isNotEmpty:
-          path: data["dcgmi-wrapper.sh"]
+          path: stringData["dcgmi-wrapper.sh"]
 
   - it: truncates a custom base so the hashed name remains a DNS label
     set:

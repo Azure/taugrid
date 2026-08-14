@@ -13,7 +13,33 @@ mkdir -p "$TEST_ROOT/bin"
 cat >"$TEST_ROOT/bin/nvidia-smi" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
-  "nvlink --status"|"nvlink --id=0 --status"|"c2c --id=0 --status")
+  "nvlink --status")
+    if [[ "${NVIDIA_SMI_NVLINK_STATUS_FAIL:-0}" == "1" ]]; then
+      echo "nvlink status query failed" >&2
+      exit 1
+    fi
+    [[ "${NVIDIA_SMI_EMPTY_NVLINK_STATUS:-0}" == "1" ]] && exit 0
+    echo "Link 0: 50 GB/s"
+    ;;
+  "nvlink -s -i 0")
+    if [[ "${NVIDIA_SMI_NVLINK_DETAIL_FAIL:-0}" == "1" ]]; then
+      echo "nvlink detail query failed" >&2
+      exit 1
+    fi
+    echo "Link 0: 50 GB/s"
+    ;;
+  "nvlink --id=0 --status")
+    if [[ "${NVIDIA_SMI_NVLINK_DETAIL_FAIL:-0}" == "1" ]]; then
+      echo "nvlink detail query failed" >&2
+      exit 1
+    fi
+    echo "Link 0: 50 GB/s"
+    ;;
+  "c2c --id=0 --status")
+    if [[ "${NVIDIA_SMI_C2C_FAIL:-0}" == "1" ]]; then
+      echo "c2c status query failed" >&2
+      exit 1
+    fi
     echo "Link 0: 50 GB/s"
     ;;
   "topo -m")
@@ -104,6 +130,46 @@ PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
 PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 \
   bash "$CHART_DIR/scripts/check_temp_imex.sh"
 
+if nvlink_empty_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" EXPECTED_NUM_GPU=1 \
+    NVIDIA_SMI_EMPTY_NVLINK_STATUS=1 \
+    bash "$CHART_DIR/scripts/check_gpu_nvlink.sh" 2>&1
+)"; then
+  echo "expected an empty NVLink status to fail the generic check" >&2
+  exit 1
+fi
+[[ "$nvlink_empty_output" == *"NVLINK is not enabled"* ]]
+
+if b200_empty_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
+    NVIDIA_SMI_EMPTY_NVLINK_STATUS=1 \
+    bash "$CHART_DIR/scripts/check_gpu_nvlink_b200.sh" 2>&1
+)"; then
+  echo "expected an empty NVLink status to fail the Blackwell check" >&2
+  exit 1
+fi
+[[ "$b200_empty_output" == *"NVLINK is not enabled"* ]]
+
+if b200_query_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
+    NVIDIA_SMI_NVLINK_DETAIL_FAIL=1 \
+    bash "$CHART_DIR/scripts/check_gpu_nvlink_b200.sh" 2>&1
+)"; then
+  echo "expected a failed Blackwell NVLink query to fail the check" >&2
+  exit 1
+fi
+[[ "$b200_query_output" == *"error code 1"* ]]
+
+if b200_c2c_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
+    NVIDIA_SMI_C2C_FAIL=1 \
+    bash "$CHART_DIR/scripts/check_gpu_nvlink_b200.sh" 2>&1
+)"; then
+  echo "expected a failed Blackwell C2C query to fail the check" >&2
+  exit 1
+fi
+[[ "$b200_c2c_output" == *"error code 1"* ]]
+
 skip_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=H100 EXPECTED_NUM_GPU=1 \
     bash "$CHART_DIR/scripts/check_gpu_nvlink_b200.sh"
@@ -184,6 +250,12 @@ if dcgm_output="$(
 fi
 [[ "$dcgm_output" == *"DCGM diagnostic failure"* ]]
 [[ "$dcgm_output" == *"return code 3"* ]]
+
+dcgm_skip_output="$(
+  PATH="$TEST_ROOT/bin:$PATH" NPD_DCGM_REQUIRED=0 \
+    bash "$CHART_DIR/scripts/check-dcgm-health.sh"
+)"
+[[ "$dcgm_skip_output" == *"not required for this profile"* ]]
 
 readonly NSENTER_LOG="$TEST_ROOT/nsenter-args"
 PATH="$TEST_ROOT/bin:$PATH" NSENTER_ARGS_FILE="$NSENTER_LOG" \
@@ -271,17 +343,17 @@ if second_flap_output="$(
 fi
 [[ "$second_flap_output" == *"2 ibstat state flaps"* ]]
 
-readonly ORIGINAL_CONFIG_NAME="$(
-  helm template content-hash "$CHART_DIR" --show-only templates/configmap.yaml |
+readonly ORIGINAL_BUNDLE_NAME="$(
+  helm template content-hash "$CHART_DIR" --show-only templates/executable-bundle-secret.yaml |
     awk '$1 == "name:" { print $2; exit }'
 )"
 readonly MUTATED_CHART_DIR="$TEST_ROOT/gpu-monitoring"
 cp -R "$CHART_DIR" "$MUTATED_CHART_DIR"
 printf '\n# content hash regression probe\n' >>"$MUTATED_CHART_DIR/scripts/check_gpu_xid.sh"
-readonly MUTATED_CONFIG_NAME="$(
-  helm template content-hash "$MUTATED_CHART_DIR" --show-only templates/configmap.yaml |
+readonly MUTATED_BUNDLE_NAME="$(
+  helm template content-hash "$MUTATED_CHART_DIR" --show-only templates/executable-bundle-secret.yaml |
     awk '$1 == "name:" { print $2; exit }'
 )"
-[[ "$ORIGINAL_CONFIG_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
-[[ "$MUTATED_CONFIG_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
-[[ "$ORIGINAL_CONFIG_NAME" != "$MUTATED_CONFIG_NAME" ]]
+[[ "$ORIGINAL_BUNDLE_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
+[[ "$MUTATED_BUNDLE_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
+[[ "$ORIGINAL_BUNDLE_NAME" != "$MUTATED_BUNDLE_NAME" ]]

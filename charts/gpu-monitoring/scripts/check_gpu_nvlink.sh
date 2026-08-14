@@ -10,7 +10,13 @@ readonly UNKNOWN=2
 
 readonly _NUM_GPU_ENV="${EXPECTED_NUM_GPU:-0}"
 if [ "$_NUM_GPU_ENV" -eq 0 ]; then
-  readonly _NUM_GPU=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1)
+  if gpu_count_output=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>&1); then
+    readonly _NUM_GPU=$(printf '%s\n' "$gpu_count_output" | head -1)
+  else
+    gpu_count_rc=$?
+    echo "Failed to get GPU count with error code $gpu_count_rc. FaultCode: NHC2016"
+    exit $NONOK
+  fi
 else
   readonly _NUM_GPU=$_NUM_GPU_ENV
 fi
@@ -26,21 +32,29 @@ fi
 # Check if nvlink is enabled
 num_gpus=$_NUM_GPU
 
-nvlink_status=$(nvidia-smi nvlink --status)
-if [ $? -ne 0 ]; then
-  echo "Failed to get NVLINK status with error code $?. FaultCode: NHC2016"
+if nvlink_status=$(nvidia-smi nvlink --status 2>&1); then
+  :
+else
+  nvlink_rc=$?
+  echo "Failed to get NVLINK status with error code $nvlink_rc. FaultCode: NHC2016"
   exit $NONOK
 fi
 if [ -z "$nvlink_status" ]; then
   echo "NVLINK is not enabled"
-  exit $OK
+  exit $NONOK
 fi
 for ((i=0; i<num_gpus; i++)); do
     gpu_id=$i
     # Run nvlink command
-    nvlink_output=$(nvidia-smi nvlink -s -i $gpu_id)
-    if [ $? -ne 0 ]; then
-      echo "Failed to get NVLINK status with error code $?. FaultCode: NHC2016"
+    if nvlink_output=$(nvidia-smi nvlink -s -i "$gpu_id" 2>&1); then
+      :
+    else
+      nvlink_rc=$?
+      echo "Failed to get NVLINK status with error code $nvlink_rc. FaultCode: NHC2016"
+      exit $NONOK
+    fi
+    if [ -z "$nvlink_output" ]; then
+      echo "NVLINK is not enabled for GPU $gpu_id. FaultCode: NHC2016"
       exit $NONOK
     fi
     # Check for inactive links

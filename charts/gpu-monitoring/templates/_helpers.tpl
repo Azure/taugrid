@@ -51,11 +51,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
-Render the executable scripts and monitor configs stored in the shared ConfigMap.
-The same rendered block is hashed for the ConfigMap name so its identity cannot
+Render the executable scripts and monitor configs stored in the shared Secret.
+The same rendered block is hashed for the Secret name so its identity cannot
 drift from its data.
 */}}
-{{- define "gpu-monitoring.configMapData" -}}
+{{- define "gpu-monitoring.executableBundleData" -}}
 {{- range $name := list "custom-plugin-monitor.json" "custom-plugin-monitor-h100.json" "custom-plugin-monitor-h100-nvl.json" "custom-plugin-monitor-gb200.json" "custom-plugin-monitor-spark.json" }}
 {{ $name }}: |
 {{ tpl ($.Files.Get (printf "configs/%s" $name)) $ | indent 2 }}
@@ -117,6 +117,29 @@ check_roce.sh: |
 {{- end }}
 
 {{/*
+Require the host dcgmi check only when the selected profile scrapes a host-local
+DCGM exporter. A profile can override the inference with dcgm_health_required.
+*/}}
+{{- define "gpu-monitoring.dcgmHealthRequired" -}}
+{{- $root := .root -}}
+{{- $sku := .sku -}}
+{{- $scrapeTargets := $root.Values.metricsCollector.scrapeTargets -}}
+{{- if hasKey $sku "scrapeTargets" -}}
+{{- $scrapeTargets = $sku.scrapeTargets -}}
+{{- end -}}
+{{- $required := false -}}
+{{- range $scrapeTargets -}}
+{{- if and (eq .name "dcgm-exporter") (regexMatch "^https?://(localhost|127\\.0\\.0\\.1)(:[0-9]+)?(/|$)" .url) -}}
+{{- $required = true -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey $sku "dcgm_health_required" -}}
+{{- $required = $sku.dcgm_health_required -}}
+{{- end -}}
+{{- ternary "1" "0" $required -}}
+{{- end }}
+
+{{/*
 Render one SKU's metrics collector rules. The DaemonSet hashes this exact payload
 so ConfigMap changes roll only the affected profile.
 */}}
@@ -159,11 +182,11 @@ rules:
 {{- end }}
 
 {{/*
-Content-address the executable ConfigMap so updates create a new immutable object.
+Content-address the executable bundle so updates create a new immutable object.
 Truncating the configurable base keeps the complete DNS label within 63 bytes.
 */}}
-{{- define "gpu-monitoring.configMapName" -}}
-{{- $dataHash := include "gpu-monitoring.configMapData" . | sha256sum | trunc 10 -}}
+{{- define "gpu-monitoring.executableBundleName" -}}
+{{- $dataHash := include "gpu-monitoring.executableBundleData" . | sha256sum | trunc 10 -}}
 {{- $baseName := .Values.configMap.name | default "gpu-monitoring-gpu" | trunc 52 | trimSuffix "-" -}}
 {{- printf "%s-%s" $baseName $dataHash -}}
 {{- end }}

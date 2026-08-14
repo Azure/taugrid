@@ -13,7 +13,7 @@ charts/gpu-monitoring/
 │   ├── serviceaccount.yaml             # ServiceAccount resource
 │   ├── clusterrole.yaml                # ClusterRole for node and event permissions
 │   ├── clusterrolebinding.yaml         # ClusterRoleBinding
-│   ├── configmap.yaml                  # ConfigMap bundling scripts and configs
+│   ├── executable-bundle-secret.yaml   # RBAC-separated script/config bundle
 │   └── daemonset.yaml                  # DaemonSet running on GPU nodes
 ├── configs/                            # Monitor configuration files
 │   ├── custom-plugin-monitor.json      # Custom plugin monitor config (GPU/IB checks)
@@ -49,7 +49,7 @@ charts/gpu-monitoring/
 1. **ServiceAccount**: `gpu-monitoring` - Identity for the DaemonSet pods
 2. **ClusterRole**: Permissions to read nodes, create events, and update node status
 3. **ClusterRoleBinding**: Binds the ClusterRole to the ServiceAccount
-4. **ConfigMap**: `gpu-monitoring-gpu-<content-hash>` - Immutable bundle of all scripts and monitor configs
+4. **Secret**: `gpu-monitoring-gpu-<content-hash>` - Immutable RBAC-separated bundle of all scripts and monitor configs
 5. **DaemonSet**: `gpu-monitoring-gpu` - Runs on GPU nodes with custom checks
 
 ## Key Features
@@ -59,7 +59,7 @@ charts/gpu-monitoring/
 - **System Monitoring**: Log and stats monitoring
 - **Node Affinity**: Targets GPU worker nodes (excludes system nodes)
 - **Privileged Access**: Required for GPU and IB device access
-- **Immutable Executable Bundle**: Scripts use mode 0755 and a content-addressed ConfigMap name, so updates roll pods to a new immutable object
+- **Immutable Executable Bundle**: Scripts use mode 0755 and a content-addressed Secret name, so updates roll pods to a new immutable object
 
 ## Installation
 
@@ -99,6 +99,9 @@ Each `gpuSkus` entry may set:
   that profile.
 - `ib_rate_gbps` to set the expected InfiniBand rate. GB200 defaults to 400
   Gbps and GB300 defaults to 800 Gbps.
+- `dcgm_health_required` to override whether NPD runs the host `dcgmi` health
+  check. By default, the chart requires it only for profiles whose selected
+  DCGM scrape target is host-local.
 
 For a mixed cluster with managed A100 nodes and GPU Operator H200 nodes:
 
@@ -118,6 +121,16 @@ The A100 profile continues to use the global
 otherwise its Service can return another node's metrics. GB200 and GB300 share
 the historical `NVLinkB200Inactive` Node condition name for compatibility, but
 the underlying NVLink and IMEX checks accept both models.
+
+## Security boundary
+
+The NPD pod is privileged and uses `hostPID`, so its executable bundle must be
+protected as code. The chart stores that bundle in an immutable,
+content-addressed Secret rather than a ConfigMap; the chart ServiceAccount has
+no permission to create, update, or delete Secrets. Do not grant untrusted
+principals Secret mutation, DaemonSet mutation, or pod-deletion rights in this
+namespace. Deployments that delegate those permissions require an external
+admission policy or an image-baked bundle.
 
 ## Source Files
 

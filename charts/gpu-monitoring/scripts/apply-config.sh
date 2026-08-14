@@ -7,7 +7,7 @@ set -euo pipefail
 namespace="${NAMESPACE:-kube-system}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-kubectl -n "${namespace}" create configmap gpu-monitoring-gpu \
+kubectl -n "${namespace}" create secret generic gpu-monitoring-gpu \
   --from-file=custom-plugin-monitor.json="${root}/deploy/custom-plugin-monitor.json" \
   --from-file=kernel-monitor.json="${root}/deploy/kernel-monitor.json" \
   --from-file=system-log-monitor.json="${root}/deploy/system-log-monitor.json" \

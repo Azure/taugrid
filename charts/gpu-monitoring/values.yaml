@@ -48,8 +48,9 @@ securityContext:
 resources: {}
 
 configMap:
-  # Base for the immutable executable/config bundle; the chart appends a
-  # content hash and points every per-SKU DaemonSet at that exact object.
+  # Base for the RBAC-separated immutable executable/config Secret; the chart
+  # appends a content hash and points every per-SKU DaemonSet at that object.
+  # The configMap key is retained for values compatibility.
   name: gpu-monitoring-gpu
 
 monitors:

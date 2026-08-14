@@ -192,6 +192,20 @@ tests:
             readOnly: true
           any: true
 
+  - it: GPU Operator DCGM Service profiles do not require a host dcgmi binary
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_DCGM_REQUIRED
+            value: "0"
+          any: true
+
   - it: spark DaemonSet mounts the spark per-SKU collector-config ConfigMap (not shared)
     documentSelector:
       path: metadata.name
@@ -323,11 +337,11 @@ tests:
             effect: NoExecute
           any: true
 
-  - it: references the shared content-addressed executable ConfigMap
+  - it: references the shared content-addressed executable Secret
     documentSelector:
       path: metadata.name
       value: gpu-monitoring-a100
     asserts:
       - matchRegex:
-          path: spec.template.spec.volumes[?(@.name=="custom-config")].configMap.name
+          path: spec.template.spec.volumes[?(@.name=="custom-config")].secret.secretName
           pattern: '^gpu-monitoring-gpu-[a-f0-9]{10}$'

@@ -116,7 +116,7 @@ spec:
             - name: NPD_GPU_REQUIRED
               value: "1"
             - name: NPD_DCGM_REQUIRED
-              value: "1"
+              value: {{ include "gpu-monitoring.dcgmHealthRequired" (dict "root" $ "sku" $sku) | quote }}
             - name: EXPECTED_NUM_GPU
               value: "{{ $sku.num_gpus }}"
             - name: VBIOS_VERSIONS
@@ -354,8 +354,8 @@ spec:
           hostPath:
             path: {{ $.Values.volumes.localtime.hostPath }}
         - name: custom-config
-          configMap:
-            name: {{ include "gpu-monitoring.configMapName" $ }}
+          secret:
+            secretName: {{ include "gpu-monitoring.executableBundleName" $ }}
             defaultMode: 0755
         {{- if $.Values.metricsCollector.enabled }}
         - name: collector-config

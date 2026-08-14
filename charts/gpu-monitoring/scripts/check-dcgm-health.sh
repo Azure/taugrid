@@ -28,13 +28,14 @@ case "${NPD_DCGM_SIMULATION:-}" in
     ;;
 esac
 
-if ! command -v dcgmi >/dev/null 2>&1; then
-  if [[ "${NPD_DCGM_REQUIRED:-}" == "1" ]]; then
-    echo "dcgmi not found"
-    exit 1
-  fi
-  echo "dcgmi not found; dcgm not required"
+if [[ "${NPD_DCGM_REQUIRED:-0}" != "1" ]]; then
+  echo "dcgm health check not required for this profile"
   exit 0
+fi
+
+if ! command -v dcgmi >/dev/null 2>&1; then
+  echo "dcgmi not found"
+  exit 1
 fi
 
 if ! dcgmi health -c >/dev/null 2>&1; then
