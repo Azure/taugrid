@@ -44,19 +44,19 @@ tests:
           value: Reconcile
       - lengthEqual:
           path: spec.nodes.labelRules
-          count: 4
+          count: 14
       - equal:
           path: spec.nodes.labelRules[0].match.vmSizes[0]
-          value: Standard_NC24ads_A100_v4
+          value: Standard_NV6ads_A10_v5
       - equal:
           path: spec.nodes.labelRules[0].labels["kueue.azure.com/gpu-series"]
-          value: nc24ads-a100-v4
+          value: nvads-a10-v5
       - equal:
           path: spec.nodes.labelRules[0].labels["tau.azure.com/gpu-class"]
-          value: a100-80gb
+          value: a10-4gb
       - equal:
-          path: spec.nodes.labelRules[3].labels["tau.azure.com/gpu-class"]
-          value: h200-141gb
+          path: spec.nodes.labelRules[13].labels["tau.azure.com/gpu-class"]
+          value: gb300-288gb
       - equal:
           path: spec.queues.ownership
           value: External

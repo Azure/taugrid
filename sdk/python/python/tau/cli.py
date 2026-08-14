@@ -565,7 +565,7 @@ def _add_workload_override_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--gpu-class",
         default=None,
-        help="GPU class override, e.g. any, h100, h200 (written to generated run config policy.gpu_class)",
+        help="GPU class override, e.g. any, a100-80gb, h200-141gb, gb300-288gb (written to generated run config policy.gpu_class)",
     )
     parser.add_argument(
         "--disable-default-priorities",

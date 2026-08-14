@@ -2,7 +2,7 @@ apiVersion: v2
 name: tau-core-controller
 description: TauGrid cluster and workspace reconciliation APIs and controller.
 type: application
-version: 0.1.2
+version: 0.1.3
 # The tau-core-controller image release tag follows appVersion.
 appVersion: "0.1.2"
 kubeVersion: ">=1.30.0-0"

@@ -52,7 +52,8 @@ one node flavor across all of its requested resources. `taugrid-default-cpu` has
 zero GPU quota, while the generic `taugrid-default-gpu` has CPU/memory plus GPU
 quota and supports `gpu_class: any` on a fresh install. When hardware is known,
 replace the GPU flavor list with class-specific flavors and label matching nodes
-with `a100-80gb`, `h100-95gb`, or `h200-141gb`.
+with the canonical A10, A100, H100, H200, GB200, or GB300 class from
+`policy.gpu_class`.
 Only GPU flavors carry `topologyName` and the managed
 `kueue.x-k8s.io/podset-required-topology` metadata annotation. Connected Tau
 submission copies that requirement onto generated GPU pod templates when no

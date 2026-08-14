@@ -12,25 +12,40 @@ tests:
           value: Retain
       - lengthEqual:
           path: spec.nodes.labelRules
-          count: 4
+          count: 14
       - equal:
           path: spec.nodes.labelRules[0].match.vmSizes[0]
-          value: Standard_NC24ads_A100_v4
+          value: Standard_NV6ads_A10_v5
       - equal:
           path: spec.nodes.labelRules[0].labels["kueue.azure.com/gpu-series"]
-          value: nc24ads-a100-v4
+          value: nvads-a10-v5
       - equal:
           path: spec.nodes.labelRules[0].labels["tau.azure.com/gpu-class"]
+          value: a10-4gb
+      - equal:
+          path: spec.nodes.labelRules[4].labels["tau.azure.com/gpu-class"]
           value: a100-80gb
       - equal:
-          path: spec.nodes.labelRules[2].labels["tau.azure.com/gpu-class"]
-          value: h100-95gb
+          path: spec.nodes.labelRules[4].labels["kueue.azure.com/gpu-series"]
+          value: nc24ads-a100-v4
       - equal:
-          path: spec.nodes.labelRules[3].labels["kueue.azure.com/gpu-series"]
-          value: nd-h200-v5
+          path: spec.nodes.labelRules[10].labels["tau.azure.com/gpu-class"]
+          value: h100-80gb
       - equal:
-          path: spec.nodes.labelRules[3].labels["tau.azure.com/gpu-class"]
+          path: spec.nodes.labelRules[11].labels["tau.azure.com/gpu-class"]
           value: h200-141gb
+      - equal:
+          path: spec.nodes.labelRules[12].labels["tau.azure.com/gpu-class"]
+          value: gb200-192gb
+      - equal:
+          path: spec.nodes.labelRules[13].match.vmSizes[1]
+          value: Standard_ND128isrG5_GB300_v6
+      - equal:
+          path: spec.nodes.labelRules[13].labels["tau.azure.com/gpu-class"]
+          value: gb300-288gb
+      - equal:
+          path: spec.nodes.labelRules[9].labels["tau.azure.com/gpu-class"]
+          value: h100-95gb
       - equal:
           path: spec.queues.ownership
           value: External

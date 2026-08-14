@@ -31,9 +31,9 @@ Wraps the resources we wrote and want to ship as one helm release:
 
 ## GPU class ResourceFlavors
 
-`gpu_class` is a stable hardware-only API with three canonical values:
-`a100-80gb`, `h100-95gb`, and `h200-141gb`. `any` is explicit unconstrained
-selection. For a specific class, Tau renders
+`gpu_class` is a stable hardware-only API. TauGrid defines memory-accurate
+classes for Azure A10, A100, H100, H200, GB200, and GB300 GPUs; `any` is
+explicit unconstrained selection. For a specific class, Tau renders
 `tau.azure.com/gpu-class=<class>` and Kueue must see the same exact value in the
 selected ResourceFlavor's `spec.nodeLabels` and on matching GPU nodes.
 ResourceFlavor names such as `ndm-a100-v4` and `nd-h200-v5` remain

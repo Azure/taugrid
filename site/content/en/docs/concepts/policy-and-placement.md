@@ -28,9 +28,14 @@ cluster-owned policy.
 | Researcher value | Meaning |
 |---|---|
 | `any` | No class selector; any compatible GPU ResourceFlavor may be admitted |
+| `a10-4gb`, `a10-8gb`, `a10-12gb`, `a10-24gb` | NVIDIA A10, including Azure fractional GPU sizes |
+| `a100-40gb` | NVIDIA A100 with 40 GB memory |
 | `a100-80gb` | NVIDIA A100 with 80 GB memory |
+| `h100-80gb` | NVIDIA H100 with 80 GB memory |
 | `h100-95gb` | NVIDIA H100 with 95 GB memory |
 | `h200-141gb` | NVIDIA H200 with 141 GB memory |
+| `gb200-192gb` | NVIDIA GB200 with 192 GB memory |
+| `gb300-288gb` | NVIDIA GB300 with 288 GB memory |
 
 For a specific class, Tau renders the canonical label as both workload metadata
 and a pod node selector. Queue preflight accepts a ResourceFlavor only when

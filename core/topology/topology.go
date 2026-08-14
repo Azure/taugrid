@@ -42,18 +42,21 @@ const (
 	// GPUClassAny is explicit unconstrained hardware selection: it renders no
 	// class selector and lets Kueue admit against any available GPU flavor.
 	GPUClassAny = "any"
-	// GPUClassA10080GB, GPUClassH10095GB, and GPUClassH200141GB are the
-	// canonical, hardware-only gpu_class values. They name capacity/memory
-	// only ("80gb", "95gb", "141gb"); interconnect/placement concerns
-	// (NVLink, same-host, multi-node) belong solely to Topology.Placement
-	// and must never be re-encoded into a gpu_class name. Each canonical value
-	// is also the exact tau.azure.com/gpu-class node-label/ResourceFlavor
-	// contract Tau uses to select a Kueue ResourceFlavor -- resolution must
-	// match this value exactly and never by matching a substring of a
-	// ResourceFlavor's own name.
+	// GPU classes are canonical, hardware-only values. They name model and
+	// usable device memory; interconnect and placement belong solely to
+	// Topology.Placement. Each value is also the exact
+	// tau.azure.com/gpu-class node-label/ResourceFlavor contract.
+	GPUClassA104GB          = "a10-4gb"
+	GPUClassA108GB          = "a10-8gb"
+	GPUClassA1012GB         = "a10-12gb"
+	GPUClassA1024GB         = "a10-24gb"
+	GPUClassA10040GB        = "a100-40gb"
 	GPUClassA10080GB        = "a100-80gb"
+	GPUClassH10080GB        = "h100-80gb"
 	GPUClassH10095GB        = "h100-95gb"
 	GPUClassH200141GB       = "h200-141gb"
+	GPUClassGB200192GB      = "gb200-192gb"
+	GPUClassGB300288GB      = "gb300-288gb"
 	LabelTeam               = workloadmeta.LabelTeam
 	LabelLane               = workloadmeta.LabelLane
 	LabelGPUClass           = workloadmeta.LabelGPUClass
@@ -121,6 +124,26 @@ var legacyGPUClassAliases = map[string]string{
 	"h200-nvlink-141gb":    GPUClassH200141GB,
 }
 
+var supportedGPUClasses = []string{
+	GPUClassAny,
+	GPUClassA104GB,
+	GPUClassA108GB,
+	GPUClassA1012GB,
+	GPUClassA1024GB,
+	GPUClassA10040GB,
+	GPUClassA10080GB,
+	GPUClassH10080GB,
+	GPUClassH10095GB,
+	GPUClassH200141GB,
+	GPUClassGB200192GB,
+	GPUClassGB300288GB,
+}
+
+// SupportedGPUClasses returns the canonical researcher-facing GPU classes.
+func SupportedGPUClasses() []string {
+	return append([]string(nil), supportedGPUClasses...)
+}
+
 // NormalizeGPUClass maps a researcher-supplied gpu_class value (from a CLI
 // flag, run config, preset, or profile Topology.GPUClass) to its
 // canonical hardware-only spelling. It returns the canonical value and
@@ -138,12 +161,12 @@ func NormalizeGPUClass(v string) (canonical string, deprecatedAlias bool) {
 
 func IsSupportedGPUClass(v string) bool {
 	canonical, _ := NormalizeGPUClass(v)
-	switch canonical {
-	case GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB:
-		return true
-	default:
-		return false
+	for _, supported := range supportedGPUClasses {
+		if canonical == supported {
+			return true
+		}
 	}
+	return false
 }
 
 func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) error {
@@ -469,7 +492,7 @@ func (c contract) validate(profileName string) error {
 		}
 	}
 	if c.gpuClass != "" {
-		if err := validEnum("gpuClass", c.gpuClass, GPUClassAny, GPUClassA10080GB, GPUClassH10095GB, GPUClassH200141GB); err != nil {
+		if err := validEnum("gpuClass", c.gpuClass, supportedGPUClasses...); err != nil {
 			return fmt.Errorf("profile %q topology: %w", profileName, err)
 		}
 	}
