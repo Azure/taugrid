@@ -34,12 +34,18 @@ metricsCollector:
   nodeExporterScrape: true
 
 gpuSkus:
+  a10-2g: null
   a100: null
+  a100-pcie-1g: null
+  a100-pcie-2g: null
+  a100-pcie-4g: null
   h100: null
   h100-nvl-1g: null
   h100-nvl-2g: null
+  h100-nvl-confidential-1g: null
   h200: null
   gb200: null
+  gb300: null
   spark: null
   longhaul-a10:
     instanceTypes:

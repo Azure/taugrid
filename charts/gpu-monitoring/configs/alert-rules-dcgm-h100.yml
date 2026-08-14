@@ -1,0 +1,151 @@
+groups:
+  # ============================================================
+  # Immediate alerts — hardware failure or imminent failure
+  # ============================================================
+  - name: immediate
+    rules:
+      - alert: GPUDoubleBitECCError
+        expr: DCGM_FI_DEV_RETIRED_DBE > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU {{ $labels.gpu }} has uncorrectable (double-bit) ECC retired pages"
+          description: "DCGM_FI_DEV_RETIRED_DBE is {{ $value }} on {{ $labels.instance }}"
+
+      - alert: GPUUncorrectableECCVolatile
+        expr: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU {{ $labels.gpu }} has uncorrectable volatile ECC errors"
+          description: "DCGM_FI_DEV_ECC_DBE_VOL_TOTAL is {{ $value }} on {{ $labels.instance }}"
+
+      - alert: GPUXIDErrors
+        expr: increase(nvidia_gpu_xid_errors_total{err_code=~"48|63|64|79|94|95"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU XID {{ $labels.err_code }} errors detected on {{ $labels.instance }}"
+          description: "nvidia_gpu_xid_errors_total increased by {{ $value }} in 5m"
+
+      - alert: GPUNVLinkCRCFlitErrors
+        expr: increase(DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NVLink CRC flit errors on GPU {{ $labels.gpu }}"
+          description: "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL increased by {{ $value }}"
+
+      - alert: GPUNVLinkCRCDataErrors
+        expr: increase(DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NVLink CRC data errors on GPU {{ $labels.gpu }}"
+          description: "DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL increased by {{ $value }}"
+
+      - alert: GPUNVLinkReplayErrors
+        expr: increase(DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NVLink replay errors on GPU {{ $labels.gpu }}"
+          description: "DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL increased by {{ $value }}"
+
+      - alert: GPUThermalViolation
+        expr: increase(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU {{ $labels.gpu }} thermal throttling detected"
+          description: "DCGM_FI_DEV_THERMAL_VIOLATION increased by {{ $value }} in 5m"
+
+      - alert: IBLinkDowned
+        expr: increase(node_infiniband_port_link_downed_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "InfiniBand link downed on {{ $labels.device }} port {{ $labels.port }}"
+          description: "node_infiniband_port_link_downed_total increased by {{ $value }}"
+
+  # ============================================================
+  # Degradation alerts — trending toward failure
+  # ============================================================
+  - name: degradation
+    rules:
+      - alert: GPUCorrectableECCSlopeIncreasing
+        expr: increase(DCGM_FI_DEV_ECC_SBE_VOL_TOTAL[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} correctable ECC errors increasing"
+          description: "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL increased by {{ $value }} in 10m"
+
+      - alert: GPUSingleBitECCRetired
+        expr: increase(DCGM_FI_DEV_RETIRED_SBE[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} has new single-bit ECC retired pages"
+          description: "DCGM_FI_DEV_RETIRED_SBE increased by {{ $value }} in 5m"
+
+      - alert: GPUPCIeReplayErrors
+        expr: increase(DCGM_FI_DEV_PCIE_REPLAY_COUNTER[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PCIe replay errors on GPU {{ $labels.gpu }}"
+          description: "DCGM_FI_DEV_PCIE_REPLAY_COUNTER increased by {{ $value }} in 5m"
+
+      - alert: GPUPowerViolation
+        expr: increase(DCGM_FI_DEV_POWER_VIOLATION[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} power throttling detected"
+          description: "DCGM_FI_DEV_POWER_VIOLATION increased by {{ $value }} in 5m"
+
+      - alert: GPUClockThrottled
+        expr: DCGM_FI_DEV_CLOCK_THROTTLE_REASONS > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} clock throttling active (non-idle)"
+          description: "DCGM_FI_DEV_CLOCK_THROTTLE_REASONS is {{ $value }}"
+
+      - alert: GPUNVLinkBandwidthDegraded
+        expr: DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL > 0 < 7.5e+11
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVLink bandwidth degraded on GPU {{ $labels.gpu }}"
+          description: "DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL is {{ $value }} (expected ~900GB/s for H100)"
+
+      - alert: IBSymbolErrors
+        expr: increase(node_infiniband_port_symbol_error_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "InfiniBand symbol errors on {{ $labels.device }} port {{ $labels.port }}"
+          description: "node_infiniband_port_symbol_error_total increased by {{ $value }}"
+
+      - alert: IBReceiveErrors
+        expr: increase(node_infiniband_port_rcv_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "InfiniBand receive errors on {{ $labels.device }} port {{ $labels.port }}"
+          description: "node_infiniband_port_rcv_errors_total increased by {{ $value }}"

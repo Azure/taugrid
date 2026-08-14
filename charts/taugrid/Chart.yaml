@@ -34,6 +34,6 @@ dependencies:
   # it explicitly overrides that. A cluster running Tau workloads should not be
   # able to end up with no GPU health signal by default.
   - name: gpu-monitoring
-    version: 0.1.2
+    version: 0.1.3
     repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
     condition: components.gpuMonitoring.enabled,components.tauCoreController.enabled

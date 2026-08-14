@@ -9,6 +9,7 @@ readonly ACR_NAME="${ACR_NAME:-aksmcrimagescommon}"
 readonly REPOSITORY_NAME="${REPOSITORY_NAME:-public/aks/ai-runtime}"
 readonly CHARTS=(
   charts/tau-core-controller
+  charts/gpu-monitoring
   charts/taugrid-core
   charts/adx-mon
   charts/taugrid
@@ -43,6 +44,9 @@ package_charts() {
       helm dependency build "$chart"
     fi
     helm lint "$chart"
+    if [[ -f "${chart}/tests/scripts_test.sh" ]]; then
+      bash "${chart}/tests/scripts_test.sh"
+    fi
     helm template test "$chart" > /dev/null
     helm package "$chart" --destination "$output_dir"
   done

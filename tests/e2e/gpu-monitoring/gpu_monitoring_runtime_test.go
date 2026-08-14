@@ -6,17 +6,21 @@ package gpumonitoring
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 
 	e2e "github.com/Azure/taugrid/tests/e2e"
 )
@@ -36,7 +40,6 @@ const (
 type gpuMonitoringRuntimeCase struct {
 	name                        string
 	selector                    string
-	requireDCGM                 bool
 	expectNodeExporterContainer bool
 }
 
@@ -76,7 +79,7 @@ func configuredGPUMonitoringRuntimeCases() []gpuMonitoringRuntimeCase {
 	var out []gpuMonitoringRuntimeCase
 	expectNodeExporterContainer := envBoolDefault(gpuMonitoringNodeExporterEnv, true)
 
-	add := func(name, selectorEnv, fallbackSelectorEnv, requireDCGMEnv string) {
+	add := func(name, selectorEnv, fallbackSelectorEnv string) {
 		selector := strings.TrimSpace(os.Getenv(selectorEnv))
 		if selector == "" {
 			selector = strings.TrimSpace(os.Getenv(fallbackSelectorEnv))
@@ -87,16 +90,61 @@ func configuredGPUMonitoringRuntimeCases() []gpuMonitoringRuntimeCase {
 		out = append(out, gpuMonitoringRuntimeCase{
 			name:                        name,
 			selector:                    selector,
-			requireDCGM:                 envBool(requireDCGMEnv),
 			expectNodeExporterContainer: expectNodeExporterContainer,
 		})
 	}
 
-	add("a10", "AI_RUNTIME_GPU_MONITORING_A10_SELECTOR", "AI_RUNTIME_GPU_A10_SELECTOR", "AI_RUNTIME_GPU_MONITORING_A10_REQUIRE_DCGM")
-	add("a100", "AI_RUNTIME_GPU_MONITORING_A100_SELECTOR", "AI_RUNTIME_GPU_A100_SELECTOR", "AI_RUNTIME_GPU_MONITORING_A100_REQUIRE_DCGM")
-	add("h100", "AI_RUNTIME_GPU_MONITORING_H100_SELECTOR", "AI_RUNTIME_GPU_H100_SELECTOR", "AI_RUNTIME_GPU_MONITORING_H100_REQUIRE_DCGM")
+	add("a10", "AI_RUNTIME_GPU_MONITORING_A10_SELECTOR", "AI_RUNTIME_GPU_A10_SELECTOR")
+	add("a100", "AI_RUNTIME_GPU_MONITORING_A100_SELECTOR", "AI_RUNTIME_GPU_A100_SELECTOR")
+	add("h100", "AI_RUNTIME_GPU_MONITORING_H100_SELECTOR", "AI_RUNTIME_GPU_H100_SELECTOR")
+	add("h200", "AI_RUNTIME_GPU_MONITORING_H200_SELECTOR", "AI_RUNTIME_GPU_H200_SELECTOR")
+	add("gb200", "AI_RUNTIME_GPU_MONITORING_GB200_SELECTOR", "AI_RUNTIME_GPU_GB200_SELECTOR")
+	add("gb300", "AI_RUNTIME_GPU_MONITORING_GB300_SELECTOR", "AI_RUNTIME_GPU_GB300_SELECTOR")
 
 	return out
+}
+
+func TestConfiguredGPUMonitoringRuntimeCasesIncludesSupportedFamilies(t *testing.T) {
+	for _, family := range []string{"A10", "A100", "H100", "H200", "GB200", "GB300"} {
+		t.Setenv("AI_RUNTIME_GPU_MONITORING_"+family+"_SELECTOR", "gpu.example.com/family="+strings.ToLower(family))
+	}
+
+	got := make(map[string]gpuMonitoringRuntimeCase)
+	for _, c := range configuredGPUMonitoringRuntimeCases() {
+		got[c.name] = c
+	}
+	for _, family := range []string{"a10", "a100", "h100", "h200", "gb200", "gb300"} {
+		require.Contains(t, got, family)
+	}
+}
+
+func TestDCGMURLForMonitoringPodReadsCollectorConfigMap(t *testing.T) {
+	const (
+		namespace     = "gpu-monitoring"
+		configMapName = "gpu-monitoring-gpu-metrics-collector-h200"
+		wantURL       = "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"
+	)
+	kubeClient := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace},
+		Data: map[string]string{
+			"rules.yaml": "scrapeTargets:\n  - name: dcgm-exporter\n    url: " + wantURL + "\n",
+		},
+	})
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-monitoring-h200", Namespace: namespace},
+		Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{
+				Name: "collector-config",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+					},
+				},
+			}},
+		},
+	}
+
+	require.Equal(t, wantURL, dcgmURLForMonitoringPod(t, context.Background(), kubeClient, pod))
 }
 
 func runGPUMonitoringRuntimeCase(
@@ -112,6 +160,8 @@ func runGPUMonitoringRuntimeCase(
 	t.Logf("Using node %q for gpu-monitoring runtime case %s (selector=%q)", node.Name, c.name, c.selector)
 
 	pod := waitForGPUMonitoringPodOnNode(t, ctx, kubeClient, namespace, node.Name, gpuMonitoringPodTimeout)
+	dcgmURL := dcgmURLForMonitoringPod(t, ctx, kubeClient, pod)
+	requireNodeLocalDCGMEndpoint(t, ctx, kubeClient, dcgmURL)
 	requireContainerReady(t, pod, "gpu-monitoring")
 	if c.expectNodeExporterContainer {
 		requireContainerReady(t, pod, "node-exporter")
@@ -128,7 +178,7 @@ func runGPUMonitoringRuntimeCase(
 	require.NotContains(t, logs, `"level":"ERROR","msg":"fatal"`, "metrics-collector should not log a fatal startup error")
 
 	jobName := fmt.Sprintf("gpu-monitoring-probe-%s-%s", c.name, rand.String(5))
-	job := newGPUMonitoringProbeJob(namespace, jobName, node.Name, c.requireDCGM)
+	job := newGPUMonitoringProbeJob(namespace, jobName, node.Name, dcgmURL)
 	_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 	require.NoError(t, err, "create gpu-monitoring probe job %s/%s", namespace, jobName)
 	t.Cleanup(func() {
@@ -143,9 +193,7 @@ func runGPUMonitoringRuntimeCase(
 	require.EqualValues(t, 0, term.ExitCode, "probe pod %s should exit 0", probePod.Name)
 	require.Contains(t, term.Message, "RESULT_NPD=PASS", "NPD Prometheus endpoint should be reachable on %s", node.Name)
 	require.Contains(t, term.Message, "RESULT_NODE_EXPORTER=PASS", "node-exporter endpoint should be reachable on %s", node.Name)
-	if c.requireDCGM {
-		require.Contains(t, term.Message, "RESULT_DCGM=PASS", "DCGM endpoint should be reachable on %s", node.Name)
-	}
+	require.Contains(t, term.Message, "RESULT_DCGM=PASS", "configured DCGM endpoint should be reachable on %s", node.Name)
 }
 
 func waitForGPUMonitoringNode(
@@ -240,12 +288,77 @@ func waitForGPUMonitoringPodOnNode(
 	return nil
 }
 
-func newGPUMonitoringProbeJob(namespace, jobName, nodeName string, requireDCGM bool) *batchv1.Job {
-	requireDCGMValue := "0"
-	if requireDCGM {
-		requireDCGMValue = "1"
+func requireNodeLocalDCGMEndpoint(
+	t *testing.T,
+	ctx context.Context,
+	kubeClient kubernetes.Interface,
+	rawURL string,
+) {
+	t.Helper()
+	if rawURL == "" {
+		return
 	}
 
+	endpoint, err := url.Parse(rawURL)
+	require.NoError(t, err, "parse DCGM URL")
+	host := strings.TrimSuffix(strings.ToLower(endpoint.Hostname()), ".")
+	ip := net.ParseIP(host)
+	if host == "localhost" || (ip != nil && ip.IsLoopback()) {
+		return
+	}
+
+	parts := strings.Split(host, ".")
+	require.GreaterOrEqual(t, len(parts), 3, "non-loopback DCGM URL must use Kubernetes Service DNS")
+	require.Equal(t, "svc", parts[2], "non-loopback DCGM URL must use Kubernetes Service DNS")
+
+	service, err := kubeClient.CoreV1().Services(parts[1]).Get(ctx, parts[0], metav1.GetOptions{})
+	require.NoError(t, err, "get DCGM Service %s/%s", parts[1], parts[0])
+	require.NotNil(t, service.Spec.InternalTrafficPolicy, "DCGM Service must set internalTrafficPolicy")
+	require.Equal(t, corev1.ServiceInternalTrafficPolicyLocal, *service.Spec.InternalTrafficPolicy,
+		"DCGM Service must route only to node-local exporters")
+}
+
+func dcgmURLForMonitoringPod(
+	t *testing.T,
+	ctx context.Context,
+	kubeClient kubernetes.Interface,
+	pod *corev1.Pod,
+) string {
+	t.Helper()
+
+	var configMapName string
+	for _, volume := range pod.Spec.Volumes {
+		if volume.Name == "collector-config" && volume.ConfigMap != nil {
+			configMapName = volume.ConfigMap.Name
+			break
+		}
+	}
+	require.NotEmpty(t, configMapName, "pod %s/%s should reference a collector ConfigMap", pod.Namespace, pod.Name)
+
+	configMap, err := kubeClient.CoreV1().ConfigMaps(pod.Namespace).Get(ctx, configMapName, metav1.GetOptions{})
+	require.NoError(t, err, "get collector ConfigMap %s/%s", pod.Namespace, configMapName)
+	raw, ok := configMap.Data["rules.yaml"]
+	require.True(t, ok, "collector ConfigMap %s/%s should contain rules.yaml", pod.Namespace, configMapName)
+
+	var config struct {
+		ScrapeTargets []struct {
+			Name string `yaml:"name"`
+			URL  string `yaml:"url"`
+		} `yaml:"scrapeTargets"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(raw), &config), "parse collector ConfigMap %s/%s", pod.Namespace, configMapName)
+	for _, target := range config.ScrapeTargets {
+		if target.Name == "dcgm-exporter" {
+			require.NotEmpty(t, target.URL, "DCGM scrape target in %s/%s should have a URL", pod.Namespace, configMapName)
+			return target.URL
+		}
+	}
+
+	require.FailNowf(t, "DCGM scrape target missing", "collector ConfigMap %s/%s has no dcgm-exporter target", pod.Namespace, configMapName)
+	return ""
+}
+
+func newGPUMonitoringProbeJob(namespace, jobName, nodeName, dcgmURL string) *batchv1.Job {
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -283,7 +396,8 @@ func newGPUMonitoringProbeJob(namespace, jobName, nodeName string, requireDCGM b
 								gpuMonitoringProbeScript,
 							},
 							Env: []corev1.EnvVar{
-								{Name: "REQUIRE_DCGM", Value: requireDCGMValue},
+								{Name: "REQUIRE_DCGM", Value: "1"},
+								{Name: "DCGM_URL", Value: dcgmURL},
 							},
 							TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 						},
@@ -325,7 +439,7 @@ check_endpoint() {
 
 check_endpoint NPD http://localhost:20261/metrics '^(# HELP|# TYPE|problem_|node_problem_detector_)' 1
 check_endpoint NODE_EXPORTER http://localhost:9100/metrics '^node_' 1
-check_endpoint DCGM http://localhost:19400/metrics '^DCGM_' "$REQUIRE_DCGM"
+check_endpoint DCGM "$DCGM_URL" '^DCGM_' "$REQUIRE_DCGM"
 
 cat "$RESULT_FILE"
 cat "$RESULT_FILE" > /dev/termination-log

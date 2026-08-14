@@ -1,0 +1,26 @@
+suite: GPU monitoring supports mixed DCGM providers
+templates:
+  - charts/gpu-monitoring/templates/metrics-collector-configmap.yaml
+values:
+  - mixed-dcgm-values.yaml
+tests:
+  - it: uses the GPU Operator Service only for the overridden H200 profile
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h200
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'http://localhost:19400/metrics'
+
+  - it: keeps the managed DCGM endpoint for A100
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics'

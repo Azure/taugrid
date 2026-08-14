@@ -1,0 +1,49 @@
+{{- if .Values.metricsCollector.enabled }}
+{{- range $skuName, $sku := .Values.gpuSkus }}
+{{- if $sku }}
+{{- $scrapeTargets := $.Values.metricsCollector.scrapeTargets }}
+{{- if hasKey $sku "scrapeTargets" }}
+{{- $scrapeTargets = $sku.scrapeTargets }}
+{{- end }}
+{{- $nodeExporterEnabled := $.Values.nodeExporter.enabled }}
+{{- if hasKey $sku "nodeExporter" }}
+{{- $nodeExporterEnabled = $sku.nodeExporter }}
+{{- end }}
+{{- $nodeExporterScrapeEnabled := $nodeExporterEnabled }}
+{{- if hasKey $.Values.metricsCollector "nodeExporterScrape" }}
+{{- $nodeExporterScrapeEnabled = $.Values.metricsCollector.nodeExporterScrape }}
+{{- end }}
+{{- if hasKey $sku "nodeExporterScrape" }}
+{{- $nodeExporterScrapeEnabled = $sku.nodeExporterScrape }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $.Values.configMap.name }}-metrics-collector-{{ $skuName }}
+  namespace: {{ include "gpu-monitoring.namespace" $ }}
+  labels:
+    gpu-sku: {{ $skuName }}
+data:
+  rules.yaml: |
+    scrapeTargets:
+      {{- range $scrapeTargets }}
+      {{- if eq .name "node-exporter" }}
+      {{- if $nodeExporterScrapeEnabled }}
+      - name: {{ .name }}
+        url: {{ .url }}
+      {{- end }}
+      {{- else }}
+      - name: {{ .name }}
+        url: {{ .url }}
+      {{- end }}
+      {{- end }}
+      {{- if $.Values.metricsCollector.npdScrape }}
+      - name: node-problem-detector
+        url: http://localhost:{{ add $.Values.npdPort 1 }}/metrics
+      {{- end }}
+    rules:
+      {{- toYaml $.Values.metricsCollector.rules | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}
