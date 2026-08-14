@@ -248,12 +248,27 @@ least-privilege RBAC. It creates a namespace-scoped Role granting only
 Workload Identity is mandatory; it requires a ServiceAccount client-id annotation
 and stamps the AKS workload-identity pod label.
 
-Before enabling the recorder, apply the lifecycle schema emitted by
-`taugrid-portal exp kusto schema --ingestion lifecycle`. It creates the
-`TauExpRunLifecycle` table, its named JSON ingestion mapping, and the dashboard
-function as one idempotent contract. The recorder uses queued NDJSON ingestion
-with an inline mapping generated from that same contract, so direct upgrades do
-not require database-management permission at recorder startup.
+With the default `lifecycleRecorder.schemaManagement.enabled=true`, the chart
+creates an adx-mon `ManagementCommand` in
+`lifecycleRecorder.schemaManagement.namespace` (default `adx-mon`). adx-mon
+idempotently creates the `TauExpRunLifecycle` table, its named JSON ingestion
+mapping, and the dashboard function. Install and authorize adx-mon before this
+chart: its identity needs database-management permission on the recorder's ADX
+database. The recorder retains only `Ingestor` permission and does not execute
+database-management commands itself. Check completion with:
+
+```bash
+kubectl -n <schema-management-namespace> get managementcommand <schema-management-resource-name>
+```
+
+adx-mon reconciles ManagementCommands periodically (currently every 10 minutes),
+so wait for the command to report a successful status before enabling a
+Kusto-backed Portal feature or diagnosing a missing lifecycle table.
+
+The ManagementCommand carries the same lifecycle table and mapping contract as
+the recorder's inline queued-ingestion mapping. Set
+`lifecycleRecorder.schemaManagement.enabled=false` only when an existing
+platform automation owns the identical lifecycle schema.
 
 Keep `portal.runHistory.enabled=false` until this recorder is deployed and
 successfully writing lifecycle rows. The Portal then reports Runs as `live-only`

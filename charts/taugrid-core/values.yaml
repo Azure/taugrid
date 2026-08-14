@@ -217,6 +217,15 @@ lifecycleRecorder:
     endpoint: ""
     database: Metrics
     table: TauExpRunLifecycle
+  # adx-mon owns database-management operations. When enabled, this chart
+  # creates a ManagementCommand in adx-mon's namespace which idempotently
+  # creates the lifecycle table, ingestion mapping, and dashboard function.
+  # The adx-mon identity therefore needs database-management permission; the
+  # recorder itself only needs Ingestor permission.
+  schemaManagement:
+    enabled: true
+    namespace: adx-mon
+    resourceName: taugrid-lifecycle-schema
   image:
     # Release image tags follow this chart's version. Set tag to "" when
     # overriding digest with an immutable sha256 reference.
