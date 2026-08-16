@@ -1,0 +1,59 @@
+suite: metrics-collector image pinning
+templates:
+  - daemonset.yaml
+
+tests:
+  - it: defaults to the immutable digest, not a mutable tag
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="metrics-collector")].image
+          value: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector@sha256:c45fee5ea8a8b7a24a1ff6868d3dfa90b322c7369380e611ea63ae03f5981b59
+
+  - it: pins every SKU DaemonSet to the same digest
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name=="metrics-collector")].image
+          pattern: ^mcr\.microsoft\.com/aks/ai-runtime/gpu-metrics-collector@sha256:[a-f0-9]{64}$
+
+  - it: allows a tag for local builds when the digest is cleared
+    set:
+      metricsCollector.image.digest: ""
+      metricsCollector.image.tag: dev
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="metrics-collector")].image
+          value: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector:dev
+
+  - it: rejects setting both tag and digest
+    set:
+      metricsCollector.image.tag: latest
+    asserts:
+      - failedTemplate:
+          errorMessage: metricsCollector.image must set exactly one of tag or digest
+
+  - it: rejects setting neither tag nor digest
+    set:
+      metricsCollector.image.digest: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: metricsCollector.image must set exactly one of tag or digest
+
+  - it: rejects a malformed digest
+    set:
+      metricsCollector.image.digest: sha256:ABC
+    asserts:
+      - failedTemplate:
+          errorMessage: "metricsCollector.image.digest must be sha256:<64 lowercase hex characters>"
+
+  - it: rejects an empty repository
+    set:
+      metricsCollector.image.repository: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: metricsCollector.image.repository is required

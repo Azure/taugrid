@@ -1,0 +1,381 @@
+{{- range $skuName, $sku := .Values.gpuSkus }}
+{{- if $sku }}
+{{- $dsName := printf "gpu-monitoring-%s" $skuName }}
+{{- $nodeExporterEnabled := $.Values.nodeExporter.enabled }}
+{{- if hasKey $sku "nodeExporter" }}
+{{- $nodeExporterEnabled = $sku.nodeExporter }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $dsName }}
+  namespace: {{ include "gpu-monitoring.namespace" $ }}
+  labels:
+    {{- include "gpu-monitoring.labels" $ | nindent 4 }}
+    app: {{ $dsName }}
+    gpu-sku: {{ $skuName }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $dsName }}
+  template:
+    metadata:
+      {{- if $.Values.metricsCollector.enabled }}
+      annotations:
+        checksum/metrics-collector-config: {{ include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "sku" $sku) | sha256sum | quote }}
+      {{- end }}
+      labels:
+        app: {{ $dsName }}
+        gpu-sku: {{ $skuName }}
+        {{- include "gpu-monitoring.selectorLabels" $ | nindent 8 }}
+        {{- with $.Values.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $.Values.serviceAccount.name }}
+      hostNetwork: {{ $.Values.daemonset.hostNetwork }}
+      hostPID: {{ $.Values.daemonset.hostPID }}
+      {{- if $.Values.daemonset.hostNetwork }}
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      tolerations:
+        {{- with $.Values.daemonset.tolerations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $.Values.nodeTainter.enabled }}
+        - operator: Exists
+          effect: NoSchedule
+        - operator: Exists
+          effect: NoExecute
+        {{- end }}
+      {{- with $.Values.daemonset.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              {{- range $labelKey := $.Values.daemonset.instanceTypeLabelKeys }}
+              - matchExpressions:
+                  {{- if $.Values.daemonset.requireAcceleratorLabel }}
+                  - key: kubernetes.azure.com/accelerator
+                    operator: In
+                    values:
+                      - nvidia
+                  {{- end }}
+                  - key: {{ $labelKey }}
+                    operator: In
+                    values:
+                      {{- toYaml $sku.instanceTypes | nindent 22 }}
+              {{- end }}
+      {{- with $.Values.daemonset.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $.Values.metricsCollector.enabled }}
+      initContainers:
+        - name: init-collector-state
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          command: ["sh", "-c", "chown -R 65532:65532 /var/lib/npd-metrics-collector"]
+          volumeMounts:
+            - name: collector-state
+              mountPath: /var/lib/npd-metrics-collector
+      {{- end }}
+      containers:
+        - name: gpu-monitoring
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            - /node-problem-detector
+          args:
+            - --logtostderr
+            - --port={{ $.Values.npdPort }}
+            - --prometheus-port={{ add $.Values.npdPort 1 }}
+            {{- if $.Values.monitors.customPluginMonitor }}
+            - --config.custom-plugin-monitor=/custom-config/{{ $sku.monitor_config }}
+            {{- end }}
+            {{- if $.Values.monitors.systemLogMonitor }}
+            - --config.system-log-monitor=/custom-config/system-log-monitor.json
+            {{- end }}
+            {{- if $.Values.monitors.systemStatsMonitor }}
+            - --config.system-stats-monitor=/custom-config/system-stats-monitor.json
+            {{- end }}
+            {{- if $.Values.monitors.kernelMonitor }}
+            - --config.kernel-monitor=/custom-config/kernel-monitor.json
+            {{- end }}
+            {{- with $.Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NPD_GPU_REQUIRED
+              value: "1"
+            - name: NPD_DCGM_REQUIRED
+              value: {{ include "gpu-monitoring.dcgmHealthRequired" (dict "root" $ "sku" $sku) | quote }}
+            - name: EXPECTED_NUM_GPU
+              value: "{{ $sku.num_gpus }}"
+            - name: VBIOS_VERSIONS
+              value: {{ $sku.vbios_versions | quote }}
+            - name: IB_DEVICES
+              value: "{{ $sku.ib_devices }}"
+            {{- if $sku.ib_rate_gbps }}
+            - name: EXPECTED_IB_GBPS
+              value: "{{ $sku.ib_rate_gbps }}"
+            {{- end }}
+            - name: IB_FLAP_THRESHOLD_SHORT
+              value: "{{ $sku.ib_flap_threshold_short }}"
+            - name: IB_FLAP_CHECK_WINDOW
+              value: "{{ $sku.ib_flap_check_window }}"
+            - name: NVME_TOTAL
+              value: "{{ $sku.nvme_total }}"
+            - name: NVME_SIZE_COUNT
+              value: "{{ $sku.nvme_size_count }}"
+            - name: NVME_SIZE
+              value: "{{ $sku.nvme_size }}"
+            - name: IMEX_PROCNAME
+              value: "{{ $sku.imex_procname }}"
+            {{- if $sku.roce_devices }}
+            - name: ROCE_DEVICES
+              value: "{{ $sku.roce_devices }}"
+            {{- end }}
+            {{- if $sku.gpu_type }}
+            - name: GPU_TYPE
+              value: "{{ $sku.gpu_type }}"
+            {{- end }}
+            {{- if $sku.gpu_driver_versions }}
+            - name: GPU_DRIVER_VERSIONS
+              value: {{ $sku.gpu_driver_versions | quote }}
+            {{- end }}
+            {{- with $.Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          {{- with $.Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+            - name: kmsg
+              mountPath: /dev/kmsg
+              readOnly: true
+            - name: log
+              mountPath: /var/log
+              readOnly: true
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/{{ $sku.monitor_config }}
+              subPath: {{ $sku.monitor_config }}
+              readOnly: true
+            - name: custom-config
+              mountPath: /usr/local/bin/nvidia-smi
+              subPath: nvidia-smi-wrapper.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /usr/local/bin/dcgmi
+              subPath: dcgmi-wrapper.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check-nvidia-smi.sh
+              subPath: check-nvidia-smi.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check-nvidia-device-files.sh
+              subPath: check-nvidia-device-files.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check-dcgm-health.sh
+              subPath: check-dcgm-health.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_count.sh
+              subPath: check_gpu_count.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_nvlink.sh
+              subPath: check_gpu_nvlink.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_xid.sh
+              subPath: check_gpu_xid.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_ecc.sh
+              subPath: check_gpu_ecc.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_ecc_from_sai.sh
+              subPath: check_gpu_ecc_from_sai.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_ib.sh
+              subPath: check_ib.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_ib_pkeys.sh
+              subPath: check_ib_pkeys.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_vbios.sh
+              subPath: check_gpu_vbios.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_throttle.sh
+              subPath: check_gpu_throttle.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_driver.sh
+              subPath: check_gpu_driver.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_ecc_remap_pending.sh
+              subPath: check_gpu_ecc_remap_pending.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_ecc_remap_failure.sh
+              subPath: check_gpu_ecc_remap_failure.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_nvlink_b200.sh
+              subPath: check_gpu_nvlink_b200.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_gpu_xid_always_fail.sh
+              subPath: check_gpu_xid_always_fail.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_ib_flaps.sh
+              subPath: check_ib_flaps.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_nvme_mount.sh
+              subPath: check_nvme_mount.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_temp_imex.sh
+              subPath: check_temp_imex.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check_roce.sh
+              subPath: check_roce.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/system-log-monitor.json
+              subPath: system-log-monitor.json
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/system-stats-monitor.json
+              subPath: system-stats-monitor.json
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/kernel-monitor.json
+              subPath: kernel-monitor.json
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/known-modules.json
+              subPath: known-modules.json
+              readOnly: true
+        {{- if $nodeExporterEnabled }}
+        - name: node-exporter
+          image: "{{ $.Values.nodeExporter.image.repository }}:{{ $.Values.nodeExporter.image.tag }}"
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --no-collector.wifi
+            - --no-collector.hwmon
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+          ports:
+            - name: node-metrics
+              containerPort: 9100
+              protocol: TCP
+          {{- with $.Values.nodeExporter.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: host-sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: host-root
+              mountPath: /host/root
+              mountPropagation: HostToContainer
+              readOnly: true
+        {{- end }}
+        {{- if $.Values.metricsCollector.enabled }}
+        - name: metrics-collector
+          image: {{ include "gpu-monitoring.image" (dict "component" "metricsCollector" "image" $.Values.metricsCollector.image) | quote }}
+          args:
+            - --config=/etc/npd-metrics-collector/rules.yaml
+            - --scrape-interval={{ $.Values.metricsCollector.scrapeInterval }}
+            - --state-dir=/var/lib/npd-metrics-collector
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- with $.Values.metricsCollector.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: collector-config
+              mountPath: /etc/npd-metrics-collector
+              readOnly: true
+            - name: collector-state
+              mountPath: /var/lib/npd-metrics-collector
+        {{- end }}
+      volumes:
+        - name: dev
+          hostPath:
+            path: {{ $.Values.volumes.dev.hostPath }}
+        - name: kmsg
+          hostPath:
+            path: {{ $.Values.volumes.kmsg.hostPath }}
+        - name: log
+          hostPath:
+            path: {{ $.Values.volumes.log.hostPath }}
+        - name: localtime
+          hostPath:
+            path: {{ $.Values.volumes.localtime.hostPath }}
+        - name: custom-config
+          secret:
+            secretName: {{ include "gpu-monitoring.executableBundleName" $ }}
+            defaultMode: 0755
+        {{- if $.Values.metricsCollector.enabled }}
+        - name: collector-config
+          configMap:
+            name: {{ $.Values.configMap.name }}-metrics-collector-{{ $skuName }}
+        - name: collector-state
+          hostPath:
+            path: /var/lib/npd-metrics-collector
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- if $nodeExporterEnabled }}
+        - name: host-proc
+          hostPath:
+            path: /proc
+        - name: host-sys
+          hostPath:
+            path: /sys
+        - name: host-root
+          hostPath:
+            path: /
+        {{- end }}
+{{- end }}
+{{- end }}

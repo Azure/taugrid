@@ -1,0 +1,18 @@
+{{- if .Values.metricsCollector.enabled }}
+{{- range $skuName, $sku := .Values.gpuSkus }}
+{{- if $sku }}
+{{- $collectorConfig := include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "sku" $sku) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $.Values.configMap.name }}-metrics-collector-{{ $skuName }}
+  namespace: {{ include "gpu-monitoring.namespace" $ }}
+  labels:
+    gpu-sku: {{ $skuName }}
+data:
+  rules.yaml: |
+    {{- $collectorConfig | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,502 @@
+image:
+  repository: mcr.microsoft.com/oss/kubernetes/node-problem-detector
+  tag: v0.8.19
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+namespace: ""
+labels: {}
+
+# Port for NPD's K8s exporter. Changed from default 20256 to avoid
+# conflict with AKS's built-in gpu-monitoring host process.
+npdPort: 20260
+
+env: []
+extraArgs: []
+
+serviceAccount:
+  create: true
+  name: gpu-monitoring
+
+rbac:
+  create: true
+  name: gpu-monitoring
+
+daemonset:
+  hostNetwork: true
+  hostPID: true
+  tolerations:
+    - operator: Exists
+  nodeSelector: {}
+  # Also require kubernetes.azure.com/accelerator=nvidia in the node affinity.
+  # Off by default: that label is applied only to AKS-managed node pools, so
+  # requiring it silently excludes externally-joined GPU nodes (which report
+  # kubernetes.azure.com/managed=false) and leaves them entirely unmonitored.
+  # The instanceTypeLabelKeys match below is already GPU-specific, since every
+  # SKU overlay enumerates explicit GPU VM sizes. Set to true only to restrict a
+  # deployment to AKS-managed GPU pools.
+  requireAcceleratorLabel: false
+  instanceTypeLabelKeys:
+    - node.kubernetes.io/instance-type
+  topologySpreadConstraints: []
+
+securityContext:
+  privileged: true
+
+resources: {}
+
+configMap:
+  # Base for the RBAC-separated immutable executable/config Secret; the chart
+  # appends a content hash and points every per-SKU DaemonSet at that object.
+  # The configMap key is retained for values compatibility.
+  name: gpu-monitoring-gpu
+
+monitors:
+  customPluginMonitor: true
+  systemLogMonitor: true
+  systemStatsMonitor: true
+  kernelMonitor: false
+
+volumes:
+  dev:
+    hostPath: /dev
+  kmsg:
+    hostPath: /dev/kmsg
+  log:
+    hostPath: /var/log
+  localtime:
+    hostPath: /etc/localtime
+
+# When enabled, NPD pods tolerate all NoSchedule/NoExecute taints so they
+# keep running on nodes that the standalone node-tainter has tainted.
+nodeTainter:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/oss/prometheus/node-exporter
+    tag: v1.8.2
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+# Lightweight metrics collector — replaces Prometheus sidecar.
+# Scrapes DCGM + node-exporter, evaluates threshold/rate rules,
+# and patches Kubernetes Node conditions directly.
+metricsCollector:
+  enabled: true
+  image:
+    repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
+    # a9c2591 — golang.org/x/net 0.55.0 (#830). Set exactly one of tag or
+    # digest; tag is for local builds, published deployments use the digest.
+    tag: ""
+    digest: sha256:c45fee5ea8a8b7a24a1ff6868d3dfa90b322c7369380e611ea63ae03f5981b59
+  scrapeInterval: "15s"
+  resources:
+    requests:
+      cpu: "2m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      # 256Mi OOMKilled the collector every 1-3h on 8-GPU H200 nodes, where the
+      # DCGM scrape returns far more series than on smaller SKUs and the rule
+      # engine retains per-series history across the rate windows.
+      memory: "512Mi"
+  scrapeTargets:
+    # DCGM exporter runs as a host systemd unit (port 19400) on AKS managed
+    # GPU nodes (see tests/e2e/managedgpu/harness/README.md). This pod runs
+    # with hostNetwork: true, so localhost reaches the host-level exporter.
+    - name: dcgm-exporter
+      url: http://localhost:19400/metrics
+    - name: node-exporter
+      url: http://localhost:9100/metrics
+  # By default the collector scrapes node-exporter only when this chart deploys
+  # the node-exporter sidecar. Set nodeExporterScrape: true to scrape an
+  # external hostNetwork node-exporter on :9100 without deploying a second
+  # sidecar that would collide on the host port.
+  # nodeExporterScrape: true
+  # Implicitly append an NPD scrape target to every per-SKU collector ConfigMap.
+  # NPD's Prometheus exporter listens on `npdPort + 1` (see daemonset.yaml
+  # `--prometheus-port`). Set to false to disable, e.g. if you fully override
+  # scrapeTargets above.
+  npdScrape: true
+  rules:
+    # Critical: ECC Double-Bit Errors (any increase over 1m → drain)
+    - name: ecc-dbe-retired
+      metricName: DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
+      conditionType: GPUECCDoubleRetired
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    - name: ecc-dbe-volatile
+      metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
+      conditionType: GPUECCDoubleVolatile
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    # Critical: NVLink Errors (any increase over 1m → drain)
+    - name: nvlink-crc-flit
+      metricName: DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
+      conditionType: GPUNVLinkCRCFlitErrors
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    - name: nvlink-crc-data
+      metricName: DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL
+      conditionType: GPUNVLinkCRCDataErrors
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    - name: nvlink-replay
+      metricName: DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
+      conditionType: GPUNVLinkReplayErrors
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    # Critical: Thermal/Power Violations (any increase over 1m → taint)
+    - name: thermal-violation
+      metricName: DCGM_FI_DEV_THERMAL_VIOLATION
+      conditionType: GPUThermalViolation
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    - name: power-violation
+      metricName: DCGM_FI_DEV_POWER_VIOLATION
+      conditionType: GPUPowerViolation
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    # Critical: XID Errors (current nonzero raw gauge, specific codes → drain)
+    - name: xid-48
+      metricName: DCGM_FI_DEV_XID_ERRORS
+      labels:
+        err_code: "48"
+      conditionType: XIDError48
+      mode: instant
+      threshold: 0
+    - name: xid-63
+      metricName: DCGM_FI_DEV_XID_ERRORS
+      labels:
+        err_code: "63"
+      conditionType: XIDError63
+      mode: instant
+      threshold: 0
+    - name: xid-64
+      metricName: DCGM_FI_DEV_XID_ERRORS
+      labels:
+        err_code: "64"
+      conditionType: XIDError64
+      mode: instant
+      threshold: 0
+    - name: xid-79
+      metricName: DCGM_FI_DEV_XID_ERRORS
+      labels:
+        err_code: "79"
+      conditionType: XIDError79
+      mode: instant
+      threshold: 0
+    - name: xid-94
+      metricName: DCGM_FI_DEV_XID_ERRORS
+      labels:
+        err_code: "94"
+      conditionType: XIDError94
+      mode: instant
+      threshold: 0
+    - name: xid-95
+      metricName: DCGM_FI_DEV_XID_ERRORS
+      labels:
+        err_code: "95"
+      conditionType: XIDError95
+      mode: instant
+      threshold: 0
+    # Critical: InfiniBand (any increase over 1m → taint)
+    - name: ib-link-down
+      metricName: node_infiniband_port_link_downed_total
+      conditionType: IBLinkDown
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    - name: ib-symbol-error
+      metricName: node_infiniband_port_symbol_error_total
+      conditionType: IBSymbolError
+      mode: rate
+      threshold: 0
+      window: 1m
+      for: 1m
+    # Warning: Correctable ECC (rate >10 in 10m → taint)
+    - name: ecc-sbe-volatile-rate
+      metricName: DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
+      conditionType: GPUECCSingleVolatileRate
+      mode: rate
+      threshold: 10
+      window: 10m
+      for: 5m
+    - name: ecc-sbe-retired
+      metricName: DCGM_FI_DEV_ECC_SBE_AGG_TOTAL
+      conditionType: GPUECCSingleRetired
+      mode: rate
+      threshold: 0
+      window: 5m
+      for: 5m
+    # Warning: PCIe Replay (rate >5 in 5m → taint)
+    - name: pcie-replay
+      metricName: DCGM_FI_DEV_PCIE_REPLAY_COUNTER
+      conditionType: GPUPCIeReplayErrors
+      mode: rate
+      threshold: 5
+      window: 5m
+      for: 5m
+    # GB200: Grace CPU Memory ECC
+    - name: grace-cpu-ecc-uncorrectable
+      metricName: DCGM_FI_DEV_GRACE_CPU_ECC_UNCORRECTABLE
+      conditionType: GraceCPUECCUncorrectable
+      mode: instant
+      threshold: 0
+      for: 1m
+    - name: grace-cpu-ecc-correctable-rate
+      metricName: DCGM_FI_DEV_GRACE_CPU_ECC_CORRECTABLE
+      conditionType: GraceCPUECCCorrectableRate
+      mode: rate
+      threshold: 10
+      window: 10m
+      for: 5m
+
+# --------------------------------------------------------------------------
+# Per-SKU GPU monitoring.
+#
+# Each entry creates a DaemonSet that targets nodes with matching VM instance
+# types via node affinity on "node.kubernetes.io/instance-type". All
+# DaemonSets are always deployed; pods only schedule on nodes whose instance
+# type is listed in that SKU's instanceTypes list.
+#
+# When a new GPU node joins the cluster with a matching instance type, the
+# correct DaemonSet automatically schedules a monitoring pod on it.
+#
+# To add a new GPU SKU, add an entry here with the appropriate instanceTypes
+# and monitoring parameters.
+#
+# scrapeTargets optionally replaces metricsCollector.scrapeTargets for one
+# profile. This supports mixed clusters where managed GPU nodes expose DCGM on
+# localhost:19400 and GPU Operator nodes use a node-local Service on port 9400.
+# A non-loopback DCGM Service must use internalTrafficPolicy: Local.
+# --------------------------------------------------------------------------
+gpuSkus:
+  a100:
+    instanceTypes:
+      - Standard_ND96asr_v4
+      - Standard_ND96amsr_A100_v4
+    num_gpus: 8
+    monitor_config: custom-plugin-monitor.json
+    gpu_driver_versions: '("580.126.09")'
+    vbios_versions: '("")'
+    ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
+    ib_rate_gbps: 200
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: "imex"
+  h100:
+    instanceTypes:
+      - Standard_ND96isr_H100_v5
+    num_gpus: 8
+    monitor_config: custom-plugin-monitor-h100.json
+    gpu_driver_versions: '("535.54.03")'
+    vbios_versions: '("96.00.89.00.01" "96.00.99.00.01" "96.00.A5.00.01" "96.00.BC.00.01")'
+    ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_5:1 mlx5_6:1 mlx5_7:1 mlx5_8:1 mlx5_9:1"
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: "imex"
+  h100-nvl-1g:
+    instanceTypes:
+      - Standard_NC40ads_H100_v5
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor-h100-nvl.json
+    gpu_driver_versions: '("580.105.08")'
+    vbios_versions: '("96.00.9F.00.04")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+    gpu_type: "h100-nvl"
+  h100-nvl-2g:
+    instanceTypes:
+      - Standard_NC80adis_H100_v5
+    num_gpus: 2
+    monitor_config: custom-plugin-monitor-h100-nvl.json
+    gpu_driver_versions: '("580.105.08")'
+    vbios_versions: '("96.00.9F.00.04")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+    gpu_type: "h100-nvl"
+  h100-nvl-confidential-1g:
+    instanceTypes:
+      - Standard_NCC40ads_H100_v5
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor-h100-nvl.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+    gpu_type: "h100-nvl"
+  h200:
+    instanceTypes:
+      - Standard_ND96isr_H200_v5
+    num_gpus: 8
+    monitor_config: custom-plugin-monitor-h100.json
+    gpu_driver_versions: '("580.126.09")'
+    vbios_versions: '("97.00.B9.00.23")'
+    ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: "nvidia-imex"
+  gb200:
+    instanceTypes:
+      - Standard_ND96isr_GB200_v6
+      - Standard_ND128isr_NDR_GB200_v6
+    num_gpus: 4
+    monitor_config: custom-plugin-monitor-gb200.json
+    gpu_driver_versions: '("580.65.06")'
+    vbios_versions: '("97.00.B9.00.23" "97.00.B9.00.69")'
+    ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
+    ib_rate_gbps: 400
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 5
+    nvme_size_count: 4
+    nvme_size: "3.5T"
+    imex_procname: "nvidia-imex"
+    gpu_type: "GB200"
+  gb300:
+    instanceTypes:
+      - Standard_ND128isr_GB300_v6
+      - Standard_ND128isrG5_GB300_v6
+    num_gpus: 4
+    # This profile retains the historical NVLinkB200Inactive condition name so
+    # existing condition consumers remain compatible across Blackwell SKUs.
+    monitor_config: custom-plugin-monitor-gb200.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
+    ib_rate_gbps: 800
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 5
+    nvme_size_count: 4
+    nvme_size: "3.5T"
+    imex_procname: "nvidia-imex"
+    gpu_type: "GB300"
+  spark:
+    instanceTypes:
+      - Standard_NV6ads_A10_v5
+      - Standard_NV12ads_A10_v5
+      - Standard_NV18ads_A10_v5
+      - Standard_NV36ads_A10_v5
+      - Standard_NV36adms_A10_v5
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor-spark.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    roce_devices: ""
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+  a10-2g:
+    instanceTypes:
+      - Standard_NV72ads_A10_v5
+    num_gpus: 2
+    monitor_config: custom-plugin-monitor-spark.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    roce_devices: ""
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+  a100-pcie-1g:
+    instanceTypes:
+      - Standard_NC24ads_A100_v4
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor-spark.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    roce_devices: ""
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+  a100-pcie-2g:
+    instanceTypes:
+      - Standard_NC48ads_A100_v4
+    num_gpus: 2
+    monitor_config: custom-plugin-monitor-spark.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    roce_devices: ""
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
+  a100-pcie-4g:
+    instanceTypes:
+      - Standard_NC96ads_A100_v4
+    num_gpus: 4
+    monitor_config: custom-plugin-monitor-spark.json
+    gpu_driver_versions: '("")'
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    roce_devices: ""
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""

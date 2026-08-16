@@ -1,0 +1,5 @@
+# CI test values — Spark (1-GPU, RoCE, NVMe)
+gpuSkus:
+  spark:
+    instanceTypes:
+      - Standard_NV36ads_A10_v5

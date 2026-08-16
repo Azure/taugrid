@@ -11,7 +11,7 @@ tests:
   - it: installs GPU monitoring by default alongside the Tau core controller
     asserts:
       - hasDocuments:
-          count: 7
+          count: 13
 
   - it: can be enabled explicitly without the Tau core controller
     set:
@@ -19,7 +19,7 @@ tests:
       components.gpuMonitoring.enabled: true
     asserts:
       - hasDocuments:
-          count: 7
+          count: 13
 
   # Externally-joined GPU nodes never receive kubernetes.azure.com/accelerator,
   # so requiring it would silently leave them unmonitored by the distribution.
@@ -40,6 +40,100 @@ tests:
             operator: In
             values:
               - Standard_ND96isr_H200_v5
+          any: true
+
+  - it: covers one-GPU A10 sizes without Spark hardware assumptions
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-spark
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_NV6ads_A10_v5
+              - Standard_NV12ads_A10_v5
+              - Standard_NV18ads_A10_v5
+              - Standard_NV36ads_A10_v5
+              - Standard_NV36adms_A10_v5
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor-spark.json
+
+  - it: covers PCIe A100 sizes
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100-pcie-4g
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_NC96ads_A100_v4
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor-spark.json
+
+  - it: covers confidential H100
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h100-nvl-confidential-1g
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_NCC40ads_H100_v5
+          any: true
+
+  - it: covers the current public GB200 size
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gb200
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_ND96isr_GB200_v6
+              - Standard_ND128isr_NDR_GB200_v6
+          any: true
+
+  - it: covers GB300 variants
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gb300
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_ND128isr_GB300_v6
+              - Standard_ND128isrG5_GB300_v6
+          any: true
+      - equal:
+          path: metadata.labels["gpu-sku"]
+          value: gb300
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor-gb200.json
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXPECTED_IB_GBPS
+            value: "800"
           any: true
 
   - it: lands in the release namespace

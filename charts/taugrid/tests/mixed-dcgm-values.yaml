@@ -1,0 +1,8 @@
+gpu-monitoring:
+  gpuSkus:
+    h200:
+      scrapeTargets:
+        - name: dcgm-exporter
+          url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+        - name: node-exporter
+          url: http://localhost:9100/metrics

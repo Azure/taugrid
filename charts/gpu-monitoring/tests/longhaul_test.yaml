@@ -1,0 +1,25 @@
+suite: long-haul overlay profile isolation
+templates:
+  - daemonset.yaml
+values:
+  - ../../../tests/e2e/gpu-monitoring/longhaul-values.yaml
+tests:
+  - it: renders only the three long-haul DaemonSets
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: keeps the dedicated NC24 A100 profile
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-longhaul-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_NC24ads_A100_v4
+              - standard_nc24ads_a100_v4
+          any: true

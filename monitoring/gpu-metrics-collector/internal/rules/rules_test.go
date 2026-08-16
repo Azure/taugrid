@@ -102,20 +102,50 @@ func TestEvaluate_ForDuration(t *testing.T) {
 	}
 }
 
-func TestEvaluate_LabelFiltering(t *testing.T) {
+func TestEvaluate_XIDInstantGaugeWithErrCode(t *testing.T) {
 	t.Parallel()
 
-	engine := NewEngine([]Rule{
-		{Name: "xid-48", MetricName: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"xid": "48"}, ConditionType: "XIDError48", Mode: "instant", Threshold: 0},
-	})
-
-	metrics := []scraper.Metric{
-		{Name: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"gpu": "0", "xid": "48"}, Value: 1},
-		{Name: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"gpu": "0", "xid": "99"}, Value: 5},
+	tests := []struct {
+		name       string
+		metrics    []scraper.Metric
+		wantFiring bool
+	}{
+		{
+			name: "matching nonzero gauge fires",
+			metrics: []scraper.Metric{
+				{Name: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"gpu": "0", "err_code": "48"}, Value: 1},
+			},
+			wantFiring: true,
+		},
+		{
+			name: "matching zero gauge does not fire",
+			metrics: []scraper.Metric{
+				{Name: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"gpu": "0", "err_code": "48"}, Value: 0},
+			},
+		},
+		{
+			name: "nonmatching gauge does not fire",
+			metrics: []scraper.Metric{
+				{Name: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"gpu": "0", "err_code": "63"}, Value: 5},
+			},
+		},
 	}
 
-	results := engine.Evaluate(metrics)
-	if !results[0].Firing {
-		t.Error("expected firing for xid=48")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := NewEngine([]Rule{
+				{Name: "xid-48", MetricName: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"err_code": "48"}, ConditionType: "XIDError48", Mode: "instant", Threshold: 0},
+			})
+
+			results := engine.Evaluate(tt.metrics)
+			if len(results) != 1 {
+				t.Fatalf("expected 1 result, got %d", len(results))
+			}
+			if results[0].Firing != tt.wantFiring {
+				t.Errorf("firing = %t, want %t", results[0].Firing, tt.wantFiring)
+			}
+		})
 	}
 }

@@ -1,0 +1,347 @@
+suite: GPU monitoring DaemonSet wiring
+templates:
+  - daemonset.yaml
+
+tests:
+  - it: renders one DaemonSet per SKU (13 by default)
+    asserts:
+      - hasDocuments:
+          count: 13
+
+  - it: a100 DaemonSet includes NPD, node-exporter, and metrics-collector containers (no bundled dcgm-exporter)
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: gpu-monitoring
+          any: true
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: dcgm-exporter
+          any: true
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: node-exporter
+          any: true
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: metrics-collector
+          any: true
+
+  - it: spark DaemonSet has no dcgm-exporter, keeps node-exporter (same as every other SKU)
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-spark
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: dcgm-exporter
+          any: true
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: node-exporter
+          any: true
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: metrics-collector
+          any: true
+
+  - it: spark DaemonSet targets the one-GPU A10 instance types
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-spark
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_NV6ads_A10_v5
+              - Standard_NV12ads_A10_v5
+              - Standard_NV18ads_A10_v5
+              - Standard_NV36ads_A10_v5
+              - Standard_NV36adms_A10_v5
+          any: true
+
+  - it: GB300 uses Blackwell checks with an 800-Gbps InfiniBand expectation
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gb300
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor-gb200.json
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXPECTED_IB_GBPS
+            value: "800"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GPU_TYPE
+            value: GB300
+          any: true
+
+  - it: GB200 retains its 400-Gbps InfiniBand expectation
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gb200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXPECTED_IB_GBPS
+            value: "400"
+          any: true
+
+  - it: A100 uses Azure HDR's 200-Gbps per-port expectation
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXPECTED_IB_GBPS
+            value: "200"
+          any: true
+
+  - it: nodeExporter.enabled=false omits the node-exporter sidecar
+    set:
+      nodeExporter.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: node-exporter
+          any: true
+
+  - it: metrics-collector sidecar mounts the per-SKU collector-config ConfigMap
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: collector-config
+            configMap:
+              name: gpu-monitoring-gpu-metrics-collector-a100
+          any: true
+
+  - it: collector configuration is hashed into the pod template
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
+          value: 714235a3faae83eb79646a80360716e2eebd8341ff83f0184bd3668f3bedc1cf
+
+  - it: per-profile scrape target changes update only that profile checksum
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
+          value: 8bceeb43852f6747a2f33b8efb080a175720b7108d27ee0ecda8abb8ccff4fec
+
+  - it: GPU device-file and host DCGM health checks are required
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_GPU_REQUIRED
+            value: "1"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_DCGM_REQUIRED
+            value: "1"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /usr/local/bin/dcgmi
+            subPath: dcgmi-wrapper.sh
+            readOnly: true
+          any: true
+
+  - it: GPU Operator DCGM Service profiles do not require a host dcgmi binary
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_DCGM_REQUIRED
+            value: "0"
+          any: true
+
+  - it: spark DaemonSet mounts the spark per-SKU collector-config ConfigMap (not shared)
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-spark
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: collector-config
+            configMap:
+              name: gpu-monitoring-gpu-metrics-collector-spark
+          any: true
+
+  - it: metrics-collector sidecar has expected args
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name=="metrics-collector")].args[0]
+          pattern: '--config=/etc/npd-metrics-collector/rules.yaml'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name=="metrics-collector")].args[1]
+          pattern: '--scrape-interval=15s'
+
+  - it: default affinity matches instance type without requiring the AKS accelerator label
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - notContains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: kubernetes.azure.com/accelerator
+          any: true
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_ND96asr_v4
+              - Standard_ND96amsr_A100_v4
+          any: true
+
+  - it: requireAcceleratorLabel=true restricts scheduling to AKS-managed GPU pools
+    set:
+      daemonset.requireAcceleratorLabel: true
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: kubernetes.azure.com/accelerator
+            operator: In
+            values:
+              - nvidia
+          any: true
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+              - Standard_ND96asr_v4
+              - Standard_ND96amsr_A100_v4
+          any: true
+
+  - it: can target stretch-node instance type labels without the AKS accelerator label
+    set:
+      daemonset.requireAcceleratorLabel: false
+      daemonset.instanceTypeLabelKeys[0]: aks.azure.com/instance-type
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - notContains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: kubernetes.azure.com/accelerator
+          any: true
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content:
+            key: aks.azure.com/instance-type
+            operator: In
+            values:
+              - Standard_ND96asr_v4
+              - Standard_ND96amsr_A100_v4
+          any: true
+
+  - it: metricsCollector.enabled=false omits the sidecar and collector-config volume
+    set:
+      metricsCollector.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: metrics-collector
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: collector-config
+          any: true
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
+
+  - it: nodeTainter.enabled=true adds tolerations for NoSchedule and NoExecute
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            operator: Exists
+            effect: NoSchedule
+          any: true
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            operator: Exists
+            effect: NoExecute
+          any: true
+
+  - it: references the shared content-addressed executable Secret
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.volumes[?(@.name=="custom-config")].secret.secretName
+          pattern: '^gpu-monitoring-gpu-[a-f0-9]{10}$'

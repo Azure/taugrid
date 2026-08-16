@@ -1,0 +1,268 @@
+{
+  "plugin": "custom",
+  "pluginConfig": {
+    "invoke_interval": "60s",
+    "timeout": "10s",
+    "max_output_length": 200,
+    "concurrency": 3,
+    "enable_message_change_based_condition_update": false
+  },
+  "source": "gpu-custom-plugin-monitor",
+  "metricsReporting": true,
+  "conditions": [
+    {
+      "type": "NvidiaSmiProblem",
+      "reason": "NvidiaSmiOk",
+      "message": "nvidia-smi ok"
+    },
+    {
+      "type": "NvidiaDeviceFilesProblem",
+      "reason": "NvidiaDeviceFilesOk",
+      "message": "nvidia device files ok"
+    },
+    {
+      "type": "DcgmHealthProblem",
+      "reason": "DcgmHealthOk",
+      "message": "dcgm health ok"
+    },
+    {
+      "type": "GPUMissing",
+      "reason": "GPUCountMatches",
+      "message": "Observed GPU count matches expected GPU count"
+    },
+    {
+      "type": "GPUECCRemapPending",
+      "reason": "GPUECCRemapPendingClear",
+      "message": "GPU ECC remap pending clear"
+    },
+    {
+      "type": "GPUECCRemapFailure",
+      "reason": "GPUECCRemapFailureClear",
+      "message": "GPU ECC remap failure clear"
+    },
+    {
+      "type": "GPUECC",
+      "reason": "GPUECCOk",
+      "message": "GPU ECC ok"
+    },
+    {
+      "type": "NVLinkB200Inactive",
+      "reason": "NVLinkB200Active",
+      "message": "NVLink B200 active"
+    },
+    {
+      "type": "GPUVbiosMismatch",
+      "reason": "GPUVbiosOk",
+      "message": "GPU VBIOS ok"
+    },
+    {
+      "type": "GPUThrottle",
+      "reason": "GPUThrottleOk",
+      "message": "GPU throttle ok"
+    },
+    {
+      "type": "XIDErrorsAlwaysFail",
+      "reason": "NoXIDErrors",
+      "message": "No XID errors found"
+    },
+    {
+      "type": "NVMeMountMissing",
+      "reason": "NVMeMountOk",
+      "message": "NVMe mount ok"
+    },
+    {
+      "type": "TempIMEXProblem",
+      "reason": "TempIMEXOk",
+      "message": "Temp IMEX ok"
+    },
+    {
+      "type": "RoCELinkIssue",
+      "reason": "RoCELinkOk",
+      "message": "RoCE link ok"
+    }
+  ],
+  "rules": [
+    {
+      "type": "temporary",
+      "reason": "NvidiaSmiError",
+      "path": "/custom-config/check-nvidia-smi.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NvidiaSmiProblem",
+      "reason": "NvidiaSmiError",
+      "path": "/custom-config/check-nvidia-smi.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NvidiaDeviceFilesError",
+      "path": "/custom-config/check-nvidia-device-files.sh",
+      "timeout": "5s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NvidiaDeviceFilesProblem",
+      "reason": "NvidiaDeviceFilesError",
+      "path": "/custom-config/check-nvidia-device-files.sh",
+      "timeout": "5s"
+    },
+    {
+      "type": "temporary",
+      "reason": "DcgmHealthError",
+      "path": "/custom-config/check-dcgm-health.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "DcgmHealthProblem",
+      "reason": "DcgmHealthError",
+      "path": "/custom-config/check-dcgm-health.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUMissing",
+      "path": "/custom-config/check_gpu_count.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUMissing",
+      "reason": "GPUMissing",
+      "path": "/custom-config/check_gpu_count.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUECCRemapPending",
+      "path": "/custom-config/check_gpu_ecc_remap_pending.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUECCRemapPending",
+      "reason": "GPUECCRemapPending",
+      "path": "/custom-config/check_gpu_ecc_remap_pending.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUECCRemapFailure",
+      "path": "/custom-config/check_gpu_ecc_remap_failure.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUECCRemapFailure",
+      "reason": "GPUECCRemapFailure",
+      "path": "/custom-config/check_gpu_ecc_remap_failure.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUECC",
+      "path": "/custom-config/check_gpu_ecc.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUECC",
+      "reason": "GPUECC",
+      "path": "/custom-config/check_gpu_ecc.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NVLinkB200Inactive",
+      "path": "/custom-config/check_gpu_nvlink_b200.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NVLinkB200Inactive",
+      "reason": "NVLinkB200Inactive",
+      "path": "/custom-config/check_gpu_nvlink_b200.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUVbiosMismatch",
+      "path": "/custom-config/check_gpu_vbios.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUVbiosMismatch",
+      "reason": "GPUVbiosMismatch",
+      "path": "/custom-config/check_gpu_vbios.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUThrottle",
+      "path": "/custom-config/check_gpu_throttle.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUThrottle",
+      "reason": "GPUThrottle",
+      "path": "/custom-config/check_gpu_throttle.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "XIDErrorsAlwaysFail",
+      "path": "/custom-config/check_gpu_xid_always_fail.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "XIDErrorsAlwaysFail",
+      "reason": "XIDErrorsAlwaysFail",
+      "path": "/custom-config/check_gpu_xid_always_fail.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "NVMeMountMissing",
+      "path": "/custom-config/check_nvme_mount.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "NVMeMountMissing",
+      "reason": "NVMeMountMissing",
+      "path": "/custom-config/check_nvme_mount.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "TempIMEXProblem",
+      "path": "/custom-config/check_temp_imex.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "TempIMEXProblem",
+      "reason": "TempIMEXProblem",
+      "path": "/custom-config/check_temp_imex.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "RoCELinkIssue",
+      "path": "/custom-config/check_roce.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "RoCELinkIssue",
+      "reason": "RoCELinkIssue",
+      "path": "/custom-config/check_roce.sh",
+      "timeout": "10s"
+    }
+  ]
+}

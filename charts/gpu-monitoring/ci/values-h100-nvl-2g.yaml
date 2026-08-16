@@ -1,0 +1,5 @@
+# CI test values — H100 NVL (2 GPU, NC80adis)
+gpuSkus:
+  h100-nvl-2g:
+    instanceTypes:
+      - Standard_NC80adis_H100_v5

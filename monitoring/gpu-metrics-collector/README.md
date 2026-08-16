@@ -9,7 +9,7 @@ A lightweight, config-driven sidecar that replaces Prometheus + AlertManager in 
 │                                                                                                  │
 │  ┌──────────────┐   ┌──────────────┐   ┌────────────────────┐                                   │
 │  │ DCGM Exporter│   │ Node Exporter│   │ Node Problem       │                                   │
-│  │  :9400       │   │  :9100       │   │ Detector            │                                   │
+│  │ :19400/:9400 │   │  :9100       │   │ Detector            │                                   │
 │  └──────┬───────┘   └──────┬───────┘   └────────────────────┘                                   │
 │         │                  │                                                                     │
 │         └────────┬─────────┘                                                                     │
@@ -36,6 +36,8 @@ A lightweight, config-driven sidecar that replaces Prometheus + AlertManager in 
 ## Features
 
 - **Config-driven rules** — all rules defined in `values.yaml`, no Go code changes needed to add/remove rules
+- **Dual DCGM support** — scrape AKS managed GPU experience on `19400` or a
+  node-local GPU Operator Service on `9400`
 - **Parallel scraping** — concurrent HTTP fetches to all targets with bounded connection pool
 - **Rate and instant modes** — supports cumulative counter rate-of-change and instantaneous threshold checks
 - **"For" duration** — conditions must persist for a configurable duration before firing (reduces flaps)
@@ -102,6 +104,31 @@ docker buildx build --platform linux/amd64 \
 
 Rules are defined in the Helm `values.yaml` under `metricsCollector.rules` and rendered into a ConfigMap. The collector loads this at startup via `--config`.
 
+### DCGM endpoints
+
+Use `metricsCollector.scrapeTargets` as the default and
+`gpuSkus.<profile>.scrapeTargets` to select a different endpoint for one GPU
+monitoring DaemonSet:
+
+- AKS managed GPU experience:
+  `http://localhost:19400/metrics`
+- NVIDIA GPU Operator:
+  `http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics`
+
+Configure the GPU Operator `ClusterPolicy` so its Service uses
+`spec.internalTrafficPolicy: Local`:
+
+```yaml
+spec:
+  dcgmExporter:
+    service:
+      internalTrafficPolicy: Local
+```
+
+This is the Kubernetes-native locality guarantee: traffic is routed only to an
+exporter endpoint on the collector's node instead of another node's GPU
+exporter.
+
 ### Helm Values
 
 ```yaml
@@ -120,7 +147,7 @@ metricsCollector:
       memory: "64Mi"
   scrapeTargets:
     - name: dcgm-exporter
-      url: http://localhost:9400/metrics
+      url: http://localhost:19400/metrics
     - name: node-exporter
       url: http://localhost:9100/metrics
   rules:
@@ -133,6 +160,11 @@ metricsCollector:
       for: 1m
     # ... more rules
 ```
+
+For a GPU Operator-backed profile, set its `gpuSkus.<profile>.scrapeTargets` to
+the node-local Service URL shown above while managed profiles inherit the global
+port-19400 target. Apply the `ClusterPolicy` setting above before enabling
+Node-condition writes.
 
 ### Rule Schema
 

@@ -33,6 +33,12 @@ AI_RUNTIME_GPU_A10_SELECTOR='agentpool=a10' \
 AI_RUNTIME_GPU_A100_SELECTOR='agentpool=gpu' \
 go test -v -timeout 20m ./managedgpu/
 
+# Assert mixed-cluster collector source selection on managed A100 and GPU Operator H200 nodes
+AI_RUNTIME_E2E=1 AI_RUNTIME_GPU_MONITORING_RUNTIME=1 \
+AI_RUNTIME_GPU_MONITORING_A100_SELECTOR='<managed A100 selector>' \
+AI_RUNTIME_GPU_MONITORING_H200_SELECTOR='<joined H200 selector>' \
+go test -v -timeout 20m -run '^TestGPUMonitoringRuntimeOnGPUNode$' ./gpu-monitoring/
+
 # Run the portable scheduler packing check against a multi-node kind cluster
 AI_RUNTIME_E2E=1 go test -v -timeout 2m ./scheduler/
 
@@ -62,6 +68,13 @@ GPU_NODE_SELECTOR_KEY='<gpu node selector key>' \
 GPU_NODE_SELECTOR_VALUE='<gpu node selector value>' \
 go test -v -timeout 35m -run '^TestTauPyEntrypointRayJobGPU$' ./stack/
 ```
+
+The runtime monitoring test accepts
+`AI_RUNTIME_GPU_MONITORING_<FAMILY>_SELECTOR` for `A10`, `A100`, `H100`,
+`H200`, `GB200`, and `GB300`. Configure only families present in the target
+cluster. Each case reads and probes the DCGM URL from the selected monitoring
+pod's actual collector ConfigMap; it does not accept an independent test-only
+URL.
 
 Without `AI_RUNTIME_E2E=1`, cluster-backed integration tests are skipped. The
 offline unit, fixture, payload, and fake-client tests still run and require no

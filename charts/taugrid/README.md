@@ -7,7 +7,7 @@ AKS clusters.
 ## Install
 
 ```bash
-tau cluster install --version 0.2.3 --values taugrid-values.yaml
+tau cluster install --version 0.2.4 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -15,7 +15,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.2.3 \
+  --version 0.2.4 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -261,7 +261,7 @@ taugrid-core values reference.
 
 ### `gpu-monitoring`
 
-Node Problem Detector with GPU/InfiniBand/NVMe health checks, DCGM exporter,
+Node Problem Detector with GPU/InfiniBand/NVMe health checks, DCGM metrics,
 node-exporter, and the metrics collector that writes Kubernetes Node conditions.
 Deploys one DaemonSet per entry in `gpu-monitoring.gpuSkus`, each selecting nodes
 by `node.kubernetes.io/instance-type`. A cluster with no matching instance types
@@ -269,11 +269,17 @@ gets DaemonSets that schedule nothing, so bundling is safe on CPU-only clusters.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `gpu-monitoring.gpuSkus` | map | 7 SKUs (a100, h100, h100-nvl-1g, h100-nvl-2g, h200, gb200, spark) | Per-SKU DaemonSet definitions |
+| `gpu-monitoring.gpuSkus` | map | 13 profiles covering A10, A100, H100, H200, GB200, and GB300 | Per-SKU DaemonSet definitions |
+| `gpu-monitoring.gpuSkus.<profile>.scrapeTargets` | list | global collector targets | Per-profile DCGM/node-exporter endpoints for mixed managed and GPU Operator clusters |
 | `gpu-monitoring.daemonset.requireAcceleratorLabel` | bool | `false` | Also require `kubernetes.azure.com/accelerator=nvidia`. Externally-joined GPU nodes never receive that label, so requiring it leaves them unmonitored |
 | `gpu-monitoring.namespace` | string | `""` (release namespace) | Where the DaemonSets are installed |
 
 See `charts/gpu-monitoring/README.md` for the full reference.
+
+Managed GPU profiles use `http://localhost:19400/metrics` by default. Override
+only the profiles backed by GPU Operator with its port-9400 Service, and set
+that Service's `internalTrafficPolicy` to `Local` so collectors cannot scrape a
+different node.
 
 **Do not install this alongside a separately-managed `gpu-monitoring` release.**
 The subchart creates cluster-scoped `gpu-monitoring` ServiceAccount, ClusterRole,
