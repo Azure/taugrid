@@ -19,12 +19,12 @@ from legacy `manifest.yaml` folders.
 ```bash
 # from the repository root
 make install-tau-cli
-tau run --config cli/examples/market-policy/tau.yaml --dry-run=client
-tau run --config cli/examples/market-policy/tau.yaml
+tau run --config examples/market-policy/tau.yaml --dry-run=client
+tau run --config examples/market-policy/tau.yaml
 ```
 
 For the supported repository-first GPU HPO path, follow the canonical
-[GPU Ray Tune HPO on AKS walkthrough](../../site/content/en/docs/examples/gpu-ray-tune.md).
+[GPU Ray Tune HPO on AKS walkthrough](../site/content/en/docs/examples/gpu-ray-tune.md).
 
 ## Status labels
 
@@ -48,11 +48,11 @@ Standalone Tau example pages should include the same status block near the top:
 | [`market-policy`](./market-policy/) | `production-shaped` | Trains the exact compact actor-critic rendered in the documentation, requires CUDA on TauGrid, and exports browser-ready policy/value weights. |
 | [`kind-smoke`](./kind-smoke/) | `smoke/debug` | Verify the local Tau -> Kueue -> Kubernetes Job path on a disposable Kind cluster before trying AKS/GPU-specific prepare and storage flows. |
 | [`nanogpt-ray`](./nanogpt-ray/) | `smoke/debug` for local and small GPU runs; `production-shaped` for H200 target routes | Start with the 1-GPU smoke for onboarding, then use the pre-tokenized H200 configs for FineWeb target/regression work. |
-| [`ray-tune-smoke`](./ray-tune-smoke/) | `smoke/debug` | Minimal Ray Tune HPO path: the researcher supplies `train_func(config)` and a search space, and Tau generates the Tuner/TorchTrainer wrapper. Use the [canonical AKS walkthrough](../../site/content/en/docs/examples/gpu-ray-tune.md) for provider setup and the repository-first handoff. |
-| FineWeb tokenization/data prep ([dataset contract](./nanogpt-ray/#dataset-contract), [registry runbook](../../../docs/tau/dataset-catalog.md)) | `operator runbook` | Use pre-tokenized artifacts or the dataset registry handoff for target runs; inline tokenization is only a smoke/debug escape hatch. |
-| Stellar grouping and wiki screenshots ([guide](../../../docs/tau/stellar-ui.md#live-wiki-screenshot-refresh)) | `operator runbook` | Capture live NanoGPT/Stellar group pages from a real service for wiki assets; do not use mocks or future-only UI sketches. |
+| [`ray-tune-smoke`](./ray-tune-smoke/) | `smoke/debug` | Minimal Ray Tune HPO path: the researcher supplies `train_func(config)` and a search space, and Tau generates the Tuner/TorchTrainer wrapper. Use the [canonical AKS walkthrough](../site/content/en/docs/examples/gpu-ray-tune.md) for provider setup and the repository-first handoff. |
+| FineWeb tokenization/data prep ([dataset contract](./nanogpt-ray/#dataset-contract), [registry runbook](../../docs/tau/dataset-catalog.md)) | `operator runbook` | Use pre-tokenized artifacts or the dataset registry handoff for target runs; inline tokenization is only a smoke/debug escape hatch. |
+| Stellar grouping and wiki screenshots ([guide](../../docs/tau/stellar-ui.md#live-wiki-screenshot-refresh)) | `operator runbook` | Capture live NanoGPT/Stellar group pages from a real service for wiki assets; do not use mocks or future-only UI sketches. |
 | [`cpu-multi-interest-ray`](./cpu-multi-interest-ray/) | `smoke/debug` | CPU Ray managed workflow demo using a checked-in `tau.yaml`; useful for validating config-first RayJob rendering without GPUs. |
 | [`portal-ray-stellar`](./portal-ray-stellar/) | `operator runbook` | Single CPU RayJob that lights both portal detail-page links (Ray dashboard + Open in Experiments/Stellar); requires a pinned metrics-offload image and a namespace with a Ready TauWorkspace plus a writable `/data` PVC. |
-| Serving compiled inference ([guide](../../../docs/tau/tau-serve-compiled-inference-example.md)) | `future UX` | Review the intended `tau serve deploy` shape; do not present it as a completed quickstart. |
-| Dataset catalog and ingest ([runbook](../../../docs/tau/dataset-catalog.md)) | `operator runbook` | Seed, ingest, and verify dataset records before production-shaped FineWeb or RL data consumption. |
-| Sandbox/RL cockpit scenario ([design](../../../docs/design/agentic-experiment-tracking-design.md#56-executable-rl-experimenter-acceptance-scenario)) | `future UX` | Validate product direction for RL experiment loops; not a shipped dashboard workflow. |
+| Serving compiled inference ([guide](../../docs/tau/tau-serve-compiled-inference-example.md)) | `future UX` | Review the intended `tau serve deploy` shape; do not present it as a completed quickstart. |
+| Dataset catalog and ingest ([runbook](../../docs/tau/dataset-catalog.md)) | `operator runbook` | Seed, ingest, and verify dataset records before production-shaped FineWeb or RL data consumption. |
+| Sandbox/RL cockpit scenario ([design](../../docs/design/agentic-experiment-tracking-design.md#56-executable-rl-experimenter-acceptance-scenario)) | `future UX` | Validate product direction for RL experiment loops; not a shipped dashboard workflow. |

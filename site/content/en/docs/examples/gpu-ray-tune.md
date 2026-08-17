@@ -8,7 +8,7 @@ description: Provision GPU-capable AKS, enable TauGrid, and run the six-trial Ra
 {{< maturity status="ga" reviewed="2026-08-11" >}}
 
 This guide runs the GPU HPO workflow for
-[`cli/examples/ray-tune-smoke`](https://github.com/Azure/taugrid/tree/main/cli/examples/ray-tune-smoke).
+[`examples/ray-tune-smoke`](https://github.com/Azure/taugrid/tree/main/examples/ray-tune-smoke).
 It was verified on one `Standard_NV12ads_A10_v5` node. A100 SKUs are also
 usable when the selected subscription and region have both sufficient quota
 and real-time allocation capacity.
@@ -216,7 +216,7 @@ walkthrough installs the checked-in, digest-pinned NVIDIA device plugin:
 
 ```bash
 kubectl apply \
-  -f "$TAUGRID_ROOT/cli/examples/aks-gpu-quickstart/nvidia-device-plugin.yaml"
+  -f "$TAUGRID_ROOT/examples/aks-gpu-quickstart/nvidia-device-plugin.yaml"
 
 kubectl -n kube-system rollout status \
   daemonset/nvidia-device-plugin-daemonset \
@@ -327,8 +327,8 @@ tau workspace init-repo ray-tune-research \
   --aks-resource-group "$RESOURCE_GROUP" \
   --aks-cluster "$AKS_CLUSTER"
 
-cp "$TAUGRID_ROOT/cli/examples/ray-tune-smoke/tau.yaml" "$RESEARCH_REPO/"
-cp "$TAUGRID_ROOT/cli/examples/ray-tune-smoke/train.py" "$RESEARCH_REPO/"
+cp "$TAUGRID_ROOT/examples/ray-tune-smoke/tau.yaml" "$RESEARCH_REPO/"
+cp "$TAUGRID_ROOT/examples/ray-tune-smoke/train.py" "$RESEARCH_REPO/"
 
 git -C "$RESEARCH_REPO" init
 git -C "$RESEARCH_REPO" add .

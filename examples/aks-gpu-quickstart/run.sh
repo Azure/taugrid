@@ -16,7 +16,7 @@
 # Creates EXPENSIVE billable Azure resources (an A100 node). Run ./cleanup.sh
 # as soon as you have your evidence.
 #
-# Usage:  ./cli/examples/aks-gpu-quickstart/run.sh
+# Usage:  ./examples/aks-gpu-quickstart/run.sh
 # Run from the repository root.
 
 set -euo pipefail

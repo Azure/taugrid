@@ -47,7 +47,7 @@ transient SQLite/spool buffers resolve under the `/var/run/tau` emptyDir, not
 # from the repository root
 make install-tau-cli
 export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
-tau run --config cli/examples/portal-ray-stellar/tau.yaml --dry-run=client
+tau run --config examples/portal-ray-stellar/tau.yaml --dry-run=client
 ```
 
 The rendered RayJob must carry
@@ -59,7 +59,7 @@ the retired `tau.azure.com/stellar-experiment-title` annotation.
 Submit:
 
 ```bash
-tau run --config cli/examples/portal-ray-stellar/tau.yaml
+tau run --config examples/portal-ray-stellar/tau.yaml
 tau run status portal-ray-stellar --watch
 kubectl -n tau-default get rayjob portal-ray-stellar
 kubectl -n tau-default get pod -l ray.io/cluster -o wide

@@ -32,4 +32,4 @@ behavior. It does not verify GPU drivers, cloud identity, production storage, or
 live-cluster quota.
 
 The fixture and expected flow live in
-[`cli/examples/kind-smoke`](https://github.com/Azure/taugrid/tree/main/cli/examples/kind-smoke).
+[`examples/kind-smoke`](https://github.com/Azure/taugrid/tree/main/examples/kind-smoke).

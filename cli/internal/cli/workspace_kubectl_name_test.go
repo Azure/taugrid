@@ -24,9 +24,9 @@ var workspaceKubectlHintFiles = []string{
 	repoPath("cli", "internal", "queueresolve", "resolve.go"),
 	repoPath("charts", "taugrid", "templates", "NOTES.txt"),
 	repoPath("skills", "taugrid", "references", "platform.md"),
-	repoPath("cli", "examples", "aks-cpu-quickstart", "README.md"),
-	repoPath("cli", "examples", "aks-cpu-quickstart", "cleanup.sh"),
-	repoPath("cli", "examples", "aks-gpu-quickstart", "cleanup.sh"),
+	repoPath("examples", "aks-cpu-quickstart", "README.md"),
+	repoPath("examples", "aks-cpu-quickstart", "cleanup.sh"),
+	repoPath("examples", "aks-gpu-quickstart", "cleanup.sh"),
 }
 
 // kubectl resolves a resource argument against a CRD's plural, singular, and

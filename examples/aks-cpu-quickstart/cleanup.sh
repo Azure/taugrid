@@ -8,8 +8,8 @@
 # Sequencer only, matching README.md > Cleanup. Invokes exactly three tools:
 # az, tau, kubectl. Tolerates already-deleted resources so it is safe to re-run.
 #
-# Usage:  ./cli/examples/aks-cpu-quickstart/cleanup.sh
-#         ./cli/examples/aks-cpu-quickstart/cleanup.sh --yes   # skip the prompt
+# Usage:  ./examples/aks-cpu-quickstart/cleanup.sh
+#         ./examples/aks-cpu-quickstart/cleanup.sh --yes   # skip the prompt
 
 set -uo pipefail
 

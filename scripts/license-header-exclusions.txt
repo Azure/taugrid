@@ -6,7 +6,7 @@ charts/adx-mon/crds/
 images/adx-mon/Dockerfile.collector
 
 # NVIDIA/k8s-device-plugin v0.19.3-derived manifest.
-cli/examples/aks-gpu-quickstart/nvidia-device-plugin.yaml
+examples/aks-gpu-quickstart/nvidia-device-plugin.yaml
 
 # Ray 2.54.0 and KubeRay v1.6.2-derived dashboards.
 cluster-overlays/dashboards/

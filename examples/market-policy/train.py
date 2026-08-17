@@ -159,7 +159,7 @@ def export_artifact(
         "format": "taugrid-market-policy",
         "version": 1,
         "purpose": (
-            "Educational actor-critic trained by cli/examples/market-policy/train.py "
+            "Educational actor-critic trained by examples/market-policy/train.py "
             "for a synthetic market-making task. Not financial advice."
         ),
         "architecture": {

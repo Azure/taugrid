@@ -11,7 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 
-EXPECTED_SHA256 = "839b37756e0ee81cce74e96712c9c607d3b72cbf736f6d75f3fc84453ca857c1"
+EXPECTED_SHA256 = "d1acef1b21999e8e08cb893ff24f3c3a4d384bd5a3c28d8afe0bdeefe2547923"
 EXPECTED_ARCHITECTURE = {
     "actionCount": 3,
     "activation": "relu",

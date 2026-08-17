@@ -13,6 +13,7 @@ trigger:
       - cli/**
       - controllers/tau-core/**
       - core/**
+      - examples/**
       - images/tau-core-controller/**
 
 pr:
@@ -28,6 +29,7 @@ pr:
       - cli/**
       - controllers/tau-core/**
       - core/**
+      - examples/**
       - images/tau-core-controller/**
 
 pool:

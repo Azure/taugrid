@@ -107,6 +107,9 @@ tau status
 tau logs <job-name>
 ```
 
+Browse the [runnable examples](examples/) for checked-in configurations and
+step-by-step guides covering local, CPU, GPU, and Ray workloads.
+
 ## Container Images
 
 TauGrid first-party images are published under the following MCR repositories:

@@ -21,7 +21,7 @@ import (
 )
 
 func TestPortalRayStellarExampleUsesCanonicalExperimentIdentity(t *testing.T) {
-	cfg, err := runconfig.Load(filepath.Join("..", "..", "examples", "portal-ray-stellar", "tau.yaml"))
+	cfg, err := runconfig.Load(filepath.Join("..", "..", "..", "examples", "portal-ray-stellar", "tau.yaml"))
 	if err != nil {
 		t.Fatalf("parse portal-ray-stellar config: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestPortalRayStellarExampleUsesCanonicalExperimentIdentity(t *testing.T) {
 	if got, want := strings.Join(cfg.Metrics.History, ","), "metrics-history-attempt-0/*.jsonl"; got != want {
 		t.Fatalf("metrics.history = %q, want immutable chunk glob %q", got, want)
 	}
-	driver, err := os.ReadFile(filepath.Join("..", "..", "examples", "portal-ray-stellar", "train.py"))
+	driver, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "portal-ray-stellar", "train.py"))
 	if err != nil {
 		t.Fatalf("read portal-ray-stellar driver: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 	// name for metrics metadata without fetching the live TauWorkspace.
 	const offloadImage = "registry.example.com/taugrid-portal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
-	config := filepath.Clean("../../examples/portal-ray-stellar/tau.yaml")
+	config := filepath.Clean("../../../examples/portal-ray-stellar/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
 	for _, want := range []string{
 		"kind: RayJob",
@@ -401,7 +401,7 @@ func TestGeneratedScaffoldJobResourcesDryRun(t *testing.T) {
 }
 
 func TestRunConfigKindSmokeExampleDryRun(t *testing.T) {
-	config := filepath.Clean("../../examples/kind-smoke/tau.yaml")
+	config := filepath.Clean("../../../examples/kind-smoke/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
 	for _, want := range []string{
 		"kind: Job",
@@ -428,7 +428,7 @@ func TestRunConfigKindSmokeExampleDryRun(t *testing.T) {
 }
 
 func TestRunConfigKindRayExampleDryRun(t *testing.T) {
-	config := filepath.Clean("../../examples/kind-smoke/tau-ray.yaml")
+	config := filepath.Clean("../../../examples/kind-smoke/tau-ray.yaml")
 	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
 	for _, want := range []string{
 		"kind: RayJob",
@@ -526,7 +526,7 @@ execution:
 // last one Ray blanks CUDA_VISIBLE_DEVICES on the worker and the run fails on a
 // healthy A100.
 func TestRunConfigAKSGPUQuickstartExampleDryRun(t *testing.T) {
-	config := filepath.Clean("../../examples/aks-gpu-quickstart/tau.yaml")
+	config := filepath.Clean("../../../examples/aks-gpu-quickstart/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{
 		"run", "--config", config, "--namespace", "default", "--dry-run=client",
 	})
@@ -556,7 +556,7 @@ func TestRunConfigAKSGPUQuickstartExampleDryRun(t *testing.T) {
 func TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing(t *testing.T) {
 	const probePrefix = "zzprobe"
 
-	source := filepath.Clean("../../examples/aks-gpu-quickstart")
+	source := filepath.Clean("../../../examples/aks-gpu-quickstart")
 	original, err := os.ReadFile(filepath.Join(source, "tau.yaml"))
 	if err != nil {
 		t.Fatalf("read example config: %v", err)
@@ -595,7 +595,7 @@ func TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing(t *testing.T) {
 // The non-CUDA image tag and the absence of any GPU request are the properties
 // that keep it runnable on a CPU-only cluster.
 func TestRunConfigAKSCPUQuickstartExampleDryRun(t *testing.T) {
-	config := filepath.Clean("../../examples/aks-cpu-quickstart/tau.yaml")
+	config := filepath.Clean("../../../examples/aks-cpu-quickstart/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{
 		"run", "--config", config, "--namespace", "default", "--dry-run=client",
 	})
@@ -1847,8 +1847,8 @@ func TestQuickstartScriptsPassWorkspaceCreateName(t *testing.T) {
 	}
 
 	for _, script := range []string{
-		filepath.Join("..", "..", "examples", "aks-cpu-quickstart", "run.sh"),
-		filepath.Join("..", "..", "examples", "aks-gpu-quickstart", "run.sh"),
+		filepath.Join("..", "..", "..", "examples", "aks-cpu-quickstart", "run.sh"),
+		filepath.Join("..", "..", "..", "examples", "aks-gpu-quickstart", "run.sh"),
 	} {
 		body, err := os.ReadFile(script)
 		if err != nil {
@@ -1870,7 +1870,7 @@ func TestQuickstartCleanupGuardsResourceGroupDeletion(t *testing.T) {
 		{"aks-cpu-quickstart", "aks-cpu-quickstart"},
 		{"aks-gpu-quickstart", "aks-gpu-quickstart"},
 	} {
-		runSrc, err := os.ReadFile(filepath.Join("..", "..", "examples", tc.dir, "run.sh"))
+		runSrc, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", tc.dir, "run.sh"))
 		if err != nil {
 			t.Fatalf("read %s/run.sh: %v", tc.dir, err)
 		}
@@ -1880,7 +1880,7 @@ func TestQuickstartCleanupGuardsResourceGroupDeletion(t *testing.T) {
 				"can tell them apart from pre-existing groups", tc.dir, wantTag)
 		}
 
-		cleanSrc, err := os.ReadFile(filepath.Join("..", "..", "examples", tc.dir, "cleanup.sh"))
+		cleanSrc, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", tc.dir, "cleanup.sh"))
 		if err != nil {
 			t.Fatalf("read %s/cleanup.sh: %v", tc.dir, err)
 		}
@@ -1908,7 +1908,7 @@ func TestQuickstartCleanupGuardsResourceGroupDeletion(t *testing.T) {
 // the node's host namespaces. A user-overridable image there would be arbitrary
 // root code execution on the node.
 func TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "aks-gpu-quickstart", "run.sh")
+	path := filepath.Join("..", "..", "..", "examples", "aks-gpu-quickstart", "run.sh")
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
