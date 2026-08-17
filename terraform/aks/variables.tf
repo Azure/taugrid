@@ -93,6 +93,36 @@ variable "command_interpreter" {
   default     = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 }
 
+variable "enable_adx" {
+  description = "Create the optional Azure Data Explorer data plane and install adx-mon. This creates additional billable Azure resources."
+  type        = bool
+  default     = false
+}
+
+variable "adx_cluster_name" {
+  description = "Globally unique Azure Data Explorer cluster name when enable_adx is true."
+  type        = string
+  default     = "guweterraformadx"
+}
+
+variable "adx_sku_name" {
+  description = "Azure Data Explorer SKU for an evaluation deployment."
+  type        = string
+  default     = "Dev(No SLA)_Standard_D11_v2"
+}
+
+variable "adx_sku_capacity" {
+  description = "Number of Azure Data Explorer instances."
+  type        = number
+  default     = 1
+}
+
+variable "dcgm_exporter_chart_version" {
+  description = "Pinned NVIDIA DCGM exporter Helm chart version used for GPU telemetry when ADX is enabled."
+  type        = string
+  default     = "4.8.3"
+}
+
 variable "tags" {
   description = "Tags applied to Azure resources."
   type        = map(string)

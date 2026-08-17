@@ -21,14 +21,25 @@ taugrid-core:
     namespace: tau
     workloadNamespace: taugrid-default
     source: kusto
+    cluster: ${cluster_name}
     serviceAccount:
       create: true
       name: tau-portal
+%{ if adx_enabled }
+      annotations:
+        azure.workload.identity/client-id: ${portal_client_id}
+%{ endif }
     rbac:
       create: true
     access:
       mode: cluster-internal
       externalURL: ""
+%{ if adx_enabled }
+    kusto:
+      endpoint: ${adx_endpoint}
+      database: Metrics
+      ingestion: remote-write
+%{ endif }
 
 gpu-monitoring:
   gpuSkus:

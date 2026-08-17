@@ -1,0 +1,14 @@
+nodeSelector:
+  kubernetes.azure.com/agentpool: ${gpu_node_pool_name}
+
+tolerations:
+  - key: sku
+    operator: Equal
+    value: gpu
+    effect: NoSchedule
+
+podAnnotations:
+  adx-mon/scrape: "true"
+
+kubernetes:
+  enablePodLabels: true
