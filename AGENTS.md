@@ -127,6 +127,21 @@ CI runs on every PR to main (`.github/workflows/taugrid-validation.yml`). It bui
 
 Key CI settings: `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`. Tests run with `-count=1` (no caching). The controller module uses `-race`.
 
+## TauGrid MCR Version Bump
+
+TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
+`tau-core-controller` charts plus the `tau`, `taugrid-portal`, and
+`tau-core-controller` images. Helm and MCR use `X.Y.Z`; the Git tag uses
+`vX.Y.Z`. `gpu-monitoring` and `adx-mon` keep independent versions.
+
+1. Update `version`/`appVersion` in the three `Chart.yaml` files and the two
+   first-party dependency versions in `charts/taugrid/Chart.yaml`.
+2. Update their image tags, the controller Kustomize image, the CLI default
+   chart version, install examples, and version assertions.
+3. Run `scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid`, Helm lint and
+   unit tests for the three charts, `cd cli && go test ./internal/cli`, and
+   `python3 scripts/check-license-headers.py`.
+
 ## Architecture
 
 ### Module dependency graph

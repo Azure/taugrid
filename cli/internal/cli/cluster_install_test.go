@@ -588,6 +588,88 @@ func TestDefaultChartVersionMatchesChartYAML(t *testing.T) {
 	}
 }
 
+// The TauGrid umbrella, its first-party child charts, and their MCR images are
+// one release train. GPU monitoring and adx-mon keep independent versions.
+func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
+	type chartMetadata struct {
+		Version      string `yaml:"version"`
+		AppVersion   string `yaml:"appVersion"`
+		Dependencies []struct {
+			Name    string `yaml:"name"`
+			Version string `yaml:"version"`
+		} `yaml:"dependencies"`
+	}
+
+	loadYAML := func(path string, out any) {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Clean(path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if err := yaml.Unmarshal(raw, out); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+	}
+	assertVersion := func(field, got, want string) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %q, want TauGrid release version %q", field, got, want)
+		}
+	}
+
+	var umbrella chartMetadata
+	loadYAML("../../../charts/taugrid/Chart.yaml", &umbrella)
+	releaseVersion := umbrella.Version
+	assertVersion("taugrid appVersion", umbrella.AppVersion, releaseVersion)
+
+	for _, chartName := range []string{"tau-core-controller", "taugrid-core"} {
+		var child chartMetadata
+		loadYAML("../../../charts/"+chartName+"/Chart.yaml", &child)
+		assertVersion(chartName+" chart version", child.Version, releaseVersion)
+		assertVersion(chartName+" appVersion", child.AppVersion, releaseVersion)
+
+		var dependencyVersion string
+		for _, dependency := range umbrella.Dependencies {
+			if dependency.Name == chartName {
+				dependencyVersion = dependency.Version
+				break
+			}
+		}
+		assertVersion("taugrid dependency "+chartName, dependencyVersion, releaseVersion)
+	}
+
+	type taggedImage struct {
+		Tag string `yaml:"tag"`
+	}
+	var controllerValues struct {
+		Image taggedImage `yaml:"image"`
+	}
+	loadYAML("../../../charts/tau-core-controller/values.yaml", &controllerValues)
+	assertVersion("tau-core-controller image tag", controllerValues.Image.Tag, releaseVersion)
+
+	type componentValues struct {
+		Image taggedImage `yaml:"image"`
+	}
+	var coreValues struct {
+		Stellar           componentValues `yaml:"stellar"`
+		LifecycleRecorder componentValues `yaml:"lifecycleRecorder"`
+		Portal            componentValues `yaml:"portal"`
+	}
+	loadYAML("../../../charts/taugrid-core/values.yaml", &coreValues)
+	assertVersion("taugrid-core stellar image tag", coreValues.Stellar.Image.Tag, releaseVersion)
+	assertVersion("taugrid-core lifecycle recorder image tag", coreValues.LifecycleRecorder.Image.Tag, releaseVersion)
+	assertVersion("taugrid-core portal image tag", coreValues.Portal.Image.Tag, releaseVersion)
+
+	kustomizeDeployment, err := os.ReadFile(filepath.Clean("../../../charts/tau-core-controller/kustomize/deployment.yaml"))
+	if err != nil {
+		t.Fatalf("read tau-core-controller kustomize deployment: %v", err)
+	}
+	wantControllerImage := "mcr.microsoft.com/aks/ai-runtime/tau-core-controller:" + releaseVersion
+	if !strings.Contains(string(kustomizeDeployment), "image: "+wantControllerImage) {
+		t.Errorf("tau-core-controller kustomize deployment must use %s", wantControllerImage)
+	}
+}
+
 // GPU node health monitoring is linked to the Tau control plane rather than
 // carrying an independent default: a cluster that installs the controller must
 // not be able to end up with no GPU health signal. Helm evaluates only the
