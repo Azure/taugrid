@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 // A failed batch Job's own condition only ever carries "BackoffLimitExceeded",
@@ -223,5 +225,36 @@ func TestFailureSummaryTruncationPreservesValidUTF8(t *testing.T) {
 	}
 	if !utf8.ValidString(record.Message) {
 		t.Errorf("truncation produced invalid UTF-8: %q", record.Message)
+	}
+}
+
+// controller_version is a durable audit column in TauExpRunLifecycle. It used
+// to fall back to app.kubernetes.io/version, which nothing in TauGrid writes
+// and which researchers set to their own git SHA — so the column silently
+// recorded a plausible-looking value that was not a TauGrid version. Empty is
+// the only honest answer until tau stamps its own version (Azure/taugrid#113).
+func TestControllerVersionNeverBorrowsResearcherLabel(t *testing.T) {
+	metadata := testMetadata("train")
+	metadata.Annotations["app.kubernetes.io/version"] = "87703b5"
+
+	source := &fakeSource{jobs: []Job{{Metadata: metadata, Active: 1}}}
+	record := terminalRecord(t, source)
+
+	if record.ControllerVersion != "" {
+		t.Errorf("ControllerVersion = %q, want empty; a researcher label must never populate the audit column", record.ControllerVersion)
+	}
+}
+
+// The tau-owned annotation is still the real source, once something writes it.
+func TestControllerVersionUsesTauAnnotation(t *testing.T) {
+	metadata := testMetadata("train")
+	metadata.Annotations[workloadmeta.AnnotationControllerVerion] = "v0.3.0"
+	metadata.Annotations["app.kubernetes.io/version"] = "87703b5"
+
+	source := &fakeSource{jobs: []Job{{Metadata: metadata, Active: 1}}}
+	record := terminalRecord(t, source)
+
+	if record.ControllerVersion != "v0.3.0" {
+		t.Errorf("ControllerVersion = %q, want v0.3.0", record.ControllerVersion)
 	}
 }

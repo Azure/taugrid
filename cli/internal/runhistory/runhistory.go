@@ -589,37 +589,50 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		ownerKindValue = ownerKind
 	}
 	return Record{
-		ObservedAt:         now,
-		DurableID:          durableID(cluster, metadata, ownerKind),
-		RunID:              runID(metadata),
-		WorkspaceID:        first(annotations[experiment.AnnotationWorkspaceID], labels[workloadmeta.LabelWorkspace], defaultWorkspaceID),
-		ResultScope:        first(annotations[experiment.AnnotationResultScope], defaultResultScope),
-		Project:            project,
-		Group:              text(annotations[experiment.AnnotationStellarGroup]),
-		Tags:               stellarTags(annotations[experiment.AnnotationStellarTags]),
-		OwnerKind:          ownerKindValue,
-		OwnerName:          ownerName,
-		Namespace:          metadata.Namespace,
-		Cluster:            cluster,
-		ResourceUID:        metadata.UID,
-		ResourceVersion:    metadata.ResourceVersion,
-		Generation:         metadata.Generation,
-		SubmittedAt:        metadata.CreatedAt,
-		CreatedAt:          metadata.CreatedAt,
-		AdmittedAt:         admittedAt,
-		LocalQueue:         localQueue,
-		ClusterQueue:       clusterQueue,
-		WorkloadKind:       first(labels[experiment.LabelWorkloadKind], workloadKind),
-		Image:              text(annotations[experiment.AnnotationImage]),
-		ImageDigest:        text(annotations[experiment.AnnotationImageDigest]),
-		ConfigHash:         text(annotations[experiment.AnnotationConfigHash]),
-		CodeSHA:            text(annotations[experiment.AnnotationCodeSHA]),
-		TauCommand:         text(annotations[experiment.AnnotationTauCommand]),
-		ResultPath:         text(annotations[experiment.AnnotationResultPath]),
-		ResultPVC:          text(annotations[experiment.AnnotationResultPVC]),
-		ArtifactURI:        uri(annotations[experiment.AnnotationArtifactURI]),
-		CheckpointURI:      uri(annotations[experiment.AnnotationCheckpointURI]),
-		ControllerVersion:  first(annotations[workloadmeta.AnnotationControllerVerion], annotations["app.kubernetes.io/version"]),
+		ObservedAt:      now,
+		DurableID:       durableID(cluster, metadata, ownerKind),
+		RunID:           runID(metadata),
+		WorkspaceID:     first(annotations[experiment.AnnotationWorkspaceID], labels[workloadmeta.LabelWorkspace], defaultWorkspaceID),
+		ResultScope:     first(annotations[experiment.AnnotationResultScope], defaultResultScope),
+		Project:         project,
+		Group:           text(annotations[experiment.AnnotationStellarGroup]),
+		Tags:            stellarTags(annotations[experiment.AnnotationStellarTags]),
+		OwnerKind:       ownerKindValue,
+		OwnerName:       ownerName,
+		Namespace:       metadata.Namespace,
+		Cluster:         cluster,
+		ResourceUID:     metadata.UID,
+		ResourceVersion: metadata.ResourceVersion,
+		Generation:      metadata.Generation,
+		SubmittedAt:     metadata.CreatedAt,
+		CreatedAt:       metadata.CreatedAt,
+		AdmittedAt:      admittedAt,
+		LocalQueue:      localQueue,
+		ClusterQueue:    clusterQueue,
+		WorkloadKind:    first(labels[experiment.LabelWorkloadKind], workloadKind),
+		Image:           text(annotations[experiment.AnnotationImage]),
+		ImageDigest:     text(annotations[experiment.AnnotationImageDigest]),
+		ConfigHash:      text(annotations[experiment.AnnotationConfigHash]),
+		CodeSHA:         text(annotations[experiment.AnnotationCodeSHA]),
+		TauCommand:      text(annotations[experiment.AnnotationTauCommand]),
+		ResultPath:      text(annotations[experiment.AnnotationResultPath]),
+		ResultPVC:       text(annotations[experiment.AnnotationResultPVC]),
+		ArtifactURI:     uri(annotations[experiment.AnnotationArtifactURI]),
+		CheckpointURI:   uri(annotations[experiment.AnnotationCheckpointURI]),
+		// controller_version is a durable audit column. It is populated only
+		// from tau's own annotation, never from app.kubernetes.io/version.
+		//
+		// That fallback used to be here and was actively harmful: nothing in
+		// the tree writes tau.azure.com/controller-version, so the fallback
+		// always won, and app.kubernetes.io/version is a researcher-set label
+		// carrying the researcher's own git SHA. The column therefore recorded
+		// a plausible-looking value that was not a TauGrid version at all —
+		// worse than empty, because a reader cannot tell it is wrong.
+		//
+		// An unknown version must read as unknown. See Azure/taugrid#113 for
+		// recording the producing tau version properly, which is what will
+		// populate this column.
+		ControllerVersion:  text(annotations[workloadmeta.AnnotationControllerVerion]),
 		ExperimentTracking: tracking,
 		ExperimentSource:   source,
 	}
