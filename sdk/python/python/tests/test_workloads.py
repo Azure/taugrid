@@ -13,10 +13,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-import tau
+from tau import (
+    Ctx,
+    pvc_mount,
+    secret_from_env,
+    secret_ref,
+    serve as exported_serve,
+    train,
+    workloads as _workloads,
+)
 from tau.serve import serve as serve_workload
-
-_workloads = tau.workloads
 
 
 def _write_python(path: Path, source: str) -> None:
@@ -46,12 +52,12 @@ def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> N
 def test_decorator_returns_handle():
     captured = {}
 
-    def train_fn(ctx: tau.Ctx, steps: int = 1) -> tau.Ctx:
+    def train_fn(ctx: Ctx, steps: int = 1) -> Ctx:
         captured["ctx"] = ctx
         captured["steps"] = steps
         return ctx
 
-    f = tau.train(name="t1", gpus=2)(train_fn)
+    f = train(name="t1", gpus=2)(train_fn)
 
     assert getattr(f, "_tau_train_handle", False) is True
     assert f.__name__ == "train_fn"
@@ -75,12 +81,12 @@ def test_finetune_module_is_not_exported():
 
 
 def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
-    assert tau.serve is serve_workload
+    assert exported_serve is serve_workload
     recorder = tmp_path / "tau_argv.txt"
     fake = tmp_path / "tau"
     _write_argv_recorder(fake, recorder)
 
-    @tau.train(name="ft-run")
+    @train(name="ft-run")
     def f(ctx):
         return ctx
 
@@ -142,7 +148,7 @@ def test_serve_accepts_model_ref_and_delegates_to_cli(tmp_path):
 
 
 def test_manifest_shape_matches_tau_v1():
-    @tau.train(name="my-ft", gpus=2)
+    @train(name="my-ft", gpus=2)
     def f(ctx):
         pass
 
@@ -155,7 +161,7 @@ def test_manifest_shape_matches_tau_v1():
 
 
 def test_train_manifest_declares_custom_checkpoint_artifact():
-    @tau.train(name="my-ft", gpus=2, checkpoint_artifact="rank0/final.safetensors")
+    @train(name="my-ft", gpus=2, checkpoint_artifact="rank0/final.safetensors")
     def f(ctx):
         pass
 
@@ -163,7 +169,7 @@ def test_train_manifest_declares_custom_checkpoint_artifact():
 
 
 def test_train_manifest_declares_model_registry_metadata():
-    @tau.train(
+    @train(
         name="my-ft",
         gpus=2,
         model="sample-lora",
@@ -188,7 +194,7 @@ def test_train_manifest_declares_model_registry_metadata():
 
 def test_train_manifest_rejects_model_metadata_conflict():
     with pytest.raises(ValueError, match="model metadata"):
-        @tau.train(
+        @train(
             name="my-ft",
             gpus=2,
             model="sample-lora",
@@ -202,13 +208,13 @@ def test_train_manifest_rejects_model_metadata_conflict():
 
 def test_train_rejects_unsafe_checkpoint_artifact():
     with pytest.raises(ValueError, match="checkpoint_artifact"):
-        @tau.train(name="my-ft", gpus=2, checkpoint_artifact="../final.safetensors")
+        @train(name="my-ft", gpus=2, checkpoint_artifact="../final.safetensors")
         def f(ctx):
             pass
 
 
 def test_train_manifest_allows_cpu_only_gpus_zero():
-    @tau.train(name="cpu-only", gpus=0, workers=4)
+    @train(name="cpu-only", gpus=0, workers=4)
     def f(ctx):
         pass
 
@@ -217,7 +223,7 @@ def test_train_manifest_allows_cpu_only_gpus_zero():
 
 
 def test_manifest_extras_merge():
-    @tau.train(
+    @train(
         name="x",
         gpus=4,
         extra_manifest={"lora": {"target_modules": ["q", "v"]}},
@@ -247,12 +253,12 @@ dataset:
 """
     )
 
-    @tau.train(
+    @train(
         config=cfg,
         name="override-run",
         runtime_pip=["torch==2.5.0", "transformers"],
-        env={"HF_TOKEN": tau.secret_ref("hf-token", "token"), "WANDB_MODE": "offline"},
-        mounts=[tau.pvc_mount("dataset", pvc="captioner-data", mount_path="/datasets/captioner", read_only=True)],
+        env={"HF_TOKEN": secret_ref("hf-token", "token"), "WANDB_MODE": "offline"},
+        mounts=[pvc_mount("dataset", pvc="captioner-data", mount_path="/datasets/captioner", read_only=True)],
     )
     def f(ctx):
         pass
@@ -273,12 +279,12 @@ dataset:
 
 
 def test_train_manifest_declares_primary_data_pvc():
-    @tau.train(
+    @train(
         name="pvc-run",
         gpus=1,
         data_pvc="lustre-research",
         runtime_pip=["torch==2.4.0"],
-        mounts=[tau.pvc_mount("labels", pvc="labels-pvc", mount_path="/labels", read_only=True)],
+        mounts=[pvc_mount("labels", pvc="labels-pvc", mount_path="/labels", read_only=True)],
     )
     def f(ctx):
         pass
@@ -292,7 +298,7 @@ def test_train_manifest_declares_primary_data_pvc():
 
 
 def test_train_manifest_declares_resource_sizing():
-    @tau.train(
+    @train(
         name="small-a10",
         gpus=1,
         cpu_request=4,
@@ -314,7 +320,7 @@ def test_train_manifest_declares_resource_sizing():
 
 
 def test_train_manifest_rejects_conflicting_data_pvc():
-    @tau.train(
+    @train(
         name="pvc-conflict",
         gpus=1,
         data_pvc="lustre-research",
@@ -340,7 +346,7 @@ def test_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("TAU_BINARY", str(fake))
 
-    @tau.train(
+    @train(
         name="submit-pvc",
         gpus=1,
         data_pvc="captioner2-data",
@@ -368,7 +374,7 @@ def test_submit_resource_override_rewrites_manifest(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("TAU_BINARY", str(fake))
 
-    @tau.train(
+    @train(
         name="submit-resources",
         gpus=1,
         cpu_request=8,
@@ -413,13 +419,13 @@ def test_secret_from_env_rewrites_to_job_scoped_secret(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("HF_TOKEN", "fake-token-value")
 
-    @tau.train(
+    @train(
         name="secret-job",
         gpus=1,
         runtime_pip=["torch==2.4.0"],
         env={
-            "HF_TOKEN": tau.secret_from_env("HF_TOKEN"),
-            "HUGGING_FACE_HUB_TOKEN": tau.secret_from_env("HF_TOKEN"),
+            "HF_TOKEN": secret_from_env("HF_TOKEN"),
+            "HUGGING_FACE_HUB_TOKEN": secret_from_env("HF_TOKEN"),
         },
     )
     def f(ctx):
@@ -494,11 +500,11 @@ def test_secret_from_env_missing_fails_before_submit(tmp_path):
     fake.write_text("#!/usr/bin/env python3\nraise SystemExit(99)\n")
     fake.chmod(0o755)
 
-    @tau.train(
+    @train(
         name="secret-job",
         gpus=1,
         runtime_pip=["torch==2.4.0"],
-        env={"HF_TOKEN": tau.secret_from_env("HF_TOKEN", env="MISSING_HF_TOKEN")},
+        env={"HF_TOKEN": secret_from_env("HF_TOKEN", env="MISSING_HF_TOKEN")},
     )
     def f(ctx):
         pass
@@ -510,7 +516,7 @@ def test_secret_from_env_missing_fails_before_submit(tmp_path):
 def test_local_call_passes_ctx():
     captured = {}
 
-    @tau.train(name="local", gpus=1, smoke_pairs=3)
+    @train(name="local", gpus=1, smoke_pairs=3)
     def f(ctx):
         captured["ctx"] = ctx
 
@@ -524,7 +530,7 @@ def test_local_call_passes_ctx():
 
 
 def test_source_path_resolves_to_file_defining_decorator():
-    @tau.train(name="src", gpus=1)
+    @train(name="src", gpus=1)
     def f(ctx):
         pass
 
@@ -540,7 +546,7 @@ def test_submit_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     _write_config_recorder(fake_tau, recorder, copied_config)
     monkeypatch.setenv("TAU_BINARY", str(fake_tau))
 
-    @tau.train(
+    @train(
         name="submit-test",
         gpus=2,
         smoke_pairs=4,
@@ -577,7 +583,7 @@ def test_submit_forwards_profiler_flags(tmp_path, monkeypatch):
     _write_config_recorder(fake_tau, recorder, copied_config)
     monkeypatch.setenv("TAU_BINARY", str(fake_tau))
 
-    @tau.train(
+    @train(
         name="profile-submit",
         gpus=8,
         workers=2,
@@ -619,7 +625,7 @@ def test_train_entrypoint_returns_handle_and_runs_local_script(tmp_path):
         """,
     )
 
-    handle = tau.train(
+    handle = train(
         name="entrypoint-local",
         gpus=0,
         runtime_pip=["torch==2.4.0"],
@@ -650,7 +656,7 @@ def test_train_entrypoint_can_pass_ctx_to_local_script(tmp_path):
         """,
     )
 
-    handle = tau.train(
+    handle = train(
         name="entrypoint-ctx",
         gpus=2,
         runtime_pip=["torch==2.4.0"],
@@ -673,7 +679,7 @@ def test_train_entrypoint_submit_stages_generated_module_entrypoint_and_extra_sc
     _write_python(script, "def main(): return 'ok'")
     _write_python(helper, "VALUE = 1")
 
-    handle = tau.train(
+    handle = train(
         name="entrypoint-submit",
         gpus=1,
         runtime_pip=["torch==2.4.0"],
@@ -702,7 +708,7 @@ def test_train_entrypoint_accepts_absolute_pvc_path_without_staging(tmp_path, mo
     _write_config_recorder(fake_tau, recorder, copied_config)
     monkeypatch.setenv("TAU_BINARY", str(fake_tau))
 
-    handle = tau.train(
+    handle = train(
         name="entrypoint-pvc",
         gpus=1,
         runtime_pip=["torch==2.4.0"],
@@ -721,7 +727,7 @@ def test_train_entrypoint_rejects_missing_relative_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(FileNotFoundError, match="relative entrypoint missing.py"):
-        tau.train(name="missing", gpus=1, runtime_pip=["torch==2.4.0"], entrypoint="missing.py:main")
+        train(name="missing", gpus=1, runtime_pip=["torch==2.4.0"], entrypoint="missing.py:main")
 
 
 def test_train_entrypoint_rejects_non_json_args(tmp_path):
@@ -729,7 +735,7 @@ def test_train_entrypoint_rejects_non_json_args(tmp_path):
     _write_python(script, "def main(): pass")
 
     with pytest.raises(ValueError, match="JSON-serializable"):
-        tau.train(
+        train(
             name="bad-args",
             gpus=1,
             runtime_pip=["torch==2.4.0"],
@@ -742,7 +748,7 @@ def test_train_entrypoint_rejects_decorator_misuse(tmp_path):
     script = tmp_path / "train.py"
     _write_python(script, "def main(): pass")
 
-    handle = tau.train(name="bad-decorator", gpus=1, runtime_pip=["torch==2.4.0"], entrypoint=script)
+    handle = train(name="bad-decorator", gpus=1, runtime_pip=["torch==2.4.0"], entrypoint=script)
 
     with pytest.raises(TypeError, match="returns a train handle directly"):
         @handle
@@ -757,7 +763,7 @@ def test_submit_forwards_gpu_resource_mode_and_node_selector_kwargs(tmp_path, mo
     _write_config_recorder(fake_tau, recorder, copied_config)
     monkeypatch.setenv("TAU_BINARY", str(fake_tau))
 
-    @tau.train(
+    @train(
         name="submit-gpu-mode",
         gpus=1,
         gpu_resource_mode="device-plugin",
@@ -795,7 +801,7 @@ def test_serve_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
         env={
             "MODEL_BACKEND": "compile",
             "COMPILE_MODE": "reduce-overhead",
-            "HF_TOKEN": tau.secret_ref("hf-token", "token"),
+            "HF_TOKEN": secret_ref("hf-token", "token"),
         },
         runtime_pip=["transformers==4.45.0", "accelerate"],
         args=["--model", "example checkpoint"],
@@ -840,7 +846,7 @@ def test_serve_validates_dry_run_without_spawning_tau():
 def test_submit_refuses_inside_cluster(monkeypatch):
     monkeypatch.setenv("TAU_DATA_DIR", "/data")
 
-    @tau.train(name="x", gpus=1)
+    @train(name="x", gpus=1)
     def f(ctx):
         pass
 
@@ -854,7 +860,7 @@ def test_submit_validates_dry_run(monkeypatch, tmp_path):
     fake_tau.chmod(0o755)
     monkeypatch.setenv("TAU_BINARY", str(fake_tau))
 
-    @tau.train(name="x", gpus=1, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
+    @train(name="x", gpus=1, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
     def f(ctx):
         pass
 
