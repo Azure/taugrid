@@ -60,7 +60,7 @@ tau serve status <service-name> \
 
 The strongest inference examples render real model behavior instead of replaying
 a canned response. This browser-only specimen loads the artifact produced by the
-[`market-policy`](https://github.com/Azure/taugrid/tree/main/cli/examples/market-policy)
+[`market-policy`](https://github.com/Azure/taugrid/tree/main/examples/market-policy)
 TauGrid workload: an 8-input, 24-hidden-unit policy and value network trained for
 a synthetic market-making environment, then exported for module Worker inference.
 
@@ -69,8 +69,8 @@ a synthetic market-making environment, then exported for module Worker inference
 Run the exact trainer on TauGrid:
 
 ```bash
-tau run --config cli/examples/market-policy/tau.yaml --dry-run=client
-tau run --config cli/examples/market-policy/tau.yaml
+tau run --config examples/market-policy/tau.yaml --dry-run=client
+tau run --config examples/market-policy/tau.yaml
 ```
 
 Before submitting, set `storage.data_pvc` in the example to the writable PVC

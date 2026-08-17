@@ -52,11 +52,11 @@ Entra, grant the intended identity access to normal AKS cluster-user
 credentials, and make the API reachable from the researcher. Kubernetes/
 TauGrid setup must bind that real subject in a Ready workspace and hand over a
 matching connection descriptor. The researcher then follows the
-[researcher quickstart](../../../site/content/en/docs/getting-started/quickstart.md)
+[researcher quickstart](../../site/content/en/docs/getting-started/quickstart.md)
 without an operator context override.
 
 This quickstart does not duplicate the training script. It reuses
-[`cli/examples/cpu-multi-interest-ray/train.py`](../cpu-multi-interest-ray/train.py)
+[`examples/cpu-multi-interest-ray/train.py`](../cpu-multi-interest-ray/train.py)
 unmodified: a CPU-only, 5-pod Ray Train PyTorch DDP demo (multi-interest
 retrieval model, `arxiv:2506.23060v1`) that prints per-step loss and pairwise
 accuracy. Only [`tau.yaml`](./tau.yaml) in this directory differs from the
@@ -167,10 +167,10 @@ a cluster, catching config errors before provisioning anything. Run
 this first: it takes seconds and needs no Azure resources:
 
 ```bash
-tau run --config cli/examples/aks-cpu-quickstart/tau.yaml \
+tau run --config examples/aks-cpu-quickstart/tau.yaml \
   --namespace taugrid-default --dry-run=client
 
-tau run --config cli/examples/aks-cpu-quickstart/stellar-demo/tau.yaml \
+tau run --config examples/aks-cpu-quickstart/stellar-demo/tau.yaml \
   --namespace taugrid-default --dry-run=client
 ```
 
@@ -250,7 +250,7 @@ tau run smoke --context tau-cpu-quickstart
 ### 5. Workload validation: submit the real PyTorch workload (`tau` only)
 
 ```bash
-tau run --config cli/examples/aks-cpu-quickstart/tau.yaml --context tau-cpu-quickstart
+tau run --config examples/aks-cpu-quickstart/tau.yaml --context tau-cpu-quickstart
 ```
 
 ### 6. Workload validation: observe it running
@@ -370,7 +370,7 @@ containing `stellar.py` alongside the script. See the comments in that file
 for why):
 
 ```bash
-tau run --config cli/examples/aks-cpu-quickstart/stellar-demo/tau.yaml --context tau-cpu-quickstart
+tau run --config examples/aks-cpu-quickstart/stellar-demo/tau.yaml --context tau-cpu-quickstart
 ```
 
 This produces a real, converging training curve (Train loss 3.76 → 0.72,
@@ -696,7 +696,7 @@ resubmitting:
 
 ```bash
 tau run cancel tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quickstart --teardown-timeout 3m
-tau run --config cli/examples/aks-cpu-quickstart/tau.yaml --context tau-cpu-quickstart
+tau run --config examples/aks-cpu-quickstart/tau.yaml --context tau-cpu-quickstart
 ```
 
 ### Caveat 5: log-follow / port-forward timing
@@ -865,8 +865,8 @@ invoke only `az`, `tau`, and `kubectl`. They exist to remove copy-paste error,
 not to hide any tool. Read them before running them.
 
 ```bash
-./cli/examples/aks-cpu-quickstart/run.sh          # step 0 through step 6
-./cli/examples/aks-cpu-quickstart/cleanup.sh      # full teardown, prompts first
+./examples/aks-cpu-quickstart/run.sh          # step 0 through step 6
+./examples/aks-cpu-quickstart/cleanup.sh      # full teardown, prompts first
 ```
 
 Both are idempotent enough to re-run: `run.sh` skips cluster creation if the

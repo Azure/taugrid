@@ -14,8 +14,8 @@ This is the GPU counterpart to [`aks-cpu-quickstart`](../aks-cpu-quickstart).
 It uses the same three tools and adds one GPU node pool.
 
 ```
-./cli/examples/aks-gpu-quickstart/run.sh      # ~25 min, creates billable resources
-./cli/examples/aks-gpu-quickstart/cleanup.sh  # deletes everything
+./examples/aks-gpu-quickstart/run.sh      # ~25 min, creates billable resources
+./examples/aks-gpu-quickstart/cleanup.sh  # deletes everything
 ```
 
 > **Cost warning.** A `Standard_NC24ads_A100_v4` node bills by the hour. Run
@@ -269,7 +269,7 @@ workspace per cluster with a default name.
 ## Cleanup
 
 ```bash
-./cli/examples/aks-gpu-quickstart/cleanup.sh
+./examples/aks-gpu-quickstart/cleanup.sh
 ```
 
 The script cancels the workload, deletes the workspace, uninstalls TauGrid, and

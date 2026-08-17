@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TAU_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${TAU_DIR}/.." && pwd)"
-EXAMPLE_DIR="${TAU_DIR}/examples/kind-smoke"
+EXAMPLE_DIR="${REPO_ROOT}/examples/kind-smoke"
 
 CLUSTER_NAME="${TAU_KIND_CLUSTER_NAME:-tau-kind}"
 KUBE_CONTEXT="${TAU_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"

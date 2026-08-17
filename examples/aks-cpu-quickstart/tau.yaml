@@ -2,7 +2,7 @@ schema_version: 1
 name: aks-cpu-quickstart
 run:
   # Reuses the shared CPU Ray Train PyTorch demo script unmodified; only the
-  # resource sizing below differs from cli/examples/cpu-multi-interest-ray/tau.yaml.
+  # resource sizing below differs from examples/cpu-multi-interest-ray/tau.yaml.
   entrypoint: ../cpu-multi-interest-ray/train.py
   workload_kind: rayjob
 resource_naming:

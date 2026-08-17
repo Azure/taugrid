@@ -186,7 +186,7 @@ runtime:
 }
 
 // looksLikeTauConfig selects run configs by a top-level marker key rather than
-// by filename. Kubernetes manifests under cli/examples are top-level mappings
+// by filename. Kubernetes manifests under the examples directory are top-level mappings
 // too, so presence of a marker -- not parseability -- is the discriminator;
 // "parses as a config" would be circular, since the thing under test is whether
 // the config parses without warnings.
@@ -245,14 +245,14 @@ func TestLooksLikeTauConfigPartitions(t *testing.T) {
 // discriminator is a top-level marker key, which partitions the tree exactly.
 //
 // A missing root is fatal, not skipped, for the same reason. cli and core are
-// one repo joined by a replace directive and core is never published, so
-// cli/examples is always present relative to here; if it ever is not, the
-// directory was renamed and this guard silently stopped guarding. A skip
+// one repo joined by a replace directive and core is never published, so the
+// examples directory is always present relative to here; if it ever is not,
+// the directory was renamed and this guard silently stopped guarding. A skip
 // reports as a pass, which is the identical failure one layer out.
 func TestShippedExampleConfigsWarnNothing(t *testing.T) {
-	root := filepath.Join("..", "..", "cli", "examples")
+	root := filepath.Join("..", "..", "examples")
 	if _, err := os.Stat(root); err != nil {
-		t.Fatalf("examples root missing (%v); if cli/examples moved, repoint this "+
+		t.Fatalf("examples root missing (%v); if examples moved, repoint this "+
 			"guard rather than letting it pass vacuously", err)
 	}
 	checked := 0

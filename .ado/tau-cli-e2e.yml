@@ -14,6 +14,7 @@ trigger:
       - charts/taugrid/**
       - cli/**
       - core/**
+      - examples/**
 
 pr:
   autoCancel: true
@@ -29,6 +30,7 @@ pr:
       - charts/taugrid/**
       - cli/**
       - core/**
+      - examples/**
 
 pool:
   vmImage: ubuntu-24.04

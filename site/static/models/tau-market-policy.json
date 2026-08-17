@@ -27,7 +27,7 @@
     "policyAccuracy": 0.9875000715255737,
     "valueRmse": 0.03227243945002556
   },
-  "purpose": "Educational actor-critic trained by cli/examples/market-policy/train.py for a synthetic market-making task. Not financial advice.",
+  "purpose": "Educational actor-critic trained by examples/market-policy/train.py for a synthetic market-making task. Not financial advice.",
   "training": {
     "batchSize": 256,
     "device": "cuda",

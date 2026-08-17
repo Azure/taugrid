@@ -37,7 +37,7 @@ Open Source License/Copyright Notice:
 Component: NVIDIA/k8s-device-plugin v0.19.3
 Source: https://github.com/NVIDIA/k8s-device-plugin/tree/v0.19.3
 Included material: The modified static DaemonSet manifest at
-cli/examples/aks-gpu-quickstart/nvidia-device-plugin.yaml.
+examples/aks-gpu-quickstart/nvidia-device-plugin.yaml.
 
 Open Source License/Copyright Notice:
 

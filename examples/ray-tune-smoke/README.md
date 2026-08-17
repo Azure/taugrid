@@ -75,4 +75,4 @@ trials execute sequentially because each `TorchTrainer` needs one GPU.
 
 For provider setup, GPU readiness gates, workspace handoff, live-log capture,
 success criteria, and cleanup, follow the canonical
-[GPU Ray Tune HPO on AKS walkthrough](../../../site/content/en/docs/examples/gpu-ray-tune.md).
+[GPU Ray Tune HPO on AKS walkthrough](../../site/content/en/docs/examples/gpu-ray-tune.md).

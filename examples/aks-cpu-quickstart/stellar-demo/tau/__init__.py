@@ -20,7 +20,7 @@
 # required `--experiment` flag on `import jsonl`. Refresh it with:
 #
 #     cp sdk/python/tau/stellar.py \
-#        cli/examples/aks-cpu-quickstart/stellar-demo/tau/stellar.py
+#        examples/aks-cpu-quickstart/stellar-demo/tau/stellar.py
 #
 # Scope of this copy: local logging only. `Run.finish()` defaults to
 # `sync=False` and this demo takes that default, so nothing here shells out to

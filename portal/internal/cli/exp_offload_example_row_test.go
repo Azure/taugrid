@@ -55,7 +55,7 @@ func TestMetricsOffloadOnlineAcceptsPortalRayStellarExampleRow(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 not available")
 	}
-	script := filepath.Join("..", "..", "..", "cli", "examples", "portal-ray-stellar", "train.py")
+	script := filepath.Join("..", "..", "..", "examples", "portal-ray-stellar", "train.py")
 	if _, err := os.Stat(script); err != nil {
 		t.Fatalf("example script: %v", err)
 	}

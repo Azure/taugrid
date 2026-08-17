@@ -57,11 +57,11 @@ tau/
   train.yaml
 ```
 
-See [`examples/kind-smoke`](./examples/kind-smoke/) for the Kind cluster config,
+See [`examples/kind-smoke`](../examples/kind-smoke/) for the Kind cluster config,
 CPU-only lane manifest, and checked-in `tau.yaml`.
 
 For researcher-facing, workspace-first examples, see
-[`examples/`](./examples/). See
+[`examples/`](../examples/). See
 [`docs/tau/tau-project-onboarding.md`](../../docs/tau/tau-project-onboarding.md#examples-repo-handoff-contract)
 for the exact handoff contract — a project cannot be promoted to that repo
 until it meets that contract, and handoff there is currently **blocked** on
@@ -188,7 +188,7 @@ tau run cancel <run-name>
 ```
 
 For copyable workspace-first repositories, run `tau workspace init-repo`, which
-scaffolds a Tau-ready project layout. The examples under this directory are
+scaffolds a Tau-ready project layout. The examples at the repository root are
 primarily local fixtures and compatibility coverage.
 
 ## Monorepos
@@ -292,5 +292,5 @@ For a disposable Kind end-to-end that exercises Tau submission through Kueue:
 make test-kind-e2e
 ```
 
-See [`examples/kind-smoke`](./examples/kind-smoke/) for the checked-in local
+See [`examples/kind-smoke`](../examples/kind-smoke/) for the checked-in local
 fixture.

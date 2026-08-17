@@ -44,7 +44,7 @@ manifest.
 
 ```bash
 # from the repository root
-python3 cli/examples/nanogpt-ray/train.py \
+python3 examples/nanogpt-ray/train.py \
   --local-smoke --steps 2 --batch-size 2 --eval-every 1 --eval-batches 1 \
   --out-dir /tmp/nanogpt-smoke
 ```
@@ -65,7 +65,7 @@ tau run --config path/to/your/tau.yaml
 
 See [`../ray-tune-smoke/tau.yaml`](../ray-tune-smoke/tau.yaml) for a minimal
 config-first example to copy from, and
-[`docs/tau/tau-run-config.md`](../../../../docs/tau/tau-run-config.md) for
+[`docs/tau/tau-run-config.md`](../../../docs/tau/tau-run-config.md) for
 the full schema.
 
 Keep one config per experiment variant rather than adding `tau run` flags: `tau run`
@@ -118,7 +118,7 @@ visibility, output import, and verifier success.
 Verify a result bundle:
 
 ```bash
-python3 cli/examples/nanogpt-ray/verify_result.py \
+python3 examples/nanogpt-ray/verify_result.py \
   --metrics /path/to/metrics.json \
   --history /path/to/history.jsonl \
   --require-cuda \

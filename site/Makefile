@@ -40,10 +40,10 @@ serve: deps
 
 train-market-policy:
 	@mkdir -p $(HUGO_CACHEDIR)
-	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../cli/examples/market-policy/train.py \
+	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../examples/market-policy/train.py \
 		--device cpu \
 		--output $(MARKET_POLICY_LOCAL)
-	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../cli/examples/market-policy/train.py \
+	MARKET_POLICY_REQUIRE_CUDA=0 python3 ../examples/market-policy/train.py \
 		--device cpu \
 		--output $(MARKET_POLICY_REPEAT)
 	cmp $(MARKET_POLICY_LOCAL) $(MARKET_POLICY_REPEAT)

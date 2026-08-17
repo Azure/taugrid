@@ -30,13 +30,13 @@ Render the workload before submitting it:
 ```bash
 # from the repository root
 make install-tau-cli
-tau run --config cli/examples/market-policy/tau.yaml --dry-run=client
+tau run --config examples/market-policy/tau.yaml --dry-run=client
 ```
 
 Run the exact trainer on an H200-capable TauGrid workspace:
 
 ```bash
-tau run --config cli/examples/market-policy/tau.yaml
+tau run --config examples/market-policy/tau.yaml
 tau run logs market-policy
 ```
 

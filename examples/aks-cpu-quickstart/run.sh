@@ -15,7 +15,7 @@
 #
 # Creates billable Azure resources. Run ./cleanup.sh when you are done.
 #
-# Usage:  ./cli/examples/aks-cpu-quickstart/run.sh
+# Usage:  ./examples/aks-cpu-quickstart/run.sh
 # Run from the repository root.
 
 set -euo pipefail
