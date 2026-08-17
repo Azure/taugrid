@@ -78,7 +78,7 @@ variable "gpu_monitoring_sku_name" {
 variable "taugrid_version" {
   description = "Published TauGrid chart version passed to tau cluster install."
   type        = string
-  default     = "0.2.4"
+  default     = "0.3.0"
 }
 
 variable "install_taugrid" {

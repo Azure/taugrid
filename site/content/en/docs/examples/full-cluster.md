@@ -48,7 +48,7 @@ Terraform creates a local ignored admin kubeconfig and values file under
 device plugin, then runs:
 
 ```bash
-tau cluster install --values generated/taugrid-values.yaml --version 0.2.4
+tau cluster install --values generated/taugrid-values.yaml --version 0.3.0
 ```
 
 If the local installation step fails after AKS has been created, correct the
