@@ -79,6 +79,13 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]
+  # Pods carry the only record of why a batch Job failed. The Job's own
+  # condition says just "BackoffLimitExceeded", and the pods are deleted with
+  # the Job on ttlSecondsAfterFinished expiry, so the recorder must read them
+  # to persist a usable failure summary before that happens.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["ray.io"]
     resources: ["rayjobs"]
     verbs: ["get", "list", "watch"]

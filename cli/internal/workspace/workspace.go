@@ -55,9 +55,17 @@ type WorkspaceTarget struct {
 }
 
 type WorkspaceDefaults struct {
-	OutputRoot   string `json:"outputRoot,omitempty" yaml:"outputRoot,omitempty"`
+	OutputRoot string `json:"outputRoot,omitempty" yaml:"outputRoot,omitempty"`
+	// ScratchMount is not part of the TauWorkspace CRD schema, so the API
+	// server prunes it on write. It is kept here only so reads of an object
+	// that somehow carries it do not fail; do not add new consumers.
 	ScratchMount string `json:"scratchMount,omitempty" yaml:"scratchMount,omitempty"`
 	Priority     string `json:"priority,omitempty" yaml:"priority,omitempty"`
+	// TTLSecondsAfterFinished mirrors WorkspaceDefaults.ttlSecondsAfterFinished
+	// in the CRD: the workspace-level default retention for finished batch
+	// Jobs. A pointer keeps "unset" distinct from an explicit value, because
+	// zero is a legal Kubernetes TTL meaning "delete immediately".
+	TTLSecondsAfterFinished *int64 `json:"ttlSecondsAfterFinished,omitempty" yaml:"ttlSecondsAfterFinished,omitempty"`
 }
 
 type WorkspaceWorkloadIdentity struct {

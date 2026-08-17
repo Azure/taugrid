@@ -398,8 +398,15 @@ type jobObject struct {
 	Metadata objectMeta `json:"metadata"`
 	Status   struct {
 		Conditions []struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
+			Type string `json:"type"`
+			// Reason and Message carry the Job's terminal explanation
+			// ("BackoffLimitExceeded", "DeadlineExceeded"). RayJobs expose the
+			// equivalent on status directly and it has always been surfaced;
+			// discarding it here made batch Jobs the only workload kind whose
+			// terminal cause was invisible in the UI.
+			Status  string `json:"status"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
 		} `json:"conditions"`
 		Active    int `json:"active"`
 		Succeeded int `json:"succeeded"`
@@ -432,6 +439,7 @@ func parseJob(data []byte) (resolved, bool) {
 	for _, c := range o.Status.Conditions {
 		conds = append(conds, runs.StatusCondition{Type: c.Type, Status: c.Status})
 	}
+	reason, message := jobTerminalExplanation(o)
 	return resolved{
 		kind:   "Job",
 		status: runs.JobStatus(conds, o.Status.Active, o.Status.Succeeded, o.Status.Failed),
@@ -441,12 +449,30 @@ func parseJob(data []byte) (resolved, bool) {
 		detail: ObjectDetail{
 			Created:     optionalTime(created),
 			Age:         runs.FormatAge(time.Now(), created),
+			Reason:      reason,
+			Message:     message,
 			Labels:      o.Metadata.Labels,
 			Annotations: o.Metadata.Annotations,
 		},
 		podSelectorKey:   workloadmeta.LabelJob,
 		podSelectorValue: o.Metadata.Name,
 	}, true
+}
+
+// jobTerminalExplanation returns the reason and message of the Job's terminal
+// condition. Only Complete and Failed are terminal; a transient condition such
+// as Suspended would otherwise present itself as the outcome.
+func jobTerminalExplanation(o jobObject) (string, string) {
+	for i := len(o.Status.Conditions) - 1; i >= 0; i-- {
+		c := o.Status.Conditions[i]
+		if !strings.EqualFold(c.Status, "true") {
+			continue
+		}
+		if c.Type == "Complete" || c.Type == "Failed" {
+			return c.Reason, c.Message
+		}
+	}
+	return "", ""
 }
 
 func parseRayJob(data []byte) (resolved, bool) {

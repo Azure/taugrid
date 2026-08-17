@@ -420,6 +420,8 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 			MetricsOffload:     metricsOffloadOptions,
 			KVSpec:             kvSpec,
 			ServiceAccountName: o.serviceAccountName,
+
+			TTLSecondsAfterFinished: o.ttlSecondsAfterFinished,
 		})
 	}
 	rendered, err := renderManagedWorkflow()
@@ -488,6 +490,18 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 			SubmissionID: o.submissionID,
 		}}, cleanupSubmissions...)
 	}
+	// The per-run SecretProviderClass is rendered by manifest.Render under the
+	// same condition (see render.go: KVSpec non-nil with at least one entry).
+	spcName := ""
+	if kvSpec != nil && len(kvSpec.Entries) > 0 {
+		spcName = kvspec.SPCName(m.ResourceName())
+		cleanupSubmissions = append([]runSubmission{{
+			Resource:     secretProviderClassResource,
+			Name:         spcName,
+			Namespace:    namespace,
+			SubmissionID: o.submissionID,
+		}}, cleanupSubmissions...)
+	}
 	if len(prepared.Ancillary) > 0 {
 		out, ancillaryErr := submissionRunner.Raw(ctx, []string{"apply", "-n", namespace, "-f", "-"}, prepared.Ancillary)
 		fmt.Fprint(stdout, out)
@@ -497,6 +511,11 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	}
 	if jobSecret != nil {
 		if err := patchSecretOwnerRef(ctx, submissionRunner.Runner, namespace, jobSecret, workloadKind); err != nil {
+			return withRunSubmissionCleanup(fmt.Errorf("ownerRef patch failed: %w", err), submissionRunner, cleanupSubmissions...)
+		}
+	}
+	if spcName != "" {
+		if err := patchSecretProviderClassOwnerRef(ctx, submissionRunner.Runner, namespace, spcName, m.ResourceName(), workloadKind); err != nil {
 			return withRunSubmissionCleanup(fmt.Errorf("ownerRef patch failed: %w", err), submissionRunner, cleanupSubmissions...)
 		}
 	}

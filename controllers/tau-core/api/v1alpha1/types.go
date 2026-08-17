@@ -240,6 +240,26 @@ type WorkspaceDefaults struct {
 	// silently downgrades "priority" workspaces to normal scheduling. Keep it.
 	// +kubebuilder:validation:Enum=default;priority;normal
 	Priority string `json:"priority,omitempty"`
+	// TTLSecondsAfterFinished is the workspace-level default retention for
+	// finished batch Jobs, in seconds. Like Priority, the controller does not
+	// read it: the Tau CLI does, via applyWorkspaceDefaults, and applies it to
+	// runs submitted against the workspace.
+	//
+	// It is an override, not a floor. When unset, tau keeps its built-in
+	// retention; when set, it wins over the built-in but still loses to an
+	// explicit run.ttl_seconds_after_finished in a run config.
+	//
+	// Scope is batch Jobs only, matching run.ttl_seconds_after_finished, which
+	// core/runconfig rejects for the ray engine. RayJob cleanup is governed by
+	// the Ray cluster's own shutdown behaviour and is not affected by this
+	// field.
+	//
+	// A pointer distinguishes "unset" from a zero the API server would
+	// otherwise elide, which matters because zero is a legal Kubernetes TTL
+	// meaning "delete immediately" and must never be inferred from absence.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2147483647
+	TTLSecondsAfterFinished *int64 `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 type WorkspaceWorkloadIdentity struct {

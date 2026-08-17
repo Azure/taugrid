@@ -29,7 +29,7 @@ spec:
   # reserved in the LocalQueue above.
   suspend: true
   backoffLimit: 0
-  ttlSecondsAfterFinished: 86400
+  ttlSecondsAfterFinished: {{.JobTTLSecondsAfterFinished}}
   template:
 ${POD_METADATA_BLOCK}
     spec:

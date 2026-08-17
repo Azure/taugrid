@@ -206,6 +206,14 @@ type RenderOptions struct {
 	// ServiceAccountName sets the pod spec's serviceAccountName field.
 	// Typically sourced from the resolved workload identity.
 	ServiceAccountName string
+	// TTLSecondsAfterFinished overrides how long the rendered batch Job is
+	// retained after it finishes. Zero keeps the template's built-in
+	// retention, so an unset value renders exactly what it always did.
+	//
+	// Job engine only. RayJob templates carry their own, much shorter, TTL
+	// which governs Ray cluster teardown rather than record retention, and is
+	// deliberately not driven from here.
+	TTLSecondsAfterFinished int64
 }
 
 // ProfileOptions configures opt-in Nsight Systems profiling for Ray Train
@@ -512,7 +520,7 @@ func Render(opts RenderOptions) ([]byte, error) {
 		if opts.Manifest.IsEval() {
 			return nil, fmt.Errorf("workload kind %q cannot serve eval manifests (eval.cpu_workers=%d, eval.upstream=%q); use --workload-kind=rayjob-eval", kind, opts.Manifest.Eval.CPUWorkers, opts.Manifest.Eval.Upstream)
 		}
-		workloadYAML, err = buildJob(name, resourceName, ns, mfName, opts.Manifest.Compute.GPUs, opts.SmokePairs, pip, runtimeEnv, dataPVC, storageMounts, scheduling, gpuResourceMode, migProfile, resources, spcName, embeds)
+		workloadYAML, err = buildJob(name, resourceName, ns, mfName, opts.Manifest.Compute.GPUs, opts.SmokePairs, pip, runtimeEnv, dataPVC, storageMounts, scheduling, gpuResourceMode, migProfile, resources, spcName, embeds, opts.TTLSecondsAfterFinished)
 	case WorkloadKindRayJob:
 		if err := opts.Manifest.ValidateRayJobResourceName(); err != nil {
 			return nil, err
@@ -1350,7 +1358,7 @@ func hasHeadResourceOverride(m *Manifest) bool {
 // buildJob renders the embedded Job template via text/template. The template
 // uses shell-style ${VAR} markers (so the same file works with envsubst from
 // the bash path); we translate to {{.Var}} before parsing.
-func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, spcName string, embeds payloadEmbeds) ([]byte, error) {
+func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, spcName string, embeds payloadEmbeds, ttlSecondsAfterFinished int64) ([]byte, error) {
 	return renderWorkloadTemplate(workloadTemplateInput{
 		Asset:              "managed-workflow-job.yaml.tmpl",
 		CheckpointArtifact: embeds.CheckpointArtifact,
@@ -1371,6 +1379,8 @@ func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePai
 		StorageMounts:      storageMounts,
 		Scheduling:         scheduling,
 		Blocks:             jobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, defaultRayJobImage),
+
+		TTLSecondsAfterFinished: ttlSecondsAfterFinished,
 	})
 }
 
@@ -1704,6 +1714,22 @@ type workloadTemplateInput struct {
 	Blocks             workloadBlocks
 	MetricsOffload     metricsOffloadRuntime
 	CheckpointArtifact string
+	// TTLSecondsAfterFinished is honoured only by the batch Job template.
+	// Zero means "keep the template default".
+	TTLSecondsAfterFinished int64
+}
+
+// defaultManagedJobTTLSecondsAfterFinished is the retention the batch Job
+// template has always used. It stays the fallback so a workspace or run that
+// does not ask for a TTL renders byte-for-byte what it rendered before this
+// override existed.
+const defaultManagedJobTTLSecondsAfterFinished int64 = 86400
+
+func jobTTLSecondsAfterFinished(override int64) int64 {
+	if override > 0 {
+		return override
+	}
+	return defaultManagedJobTTLSecondsAfterFinished
 }
 
 func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
@@ -1824,6 +1850,7 @@ func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
 		"Namespace":                      in.Namespace,
 		"ResourceName":                   in.ResourceName,
 		"ManifestName":                   in.ManifestName,
+		"JobTTLSecondsAfterFinished":     jobTTLSecondsAfterFinished(in.TTLSecondsAfterFinished),
 		"SmokePairs":                     in.SmokePairs,
 		"GPUs":                           in.GPUs,
 		"HasGPU":                         in.GPUs > 0,

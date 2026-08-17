@@ -40,6 +40,10 @@ type Source interface {
 	ListJobs(context.Context, string) ([]Job, error)
 	ListRayJobs(context.Context, string) ([]RayJob, error)
 	ListWorkloads(context.Context, string) ([]Workload, error)
+	// ListPods backs the terminal failure summary for batch Jobs. Pods are the
+	// only place the real cause of a Job failure is recorded, and they are
+	// deleted with the Job on TTL expiry.
+	ListPods(context.Context, string) ([]Pod, error)
 }
 
 // Writer persists lifecycle observations. Implementations must acknowledge writes
@@ -107,6 +111,36 @@ type Workload struct {
 	AdmittedAt   time.Time
 	FinishedAt   time.Time
 	Conditions   []Condition
+}
+
+// Pod carries the pod-level evidence the recorder needs to explain a terminal
+// batch Job failure.
+//
+// A Job's own Failed condition only ever says "BackoffLimitExceeded" — the
+// actual cause (non-zero exit code, OOM kill, image pull failure) lives on the
+// pods, and Kubernetes deletes those pods along with the Job once
+// ttlSecondsAfterFinished elapses. Reading them here is what makes the durable
+// lifecycle record survive that garbage collection with the cause intact.
+//
+// RayJobs do not need this: KubeRay already puts the failure text on the RayJob
+// object itself, which is why Ray failures were always legible and batch Job
+// failures were not.
+type Pod struct {
+	Metadata
+	Phase      string
+	Reason     string
+	Containers []ContainerState
+}
+
+// ContainerState is one container's terminal or blocked state. Only fields that
+// explain a failure are kept; no logs, no environment, no command line.
+type ContainerState struct {
+	Name       string
+	ExitCode   int32
+	Reason     string
+	Message    string
+	Terminated bool
+	OOMKilled  bool
 }
 
 // Record intentionally contains only workload metadata. It never contains pod
@@ -181,6 +215,10 @@ type Result struct {
 	Emitted         int    `json:"emitted"`
 	RayJobsStatus   string `json:"rayjobs_status"`
 	WorkloadsStatus string `json:"workloads_status"`
+	// PodsStatus reports whether pod-level failure evidence was readable this
+	// pass. "unavailable" means failure summaries fall back to the Job
+	// condition reason alone.
+	PodsStatus string `json:"pods_status"`
 }
 
 type Reconciler struct {
@@ -232,6 +270,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 		result.WorkloadsStatus = "missing-crd"
 		workloads = nil
 	}
+	// Pods only enrich the failure summary. A pod read failure must never cost
+	// us the lifecycle record itself, which is the durable artifact — degrade to
+	// the Job-condition reason instead, exactly as before this enrichment
+	// existed.
+	pods, podErr := r.Source.ListPods(ctx, namespace)
+	result.PodsStatus = "available"
+	if podErr != nil {
+		result.PodsStatus = "unavailable"
+		pods = nil
+	}
 
 	now := time.Now().UTC()
 	if r.Now != nil {
@@ -239,7 +287,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 	}
 	var pending []Record
 	for _, job := range jobs {
-		records := observationsForJob(job, correlatedWorkloads(job.Metadata, runID(job.Metadata), workloads), r.Cluster, r.WorkspaceID, r.ResultScope, now)
+		records := observationsForJob(job, correlatedWorkloads(job.Metadata, runID(job.Metadata), workloads), correlatedPods(job.Metadata, pods), r.Cluster, r.WorkspaceID, r.ResultScope, now)
 		assignObservationIDs(records)
 		pending = append(pending, r.unsent(records)...)
 	}
@@ -332,14 +380,137 @@ func assignObservationIDs(records []Record) {
 	}
 }
 
-func observationsForJob(job Job, workloads []Workload, cluster, workspaceID, resultScope string, now time.Time) []Record {
+func observationsForJob(job Job, workloads []Workload, pods []Pod, cluster, workspaceID, resultScope string, now time.Time) []Record {
 	state, reason, message := jobState(job)
 	state, reason, message = applyWorkloadState(state, reason, message, workloads)
+	if state == StateFailed {
+		reason, message = enrichFailureFromPods(reason, message, pods)
+	}
 	record := baseRecord(job.Metadata, cluster, workspaceID, resultScope, "Job", experiment.WorkloadKindJob, workloads, now)
 	record.State, record.Reason, record.Message = state, reason, message
 	record.PodStartedAt = job.StartTime
 	record.CompletionAt = firstTime(job.CompletionTime, terminalConditionTime(job.Conditions))
 	return initialAndCurrent(record)
+}
+
+// maxFailureMessageLength bounds the durable message. A Job can fail with
+// hundreds of pods and a container message can itself be long; the lifecycle
+// row is an index, not a log store, so the summary is truncated rather than
+// allowed to grow without limit.
+const maxFailureMessageLength = 512
+
+// correlatedPods returns the pods belonging to one Job.
+//
+// Pods created by a Job carry an ownerReference to it and the
+// batch.kubernetes.io/job-name label (job-name on older clusters). Matching on
+// any of the three keeps this working across Kubernetes versions and across
+// pods whose ownerReference has already been rewritten.
+func correlatedPods(metadata Metadata, pods []Pod) []Pod {
+	var out []Pod
+	for _, pod := range pods {
+		if (pod.OwnerKind == "Job" && pod.OwnerName == metadata.Name) ||
+			pod.Labels["batch.kubernetes.io/job-name"] == metadata.Name ||
+			pod.Labels["job-name"] == metadata.Name {
+			out = append(out, pod)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// enrichFailureFromPods replaces a Job's generic terminal reason with the
+// actual cause taken from its pods.
+//
+// The Job condition reason is kept as a prefix so nothing that used to be in
+// the record is lost — a reader still sees "BackoffLimitExceeded", now followed
+// by the exit code or OOM kill that produced it.
+func enrichFailureFromPods(reason, message string, pods []Pod) (string, string) {
+	failed := failedContainers(pods)
+	if len(failed) == 0 {
+		return reason, message
+	}
+	first := failed[0]
+	cause := first.state.Reason
+	if cause == "" {
+		cause = "Error"
+	}
+	if first.state.OOMKilled {
+		cause = "OOMKilled"
+	}
+
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("pod %s container %s: %s", first.pod, first.state.Name, cause))
+	if first.state.Terminated {
+		summary.WriteString(fmt.Sprintf(" (exit code %d)", first.state.ExitCode))
+	}
+	if detail := strings.TrimSpace(first.state.Message); detail != "" {
+		summary.WriteString(": " + detail)
+	}
+	if extra := len(failed) - 1; extra > 0 {
+		summary.WriteString(fmt.Sprintf(" [+%d more failed container(s)]", extra))
+	}
+	if existing := strings.TrimSpace(message); existing != "" {
+		summary.WriteString(" — " + existing)
+	}
+
+	enrichedReason := cause
+	if base := strings.TrimSpace(reason); base != "" && base != cause {
+		enrichedReason = base + "/" + cause
+	}
+	return enrichedReason, truncate(summary.String(), maxFailureMessageLength)
+}
+
+type failedContainer struct {
+	pod   string
+	state ContainerState
+}
+
+// failedContainers returns every container that explains a failure, in a stable
+// order so the same Job always produces the same summary. A record whose text
+// churned between polls would defeat the recorder's fingerprint de-duplication
+// and re-ingest on every interval.
+func failedContainers(pods []Pod) []failedContainer {
+	var out []failedContainer
+	for _, pod := range pods {
+		for _, container := range pod.Containers {
+			if container.Terminated && container.ExitCode == 0 && !container.OOMKilled {
+				continue
+			}
+			if !container.Terminated && container.Reason == "" {
+				continue
+			}
+			out = append(out, failedContainer{pod: pod.Name, state: container})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].pod != out[j].pod {
+			return out[i].pod < out[j].pod
+		}
+		return out[i].state.Name < out[j].state.Name
+	})
+	return out
+}
+
+// truncate bounds the summary without splitting a UTF-8 rune. Container
+// messages are arbitrary user text, and a byte-wise cut mid-rune would write
+// invalid UTF-8 into the durable record.
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	const ellipsis = "..."
+	if limit <= len(ellipsis) {
+		return string([]rune(s)[:0])
+	}
+	budget := limit - len(ellipsis)
+	cut := 0
+	for i := range s {
+		if i > budget {
+			break
+		}
+		cut = i
+	}
+	return s[:cut] + ellipsis
 }
 
 func terminalConditionTime(conditions []Condition) time.Time {
