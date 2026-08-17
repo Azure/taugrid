@@ -313,7 +313,10 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
-    ib_pkey: "0x800b"
+    # Preserves the chart 0.1.3 eight-device expectation. A handoff proposed
+    # 0x800b for Flex A100, but no captured sysfs read or fabric document
+    # verified it; do not change this default until authoritative evidence exists.
+    ib_pkey: "0x8003"
     ib_rate_gbps: 200
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -329,6 +332,7 @@ gpuSkus:
     gpu_driver_versions: '("535.54.03")'
     vbios_versions: '("96.00.89.00.01" "96.00.99.00.01" "96.00.A5.00.01" "96.00.BC.00.01")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_5:1 mlx5_6:1 mlx5_7:1 mlx5_8:1 mlx5_9:1"
+    # Preserves the chart 0.1.3 eight-device expectation.
     ib_pkey: "0x8003"
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -392,6 +396,7 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("96.00.BC.00.02")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
+    # Directly verified against the live East US 2 H200 fabric.
     ib_pkey: "0x8001"
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -408,6 +413,7 @@ gpuSkus:
     gpu_driver_versions: '("580.65.06")'
     vbios_versions: '("97.00.B9.00.23" "97.00.B9.00.69")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
+    # Preserves the chart 0.1.3 non-eight-device expectation.
     ib_pkey: "0xffff"
     ib_rate_gbps: 400
     ib_flap_threshold_short: 2
@@ -428,6 +434,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
+    # Preserves the chart 0.1.3 non-eight-device expectation.
     ib_pkey: "0xffff"
     ib_rate_gbps: 800
     ib_flap_threshold_short: 2

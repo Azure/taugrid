@@ -120,8 +120,11 @@ gpuSkus:
     ib_pkey: "0x8001"
 ```
 
-Flex A100 uses its built-in `0x800b` value. Flex H200 overrides both the device
-names and PKey:
+The A100 profile preserves the chart 0.1.3 `0x8003` expectation. A proposed
+Flex A100 value of `0x800b` is intentionally not built in because it lacks a
+captured sysfs observation or authoritative fabric source.
+
+Flex H200 overrides both the device names and PKey:
 
 ```yaml
 enabledGpuSkus:
@@ -161,6 +164,11 @@ the metrics collector scrapes the configured endpoint. The collector does not
 currently publish endpoint availability as a dedicated Node condition, so
 remediation systems must not treat the absence of `DcgmHealthProblem` as proof
 that a remote exporter is reachable.
+
+If an expected device or its `pkeys/0` file is missing, both the link and PKey
+conditions may fire: link health cannot find the expected port, and PKey health
+cannot verify partition membership. Consumers should not assume these
+conditions are mutually exclusive.
 
 ## Security boundary
 

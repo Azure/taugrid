@@ -210,11 +210,11 @@ create_ib_fabric() {
 }
 
 readonly FLEX_A100_SYSFS="$TEST_ROOT/flex-a100-sys"
-flex_a100_devices="$(create_ib_fabric "$FLEX_A100_SYSFS" mlx5_ 200 0x800b)"
+flex_a100_devices="$(create_ib_fabric "$FLEX_A100_SYSFS" mlx5_ 200 0x8003)"
 SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
   EXPECTED_IB_GBPS=200 bash "$CHART_DIR/scripts/check_ib.sh"
 SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
-  EXPECTED_IB_PKEY=0x800b bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+  EXPECTED_IB_PKEY=0x8003 bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
 
 readonly FLEX_H200_SYSFS="$TEST_ROOT/flex-h200-sys"
 flex_h200_devices="$(create_ib_fabric "$FLEX_H200_SYSFS" mlx5_ib 400 0xffff)"
