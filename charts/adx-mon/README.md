@@ -225,7 +225,7 @@ Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific 
 | `kube-state-metrics.customResourceState.enabled` | Enable Kueue CRD metrics | `true` |
 | `kube-state-metrics.podAnnotations` | Annotations for collector scrape discovery | `adx-mon/scrape: "true"` |
 
-> **Image source:** KSM defaults to `mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics:v2.18.0` — a dalec-built MCR image (MSFT Go, `runAsNonRoot` compatible, active CVE patching). No ACR mirror required.
+> **Image source:** KSM defaults to `mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics:v2.19.1` — a dalec-built MCR image (MSFT Go, `runAsNonRoot` compatible, active CVE patching). No ACR mirror required.
 
 ### Functions (KQL Views)
 

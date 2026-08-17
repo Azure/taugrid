@@ -460,10 +460,10 @@ Open Source License/Copyright Notice:
 
 ===============================================================================
 
-Component: kube-state-metrics Helm chart 7.3.0
-Source: https://github.com/prometheus-community/helm-charts/tree/kube-state-metrics-7.3.0/charts/kube-state-metrics
+Component: kube-state-metrics Helm chart 8.3.0
+Source: https://github.com/prometheus-community/helm-charts/tree/kube-state-metrics-8.3.0/charts/kube-state-metrics
 Included material:
-charts/adx-mon/charts/kube-state-metrics-7.3.0.tgz.
+charts/adx-mon/charts/kube-state-metrics-8.3.0.tgz.
 
 Open Source License/Copyright Notice:
 
