@@ -1,0 +1,67 @@
+# TauGrid AKS Terraform
+
+This Terraform root creates a GPU-enabled AKS environment and then invokes the
+repository's supported `tau cluster install` workflow. TauGrid owns Kueue,
+KubeRay, the Tau controller, GPU monitoring, the baseline queue, and Portal.
+
+The default GPU pool is one `Standard_NC24ads_A100_v4` node. It is billable and
+requires matching regional quota. Change `gpu_vm_size`, `gpu_count_per_node`,
+and `gpu_monitoring_sku_name` together for another supported GPU SKU.
+
+## Prerequisites
+
+- Terraform 1.6 or later
+- Azure credentials usable by the AzureRM provider
+- `tau`, `helm`, and `kubectl` on PATH
+- Bash. On Windows, Git Bash is supported by default. PowerShell users can set
+  `command_interpreter = ["PowerShell", "-NoProfile", "-Command"]`.
+
+## Deploy
+
+```bash
+cd terraform/aks
+terraform init
+terraform apply -var="subscription_id=<subscription-id>"
+```
+
+Terraform writes an ignored local admin kubeconfig and generated chart values
+under `generated/`. Its final provisioner installs the NVIDIA device plugin and
+runs `tau cluster install`. Do not run a separate Helm installation for Kueue,
+KubeRay, or gpu-monitoring.
+
+After apply, use an operator kubeconfig and verify the environment:
+
+```bash
+eval "$(terraform output -raw get_credentials_command)"
+tau cluster validate installation --timeout 10m
+kubectl get nodes -l accelerator=nvidia
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.allocatable.nvidia\\.com/gpu}{"\\n"}{end}'
+```
+
+Create a workspace with a real Entra group object ID, then run the standard
+smoke test:
+
+```bash
+tau workspace create taugrid-default --principal-name <entra-group-object-id> --apply
+tau run smoke
+```
+
+Portal is installed as `tau-portal` in the `tau` namespace with a ClusterIP
+Service. This is intentionally not an internet-facing endpoint. For an
+operator diagnostic session:
+
+```bash
+kubectl -n tau port-forward service/tau-portal 8080:80
+```
+
+An authenticated HTTPS proxy is required before giving researchers a browser
+URL. The default Portal deployment exposes Kubernetes-backed boards. Its
+Kusto-backed boards require a separate ADX and workload identity configuration.
+
+## Destroy
+
+Destroying the resource group removes the cluster and stops GPU billing:
+
+```bash
+terraform destroy -var="subscription_id=<subscription-id>"
+```

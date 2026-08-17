@@ -1,0 +1,38 @@
+baselineQueue:
+  gpu:
+    enabled: true
+    flavors:
+      - name: taugrid-a100
+        nodeLabels:
+          kubernetes.io/os: linux
+          aks.azure.com/gpu-sku: ${gpu_monitoring_sku_name}
+        nodeTaints:
+          - key: sku
+            value: gpu
+            effect: NoSchedule
+        tolerations: []
+        resources:
+          - name: nvidia.com/gpu
+            nominalQuota: "${gpu_quota}"
+
+taugrid-core:
+  portal:
+    enabled: true
+    namespace: tau
+    workloadNamespace: taugrid-default
+    source: kusto
+    serviceAccount:
+      create: true
+      name: tau-portal
+    rbac:
+      create: true
+    access:
+      mode: cluster-internal
+      externalURL: ""
+
+gpu-monitoring:
+  gpuSkus:
+    ${gpu_monitoring_sku_name}:
+      instanceTypes:
+        - ${gpu_vm_size}
+      num_gpus: ${gpu_count_per_node}
