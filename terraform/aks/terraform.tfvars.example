@@ -1,0 +1,25 @@
+# Copy this file to terraform.tfvars and replace all placeholder values.
+# terraform.tfvars is intentionally ignored and must not be committed.
+
+subscription_id     = "<azure-subscription-id>"
+location            = "swedencentral"
+resource_group_name = "<resource-group-name>"
+cluster_name        = "<cluster-name>"
+
+# Use this interpreter on Linux, WSL, and macOS.
+command_interpreter = ["bash", "-c"]
+
+# The defaults below create one billable A100 GPU node.
+gpu_vm_size             = "Standard_NC24ads_A100_v4"
+gpu_node_count          = 1
+gpu_count_per_node      = 1
+gpu_monitoring_sku_name = "a100-pcie-1g"
+
+# ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
+enable_adx       = true
+adx_cluster_name = "<globally-unique-adx-cluster-name>"
+
+# Keep this false for the first apply. Enable it only after the
+# taugrid-default TauWorkspace has been created, then apply again.
+enable_lifecycle_recorder           = false
+lifecycle_recorder_target_namespace = "taugrid-default"

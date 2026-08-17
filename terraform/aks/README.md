@@ -25,7 +25,11 @@ terraform init
 
 Keep the deployment inputs in a local `terraform.tfvars` file so every later
 `plan`, `apply`, and `destroy` uses the same environment. Do not commit this
-file.
+file. Start from the tracked template:
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+```
 
 ```hcl
 subscription_id     = "<subscription-id>"
@@ -75,6 +79,7 @@ kubectl -n tau port-forward service/tau-portal 18080:80
 An authenticated HTTPS proxy is required before giving researchers a browser
 URL. The default Portal deployment exposes Kubernetes-backed boards. Its
 Kusto-backed boards require a separate ADX and workload identity configuration.
+
 ## Enable lifecycle history
 
 Lifecycle history is a second apply. The target namespace is created by the
