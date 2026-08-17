@@ -7,7 +7,7 @@
 > **Not for:** first-time onboarding or clusters without a Ready TauWorkspace
 > and a writable `/data` PVC — this example depends on live platform state.
 
-A bounded, dependency-free CPU `RayJob` that exercises both portal detail-page
+A bounded, dependency-free GPU `RayJob` that exercises both portal detail-page
 links:
 
 - **"Ray dashboard"**: the job runs as a RayJob, so KubeRay creates a
@@ -33,9 +33,8 @@ links:
 2. **A namespace with a Ready TauWorkspace and a writable `/data` PVC.** The
    offload sidecar remote-writes to adx-mon and writes a small SQLite buffer;
    the trainer publishes immutable JSONL chunks under `/data`. The canonical
-   `tau-default` namespace satisfies both on `<cluster>` and
-   `<cluster>`: it is the target of the cluster-wide `default`
-   TauWorkspace and holds the GitOps-owned `blob-training` PVC.
+   selected workspace namespace must hold a pre-provisioned `blob-training`
+   PVC.
 
 ## Run
 
@@ -47,7 +46,10 @@ transient SQLite/spool buffers resolve under the `/var/run/tau` emptyDir, not
 # from the repository root
 make install-tau-cli
 export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
-tau run --config examples/portal-ray-stellar/tau.yaml --dry-run=client
+# Keep the offloader checkpoint on its emptyDir. Azure File RWX volumes reject
+# the chmod used for atomic checkpoint writes.
+export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
+tau run --workspace <workspace-name> --config examples/portal-ray-stellar/tau.yaml --dry-run=client
 ```
 
 The rendered RayJob must carry
@@ -59,22 +61,21 @@ the retired `tau.azure.com/stellar-experiment-title` annotation.
 Submit:
 
 ```bash
-tau run --config examples/portal-ray-stellar/tau.yaml
+tau run --workspace <workspace-name> --config examples/portal-ray-stellar/tau.yaml
 tau run status portal-ray-stellar --watch
-kubectl -n tau-default get rayjob portal-ray-stellar
-kubectl -n tau-default get pod -l ray.io/cluster -o wide
-kubectl logs -n tau-default -l tau.azure.com/run-id=portal-ray-stellar -f
+kubectl -n <workspace-namespace> get rayjob portal-ray-stellar
+kubectl -n <workspace-namespace> get pod -l ray.io/cluster -o wide
+kubectl logs -n <workspace-namespace> -l tau.azure.com/run-id=portal-ray-stellar -f
 ```
 
 Then open the portal detail page for the run and confirm both links are lit:
 
 ```
-/portal/runs/tau-default/<run-name>
+/portal/runs/<workspace-namespace>/<run-name>
 ```
 
-The deployed portal is scoped to `tau-default` (`portal.workloadNamespace` in
-each cluster's `applications/taugrid-portal` overlay), so the run appears on the
-Runs list board as well as at the detail URL above.
+The deployed Portal must be configured to read the workspace namespace, or the
+operator can open the detail URL directly.
 
 `compute.workers` counts dedicated execution pods; Tau adds a separate
 CPU-only system head. For the multi-node acceptance pass, set it to `2` or greater and use a distinct

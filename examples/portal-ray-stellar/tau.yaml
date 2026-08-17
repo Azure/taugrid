@@ -13,12 +13,12 @@
 #   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
 #   tau run --config tau.yaml
 #
-# NOTE (namespace): this runs in `tau-default`, the canonical Tau workspace
-# namespace on both flex and eastus2. It has a Ready cluster-wide `default`
-# TauWorkspace AND a writable /data `blob-training` PVC (offload prerequisites),
+# NOTE (namespace): select a Ready TauWorkspace with `tau run --workspace`.
+# The example values below use `taugrid-default` and require a writable /data
+# `blob-training` PVC in that workspace namespace.
 # and the deployed portal is scoped to it (portal.workloadNamespace), so the run
 # appears on the Runs list board as well as at its detail URL
-#   /portal/runs/tau-default/<run-name>
+#   /portal/runs/taugrid-default/<run-name>
 
 name: portal-ray-stellar
 
@@ -26,8 +26,8 @@ engine: rayjob
 entrypoint: train.py
 
 compute:
-  workers: 1                       # one head-only execution pod
-  gpus_per_worker: 0            # CPU-only: runs on any Kueue-admitted queue
+  workers: 1
+  gpus_per_worker: 1
   head_cpu_request: "1"
   head_memory_request: "4Gi"
   head_cpu_limit: "2"
@@ -38,13 +38,13 @@ compute:
   worker_memory_limit: "2Gi"
 
 policy:
-  workspace: default
-  namespace: tau-default
+  workspace: taugrid-default
+  namespace: taugrid-default
   queue: jobqueue
 
 storage:
   data_pvc: blob-training       # mounted at /data
-  output: /data/tau-workspaces/default/portal-ray-stellar
+  output: /data/projects/taugrid-default/runs/portal-ray-stellar
 
 # Stellar wiring: the offload sidecar watches immutable chunks and remote-writes rows
 # (plus a terminal tau/run_status marker) to Kusto. Path is relative to
