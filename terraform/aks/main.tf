@@ -2,6 +2,10 @@ resource "azurerm_resource_group" "this" {
   name     = var.resource_group_name
   location = var.location
   tags     = var.tags
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 resource "azurerm_kubernetes_cluster" "this" {
@@ -16,11 +20,10 @@ resource "azurerm_kubernetes_cluster" "this" {
   workload_identity_enabled = true
 
   default_node_pool {
-    name                         = "system"
-    vm_size                      = var.system_vm_size
-    node_count                   = var.system_node_count
-    only_critical_addons_enabled = true
-
+    name                        = "system"
+    vm_size                     = var.system_vm_size
+    node_count                  = var.system_node_count
+    temporary_name_for_rotation = "systmp"
     upgrade_settings {
       max_surge = "10%"
     }
@@ -93,7 +96,7 @@ resource "terraform_data" "install_taugrid" {
     environment = {
       KUBECONFIG = local_sensitive_file.kubeconfig.filename
     }
-    command = "kubectl apply -f nvidia-device-plugin.yaml; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; tau cluster install --values ${local_file.taugrid_values.filename} --version ${var.taugrid_version} --timeout 20m"
+    command = "az aks get-credentials --resource-group ${azurerm_resource_group.this.name} --name ${azurerm_kubernetes_cluster.this.name} --file ${local_sensitive_file.kubeconfig.filename} --overwrite-existing; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl apply -f nvidia-device-plugin.yaml; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; tau cluster install --values ${local_file.taugrid_values.filename} --version ${var.taugrid_version} --timeout 20m"
   }
 
   depends_on = [
