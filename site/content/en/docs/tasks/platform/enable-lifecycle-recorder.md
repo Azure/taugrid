@@ -124,6 +124,13 @@ correct its ADX role, database configuration, or network path. Automatic schema
 management currently supports only the adx-mon configured `Metrics` database
 and the canonical `TauExpRunLifecycle` table.
 
+> **Known limitation:** adx-mon does not currently publish a reliable success or
+> failure status for `ManagementCommand`. The recorder therefore cannot wait for
+> schema creation before it starts. It retries ingestion until the schema is
+> available, but a short-lived workload that is deleted during this initial
+> window can be absent from lifecycle history. This chart will restore a schema
+> readiness gate after adx-mon publishes that completion contract.
+
 Submit a workload in `targetNamespace`, then query the configured ADX database:
 
 ```kusto

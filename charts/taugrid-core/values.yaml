@@ -224,9 +224,11 @@ lifecycleRecorder:
   # function. adx-mon performs that operation asynchronously and does not
   # expose a completion condition. The recorder starts immediately, remains
   # NotReady while ingestion fails, and retries on every interval until the
-  # schema becomes available. The adx-mon identity therefore needs
-  # database-management permission; the recorder itself only needs Ingestor
-  # permission.
+  # schema becomes available. Short-lived workloads that are created and
+  # deleted before the schema is ready can be missed. The adx-mon identity
+  # therefore needs database-management permission; the recorder itself only
+  # needs Ingestor permission. Restore a schema readiness gate when adx-mon
+  # publishes a reliable ManagementCommand success or failure condition.
   schemaManagement:
     enabled: false
     namespace: adx-mon
