@@ -797,7 +797,7 @@ func TestRunClusterValidateNodesFetchesNodesOnce(t *testing.T) {
 //
 // Every other fixture in this file is hand-written, which only proves the
 // classifier is self-consistent with data we invented. testdata/
-// <cluster>-nodes.json is a trimmed capture of
+// cluster-nodes.json is a trimmed capture of
 // `kubectl get nodes -o json` from the <cluster> test cluster
 // (2x A100 + 2x H200 GPU nodes, 5 system nodes), reduced to names, the labels
 // detection reads, and allocatable capacity.
@@ -808,7 +808,7 @@ func TestRunClusterValidateNodesFetchesNodesOnce(t *testing.T) {
 // profile has non-zero capacity, so those zero entries must not push the node
 // down the MIG arm, which would report AllocGPU 0 for a healthy 8-GPU node.
 func TestClassifyGPUNodesAgainstRealClusterInventory(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("testdata", "<cluster>-nodes.json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "cluster-nodes.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -857,7 +857,7 @@ func TestClassifyGPUNodesAgainstRealClusterInventory(t *testing.T) {
 // node on it has a registered device plugin, and the system nodes are not GPU
 // hardware. A false warning here would train people to ignore a real one.
 func TestClassifyStrandedGPUNodesFindsNoneOnHealthyRealCluster(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("testdata", "<cluster>-nodes.json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "cluster-nodes.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -894,7 +894,7 @@ func TestCountNVIDIAResourcesIgnoresZeroQuantityMIGProfiles(t *testing.T) {
 // Asserting the property rather than the node count means trimming the fixture
 // fails with a reason instead of an off-by-one someone can "fix" by editing 9.
 func TestRealClusterFixtureRetainsMIGCapableWholeGPUNode(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("testdata", "<cluster>-nodes.json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "cluster-nodes.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
