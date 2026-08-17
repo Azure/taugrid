@@ -210,7 +210,6 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o.workerMemoryRequest = c.Compute.WorkerMemReq
 	o.workerCPULimit = c.Compute.WorkerCPULimit
 	o.workerMemoryLimit = c.Compute.WorkerMemLimit
-	o.containerWorkingDir = c.Runtime.WorkingDir
 	o.runtimePip = append([]string{}, c.Runtime.Pip...)
 	o.env = mapToKeyValueList(c.Runtime.Env)
 	o.envSecrets = mapToKeyValueList(c.Runtime.EnvSecret)
@@ -220,8 +219,15 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o.secretPayloadPath = configRelativePath(baseDir, c.Workflow.SecretPayload)
 	o.extraScripts = configRelativeExtraScripts(baseDir, c.Workflow.ExtraScripts)
 	o.configDir = baseDir
-	o.workingDir = configRelativePath(baseDir, c.Run.WorkingDir)
-	o.workingDirExcludes = append([]string{}, c.Run.WorkingDirExcludes...)
+	switch {
+	case strings.TrimSpace(c.Runtime.WorkingDir) != "":
+		o.workingDir = jobContainerWorkingDirectory(c.Runtime.WorkingDir)
+	case strings.TrimSpace(c.Run.WorkingDir) != "":
+		o.workingDir = rayProjectWorkingDirectory(
+			configRelativePath(baseDir, c.Run.WorkingDir),
+			c.Run.WorkingDirExcludes,
+		)
+	}
 	if c.Run.SmokePairs != nil {
 		o.smokePairs = *c.Run.SmokePairs
 	}

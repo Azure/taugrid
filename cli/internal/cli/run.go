@@ -285,9 +285,7 @@ type runDispatchOptions struct {
 	imageAssets                                                                                     []runconfig.ImageAsset
 	topologyPolicy, workloadKind, upstreamCheckpoint                                                string
 	configDir                                                                                       string
-	workingDir                                                                                      string
-	workingDirExcludes                                                                              []string
-	containerWorkingDir                                                                             string
+	workingDir                                                                                      dispatchWorkingDir
 	source                                                                                          *runconfig.Source
 	nodeSelectors, runtimePip, env, envSecrets, envKV, extraScripts                                 []string
 	metricsHistory                                                                                  []string
@@ -338,6 +336,46 @@ type resolvedRunTarget struct {
 	job             *runJobRequest
 	ray             *runRayRequest
 	managedWorkflow *runManagedWorkflowRequest
+}
+
+type workingDirKind uint8
+
+const (
+	workingDirUnset workingDirKind = iota
+	workingDirRayProject
+	workingDirJobContainer
+)
+
+type dispatchWorkingDir struct {
+	kind     workingDirKind
+	path     string
+	excludes []string
+}
+
+func rayProjectWorkingDirectory(path string, excludes []string) dispatchWorkingDir {
+	return dispatchWorkingDir{
+		kind:     workingDirRayProject,
+		path:     path,
+		excludes: append([]string{}, excludes...),
+	}
+}
+
+func jobContainerWorkingDirectory(path string) dispatchWorkingDir {
+	return dispatchWorkingDir{kind: workingDirJobContainer, path: path}
+}
+
+func (w dispatchWorkingDir) rayProjectPath() string {
+	if w.kind != workingDirRayProject {
+		return ""
+	}
+	return w.path
+}
+
+func (w dispatchWorkingDir) jobContainerPath() string {
+	if w.kind != workingDirJobContainer {
+		return ""
+	}
+	return w.path
 }
 
 // dispatchOptions returns the resolved options for whichever engine was chosen.
