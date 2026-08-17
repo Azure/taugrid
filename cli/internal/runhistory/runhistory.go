@@ -309,6 +309,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 		// The degraded row could therefore win and hide the exit code.
 		if podErr != nil {
 			records = r.withoutRecordedFailures(records)
+		} else {
+			records = r.supersedeRecordedFailures(records, now)
 		}
 		pending = append(pending, r.unsent(records)...)
 	}
@@ -406,6 +408,42 @@ func (r *Reconciler) withoutRecordedFailures(records []Record) []Record {
 		out = append(out, record)
 	}
 	return out
+}
+
+// supersedeRecordedFailures timestamps a terminal failure observation that
+// replaces an already-recorded one with the moment it was observed, rather than
+// the moment the failure occurred.
+//
+// Both records describe the same lifecycle event, so both would otherwise carry
+// the same observed_at — it derives from the Job's terminal condition, which
+// does not move. The dashboards collapse with arg_max(observed_at, *), and on
+// equal values the winner is arbitrary, so a later record carrying the real
+// exit code could lose to an earlier one that says only
+// "BackoffLimitExceeded".
+//
+// This is the ordering that actually occurs in practice: a recorder deployed
+// without the pods read verb records degraded failures, and the enriched
+// records only start once the Role is fixed. Without this the fix would appear
+// not to have worked.
+//
+// Using the observation time is honest — it is genuinely when this observation
+// was made — and it is strictly increasing across passes, so the newest
+// evidence wins. First observations keep lifecycle-event semantics.
+func (r *Reconciler) supersedeRecordedFailures(records []Record, now time.Time) []Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range records {
+		if records[i].State != StateFailed {
+			continue
+		}
+		if _, ok := r.terminalFailed[records[i].DurableID]; !ok {
+			continue
+		}
+		if now.After(records[i].ObservedAt) {
+			records[i].ObservedAt = now
+		}
+	}
+	return records
 }
 
 // notePodsStatus reports pod-visibility transitions exactly once per change.

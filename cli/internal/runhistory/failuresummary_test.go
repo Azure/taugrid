@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -345,5 +346,69 @@ func TestRecoveredPodsStillEnrichAnUnrecordedFailure(t *testing.T) {
 	}
 	if !enriched {
 		t.Error("recovered pod reads did not produce an enriched record")
+	}
+}
+
+// The rollout sequence: a recorder deployed without the pods read verb records
+// degraded failures, then the Role is fixed and enriched records begin. Both
+// describe the same lifecycle event, so both would otherwise carry the same
+// observed_at, and arg_max(observed_at, *) would pick between them arbitrarily
+// — meaning the fix could appear not to have worked.
+//
+// The superseding observation must be strictly newer so the real cause wins.
+func TestEnrichedFailureSupersedesAnEarlierDegradedOne(t *testing.T) {
+	source := failedJobSource(nil)
+	source.podErr = context.DeadlineExceeded
+	writer := &fakeWriter{}
+	reconciler := newTestReconciler(source, writer)
+
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	source.podErr = nil
+	source.pods = []Pod{jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 7, Reason: "Error"})}
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	var failed []Record
+	for _, record := range writer.records {
+		if record.State == StateFailed {
+			failed = append(failed, record)
+		}
+	}
+	if len(failed) != 2 {
+		t.Fatalf("expected a degraded then an enriched record, got %d", len(failed))
+	}
+	degraded, enriched := failed[0], failed[1]
+	if !strings.Contains(enriched.Message, "exit code 7") {
+		t.Fatalf("second record was not the enriched one: %q", enriched.Message)
+	}
+	if !enriched.ObservedAt.After(degraded.ObservedAt) {
+		t.Errorf("enriched observed_at %s is not strictly after degraded %s; arg_max could pick the degraded row",
+			enriched.ObservedAt, degraded.ObservedAt)
+	}
+}
+
+// A first observation must keep lifecycle-event semantics: its observed_at is
+// when the failure happened, not when the recorder noticed.
+func TestFirstFailureKeepsLifecycleEventTime(t *testing.T) {
+	source := failedJobSource([]Pod{
+		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 3, Reason: "Error"}),
+	})
+	writer := &fakeWriter{}
+	if _, err := newTestReconciler(source, writer).Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, record := range writer.records {
+		if record.State != StateFailed {
+			continue
+		}
+		// newTestReconciler pins Now to 10:01; the fixture's lifecycle time is 10:00.
+		if record.ObservedAt.Equal(time.Date(2026, 7, 16, 10, 1, 0, 0, time.UTC)) {
+			t.Errorf("first observation used poll time %s instead of the lifecycle event time", record.ObservedAt)
+		}
 	}
 }
