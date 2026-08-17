@@ -85,6 +85,22 @@ tau workspace create taugrid-default \
 tau run smoke
 ```
 
+## Optional ADX and lifecycle history
+
+ADX observability is opt-in because it creates additional billable resources.
+Set `enable_adx = true` and a globally unique `adx_cluster_name` before the
+first apply. This installs adx-mon and DCGM exporter telemetry alongside
+TauGrid.
+
+Portal lifecycle history is a second apply: its target namespace is created by
+the TauWorkspace. After creating the workspace above, add these values to the
+same local `terraform.tfvars` file and run `terraform apply` again:
+
+```hcl
+enable_lifecycle_recorder           = true
+lifecycle_recorder_target_namespace = "taugrid-default"
+```
+
 For a real GPU workload, use
 [the A100 GPU quickstart](https://github.com/Azure/taugrid/tree/main/examples/aks-gpu-quickstart)
 after the GPU allocatable-resource check succeeds. It verifies CUDA execution,
@@ -96,7 +112,7 @@ Terraform enables Portal as `tau-portal` in the `tau` namespace. Its Service
 is ClusterIP-only by design. An operator can inspect it with:
 
 ```bash
-kubectl port-forward service/tau-portal 8080:80 --namespace=tau
+kubectl port-forward service/tau-portal 18080:80 --namespace=tau
 ```
 
 This is an operator diagnostic path, not a researcher endpoint. Before giving
