@@ -127,6 +127,13 @@ spec:
             - name: EXPECTED_IB_GBPS
               value: "{{ $sku.ib_rate_gbps }}"
             {{- end }}
+            {{- if $sku.ib_pkey }}
+            {{- if not (regexMatch "^0x[0-9a-fA-F]{1,4}$" (toString $sku.ib_pkey)) }}
+            {{- fail (printf "gpuSkus.%s.ib_pkey must be a quoted hexadecimal PKey such as \"0x8001\", got %v. YAML parses an unquoted 0x8001 as the integer 32769, which never matches the sysfs PKey and would make IBPKeyIssue fire on every node." $skuName $sku.ib_pkey) }}
+            {{- end }}
+            - name: IB_PKEY
+              value: "{{ $sku.ib_pkey }}"
+            {{- end }}
             - name: IB_FLAP_THRESHOLD_SHORT
               value: "{{ $sku.ib_flap_threshold_short }}"
             - name: IB_FLAP_CHECK_WINDOW

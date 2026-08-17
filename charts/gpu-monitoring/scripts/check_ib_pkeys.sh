@@ -2,18 +2,44 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks IB devices. Copied from Azure HPC again but with many bug fixes.
-readonly EXPECTED_IB_Gbps="${EXPECTED_IB_GBPS:-400}"
+# This plugin checks IB partition-key membership. Copied from Azure HPC again
+# but with many bug fixes.
+#
+# This check asserts PKey membership only. Link state, physical state, and rate
+# are asserted separately by check_ib.sh so that a link fault and a PKey
+# misconfiguration surface as independent, correctly-attributed conditions.
 readonly EXPECTED_IB_DEVS="${IB_DEVICES:-}"
 readonly EXPECTED_IB_NUM_DEVS=`grep -o ":" <<<"$EXPECTED_IB_DEVS" | wc -l`
 readonly SYSFS_ROOT="${SYSFS_ROOT:-/sys}"
 
-# Only check for tenant PKEY on Mango PDX
-if [[ $EXPECTED_IB_NUM_DEVS -eq 8 ]]; then
-  readonly EXPECTED_IB_PKEY="0x8003"
+# IB_PKEY is the per-SKU expected tenant PKey. When it is unset the historical
+# derivation applies: 8-device SKUs expect the Mango PDX tenant PKey and every
+# other SKU expects the default partition.
+if [[ -n "${IB_PKEY:-}" ]]; then
+  configured_pkey="$IB_PKEY"
+elif [[ $EXPECTED_IB_NUM_DEVS -eq 8 ]]; then
+  configured_pkey="0x8003"
 else
-  readonly EXPECTED_IB_PKEY="0xffff"
+  configured_pkey="0xffff"
 fi
+
+# The kernel emits port PKeys as "0x%04x", so compare canonical forms. Without
+# this, an operator-supplied "0xFFFF" or "0x1" would never match the sysfs value
+# and would fail the check on every node.
+function normalize_pkey() {
+    local value="$1"
+    value="${value#0x}"
+    value="${value#0X}"
+    if [[ ! "$value" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+      # Pass unrecognized values through so the failure message shows what was
+      # actually configured.
+      echo "$1"
+      return
+    fi
+    printf '0x%04x' "$((16#$value))"
+}
+
+readonly EXPECTED_IB_PKEY="$(normalize_pkey "$configured_pkey")"
 
 HW_IB_STATE=( )
 HW_IB_PHYS_STATE=()
@@ -63,50 +89,43 @@ function gather_ib_data() {
     export HW_IB_UMAD_ABI_VER
 }
 
-# Check if IB state, phys_state, and rate ($1) all match.
-function check_ib() {
-    local STATE="ACTIVE"
-    local PHYS_STATE="LinkUp"
-    local RATE="$1"
-    local DEV="$2"
+# Check that the named device ($1) is a member of the expected PKey.
+#
+# Ports that are absent from sysfs or not ACTIVE are skipped: their partition
+# table is not authoritative while the link is down, and check_ib.sh already
+# reports that fault. Asserting here too would report one fault as two
+# unrelated conditions, which is what this split exists to prevent.
+function check_ib_pkey() {
+    local DEV="$1"
     local PKEY="$EXPECTED_IB_PKEY"
+    local observed
     local i
 
-    if [[ ${#HW_IB_STATE[*]} -eq 0 ]]; then
+    if [[ ${#HW_IB_DEV[*]} -eq 0 ]]; then
       gather_ib_data
     fi
 
-    if [[ $HW_IB_UMAD_ABI_VER -eq 0 ]]; then
-      echo "Version mismatch between kernel OFED drivers and userspace OFED libraries."
-      exit 1
-    fi
-
-    for ((i=0; i < ${#HW_IB_STATE[*]}; i++)); do
-        if [[ "${HW_IB_STATE[$i]}" == "$STATE" && "${HW_IB_PHYS_STATE[$i]}" == "$PHYS_STATE"  && "${HW_IB_PKEY[$i]}" == "$PKEY" ]]; then
-          if [[ (-z "$DEV" || "${HW_IB_DEV[$i]}" == "$DEV") && (-z "$RATE" || "${HW_IB_RATE[$i]}" == "$RATE") && (-z "$PKEY" || "${HW_IB_PKEY[$i]}" == "$PKEY") ]]; then
-              return 0
-          fi
+    for ((i=0; i < ${#HW_IB_DEV[*]}; i++)); do
+        if [[ -n "$DEV" && "${HW_IB_DEV[$i]}" != "$DEV" ]]; then
+          continue
+        fi
+        if [[ "${HW_IB_STATE[$i]}" != "ACTIVE" ]]; then
+          continue
+        fi
+        observed="$(normalize_pkey "${HW_IB_PKEY[$i]}")"
+        if [[ "$observed" != "$PKEY" ]]; then
+          echo "IB port ${HW_IB_DEV[$i]} PKey mismatch: expected $PKEY, observed $observed."
+          exit 1
         fi
     done
 
-    if [[ -n "$DEV" ]]; then
-      DEV=" $DEV"
-    fi
-    if [[ -n "$RATE" ]]; then
-      RATE=" $RATE Gb/sec"
-    fi
-    if [[ -n "$PKEY" ]]; then
-      PKEY=" $PKEY"
-    fi
-
-    echo "No IB port$DEV is $STATE ($PHYS_STATE$RATE)."
-    exit 1
+    return 0
 }
 
 for ib_dev in $EXPECTED_IB_DEVS
 do
-    check_ib $EXPECTED_IB_Gbps $ib_dev
+    check_ib_pkey $ib_dev
 done
 
-echo "IB devices are ok"
+echo "IB PKeys are ok"
 exit 0

@@ -68,7 +68,7 @@ Install the published OCI chart from Microsoft Container Registry:
 ```bash
 helm upgrade --install gpu-monitoring \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/gpu-monitoring \
-  --version 0.1.3 \
+  --version 0.1.4 \
   --namespace kube-system \
   --create-namespace
 ```
@@ -99,9 +99,22 @@ Each `gpuSkus` entry may set:
   that profile.
 - `ib_rate_gbps` to set the expected InfiniBand rate. GB200 defaults to 400
   Gbps and GB300 defaults to 800 Gbps.
+- `ib_pkey` to set the expected InfiniBand tenant PKey, for example
+  `ib_pkey: "0x8001"`. **Quote the value.** YAML parses an unquoted `0x8001` as
+  the integer `32769`, which would never match the PKey reported by sysfs; the
+  chart rejects such a value at render time rather than shipping a check that
+  fails on every node. When unset, the historical derivation applies: profiles
+  with 8 IB devices expect `0x8003` and all others expect `0xffff`. Set this
+  when the fabric places tenants on a different partition, otherwise
+  `IBPKeyIssue` reports a false positive on every node.
 - `dcgm_health_required` to override whether NPD runs the host `dcgmi` health
   check. By default, the chart requires it only for profiles whose selected
   DCGM scrape target is host-local.
+
+`IBLinkIssue` and `IBPKeyIssue` are independent conditions. `check_ib.sh`
+asserts link state, physical state, and rate; `check_ib_pkeys.sh` asserts PKey
+membership and reports the expected and observed values. A device missing from
+sysfs is reported once, as a link fault.
 
 For a mixed cluster with managed A100 nodes and GPU Operator H200 nodes:
 

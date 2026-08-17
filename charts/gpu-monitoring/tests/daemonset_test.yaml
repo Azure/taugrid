@@ -120,6 +120,67 @@ tests:
             value: "200"
           any: true
 
+  - it: no profile sets an IB PKey by default, so the scripts keep their derived expectation
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IB_PKEY
+          any: true
+
+  - it: gpuSkus.h200.ib_pkey plumbs the tenant PKey into the h200 DaemonSet
+    set:
+      gpuSkus.h200.ib_pkey: "0x8001"
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IB_PKEY
+            value: "0x8001"
+          any: true
+
+  - it: an h200 ib_pkey override leaves other profiles untouched
+    set:
+      gpuSkus.h200.ib_pkey: "0x8001"
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IB_PKEY
+          any: true
+
+  - it: an unquoted hex ib_pkey is rejected instead of silently becoming an integer
+    set:
+      gpuSkus.h200.ib_pkey: 32769
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpuSkus\.h200\.ib_pkey must be a quoted hexadecimal PKey'
+
+  - it: a PKey missing its 0x prefix is rejected
+    set:
+      gpuSkus.h200.ib_pkey: "8001"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpuSkus\.h200\.ib_pkey must be a quoted hexadecimal PKey'
+
+  - it: h200 expects the Hopper VBIOS the fleet actually runs
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: VBIOS_VERSIONS
+            value: '("96.00.BC.00.02")'
+          any: true
+
   - it: nodeExporter.enabled=false omits the node-exporter sidecar
     set:
       nodeExporter.enabled: false

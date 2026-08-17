@@ -2,18 +2,15 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks IB devices. Copied from Azure HPC again but with many bug fixes.
+# This plugin checks IB link health. Copied from Azure HPC again but with many
+# bug fixes.
+#
+# This check asserts link state, physical state, and rate only. PKey membership
+# is asserted separately by check_ib_pkeys.sh so that a link fault and a PKey
+# misconfiguration surface as independent, correctly-attributed conditions.
 readonly EXPECTED_IB_Gbps="${EXPECTED_IB_GBPS:-400}"
 readonly EXPECTED_IB_DEVS="${IB_DEVICES:-}"
-readonly EXPECTED_IB_NUM_DEVS=`grep -o ":" <<<"$EXPECTED_IB_DEVS" | wc -l`
 readonly SYSFS_ROOT="${SYSFS_ROOT:-/sys}"
-
-# Only check for tenant PKEY on Mango PDX
-if [[ $EXPECTED_IB_NUM_DEVS -eq 8 ]]; then
-  readonly EXPECTED_IB_PKEY="0x8003"
-else
-  readonly EXPECTED_IB_PKEY="0xffff"
-fi
 
 HW_IB_STATE=( )
 HW_IB_PHYS_STATE=()
@@ -69,7 +66,6 @@ function check_ib() {
     local PHYS_STATE="LinkUp"
     local RATE="$1"
     local DEV="$2"
-    local PKEY="$EXPECTED_IB_PKEY"
     local i
 
     if [[ ${#HW_IB_STATE[*]} -eq 0 ]]; then
@@ -82,8 +78,8 @@ function check_ib() {
     fi
 
     for ((i=0; i < ${#HW_IB_STATE[*]}; i++)); do
-        if [[ "${HW_IB_STATE[$i]}" == "$STATE" && "${HW_IB_PHYS_STATE[$i]}" == "$PHYS_STATE" && "${HW_IB_PKEY[$i]}" == "$PKEY" ]]; then
-          if [[ (-z "$DEV" || "${HW_IB_DEV[$i]}" == "$DEV") && (-z "$RATE" || "${HW_IB_RATE[$i]}" == "$RATE") && (-z "$PKEY" || "${HW_IB_PKEY[$i]}" == "$PKEY") ]]; then
+        if [[ "${HW_IB_STATE[$i]}" == "$STATE" && "${HW_IB_PHYS_STATE[$i]}" == "$PHYS_STATE" ]]; then
+          if [[ (-z "$DEV" || "${HW_IB_DEV[$i]}" == "$DEV") && (-z "$RATE" || "${HW_IB_RATE[$i]}" == "$RATE") ]]; then
             return 0
           fi
         fi
@@ -94,9 +90,6 @@ function check_ib() {
     fi
     if [[ -n "$RATE" ]]; then
       RATE=" $RATE Gb/sec"
-    fi
-    if [[ -n "$PKEY" ]]; then
-      PKEY=" $PKEY"
     fi
 
     echo "No IB port$DEV is $STATE ($PHYS_STATE$RATE)."
