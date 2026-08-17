@@ -219,15 +219,11 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o.secretPayloadPath = configRelativePath(baseDir, c.Workflow.SecretPayload)
 	o.extraScripts = configRelativeExtraScripts(baseDir, c.Workflow.ExtraScripts)
 	o.configDir = baseDir
-	switch {
-	case strings.TrimSpace(c.Runtime.WorkingDir) != "":
-		o.workingDir = jobContainerWorkingDirectory(c.Runtime.WorkingDir)
-	case strings.TrimSpace(c.Run.WorkingDir) != "":
-		o.workingDir = rayProjectWorkingDirectory(
-			configRelativePath(baseDir, c.Run.WorkingDir),
-			c.Run.WorkingDirExcludes,
-		)
+	workingDir, err := resolveConfigWorkingDirectory(c, baseDir)
+	if err != nil {
+		return runDispatchOptions{}, err
 	}
+	o.workingDir = workingDir
 	if c.Run.SmokePairs != nil {
 		o.smokePairs = *c.Run.SmokePairs
 	}
@@ -301,6 +297,26 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 
 func runConfigExperimentMetadata(e runconfig.Experiment) runExperimentMetadata {
 	return runconfig.ExperimentRunMetadata(e)
+}
+
+func resolveConfigWorkingDirectory(c runconfig.Config, baseDir string) (dispatchWorkingDir, error) {
+	rayProjectDir := strings.TrimSpace(c.Run.WorkingDir)
+	jobContainerDir := strings.TrimSpace(c.Runtime.WorkingDir)
+	if rayProjectDir != "" && jobContainerDir != "" {
+		return dispatchWorkingDir{}, fmt.Errorf(
+			"runtime.working_dir and run.working_dir cannot be used together; runtime.working_dir sets a Job container path while run.working_dir ships a local project through Ray",
+		)
+	}
+	if jobContainerDir != "" {
+		return jobContainerWorkingDirectory(c.Runtime.WorkingDir), nil
+	}
+	if rayProjectDir != "" {
+		return rayProjectWorkingDirectory(
+			configRelativePath(baseDir, c.Run.WorkingDir),
+			c.Run.WorkingDirExcludes,
+		), nil
+	}
+	return dispatchWorkingDir{}, nil
 }
 
 func configRelativePath(baseDir, value string) string {

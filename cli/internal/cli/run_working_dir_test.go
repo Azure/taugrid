@@ -78,6 +78,16 @@ func TestConfigToDispatchTagsWorkingDirectorySemantics(t *testing.T) {
 	}
 }
 
+func TestConfigToDispatchRejectsAmbiguousWorkingDirectory(t *testing.T) {
+	_, err := configToDispatch(runconfig.Config{
+		Run:     runconfig.Run{WorkingDir: "."},
+		Runtime: runconfig.Runtime{WorkingDir: "/workspace/slime"},
+	}, filepath.Join(t.TempDir(), "tau.yaml"))
+	if err == nil || !strings.Contains(err.Error(), "cannot be used together") {
+		t.Fatalf("ambiguous working directory error = %v", err)
+	}
+}
+
 func TestBuildProjectArchivePackagesProjectAndRelativisesEntrypoint(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFile(t, root, "helpers.py", "X = 1\n")
