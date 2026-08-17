@@ -18,12 +18,20 @@ type Sample struct {
 	Value float64   `json:"v"`
 }
 
+// Availability captures one required scrape target's debounce state.
+type Availability struct {
+	FailingSince time.Time `json:"failingSince,omitempty"`
+	HealthySince time.Time `json:"healthySince,omitempty"`
+	Firing       bool      `json:"firing,omitempty"`
+}
+
 // Snapshot captures all in-memory state for persistence across restarts.
 type Snapshot struct {
-	History    map[string][]Sample  `json:"history"`
-	Pending    map[string]time.Time `json:"pending"`
-	LastStatus map[string]string    `json:"lastStatus"`
-	SavedAt    time.Time            `json:"savedAt"`
+	History      map[string][]Sample     `json:"history"`
+	Pending      map[string]time.Time    `json:"pending"`
+	LastStatus   map[string]string       `json:"lastStatus"`
+	Availability map[string]Availability `json:"availability,omitempty"`
+	SavedAt      time.Time               `json:"savedAt"`
 }
 
 const stateFile = "state.json"
