@@ -163,9 +163,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
-          cache-dependency-path: |
-            cli/go.sum
-            core/go.sum
+          cache: false
 
       - name: Test Go release modules
         run: |
@@ -177,8 +175,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: sdk/python/python/pyproject.toml
 
       - name: Test Python SDK compatibility
         run: |
@@ -205,9 +201,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
-          cache-dependency-path: |
-            cli/go.sum
-            core/go.sum
+          cache: false
 
       - name: Build twice and compare
         env:
