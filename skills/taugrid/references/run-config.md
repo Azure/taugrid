@@ -108,6 +108,7 @@ It does not apply until the Job reaches a terminal condition.
 | Field | Notes |
 |---|---|
 | `runtime.image` | Container image override. Pin a tag or digest. |
+| `runtime.working_dir` | Clean absolute initial directory inside the main container for direct `engine: job` configs. Maps to Kubernetes `container.workingDir`; it does not ship files and cannot be combined with `run.source`. This is distinct from Ray-only, host-relative `run.working_dir`, which packages a local project into `runtime_env`. |
 | `runtime.pip` | Packages installed through Ray `runtime_env` (Ray dispatch). Values are shell-quoted to prevent injection. |
 | `runtime.env` | Literal, non-secret env vars. Values over 64 KiB or aggregate literal payloads over 128 KiB are rejected before workload creation; Tau-generated embedded payload entries are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for content. |
 | `runtime.env_secret` | `NAME: "secret-name:key"` → `valueFrom.secretKeyRef`. Client dry-run redacts name/key but shows the dependency exists. |

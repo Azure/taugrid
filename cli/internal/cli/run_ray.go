@@ -55,6 +55,9 @@ func newRunRayRequest(options runDispatchOptions, name string) (runRayRequest, e
 	if len(options.volumeSpecs) > 0 || len(options.mountSpecs) > 0 {
 		return runRayRequest{}, fmt.Errorf("ray run configs support storage.data_pvc/output, but not storage.volumes/mounts")
 	}
+	if strings.TrimSpace(options.workingDir.jobContainerPath()) != "" {
+		return runRayRequest{}, fmt.Errorf("runtime.working_dir requires engine: job")
+	}
 	return runRayRequest{Name: name, Options: options}, nil
 }
 
@@ -344,7 +347,7 @@ func rayTrainConfigForRender(o runDispatchOptions) map[string]any {
 // and the plain entrypoint base name, which is the pre-existing single-file
 // behaviour.
 func buildProjectArchive(o runDispatchOptions) ([]byte, string, error) {
-	dir := strings.TrimSpace(o.workingDir)
+	dir := strings.TrimSpace(o.workingDir.rayProjectPath())
 	if dir == "" {
 		return nil, filepath.Base(o.script), nil
 	}
@@ -365,7 +368,7 @@ func buildProjectArchive(o runDispatchOptions) ([]byte, string, error) {
 
 	archive, files, err := projectzip.Build(projectzip.Options{
 		Dir:      root,
-		Excludes: o.workingDirExcludes,
+		Excludes: o.workingDir.excludes,
 		MaxBytes: maxProjectArchiveInputBytes,
 	})
 	if err != nil {

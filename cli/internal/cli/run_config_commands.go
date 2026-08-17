@@ -124,7 +124,7 @@ func checkEntrypointImports(o runDispatchOptions) error {
 		// main container runs from its staged root.
 		return nil
 	}
-	if strings.TrimSpace(o.workingDir) != "" {
+	if strings.TrimSpace(o.workingDir.rayProjectPath()) != "" {
 		// The whole project directory ships and Ray puts it on PYTHONPATH, so
 		// local imports resolve on the driver and on every worker.
 		return nil
