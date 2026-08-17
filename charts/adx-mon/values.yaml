@@ -436,11 +436,11 @@ alerter:
 kube-state-metrics:
   enabled: true
   # -- KSM image: dalec-built MCR image (MSFT Go + systemcrypto, runAsNonRoot compatible).
-  # MCR oss/v2 has v2.13–v2.18 with active CVE patching; no ACR mirror required.
+  # MCR oss/v2 has v2.13–v2.19 with active CVE patching; no ACR mirror required.
   image:
     registry: mcr.microsoft.com
     repository: oss/v2/kubernetes/kube-state-metrics
-    tag: v2.18.0
+    tag: v2.19.1
   # -- Number of KSM shards (1 for <=5K nodes, 2-4 for larger clusters)
   shards: 1
   # -- Custom resource state metrics for Kueue CRDs
