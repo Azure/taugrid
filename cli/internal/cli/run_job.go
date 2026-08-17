@@ -116,7 +116,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		profileDuration = 2 * time.Minute
 	}
 
-	topo := resolvedRunTopologyFlags(o.resolvedRunPlacement)
+	topo := resolvedRunTopologyFlags(o.runPlacement)
 	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
 	if err != nil {
 		return err
@@ -225,7 +225,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		Annotations:             annotations,
 	}
 	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, preset, func(flag string) bool {
-		return resolvedRunTopologyFieldSet(o.resolvedRunPlacement, flag)
+		return resolvedRunTopologyFieldSet(o.runPlacement, flag)
 	}, o.workspaceQueueResolved)
 	if err != nil {
 		return err
@@ -454,10 +454,10 @@ func parseRunJobDuration(field, value string) (time.Duration, error) {
 }
 
 func runJobTopologyFlags(o unresolvedRunOptions) topologyFlags {
-	return resolvedRunTopologyFlags(resolveRunPlacement(o))
+	return resolvedRunTopologyFlags(o.runPlacement)
 }
 
-func resolvedRunTopologyFlags(o resolvedRunPlacement) topologyFlags {
+func resolvedRunTopologyFlags(o runPlacement) topologyFlags {
 	return topologyFlags{
 		preset:                   o.preset,
 		policyPath:               o.topologyPolicy,
@@ -476,36 +476,28 @@ func resolvedRunTopologyFlags(o resolvedRunPlacement) topologyFlags {
 }
 
 func runJobTopologyFieldSet(o unresolvedRunOptions, flag string) bool {
-	return resolvedRunTopologyFieldSet(resolveRunPlacement(o), flag)
+	return resolvedRunTopologyFieldSet(o.runPlacement, flag)
 }
 
-func resolvedRunTopologyFieldSet(o resolvedRunPlacement, flag string) bool {
-	switch flag {
-	case "team":
-		return strings.TrimSpace(o.team) != ""
-	case "lane":
-		return strings.TrimSpace(o.lane) != ""
-	case "mode":
-		return strings.TrimSpace(o.mode) != ""
-	case "topology":
-		return strings.TrimSpace(o.topology) != ""
-	case "shape":
-		return strings.TrimSpace(o.shape) != ""
-	case "gpu-class":
-		return strings.TrimSpace(o.gpuClass) != ""
-	case "queue":
-		return strings.TrimSpace(o.queue) != ""
-	case "priority-tier":
-		return strings.TrimSpace(o.priorityTier) != ""
-	case "workload-priority-class":
-		return strings.TrimSpace(o.workloadPriorityClass) != ""
-	case "pod-priority-class":
-		return strings.TrimSpace(o.podPriorityClass) != ""
-	case "disable-default-priorities":
+var runPlacementValue = map[string]func(runPlacement) string{
+	"team":                    func(o runPlacement) string { return o.team },
+	"lane":                    func(o runPlacement) string { return o.lane },
+	"mode":                    func(o runPlacement) string { return o.mode },
+	"topology":                func(o runPlacement) string { return o.topology },
+	"shape":                   func(o runPlacement) string { return o.shape },
+	"gpu-class":               func(o runPlacement) string { return o.gpuClass },
+	"queue":                   func(o runPlacement) string { return o.queue },
+	"priority-tier":           func(o runPlacement) string { return o.priorityTier },
+	"workload-priority-class": func(o runPlacement) string { return o.workloadPriorityClass },
+	"pod-priority-class":      func(o runPlacement) string { return o.podPriorityClass },
+}
+
+func resolvedRunTopologyFieldSet(o runPlacement, flag string) bool {
+	if flag == "disable-default-priorities" {
 		return o.disableDefaultPriorities
-	default:
-		return false
 	}
+	value := runPlacementValue[flag]
+	return value != nil && strings.TrimSpace(value(o)) != ""
 }
 
 func validateRunJobStorageConfig(o unresolvedRunOptions) error {

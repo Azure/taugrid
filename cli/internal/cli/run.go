@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/onboarding"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/experiment"
-	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
@@ -263,132 +261,104 @@ Common examples:
 	return cmd
 }
 
-// unresolvedRunOptions is the mutable input model used while config, flags,
-// connection metadata, workspace defaults, retry/resume overrides, and engine
-// inference are still being combined. resolveRunTarget is its terminal boundary.
-type unresolvedRunOptions struct {
-	engine, file, script, mainScript, image, profileName, namespace, workspace, kubeContext, dryRun string
-	dataPVC, resultPVC, output, queue, preset, team, lane, gpuClass, mode, topology, shape          string
-	outputPublish                                                                                   string
-	checkpointArtifact                                                                              string
-	artifactPublicationID                                                                           string
-	workspaceResultScope                                                                            string
-	priorityTier, workloadPriorityClass, podPriorityClass                                           string
-	cpuRequest, memoryRequest, cpuLimit, memoryLimit                                                string
-	headCPURequest, headMemoryRequest, headCPULimit, headMemoryLimit                                string
-	workerCPURequest, workerMemoryRequest, workerCPULimit, workerMemoryLimit                        string
-	volumeSpecs, mountSpecs                                                                         []string
-	imageAssets                                                                                     []runconfig.ImageAsset
-	topologyPolicy, workloadKind, upstreamCheckpoint                                                string
-	configDir                                                                                       string
-	workingDir                                                                                      string
-	workingDirExcludes                                                                              []string
-	source                                                                                          *runconfig.Source
-	nodeSelectors, runtimePip, env, envSecrets, envKV, extraScripts                                 []string
-	metricsHistory                                                                                  []string
-	metricsSessionID                                                                                string
-	submissionID                                                                                    string
-	clearNodeSelector, disableDefaultPriorities, nameFromConfig                                     bool
-	metricsOffloadEnabled                                                                           bool
-	workspaceExplicit, workspaceQueueResolved, kubeContextExplicit                                  bool
-	// kubeContextFromFlag separates a typed --context from one inherited via
-	// $TAU_CONTEXT. Both name a cluster, but only the flag is unambiguously
-	// about this invocation, so only the flag settles a disagreement with a
-	// checked-in workspace connection descriptor.
-	kubeContextFromFlag                                                                                   bool
-	azureWorkloadIdentity                                                                                 bool
-	workers, gpusPerWorker, nConcurrent, cpuWorkers                                                       int
-	jobGPUs                                                                                               *int
-	gpusPerWorkerExplicit                                                                                 bool
-	profiler, profileRank, profileWarmup, profileDuration, gpuResourceMode, migProfile, secretPayloadPath string
-	keyVault, kvTenantID, kvClientID                                                                      string
-	serviceAccountName                                                                                    string
-	experiment                                                                                            runExperimentMetadata
-	smokePairs                                                                                            int
-	maxRetries                                                                                            int
-	retryOn                                                                                               []string
-	checkpointPath                                                                                        string
-	backoffInitial, backoffMax                                                                            time.Duration
-	launcher                                                                                              string
-	processesPerNode                                                                                      int
-	nodes                                                                                                 int
-	ttlSecondsAfterFinished                                                                               int64
-	tuneMetric, tuneMode, tuneParamSpace                                                                  string
-	tuneNumSamples, tuneMaxConcurrentTrials                                                               int
-	configs                                                                                               map[string]any
-	allowNCCLOverride                                                                                     bool
-}
-
-func defaultRunDispatchOptions() unresolvedRunOptions {
-	return unresolvedRunOptions{
-		workers:       1,
-		gpusPerWorker: 1,
-		nConcurrent:   1,
-	}
-}
-
 func resolveRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
 	if err := ensureSubmissionID(&o); err != nil {
-		return resolvedRunTarget{}, err
+		return nil, err
 	}
 	if o.file != "" {
-		if o.outputPublish != "" {
-			return resolvedRunTarget{}, fmt.Errorf("storage.publish is not supported for managed workflow configs")
-		}
-		if name != "" && !o.nameFromConfig {
-			return resolvedRunTarget{}, fmt.Errorf("managed workflow configs take the run name from the config file; remove positional NAME")
-		}
-		managed, err := newRunManagedWorkflowRequest(o)
-		if err != nil {
-			return resolvedRunTarget{}, err
-		}
-		return newResolvedRunTarget(&managed), nil
+		return resolveManagedRunTarget(o, name)
 	}
+	return resolveDirectRunTarget(o, name)
+}
 
+func resolveManagedRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
+	if o.outputPublish != "" {
+		return nil, fmt.Errorf("storage.publish is not supported for managed workflow configs")
+	}
+	if name != "" && !o.nameFromConfig {
+		return nil, fmt.Errorf("managed workflow configs take the run name from the config file; remove positional NAME")
+	}
+	managed, err := newRunManagedWorkflowRequest(o)
+	if err != nil {
+		return nil, err
+	}
+	return &managed, nil
+}
+
+type directRunEngine string
+
+const (
+	directRunEngineJob directRunEngine = "job"
+	directRunEngineRay directRunEngine = "ray"
+)
+
+var (
+	directEngineAliases = map[string]directRunEngine{
+		"":    "",
+		"job": directRunEngineJob,
+		"ray": directRunEngineRay,
+	}
+	directWorkloadKindAliases = map[string]directRunEngine{
+		"":          "",
+		"job":       directRunEngineJob,
+		"ray":       directRunEngineRay,
+		"rayjob":    directRunEngineRay,
+		"ray-train": directRunEngineRay,
+		"ray_train": directRunEngineRay,
+	}
+	directRunResolvers = map[directRunEngine]func(unresolvedRunOptions, string) (resolvedRunTarget, error){
+		directRunEngineJob: resolveJobRunTarget,
+		directRunEngineRay: resolveRayRunTarget,
+	}
+)
+
+func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
 	if len(o.envKV) > 0 || o.keyVault != "" || o.kvTenantID != "" || o.kvClientID != "" {
-		return resolvedRunTarget{}, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct job/ray configs must remove runtime.env_kv or use workflow.file")
+		return nil, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct job/ray configs must remove runtime.env_kv or use workflow.file")
 	}
 	if err := ensureArtifactPublicationID(o.outputPublish, &o.artifactPublicationID); err != nil {
-		return resolvedRunTarget{}, err
+		return nil, err
 	}
-
-	dispatch, explicitDispatch, err := explicitRunDispatch(o)
+	engine, err := resolveDirectRunEngine(o)
 	if err != nil {
-		return resolvedRunTarget{}, err
+		return nil, err
 	}
-	if err := validateDirectMetricsOffloadDispatch(o, dispatch, explicitDispatch); err != nil {
-		return resolvedRunTarget{}, err
+	if err := validateDirectMetricsOffloadDispatch(o, engine); err != nil {
+		return nil, err
 	}
-	inferRay := !explicitDispatch && (o.workers > 1 || o.gpusPerWorker != 1 || o.gpusPerWorkerExplicit || len(o.runtimePip) > 0)
-	if dispatch == "ray" || inferRay {
-		if o.jobGPUs != nil {
-			return resolvedRunTarget{}, fmt.Errorf("compute.gpus is only supported for engine: job; use compute.gpus_per_worker for Ray")
-		}
+	return directRunResolvers[engine](o, name)
+}
+
+func resolveRayRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
+	if o.jobGPUs != nil {
+		return nil, fmt.Errorf("compute.gpus is only supported for engine: job; use compute.gpus_per_worker for Ray")
 	}
-	if (dispatch == "ray" || inferRay) && o.nodes > 1 {
-		return resolvedRunTarget{}, fmt.Errorf("execution.nodes > 1 requires engine: job; cannot combine with Ray dispatch")
+	if o.nodes > 1 {
+		return nil, fmt.Errorf("execution.nodes > 1 requires engine: job; cannot combine with Ray dispatch")
 	}
-	if dispatch == "ray" || inferRay {
-		ray, err := newRunRayRequest(o, name)
-		if err != nil {
-			return resolvedRunTarget{}, err
-		}
-		return newResolvedRunTarget(&ray), nil
+	ray, err := newRunRayRequest(o, name)
+	if err != nil {
+		return nil, err
 	}
+	return &ray, nil
+}
+
+func resolveJobRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
 	if err := validateExplicitJobRunConfig(o); err != nil {
-		return resolvedRunTarget{}, err
+		return nil, err
 	}
 	if o.metricsOffloadEnabled && strings.TrimSpace(o.metricsSessionID) == "" {
-		o.metricsSessionID, err = newMetricsSessionID()
+		metricsSessionID, err := newMetricsSessionID()
 		if err != nil {
-			return resolvedRunTarget{}, err
+			return nil, err
 		}
+		o.metricsSessionID = metricsSessionID
 	}
 	job, err := newRunJobRequest(o, name)
 	if err != nil {
-		return resolvedRunTarget{}, err
+		return nil, err
 	}
-	return newResolvedRunTarget(&job), nil
+	return &job, nil
 }
 
 func newMetricsSessionID() (string, error) {
@@ -427,12 +397,11 @@ func ensureArtifactPublicationID(outputPublish string, artifactPublicationID *st
 	return nil
 }
 
-func validateDirectMetricsOffloadDispatch(o unresolvedRunOptions, dispatch string, explicitDispatch bool) error {
+func validateDirectMetricsOffloadDispatch(o unresolvedRunOptions, engine directRunEngine) error {
 	if !o.metricsOffloadEnabled {
 		return nil
 	}
-	inferRay := !explicitDispatch && (o.workers > 1 || o.gpusPerWorker != 1 || o.gpusPerWorkerExplicit || len(o.runtimePip) > 0)
-	if dispatch != "ray" && !inferRay && o.nodes > 1 {
+	if engine == directRunEngineJob && o.nodes > 1 {
 		return fmt.Errorf("metrics.offload.enabled requires a single Job pod; execution.nodes must be unset or 1")
 	}
 	if strings.TrimSpace(o.script) == "" {
@@ -441,37 +410,28 @@ func validateDirectMetricsOffloadDispatch(o unresolvedRunOptions, dispatch strin
 	return nil
 }
 
-func explicitRunDispatch(o unresolvedRunOptions) (target string, explicit bool, err error) {
-	engine := strings.ToLower(strings.TrimSpace(o.engine))
+func resolveDirectRunEngine(o unresolvedRunOptions) (directRunEngine, error) {
+	engineName := strings.ToLower(strings.TrimSpace(o.engine))
+	engine, ok := directEngineAliases[engineName]
+	if !ok {
+		return "", fmt.Errorf("engine must be one of: job, ray")
+	}
 	workloadKind := strings.ToLower(strings.TrimSpace(o.workloadKind))
-
-	engineTarget := ""
-	switch engine {
-	case "":
-	case "job":
-		engineTarget = "job"
-	case "ray":
-		engineTarget = "ray"
-	default:
-		return "", false, fmt.Errorf("engine must be one of: job, ray")
+	kindEngine, ok := directWorkloadKindAliases[workloadKind]
+	if !ok {
+		return "", fmt.Errorf("workload_kind must be one of: job, rayjob, ray-train for non-managed run configs")
 	}
-
-	kindTarget := ""
-	switch workloadKind {
-	case "":
-	case "job":
-		kindTarget = "job"
-	case "ray", "rayjob", "ray-train", "ray_train":
-		kindTarget = "ray"
-	default:
-		return "", false, fmt.Errorf("workload_kind must be one of: job, rayjob, ray-train for non-managed run configs")
+	if engine != "" && kindEngine != "" && engine != kindEngine {
+		return "", fmt.Errorf("engine=%s conflicts with workload_kind=%s", engineName, workloadKind)
 	}
-
-	if engineTarget != "" && kindTarget != "" && engineTarget != kindTarget {
-		return "", false, fmt.Errorf("engine=%s conflicts with workload_kind=%s", engine, workloadKind)
+	explicit := firstNonEmpty(string(engine), string(kindEngine))
+	if explicit != "" {
+		return directRunEngine(explicit), nil
 	}
-	target = firstNonEmpty(engineTarget, kindTarget)
-	return target, target != "", nil
+	if o.workers > 1 || o.gpusPerWorker != 1 || o.gpusPerWorkerExplicit || len(o.runtimePip) > 0 {
+		return directRunEngineRay, nil
+	}
+	return directRunEngineJob, nil
 }
 
 func validateExplicitJobRunConfig(o unresolvedRunOptions) error {
@@ -527,26 +487,25 @@ func validateExplicitJobRunConfig(o unresolvedRunOptions) error {
 }
 
 func dispatchIntent(o unresolvedRunOptions) string {
-	engine := strings.TrimSpace(o.engine)
-	workloadKind := strings.TrimSpace(o.workloadKind)
-	switch {
-	case engine != "" && workloadKind != "":
-		return fmt.Sprintf("engine=%s/workload_kind=%s", engine, workloadKind)
-	case engine != "":
-		return "engine=" + engine
-	case workloadKind != "":
-		return "workload_kind=" + workloadKind
-	default:
+	parts := make([]string, 0, 2)
+	if engine := strings.TrimSpace(o.engine); engine != "" {
+		parts = append(parts, "engine="+engine)
+	}
+	if workloadKind := strings.TrimSpace(o.workloadKind); workloadKind != "" {
+		parts = append(parts, "workload_kind="+workloadKind)
+	}
+	if len(parts) == 0 {
 		return "implicit dispatch"
 	}
+	return strings.Join(parts, "/")
 }
 
 func executeRunTarget(parent *cobra.Command, target resolvedRunTarget, captureCommand string, experiment runExperimentMetadata) error {
 	ctx := withRunExperimentMetadata(parent.Context(), experiment)
-	if target.request == nil {
+	if target == nil {
 		return fmt.Errorf("resolved run target has no executor")
 	}
-	return target.request.execute(ctx, parent.OutOrStdout(), parent.ErrOrStderr(), captureCommand)
+	return target.execute(ctx, parent.OutOrStdout(), parent.ErrOrStderr(), captureCommand)
 }
 
 func buildRunCaptureCommand(cmd *cobra.Command, name string, nameFromConfig bool, configPath string) string {

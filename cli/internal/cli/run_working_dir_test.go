@@ -22,11 +22,21 @@ func writeProjectFile(t *testing.T, root, rel, body string) string {
 	return p
 }
 
+func projectRunOptions(script, workingDir string, excludes ...string) runDispatchOptions {
+	return runDispatchOptions{
+		runPayloadInput: runPayloadInput{
+			script:             script,
+			workingDir:         workingDir,
+			workingDirExcludes: excludes,
+		},
+	}
+}
+
 func TestBuildProjectArchiveDisabledByDefault(t *testing.T) {
 	root := t.TempDir()
 	script := writeProjectFile(t, root, "train.py", "print(1)\n")
 
-	archive, name, err := buildProjectArchive(runDispatchOptions{script: script})
+	archive, name, err := buildProjectArchive(projectRunOptions(script, ""))
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
 	}
@@ -43,10 +53,7 @@ func TestBuildProjectArchivePackagesProjectAndRelativisesEntrypoint(t *testing.T
 	writeProjectFile(t, root, "helpers.py", "X = 1\n")
 	script := writeProjectFile(t, root, "pipeline/train.py", "import helpers\n")
 
-	archive, name, err := buildProjectArchive(runDispatchOptions{
-		script:     script,
-		workingDir: root,
-	})
+	archive, name, err := buildProjectArchive(projectRunOptions(script, root))
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
 	}
@@ -66,7 +73,7 @@ func TestBuildProjectArchiveRejectsEntrypointOutsideWorkingDir(t *testing.T) {
 	writeProjectFile(t, root, "keep.py", "")
 	script := writeProjectFile(t, base, "outside.py", "print(1)\n")
 
-	_, _, err := buildProjectArchive(runDispatchOptions{script: script, workingDir: root})
+	_, _, err := buildProjectArchive(projectRunOptions(script, root))
 	if err == nil {
 		t.Fatal("want error: an entrypoint outside working_dir would never be shipped")
 	}
@@ -80,15 +87,11 @@ func TestBuildProjectArchiveHonoursExcludes(t *testing.T) {
 	script := writeProjectFile(t, root, "train.py", "print(1)\n")
 	writeProjectFile(t, root, "data/blob.bin", strings.Repeat("a", 2048))
 
-	withData, _, err := buildProjectArchive(runDispatchOptions{script: script, workingDir: root})
+	withData, _, err := buildProjectArchive(projectRunOptions(script, root))
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
 	}
-	withoutData, _, err := buildProjectArchive(runDispatchOptions{
-		script:             script,
-		workingDir:         root,
-		workingDirExcludes: []string{"data"},
-	})
+	withoutData, _, err := buildProjectArchive(projectRunOptions(script, root, "data"))
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
 	}
@@ -104,7 +107,7 @@ func TestEntrypointImportGateSuppressedWhenWorkingDirSet(t *testing.T) {
 
 	// Without working_dir the sibling is not shipped, so the gate must fire
 	// at submit time rather than letting Ray fail with ModuleNotFoundError.
-	if err := checkEntrypointImports(runDispatchOptions{script: script}); err == nil {
+	if err := checkEntrypointImports(projectRunOptions(script, "")); err == nil {
 		t.Fatal("want submit-time failure for an unshipped sibling import")
 	} else if !strings.Contains(err.Error(), "working_dir") {
 		t.Fatalf("error should point at the working_dir remedy, got: %v", err)
@@ -112,7 +115,7 @@ func TestEntrypointImportGateSuppressedWhenWorkingDirSet(t *testing.T) {
 
 	// With working_dir the sibling genuinely ships and Ray puts it on
 	// PYTHONPATH, so the same import must be accepted.
-	if err := checkEntrypointImports(runDispatchOptions{script: script, workingDir: root}); err != nil {
+	if err := checkEntrypointImports(projectRunOptions(script, root)); err != nil {
 		t.Fatalf("working_dir ships siblings; gate should pass: %v", err)
 	}
 }
@@ -124,7 +127,7 @@ func TestWorkingDirRejectedForJobEngine(t *testing.T) {
 	// engine: job renders a plain Kubernetes Job, which has no runtime_env.
 	// Accepting working_dir there would also suppress the submit-time import
 	// check, handing back the exact late ModuleNotFoundError it prevents.
-	_, err := newRunJobRequest(runDispatchOptions{script: script, workingDir: root}, "wd-job")
+	_, err := newRunJobRequest(projectRunOptions(script, root), "wd-job")
 	if err == nil {
 		t.Fatal("want rejection: engine job cannot deliver working_dir")
 	}
@@ -139,7 +142,7 @@ func TestJobEngineUnaffectedWhenWorkingDirUnset(t *testing.T) {
 	root := t.TempDir()
 	script := writeProjectFile(t, root, "train.py", "print(1)\n")
 
-	if _, err := newRunJobRequest(runDispatchOptions{script: script}, "plain-job"); err != nil {
+	if _, err := newRunJobRequest(projectRunOptions(script, ""), "plain-job"); err != nil {
 		t.Fatalf("existing single-file job configs must keep working: %v", err)
 	}
 }
@@ -152,7 +155,9 @@ func TestEntrypointImportGateSearchesProjectRootNotJustEntrypointDir(t *testing.
 	writeProjectFile(t, root, "helpers.py", "def build(): return 1\n")
 	script := writeProjectFile(t, root, "pipeline/train.py", "from helpers import build\n")
 
-	err := checkEntrypointImports(runDispatchOptions{script: script, configDir: root})
+	options := projectRunOptions(script, "")
+	options.configDir = root
+	err := checkEntrypointImports(options)
 	if err == nil {
 		t.Fatal("want submit-time failure: helpers.py is at the project root and is not shipped")
 	}

@@ -8,29 +8,16 @@ package cli
 type runDispatchOptions = unresolvedRunOptions
 
 func resolvedJobRequestForTest(target resolvedRunTarget) *runJobRequest {
-	request, _ := target.request.(*runJobRequest)
+	request, _ := target.(*runJobRequest)
 	return request
 }
 
 func resolvedRayRequestForTest(target resolvedRunTarget) *runRayRequest {
-	request, _ := target.request.(*runRayRequest)
+	request, _ := target.(*runRayRequest)
 	return request
 }
 
 func resolvedManagedWorkflowRequestForTest(target resolvedRunTarget) *runManagedWorkflowRequest {
-	request, _ := target.request.(*runManagedWorkflowRequest)
+	request, _ := target.(*runManagedWorkflowRequest)
 	return request
-}
-
-func resolvedRuntimeForTest(target resolvedRunTarget) (resolvedRunRuntime, bool) {
-	switch request := target.request.(type) {
-	case *runJobRequest:
-		return request.Options.resolvedRunRuntime, true
-	case *runRayRequest:
-		return request.Options.resolvedRunRuntime, true
-	case *runManagedWorkflowRequest:
-		return request.Options.resolvedRunRuntime, true
-	default:
-		return resolvedRunRuntime{}, false
-	}
 }

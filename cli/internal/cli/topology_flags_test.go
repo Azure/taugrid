@@ -665,7 +665,7 @@ spec:
 func TestTopologyFlagsApplyToPreservesOverrideWarningOrder(t *testing.T) {
 	// Mirrors the production path: placement intent arrives from the config's
 	// policy block, and "changed" means the config set a non-empty value.
-	dispatch := runDispatchOptions{lane: "large-memory", queue: "sample-large-memory"}
+	dispatch := runDispatchOptions{runPlacement: runPlacement{lane: "large-memory", queue: "sample-large-memory"}}
 	flags := runJobTopologyFlags(dispatch)
 	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
 	preset := &runtopology.ResolvedPreset{
@@ -712,7 +712,7 @@ func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
 }
 
 func TestTopologyFlagsQueueOverrideDisablesPresetTASContract(t *testing.T) {
-	dispatch := runDispatchOptions{queue: "sample-training"}
+	dispatch := runDispatchOptions{runPlacement: runPlacement{queue: "sample-training"}}
 	flags := runJobTopologyFlags(dispatch)
 	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
 	preset := &runtopology.ResolvedPreset{
@@ -737,7 +737,7 @@ func TestTopologyFlagsQueueOverrideDisablesPresetTASContract(t *testing.T) {
 }
 
 func TestTopologyFlagsMatchingQueuePreservesPresetTASContract(t *testing.T) {
-	dispatch := runDispatchOptions{queue: "jobqueue"}
+	dispatch := runDispatchOptions{runPlacement: runPlacement{queue: "jobqueue"}}
 	flags := runJobTopologyFlags(dispatch)
 	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
 	preset := &runtopology.ResolvedPreset{
@@ -762,7 +762,7 @@ func TestTopologyFlagsMatchingQueuePreservesPresetTASContract(t *testing.T) {
 }
 
 func TestTopologyFlagsAutoQueuePreservesPresetTASContract(t *testing.T) {
-	dispatch := runDispatchOptions{queue: "auto"}
+	dispatch := runDispatchOptions{runPlacement: runPlacement{queue: "auto"}}
 	flags := runJobTopologyFlags(dispatch)
 	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
 	preset := &runtopology.ResolvedPreset{
@@ -935,7 +935,7 @@ func TestDRAQueueModeUsesParallelQueueUnlessExplicitlyOverridden(t *testing.T) {
 		t.Fatal("DRA mode must disable TAS annotations")
 	}
 
-	explicitQueue := runDispatchOptions{queue: "custom-dra"}
+	explicitQueue := runDispatchOptions{runPlacement: runPlacement{queue: "custom-dra"}}
 	changed := func(flag string) bool { return runJobTopologyFieldSet(explicitQueue, flag) }
 	opts = jobrender.Options{QueueName: "custom-dra"}
 	configureGPUQueueModeWithChanged("dra", &opts, changed)

@@ -105,8 +105,8 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	namespaceExplicit := strings.TrimSpace(o.namespace) != ""
 	namespace := strings.TrimSpace(o.namespace)
 
-	topo := resolvedRunTopologyFlags(o.resolvedRunPlacement)
-	topoChanged := func(flag string) bool { return resolvedRunTopologyFieldSet(o.resolvedRunPlacement, flag) }
+	topo := resolvedRunTopologyFlags(o.runPlacement)
+	topoChanged := func(flag string) bool { return resolvedRunTopologyFieldSet(o.runPlacement, flag) }
 	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
 	if err != nil {
 		return err

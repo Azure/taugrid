@@ -297,12 +297,15 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 			KubeContext: "test-context",
 			Namespace:   "ray",
 			TargetOptions: runDispatchOptions{
-				engine:                "job",
-				script:                "train.py",
-				metricsOffloadEnabled: true,
-				workers:               1,
-				jobGPUs:               &zeroGPUs,
-				gpusPerWorker:         1,
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runComputeInput: runComputeInput{
+					runRayResources: runRayResources{workers: 1, gpusPerWorker: 1},
+					jobGPUs:         &zeroGPUs,
+				},
+				runObservabilityInput: runObservabilityInput{
+					runDirectMetrics: runDirectMetrics{metricsOffloadEnabled: true},
+				},
 			},
 		},
 		"/data/resume-job/checkpoints",
@@ -342,9 +345,15 @@ func TestValidateMetricsResumeStateLocationRejectsOutputDrift(t *testing.T) {
 		experiment.AnnotationResultPVC:        "original-pvc",
 	}}
 	options := runDispatchOptions{
-		metricsOffloadEnabled: true,
-		output:                "/data/runs/changed",
-		dataPVC:               "original-pvc",
+		runStorageInput: runStorageInput{
+			runDirectStorage: runDirectStorage{
+				output:  "/data/runs/changed",
+				dataPVC: "original-pvc",
+			},
+		},
+		runObservabilityInput: runObservabilityInput{
+			runDirectMetrics: runDirectMetrics{metricsOffloadEnabled: true},
+		},
 	}
 	if err := validateMetricsResumeStateLocation(snapshot, options, "resume-job"); err == nil ||
 		!strings.Contains(err.Error(), "cannot change storage.output") {
@@ -435,7 +444,7 @@ func TestResumeDoesNotDeleteWhenWorkspaceNamespaceChanged(t *testing.T) {
 			KubeContext: "test-context",
 			Namespace:   "sample-old",
 			TargetOptions: runDispatchOptions{
-				workspace: "sample",
+				runRouting: runRouting{workspace: "sample"},
 			},
 		},
 		"",

@@ -1168,7 +1168,7 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 }
 
 func TestRunConfigAcceptsQueueAutoForLiveResolution(t *testing.T) {
-	if err := validateRunDispatchOptions(runDispatchOptions{queue: "auto"}); err != nil {
+	if err := validateRunDispatchOptions(runDispatchOptions{runPlacement: runPlacement{queue: "auto"}}); err != nil {
 		t.Fatalf("policy.queue auto should reach live queue discovery: %v", err)
 	}
 }
@@ -1543,7 +1543,10 @@ func TestResolveRunTargetCarriesManagedRayMetricsAndOutput(t *testing.T) {
 
 func TestResolveRunTargetRejectsUnsupportedStagedPublicationDispatch(t *testing.T) {
 	tests := []runDispatchOptions{
-		{file: "managed.yaml", outputPublish: "staged"},
+		{
+			runDispatchInput: runDispatchInput{file: "managed.yaml"},
+			runStorageInput:  runStorageInput{runDirectStorage: runDirectStorage{outputPublish: "staged"}},
+		},
 	}
 	for _, options := range tests {
 		if _, err := resolveRunTarget(options, "unsupported"); err == nil || !strings.Contains(err.Error(), "storage.publish is not supported") {

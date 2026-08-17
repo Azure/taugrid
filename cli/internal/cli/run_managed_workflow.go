@@ -267,8 +267,8 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 		m.Runtime.Env = mergedEnv
 	}
 
-	topo := resolvedRunTopologyFlags(o.resolvedRunPlacement)
-	changed := func(flag string) bool { return resolvedRunTopologyFieldSet(o.resolvedRunPlacement, flag) }
+	topo := resolvedRunTopologyFlags(o.runPlacement)
+	changed := func(flag string) bool { return resolvedRunTopologyFieldSet(o.runPlacement, flag) }
 	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
 	if err != nil {
 		return err
