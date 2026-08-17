@@ -37,6 +37,11 @@ Before enabling the recorder:
 The recorder's Kubernetes Role is namespace-scoped and permits only
 `get/list/watch` for Jobs, RayJobs, and Kueue Workloads in `targetNamespace`.
 It does not mount workload storage or read workload logs or Secrets.
+When `schemaManagement.enabled=true`, the chart additionally creates a Role in
+`schemaManagement.namespace` which can only `get/list/watch` the one named
+`ManagementCommand`. That read-only permission is used by the init container
+to wait for schema readiness; it grants neither write access to adx-mon objects
+nor ADX database-management access.
 
 ## Merge recorder settings into the canonical platform values
 
