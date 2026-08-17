@@ -21,7 +21,24 @@ and `gpu_monitoring_sku_name` together for another supported GPU SKU.
 ```bash
 cd terraform/aks
 terraform init
-terraform apply -var="subscription_id=<subscription-id>"
+```
+
+Keep the deployment inputs in a local `terraform.tfvars` file so every later
+`plan`, `apply`, and `destroy` uses the same environment. Do not commit this
+file.
+
+```hcl
+subscription_id     = "<subscription-id>"
+resource_group_name = "<resource-group-name>"
+cluster_name        = "<cluster-name>"
+
+# Optional ADX, adx-mon, and Portal Kusto integration.
+enable_adx          = true
+adx_cluster_name    = "<globally-unique-adx-cluster-name>"
+```
+
+```bash
+terraform apply
 ```
 
 Terraform writes an ignored local admin kubeconfig and generated chart values
@@ -51,7 +68,7 @@ Service. This is intentionally not an internet-facing endpoint. For an
 operator diagnostic session:
 
 ```bash
-kubectl -n tau port-forward service/tau-portal 8080:80
+kubectl -n tau port-forward service/tau-portal 18080:80
 ```
 
 An authenticated HTTPS proxy is required before giving researchers a browser
@@ -63,5 +80,5 @@ Kusto-backed boards require a separate ADX and workload identity configuration.
 Destroying the resource group removes the cluster and stops GPU billing:
 
 ```bash
-terraform destroy -var="subscription_id=<subscription-id>"
+terraform destroy
 ```

@@ -11,4 +11,7 @@ podAnnotations:
   adx-mon/scrape: "true"
 
 kubernetes:
-  enablePodLabels: true
+  # Keep one DCGM series per physical GPU. The Portal fleet board keys a GPU
+  # by node and device, while DCGM Pod labels would create an additional row
+  # for every workload using that device.
+  enablePodLabels: false
