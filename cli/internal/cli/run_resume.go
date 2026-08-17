@@ -46,14 +46,11 @@ func newRunResumeCmdWithDependencies(
 		Long: `Resume a training job that failed due to preemption, OOM, eviction, or
 other transient errors. The command inspects the failed workload, discovers
 the durable checkpoint directory, injects TAU_RESUME_FROM into the pod
-env, deletes the old workload, and re-submits with the same config.
+		env, and submits a successor run with a fresh immutable run ID. The failed
+		workload remains available as provenance.
 
 The trainer reads TAU_RESUME_FROM at startup and loads the latest
 checkpoint from that directory to continue training.
-
-For MultiKueue jobs, tau deletes the manager-cluster Job/RayJob and waits for
-the manager-side Workload finalizer proof before resubmitting. It never calls
-worker clusters directly during resume.
 
 Requirements:
   - The workload must exist and be in a failed state.
@@ -96,6 +93,13 @@ Examples:
 				return err
 			}
 			defer restore()
+			if hooks.fetchStatus == nil {
+				ref, err := resolveRunWorkload(cmd.Context(), kube.New(routing.KubeContext), routing.Namespace, name)
+				if err != nil {
+					return err
+				}
+				name = ref.Name
+			}
 			return runResumeCommand(
 				cmd,
 				name,
@@ -371,6 +375,8 @@ func runResumeCommand(
 			if err != nil {
 				return err
 			}
+		} else if targetOptions.output == "" {
+			targetOptions.output = strings.TrimSpace(snap.Annotations[experiment.AnnotationResultPath])
 		}
 	}
 
@@ -436,7 +442,8 @@ func runResumeCommand(
 	if dryRun == "" {
 		preflightOptions := targetOptions
 		preflightOptions.dryRun = "client"
-		preflightTarget, err := resolveRunTarget(preflightOptions, name)
+		logicalName := firstNonEmpty(routing.ConfigName, targetOptions.logicalName, name)
+		preflightTarget, err := resolveRunTarget(preflightOptions, logicalName)
 		if err != nil {
 			return fmt.Errorf("resolving replacement workload for validation: %w", err)
 		}
@@ -446,16 +453,23 @@ func runResumeCommand(
 		preflightParent.SetOut(io.Discard)
 		preflightParent.SetErr(io.Discard)
 		if err := hooks.validate(preflightParent, preflightTarget, captureCommand, targetOptions.experiment); err != nil {
-			return fmt.Errorf("validating replacement workload before deleting old workload: %w", err)
+			return fmt.Errorf("validating replacement workload successor: %w", err)
 		}
 
-		fmt.Fprintf(w, "deleting failed workload %s/%s...\n", routing.Namespace, name)
-		if err := hooks.delete(cmd.Context(), routing.KubeContext, routing.Namespace, name, w); err != nil {
-			return fmt.Errorf("deleting old workload: %w", err)
+		// Injected legacy hooks remain available to focused tests and embedders,
+		// but the production command preserves the predecessor as evidence.
+		if hooks.deleteOld != nil {
+			fmt.Fprintf(w, "deleting failed workload %s/%s...\n", routing.Namespace, name)
+			if err := hooks.delete(cmd.Context(), routing.KubeContext, routing.Namespace, name, w); err != nil {
+				return fmt.Errorf("deleting old workload: %w", err)
+			}
 		}
 	}
 
-	target, err := resolveRunTarget(targetOptions, name)
+	logicalName := firstNonEmpty(routing.ConfigName, targetOptions.logicalName, name)
+	targetOptions.runID = ""
+	targetOptions.physicalName = ""
+	target, err := resolveRunTarget(targetOptions, logicalName)
 	if err != nil {
 		return fmt.Errorf("resolving run target: %w", err)
 	}

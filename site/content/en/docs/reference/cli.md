@@ -138,11 +138,24 @@ subcommand** — `tau run train --dry-run=client` runs the `run` root with
 | `schema` | Print the JSON schema for the direct run config |
 | `explain-config` | Print the direct run config field reference |
 | `list` | List Tau-managed Jobs/RayJobs in a namespace |
-| `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
-| `logs <job-name>` | Stream Ray driver logs or the batch Job pod logs |
-| `get <name>` | Fetch durable run results and artifacts |
-| `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |
-| `resume <name> --config tau.yaml` | Manually restart a failed run from its checkpoint |
+| `status <run>` | Show lifecycle state and startup phases; `--watch` to poll |
+| `logs <run>` | Stream Ray driver logs or the batch Job pod logs |
+| `get <run>` | Fetch durable run results and artifacts |
+| `cancel <run>` | Stop one active run, delete only its ownership-matched workload, and wait for compute release |
+| `delete <run>` (`remove`) | Remove one terminal Tau workload, or an ownership-matched orphan RayCluster |
+| `archive <run>` | Mark one terminal workload archived while preserving its Kubernetes evidence |
+| `resume <run> --config tau.yaml` | Submit a new immutable successor from a failed run's checkpoint |
+
+The checked-in config `name` is a **logical name**. Each real submission gets a
+new run ID and a run-qualified physical Job/RayJob name. Lifecycle selectors
+accept an exact physical name, exact run ID, or a logical name that identifies
+only one run. If several executions share a logical name, Tau lists the
+candidates instead of silently choosing one.
+
+Submission retries inside one CLI invocation reuse the same submission ID.
+Independent invocations intentionally create distinct immutable runs, so a
+completed workload from an earlier invocation never blocks server dry-run or
+submission and is never overwritten.
 
 There is no `tau run retry` subcommand — automatic retry is driven entirely
 by the `resilience.*` fields in your run config. See

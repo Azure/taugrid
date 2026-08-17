@@ -87,7 +87,10 @@ var (
 type Manifest struct {
 	SchemaVersion int    `yaml:"schema_version"`
 	Name          string `yaml:"name"`
-	Eval          struct {
+	// ResourceNameOverride is assigned by Tau at submission time. It is not
+	// part of the user-authored manifest schema.
+	ResourceNameOverride string `yaml:"-" json:"-"`
+	Eval                 struct {
 		// CPUWorkers is the number of CPU-only Ray worker pods to provision
 		// when this manifest is rendered as a rayjob-eval (Ray actor on a
 		// dedicated GPU worker + ray.remote tasks fanned out across CPU pods). Optional;
@@ -598,6 +601,9 @@ func (m *Manifest) ResourcePrefix() string {
 // ResourceName is the Kubernetes object name used for the workload and its
 // optional JobSecret.
 func (m *Manifest) ResourceName() string {
+	if name := strings.TrimSpace(m.ResourceNameOverride); name != "" {
+		return name
+	}
 	return m.ResourcePrefix() + "-" + m.Name
 }
 

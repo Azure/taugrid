@@ -159,6 +159,13 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	if err != nil {
 		return fmt.Errorf("manifest %s: %w", manifestPath, err)
 	}
+	logicalName := m.ResourceName()
+	identity, err := ensureRunIdentity(&o, logicalName)
+	if err != nil {
+		return err
+	}
+	request.Options = o
+	m.ResourceNameOverride = identity.PhysicalName
 	dataPVC, err := cleanStorageFlag("storage.data_pvc", o.dataPVC)
 	if err != nil {
 		return err
@@ -383,8 +390,12 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	}
 	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, dryRun)
 	capture := buildManagedWorkflowCaptureMetadata(ctx, captureCommand, m, raw, namespace, workloadKind)
+	capture.RunID = o.runID
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
+	labels[workloadmeta.LabelRunID] = o.runID
+	labels[workloadmeta.LabelRun] = o.logicalName
+	labels[workloadmeta.LabelJob] = m.ResourceName()
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
 	if o.submissionID != "" {
 		annotations[workloadmeta.AnnotationSubmissionID] = o.submissionID

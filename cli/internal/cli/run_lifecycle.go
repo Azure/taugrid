@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/status"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 type watchStatusHooks struct {
@@ -61,6 +63,11 @@ Examples:
 				return err
 			}
 			defer restore()
+			ref, err := resolveRunWorkload(cmd.Context(), kube.New(resolvedContext), ns, name)
+			if err != nil {
+				return err
+			}
+			name = ref.Name
 			opts := statusRunOptions{
 				Namespace:       ns,
 				KubeContext:     resolvedContext,
@@ -350,6 +357,11 @@ Examples:
 			}
 			defer restore()
 			r := kube.New(resolvedContext)
+			ref, err := resolveRunWorkload(cmd.Context(), r, ns, name)
+			if err != nil {
+				return err
+			}
+			name = ref.Name
 			return runLogsCommandWithHooks(cmd.Context(), cmd.OutOrStdout(), r, name, runLogsOptions{
 				Namespace:     ns,
 				Follow:        follow,
@@ -503,7 +515,23 @@ Examples:
 			}
 			defer restore()
 			r := kube.New(resolvedContext)
-			return cancelWorkload(cmd.Context(), r, name, ns, cmd.OutOrStdout(), cancelWorkloadOptions{
+			ref, err := resolveRunWorkload(cmd.Context(), r, ns, name)
+			if err != nil {
+				return err
+			}
+			if !ref.active() {
+				return fmt.Errorf("run %s/%s is terminal; use `tau run archive %s` to retain it or `tau run delete %s` to remove it", ns, ref.Name, ref.Name, ref.Name)
+			}
+			submissionRunner := newKubernetesRunSubmissionRunner(r)
+			hooks := newManagerCleanupHooks(r, ns, ref.Name)
+			hooks.deleteExact = func(ctx context.Context, _ kubeRawRunner, _, _ string, w io.Writer) error {
+				if err := deleteOwnedRunWorkload(ctx, submissionRunner, ref); err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "%s %q deleted\n", ref.Resource, ref.Name)
+				return nil
+			}
+			return cancelWorkload(cmd.Context(), r, ref.Name, ns, cmd.OutOrStdout(), cancelWorkloadOptions{
 				Timeout:  timeout,
 				Interval: interval,
 				Release: computeReleaseOptions{
@@ -512,15 +540,128 @@ Examples:
 					Timeout:  teardownTimeout,
 					Interval: interval,
 				},
-			}, newManagerCleanupHooks(r, ns, name))
+			}, hooks)
 		},
 	}
+
 	connection.add(cmd)
 	cmd.Flags().DurationVar(&timeout, "timeout", defaultManagerCleanupTimeout, "maximum time to wait for MultiKueue manager Workloads to disappear after delete")
 	cmd.Flags().DurationVar(&interval, "interval", defaultManagerCleanupInterval, "poll interval while waiting for MultiKueue cleanup and for the RayCluster and its pods to be released")
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the RayCluster and its pods are gone before reporting success")
 	cmd.Flags().DurationVar(&teardownTimeout, "teardown-timeout", defaultComputeReleaseTimeout, "maximum time to wait for the RayCluster and its pods to be released (covers the 600s pod termination grace period)")
 	return cmd
+}
+
+func newRunDeleteCmd() *cobra.Command {
+	var connection runLifecycleConnectionFlags
+	cmd := &cobra.Command{
+		Use:     "delete <run>",
+		Aliases: []string{"remove"},
+		Short:   "Delete one terminal Tau workload after verifying immutable ownership",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedContext, ns, restore, err := connection.resolve(cmd)
+			if err != nil {
+				return err
+			}
+			defer restore()
+			r := kube.New(resolvedContext)
+			ref, err := resolveRunWorkload(cmd.Context(), r, ns, args[0])
+			if err != nil {
+				if !isRunWorkloadNotFound(err) {
+					return err
+				}
+				deleted, cleanupErr := deleteOwnedRunRayClusters(cmd.Context(), newKubernetesRunSubmissionRunner(r), ns, args[0])
+				if cleanupErr != nil {
+					return fmt.Errorf("%v; orphan RayCluster cleanup failed: %w", err, cleanupErr)
+				}
+				if len(deleted) == 0 {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "deleted orphaned Tau RayCluster(s) for %s: %s\n", args[0], strings.Join(deleted, ", "))
+				return nil
+			}
+			if ref.active() {
+				return fmt.Errorf("run %s/%s is still active; use `tau run cancel %s` so Tau waits for compute release", ns, ref.Name, ref.Name)
+			}
+			if err := deleteOwnedRunWorkload(cmd.Context(), newKubernetesRunSubmissionRunner(r), ref); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %q deleted\n", ref.Resource, ref.Name)
+			return nil
+		},
+	}
+	connection.add(cmd)
+	return cmd
+}
+
+func newRunArchiveCmd() *cobra.Command {
+	var connection runLifecycleConnectionFlags
+	cmd := &cobra.Command{
+		Use:   "archive <run>",
+		Short: "Mark one terminal Tau workload as archived without deleting its evidence",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedContext, ns, restore, err := connection.resolve(cmd)
+			if err != nil {
+				return err
+			}
+			defer restore()
+			r := kube.New(resolvedContext)
+			ref, err := resolveRunWorkload(cmd.Context(), r, ns, args[0])
+			if err != nil {
+				return err
+			}
+			if ref.active() {
+				return fmt.Errorf("run %s/%s is still active; cancel it or wait for terminal status before archiving", ns, ref.Name)
+			}
+			alreadyArchived := ref.Annotations[workloadmeta.AnnotationArchivedAt] != ""
+			if alreadyArchived && (ref.Kind != "Job" || ref.TTLSecondsAfterFinished == nil) {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %q is already archived\n", ref.Resource, ref.Name)
+				return nil
+			}
+			patch, err := archiveRunPatch(ref, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			out, err := r.Raw(cmd.Context(), []string{
+				"patch", ref.Resource + "/" + ref.Name,
+				"-n", ns,
+				"--type=json",
+				"-p", string(patch),
+			}, nil)
+			fmt.Fprint(cmd.OutOrStdout(), out)
+			return err
+		},
+	}
+	connection.add(cmd)
+	return cmd
+}
+
+func archiveRunPatch(run resolvedRunWorkload, archivedAt time.Time) ([]byte, error) {
+	operations := []map[string]any{
+		{"op": "test", "path": "/metadata/uid", "value": string(run.UID)},
+		{"op": "test", "path": "/metadata/labels/" + jsonPointerEscape(workloadmeta.LabelManagedBy), "value": workloadmeta.ManagedByValue},
+		{"op": "test", "path": "/metadata/labels/" + jsonPointerEscape(workloadmeta.LabelRunID), "value": run.RunID},
+	}
+	if run.Kind == "Job" && run.TTLSecondsAfterFinished != nil {
+		operations = append(operations, map[string]any{
+			"op":   "remove",
+			"path": "/spec/ttlSecondsAfterFinished",
+		})
+	}
+	if run.Annotations[workloadmeta.AnnotationArchivedAt] != "" {
+		return json.Marshal(operations)
+	}
+	if run.Annotations == nil {
+		operations = append(operations, map[string]any{"op": "add", "path": "/metadata/annotations", "value": map[string]string{}})
+	}
+	operations = append(operations, map[string]any{
+		"op":    "add",
+		"path":  "/metadata/annotations/" + jsonPointerEscape(workloadmeta.AnnotationArchivedAt),
+		"value": archivedAt.Format(time.RFC3339),
+	})
+	return json.Marshal(operations)
 }
 
 func deleteWorkload(ctx context.Context, r kubeRawRunner, name, ns string, w io.Writer) error {

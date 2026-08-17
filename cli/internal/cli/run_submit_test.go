@@ -407,7 +407,7 @@ func TestWithRunSubmissionCleanupReportsRollbackFailure(t *testing.T) {
 }
 
 func TestRunSubmissionGVRsSupportEveryCleanupResource(t *testing.T) {
-	for _, resource := range []string{"job", "jobs.batch", "rayjob.ray.io", "service", "secret"} {
+	for _, resource := range []string{"job", "jobs.batch", "rayjob.ray.io", "raycluster.ray.io", "service", "secret"} {
 		if _, err := runSubmissionGVR(resource); err != nil {
 			t.Fatalf("runSubmissionGVR(%q): %v", resource, err)
 		}

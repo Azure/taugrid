@@ -235,7 +235,8 @@ Common examples:
 				}
 				retryNS := retryDispatch.namespace
 				return retryLoop(cmd, retryLoopOptions{
-					name:           name,
+					name:           target.physicalName(),
+					logicalName:    firstNonEmpty(retryDispatch.logicalName, name),
 					namespace:      retryNS,
 					kubeContext:    targetOptions.kubeContext,
 					configPath:     resolvedConfigPath,
@@ -266,7 +267,7 @@ Common examples:
 	cmd.Flags().StringVar(&serviceAccountName, "service-account", "", "pod ServiceAccount for workload cloud identity (overrides the TauWorkspace default; authorization remains server-side)")
 	cmd.PersistentFlags().StringVar(&projectName, "project", "", "Tau project name from the repository's tau.projects.yaml")
 
-	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
+	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunDeleteCmd(), newRunArchiveCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
 	return cmd
 }
 
@@ -292,6 +293,7 @@ type runDispatchOptions struct {
 	metricsHistory                                                                                  []string
 	metricsSessionID                                                                                string
 	submissionID                                                                                    string
+	logicalName, runID, physicalName                                                                string
 	clearNodeSelector, disableDefaultPriorities, nameFromConfig                                     bool
 	metricsOffloadEnabled                                                                           bool
 	workspaceExplicit, workspaceQueueResolved, kubeContextExplicit                                  bool
@@ -337,6 +339,19 @@ type resolvedRunTarget struct {
 	job             *runJobRequest
 	ray             *runRayRequest
 	managedWorkflow *runManagedWorkflowRequest
+}
+
+func (t resolvedRunTarget) physicalName() string {
+	switch {
+	case t.job != nil:
+		return t.job.Name
+	case t.ray != nil:
+		return t.ray.Name
+	case t.managedWorkflow != nil:
+		return t.managedWorkflow.Options.physicalName
+	default:
+		return ""
+	}
 }
 
 // dispatchOptions returns the resolved options for whichever engine was chosen.

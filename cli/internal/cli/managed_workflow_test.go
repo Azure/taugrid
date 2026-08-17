@@ -1178,15 +1178,17 @@ esac
 	o.namespace = "taugrid-e2e"
 	o.kubeContext = "taugrid-flex"
 	o.submissionID = "submission-test"
+	o.runID = "run-0001"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
 		t.Fatalf("managed workflow submit: %v\nstderr:\n%s", err, stderr)
 	}
 	rendered := out
+	resourceName := physicalRunName("tau-vit-enc-vision-smoke", "run-0001")
 	for _, want := range []string{
-		"submitted tau-vit-enc-vision-smoke (kind=rayjob",
-		"status:  tau run status tau-vit-enc-vision-smoke",
-		"logs:    tau run logs tau-vit-enc-vision-smoke",
+		"submitted " + resourceName + " (kind=rayjob",
+		"status:  tau run status " + resourceName,
+		"logs:    tau run logs " + resourceName,
 		"artifacts: /data is ephemeral (emptyDir); set storage.data_pvc to persist files beyond RayJob teardown",
 	} {
 		if !strings.Contains(rendered, want) {

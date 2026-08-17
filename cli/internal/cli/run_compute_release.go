@@ -197,13 +197,9 @@ func reportAsyncTeardown(ctx context.Context, r kubeRawRunner, ns, runName, capt
 }
 
 func computeReleaseTimeoutError(timeout time.Duration, ns, runName string, held heldCompute) error {
-	recovery := fmt.Sprintf("kubectl -n %s delete rayclusters.ray.io -l %s=%s", ns, rayOriginLabel, runName)
-	if len(held.Clusters) > 0 {
-		recovery = fmt.Sprintf("kubectl -n %s delete rayclusters.ray.io %s", ns, strings.Join(held.Clusters, " "))
-	}
 	return fmt.Errorf(
-		"timed out after %s waiting for %s/%s to release compute: %s; do NOT resubmit yet or the new run will be admitted against quota these pods still hold; recover with: %s",
-		timeout, ns, runName, held, recovery,
+		"timed out after %s waiting for %s/%s to release compute: %s; do NOT resubmit yet or the new run will be admitted against quota these pods still hold; recover with `tau run delete %s -n %s`, which verifies immutable Tau ownership before removing any orphaned RayCluster",
+		timeout, ns, runName, held, runName, ns,
 	)
 }
 

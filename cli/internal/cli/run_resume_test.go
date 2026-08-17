@@ -288,6 +288,7 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
 	var gotSession string
+	var gotOutput string
 	err := runResumeCommand(
 		command,
 		"resume-job",
@@ -299,6 +300,7 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 				engine:                "job",
 				script:                "train.py",
 				metricsOffloadEnabled: true,
+				dataPVC:               "metrics-pvc",
 				workers:               1,
 				jobGPUs:               &zeroGPUs,
 				gpusPerWorker:         1,
@@ -313,6 +315,8 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 				snapshot.Events = []status.Event{{Reason: "Evicted"}}
 				snapshot.Annotations = map[string]string{
 					workloadmeta.AnnotationMetricsSession: "session-from-failed-job",
+					experiment.AnnotationResultPath:       "/data/runs/resume-job-original",
+					experiment.AnnotationResultPVC:        "metrics-pvc",
 				}
 				return snapshot, nil
 			},
@@ -321,6 +325,7 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 					t.Fatal("resume did not resolve a direct Job")
 				}
 				gotSession = target.job.Options.metricsSessionID
+				gotOutput = target.job.Options.output
 				return nil
 			},
 		},
@@ -330,6 +335,9 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 	}
 	if gotSession != "session-from-failed-job" {
 		t.Fatalf("resumed metrics session = %q", gotSession)
+	}
+	if gotOutput != "/data/runs/resume-job-original" {
+		t.Fatalf("resumed metrics output = %q", gotOutput)
 	}
 }
 

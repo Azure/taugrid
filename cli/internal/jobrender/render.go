@@ -1751,6 +1751,12 @@ func buildHeadlessService(o Options) map[string]any {
 			workloadmeta.LabelManagedBy: workloadmeta.ManagedByValue,
 		},
 	}
+	serviceLabels := metadata["labels"].(map[string]any)
+	for _, key := range []string{workloadmeta.LabelRunID, workloadmeta.LabelRun, workloadmeta.LabelJob} {
+		if value := o.Labels[key]; value != "" {
+			serviceLabels[key] = value
+		}
+	}
 	if submissionID := o.Annotations[workloadmeta.AnnotationSubmissionID]; submissionID != "" {
 		metadata["annotations"] = map[string]any{
 			workloadmeta.AnnotationSubmissionID: submissionID,

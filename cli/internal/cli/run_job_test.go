@@ -29,6 +29,7 @@ func TestResolveRunTargetUsesTypedJobExecutor(t *testing.T) {
 	options.jobGPUs = &zeroGPUs
 	options.env = []string{"FOO=bar"}
 	options.serviceAccountName = "tau-workload"
+	options.runID = "run-0001"
 
 	target, err := resolveRunTarget(options, "typed-job")
 	if err != nil {
@@ -38,7 +39,8 @@ func TestResolveRunTargetUsesTypedJobExecutor(t *testing.T) {
 	if target.job == nil {
 		t.Fatalf("Job run did not resolve to the typed Job executor: %#v", target)
 	}
-	if target.job.Name != "typed-job" ||
+	if target.job.Name != physicalRunName("typed-job", "run-0001") ||
+		target.job.Options.logicalName != "typed-job" ||
 		target.job.Options.script != "train.sh" ||
 		target.job.Options.image != "busybox:1.36" ||
 		target.job.Options.serviceAccountName != "tau-workload" {

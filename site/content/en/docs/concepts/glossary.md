@@ -157,9 +157,14 @@ the schema does. It is not a competing hand-authored default. See
 
 ## Run {#run}
 
-One execution of a [target](#target) plus its lifecycle handle -- the
-object `tau run status`, `tau run logs`, `tau run get`,
-`tau run cancel`, and `tau run resume` operate on.
+One immutable execution of a [target](#target) plus its lifecycle handle -- the
+object `tau run status`, `tau run logs`, `tau run get`, `tau run cancel`,
+`tau run delete`, `tau run archive`, and `tau run resume` operate on.
+
+The config or target name is the logical name and may be shared by many runs.
+Tau assigns each execution a distinct run ID and derives a run-qualified
+physical Kubernetes name. Commands accept any unambiguous identity; they never
+silently select among several runs with the same logical name.
 
 ## Workload (Job / RayJob) {#workload}
 
