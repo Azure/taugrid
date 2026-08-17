@@ -51,8 +51,7 @@ tau --help >/dev/null
 
 Persist `TAU_BIN_DIR` on `PATH` for later terminals. The
 [Tau installation guide](../../getting-started/install/) explains upgrades,
-the optional Python SDK, and the verified-binary path available after a GitHub
-Release is published.
+the recommended GitHub Release installation, and the optional Python SDK.
 
 Record the original local state and select the target:
 

@@ -10,18 +10,28 @@ license_dir="${TAU_LICENSE_DIR:-${HOME:?HOME must be set}/.local/share/doc/tau}"
 default_version="@TAU_VERSION@"
 version="${TAU_VERSION:-$default_version}"
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "tau installer: curl is required" >&2
-  exit 1
+github_cli_authenticated=false
+if command -v gh >/dev/null 2>&1 &&
+  gh auth status --hostname github.com >/dev/null 2>&1; then
+  github_cli_authenticated=true
 fi
 
 if [ "$version" = "$default_version" ] &&
   [ "${default_version#@}" != "$default_version" ]; then
-  latest_url="$(
-    curl -fsSL -o /dev/null -w '%{url_effective}' \
-      "https://github.com/$repository/releases/latest"
-  )"
-  version="${latest_url##*/}"
+  if [ "$github_cli_authenticated" = true ]; then
+    version="$(
+      gh release view --repo "$repository" --json tagName --jq .tagName
+    )"
+  elif command -v curl >/dev/null 2>&1; then
+    latest_url="$(
+      curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$repository/releases/latest"
+    )"
+    version="${latest_url##*/}"
+  else
+    echo "tau installer: authenticated gh or curl is required" >&2
+    exit 1
+  fi
 fi
 
 semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*))(\.((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*)))*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
@@ -61,9 +71,21 @@ release_url="https://github.com/$repository/releases/download/$version"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/tau-install.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
-curl -fsSL --output "$tmp_dir/$asset" "$release_url/$asset"
-curl -fsSL --output "$tmp_dir/SHA256SUMS" "$release_url/SHA256SUMS"
-curl -fsSL --output "$tmp_dir/LICENSE" "$release_url/LICENSE"
+if [ "$github_cli_authenticated" = true ]; then
+  gh release download "$version" \
+    --repo "$repository" \
+    --dir "$tmp_dir" \
+    --pattern "$asset" \
+    --pattern SHA256SUMS \
+    --pattern LICENSE
+elif command -v curl >/dev/null 2>&1; then
+  curl -fsSL --output "$tmp_dir/$asset" "$release_url/$asset"
+  curl -fsSL --output "$tmp_dir/SHA256SUMS" "$release_url/SHA256SUMS"
+  curl -fsSL --output "$tmp_dir/LICENSE" "$release_url/LICENSE"
+else
+  echo "tau installer: authenticated gh or curl is required" >&2
+  exit 1
+fi
 
 if command -v sha256sum >/dev/null 2>&1; then
   checksum_command="sha256sum"
