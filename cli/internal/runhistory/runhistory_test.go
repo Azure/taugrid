@@ -644,6 +644,22 @@ func TestWriterRetryAndErrorPropagation(t *testing.T) {
 	}
 }
 
+func TestRunRetriesContinuousRecorderAfterReconcileFailure(t *testing.T) {
+	source := &fakeSource{jobs: []Job{{Metadata: testMetadata("retry-loop")}}}
+	writer := &fakeWriter{failures: 100, err: errors.New("schema not ready")}
+	reconciler := newTestReconciler(source, writer)
+	reconciler.WriterRetries = 0
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Millisecond)
+	defer cancel()
+	err := Run(ctx, reconciler, "ray", 5*time.Millisecond, false, &Health{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want context deadline exceeded", err)
+	}
+	if writer.writeCall < 2 {
+		t.Fatalf("continuous recorder write calls = %d, want at least 2", writer.writeCall)
+	}
+}
+
 func TestRecordNeverIncludesSecretsLogsOrMetricValues(t *testing.T) {
 	metadata := testMetadata("safe")
 	metadata.Annotations["example.com/secret"] = "do-not-record"
