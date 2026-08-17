@@ -73,6 +73,13 @@ not to the current vNext deploy contract.
 
 ## Install
 
+This is the standalone services-chart path for platform owners who deliberately
+manage its release separately. Do **not** use it on a cluster whose `taugrid`
+umbrella release already enables the `taugrid-core` dependency: use
+`tau cluster install` and merge service settings into that umbrella release's
+canonical values source instead. Two releases cannot safely co-own Portal,
+recorder, or their shared namespaced resources.
+
 ```bash
 # Assumes Kueue + KubeRay are installed and GPU nodes expose nvidia.com/gpu.
 # See ../INSTALL.md.
@@ -314,9 +321,11 @@ researcher browser access. Each board degrades independently, so a partial
 install still serves the rest:
 
 - **Experiments / Cluster Health / Cost** read ADX/Kusto through the shared
-  `portal.kusto.queryCommand` (the same shell-out contract as Stellar). Without
-  it, `source=kusto` fails the render; the Cluster Health and Cost board APIs
-  return 503 when the command is absent at runtime.
+  configuration. Set `portal.kusto.endpoint` for the native
+  `DefaultAzureCredential` path, or set `portal.kusto.queryCommand` only when a
+  platform intentionally supplies an adapter executable. Without either a
+  reachable endpoint or adapter, Kusto-backed board APIs return 503 while the
+  Kubernetes-backed boards continue to serve.
 - **Jobs / Queue, Ray, and Cluster Nodes** read the Kubernetes API directly with
   the pod's ServiceAccount. The computed Jobs board is disabled by default; use
   `portal.jobs.scopeMode=workspace` with an authenticated workspace directory,
@@ -344,9 +353,10 @@ It does not authorize the Jobs board. Viewer-authorized Jobs access requires
 trusted authentication proxy supplying the configured identity headers.
 Trusted test-cluster operator deployments can instead use `operator` mode with
 explicit scopes. The chart mounts only metadata; it never mounts remote
-kubeconfigs. Grant the portal's ServiceAccount the ADX database viewer role
-(e.g. via Azure Workload Identity on `portal.serviceAccount` +
-`portal.podLabels`) so `queryCommand` can reach ADX.
+kubeconfigs. Grant the portal's ServiceAccount the ADX database viewer role.
+For Azure Workload Identity, set
+`portal.serviceAccount.annotations.azure.workload.identity/client-id`; the
+chart derives the required Pod label from that annotation.
 
 ### Researcher browser access
 
