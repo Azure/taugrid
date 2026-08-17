@@ -84,6 +84,24 @@ then reuse its digest in every run config. Kubernetes uses the workload's
 configured private-registry authentication; do not put registry credentials or
 signed download URLs in the config.
 
+Direct Jobs can set the main container's initial working directory without
+wrapping the entrypoint in shell-specific `cd` logic:
+
+```yaml
+engine: job
+entrypoint: train.py
+runtime:
+  image: <pinned-image>
+  working_dir: /workspace/project
+```
+
+`runtime.working_dir` must be a clean absolute path inside the image. Tau maps
+it directly to Kubernetes `container.workingDir`; it does not inspect the
+entrypoint, create the directory, or ship local files. It is Job-only and
+cannot be combined with `run.source`. Ray's `run.working_dir` remains a
+different, host-relative field that packages a local project into Ray
+`runtime_env`.
+
 For example, build a source-only image whose `/workspace` contains the checked
 out tree, push it to the platform's private registry, and resolve the immutable
 digest before generating run configs:
@@ -110,7 +128,7 @@ Main field groups:
 | Group | Purpose |
 |---|---|
 | `name`, `engine`, `entrypoint` | Workload identity and execution mode; `script` aliases `entrypoint`, and the nested `run.*` block adds immutable Job source staging and Ray project-directory shipping |
-| `runtime` | Image, packages, and literal/secret/Key Vault environment; top-level `image` is a lowest-priority alias for `runtime.image` |
+| `runtime` | Image, direct-Job container working directory, packages, and literal/secret/Key Vault environment; top-level `image` is a lowest-priority alias for `runtime.image` |
 | `compute` | Worker, GPU, CPU, and memory intent |
 | `execution` | Launcher, node/process topology, launcher configs, and Ray Tune search settings |
 | `policy` | Explicit operator/accounting overrides |

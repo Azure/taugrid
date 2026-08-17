@@ -287,6 +287,7 @@ type runDispatchOptions struct {
 	configDir                                                                                       string
 	workingDir                                                                                      string
 	workingDirExcludes                                                                              []string
+	containerWorkingDir                                                                             string
 	source                                                                                          *runconfig.Source
 	nodeSelectors, runtimePip, env, envSecrets, envKV, extraScripts                                 []string
 	metricsHistory                                                                                  []string

@@ -210,6 +210,7 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 	o.workerMemoryRequest = c.Compute.WorkerMemReq
 	o.workerCPULimit = c.Compute.WorkerCPULimit
 	o.workerMemoryLimit = c.Compute.WorkerMemLimit
+	o.containerWorkingDir = c.Runtime.WorkingDir
 	o.runtimePip = append([]string{}, c.Runtime.Pip...)
 	o.env = mapToKeyValueList(c.Runtime.Env)
 	o.envSecrets = mapToKeyValueList(c.Runtime.EnvSecret)

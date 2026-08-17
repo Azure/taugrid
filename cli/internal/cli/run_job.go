@@ -200,6 +200,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		AzureWorkloadIdentity:   o.azureWorkloadIdentity,
 		ScriptPath:              o.script,
 		Source:                  o.source,
+		WorkingDir:              o.containerWorkingDir,
 		Launcher:                o.launcher,
 		ProcessesPerNode:        o.processesPerNode,
 		Nodes:                   o.nodes,
