@@ -1,6 +1,6 @@
 name: Release tau CLI
 
-run-name: Release tau CLI ${{ inputs.tag || github.ref_name }}
+run-name: Release tau CLI ${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
 
 on:
   push:
@@ -9,11 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated SemVer tag to publish
+        description: Annotated SemVer tag matching the dispatch ref
         required: true
         type: string
       allow_main_release_notes:
-        description: Use release notes from main when the existing tag predates them
+        description: Recover the v0.3.0 release notes from main
         required: false
         default: false
         type: boolean
@@ -21,18 +21,18 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
+  RELEASE_SOURCE_REF: ${{ github.ref_type == 'tag' && github.sha || 'cbf4e83ee30fdb5764040a02ee948aba8dd42e83' }}
+
 concurrency:
-  group: release-tau-${{ inputs.tag || github.ref_name }}
+  group: release-tau-${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
   cancel-in-progress: false
 
 jobs:
   validate:
     name: Validate release tag
     runs-on: ubuntu-latest
-    outputs:
-      commit: ${{ steps.release.outputs.commit }}
-      date: ${{ steps.release.outputs.date }}
-      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Check out main with tags
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +41,6 @@ jobs:
           ref: main
 
       - name: Validate immutable release inputs
-        id: release
         env:
           ALLOW_MAIN_RELEASE_NOTES: ${{ inputs.allow_main_release_notes }}
           DISPATCH_TAG: ${{ inputs.tag }}
@@ -51,10 +50,29 @@ jobs:
 
           case "$GITHUB_EVENT_NAME" in
             workflow_dispatch)
-              if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-                echo "Dispatch this workflow from main, not $GITHUB_REF" >&2
-                exit 1
-              fi
+              case "$GITHUB_REF_TYPE:$GITHUB_REF" in
+                tag:*)
+                  if [[ "$DISPATCH_TAG" != "$GITHUB_REF_NAME" ]]; then
+                    echo "tag input must match the dispatch ref $GITHUB_REF_NAME" >&2
+                    exit 1
+                  fi
+                  if [[ "$ALLOW_MAIN_RELEASE_NOTES" == "true" ]]; then
+                    echo "allow_main_release_notes is only valid for the v0.3.0 recovery" >&2
+                    exit 1
+                  fi
+                  ;;
+                branch:refs/heads/main)
+                  if [[ "$DISPATCH_TAG" != "v0.3.0" ||
+                        "$ALLOW_MAIN_RELEASE_NOTES" != "true" ]]; then
+                    echo "main dispatch is only supported for the v0.3.0 recovery" >&2
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  echo "Dispatch from the release tag, not $GITHUB_REF" >&2
+                  exit 1
+                  ;;
+              esac
               TAG="$DISPATCH_TAG"
               ;;
             push)
@@ -75,6 +93,10 @@ jobs:
             echo "tag must be SemVer with a v prefix, got '$TAG'" >&2
             exit 1
           fi
+          if [[ "$TAG" != "$RELEASE_TAG" ]]; then
+            echo "tag $TAG does not match release ref $RELEASE_TAG" >&2
+            exit 1
+          fi
 
           git fetch --force origin main "refs/tags/$TAG:refs/tags/$TAG"
           if [[ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]]; then
@@ -83,6 +105,11 @@ jobs:
           fi
 
           commit="$(git rev-parse "$TAG^{commit}")"
+          source_commit="$(git rev-parse "$RELEASE_SOURCE_REF^{commit}")"
+          if [[ "$commit" != "$source_commit" ]]; then
+            echo "$TAG points to $commit, not the workflow source $source_commit" >&2
+            exit 1
+          fi
           if ! git merge-base --is-ancestor "$commit" origin/main; then
             echo "$TAG points to $commit, which is not on main" >&2
             exit 1
@@ -128,11 +155,6 @@ jobs:
 
           date="$(git show -s --format=%cI "$commit")"
           {
-            echo "tag=$TAG"
-            echo "commit=$commit"
-            echo "date=$date"
-          } >> "$GITHUB_OUTPUT"
-          {
             echo "### Validated release input"
             echo
             echo "- Tag: \`$TAG\`"
@@ -144,7 +166,7 @@ jobs:
       - name: Upload validated release notes
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tau-release-notes-${{ steps.release.outputs.tag }}
+          name: tau-release-notes-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/release-notes.md
           if-no-files-found: error
           retention-days: 1
@@ -157,7 +179,7 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -195,7 +217,7 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -205,12 +227,12 @@ jobs:
 
       - name: Build twice and compare
         env:
-          COMMIT: ${{ needs.validate.outputs.commit }}
-          DATE: ${{ needs.validate.outputs.date }}
-          VERSION: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
 
+          COMMIT="$(git rev-parse HEAD)"
+          DATE="$(git show -s --format=%cI HEAD)"
           first="$RUNNER_TEMP/tau-release-a"
           second="$RUNNER_TEMP/tau-release-b"
           make -C cli release-assets \
@@ -252,7 +274,7 @@ jobs:
       - name: Upload validated release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tau-release-${{ needs.validate.outputs.tag }}
+          name: tau-release-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release-a/*
           if-no-files-found: error
           compression-level: 0
@@ -271,28 +293,28 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Download validated release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: tau-release-${{ needs.validate.outputs.tag }}
+          name: tau-release-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release
 
       - name: Download validated release notes
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: tau-release-notes-${{ needs.validate.outputs.tag }}
+          name: tau-release-notes-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release-notes
 
       - name: Create, verify, and publish release
         env:
-          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.validate.outputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
 
+          EXPECTED_COMMIT="$(git rev-parse HEAD)"
           verify_remote_tag() {
             remote_commit="$(
               git ls-remote origin "refs/tags/$TAG^{}" |
@@ -407,23 +429,25 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install tagged Python SDK
-        env:
-          TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check \
-            "git+https://github.com/$GITHUB_REPOSITORY.git@$TAG#subdirectory=sdk/python/python"
+          python -m pip install --disable-pip-version-check ./sdk/python/python
 
       - name: Download and exercise published binaries
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.validate.outputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
           TAU_ARCH: ${{ matrix.arch }}
           TAU_OS: ${{ matrix.os }}
         run: |

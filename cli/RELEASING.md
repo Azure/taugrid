@@ -57,7 +57,14 @@ publish Python wheels.
    push only that tag. Repository tag rules must prevent updates or deletion of
    release tags; the workflow revalidates the remote tag before publication.
 2. The tag push starts **Release tau CLI** automatically. To retry an existing
-   tag, dispatch the workflow from `main` and supply the tag.
+   tag, dispatch the workflow from that same tag ref and supply the tag:
+
+   ```bash
+   gh workflow run release-tau.yaml \
+     --repo Azure/taugrid \
+     --ref vX.Y.Z \
+     -f tag=vX.Y.Z
+   ```
 3. The read-only validation job verifies that the tag is annotated, follows
    SemVer, points to `main`, has checked-in release notes, and has no existing
    GitHub Release.
@@ -72,18 +79,20 @@ publish Python wheels.
    help and version commands. A failure leaves the immutable published release
    unchanged and fails the workflow for explicit follow-up.
 
-For an existing tag that predates its checked-in release notes, a maintainer can
-explicitly allow the manual workflow to use the reviewed notes from `main`:
+`v0.3.0` predates both this dispatch flow and its checked-in release notes. Its
+one-time recovery is restricted to the reviewed tag commit while taking the
+release notes from `main`:
 
 ```bash
 gh workflow run release-tau.yaml \
   --repo Azure/taugrid \
   --ref main \
-  -f tag=vX.Y.Z \
+  -f tag=v0.3.0 \
   -f allow_main_release_notes=true
 ```
 
-This is a recovery path. New tags must contain their own release notes.
+No other tag may use this recovery path. New tags must contain their own release
+notes and manual runs must use the matching tag ref.
 
 ## Verify
 

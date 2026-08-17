@@ -143,7 +143,8 @@ TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
    unit tests for the three charts, `cd cli && go test ./internal/cli`, and
    `python3 scripts/check-license-headers.py`.
 4. Before tagging, add `cli/releases/vX.Y.Z.md`. After merge, push the annotated
-   tag; the CLI release starts automatically and can also be dispatched by tag.
+   tag; the CLI release starts automatically. Retry it by dispatching the
+   workflow from the same tag ref with the same tag input.
 
 ## Architecture
 
