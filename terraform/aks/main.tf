@@ -53,6 +53,11 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
   node_labels = {
     "aks.azure.com/gpu-sku" = var.gpu_monitoring_sku_name
   }
+
+  upgrade_settings {
+    max_surge = "10%"
+  }
+
   tags = var.tags
 }
 
@@ -67,12 +72,6 @@ locals {
     gpu_vm_size             = var.gpu_vm_size
     gpu_count_per_node      = var.gpu_count_per_node
   })
-}
-
-resource "local_sensitive_file" "kubeconfig" {
-  filename        = local.kubeconfig_path
-  content         = azurerm_kubernetes_cluster.this.kube_admin_config_raw
-  file_permission = "0600"
 }
 
 resource "local_file" "taugrid_values" {
@@ -94,13 +93,12 @@ resource "terraform_data" "install_taugrid" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local_sensitive_file.kubeconfig.filename
+      KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --resource-group ${azurerm_resource_group.this.name} --name ${azurerm_kubernetes_cluster.this.name} --file ${local_sensitive_file.kubeconfig.filename} --overwrite-existing; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl apply -f nvidia-device-plugin.yaml; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; tau cluster install --values ${local_file.taugrid_values.filename} --version ${var.taugrid_version} --timeout 20m"
+    command = "az aks get-credentials --resource-group ${azurerm_resource_group.this.name} --name ${azurerm_kubernetes_cluster.this.name} --file ${local.kubeconfig_path} --overwrite-existing; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; kubectl apply -f nvidia-device-plugin.yaml; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; tau cluster install --values ${local_file.taugrid_values.filename} --version ${var.taugrid_version} --timeout 20m"
   }
 
   depends_on = [
-    local_sensitive_file.kubeconfig,
     local_file.taugrid_values,
     azurerm_kubernetes_cluster_node_pool.gpu,
   ]
