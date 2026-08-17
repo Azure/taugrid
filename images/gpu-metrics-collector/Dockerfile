@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.5-1-azurelinux3.0 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.6-1-azurelinux3.0 AS builder
 ARG TARGETARCH
 RUN tdnf install -y glibc-static && tdnf clean all
 WORKDIR /app
