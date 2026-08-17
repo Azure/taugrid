@@ -10,6 +10,9 @@
 {{- if hasKey $sku "ib_pkey" }}
 {{- $ibPkey = $sku.ib_pkey }}
 {{- end }}
+{{- if and $sku.ib_devices (or (not (kindIs "string" $ibPkey)) (not (regexMatch "^0x[0-9a-fA-F]{4}$" (toString $ibPkey)))) }}
+{{- fail (printf "gpuSkus.%s.ib_pkey must be a quoted four-digit hexadecimal PKey such as \"0x8001\"; got %v. YAML parses an unquoted 0x8001 as the integer 32769." $skuName $ibPkey) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: DaemonSet

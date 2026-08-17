@@ -138,6 +138,18 @@ tests:
              value: "0x8001"
           any: true
 
+  - it: H200 expects the verified Hopper VBIOS
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: VBIOS_VERSIONS
+             value: '("96.00.BC.00.02")'
+          any: true
+
   - it: H200 PKey is deployment-overridable for Flex
     set:
       gpuSkus.h200.ib_pkey: "0xffff"
@@ -151,6 +163,20 @@ tests:
              name: EXPECTED_IB_PKEY
              value: "0xffff"
           any: true
+
+  - it: unquoted hexadecimal PKeys are rejected before deployment
+    set:
+      gpuSkus.h200.ib_pkey: 32769
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpuSkus\.h200\.ib_pkey must be a quoted four-digit hexadecimal PKey'
+
+  - it: malformed PKeys are rejected before deployment
+    set:
+      gpuSkus.h200.ib_pkey: "8001"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpuSkus\.h200\.ib_pkey must be a quoted four-digit hexadecimal PKey'
 
   - it: enabledGpuSkus can render only H200
     set:

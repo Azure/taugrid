@@ -390,7 +390,7 @@ gpuSkus:
     num_gpus: 8
     monitor_config: custom-plugin-monitor-h100.json
     gpu_driver_versions: '("580.126.09")'
-    vbios_versions: '("97.00.B9.00.23")'
+    vbios_versions: '("96.00.BC.00.02")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
     ib_pkey: "0x8001"
     ib_flap_threshold_short: 2

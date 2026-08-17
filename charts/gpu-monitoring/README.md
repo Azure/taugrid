@@ -134,7 +134,8 @@ gpuSkus:
 
 VBIOS expectations remain independently overridable through
 `gpuSkus.<profile>.vbios_versions`; only add firmware versions that have been
-verified on the target fleet.
+verified on the target fleet. The built-in H200 profile expects the verified
+Hopper firmware `96.00.BC.00.02`.
 
 For a mixed cluster with managed A100 nodes and GPU Operator H200 nodes:
 
