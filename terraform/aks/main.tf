@@ -217,6 +217,7 @@ resource "terraform_data" "install_taugrid" {
     azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.taugrid_values.content_sha256,
     var.taugrid_version,
+    join(" ", var.command_interpreter),
   ]
 
   provisioner "local-exec" {
@@ -264,6 +265,7 @@ resource "terraform_data" "install_dcgm_exporter" {
   triggers_replace = [
     local_file.dcgm_exporter_values[0].content_sha256,
     var.dcgm_exporter_chart_version,
+    join(" ", var.command_interpreter),
   ]
 
   provisioner "local-exec" {
@@ -286,6 +288,7 @@ resource "terraform_data" "install_adx_mon" {
   triggers_replace = [
     local_file.adx_mon_values[0].content_sha256,
     azurerm_kusto_database_principal_assignment.adx_mon,
+    join(" ", var.command_interpreter),
   ]
 
   provisioner "local-exec" {
