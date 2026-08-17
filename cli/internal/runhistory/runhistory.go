@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -230,9 +231,18 @@ type Reconciler struct {
 	ResultScope   string
 	WriterRetries int
 	Now           func() time.Time
+	// Log, when set, receives operational notices. It is deliberately not a
+	// per-poll trace: only transitions are written, so a recorder polling
+	// every 30s does not flood its own logs.
+	Log io.Writer
 
 	mu   sync.Mutex
 	seen map[string]map[string]struct{}
+	// terminalFailed records the durable IDs that have already had a failed
+	// terminal observation emitted, so a later pass that lost pod visibility
+	// cannot overwrite the enriched evidence with a degraded restatement.
+	terminalFailed map[string]struct{}
+	lastPodsStatus string
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, error) {
@@ -280,6 +290,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 		result.PodsStatus = "unavailable"
 		pods = nil
 	}
+	r.notePodsStatus(result.PodsStatus, podErr)
 
 	now := time.Now().UTC()
 	if r.Now != nil {
@@ -289,6 +300,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 	for _, job := range jobs {
 		records := observationsForJob(job, correlatedWorkloads(job.Metadata, runID(job.Metadata), workloads), correlatedPods(job.Metadata, pods), r.Cluster, r.WorkspaceID, r.ResultScope, now)
 		assignObservationIDs(records)
+		// Without pod visibility a terminal failure degrades back to the Job's
+		// own "BackoffLimitExceeded". Emitting that for a run whose enriched
+		// cause was already recorded does not add an observation, it competes
+		// with one: both rows carry the same observed_at (derived from the
+		// Job's terminal condition, which does not move), and the dashboards
+		// collapse with arg_max(observed_at, *), whose tie-break is arbitrary.
+		// The degraded row could therefore win and hide the exit code.
+		if podErr != nil {
+			records = r.withoutRecordedFailures(records)
+		}
 		pending = append(pending, r.unsent(records)...)
 	}
 	for _, rayJob := range rayJobs {
@@ -351,12 +372,62 @@ func (r *Reconciler) markSeen(records []Record) {
 	if r.seen == nil {
 		r.seen = make(map[string]map[string]struct{})
 	}
+	if r.terminalFailed == nil {
+		r.terminalFailed = make(map[string]struct{})
+	}
 	for _, record := range records {
 		if r.seen[record.DurableID] == nil {
 			r.seen[record.DurableID] = make(map[string]struct{})
 		}
 		r.seen[record.DurableID][recordFingerprint(record)] = struct{}{}
+		if record.State == StateFailed {
+			r.terminalFailed[record.DurableID] = struct{}{}
+		}
 	}
+}
+
+// withoutRecordedFailures drops failed terminal records for runs whose failure
+// has already been written. It is used only when pod evidence was unreadable
+// this pass, so the record being dropped is strictly less informative than the
+// one already durable.
+//
+// A first observation is never dropped: if the failure has not been recorded
+// yet, a degraded record is better than none.
+func (r *Reconciler) withoutRecordedFailures(records []Record) []Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Record, 0, len(records))
+	for _, record := range records {
+		if record.State == StateFailed {
+			if _, ok := r.terminalFailed[record.DurableID]; ok {
+				continue
+			}
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
+// notePodsStatus reports pod-visibility transitions exactly once per change.
+// Losing pod reads silently degrades every batch-Job failure summary, and the
+// most common cause — a Role without the pods read verb — produces no other
+// symptom: the recorder stays healthy and simply writes weaker records.
+func (r *Reconciler) notePodsStatus(status string, podErr error) {
+	r.mu.Lock()
+	previous := r.lastPodsStatus
+	r.lastPodsStatus = status
+	r.mu.Unlock()
+
+	if r.Log == nil || previous == status {
+		return
+	}
+	if status == "available" {
+		if previous != "" {
+			fmt.Fprintln(r.Log, "run history: pod reads recovered; batch Job failure summaries are enriched again")
+		}
+		return
+	}
+	fmt.Fprintf(r.Log, "run history: pod reads unavailable (%v); batch Job failures will record only the Job condition reason until this clears\n", podErr)
 }
 
 func recordFingerprint(record Record) string {

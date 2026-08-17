@@ -16,6 +16,7 @@ type Health struct {
 	ready           bool
 	rayJobsStatus   string
 	workloadsStatus string
+	podsStatus      string
 	lastReconciled  string
 }
 
@@ -25,6 +26,7 @@ func (h *Health) MarkSuccess(result Result, observedAt string) {
 	h.ready = true
 	h.rayJobsStatus = result.RayJobsStatus
 	h.workloadsStatus = result.WorkloadsStatus
+	h.podsStatus = result.PodsStatus
 	h.lastReconciled = observedAt
 }
 
@@ -38,6 +40,7 @@ func (h *Health) Handler() http.Handler {
 		ready := h.ready
 		status := h.rayJobsStatus
 		workloadsStatus := h.workloadsStatus
+		podsStatus := h.podsStatus
 		last := h.lastReconciled
 		h.mu.RUnlock()
 		if !ready {
@@ -45,7 +48,18 @@ func (h *Health) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"rayjobs_status": status, "workloads_status": workloadsStatus, "last_reconciled": last})
+		// pods_status is operator-facing, not decorative: when it is not
+		// "available" every batch-Job failure summary silently degrades to the
+		// Job's own "BackoffLimitExceeded" with no other signal. The usual
+		// cause is a Role without the pods read verb. Runbooks direct
+		// operators here first, so it has to be readable from outside the
+		// process.
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"rayjobs_status":   status,
+			"workloads_status": workloadsStatus,
+			"pods_status":      podsStatus,
+			"last_reconciled":  last,
+		})
 	})
 	return mux
 }

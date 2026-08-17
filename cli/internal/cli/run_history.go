@@ -73,6 +73,7 @@ func newRunHistoryRecordCmd(sourceFactory runHistorySourceFactory, writerFactory
 			reconciler := &runhistory.Reconciler{
 				Source: source, Writer: writer, Cluster: cluster,
 				WorkspaceID: workspaceID, ResultScope: resultScope, WriterRetries: 2,
+				Log: cmd.ErrOrStderr(),
 			}
 			runDone := make(chan error, 1)
 			go func() {

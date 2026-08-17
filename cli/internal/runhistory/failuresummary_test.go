@@ -258,3 +258,92 @@ func TestControllerVersionUsesTauAnnotation(t *testing.T) {
 		t.Errorf("ControllerVersion = %q, want v0.3.0", record.ControllerVersion)
 	}
 }
+
+// A transient pod-read failure must never overwrite evidence already recorded.
+//
+// Before this guard, a second pass without pod visibility re-emitted the same
+// terminal failure with the degraded "BackoffLimitExceeded" text. Both rows
+// carry an identical observed_at — it derives from the Job's terminal
+// condition, which does not move between passes — and the dashboards collapse
+// with arg_max(observed_at, *), whose tie-break on equal values is arbitrary.
+// The degraded row could therefore win and hide the exit code, which is the
+// exact evidence loss the failure summary exists to prevent.
+func TestTransientPodFailureDoesNotOverwriteRecordedEvidence(t *testing.T) {
+	source := failedJobSource([]Pod{
+		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 42, Reason: "Error"}),
+	})
+	writer := &fakeWriter{}
+	reconciler := newTestReconciler(source, writer)
+
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+	enriched := writer.records[len(writer.records)-1]
+	if !strings.Contains(enriched.Message, "exit code 42") {
+		t.Fatalf("first pass did not enrich: %q", enriched.Message)
+	}
+	before := len(writer.records)
+
+	// Pod visibility is lost; the Job is unchanged and still terminal.
+	source.podErr = context.DeadlineExceeded
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, record := range writer.records[before:] {
+		if record.State == StateFailed {
+			t.Errorf("degraded failure record re-emitted after losing pod visibility: %q / %q", record.Reason, record.Message)
+		}
+	}
+}
+
+// The guard must not suppress a first observation: if the failure was never
+// recorded, a degraded record is better than no record at all.
+func TestFirstFailureIsRecordedEvenWithoutPods(t *testing.T) {
+	source := failedJobSource(nil)
+	source.podErr = context.DeadlineExceeded
+
+	writer := &fakeWriter{}
+	if _, err := newTestReconciler(source, writer).Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	var failed bool
+	for _, record := range writer.records {
+		if record.State == StateFailed {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Error("no terminal failure recorded; a degraded record is better than none")
+	}
+}
+
+// Once pod reads recover, a genuinely richer record is still allowed through.
+func TestRecoveredPodsStillEnrichAnUnrecordedFailure(t *testing.T) {
+	source := failedJobSource(nil)
+	source.podErr = context.DeadlineExceeded
+	writer := &fakeWriter{}
+	reconciler := newTestReconciler(source, writer)
+
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(writer.records)
+
+	source.podErr = nil
+	source.pods = []Pod{jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 7, Reason: "Error"})}
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	var enriched bool
+	for _, record := range writer.records[before:] {
+		if strings.Contains(record.Message, "exit code 7") {
+			enriched = true
+		}
+	}
+	if !enriched {
+		t.Error("recovered pod reads did not produce an enriched record")
+	}
+}
