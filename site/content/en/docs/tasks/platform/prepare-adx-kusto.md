@@ -4,7 +4,7 @@ weight: 3
 description: Provision and authorize the optional Azure Data Explorer data plane used by TauGrid integrations
 ---
 
-{{< maturity status="alpha" reviewed="2026-08-13" >}}
+{{< maturity status="alpha" reviewed="2026-08-17" >}}
 
 ADX/Kusto is an optional platform data service. TauGrid does not create its
 cluster, databases, Entra identities, federation, or database roles. Prepare
@@ -88,8 +88,8 @@ deployment prerequisite. That command remains a development/release artifact
 generator; it does not execute KQL.
 
 For a release that includes lifecycle schema management, enable adx-mon first
-and grant its identity the ADX database `Admin` role on `Metrics`. Enabling
-`lifecycleRecorder` then creates an adx-mon `ManagementCommand` that
+and grant its identity the ADX database `Admin` role on `Metrics`. Explicitly
+enabling `lifecycleRecorder.schemaManagement` then creates an adx-mon `ManagementCommand` that
 idempotently creates or updates `Metrics.TauExpRunLifecycle`, its named JSON
 mapping, and `TauExpRunLifecycleDashboardRows()`. The recorder itself retains
 only the `Ingestor` role.
@@ -102,8 +102,9 @@ kubectl -n <adx-mon-namespace> get managementcommand \
   -o jsonpath='{.status.conditions[0].status}{" "}{.status.conditions[0].reason}{"\n"}'
 ```
 
-Wait for a successful status. adx-mon reconciles commands periodically, so a
-new command is not necessarily complete immediately after a Helm upgrade. Set
+Wait for a successful status. adx-mon v0.3.0 reconciles commands every 10
+minutes, and the recorder's readiness gate waits up to 25 minutes rather than
+starting before the schema exists. Set
 `lifecycleRecorder.schemaManagement.enabled=false` only when an existing
 platform-owned automation already manages the identical lifecycle contract.
 

@@ -4,7 +4,7 @@ weight: 4
 description: Record Tau workload lifecycle observations to a prepared ADX/Kusto database
 ---
 
-{{< maturity status="alpha" reviewed="2026-08-13" >}}
+{{< maturity status="alpha" reviewed="2026-08-17" >}}
 
 The lifecycle recorder is an optional ADX/Kusto producer, not a Portal
 component. It runs one metadata-only `tau run history record` Deployment and
@@ -50,11 +50,12 @@ The chart accepts only the released Tau image on MCR. Pin the released image by
 tag, or set `tag: ""` and provide its immutable digest.
 
 Use a release that includes the recorder's current queued-ingestion contract
-and automatic lifecycle schema management. The chart's default schema
-management creates the named `TauExpRunLifecycleMapping` through adx-mon, and
-the recorder sends an idempotent ADX extent tag with each batch. Do not replace
-it with an arbitrary private image or hand-edit the Deployment as a production
-workaround; chart and image must be released together.
+and lifecycle schema management. Schema management is deliberately opt-in:
+the configuration below enables it explicitly. It creates the named
+`TauExpRunLifecycleMapping` through adx-mon, and the recorder sends an
+idempotent ADX extent tag with each batch. Do not replace it with an arbitrary
+private image or hand-edit the Deployment as a production workaround; chart
+and image must be released together.
 
 ```text
 # Merge into the existing <platform-values.yaml>; not a complete Helm values file.
@@ -102,6 +103,13 @@ Upgrade the single umbrella release with the complete canonical values file:
 tau cluster install --context <context> --version <taugrid-release-version> \
   --values <platform-values.yaml>
 
+# adx-mon v0.3.0 reconciles ManagementCommands every 10 minutes. The recorder
+# does not start until this command succeeds, so wait for it before checking
+# the Deployment rollout.
+kubectl -n <adx-mon-namespace> wait \
+  --for=condition=managementcommand.adx-mon.azure.com \
+  --timeout=25m managementcommand/taugrid-lifecycle-schema
+
 kubectl -n <control-plane-namespace> rollout status \
   deploy/tau-lifecycle-recorder --timeout=180s
 kubectl -n <adx-mon-namespace> get managementcommand \
@@ -110,9 +118,10 @@ kubectl -n <adx-mon-namespace> get managementcommand \
 kubectl -n <control-plane-namespace> logs deploy/tau-lifecycle-recorder --tail=100
 ```
 
-Wait for the ManagementCommand to report a successful status before expecting
-the recorder to ingest rows. adx-mon reconciles commands periodically, so this
-can take up to its polling interval after the Helm upgrade.
+If the wait times out, do not disable the readiness gate: inspect the command
+and adx-mon logs, then correct its ADX role, database configuration, or
+network path. Automatic schema management currently supports only the adx-mon
+configured `Metrics` database and the canonical `TauExpRunLifecycle` table.
 
 Submit a workload in `targetNamespace`, then query the configured ADX database:
 
