@@ -24,6 +24,7 @@ kubectl -n "${namespace}" create secret generic gpu-monitoring-gpu \
   --from-file=check_ib.sh="${root}/scripts/check_ib.sh" \
   --from-file=check_ib_pkeys.sh="${root}/scripts/check_ib_pkeys.sh" \
   --from-file=check_gpu_vbios.sh="${root}/scripts/check_gpu_vbios.sh" \
+  --from-file=check_gpu_vbios_consistency.sh="${root}/scripts/check_gpu_vbios_consistency.sh" \
   --from-file=check_gpu_throttle.sh="${root}/scripts/check_gpu_throttle.sh" \
   --from-file=check_gpu_driver.sh="${root}/scripts/check_gpu_driver.sh" \
   --from-file=check_gpu_ecc_remap_pending.sh="${root}/scripts/check_gpu_ecc_remap_pending.sh" \

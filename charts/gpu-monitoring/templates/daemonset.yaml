@@ -239,6 +239,10 @@ spec:
               subPath: check_gpu_vbios.sh
               readOnly: true
             - name: custom-config
+              mountPath: /custom-config/check_gpu_vbios_consistency.sh
+              subPath: check_gpu_vbios_consistency.sh
+              readOnly: true
+            - name: custom-config
               mountPath: /custom-config/check_gpu_throttle.sh
               subPath: check_gpu_throttle.sh
               readOnly: true

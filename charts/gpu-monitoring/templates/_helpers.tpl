@@ -102,6 +102,8 @@ check_ib_pkeys.sh: |
 {{ tpl (.Files.Get "scripts/check_ib_pkeys.sh") . | indent 2 }}
 check_gpu_vbios.sh: |
 {{ tpl (.Files.Get "scripts/check_gpu_vbios.sh") . | indent 2 }}
+check_gpu_vbios_consistency.sh: |
+{{ tpl (.Files.Get "scripts/check_gpu_vbios_consistency.sh") . | indent 2 }}
 check_gpu_throttle.sh: |
 {{ tpl (.Files.Get "scripts/check_gpu_throttle.sh") . | indent 2 }}
 check_gpu_driver.sh: |

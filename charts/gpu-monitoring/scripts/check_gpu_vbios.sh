@@ -2,7 +2,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks GPU VBIOS version
+# This plugin checks that the GPU VBIOS versions on the node are on the
+# allow-list.
+#
+# It asserts allow-list membership only. Whether all GPUs agree on one version
+# is asserted separately by check_gpu_vbios_consistency.sh, so a mixed-VBIOS
+# hardware fault and fleet configuration drift surface as independent,
+# correctly-attributed node conditions.
 
 readonly OK=0
 readonly NONOK=1
@@ -33,25 +39,35 @@ if [ ${#uniq_vbios_versions[@]} -eq 0 ]; then
     exit $UNKNOWN
 fi
 
-if [ ${#uniq_vbios_versions[@]} -ne 1 ]; then
-    echo "More than 1 VBIOS version found on GPUs! Found '${uniq_vbios_versions[*]}'. FaultCode: NHC2001"
-    exit $NONOK
-fi
-
-uniq_vbios_version="${uniq_vbios_versions[0]}"
-
 # Empty expected = skip check
 if [ ${#expected_versions[@]} -eq 0 ] || [ -z "${expected_versions[0]}" ]; then
   echo "No expected VBIOS versions configured, skipping check"
   exit $OK
 fi
 
-for expected_version in "${expected_versions[@]}"; do
-  if [[ "$expected_version" == "$uniq_vbios_version" ]]; then
-    echo "GPU VBIOS version (${uniq_vbios_version}) matches one of the expected versions '${expected_versions[*]}'"
-    exit $OK
+# Every observed version must be on the allow-list. Versions differing between
+# GPUs is not a failure here: check_gpu_vbios_consistency.sh owns that fault, so
+# GPUVbiosMismatch means exactly "VBIOS is not on the allow-list".
+unexpected_versions=()
+for observed_version in "${uniq_vbios_versions[@]}"; do
+  matched=0
+  for expected_version in "${expected_versions[@]}"; do
+    if [[ "$expected_version" == "$observed_version" ]]; then
+      matched=1
+      break
+    fi
+  done
+  if [ $matched -eq 0 ]; then
+    unexpected_versions+=("$observed_version")
   fi
 done
 
-echo "GPU VBIOS version (${uniq_vbios_version}) does not match one of the expected versions '${expected_versions[*]}'. FaultCode: NHC2001"
-exit $NONOK
+# FaultCode NHC2001 is the documented catch-all in the Azure HPC fault
+# dictionary and the code upstream azure_gpu_vbios.nhc emits for this check.
+if [ ${#unexpected_versions[@]} -ne 0 ]; then
+  echo "GPU VBIOS version (${unexpected_versions[*]}) does not match one of the expected versions '${expected_versions[*]}'. FaultCode: NHC2001"
+  exit $NONOK
+fi
+
+echo "GPU VBIOS version (${uniq_vbios_versions[*]}) matches one of the expected versions '${expected_versions[*]}'"
+exit $OK

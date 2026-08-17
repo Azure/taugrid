@@ -76,6 +76,11 @@
       "message": "GPU VBIOS ok"
     },
     {
+      "type": "GPUVbiosInconsistent",
+      "reason": "GPUVbiosConsistent",
+      "message": "GPU VBIOS consistent across GPUs"
+    },
+    {
       "type": "GPUThrottle",
       "reason": "GPUThrottleOk",
       "message": "GPU throttle ok"
@@ -264,6 +269,19 @@
       "condition": "GPUVbiosMismatch",
       "reason": "GPUVbiosMismatch",
       "path": "/custom-config/check_gpu_vbios.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "temporary",
+      "reason": "GPUVbiosInconsistent",
+      "path": "/custom-config/check_gpu_vbios_consistency.sh",
+      "timeout": "10s"
+    },
+    {
+      "type": "permanent",
+      "condition": "GPUVbiosInconsistent",
+      "reason": "GPUVbiosInconsistent",
+      "path": "/custom-config/check_gpu_vbios_consistency.sh",
       "timeout": "10s"
     },
     {
