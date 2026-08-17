@@ -35,6 +35,11 @@ cluster_name        = "<cluster-name>"
 # Optional ADX, adx-mon, and Portal Kusto integration.
 enable_adx          = true
 adx_cluster_name    = "<globally-unique-adx-cluster-name>"
+
+# Optional durable Jobs and RayJobs history in Portal. The namespace must
+# already exist through a TauWorkspace before this is enabled.
+enable_lifecycle_recorder          = true
+lifecycle_recorder_target_namespace = "taugrid-default"
 ```
 
 ```bash
@@ -74,6 +79,10 @@ kubectl -n tau port-forward service/tau-portal 18080:80
 An authenticated HTTPS proxy is required before giving researchers a browser
 URL. The default Portal deployment exposes Kubernetes-backed boards. Its
 Kusto-backed boards require a separate ADX and workload identity configuration.
+When `enable_lifecycle_recorder` is set, Terraform creates a least-privilege
+ADX ingestion identity and enables Portal run history. It also asks adx-mon to
+create the `Metrics.TauExpRunLifecycle` schema. Create the target workspace
+first, then apply Terraform with the same `terraform.tfvars` file.
 
 ## Destroy
 

@@ -39,6 +39,34 @@ taugrid-core:
       endpoint: ${adx_endpoint}
       database: Metrics
       ingestion: remote-write
+%{ if lifecycle_recorder_enabled }
+    runHistory:
+      enabled: true
+      table: TauExpRunLifecycle
+%{ endif }
+%{ if lifecycle_recorder_enabled }
+  lifecycleRecorder:
+    enabled: true
+    namespace: tau
+    targetNamespace: ${lifecycle_recorder_target_namespace}
+    cluster: ${cluster_name}
+    kusto:
+      endpoint: ${adx_endpoint}
+      database: Metrics
+      table: TauExpRunLifecycle
+    schemaManagement:
+      enabled: true
+      namespace: adx-mon
+    workloadIdentity:
+      enabled: true
+    serviceAccount:
+      create: true
+      name: tau-lifecycle-recorder
+      annotations:
+        azure.workload.identity/client-id: ${lifecycle_recorder_client_id}
+    rbac:
+      create: true
+%{ endif }
 %{ endif }
 
 gpu-monitoring:

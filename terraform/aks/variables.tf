@@ -99,6 +99,23 @@ variable "enable_adx" {
   default     = false
 }
 
+variable "enable_lifecycle_recorder" {
+  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true and an existing workload namespace."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_lifecycle_recorder || var.enable_adx
+    error_message = "enable_lifecycle_recorder requires enable_adx=true."
+  }
+}
+
+variable "lifecycle_recorder_target_namespace" {
+  description = "Existing workload namespace observed by the lifecycle recorder. Create it through a TauWorkspace before enabling the recorder."
+  type        = string
+  default     = "taugrid-default"
+}
+
 variable "adx_cluster_name" {
   description = "Globally unique Azure Data Explorer cluster name when enable_adx is true."
   type        = string

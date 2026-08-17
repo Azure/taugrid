@@ -68,14 +68,17 @@ locals {
   gpu_quota           = var.gpu_node_count * var.gpu_count_per_node
   adx_databases       = toset(["Metrics", "Logs", "CostTracking", "Audit"])
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
-    gpu_quota               = local.gpu_quota
-    gpu_monitoring_sku_name = var.gpu_monitoring_sku_name
-    gpu_vm_size             = var.gpu_vm_size
-    gpu_count_per_node      = var.gpu_count_per_node
-    adx_enabled             = var.enable_adx
-    adx_endpoint            = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
-    portal_client_id        = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
-    cluster_name            = var.cluster_name
+    gpu_quota                           = local.gpu_quota
+    gpu_monitoring_sku_name             = var.gpu_monitoring_sku_name
+    gpu_vm_size                         = var.gpu_vm_size
+    gpu_count_per_node                  = var.gpu_count_per_node
+    adx_enabled                         = var.enable_adx
+    lifecycle_recorder_enabled          = var.enable_lifecycle_recorder
+    lifecycle_recorder_client_id        = var.enable_lifecycle_recorder ? azurerm_user_assigned_identity.lifecycle_recorder[0].client_id : ""
+    lifecycle_recorder_target_namespace = var.lifecycle_recorder_target_namespace
+    adx_endpoint                        = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
+    portal_client_id                    = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
+    cluster_name                        = var.cluster_name
   })
 }
 
@@ -118,6 +121,13 @@ resource "azurerm_user_assigned_identity" "adx_mon" {
   resource_group_name = azurerm_resource_group.this.name
 }
 
+resource "azurerm_user_assigned_identity" "lifecycle_recorder" {
+  count               = var.enable_lifecycle_recorder ? 1 : 0
+  name                = "taugrid-lifecycle-recorder"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+}
+
 resource "azurerm_federated_identity_credential" "portal" {
   count               = var.enable_adx ? 1 : 0
   name                = "tau-portal"
@@ -148,6 +158,16 @@ resource "azurerm_federated_identity_credential" "adx_mon_alerter" {
   audience            = ["api://AzureADTokenExchange"]
 }
 
+resource "azurerm_federated_identity_credential" "lifecycle_recorder" {
+  count               = var.enable_lifecycle_recorder ? 1 : 0
+  name                = "tau-lifecycle-recorder"
+  resource_group_name = azurerm_resource_group.this.name
+  parent_id           = azurerm_user_assigned_identity.lifecycle_recorder[0].id
+  issuer              = azurerm_kubernetes_cluster.this.oidc_issuer_url
+  subject             = "system:serviceaccount:tau:tau-lifecycle-recorder"
+  audience            = ["api://AzureADTokenExchange"]
+}
+
 resource "azurerm_kusto_database_principal_assignment" "adx_mon" {
   for_each            = var.enable_adx ? local.adx_databases : toset([])
   name                = "taugrid-adx-mon-${lower(each.value)}"
@@ -170,6 +190,18 @@ resource "azurerm_kusto_database_principal_assignment" "portal" {
   principal_type      = "App"
   role                = "Viewer"
   tenant_id           = azurerm_user_assigned_identity.portal[0].tenant_id
+}
+
+resource "azurerm_kusto_database_principal_assignment" "lifecycle_recorder" {
+  count               = var.enable_lifecycle_recorder ? 1 : 0
+  name                = "taugrid-lifecycle-recorder-ingestor"
+  resource_group_name = azurerm_resource_group.this.name
+  cluster_name        = azurerm_kusto_cluster.this[0].name
+  database_name       = azurerm_kusto_database.this["Metrics"].name
+  principal_id        = azurerm_user_assigned_identity.lifecycle_recorder[0].client_id
+  principal_type      = "App"
+  role                = "Ingestor"
+  tenant_id           = azurerm_user_assigned_identity.lifecycle_recorder[0].tenant_id
 }
 
 resource "local_file" "taugrid_values" {
@@ -199,6 +231,9 @@ resource "terraform_data" "install_taugrid" {
   depends_on = [
     local_file.taugrid_values,
     azurerm_kubernetes_cluster_node_pool.gpu,
+    azurerm_federated_identity_credential.lifecycle_recorder,
+    azurerm_kusto_database_principal_assignment.lifecycle_recorder,
+    terraform_data.install_adx_mon,
   ]
 }
 
@@ -263,9 +298,9 @@ resource "terraform_data" "install_adx_mon" {
   }
 
   depends_on = [
-    terraform_data.install_taugrid,
     terraform_data.install_dcgm_exporter,
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
+    azurerm_kusto_database_principal_assignment.lifecycle_recorder,
   ]
 }
