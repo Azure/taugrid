@@ -127,12 +127,13 @@ CI runs on every PR to main (`.github/workflows/taugrid-validation.yml`). It bui
 
 Key CI settings: `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`. Tests run with `-count=1` (no caching). The controller module uses `-race`.
 
-## TauGrid MCR Version Bump
+## TauGrid Release Version Bump
 
 TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
 `tau-core-controller` charts plus the `tau`, `taugrid-portal`, and
 `tau-core-controller` images. Helm and MCR use `X.Y.Z`; the Git tag uses
-`vX.Y.Z`. `gpu-monitoring` and `adx-mon` keep independent versions.
+`vX.Y.Z`. The tag also publishes the `tau` and `tau-gen` CLI binaries;
+`gpu-monitoring`, `adx-mon`, and the Python SDK keep independent versions.
 
 1. Update `version`/`appVersion` in the three `Chart.yaml` files and the two
    first-party dependency versions in `charts/taugrid/Chart.yaml`.
@@ -141,6 +142,9 @@ TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
 3. Run `scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid`, Helm lint and
    unit tests for the three charts, `cd cli && go test ./internal/cli`, and
    `python3 scripts/check-license-headers.py`.
+4. Before tagging, add `cli/releases/vX.Y.Z.md`. After merge, push the annotated
+   tag; the CLI release starts automatically. Retry it by dispatching the
+   workflow from the same tag ref with the same tag input.
 
 ## Architecture
 

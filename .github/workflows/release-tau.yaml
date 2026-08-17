@@ -1,30 +1,38 @@
 name: Release tau CLI
 
-run-name: Release tau CLI ${{ inputs.tag }}
+run-name: Release tau CLI ${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
 
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated SemVer tag to publish
+        description: Annotated SemVer tag matching the dispatch ref
         required: true
         type: string
+      allow_main_release_notes:
+        description: Recover the v0.3.0 release notes from main
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
+env:
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
+  RELEASE_SOURCE_REF: ${{ github.ref_type == 'tag' && github.sha || 'cbf4e83ee30fdb5764040a02ee948aba8dd42e83' }}
+
 concurrency:
-  group: release-tau-${{ inputs.tag }}
+  group: release-tau-${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
   cancel-in-progress: false
 
 jobs:
   validate:
     name: Validate release tag
     runs-on: ubuntu-latest
-    outputs:
-      commit: ${{ steps.release.outputs.commit }}
-      date: ${{ steps.release.outputs.date }}
-      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Check out main with tags
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,20 +41,60 @@ jobs:
           ref: main
 
       - name: Validate immutable release inputs
-        id: release
         env:
+          ALLOW_MAIN_RELEASE_NOTES: ${{ inputs.allow_main_release_notes }}
+          DISPATCH_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Dispatch this workflow from main, not $GITHUB_REF" >&2
-            exit 1
-          fi
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch)
+              case "$GITHUB_REF_TYPE:$GITHUB_REF" in
+                tag:*)
+                  if [[ "$DISPATCH_TAG" != "$GITHUB_REF_NAME" ]]; then
+                    echo "tag input must match the dispatch ref $GITHUB_REF_NAME" >&2
+                    exit 1
+                  fi
+                  if [[ "$ALLOW_MAIN_RELEASE_NOTES" == "true" ]]; then
+                    echo "allow_main_release_notes is only valid for the v0.3.0 recovery" >&2
+                    exit 1
+                  fi
+                  ;;
+                branch:refs/heads/main)
+                  if [[ "$DISPATCH_TAG" != "v0.3.0" ||
+                        "$ALLOW_MAIN_RELEASE_NOTES" != "true" ]]; then
+                    echo "main dispatch is only supported for the v0.3.0 recovery" >&2
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  echo "Dispatch from the release tag, not $GITHUB_REF" >&2
+                  exit 1
+                  ;;
+              esac
+              TAG="$DISPATCH_TAG"
+              ;;
+            push)
+              if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+                echo "Expected a tag push, got $GITHUB_REF" >&2
+                exit 1
+              fi
+              TAG="$GITHUB_REF_NAME"
+              ;;
+            *)
+              echo "Unsupported release event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
           semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*))(\.((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*)))*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
           if [[ ! "$TAG" =~ $semver_re ]]; then
             echo "tag must be SemVer with a v prefix, got '$TAG'" >&2
+            exit 1
+          fi
+          if [[ "$TAG" != "$RELEASE_TAG" ]]; then
+            echo "tag $TAG does not match release ref $RELEASE_TAG" >&2
             exit 1
           fi
 
@@ -57,14 +105,32 @@ jobs:
           fi
 
           commit="$(git rev-parse "$TAG^{commit}")"
+          source_commit="$(git rev-parse "$RELEASE_SOURCE_REF^{commit}")"
+          if [[ "$commit" != "$source_commit" ]]; then
+            echo "$TAG points to $commit, not the workflow source $source_commit" >&2
+            exit 1
+          fi
           if ! git merge-base --is-ancestor "$commit" origin/main; then
             echo "$TAG points to $commit, which is not on main" >&2
             exit 1
           fi
-          if ! git cat-file -e "$commit:cli/releases/$TAG.md"; then
-            echo "cli/releases/$TAG.md is required" >&2
-            exit 1
+
+          notes_path="cli/releases/$TAG.md"
+          notes_source="$commit"
+          if ! git cat-file -e "$notes_source:$notes_path"; then
+            if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ||
+                  "$ALLOW_MAIN_RELEASE_NOTES" != "true" ]]; then
+              echo "$notes_path is required in the tagged commit" >&2
+              exit 1
+            fi
+            if ! git cat-file -e "origin/main:$notes_path"; then
+              echo "$notes_path is also missing from main" >&2
+              exit 1
+            fi
+            notes_source="$(git rev-parse 'origin/main^{commit}')"
           fi
+          git show "$notes_source:$notes_path" > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
 
           status="$(
             curl --silent --show-error --output "$RUNNER_TEMP/existing-release.json" \
@@ -89,17 +155,21 @@ jobs:
 
           date="$(git show -s --format=%cI "$commit")"
           {
-            echo "tag=$TAG"
-            echo "commit=$commit"
-            echo "date=$date"
-          } >> "$GITHUB_OUTPUT"
-          {
             echo "### Validated release input"
             echo
             echo "- Tag: \`$TAG\`"
             echo "- Commit: \`$commit\`"
             echo "- Commit date: \`$date\`"
+            echo "- Release notes source: \`$notes_source\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload validated release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tau-release-notes-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          retention-days: 1
 
   gates:
     name: Run release gates
@@ -109,15 +179,13 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
-          cache-dependency-path: |
-            cli/go.sum
-            core/go.sum
+          cache: false
 
       - name: Test Go release modules
         run: |
@@ -129,17 +197,12 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: sdk/python/python/pyproject.toml
 
-      - name: Test source-aligned Python SDK
-        env:
-          EXPECTED_VERSION: ${{ needs.validate.outputs.tag }}
+      - name: Test Python SDK compatibility
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -e "./sdk/python/python[dev]"
           python -m pytest sdk/python/python/tests
-          python -c 'import os, tau; assert "v" + tau.__version__ == os.environ["EXPECTED_VERSION"]'
 
       - name: Test release installer
         run: |
@@ -154,24 +217,22 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
-          cache-dependency-path: |
-            cli/go.sum
-            core/go.sum
+          cache: false
 
       - name: Build twice and compare
         env:
-          COMMIT: ${{ needs.validate.outputs.commit }}
-          DATE: ${{ needs.validate.outputs.date }}
-          VERSION: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
 
+          COMMIT="$(git rev-parse HEAD)"
+          DATE="$(git show -s --format=%cI HEAD)"
           first="$RUNNER_TEMP/tau-release-a"
           second="$RUNNER_TEMP/tau-release-b"
           make -C cli release-assets \
@@ -213,7 +274,7 @@ jobs:
       - name: Upload validated release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tau-release-${{ needs.validate.outputs.tag }}
+          name: tau-release-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release-a/*
           if-no-files-found: error
           compression-level: 0
@@ -232,22 +293,28 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Download validated release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: tau-release-${{ needs.validate.outputs.tag }}
+          name: tau-release-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release
+
+      - name: Download validated release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tau-release-notes-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/tau-release-notes
 
       - name: Create, verify, and publish release
         env:
-          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.validate.outputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
 
+          EXPECTED_COMMIT="$(git rev-parse HEAD)"
           verify_remote_tag() {
             remote_commit="$(
               git ls-remote origin "refs/tags/$TAG^{}" |
@@ -306,7 +373,7 @@ jobs:
             --draft
             --verify-tag
             --title "TauGrid $TAG"
-            --notes-file "cli/releases/$TAG.md"
+            --notes-file "$RUNNER_TEMP/tau-release-notes/release-notes.md"
           )
           version_without_build="${TAG%%+*}"
           if [[ "$version_without_build" == *-* ]]; then
@@ -362,23 +429,25 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install tagged Python SDK
-        env:
-          TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check \
-            "git+https://github.com/$GITHUB_REPOSITORY.git@$TAG#subdirectory=sdk/python/python"
+          python -m pip install --disable-pip-version-check ./sdk/python/python
 
       - name: Download and exercise published binaries
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.validate.outputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
           TAU_ARCH: ${{ matrix.arch }}
           TAU_OS: ${{ matrix.os }}
         run: |
@@ -407,5 +476,4 @@ jobs:
           test "$(tau version --short)" = "$TAG"
           tau --help >/dev/null
           tau-gen --help >/dev/null
-          python -c 'import os, tau; assert "v" + tau.__version__ == os.environ["TAG"]'
           python -m tau.cli --help >/dev/null

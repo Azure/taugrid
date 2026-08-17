@@ -1,7 +1,8 @@
 # Releasing Tau
 
-Tau releases use canonical SemVer tags (`vX.Y.Z`) and a manually dispatched
-GitHub Actions workflow. Pushing a tag does not publish a release.
+Tau releases use canonical SemVer tags (`vX.Y.Z`). Pushing a tag automatically
+starts the GitHub Actions release workflow; maintainers can also dispatch the
+workflow manually with an existing tag.
 
 ## Distribution contract
 
@@ -16,12 +17,13 @@ macOS 12.0 or newer.
 - `LICENSE`
 - `SHA256SUMS`
 
-The Tau Python SDK is installed from the same tagged source revision. GitHub
-Releases do not contain Python wheels.
+The Tau Python SDK is tested from the same tagged source revision for CLI
+compatibility, but it keeps its own package version. This workflow does not
+publish Python wheels.
 
 ## Prepare
 
-1. Land a release-preparation PR that updates the SDK version, install docs, and
+1. Land a release-preparation PR that updates install docs and
    `releases/vX.Y.Z.md`.
 2. Choose a source commit on `main` and record its full SHA. The commit must
    contain every feature named in the release notes.
@@ -54,7 +56,15 @@ Releases do not contain Python wheels.
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
    release tags; the workflow revalidates the remote tag before publication.
-2. Manually dispatch **Release tau CLI** with the existing tag.
+2. The tag push starts **Release tau CLI** automatically. To retry an existing
+   tag, dispatch the workflow from that same tag ref and supply the tag:
+
+   ```bash
+   gh workflow run release-tau.yaml \
+     --repo Azure/taugrid \
+     --ref vX.Y.Z \
+     -f tag=vX.Y.Z
+   ```
 3. The read-only validation job verifies that the tag is annotated, follows
    SemVer, points to `main`, has checked-in release notes, and has no existing
    GitHub Release.
@@ -64,15 +74,30 @@ Releases do not contain Python wheels.
    every GitHub asset digest, and only then publishes the draft. It never
    overwrites an existing release or asset.
 6. After publication, clean GitHub-hosted Ubuntu and macOS runners install the
-   tagged Python SDK, install `tau` through the published `install.sh`, download
-   `tau-gen` from the same release, and exercise native version and help
-   commands. A failure leaves the immutable published release unchanged and
-   fails the workflow for explicit follow-up.
+   tagged Python SDK for compatibility, install `tau` through the published
+   `install.sh`, download `tau-gen` from the same release, and exercise native
+   help and version commands. A failure leaves the immutable published release
+   unchanged and fails the workflow for explicit follow-up.
+
+`v0.3.0` predates both this dispatch flow and its checked-in release notes. Its
+one-time recovery is restricted to the reviewed tag commit while taking the
+release notes from `main`:
+
+```bash
+gh workflow run release-tau.yaml \
+  --repo Azure/taugrid \
+  --ref main \
+  -f tag=v0.3.0 \
+  -f allow_main_release_notes=true
+```
+
+No other tag may use this recovery path. New tags must contain their own release
+notes and manual runs must use the matching tag ref.
 
 ## Verify
 
 Confirm the post-publication Ubuntu and macOS jobs succeeded. They exercise the
-published GitHub Release download and Python SDK bootstrap paths plus native
+published GitHub Release download and Python SDK compatibility paths plus native
 version and help commands. The earlier release jobs compare every GitHub asset
 digest with `SHA256SUMS` and inspect all cross-compiled binaries with
 `go version -m`. Do not update downstream minimum-version requirements until
