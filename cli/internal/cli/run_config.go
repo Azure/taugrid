@@ -93,10 +93,10 @@ func discoverRunConfig(explicit string) (string, bool, error) {
 	return discovery.ConfigPath, discovery.ExplicitConfig, nil
 }
 
-func loadRunConfig(path string) (runDispatchOptions, string, error) {
+func loadRunConfig(path string) (unresolvedRunOptions, string, error) {
 	_, options, name, warnings, err := readRunConfig(path)
 	if err != nil {
-		return runDispatchOptions{}, "", err
+		return unresolvedRunOptions{}, "", err
 	}
 	emitConfigWarnings(os.Stderr, warnings)
 	return options, name, nil
@@ -111,23 +111,23 @@ func emitConfigWarnings(w io.Writer, warnings []string) {
 	}
 }
 
-func readRunConfig(path string) (runconfig.Config, runDispatchOptions, string, []string, error) {
+func readRunConfig(path string) (runconfig.Config, unresolvedRunOptions, string, []string, error) {
 	cfg, warnings, err := runconfig.LoadWithDiagnostics(path)
 	if err != nil {
-		return runconfig.Config{}, runDispatchOptions{}, "", nil, err
+		return runconfig.Config{}, unresolvedRunOptions{}, "", nil, err
 	}
 	engine := firstNonEmpty(cfg.Run.Engine, cfg.Engine)
 	if err := cfg.ValidateExecution(engine); err != nil {
-		return runconfig.Config{}, runDispatchOptions{}, "", nil, err
+		return runconfig.Config{}, unresolvedRunOptions{}, "", nil, err
 	}
 	opts, err := configToDispatch(cfg, path)
 	if err != nil {
-		return runconfig.Config{}, runDispatchOptions{}, "", nil, err
+		return runconfig.Config{}, unresolvedRunOptions{}, "", nil, err
 	}
 	return cfg, opts, firstNonEmpty(cfg.Run.Name, cfg.Name), warnings, nil
 }
 
-func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions, error) {
+func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptions, error) {
 	o := defaultRunDispatchOptions()
 	baseDir := filepath.Dir(configPath)
 	o.engine = firstNonEmpty(c.Run.Engine, c.Engine)
@@ -265,7 +265,7 @@ func configToDispatch(c runconfig.Config, configPath string) (runDispatchOptions
 		if effectiveLauncher == "ray-tune" {
 			raw, err := json.Marshal(c.Execution.Configs)
 			if err != nil {
-				return runDispatchOptions{}, fmt.Errorf("execution.configs: %w", err)
+				return unresolvedRunOptions{}, fmt.Errorf("execution.configs: %w", err)
 			}
 			o.tuneParamSpace = string(raw)
 		}

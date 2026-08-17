@@ -1516,13 +1516,11 @@ func TestResolveRunTargetCarriesManagedRayMetricsAndOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.ray == nil {
+	ray := resolvedRayRequestForTest(target)
+	if ray == nil {
 		t.Fatalf("expected typed ray dispatch, got %+v", target)
 	}
-	opts, ok := target.dispatchOptions()
-	if !ok {
-		t.Fatal("expected dispatch options")
-	}
+	opts := ray.Options
 	if opts.dataPVC != "research-workspace" {
 		t.Fatalf("dataPVC = %q", opts.dataPVC)
 	}

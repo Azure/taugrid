@@ -163,7 +163,7 @@ spec:
 	if err := executeRunTarget(parent, target, "tau run", runExperimentMetadata{}); err != nil {
 		t.Fatalf("executeRunTarget: %v", err)
 	}
-	if got := target.ray.Options.namespace; got != "ray-retry-ns" {
+	if got := resolvedRayRequestForTest(target).Options.namespace; got != "ray-retry-ns" {
 		t.Fatalf("resolved ray namespace = %q, want %q", got, "ray-retry-ns")
 	}
 }

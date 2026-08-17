@@ -212,7 +212,7 @@ Common examples:
 					return err
 				}
 			}
-			if err := ensureArtifactPublicationID(&targetOptions); err != nil {
+			if err := ensureArtifactPublicationID(targetOptions.outputPublish, &targetOptions.artifactPublicationID); err != nil {
 				return err
 			}
 			captureCommand := buildRunCaptureCommand(cmd, name, targetOptions.nameFromConfig, resolvedConfigPath)
@@ -225,14 +225,7 @@ Common examples:
 			}
 			if targetOptions.maxRetries > 0 && targetOptions.dryRun == "" {
 				retryDispatch := targetOptions
-				switch {
-				case target.job != nil:
-					retryDispatch = target.job.Options
-				case target.ray != nil:
-					retryDispatch = target.ray.Options
-				case target.managedWorkflow != nil:
-					retryDispatch = target.managedWorkflow.Options
-				}
+				retryDispatch.namespace = target.namespace()
 				retryNS := retryDispatch.namespace
 				return retryLoop(cmd, retryLoopOptions{
 					name:           name,
@@ -270,7 +263,10 @@ Common examples:
 	return cmd
 }
 
-type runDispatchOptions struct {
+// unresolvedRunOptions is the mutable input model used while config, flags,
+// connection metadata, workspace defaults, retry/resume overrides, and engine
+// inference are still being combined. resolveRunTarget is its terminal boundary.
+type unresolvedRunOptions struct {
 	engine, file, script, mainScript, image, profileName, namespace, workspace, kubeContext, dryRun string
 	dataPVC, resultPVC, output, queue, preset, team, lane, gpuClass, mode, topology, shape          string
 	outputPublish                                                                                   string
@@ -323,37 +319,15 @@ type runDispatchOptions struct {
 	allowNCCLOverride                                                                                     bool
 }
 
-func defaultRunDispatchOptions() runDispatchOptions {
-	return runDispatchOptions{
+func defaultRunDispatchOptions() unresolvedRunOptions {
+	return unresolvedRunOptions{
 		workers:       1,
 		gpusPerWorker: 1,
 		nConcurrent:   1,
 	}
 }
 
-// resolvedRunTarget is the dispatch `tau run` resolved from a run config.
-// Exactly one engine request is set.
-type resolvedRunTarget struct {
-	job             *runJobRequest
-	ray             *runRayRequest
-	managedWorkflow *runManagedWorkflowRequest
-}
-
-// dispatchOptions returns the resolved options for whichever engine was chosen.
-func (t resolvedRunTarget) dispatchOptions() (runDispatchOptions, bool) {
-	switch {
-	case t.job != nil:
-		return t.job.Options, true
-	case t.ray != nil:
-		return t.ray.Options, true
-	case t.managedWorkflow != nil:
-		return t.managedWorkflow.Options, true
-	default:
-		return runDispatchOptions{}, false
-	}
-}
-
-func resolveRunTarget(o runDispatchOptions, name string) (resolvedRunTarget, error) {
+func resolveRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
 	if err := ensureSubmissionID(&o); err != nil {
 		return resolvedRunTarget{}, err
 	}
@@ -368,13 +342,13 @@ func resolveRunTarget(o runDispatchOptions, name string) (resolvedRunTarget, err
 		if err != nil {
 			return resolvedRunTarget{}, err
 		}
-		return resolvedRunTarget{managedWorkflow: &managed}, nil
+		return newResolvedRunTarget(&managed), nil
 	}
 
 	if len(o.envKV) > 0 || o.keyVault != "" || o.kvTenantID != "" || o.kvClientID != "" {
 		return resolvedRunTarget{}, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct job/ray configs must remove runtime.env_kv or use workflow.file")
 	}
-	if err := ensureArtifactPublicationID(&o); err != nil {
+	if err := ensureArtifactPublicationID(o.outputPublish, &o.artifactPublicationID); err != nil {
 		return resolvedRunTarget{}, err
 	}
 
@@ -399,7 +373,7 @@ func resolveRunTarget(o runDispatchOptions, name string) (resolvedRunTarget, err
 		if err != nil {
 			return resolvedRunTarget{}, err
 		}
-		return resolvedRunTarget{ray: &ray}, nil
+		return newResolvedRunTarget(&ray), nil
 	}
 	if err := validateExplicitJobRunConfig(o); err != nil {
 		return resolvedRunTarget{}, err
@@ -414,7 +388,7 @@ func resolveRunTarget(o runDispatchOptions, name string) (resolvedRunTarget, err
 	if err != nil {
 		return resolvedRunTarget{}, err
 	}
-	return resolvedRunTarget{job: &job}, nil
+	return newResolvedRunTarget(&job), nil
 }
 
 func newMetricsSessionID() (string, error) {
@@ -425,31 +399,35 @@ func newMetricsSessionID() (string, error) {
 	return hex.EncodeToString(value[:]), nil
 }
 
-func ensureSubmissionID(options *runDispatchOptions) error {
-	if options.dryRun != "" || strings.TrimSpace(options.submissionID) != "" {
+func ensureSubmissionID(options *unresolvedRunOptions) error {
+	return ensureSubmissionIDValue(options.dryRun, &options.submissionID)
+}
+
+func ensureSubmissionIDValue(dryRun string, submissionID *string) error {
+	if dryRun != "" || strings.TrimSpace(*submissionID) != "" {
 		return nil
 	}
-	submissionID, err := newMetricsSessionID()
+	generated, err := newMetricsSessionID()
 	if err != nil {
 		return fmt.Errorf("generate submission ID: %w", err)
 	}
-	options.submissionID = submissionID
+	*submissionID = generated
 	return nil
 }
 
-func ensureArtifactPublicationID(options *runDispatchOptions) error {
-	if options.outputPublish != artifactpublish.ModeStaged || strings.TrimSpace(options.artifactPublicationID) != "" {
+func ensureArtifactPublicationID(outputPublish string, artifactPublicationID *string) error {
+	if outputPublish != artifactpublish.ModeStaged || strings.TrimSpace(*artifactPublicationID) != "" {
 		return nil
 	}
 	publicationID, err := newMetricsSessionID()
 	if err != nil {
 		return err
 	}
-	options.artifactPublicationID = publicationID
+	*artifactPublicationID = publicationID
 	return nil
 }
 
-func validateDirectMetricsOffloadDispatch(o runDispatchOptions, dispatch string, explicitDispatch bool) error {
+func validateDirectMetricsOffloadDispatch(o unresolvedRunOptions, dispatch string, explicitDispatch bool) error {
 	if !o.metricsOffloadEnabled {
 		return nil
 	}
@@ -463,7 +441,7 @@ func validateDirectMetricsOffloadDispatch(o runDispatchOptions, dispatch string,
 	return nil
 }
 
-func explicitRunDispatch(o runDispatchOptions) (target string, explicit bool, err error) {
+func explicitRunDispatch(o unresolvedRunOptions) (target string, explicit bool, err error) {
 	engine := strings.ToLower(strings.TrimSpace(o.engine))
 	workloadKind := strings.ToLower(strings.TrimSpace(o.workloadKind))
 
@@ -496,7 +474,7 @@ func explicitRunDispatch(o runDispatchOptions) (target string, explicit bool, er
 	return target, target != "", nil
 }
 
-func validateExplicitJobRunConfig(o runDispatchOptions) error {
+func validateExplicitJobRunConfig(o unresolvedRunOptions) error {
 	intent := dispatchIntent(o)
 	if o.workers > 1 {
 		return fmt.Errorf("%s cannot set compute.workers=%d; use engine: ray or remove compute.workers", intent, o.workers)
@@ -548,7 +526,7 @@ func validateExplicitJobRunConfig(o runDispatchOptions) error {
 	return nil
 }
 
-func dispatchIntent(o runDispatchOptions) string {
+func dispatchIntent(o unresolvedRunOptions) string {
 	engine := strings.TrimSpace(o.engine)
 	workloadKind := strings.TrimSpace(o.workloadKind)
 	switch {
@@ -565,16 +543,10 @@ func dispatchIntent(o runDispatchOptions) string {
 
 func executeRunTarget(parent *cobra.Command, target resolvedRunTarget, captureCommand string, experiment runExperimentMetadata) error {
 	ctx := withRunExperimentMetadata(parent.Context(), experiment)
-	if target.job != nil {
-		return executeRunJob(ctx, parent.OutOrStdout(), parent.ErrOrStderr(), target.job, captureCommand)
+	if target.request == nil {
+		return fmt.Errorf("resolved run target has no executor")
 	}
-	if target.ray != nil {
-		return executeRunRay(ctx, parent.OutOrStdout(), parent.ErrOrStderr(), target.ray, captureCommand)
-	}
-	if target.managedWorkflow != nil {
-		return executeRunManagedWorkflow(ctx, parent.OutOrStdout(), parent.ErrOrStderr(), target.managedWorkflow, captureCommand)
-	}
-	return fmt.Errorf("resolved run target has no executor")
+	return target.request.execute(ctx, parent.OutOrStdout(), parent.ErrOrStderr(), captureCommand)
 }
 
 func buildRunCaptureCommand(cmd *cobra.Command, name string, nameFromConfig bool, configPath string) string {

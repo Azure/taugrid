@@ -35,14 +35,15 @@ func TestResolveRunTargetUsesTypedJobExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if target.job == nil {
+	job := resolvedJobRequestForTest(target)
+	if job == nil {
 		t.Fatalf("Job run did not resolve to the typed Job executor: %#v", target)
 	}
-	if target.job.Name != "typed-job" ||
-		target.job.Options.script != "train.sh" ||
-		target.job.Options.image != "busybox:1.36" ||
-		target.job.Options.serviceAccountName != "tau-workload" {
-		t.Fatalf("typed Job request lost config fields: %#v", target.job)
+	if job.Name != "typed-job" ||
+		job.Options.script != "train.sh" ||
+		job.Options.image != "busybox:1.36" ||
+		job.Options.serviceAccountName != "tau-workload" {
+		t.Fatalf("typed Job request lost config fields: %#v", job)
 	}
 }
 
@@ -121,7 +122,9 @@ func TestNewRunJobRequestIsolatesFreshMetricsSessionsAndPreservesRetry(t *testin
 		t.Fatalf("fresh requests reused metrics session %q", first.Options.metricsSessionID)
 	}
 
-	retry, err := newRunJobRequest(first.Options, "reused-name")
+	retryOptions := options
+	retryOptions.metricsSessionID = first.Options.metricsSessionID
+	retry, err := newRunJobRequest(retryOptions, "reused-name")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +147,9 @@ func TestNewRunJobRequestIsolatesArtifactPublicationGenerations(t *testing.T) {
 	if first.Options.artifactPublicationID == "" || first.Options.artifactPublicationID == second.Options.artifactPublicationID {
 		t.Fatalf("fresh artifact publication IDs = %q and %q", first.Options.artifactPublicationID, second.Options.artifactPublicationID)
 	}
-	retry, err := newRunJobRequest(first.Options, "reused-name")
+	retryOptions := options
+	retryOptions.artifactPublicationID = first.Options.artifactPublicationID
+	retry, err := newRunJobRequest(retryOptions, "reused-name")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +282,7 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	ctx := withRunExperimentMetadata(context.Background(), o.experiment)
 	err := executeRunJob(ctx, &stdout, &stderr, &runJobRequest{
 		Name:    "modernbert-bounded",
-		Options: o,
+		Options: resolveRunJobOptions(o),
 	}, "tau run --config tau.yaml")
 	if err != nil {
 		t.Fatalf("executeRunJob: %v\nstderr:\n%s", err, stderr.String())
@@ -486,11 +491,12 @@ func TestExecuteRunTargetWritesBackResolvedNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.job == nil {
+	job := resolvedJobRequestForTest(target)
+	if job == nil {
 		t.Fatal("expected job target")
 	}
-	if target.job.Options.namespace != "" {
-		t.Fatalf("precondition: namespace should start empty, got %q", target.job.Options.namespace)
+	if job.Options.namespace != "" {
+		t.Fatalf("precondition: namespace should start empty, got %q", job.Options.namespace)
 	}
 	parent := &cobra.Command{Use: "run"}
 	parent.SetContext(context.Background())
@@ -499,7 +505,7 @@ func TestExecuteRunTargetWritesBackResolvedNamespace(t *testing.T) {
 	if err := executeRunTarget(parent, target, "tau run", runExperimentMetadata{}); err != nil {
 		t.Fatalf("executeRunTarget: %v", err)
 	}
-	if target.job.Options.namespace == "" {
+	if job.Options.namespace == "" {
 		t.Fatal("namespace not written back after executeRunTarget: still empty")
 	}
 }
@@ -521,7 +527,8 @@ func TestExecuteRunTargetWritesBackResolvedNamespaceRay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.ray == nil {
+	ray := resolvedRayRequestForTest(target)
+	if ray == nil {
 		t.Fatal("expected ray target")
 	}
 	parent := &cobra.Command{Use: "run"}
@@ -533,12 +540,8 @@ func TestExecuteRunTargetWritesBackResolvedNamespaceRay(t *testing.T) {
 	}
 	// Verify the retry dispatch switch reads the resolved namespace from
 	// the ray target (not from stale targetOptions).
-	retryDispatch, ok := target.dispatchOptions()
-	if !ok {
-		t.Fatal("dispatchOptions returned false")
-	}
-	if retryDispatch.namespace != "demo" {
-		t.Fatalf("ray target namespace not propagated: got %q, want %q", retryDispatch.namespace, "demo")
+	if ray.Options.namespace != "demo" {
+		t.Fatalf("ray target namespace not propagated: got %q, want %q", ray.Options.namespace, "demo")
 	}
 }
 
@@ -676,7 +679,7 @@ func TestExecuteRunJobClientDryRunWithoutQueue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := executeRunJob(context.Background(), &stdout, &stderr, &runJobRequest{
 		Name:    "offline-render",
-		Options: o,
+		Options: resolveRunJobOptions(o),
 	}, "tau run --config tau.yaml --dry-run client")
 	if err != nil {
 		t.Fatalf("client dry-run must render offline without a queue, got: %v\nstderr:\n%s", err, stderr.String())
@@ -732,7 +735,7 @@ func TestExecuteRunJobServerDryRunStillRequiresQueue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := executeRunJob(context.Background(), &stdout, &stderr, &runJobRequest{
 		Name:    "server-render",
-		Options: o,
+		Options: resolveRunJobOptions(o),
 	}, "tau run --config tau.yaml --dry-run server")
 	if err == nil {
 		t.Fatalf("server dry-run must refuse to render a suspended Job with no queue; got:\n%s", stdout.String())
@@ -765,7 +768,7 @@ func TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := executeRunJob(context.Background(), &stdout, &stderr, &runJobRequest{
 		Name:    "explicit-render",
-		Options: o,
+		Options: resolveRunJobOptions(o),
 	}, "tau run --config tau.yaml --dry-run client"); err != nil {
 		t.Fatalf("client dry-run with explicit values: %v\nstderr:\n%s", err, stderr.String())
 	}

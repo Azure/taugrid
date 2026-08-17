@@ -170,7 +170,7 @@ func TestWorkspaceServiceAccountReachesDirectDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveRunTarget: %v", err)
 			}
-			options, ok := target.dispatchOptions()
+			options, ok := resolvedRuntimeForTest(target)
 			if !ok {
 				t.Fatalf("run target has no typed dispatch: %#v", target)
 			}

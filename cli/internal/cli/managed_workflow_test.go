@@ -181,7 +181,7 @@ spec:
 	if err := executeRunTarget(parent, target, "tau run", runExperimentMetadata{}); err != nil {
 		t.Fatalf("executeRunTarget: %v", err)
 	}
-	if got := target.managedWorkflow.Options.namespace; got != "managed-retry-ns" {
+	if got := resolvedManagedWorkflowRequestForTest(target).Options.namespace; got != "managed-retry-ns" {
 		t.Fatalf("resolved managed workflow namespace = %q, want %q", got, "managed-retry-ns")
 	}
 }

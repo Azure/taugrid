@@ -39,10 +39,10 @@ const maxProjectArchiveInputBytes = 8 << 20
 
 type runRayRequest struct {
 	Name    string
-	Options runDispatchOptions
+	Options resolvedRunRayOptions
 }
 
-func newRunRayRequest(options runDispatchOptions, name string) (runRayRequest, error) {
+func newRunRayRequest(options unresolvedRunOptions, name string) (runRayRequest, error) {
 	if name == "" {
 		return runRayRequest{}, fmt.Errorf("ray runs require NAME")
 	}
@@ -55,11 +55,11 @@ func newRunRayRequest(options runDispatchOptions, name string) (runRayRequest, e
 	if len(options.volumeSpecs) > 0 || len(options.mountSpecs) > 0 {
 		return runRayRequest{}, fmt.Errorf("ray run configs support storage.data_pvc/output, but not storage.volumes/mounts")
 	}
-	return runRayRequest{Name: name, Options: options}, nil
+	return runRayRequest{Name: name, Options: resolveRunRayOptions(options)}, nil
 }
 
 func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRayRequest, captureCommand string) error {
-	if err := ensureSubmissionID(&request.Options); err != nil {
+	if err := ensureSubmissionIDValue(request.Options.dryRun, &request.Options.submissionID); err != nil {
 		return err
 	}
 	o := request.Options
@@ -105,8 +105,8 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	namespaceExplicit := strings.TrimSpace(o.namespace) != ""
 	namespace := strings.TrimSpace(o.namespace)
 
-	topo := runJobTopologyFlags(o)
-	topoChanged := func(flag string) bool { return runJobTopologyFieldSet(o, flag) }
+	topo := resolvedRunTopologyFlags(o.resolvedRunPlacement)
+	topoChanged := func(flag string) bool { return resolvedRunTopologyFieldSet(o.resolvedRunPlacement, flag) }
 	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
 	if err != nil {
 		return err
@@ -207,7 +207,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	if o.metricsOffloadEnabled {
 		offload := o
 		offload.checkpointPath = runDispatchEnvValue(o.env, "TAU_RESUME_FROM")
-		metricsRuntime, err = resolveMetricsOffload(offload, name, namespace, kubeContext, outputDir, outputWritable, annotations)
+		metricsRuntime, err = resolveResolvedMetricsOffload(offload.resolvedDirectRunOptions, name, namespace, kubeContext, outputDir, outputWritable, annotations)
 		if err != nil {
 			return err
 		}
@@ -215,7 +215,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
 
-	projectArchive, scriptName, err := buildProjectArchive(o)
+	projectArchive, scriptName, err := buildResolvedProjectArchive(o)
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 // rayTrainConfigForRender passes execution.configs straight through. The
 // argv path used to JSON-encode it and re-parse it on the other side; the
 // typed path keeps the map.
-func rayTrainConfigForRender(o runDispatchOptions) map[string]any {
+func rayTrainConfigForRender(o resolvedRunRayOptions) map[string]any {
 	if o.tuneParamSpace != "" || len(o.configs) == 0 {
 		return nil
 	}
@@ -343,7 +343,11 @@ func rayTrainConfigForRender(o runDispatchOptions) map[string]any {
 // relative to the project root. With no working_dir configured it returns nil
 // and the plain entrypoint base name, which is the pre-existing single-file
 // behaviour.
-func buildProjectArchive(o runDispatchOptions) ([]byte, string, error) {
+func buildProjectArchive(o unresolvedRunOptions) ([]byte, string, error) {
+	return buildResolvedProjectArchive(resolveRunRayOptions(o))
+}
+
+func buildResolvedProjectArchive(o resolvedRunRayOptions) ([]byte, string, error) {
 	dir := strings.TrimSpace(o.workingDir)
 	if dir == "" {
 		return nil, filepath.Base(o.script), nil

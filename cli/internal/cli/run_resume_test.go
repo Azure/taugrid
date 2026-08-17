@@ -237,10 +237,11 @@ policy:
 			},
 			validateTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
 				validateCalls++
-				if target.job == nil {
+				job := resolvedJobRequestForTest(target)
+				if job == nil {
 					t.Fatal("resume preflight did not resolve a typed Job target")
 				}
-				options := target.job.Options
+				options := job.Options
 				if options.dryRun != "client" ||
 					options.workspace != "sample" ||
 					options.workspaceResultScope != "/data/workspaces/sample" ||
@@ -317,10 +318,11 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 				return snapshot, nil
 			},
 			executeTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
-				if target.job == nil {
+				job := resolvedJobRequestForTest(target)
+				if job == nil {
 					t.Fatal("resume did not resolve a direct Job")
 				}
-				gotSession = target.job.Options.metricsSessionID
+				gotSession = job.Options.metricsSessionID
 				return nil
 			},
 		},

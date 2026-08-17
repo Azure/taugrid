@@ -29,7 +29,7 @@ type retryLoopOptions struct {
 	backoffInitial time.Duration
 	backoffMax     time.Duration
 	cleanup        managerCleanupOptions
-	dispatch       runDispatchOptions
+	dispatch       unresolvedRunOptions
 }
 
 type retryHooks struct {

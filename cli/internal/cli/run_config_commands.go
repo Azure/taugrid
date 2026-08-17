@@ -101,7 +101,7 @@ func newRunExplainConfigCmd() *cobra.Command {
 	}
 }
 
-func validateRunDispatchOptions(o runDispatchOptions) error {
+func validateRunDispatchOptions(o unresolvedRunOptions) error {
 	// Only the direct engines execute run.entrypoint. Managed workflows embed
 	// run.main_script at /script/train.py and always invoke python3 on that, so
 	// their entrypoint is not what the launcher runs.
@@ -118,7 +118,7 @@ func validateRunDispatchOptions(o runDispatchOptions) error {
 // explicitly listed extra scripts and nothing else, so an ordinary sibling
 // import otherwise survives validation and admission and only fails inside a
 // Ray worker once the cluster is already up.
-func checkEntrypointImports(o runDispatchOptions) error {
+func checkEntrypointImports(o unresolvedRunOptions) error {
 	if o.source != nil {
 		// The immutable source image supplies the complete project tree and the
 		// main container runs from its staged root.
