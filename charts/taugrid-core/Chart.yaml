@@ -7,10 +7,10 @@ description: |
   Assumes Kueue, kuberay-operator, and AKS managed GPU readiness are already
   present. See ../INSTALL.md for the recommended install order.
 type: application
-# taugrid-core starts an independent public release lineage.
-version: 0.2.4
+# TauGrid-owned charts and images share one public release version.
+version: 0.3.0
 # The tau and taugrid-portal image release tags follow appVersion.
-appVersion: "0.2.4"
+appVersion: "0.3.0"
 keywords: [taugrid, ai, kueue, multi-cloud]
 maintainers:
   - name: taugrid
