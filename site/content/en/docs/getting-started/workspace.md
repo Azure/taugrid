@@ -9,7 +9,7 @@ description: Request access, receive a workspace connection, and prove you can s
 A platform operator completes infrastructure, queue, storage, identity, and
 [workspace](../../concepts/glossary/#workspace) readiness before handing a
 repository to a researcher — see
-[prerequisites and the readiness gate](../prerequisites/) for the shared
+[TauGrid setup and the readiness gate](../taugrid-setup/) for the shared
 contract both sides check.
 
 ## What to request from the platform team

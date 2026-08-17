@@ -6,6 +6,7 @@ description: Extend Tau and its integrations
 ---
 
 - [Make a compatible change](change/)
+- [Run the Kind smoke test](kind-smoke-test/)
 - Review [portable and provider boundaries](../../overview/provider-boundaries/)
 - Follow the [release contract](../../reference/releases/)
 - Read the repository

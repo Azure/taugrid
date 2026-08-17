@@ -7,18 +7,18 @@ description: Complete platform Day 0 before repository handoff
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
 TauWorkspace is a Kubernetes reconciler, not a cloud provisioner. See the
-full [prerequisite matrix](../../getting-started/prerequisites/) for what
+full [TauGrid setup matrix](../../getting-started/taugrid-setup/) for what
 layer owns what — TauWorkspace never provisions Azure resources, the AKS
 cluster, node pools, network, Kueue, KubeRay, Azure RBAC, storage accounts,
 or managed identities.
 
 Before handoff, the platform:
 
-1. [Prepares the Azure subscription and chooses an infrastructure path](../../getting-started/azure-subscription/),
+1. Completes [AKS setup](../../getting-started/aks-setup/),
    then provisions or selects the cluster, network, node pools, registry, and
    data services (Azure/provider layer - outside Tau).
 2. Installs the
-   [in-cluster platform components](../../getting-started/prerequisites/#platform-component-availability):
+   [in-cluster platform components](../../getting-started/taugrid-setup/#platform-component-availability):
    Kueue, KubeRay, the Tau workspace controller, and baseline queue policy.
    Fresh clusters use the TauGrid distribution; existing managed clusters use
    independent ArgoCD Applications. GPU monitoring and adx-mon are optional.
@@ -44,7 +44,7 @@ Before handoff, the platform:
    The direct command is the fresh-cluster equivalent; ArgoCD customers commit
    the same native object.
 
-5. Waits for the [readiness gate](../../getting-started/prerequisites/#tauworkspace-readiness-gate)
+5. Waits for the [readiness gate](../../getting-started/taugrid-setup/#tauworkspace-readiness-gate)
    to report `Ready`:
 
    ```bash
