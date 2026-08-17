@@ -176,34 +176,83 @@ skip_output="$(
 )"
 [[ "$skip_output" == *"Not a Blackwell node"* ]]
 
-readonly PORT_ROOT="$TEST_ROOT/sys/class/infiniband/mlx5_0/ports/1"
-mkdir -p "$PORT_ROOT/pkeys" "$TEST_ROOT/sys/class/infiniband_mad"
-printf '4: ACTIVE\n' >"$PORT_ROOT/state"
-printf '5: LinkUp\n' >"$PORT_ROOT/phys_state"
-printf '0xffff\n' >"$PORT_ROOT/pkeys/0"
-printf '1\n' >"$TEST_ROOT/sys/class/infiniband_mad/abi_version"
+create_ib_fabric() {
+  local root="$1"
+  local device_prefix="$2"
+  local rate="$3"
+  local pkey="$4"
+  local devices=""
 
-printf '400 Gb/sec (4X HDR)\n' >"$PORT_ROOT/rate"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" \
-  bash "$CHART_DIR/scripts/check_ib.sh"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" \
-  bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+  for index in {0..7}; do
+    local device="${device_prefix}${index}"
+    local port_root="$root/class/infiniband/$device/ports/1"
+    mkdir -p "$port_root/pkeys"
+    printf '4: ACTIVE\n' >"$port_root/state"
+    printf '5: LinkUp\n' >"$port_root/phys_state"
+    printf '%s Gb/sec\n' "$rate" >"$port_root/rate"
+    printf '%s\n' "$pkey" >"$port_root/pkeys/0"
+    devices+="${devices:+ }${device}:1"
+  done
 
-printf '800 Gb/sec (8X NDR)\n' >"$PORT_ROOT/rate"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
-  bash "$CHART_DIR/scripts/check_ib.sh"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
-  bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+  printf '%s\n' "$devices"
+}
 
-printf '400 Gb/sec (4X HDR)\n' >"$PORT_ROOT/rate"
-if mismatch_output="$(
-  SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
-    bash "$CHART_DIR/scripts/check_ib.sh" 2>&1
+readonly FLEX_A100_SYSFS="$TEST_ROOT/flex-a100-sys"
+flex_a100_devices="$(create_ib_fabric "$FLEX_A100_SYSFS" mlx5_ 200 0x800b)"
+SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
+  EXPECTED_IB_GBPS=200 bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
+  EXPECTED_IB_PKEY=0x800b bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+
+readonly FLEX_H200_SYSFS="$TEST_ROOT/flex-h200-sys"
+flex_h200_devices="$(create_ib_fabric "$FLEX_H200_SYSFS" mlx5_ib 400 0xffff)"
+SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+  EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+  EXPECTED_IB_PKEY=0xffff bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+
+readonly EAST_H200_SYSFS="$TEST_ROOT/east-h200-sys"
+east_h200_devices="$(create_ib_fabric "$EAST_H200_SYSFS" mlx5_ 400 0x8001)"
+SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+  EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+  EXPECTED_IB_PKEY=0x8001 bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+
+# Link health remains healthy when only the PKey is wrong.
+printf '0x8003\n' >"$EAST_H200_SYSFS/class/infiniband/mlx5_0/ports/1/pkeys/0"
+SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+  EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh"
+if pkey_mismatch_output="$(
+  SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+    EXPECTED_IB_PKEY=0x8001 bash "$CHART_DIR/scripts/check_ib_pkeys.sh" 2>&1
 )"; then
-  echo "expected the 800-Gbps check to reject a 400-Gbps link" >&2
+  echo "expected the PKey check to reject a mismatched East H200 PKey" >&2
   exit 1
 fi
-[[ "$mismatch_output" == *"800 Gb/sec"* ]]
+[[ "$pkey_mismatch_output" == *"mlx5_0:1 expected PKey 0x8001; observed 0x8003"* ]]
+
+# PKey health remains healthy when only link state and rate are wrong.
+printf '2: DOWN\n' >"$FLEX_H200_SYSFS/class/infiniband/mlx5_ib0/ports/1/state"
+printf '200 Gb/sec\n' >"$FLEX_H200_SYSFS/class/infiniband/mlx5_ib0/ports/1/rate"
+SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+  EXPECTED_IB_PKEY=0xffff bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+if link_mismatch_output="$(
+  SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+    EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh" 2>&1
+)"; then
+  echo "expected the link check to reject a down, rate-mismatched Flex H200 port" >&2
+  exit 1
+fi
+[[ "$link_mismatch_output" == *"mlx5_ib0:1 expected state=ACTIVE physical_state=LinkUp rate=400Gbps; observed state=DOWN physical_state=LinkUp rate=200Gbps"* ]]
+
+if missing_pkey_output="$(
+  SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
+    bash "$CHART_DIR/scripts/check_ib_pkeys.sh" 2>&1
+)"; then
+  echo "expected the PKey check to require an explicit PKey" >&2
+  exit 1
+fi
+[[ "$missing_pkey_output" == *"EXPECTED_IB_PKEY must be an explicit hexadecimal PKey"* ]]
 
 if throttle_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \

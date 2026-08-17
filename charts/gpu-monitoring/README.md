@@ -68,7 +68,7 @@ Install the published OCI chart from Microsoft Container Registry:
 ```bash
 helm upgrade --install gpu-monitoring \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/gpu-monitoring \
-  --version 0.1.3 \
+  --version 0.1.4 \
   --namespace kube-system \
   --create-namespace
 ```
@@ -95,6 +95,10 @@ Edit `values.yaml` to customize:
 
 Each `gpuSkus` entry may set:
 
+- `ib_pkey` to the exact PKey expected at `pkeys/0`. The link check validates
+  only device identity, `ACTIVE`/`LinkUp`, and rate; the independent PKey check
+  validates only this value. Built-in profiles set it explicitly, while custom
+  profiles fall back to the global `ibPkey` value.
 - `scrapeTargets` to replace the global `metricsCollector.scrapeTargets` for
   that profile.
 - `ib_rate_gbps` to set the expected InfiniBand rate. GB200 defaults to 400
@@ -102,6 +106,35 @@ Each `gpuSkus` entry may set:
 - `dcgm_health_required` to override whether NPD runs the host `dcgmi` health
   check. By default, the chart requires it only for profiles whose selected
   DCGM scrape target is host-local.
+
+Use `enabledGpuSkus` to render only the profiles present in a deployment. An
+empty list preserves the default behavior and renders all profiles.
+
+East US 2 H200 deployments can select only the built-in East profile:
+
+```yaml
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    ib_pkey: "0x8001"
+```
+
+Flex A100 uses its built-in `0x800b` value. Flex H200 overrides both the device
+names and PKey:
+
+```yaml
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    ib_devices: "mlx5_ib0:1 mlx5_ib1:1 mlx5_ib2:1 mlx5_ib3:1 mlx5_ib4:1 mlx5_ib5:1 mlx5_ib6:1 mlx5_ib7:1"
+    ib_pkey: "0xffff"
+```
+
+VBIOS expectations remain independently overridable through
+`gpuSkus.<profile>.vbios_versions`; only add firmware versions that have been
+verified on the target fleet.
 
 For a mixed cluster with managed A100 nodes and GPU Operator H200 nodes:
 
@@ -121,6 +154,12 @@ The A100 profile continues to use the global
 otherwise its Service can return another node's metrics. GB200 and GB300 share
 the historical `NVLinkB200Inactive` Node condition name for compatibility, but
 the underlying NVLink and IMEX checks accept both models.
+
+For non-host-local DCGM targets, the chart disables the host `dcgmi` check and
+the metrics collector scrapes the configured endpoint. The collector does not
+currently publish endpoint availability as a dedicated Node condition, so
+remediation systems must not treat the absence of `DcgmHealthProblem` as proof
+that a remote exporter is reachable.
 
 ## Security boundary
 

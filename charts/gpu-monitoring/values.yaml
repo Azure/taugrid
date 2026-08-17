@@ -13,6 +13,10 @@ labels: {}
 # conflict with AKS's built-in gpu-monitoring host process.
 npdPort: 20260
 
+# Fallback PKey for custom profiles that omit gpuSkus.<profile>.ib_pkey.
+# Built-in profiles set this explicitly because fabrics use different PKeys.
+ibPkey: "0xffff"
+
 env: []
 extraArgs: []
 
@@ -287,6 +291,10 @@ metricsCollector:
 # When a new GPU node joins the cluster with a matching instance type, the
 # correct DaemonSet automatically schedules a monitoring pod on it.
 #
+# Leave empty to render every profile. Set profile names here to render only a
+# deployment-specific subset without nulling Helm's deep-merged gpuSkus map.
+enabledGpuSkus: []
+#
 # To add a new GPU SKU, add an entry here with the appropriate instanceTypes
 # and monitoring parameters.
 #
@@ -305,6 +313,7 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
+    ib_pkey: "0x800b"
     ib_rate_gbps: 200
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -320,6 +329,7 @@ gpuSkus:
     gpu_driver_versions: '("535.54.03")'
     vbios_versions: '("96.00.89.00.01" "96.00.99.00.01" "96.00.A5.00.01" "96.00.BC.00.01")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_5:1 mlx5_6:1 mlx5_7:1 mlx5_8:1 mlx5_9:1"
+    ib_pkey: "0x8003"
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     nvme_total: 0
@@ -334,6 +344,7 @@ gpuSkus:
     gpu_driver_versions: '("580.105.08")'
     vbios_versions: '("96.00.9F.00.04")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     nvme_total: 0
@@ -349,6 +360,7 @@ gpuSkus:
     gpu_driver_versions: '("580.105.08")'
     vbios_versions: '("96.00.9F.00.04")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     nvme_total: 0
@@ -364,6 +376,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     nvme_total: 0
@@ -379,6 +392,7 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("97.00.B9.00.23")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
+    ib_pkey: "0x8001"
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     nvme_total: 0
@@ -394,6 +408,7 @@ gpuSkus:
     gpu_driver_versions: '("580.65.06")'
     vbios_versions: '("97.00.B9.00.23" "97.00.B9.00.69")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
+    ib_pkey: "0xffff"
     ib_rate_gbps: 400
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -413,6 +428,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
+    ib_pkey: "0xffff"
     ib_rate_gbps: 800
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -433,6 +449,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     roce_devices: ""
@@ -448,6 +465,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     roce_devices: ""
@@ -463,6 +481,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     roce_devices: ""
@@ -478,6 +497,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     roce_devices: ""
@@ -493,6 +513,7 @@ gpuSkus:
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: ""
+    ib_pkey: ""
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
     roce_devices: ""

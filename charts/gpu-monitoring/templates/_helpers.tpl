@@ -51,6 +51,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Fail closed when a deployment selects an unknown profile. A typo must not
+silently render a cluster with no GPU health monitoring.
+*/}}
+{{- define "gpu-monitoring.validateEnabledGpuSkus" -}}
+{{- range .Values.enabledGpuSkus -}}
+{{- if not (hasKey $.Values.gpuSkus .) -}}
+{{- fail (printf "enabledGpuSkus contains unknown profile %q" .) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render the executable scripts and monitor configs stored in the shared Secret.
 The same rendered block is hashed for the Secret name so its identity cannot
 drift from its data.

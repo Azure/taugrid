@@ -119,6 +119,70 @@ tests:
             name: EXPECTED_IB_GBPS
             value: "200"
           any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: EXPECTED_IB_PKEY
+             value: "0x800b"
+          any: true
+
+  - it: H200 defaults to the East US 2 PKey
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: EXPECTED_IB_PKEY
+             value: "0x8001"
+          any: true
+
+  - it: H200 PKey is deployment-overridable for Flex
+    set:
+      gpuSkus.h200.ib_pkey: "0xffff"
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: EXPECTED_IB_PKEY
+             value: "0xffff"
+          any: true
+
+  - it: enabledGpuSkus can render only H200
+    set:
+      enabledGpuSkus[0]: h200
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: gpu-monitoring-h200
+
+  - it: enabledGpuSkus rejects unknown profiles
+    set:
+      enabledGpuSkus[0]: h20o
+    asserts:
+      - failedTemplate:
+          errorMessage: 'enabledGpuSkus contains unknown profile "h20o"'
+
+  - it: custom profiles without a PKey use the global fallback
+    set:
+      ibPkey: "0x8007"
+      gpuSkus.h200.ib_pkey: null
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: EXPECTED_IB_PKEY
+             value: "0x8007"
+          any: true
 
   - it: nodeExporter.enabled=false omits the node-exporter sidecar
     set:

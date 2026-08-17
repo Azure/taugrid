@@ -1,9 +1,14 @@
+{{- include "gpu-monitoring.validateEnabledGpuSkus" . }}
 {{- range $skuName, $sku := .Values.gpuSkus }}
-{{- if $sku }}
+{{- if and $sku (or (empty $.Values.enabledGpuSkus) (has $skuName $.Values.enabledGpuSkus)) }}
 {{- $dsName := printf "gpu-monitoring-%s" $skuName }}
 {{- $nodeExporterEnabled := $.Values.nodeExporter.enabled }}
+{{- $ibPkey := $.Values.ibPkey }}
 {{- if hasKey $sku "nodeExporter" }}
 {{- $nodeExporterEnabled = $sku.nodeExporter }}
+{{- end }}
+{{- if hasKey $sku "ib_pkey" }}
+{{- $ibPkey = $sku.ib_pkey }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -123,6 +128,8 @@ spec:
               value: {{ $sku.vbios_versions | quote }}
             - name: IB_DEVICES
               value: "{{ $sku.ib_devices }}"
+            - name: EXPECTED_IB_PKEY
+              value: {{ $ibPkey | quote }}
             {{- if $sku.ib_rate_gbps }}
             - name: EXPECTED_IB_GBPS
               value: "{{ $sku.ib_rate_gbps }}"
