@@ -13,8 +13,8 @@ and `gpu_monitoring_sku_name` together for another supported GPU SKU.
 - Terraform 1.6 or later
 - Azure credentials usable by the AzureRM provider
 - `tau`, `helm`, and `kubectl` on PATH
-- Bash. On Windows, Git Bash is supported by default. PowerShell users can set
-  `command_interpreter = ["PowerShell", "-NoProfile", "-Command"]`.
+- PowerShell 7 on Windows. Linux and macOS users can set
+  `command_interpreter = ["bash", "-c"]`.
 
 ## Deploy
 

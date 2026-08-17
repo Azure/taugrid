@@ -93,7 +93,7 @@ resource "terraform_data" "install_taugrid" {
     environment = {
       KUBECONFIG = local_sensitive_file.kubeconfig.filename
     }
-    command = "kubectl apply -f nvidia-device-plugin.yaml && tau cluster install --values ${local_file.taugrid_values.filename} --version ${var.taugrid_version} --timeout 20m"
+    command = "kubectl apply -f nvidia-device-plugin.yaml; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; tau cluster install --values ${local_file.taugrid_values.filename} --version ${var.taugrid_version} --timeout 20m"
   }
 
   depends_on = [

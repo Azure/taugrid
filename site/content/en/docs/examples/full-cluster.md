@@ -25,7 +25,8 @@ distribution that owns those components, the baseline Kueue queue, and Portal.
   dependencies;
 - Azure credentials accepted by the AzureRM Terraform provider and permission
   to provision AKS, networking, storage, and identities; and
-- `tau` and Bash on PATH. Git Bash is supported on Windows.
+- `tau` and PowerShell 7 on PATH. Linux and macOS users can configure the
+  Terraform command interpreter to use Bash.
 
 The default deployment creates one `Standard_NC24ads_A100_v4` node. This node
 has one A100 80 GB GPU and is billable. Before applying, verify that the target

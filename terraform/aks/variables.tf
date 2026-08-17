@@ -88,9 +88,9 @@ variable "install_taugrid" {
 }
 
 variable "command_interpreter" {
-  description = "Interpreter used for the local TauGrid installation command. Git Bash on Windows and bash on Linux or macOS use [bash, -c]."
+  description = "Interpreter used for the local TauGrid installation command. The default supports Windows PowerShell. Linux and macOS users can set [bash, -c]."
   type        = list(string)
-  default     = ["bash", "-c"]
+  default     = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 }
 
 variable "tags" {
