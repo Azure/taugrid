@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -121,10 +122,11 @@ func TestRunGetJSONRepresentsSettledEmptyDirectory(t *testing.T) {
 }
 
 func TestRunResultRefFallsBackFromJobToRayJob(t *testing.T) {
+	artifactStore := `{"schema_version":"tau.run.blob-volume.v1","account_url":"https://trainingacct.blob.core.windows.net","container":"results"}`
 	reader := &fakeRunResultReader{
 		responses: map[string]string{
 			"job":           "",
-			"rayjob.ray.io": `{"metadata":{"annotations":{"` + workloadmeta.AnnotationResultPath + `":"/data/research-workspace/runs/modernbert-ray","` + workloadmeta.AnnotationResultPVC + `":"research-workspace","` + workloadmeta.AnnotationArtifactPublication + `":"staged","` + workloadmeta.AnnotationArtifactPublicationID + `":"publication-1"}}}`,
+			"rayjob.ray.io": `{"metadata":{"annotations":{"` + workloadmeta.AnnotationResultPath + `":"/data/research-workspace/runs/modernbert-ray","` + workloadmeta.AnnotationResultPVC + `":"research-workspace","` + workloadmeta.AnnotationArtifactPublication + `":"staged","` + workloadmeta.AnnotationArtifactPublicationID + `":"publication-1","` + workloadmeta.AnnotationArtifactBundleID + `":"bundle-1","` + workloadmeta.AnnotationArtifactStore + `":` + strconv.Quote(artifactStore) + `}}}`,
 		},
 	}
 	ref, err := runResultRefWithReader(context.Background(), reader, "research-workspace", "modernbert-ray")
@@ -139,6 +141,12 @@ func TestRunResultRefFallsBackFromJobToRayJob(t *testing.T) {
 	}
 	if ref.PublicationID != "publication-1" {
 		t.Fatalf("RayJob publication ID = %q", ref.PublicationID)
+	}
+	if ref.BundleID != "bundle-1" {
+		t.Fatalf("RayJob bundle ID = %q", ref.BundleID)
+	}
+	if ref.ArtifactStore != artifactStore {
+		t.Fatalf("RayJob artifact store = %q", ref.ArtifactStore)
 	}
 	if strings.Join(reader.calls, ",") != "job,rayjob.ray.io" {
 		t.Fatalf("lookup order = %v", reader.calls)

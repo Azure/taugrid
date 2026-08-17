@@ -36,6 +36,9 @@ type Config struct {
 	// ResourceName and Namespace are recorded in the index for provenance.
 	ResourceName string
 	Namespace    string
+	// BundleID binds the emitted index to the final bundle acknowledgement.
+	// Empty preserves the legacy index schema for callers without bundles.
+	BundleID string
 }
 
 // Script returns a POSIX shell snippet that finalizes the declared checkpoint
@@ -62,7 +65,8 @@ func Script(cfg Config) string {
 	b.WriteString("TAU_ARTIFACT_RUN=" + shellQuote(cfg.Run) + "\n")
 	b.WriteString("TAU_ARTIFACT_RESOURCE=" + shellQuote(cfg.ResourceName) + "\n")
 	b.WriteString("TAU_ARTIFACT_NAMESPACE=" + shellQuote(cfg.Namespace) + "\n")
-	b.WriteString("export TAU_ARTIFACT_CHECKPOINT TAU_ARTIFACT_RUN TAU_ARTIFACT_RESOURCE TAU_ARTIFACT_NAMESPACE\n")
+	b.WriteString("TAU_ARTIFACT_BUNDLE_ID=" + shellQuote(cfg.BundleID) + "\n")
+	b.WriteString("export TAU_ARTIFACT_CHECKPOINT TAU_ARTIFACT_RUN TAU_ARTIFACT_RESOURCE TAU_ARTIFACT_NAMESPACE TAU_ARTIFACT_BUNDLE_ID\n")
 	b.WriteString(finalizeScript)
 	return b.String()
 }
@@ -110,6 +114,7 @@ import datetime, json, os, pathlib, shutil, sys
 
 artifact = os.environ.get("TAU_ARTIFACT_CHECKPOINT", "").strip()
 run = os.environ.get("TAU_ARTIFACT_RUN", "").strip()
+bundle_id = os.environ.get("TAU_ARTIFACT_BUNDLE_ID", "").strip()
 if not artifact or not run:
     sys.exit(0)
 
@@ -207,6 +212,8 @@ index = {
     "durable_root": durable.as_posix(),
     "artifacts": [record],
 }
+if bundle_id:
+    index["bundle_id"] = bundle_id
 
 index_path = run_dir / "artifacts.json"
 tmp = index_path.with_suffix(".json.tmp")

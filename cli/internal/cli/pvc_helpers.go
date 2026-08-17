@@ -37,6 +37,7 @@ const (
 type managedWorkflowArtifactIndex struct {
 	SchemaVersion int                       `json:"schema_version"`
 	Run           string                    `json:"run"`
+	BundleID      string                    `json:"bundle_id,omitempty"`
 	Namespace     string                    `json:"namespace,omitempty"`
 	ResourceName  string                    `json:"resource_name,omitempty"`
 	CreatedAt     string                    `json:"created_at,omitempty"`

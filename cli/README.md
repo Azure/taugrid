@@ -182,7 +182,8 @@ Use the run lifecycle after submission:
 ```bash
 tau run status <run-name> --watch
 tau run logs <run-name>
-tau run get <run-name>  # Job-backed run with persisted results
+tau run get <run-name>
+tau run get <run-name> --destination ./artifacts/<run-name>  # complete acknowledged Job/RayJob bundle
 tau run resume <run-name> --config tau/train.yaml
 tau run cancel <run-name>
 ```
@@ -227,7 +228,7 @@ Repositories that require catalog routing should set
 | --- | --- |
 | `tau cluster` | Install/uninstall the TauGrid Helm distribution and validate an existing cluster. Tau does not provision AKS infrastructure. |
 | `tau workspace` | Inspect workspace connections and readiness, request quota, and scaffold repositories. |
-| `tau run` | Resolve a project target; submit, inspect, resume, or cancel the run, and fetch persisted results for Job-backed runs. |
+| `tau run` | Resolve a project target; submit, inspect, resume, or cancel the run, and fetch persisted Job/RayJob result bundles. |
 | `tau serve` | Deploy and operate online model endpoints. |
 | `tau data` | Manage dataset and model registries. |
 | `tau python` | Invoke Python SDK helpers while keeping Go Tau as the executor. |

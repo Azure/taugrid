@@ -140,7 +140,7 @@ subcommand** — `tau run train --dry-run=client` runs the `run` root with
 | `list` | List Tau-managed Jobs/RayJobs in a namespace |
 | `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
 | `logs <job-name>` | Stream Ray driver logs or the batch Job pod logs |
-| `get <name>` | Fetch durable run results and artifacts |
+| `get <name>` | List or fetch durable results; `--destination DIR` downloads the complete acknowledged artifact bundle |
 | `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |
 | `resume <name> --config tau.yaml` | Manually restart a failed run from its checkpoint |
 
@@ -148,6 +148,26 @@ There is no `tau run retry` subcommand — automatic retry is driven entirely
 by the `resilience.*` fields in your run config. See
 [recovery](../../operations/recovery/) for the full retry and resume
 contract.
+
+`tau run get <name> --destination DIR` is the supported replacement for mounting
+the result PVC in a temporary reader Pod. Current Tau Jobs and RayJobs commit a
+durable bundle acknowledgement only after staged artifacts, checkpoint indexing,
+and enabled metrics offload have completed successfully. Retrieval validates
+that acknowledgement and the staged-publication marker. New workloads record
+their non-secret Blob CSI account/container identity in Tau-owned metadata, so
+workspace users do not need cluster-scoped PV read access; legacy workloads fall
+back to read-only PVC/PV discovery. The tau-core controller resolves and repairs
+that metadata from the bound PV; the researcher never receives PV-wide access.
+Tau downloads with `DefaultAzureCredential` and does not read CSI Secrets or
+accept storage account keys/SAS tokens. It also refuses to replace existing
+destination files. Unsupported CSI drivers, incomplete bundles, and pre-contract
+bundles fail explicitly.
+
+Complete bundle acknowledgement currently applies to single-pod batch Jobs and
+RayJobs whose result PVC is mounted at Tau's `/data` durable-storage root.
+Multi-node Indexed Jobs do not emit a shared bundle marker because individual
+indexes cannot safely acknowledge Job-level completion. Custom PVC mount roots
+retain their existing run behavior but cannot claim this Blob bundle contract.
 
 ## `tau serve`
 

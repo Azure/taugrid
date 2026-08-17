@@ -126,6 +126,7 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 		Run:          run,
 		ResourceName: "demo-run-rayjob",
 		Namespace:    "research",
+		BundleID:     "bundle-1",
 	})
 	if script == "" {
 		t.Fatal("Script returned empty for a fully-specified config")
@@ -157,6 +158,9 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 	// required: the reader's optional fields (e.g. storage_probe) are written
 	// by other producers.
 	assertSubset(t, index, readerStructTags(t, "managedWorkflowArtifactIndex"), "index")
+	if index["bundle_id"] != "bundle-1" {
+		t.Fatalf("bundle_id = %#v, want bundle-1", index["bundle_id"])
+	}
 
 	artifacts, ok := index["artifacts"].([]any)
 	if !ok || len(artifacts) != 1 {

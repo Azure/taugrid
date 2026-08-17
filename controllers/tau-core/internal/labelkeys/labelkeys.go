@@ -17,12 +17,16 @@ const (
 	LabelWorkspace  = "tau.azure.com/workspace"
 	LabelLocalQueue = "tau.azure.com/local-queue"
 	LabelGPUClass   = "tau.azure.com/gpu-class"
+	LabelManagedBy  = "tau.azure.com/managed-by"
 
-	AnnotationApproved    = "tau.azure.com/approved"
-	AnnotationRejected    = "tau.azure.com/rejected"
-	AnnotationReviewedBy  = "tau.azure.com/reviewed-by"
-	AnnotationResultScope = "tau.azure.com/result-scope"
-	AnnotationV0Primary   = "tau.azure.com/v0-primary-workspace"
+	AnnotationApproved         = "tau.azure.com/approved"
+	AnnotationRejected         = "tau.azure.com/rejected"
+	AnnotationReviewedBy       = "tau.azure.com/reviewed-by"
+	AnnotationResultScope      = "tau.azure.com/result-scope"
+	AnnotationV0Primary        = "tau.azure.com/v0-primary-workspace"
+	AnnotationResultPVC        = "tau.azure.com/result-pvc"
+	AnnotationArtifactBundleID = "tau.azure.com/artifact-bundle-id"
+	AnnotationArtifactStore    = "tau.azure.com/artifact-store"
 
 	FinalizerWorkspaceCleanup = "tau.azure.com/workspace-cleanup"
 )

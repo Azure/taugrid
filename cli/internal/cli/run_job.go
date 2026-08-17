@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/taugrid/cli/internal/artifactbundle"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/jobrender"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
@@ -291,6 +292,39 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 			opts.Annotations = map[string]string{}
 		}
 		opts.Annotations[experiment.AnnotationExperimentSource] = "stellar"
+	}
+	artifactBundle, err := resolveArtifactBundle(
+		request.Name,
+		ns,
+		o.submissionID,
+		outputDir,
+		annotations[workloadmeta.AnnotationResultPVC],
+		outputWritable,
+		artifactPublication,
+		opts.MetricsOffload,
+		o.metricsSessionID,
+		o.checkpointArtifact,
+	)
+	if err != nil {
+		return err
+	}
+	if artifactBundle.Enabled() && strings.TrimSpace(o.script) == "" {
+		warnings = append(warnings,
+			"tau: complete bundle acknowledgement is unavailable for Jobs that use the image ENTRYPOINT/CMD")
+		artifactBundle = artifactbundle.Runtime{}
+	}
+	opts.ArtifactBundle = artifactBundle
+	if artifactBundle.Enabled() && opts.Nodes > 1 {
+		warnings = append(warnings,
+			"tau: complete bundle acknowledgement is unavailable for multi-node Indexed Jobs; no shared completion marker will be emitted")
+		opts.ArtifactBundle = artifactbundle.Runtime{}
+		artifactBundle = artifactbundle.Runtime{}
+	}
+	if artifactBundle.Enabled() {
+		if opts.Annotations == nil {
+			opts.Annotations = map[string]string{}
+		}
+		opts.Annotations[workloadmeta.AnnotationArtifactBundleID] = artifactBundle.BundleID
 	}
 	if o.dryRun == "" && !opts.DisableDefaultPriorities {
 		disabled, warning := autoDisableMissingDefaultPriorities(ctx, runner)
