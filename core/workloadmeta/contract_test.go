@@ -43,12 +43,11 @@ const (
 )
 
 // tauProductDirs are the trees this guard walks, relative to guardRoot. The
-// contract package lives in core/, but the keys it declares are applied from
-// the tau CLI (cli/) and the taugrid-portal binary (portal/), so scoping the
-// walk to core/ alone would silently stop guarding the code that emits them.
-// Sibling top-level modules (controllers/, sdk/python/) own their own contract
-// tests and are deliberately excluded.
-var tauProductDirs = []string{"cli", "core", "portal"}
+// contract package lives in core/, but its keys are also used by cli/,
+// examples/, and portal/. Scoping the walk to core/ alone would silently stop
+// guarding those consumers. Sibling top-level modules (controllers/,
+// sdk/python/) own their own contract tests and are deliberately excluded.
+var tauProductDirs = []string{"cli", "core", "examples", "portal"}
 
 // allowedNonKeyLiterals are strings that begin with the Tau domain but are not
 // label or annotation keys. Each needs a reason.
