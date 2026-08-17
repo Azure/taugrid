@@ -66,13 +66,14 @@ publish Python wheels.
      -f tag=vX.Y.Z
    ```
 3. The read-only validation job verifies that the tag is annotated, follows
-   SemVer, points to `main`, has checked-in release notes, and has no existing
+   SemVer, points to `main`, has checked-in release notes, and has no published
    GitHub Release.
 4. The workflow reruns all release gates, compares two independent builds, and
    transfers the validated assets to a separate write-authorized publish job.
 5. The publish job creates a draft release, uploads the assets once, verifies
-   every GitHub asset digest, and only then publishes the draft. It never
-   overwrites an existing release or asset.
+   every GitHub asset digest, and only then publishes the draft. A retry resumes
+   a draft only when its metadata, release notes, and assets exactly match the
+   rebuilt release. It never overwrites an existing release or asset.
 6. After publication, clean GitHub-hosted Ubuntu and macOS runners install the
    tagged Python SDK for compatibility, install `tau` through the published
    `install.sh`, download `tau-gen` from the same release, and exercise native
