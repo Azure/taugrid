@@ -55,20 +55,21 @@ type resolvedRunManagedWorkflowOptions struct {
 	runContainerRuntime
 	runProfile
 
-	file               string
-	mainScript         string
-	dataPVC            string
-	workloadKind       string
-	upstreamCheckpoint string
-	extraScripts       []string
-	envKV              []string
-	keyVault           string
-	kvTenantID         string
-	kvClientID         string
-	secretPayloadPath  string
-	workers            int
-	cpuWorkers         int
-	smokePairs         int
+	file                    string
+	mainScript              string
+	dataPVC                 string
+	workloadKind            string
+	upstreamCheckpoint      string
+	extraScripts            []string
+	envKV                   []string
+	keyVault                string
+	kvTenantID              string
+	kvClientID              string
+	secretPayloadPath       string
+	workers                 int
+	cpuWorkers              int
+	smokePairs              int
+	ttlSecondsAfterFinished int64
 }
 
 func cloneRunPlacement(o runPlacement) runPlacement {
@@ -130,24 +131,25 @@ func resolveRunRayJobOptions(o unresolvedRunOptions) resolvedRunRayJobOptions {
 
 func resolveRunManagedWorkflowOptions(o unresolvedRunOptions) resolvedRunManagedWorkflowOptions {
 	return resolvedRunManagedWorkflowOptions{
-		runRouting:          o.runRouting,
-		runPlacement:        cloneRunPlacement(o.runPlacement),
-		runContainerRuntime: cloneRunContainerRuntime(o.runContainerRuntime),
-		runProfile:          o.runProfile,
-		file:                o.file,
-		mainScript:          o.mainScript,
-		dataPVC:             o.dataPVC,
-		workloadKind:        o.workloadKind,
-		upstreamCheckpoint:  o.upstreamCheckpoint,
-		extraScripts:        slices.Clone(o.extraScripts),
-		envKV:               slices.Clone(o.envKV),
-		keyVault:            o.keyVault,
-		kvTenantID:          o.kvTenantID,
-		kvClientID:          o.kvClientID,
-		secretPayloadPath:   o.secretPayloadPath,
-		workers:             o.workers,
-		cpuWorkers:          o.cpuWorkers,
-		smokePairs:          o.smokePairs,
+		runRouting:              o.runRouting,
+		runPlacement:            cloneRunPlacement(o.runPlacement),
+		runContainerRuntime:     cloneRunContainerRuntime(o.runContainerRuntime),
+		runProfile:              o.runProfile,
+		file:                    o.file,
+		mainScript:              o.mainScript,
+		dataPVC:                 o.dataPVC,
+		workloadKind:            o.workloadKind,
+		upstreamCheckpoint:      o.upstreamCheckpoint,
+		extraScripts:            slices.Clone(o.extraScripts),
+		envKV:                   slices.Clone(o.envKV),
+		keyVault:                o.keyVault,
+		kvTenantID:              o.kvTenantID,
+		kvClientID:              o.kvClientID,
+		secretPayloadPath:       o.secretPayloadPath,
+		workers:                 o.workers,
+		cpuWorkers:              o.cpuWorkers,
+		smokePairs:              o.smokePairs,
+		ttlSecondsAfterFinished: o.ttlSecondsAfterFinished,
 	}
 }
 
