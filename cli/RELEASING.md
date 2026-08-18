@@ -13,13 +13,14 @@ macOS 12.0 or newer.
 
 - `tau-{darwin,linux}-{amd64,arm64}`
 - `tau-gen-{darwin,linux}-{amd64,arm64}`
+- `tau-<sdk-version>-py3-none-any.whl`
 - `install.sh`
 - `LICENSE`
 - `SHA256SUMS`
 
-The Tau Python SDK is tested from the same tagged source revision for CLI
-compatibility, but it keeps its own package version. This workflow does not
-publish Python wheels.
+The Tau Python SDK keeps its own package version. The workflow builds its wheel
+twice from the tagged source revision, compares the outputs, and publishes the
+wheel with the CLI assets.
 
 ## Prepare
 
@@ -33,14 +34,29 @@ publish Python wheels.
    amd64 and static Linux binaries:
 
    ```bash
-   cd cli
+   python3 -m venv /tmp/tau-release-venv
+   /tmp/tau-release-venv/bin/python -m pip install build==1.5.0
+
    VERSION=vX.Y.Z
    COMMIT="$(git rev-parse HEAD)"
    DATE="$(git show -s --format=%cI HEAD)"
-   make release-assets VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" \
-     RELEASE_DIR=/tmp/tau-release-a
-   make release-assets VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" \
-     RELEASE_DIR=/tmp/tau-release-b
+   export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+   /tmp/tau-release-venv/bin/python -m build --wheel \
+     --outdir /tmp/tau-python-wheel-a sdk/python/python
+   /tmp/tau-release-venv/bin/python -m build --wheel \
+     --outdir /tmp/tau-python-wheel-b sdk/python/python
+   WHEEL_A="$(find /tmp/tau-python-wheel-a -maxdepth 1 -type f -name 'tau-*.whl')"
+   WHEEL_B="$(find /tmp/tau-python-wheel-b -maxdepth 1 -type f -name 'tau-*.whl')"
+   cmp "$WHEEL_A" "$WHEEL_B"
+
+   make -C cli release-assets \
+     VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" \
+     RELEASE_DIR=/tmp/tau-release-a \
+     PYTHON_WHEEL="$WHEEL_A"
+   make -C cli release-assets \
+     VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" \
+     RELEASE_DIR=/tmp/tau-release-b \
+     PYTHON_WHEEL="$WHEEL_B"
    diff -u /tmp/tau-release-a/SHA256SUMS /tmp/tau-release-b/SHA256SUMS
    while read -r _ asset; do
      cmp "/tmp/tau-release-a/$asset" "/tmp/tau-release-b/$asset"
@@ -56,7 +72,7 @@ publish Python wheels.
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
    release tags; the workflow revalidates the remote tag before publication.
-2. The tag push starts **Release tau CLI** automatically. To retry an existing
+2. The tag push starts **Release TauGrid** automatically. To retry an existing
    tag, dispatch the workflow from that same tag ref and supply the tag:
 
    ```bash
@@ -75,10 +91,10 @@ publish Python wheels.
    a draft only when its metadata, release notes, and assets exactly match the
    rebuilt release. It never overwrites an existing release or asset.
 6. After publication, clean GitHub-hosted Ubuntu and macOS runners install the
-   tagged Python SDK for compatibility, install `tau` through the published
-   `install.sh`, download `tau-gen` from the same release, and exercise native
-   help and version commands. A failure leaves the immutable published release
-   unchanged and fails the workflow for explicit follow-up.
+   Python SDK wheel, install `tau` through the published `install.sh`, download
+   `tau-gen` from the same release, and exercise native help and version
+   commands. A failure leaves the immutable published release unchanged and
+   fails the workflow for explicit follow-up.
 
 `v0.3.0` predates both this dispatch flow and its checked-in release notes. Its
 one-time recovery is restricted to the reviewed tag commit while taking the
@@ -98,8 +114,8 @@ notes and manual runs must use the matching tag ref.
 ## Verify
 
 Confirm the post-publication Ubuntu and macOS jobs succeeded. They exercise the
-published GitHub Release download and Python SDK compatibility paths plus native
-version and help commands. The earlier release jobs compare every GitHub asset
-digest with `SHA256SUMS` and inspect all cross-compiled binaries with
+published CLI installer, Python SDK wheel, and native version and help commands.
+The earlier release jobs compare every GitHub asset digest with `SHA256SUMS`,
+compare two SDK wheel builds, and inspect all cross-compiled binaries with
 `go version -m`. Do not update downstream minimum-version requirements until
 the full workflow succeeds.

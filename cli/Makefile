@@ -25,6 +25,7 @@ RELEASE_TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 DARWIN_MIN_VERSION := 12.0
 DARWIN_CGO_CFLAGS := -O2 -g -mmacosx-version-min=$(DARWIN_MIN_VERSION)
 DARWIN_CGO_LDFLAGS := -mmacosx-version-min=$(DARWIN_MIN_VERSION)
+PYTHON_WHEEL ?=
 
 build:
 	go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) $(PKG)
@@ -92,8 +93,17 @@ release-binaries: verify-release-inputs
 	@ls -lh "$(RELEASE_DIR)"/
 
 release-assets: release-binaries
+	@test -f "$(PYTHON_WHEEL)" || \
+		  { echo "PYTHON_WHEEL must name a built Tau SDK wheel" >&2; exit 1; }
+	@wheel_name="$$(basename "$(PYTHON_WHEEL)")"; \
+		case "$$wheel_name" in \
+		  tau-*.whl) ;; \
+		  *) echo "PYTHON_WHEEL must be named tau-*.whl, got '$$wheel_name'" >&2; exit 1 ;; \
+		esac; \
+		cp "$(PYTHON_WHEEL)" "$(RELEASE_DIR)/$$wheel_name"
 	@sed 's/@TAU_VERSION@/$(VERSION)/g' scripts/install-tau.sh > "$(RELEASE_DIR)/install.sh"
 	@chmod 0755 "$(RELEASE_DIR)/install.sh"
 	@cp ../LICENSE "$(RELEASE_DIR)/LICENSE"
 	@(cd "$(RELEASE_DIR)" && shasum -a 256 tau-* install.sh LICENSE > SHA256SUMS)
-	@ls -lh "$(RELEASE_DIR)"/tau-* "$(RELEASE_DIR)"/install.sh "$(RELEASE_DIR)"/LICENSE "$(RELEASE_DIR)"/SHA256SUMS
+	@ls -lh "$(RELEASE_DIR)"/tau-* "$(RELEASE_DIR)"/install.sh \
+		"$(RELEASE_DIR)"/LICENSE "$(RELEASE_DIR)"/SHA256SUMS
