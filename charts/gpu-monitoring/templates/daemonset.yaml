@@ -14,6 +14,9 @@
 {{- if and $sku.ib_devices (or (not (kindIs "string" $ibPkey)) (not (regexMatch "^0x[0-9a-fA-F]{4}$" (toString $ibPkey)))) }}
 {{- fail (printf "gpuSkus.%s.ib_pkey must be a quoted four-digit hexadecimal PKey such as \"0x8001\"; got %v. YAML parses an unquoted 0x8001 as the integer 32769." $skuName $ibPkey) }}
 {{- end }}
+{{- if and (hasKey $sku "create_imex_channel_expected") (or (not (kindIs "string" $sku.create_imex_channel_expected)) (not (regexMatch "^[01]$" (toString $sku.create_imex_channel_expected)))) }}
+{{- fail (printf "gpuSkus.%s.create_imex_channel_expected must be quoted \"0\" or \"1\"; omit the field to preserve the legacy contract; got %v" $skuName $sku.create_imex_channel_expected) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -150,6 +153,10 @@ spec:
               value: "{{ $sku.nvme_size }}"
             - name: IMEX_PROCNAME
               value: "{{ $sku.imex_procname }}"
+            {{- if hasKey $sku "create_imex_channel_expected" }}
+            - name: CREATE_IMEX_CHANNEL_EXPECTED
+              value: {{ $sku.create_imex_channel_expected | quote }}
+            {{- end }}
             {{- if $sku.roce_devices }}
             - name: ROCE_DEVICES
               value: "{{ $sku.roce_devices }}"

@@ -125,6 +125,48 @@ tests:
              name: EXPECTED_IB_PKEY
              value: "0x8003"
           any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: CREATE_IMEX_CHANNEL_EXPECTED
+             value: "0"
+          any: true
+
+  - it: profiles without an explicit CreateImexChannel0 contract preserve legacy behavior
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gb200
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+             name: CREATE_IMEX_CHANNEL_EXPECTED
+          any: true
+
+  - it: H200 does not configure the A100-specific driver expectation
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CREATE_IMEX_CHANNEL_EXPECTED
+          any: true
+
+  - it: invalid CreateImexChannel0 expectations fail before deployment
+    set:
+      gpuSkus.a100.create_imex_channel_expected: "2"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.a100.create_imex_channel_expected must be quoted "0" or "1"; omit the field to preserve the legacy contract; got 2'
+
+  - it: unquoted CreateImexChannel0 expectations fail before deployment
+    set:
+      gpuSkus.a100.create_imex_channel_expected: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.a100.create_imex_channel_expected must be quoted "0" or "1"; omit the field to preserve the legacy contract; got 0'
 
   - it: H200 defaults to the East US 2 PKey
     documentSelector:
