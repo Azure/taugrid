@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - charts/**
+      - scripts/ci/publish-helm-charts.sh
+      - scripts/ci/tests/publish-helm-charts_test.sh
       - scripts/ci/vendor-taugrid-dependencies.sh
       - scripts/ci/tests/vendor-taugrid-dependencies_test.sh
       - .github/workflows/ci-helm-charts.yml
@@ -19,6 +21,16 @@ permissions:
   contents: read
 
 jobs:
+  publisher-test:
+    name: Test chart publisher
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run chart publisher tests
+        run: bash scripts/ci/tests/publish-helm-charts_test.sh
+
   detect:
     name: Detect changed charts
     runs-on: ubuntu-latest
