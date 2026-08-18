@@ -214,6 +214,46 @@ tests:
           path: data["config.toml"]
           pattern: "_TRANSPORT=kernel"
 
+  # ── DaemonSet drop-list carve-out (Gap 1 / #953) ───────
+  - it: DaemonSet drop-list un-drops the controller-runtime dashboard families
+    template: collector/configmap.yaml
+    asserts:
+      # the whole low-cardinality families are removed from the DaemonSet drop-list
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^controller_runtime'
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^workqueue'
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^leader_election'
+
+  - it: DaemonSet drop-list keeps apiserver flood protection
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^apiserver\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^etcd\.\*"'
+
+  - it: DaemonSet carve-out is data-driven (emptying exclude re-drops the families)
+    template: collector/configmap.yaml
+    set:
+      collector.prometheusScrape.scrapeDropMetricsExclude: []
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^controller_runtime\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^workqueue\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^leader_election\.\*"'
+
   # ── ray_object_store recovery (Gap 2 / #954) ───────────
   - it: recovers ray_object_store_* but keeps directory/manager dropped
     template: collector/configmap.yaml

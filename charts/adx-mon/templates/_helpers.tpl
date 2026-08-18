@@ -138,21 +138,3 @@ Returns a JSON array string. Call with root context.
 {{- end -}}
 {{- $result | toJson -}}
 {{- end -}}
-
-{{/*
-Effective singleton collector drop-metrics: dropMetrics minus the singleton's
-scrapeDropMetricsExclude (set difference). This permits selected families from
-cluster-global targets without enabling them on every DaemonSet collector.
-Returns a JSON array string. Call with root context.
-*/}}
-{{- define "adx-mon.collectorSingletonScrapeDropMetrics" -}}
-{{- $drop := .Values.collector.prometheusScrape.dropMetrics | default (list) -}}
-{{- $exclude := .Values.collectorSingleton.scrapeDropMetricsExclude | default (list) -}}
-{{- $result := list -}}
-{{- range $drop -}}
-{{- if not (has . $exclude) -}}
-{{- $result = append $result . -}}
-{{- end -}}
-{{- end -}}
-{{- $result | toJson -}}
-{{- end -}}

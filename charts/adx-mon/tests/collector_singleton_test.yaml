@@ -73,6 +73,22 @@ tests:
           path: data["config.toml"]
           pattern: "kubernetes.default.svc/metrics"
 
+  # Singleton keeps the FULL drop-list (apiserver flood protection intact) —
+  # the DaemonSet carve-out for the controller-runtime dashboard families (#953)
+  # must NOT leak into the singleton.
+  - it: config.toml keeps the full controller-runtime family drops
+    template: collector-singleton/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^controller_runtime\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^workqueue\.\*"'
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: '"\^leader_election\.\*"'
+
   # ray_object_store_* is recovered globally (Gap 2 / #954): the singleton renders
   # the same narrowed drop-list — store recovered, directory/manager kept dropped.
   - it: config.toml recovers ray_object_store_* but keeps directory/manager dropped
