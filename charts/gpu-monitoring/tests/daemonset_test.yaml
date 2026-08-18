@@ -210,6 +210,39 @@ tests:
              value: "0x8007"
           any: true
 
+  - it: both VBIOS checks are mounted, so GPUVbiosMismatch and GPUVbiosInconsistent can be reported independently
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /custom-config/check_gpu_vbios.sh
+            subPath: check_gpu_vbios.sh
+            readOnly: true
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /custom-config/check_gpu_vbios_consistency.sh
+            subPath: check_gpu_vbios_consistency.sh
+            readOnly: true
+          any: true
+
+  - it: every SKU mounts the VBIOS consistency check
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /custom-config/check_gpu_vbios_consistency.sh
+            subPath: check_gpu_vbios_consistency.sh
+            readOnly: true
+          any: true
+
   - it: nodeExporter.enabled=false omits the node-exporter sidecar
     set:
       nodeExporter.enabled: false

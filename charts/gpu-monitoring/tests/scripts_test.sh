@@ -22,6 +22,12 @@ assert_contains() {
   esac
 }
 
+assert_not_contains() {
+  case "$2" in
+    *"$3"*) fail "$1: expected not to contain '$3', got: $2" ;;
+  esac
+}
+
 cat >"$TEST_ROOT/bin/nvidia-smi" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -66,6 +72,18 @@ case "$*" in
       exit 1
     fi
     echo "${NVIDIA_SMI_THROTTLE_OUTPUT:-0x0000000000000000}"
+    ;;
+  "-q")
+    if [[ "${NVIDIA_SMI_QUERY_FAIL:-0}" == "1" ]]; then
+      echo "device query failed" >&2
+      exit 1
+    fi
+    echo "==============NVSMI LOG=============="
+    if [[ "${NVIDIA_SMI_NO_VBIOS:-0}" != "1" ]]; then
+      for vbios_version in ${NVIDIA_SMI_VBIOS_VERSIONS:-96.00.BC.00.02}; do
+        echo "    VBIOS Version                         : ${vbios_version}"
+      done
+    fi
     ;;
   *)
     exit 1
@@ -410,6 +428,116 @@ if second_flap_output="$(
 fi
 assert_contains second_flap_output "$second_flap_output" "2 ibstat state flaps"
 
+# --- GPU VBIOS checks -------------------------------------------------------
+#
+# check_gpu_vbios.sh asserts allow-list membership; check_gpu_vbios_consistency.sh
+# asserts that all GPUs agree. NPD maps one script to one condition, so the two
+# properties must stay independently reported.
+
+# Run a check script under the mock PATH, capturing output and exit status.
+# `set -e` aborts on a non-zero status, and a `!`-negated command is exempt from
+# `set -e` in every bash, so capture the status explicitly instead.
+run_check() {
+  set +e
+  RUN_OUTPUT="$(PATH="$TEST_ROOT/bin:$PATH" env "$@" 2>&1)"
+  RUN_STATUS=$?
+  set -e
+}
+
+assert_status() {
+  [ "$RUN_STATUS" -eq "$2" ] || fail "$1: expected exit $2, got $RUN_STATUS: $RUN_OUTPUT"
+}
+
+readonly VBIOS_ALLOWED='("96.00.BC.00.02" "96.00.BC.00.01")'
+
+# Uniform VBIOS on the allow-list: both checks pass.
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.02 96.00.BC.00.02" \
+  VBIOS_VERSIONS="$VBIOS_ALLOWED" bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_uniform_allowed 0
+assert_contains vbios_uniform_allowed "$RUN_OUTPUT" "matches one of the expected versions"
+
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.02 96.00.BC.00.02" \
+  bash "$CHART_DIR/scripts/check_gpu_vbios_consistency.sh"
+assert_status vbios_consistency_uniform 0
+assert_contains vbios_consistency_uniform "$RUN_OUTPUT" "All GPUs report the same VBIOS version"
+
+# Uniform VBIOS that is not on the allow-list is fleet drift: the allow-list
+# check fails and the consistency check stays healthy.
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.99 96.00.BC.00.99" \
+  VBIOS_VERSIONS="$VBIOS_ALLOWED" bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_uniform_unexpected 1
+assert_contains vbios_uniform_unexpected "$RUN_OUTPUT" "does not match one of the expected versions"
+assert_contains vbios_uniform_unexpected "$RUN_OUTPUT" "96.00.BC.00.99"
+assert_contains vbios_uniform_unexpected "$RUN_OUTPUT" "FaultCode: NHC2001"
+# An allow-list failure must not claim the GPUs disagree, or GPUVbiosMismatch
+# and GPUVbiosInconsistent would not be independent signals.
+assert_not_contains vbios_uniform_unexpected "$RUN_OUTPUT" "More than 1 VBIOS version"
+
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.99 96.00.BC.00.99" \
+  bash "$CHART_DIR/scripts/check_gpu_vbios_consistency.sh"
+assert_status vbios_consistency_unexpected 0
+assert_contains vbios_consistency_unexpected "$RUN_OUTPUT" "All GPUs report the same VBIOS version"
+
+# Mixed VBIOS whose versions are all allow-listed is a hardware fault, not
+# drift: the consistency check fails and the allow-list check passes. Before the
+# split this reported GPUVbiosMismatch=True, which routed a page-worthy fault to
+# the drift ticket queue.
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.02 96.00.BC.00.01" \
+  bash "$CHART_DIR/scripts/check_gpu_vbios_consistency.sh"
+assert_status vbios_consistency_mixed 1
+assert_contains vbios_consistency_mixed "$RUN_OUTPUT" "More than 1 VBIOS version"
+assert_contains vbios_consistency_mixed "$RUN_OUTPUT" "96.00.BC.00.01"
+assert_contains vbios_consistency_mixed "$RUN_OUTPUT" "96.00.BC.00.02"
+assert_contains vbios_consistency_mixed "$RUN_OUTPUT" "FaultCode: NHC2001"
+# A consistency failure must not claim the VBIOS is off the allow-list.
+assert_not_contains vbios_consistency_mixed "$RUN_OUTPUT" "does not match one of the expected versions"
+
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.02 96.00.BC.00.01" \
+  VBIOS_VERSIONS="$VBIOS_ALLOWED" bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_mixed_allowed 0
+assert_contains vbios_mixed_allowed "$RUN_OUTPUT" "matches one of the expected versions"
+
+# Mixed VBIOS where one version is off the allow-list still fails the allow-list
+# check, which names the offending version only.
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.02 96.00.BC.00.99" \
+  VBIOS_VERSIONS="$VBIOS_ALLOWED" bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_mixed_unexpected 1
+assert_contains vbios_mixed_unexpected "$RUN_OUTPUT" "GPU VBIOS version (96.00.BC.00.99) does not match"
+assert_not_contains vbios_mixed_unexpected "$RUN_OUTPUT" "More than 1 VBIOS version"
+
+# An empty allow-list still skips the allow-list check, and still exits 0. The
+# chart always sets VBIOS_VERSIONS, using ("") for profiles with no allow-list.
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.99 96.00.BC.00.99" \
+  VBIOS_VERSIONS='("")' bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_empty_allow_list 0
+assert_contains vbios_empty_allow_list "$RUN_OUTPUT" "No expected VBIOS versions configured, skipping check"
+
+# The consistency check needs no allow-list, so it must still fire without one.
+run_check NVIDIA_SMI_VBIOS_VERSIONS="96.00.BC.00.02 96.00.BC.00.01" \
+  VBIOS_VERSIONS='("")' bash "$CHART_DIR/scripts/check_gpu_vbios_consistency.sh"
+assert_status vbios_consistency_no_allow_list 1
+assert_contains vbios_consistency_no_allow_list "$RUN_OUTPUT" "More than 1 VBIOS version"
+
+# A failed nvidia-smi is UNKNOWN (exit 2), not a fault, for both checks.
+run_check NVIDIA_SMI_QUERY_FAIL=1 VBIOS_VERSIONS="$VBIOS_ALLOWED" \
+  bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_query_fail 2
+assert_contains vbios_query_fail "$RUN_OUTPUT" "failed to run nvidia-smi"
+
+run_check NVIDIA_SMI_QUERY_FAIL=1 bash "$CHART_DIR/scripts/check_gpu_vbios_consistency.sh"
+assert_status vbios_consistency_query_fail 2
+assert_contains vbios_consistency_query_fail "$RUN_OUTPUT" "failed to run nvidia-smi"
+
+# nvidia-smi output without a VBIOS line is equally UNKNOWN for both checks.
+run_check NVIDIA_SMI_NO_VBIOS=1 VBIOS_VERSIONS="$VBIOS_ALLOWED" \
+  bash "$CHART_DIR/scripts/check_gpu_vbios.sh"
+assert_status vbios_missing 2
+assert_contains vbios_missing "$RUN_OUTPUT" "No VBIOS version found"
+
+run_check NVIDIA_SMI_NO_VBIOS=1 bash "$CHART_DIR/scripts/check_gpu_vbios_consistency.sh"
+assert_status vbios_consistency_missing 2
+assert_contains vbios_consistency_missing "$RUN_OUTPUT" "No VBIOS version found"
+
 readonly ORIGINAL_BUNDLE_NAME="$(
   helm template content-hash "$CHART_DIR" --show-only templates/executable-bundle-secret.yaml |
     awk '$1 == "name:" { print $2; exit }'
@@ -427,3 +555,57 @@ readonly MUTATED_BUNDLE_NAME="$(
   fail "unexpected mutated bundle name: $MUTATED_BUNDLE_NAME"
 [[ "$ORIGINAL_BUNDLE_NAME" != "$MUTATED_BUNDLE_NAME" ]] ||
   fail "bundle name did not change when a script changed"
+
+# Every custom-config subPath the DaemonSet mounts must exist as a key in the
+# executable bundle. A check that is wired into a monitor config and mounted but
+# left out of the bundle renders a DaemonSet whose plugin path does not exist,
+# and no other assertion in this suite or in helm unittest catches it.
+readonly BUNDLE_KEYS="$(
+  helm template wiring "$CHART_DIR" --show-only templates/executable-bundle-secret.yaml |
+    sed -n 's/^  \([A-Za-z0-9._-]*\): |$/\1/p' | sort -u
+)"
+readonly MOUNTED_SUBPATHS="$(
+  helm template wiring "$CHART_DIR" --show-only templates/daemonset.yaml |
+    awk '/^ *- name: /{ volume = $3 } /^ *subPath: / { if (volume == "custom-config") print $2 }' |
+    sort -u
+)"
+# Guard against a parse that silently matches nothing, which would make the
+# loop below vacuous.
+[ "$(printf '%s\n' "$MOUNTED_SUBPATHS" | grep -c '\.sh$')" -ge 15 ] ||
+  fail "bundle_wiring: parsed too few mounted scripts: $MOUNTED_SUBPATHS"
+for mounted_subpath in $MOUNTED_SUBPATHS; do
+  printf '%s\n' "$BUNDLE_KEYS" | grep -Fxq -- "$mounted_subpath" ||
+    fail "bundle_wiring: the DaemonSet mounts $mounted_subpath but the executable bundle has no such key"
+done
+assert_contains bundle_wiring "$MOUNTED_SUBPATHS" "check_gpu_vbios.sh"
+assert_contains bundle_wiring "$MOUNTED_SUBPATHS" "check_gpu_vbios_consistency.sh"
+
+# Every plugin path the monitor configs reference must be mounted, for the same
+# reason: NPD reports a missing script as a failing check on every node.
+readonly REFERENCED_PLUGINS="$(
+  sed -n 's#^ *"path": "/custom-config/\(.*\)",*$#\1#p' "$CHART_DIR"/configs/custom-plugin-monitor*.json |
+    sort -u
+)"
+[ "$(printf '%s\n' "$REFERENCED_PLUGINS" | grep -c '\.sh$')" -ge 15 ] ||
+  fail "bundle_wiring: parsed too few referenced plugins: $REFERENCED_PLUGINS"
+for referenced_plugin in $REFERENCED_PLUGINS; do
+  printf '%s\n' "$MOUNTED_SUBPATHS" | grep -Fxq -- "$referenced_plugin" ||
+    fail "bundle_wiring: monitor configs reference $referenced_plugin but the DaemonSet does not mount it"
+done
+assert_contains bundle_wiring "$REFERENCED_PLUGINS" "check_gpu_vbios_consistency.sh"
+
+# The split only routes correctly if every SKU declares both conditions and runs
+# both scripts. A monitor config left behind keeps reporting a mixed-VBIOS
+# hardware fault as allow-list drift on that SKU.
+readonly MONITOR_CONFIGS=("$CHART_DIR"/configs/custom-plugin-monitor*.json)
+[ "${#MONITOR_CONFIGS[@]}" -eq 5 ] ||
+  fail "vbios_wiring: expected 5 monitor configs, found ${#MONITOR_CONFIGS[@]}"
+for monitor_config in "${MONITOR_CONFIGS[@]}"; do
+  config_name="$(basename "$monitor_config")"
+  config_body="$(cat "$monitor_config")"
+  assert_contains "$config_name" "$config_body" '"type": "GPUVbiosMismatch"'
+  assert_contains "$config_name" "$config_body" '"type": "GPUVbiosInconsistent"'
+  assert_contains "$config_name" "$config_body" '"condition": "GPUVbiosInconsistent"'
+  assert_contains "$config_name" "$config_body" '"path": "/custom-config/check_gpu_vbios.sh"'
+  assert_contains "$config_name" "$config_body" '"path": "/custom-config/check_gpu_vbios_consistency.sh"'
+done

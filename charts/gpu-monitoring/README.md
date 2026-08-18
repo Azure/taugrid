@@ -32,6 +32,7 @@ charts/gpu-monitoring/
     ├── check_ib.sh
     ├── check_ib_pkeys.sh
     ├── check_gpu_vbios.sh
+    ├── check_gpu_vbios_consistency.sh
     ├── check_gpu_throttle.sh
     ├── check_gpu_driver.sh
     ├── check_gpu_ecc_remap_pending.sh
@@ -139,6 +140,15 @@ VBIOS expectations remain independently overridable through
 `gpuSkus.<profile>.vbios_versions`; only add firmware versions that have been
 verified on the target fleet. The built-in H200 profile expects the verified
 Hopper firmware `96.00.BC.00.02`.
+
+`GPUVbiosMismatch` and `GPUVbiosInconsistent` are likewise independent
+conditions. `check_gpu_vbios.sh` asserts that every observed VBIOS version is on
+the profile's allow-list, so `GPUVbiosMismatch` means fleet configuration drift;
+`check_gpu_vbios_consistency.sh` asserts that all GPUs on the node run the same
+version, so `GPUVbiosInconsistent` means a genuine hardware or provisioning
+fault. A node whose GPUs disagree but whose versions are all allow-listed
+reports only `GPUVbiosInconsistent`. The consistency check needs no allow-list
+and therefore runs even when `VBIOS_VERSIONS` is unset.
 
 For a mixed cluster with managed A100 nodes and GPU Operator H200 nodes:
 
