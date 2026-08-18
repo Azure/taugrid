@@ -38,7 +38,7 @@ Commit `tau/workspace.connection.yaml` at the repository root, alongside the tar
 ## Optional descriptor-only inspection
 
 ```bash
-tau workspace connection inspect tau/workspace.connection.yaml
+tau workspace connection inspect
 ```
 
 This discovers and validates the descriptor without touching a cluster. It is an optional offline diagnostic, not a researcher activation step; `tau run` discovers the file automatically. Before handoff, confirm the workspace it names is still `Ready`:
@@ -65,4 +65,4 @@ A handoff is done only when all of the following hold, reproduced from a clean c
 - `tau workspace check <workspace>` exits `0`.
 - `tau run smoke` completes.
 
-Only then send the researcher the repository URL and, if `network.privateCluster` is `true`, the connection instructions. See [what to request and what proves you can start](../../getting-started/workspace/) for the matching researcher-side steps.
+Only then send the researcher the repository URL and, if `network.privateCluster` is `true`, the connection instructions. See [Tau Workspace Setup](../../getting-started/tau-workspace-setup/) for the matching researcher-side steps.

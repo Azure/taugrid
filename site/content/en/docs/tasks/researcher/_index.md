@@ -5,8 +5,7 @@ weight: 1
 description: Run, observe, recover, and compare experiments
 ---
 
-- Request workspace access and confirm you're ready to submit — see
-  [what to request and what proves you can start](../../getting-started/workspace/)
+- Request workspace access and confirm you're ready to submit — see [Tau Workspace Setup](../../getting-started/tau-workspace-setup/)
 - [Run your first target](first-run/)
 - [Serve a trained model](serve-model/)
 - Inspect [run lifecycle concepts](../../concepts/lifecycle/)

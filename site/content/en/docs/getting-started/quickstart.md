@@ -14,7 +14,7 @@ This is the **researcher workflow**, not cluster setup. It creates no Azure reso
 - **[Install Tau CLI](../install/)** has been completed on the researcher's workstation;
 - **[AKS setup](../aks-setup/)** has produced a reachable managed-Entra AKS cluster and normal cluster-user credential path;
 - **[TauGrid setup](../taugrid-setup/)** has installed the released MCR chart and validated the core control plane; and
-- **[Workspace setup](../workspace/)** has produced a Ready workspace, and a platform operator has handed over a Tau-enabled repository.
+- **[Tau Workspace Setup](../tau-workspace-setup/)** has produced a Ready workspace, and a platform operator has handed over a Tau-enabled repository.
 
 ```bash
 git clone <research-repository>

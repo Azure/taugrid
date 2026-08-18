@@ -18,6 +18,6 @@ Follow the first-class path in this order:
 1. [Install Tau CLI](install/).
 2. Complete [AKS setup](aks-setup/).
 3. Complete [TauGrid setup](taugrid-setup/) and verify the installation.
-4. [Connect to a platform workspace](workspace/).
+4. Complete [Tau Workspace Setup](tau-workspace-setup/).
 5. Complete the [researcher quickstart](quickstart/).
 6. For GPU HPO, continue with the canonical [Ray Tune on AKS walkthrough](../examples/gpu-ray-tune/).
