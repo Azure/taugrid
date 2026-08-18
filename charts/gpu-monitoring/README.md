@@ -69,7 +69,7 @@ Install the published OCI chart from Microsoft Container Registry:
 ```bash
 helm upgrade --install gpu-monitoring \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/gpu-monitoring \
-  --version 0.1.5 \
+  --version 0.1.6 \
   --namespace kube-system \
   --create-namespace
 ```
@@ -110,6 +110,15 @@ Each `gpuSkus` entry may set:
 - `dcgmAvailability` to override the DCGM scrape-target availability contract
   (condition type and debounce windows) for that profile. See
   [DCGM scrape-target availability](#dcgm-scrape-target-availability).
+- `create_imex_channel_expected` to validate the NVIDIA driver's
+  `CreateImexChannel0` parameter against the profile's contract. Quote `"0"` or
+  `"1"` to require that exact value and fail if the parameter is absent. When
+  omitted, the driver-loaded check retains its legacy behavior: an exposed
+  parameter must be `1`, while a driver that does not expose the parameter
+  passes. The built-in managed A100 profile expects `"0"` based on observed
+  driver state. GB200 and GB300 also execute this check but omit the field, so
+  they retain the legacy contract; the remaining built-in monitor
+  configurations do not execute this check.
 
 Use `enabledGpuSkus` to render only the profiles present in a deployment. An
 empty list preserves the default behavior and renders all profiles.
@@ -306,6 +315,10 @@ Steps 2–5 completed with TauGrid PR #118, the merged-main publisher from
 resolves to OCI index digest
 `sha256:768ba258c817fa07a733626e3594407d4b1152aeb4f5c1ad0e6fb313cc04c1e9`,
 which contains both `linux/amd64` and `linux/arm64` manifests.
+
+Chart `0.1.6` retains that immutable collector digest and changes only the
+gpu-monitoring chart and health-check contracts. It does not require a
+collector image rebuild or a TauGrid umbrella chart version change.
 
 ## Security boundary
 

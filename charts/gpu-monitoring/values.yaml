@@ -356,6 +356,8 @@ gpuSkus:
     nvme_size_count: 0
     nvme_size: "0"
     imex_procname: "imex"
+    # Managed A100 nodes are healthy with the driver contract set to 0.
+    create_imex_channel_expected: "0"
   h100:
     instanceTypes:
       - Standard_ND96isr_H100_v5
