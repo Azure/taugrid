@@ -101,6 +101,107 @@ run:
 	}
 }
 
+func TestRuntimeWorkingDirForDirectJob(t *testing.T) {
+	cfg, err := parse([]byte(`name: container-cwd
+engine: job
+entrypoint: train.py
+runtime:
+  working_dir: /workspace/slime
+`), "tau.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runtime.WorkingDir != "/workspace/slime" {
+		t.Fatalf("runtime.working_dir = %q", cfg.Runtime.WorkingDir)
+	}
+	if err := cfg.ValidateExecution("job"); err != nil {
+		t.Fatalf("validate Job working directory: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{name: "relative", path: "workspace/slime"},
+		{name: "unclean", path: "/workspace/../slime"},
+		{name: "surrounding whitespace", path: " /workspace/slime"},
+		{name: "backslash", path: `/workspace\slime`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Config{Runtime: Runtime{WorkingDir: tt.path}}).ValidateDirect()
+			if err == nil || !strings.Contains(err.Error(), "clean absolute container path") {
+				t.Fatalf("ValidateDirect(%q) error = %v", tt.path, err)
+			}
+		})
+	}
+
+	managed, err := parse([]byte(`schema_version: 1
+name: managed-container-cwd
+run:
+  workload_kind: job
+runtime:
+  working_dir: /workspace/slime
+`), "managed.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed.Runtime.WorkingDir != "/workspace/slime" {
+		t.Fatalf("managed projection dropped runtime.working_dir: %+v", managed.Runtime)
+	}
+	if err := managed.ValidateExecution("job"); err == nil || !strings.Contains(err.Error(), "direct Job dispatch") {
+		t.Fatalf("managed workflow error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		cfg    Config
+		engine string
+		want   string
+	}{
+		{
+			name:   "ray engine",
+			cfg:    Config{Runtime: Runtime{WorkingDir: "/workspace/slime"}},
+			engine: "ray",
+			want:   "requires engine: job",
+		},
+		{
+			name: "managed workflow",
+			cfg: Config{
+				Runtime:  Runtime{WorkingDir: "/workspace/slime"},
+				Workflow: Workflow{File: "workflow.yaml"},
+			},
+			engine: "job",
+			want:   "direct Job dispatch",
+		},
+		{
+			name: "source conflict",
+			cfg: Config{
+				Runtime: Runtime{WorkingDir: "/workspace/slime"},
+				Run:     Run{Source: &Source{}},
+			},
+			engine: "job",
+			want:   "run.source cannot be used together",
+		},
+		{
+			name: "Ray project shipping conflict",
+			cfg: Config{
+				Runtime: Runtime{WorkingDir: "/workspace/slime"},
+				Run:     Run{WorkingDir: "."},
+			},
+			engine: "job",
+			want:   "run.working_dir cannot be used together",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateExecution(tt.engine)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ValidateExecution error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateLiteralEnvPayloadsRejectsContentTransport(t *testing.T) {
 	tooLarge := strings.Repeat("x", MaxLiteralEnvValueBytes+1)
 	if err := ValidateLiteralEnvPayloads(map[string]string{"KG_SOURCE_PATCH_B64": tooLarge}); err == nil || !strings.Contains(err.Error(), "run.source") {
@@ -690,6 +791,13 @@ func TestJSONSchemaCoversCoreFields(t *testing.T) {
 	if envSecret["x-tau-status"] != string(statusSupported) {
 		t.Fatalf("runtime.env_secret status = %v, want supported", envSecret["x-tau-status"])
 	}
+	workingDir := runtimeProps["working_dir"].(map[string]any)
+	if workingDir["x-tau-status"] != string(statusDirectOnly) {
+		t.Fatalf("runtime.working_dir status = %v, want direct-only", workingDir["x-tau-status"])
+	}
+	if !strings.Contains(workingDir["description"].(string), "container.workingDir") {
+		t.Fatalf("runtime.working_dir description does not name the Kubernetes field: %v", workingDir["description"])
+	}
 }
 
 func TestJSONSchemaDurationRendersAsString(t *testing.T) {
@@ -802,6 +910,7 @@ func TestReferenceMarkdownCallsOutScopeAndUnsupportedFields(t *testing.T) {
 // field here too.
 var pathScopedStatuses = map[string]FieldStatus{
 	"runtime.env_kv":             statusWorkflowOnly,
+	"runtime.working_dir":        statusDirectOnly,
 	"storage.publish":            statusDirectOnly,
 	"policy.clear_node_selector": statusDirectOnly,
 }

@@ -86,6 +86,10 @@ type Options struct {
 	// Source stages an immutable source tree from a digest-pinned OCI image.
 	Source *runconfig.Source
 
+	// WorkingDir sets the initial working directory inside the main container.
+	// Empty preserves the image or Tau storage default.
+	WorkingDir string
+
 	// ScriptArgs, if non-empty, are forwarded to ScriptPath as positional
 	// arguments ($1, $2, ... inside the script). Ignored when Command is set
 	// (the caller already controls argv) or when ScriptPath is empty.
@@ -406,6 +410,12 @@ func (o Options) validate() error {
 	}
 	if err := o.Source.ValidateEntrypoint(o.ScriptPath); err != nil {
 		return err
+	}
+	if err := runconfig.ValidateContainerWorkingDir(o.WorkingDir); err != nil {
+		return err
+	}
+	if o.Source != nil && o.WorkingDir != "" {
+		return fmt.Errorf("runtime.working_dir and run.source cannot be used together; run.source fixes the container working directory at %s", runconfig.SourceMountPath)
 	}
 	if o.TTLSecondsAfterFinished < 0 {
 		return errors.New("Options.TTLSecondsAfterFinished must be >= 0")
@@ -859,7 +869,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		}
 		container["volumeMounts"] = mounts
 	}
-	if storagePlan.HasDurableData {
+	if o.WorkingDir != "" {
+		container["workingDir"] = o.WorkingDir
+	} else if storagePlan.HasDurableData {
 		container["workingDir"] = storage.DurableRoot
 	}
 

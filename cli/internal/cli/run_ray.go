@@ -55,6 +55,9 @@ func newRunRayRequest(options unresolvedRunOptions, name string) (runRayRequest,
 	if len(options.volumeSpecs) > 0 || len(options.mountSpecs) > 0 {
 		return runRayRequest{}, fmt.Errorf("ray run configs support storage.data_pvc/output, but not storage.volumes/mounts")
 	}
+	if strings.TrimSpace(options.workingDir.jobContainerPath()) != "" {
+		return runRayRequest{}, fmt.Errorf("runtime.working_dir requires engine: job")
+	}
 	return runRayRequest{Name: name, Options: resolveRunRayOptions(options)}, nil
 }
 

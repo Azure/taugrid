@@ -46,7 +46,7 @@ func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest,
 	if err := validateRunJobStorageConfig(options); err != nil {
 		return runJobRequest{}, err
 	}
-	if strings.TrimSpace(options.workingDir) != "" {
+	if strings.TrimSpace(options.workingDir.rayProjectPath()) != "" {
 		// working_dir is delivered through Ray's runtime_env, which a plain
 		// Kubernetes Job has no equivalent of. Accepting it silently here
 		// would suppress the submit-time import check and hand the user back
@@ -200,6 +200,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		AzureWorkloadIdentity:   o.azureWorkloadIdentity,
 		ScriptPath:              o.script,
 		Source:                  o.source,
+		WorkingDir:              o.workingDir,
 		Launcher:                o.launcher,
 		ProcessesPerNode:        o.processesPerNode,
 		Nodes:                   o.nodes,

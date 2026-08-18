@@ -25,9 +25,8 @@ func writeProjectFile(t *testing.T, root, rel, body string) string {
 func projectRunOptions(script, workingDir string, excludes ...string) runDispatchOptions {
 	return runDispatchOptions{
 		runPayloadInput: runPayloadInput{
-			script:             script,
-			workingDir:         workingDir,
-			workingDirExcludes: excludes,
+			script:     script,
+			workingDir: rayProjectWorkingDirectory(workingDir, excludes),
 		},
 	}
 }

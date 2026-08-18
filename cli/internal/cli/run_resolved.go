@@ -28,6 +28,7 @@ type resolvedRunJobOptions struct {
 	resolvedDirectRunOptions
 	runProfile
 
+	workingDir              string
 	source                  *runconfig.Source
 	volumeSpecs             []string
 	mountSpecs              []string
@@ -104,6 +105,7 @@ func resolveRunJobOptions(o unresolvedRunOptions) resolvedRunJobOptions {
 	return resolvedRunJobOptions{
 		resolvedDirectRunOptions: resolveDirectRunOptions(o),
 		runProfile:               o.runProfile,
+		workingDir:               o.workingDir.jobContainerPath(),
 		source:                   o.source,
 		volumeSpecs:              slices.Clone(o.volumeSpecs),
 		mountSpecs:               slices.Clone(o.mountSpecs),
@@ -120,8 +122,8 @@ func resolveRunRayOptions(o unresolvedRunOptions) resolvedRunRayOptions {
 		resolvedDirectRunOptions: resolveDirectRunOptions(o),
 		runRayResources:          o.runRayResources,
 		runRayTuning:             o.runRayTuning,
-		workingDir:               o.workingDir,
-		workingDirExcludes:       slices.Clone(o.workingDirExcludes),
+		workingDir:               o.workingDir.rayProjectPath(),
+		workingDirExcludes:       slices.Clone(o.workingDir.excludes),
 		runtimePip:               slices.Clone(o.runtimePip),
 	}
 }

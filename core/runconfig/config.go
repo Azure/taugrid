@@ -60,9 +60,10 @@ type managedConfigProjection struct {
 	Execution     Execution  `yaml:"execution"`
 	Resilience    Resilience `yaml:"resilience"`
 	Runtime       struct {
-		Image string            `yaml:"image"`
-		Pip   []string          `yaml:"pip"`
-		EnvKV map[string]string `yaml:"env_kv"`
+		Image      string            `yaml:"image"`
+		WorkingDir string            `yaml:"working_dir"`
+		Pip        []string          `yaml:"pip"`
+		EnvKV      map[string]string `yaml:"env_kv"`
 	} `yaml:"runtime"`
 	Storage struct {
 		DataPVC     string       `yaml:"data_pvc"`
@@ -116,11 +117,12 @@ type Workflow struct {
 }
 
 type Runtime struct {
-	Image     string            `yaml:"image"`
-	Pip       []string          `yaml:"pip"`
-	Env       map[string]string `yaml:"env"`
-	EnvSecret map[string]string `yaml:"env_secret"`
-	EnvKV     map[string]string `yaml:"env_kv"`
+	Image      string            `yaml:"image"`
+	WorkingDir string            `yaml:"working_dir"`
+	Pip        []string          `yaml:"pip"`
+	Env        map[string]string `yaml:"env"`
+	EnvSecret  map[string]string `yaml:"env_secret"`
+	EnvKV      map[string]string `yaml:"env_kv"`
 }
 
 const (
@@ -360,9 +362,10 @@ func (p managedConfigProjection) config() Config {
 		Run:           p.Run,
 		Workflow:      p.Workflow,
 		Runtime: Runtime{
-			Image: p.Runtime.Image,
-			Pip:   p.Runtime.Pip,
-			EnvKV: p.Runtime.EnvKV,
+			Image:      p.Runtime.Image,
+			WorkingDir: p.Runtime.WorkingDir,
+			Pip:        p.Runtime.Pip,
+			EnvKV:      p.Runtime.EnvKV,
 		},
 		Compute: p.Compute,
 		Policy:  p.Policy,
@@ -385,6 +388,9 @@ func (c Config) ValidateDirect() error {
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
 	}
+	if err := ValidateContainerWorkingDir(c.Runtime.WorkingDir); err != nil {
+		return err
+	}
 	if err := c.Run.Source.Validate(); err != nil {
 		return err
 	}
@@ -404,6 +410,18 @@ func (c Config) ValidateDirect() error {
 		return err
 	}
 	return c.Storage.Validate()
+}
+
+// ValidateContainerWorkingDir enforces the path shape Kubernetes expects for a
+// container workingDir without resolving it on the host.
+func ValidateContainerWorkingDir(value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.TrimSpace(value) != value || !path.IsAbs(value) || path.Clean(value) != value || strings.Contains(value, `\`) {
+		return fmt.Errorf("runtime.working_dir %q must be a clean absolute container path", value)
+	}
+	return nil
 }
 
 func (s Storage) Validate() error {
@@ -716,6 +734,9 @@ func ValidateLiteralEnvPayloads(env map[string]string) error {
 // clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
 	engine = strings.ToLower(strings.TrimSpace(engine))
+	if err := ValidateContainerWorkingDir(c.Runtime.WorkingDir); err != nil {
+		return err
+	}
 	if c.Run.TTLSecondsAfterFinished != nil {
 		if *c.Run.TTLSecondsAfterFinished <= 0 {
 			return fmt.Errorf("run.ttl_seconds_after_finished must be > 0")
@@ -731,6 +752,20 @@ func (c Config) ValidateExecution(engine string) error {
 		}
 		if engine != "job" {
 			return fmt.Errorf("run.ttl_seconds_after_finished requires engine: job")
+		}
+	}
+	if strings.TrimSpace(c.Runtime.WorkingDir) != "" {
+		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
+			return fmt.Errorf("runtime.working_dir requires direct Job dispatch and cannot be used with workflow.file")
+		}
+		if engine != "job" {
+			return fmt.Errorf("runtime.working_dir requires engine: job")
+		}
+		if c.Run.Source != nil {
+			return fmt.Errorf("runtime.working_dir and run.source cannot be used together; run.source fixes the container working directory at %s", SourceMountPath)
+		}
+		if strings.TrimSpace(c.Run.WorkingDir) != "" {
+			return fmt.Errorf("runtime.working_dir and run.working_dir cannot be used together; runtime.working_dir sets a Job container path while run.working_dir ships a local project through Ray")
 		}
 	}
 	if c.Run.Source != nil {
