@@ -43,6 +43,25 @@ The default distribution contains:
 
 Use [cluster install values](../../reference/cluster-install-values/) for the complete values contract. The `components.gpuMonitoring.enabled` key is intentionally unset by default so GPU monitoring follows `components.tauCoreController.enabled`; set it explicitly only when the cluster has another owner for that monitoring stack.
 
+### Controller release artifacts
+
+The controller source and raw Kustomize manifests live in the [`Azure/taugrid`](https://github.com/Azure/taugrid) repository. Versioned runtime artifacts are released separately through MCR: the `mcr.microsoft.com/aks/ai-runtime/tau-core-controller:<version>` image, the standalone controller OCI chart, the TauGrid umbrella OCI chart, and the CRDs packaged by both charts.
+
+Inspect a published version without cloning the repository:
+
+```bash
+TAUGRID_VERSION="<published-version>"
+
+helm show chart oci://mcr.microsoft.com/aks/ai-runtime/helm/tau-core-controller --version "$TAUGRID_VERSION"
+helm show crds oci://mcr.microsoft.com/aks/ai-runtime/helm/tau-core-controller --version "$TAUGRID_VERSION"
+helm show chart oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid --version "$TAUGRID_VERSION"
+helm show crds oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid --version "$TAUGRID_VERSION"
+```
+
+The chart commands should print matching `version` and `appVersion` fields. Both CRD commands should list `clusters.tau.azure.com`, `quotarequests.tau.azure.com`, and `workspaces.tau.azure.com`.
+
+Use `tau cluster install` and the umbrella chart for a fresh cluster. The standalone chart is only for a platform that deliberately manages the controller as a separate Helm release. Do not install it while an umbrella release has `components.tauCoreController.enabled=true`: both paths render the same cluster-scoped RBAC, controller Deployment, and `TauCluster`, and both packages carry the same CRDs. Disable the umbrella component before assigning those resources to a standalone release.
+
 ## 3. Inspect values and preview the release
 
 Print the values reference before creating a cluster-specific values file:
