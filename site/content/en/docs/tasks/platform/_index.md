@@ -6,7 +6,7 @@ description: Prepare governed clusters and workspaces
 ---
 
 - Complete [AKS setup](../../getting-started/aks-setup/)
-- Complete [TauGrid setup and its readiness gates](../../getting-started/taugrid-setup/)
+- Complete [TauGrid setup and installation validation](../../getting-started/taugrid-setup/)
 - [Enable a workspace](enable-workspace/)
 - [Prepare ADX/Kusto for TauGrid](prepare-adx-kusto/)
 - [Enable lifecycle recorder](enable-lifecycle-recorder/)

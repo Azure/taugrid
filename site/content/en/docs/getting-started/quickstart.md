@@ -5,17 +5,16 @@ weight: 6
 description: Run smoke, training, status, logs, and results
 ---
 
-{{< maturity status="ga" reviewed="2026-08-17" >}}
+{{< maturity status="ga" reviewed="2026-08-18" >}}
 
-This is the **researcher workflow**, not cluster setup. It creates no Azure
-resources and installs no Kubernetes controllers. It starts only after:
+{{< tau-visual base="Tau-Getting-Started-Flow" title="TauGrid getting started flow" question="Who configures each layer before the researcher's first run?" source="svg" >}}
 
-- **[AKS setup](../aks-setup/)** has produced a reachable managed-Entra
-  AKS cluster and normal cluster-user credential path;
-- **[TauGrid setup](../taugrid-setup/)** has installed and validated Kueue,
-  KubeRay when required, the Tau controllers, and cluster-level policy; and
-- **[Workspace setup](../workspace/)** has produced a Ready workspace, and a
-  platform operator has handed over a Tau-enabled repository.
+This is the **researcher workflow**, not cluster setup. It creates no Azure resources and installs no Kubernetes controllers. It starts only after:
+
+- **[Install Tau CLI](../install/)** has been completed on the researcher's workstation;
+- **[AKS setup](../aks-setup/)** has produced a reachable managed-Entra AKS cluster and normal cluster-user credential path;
+- **[TauGrid setup](../taugrid-setup/)** has installed the released MCR chart and validated the core control plane; and
+- **[Workspace setup](../workspace/)** has produced a Ready workspace, and a platform operator has handed over a Tau-enabled repository.
 
 ```bash
 git clone <research-repository>
@@ -25,16 +24,7 @@ tau run smoke
 tau run train
 ```
 
-On first use, `tau run smoke` uses TauGrid's first-class AKS connection path.
-It discovers the repository's checked-in connection descriptor, obtains normal
-AKS user credentials with the caller's Azure identity, verifies the live
-workspace contract, and stores a dedicated local kubeconfig plus a durable
-configuration pin. This path works without a TTY when the caller already has
-usable noninteractive Azure authentication and kubelogin state. It then
-submits a bounded Kubernetes workload using the workspace namespace, queue,
-and service account. The dedicated kubeconfig is not a researcher-isolation
-boundary, and the smoke does not verify access to external data services.
-`tau run train` resolves the checked-in target and submits its Job or RayJob.
+On first use, `tau run smoke` uses TauGrid's first-class AKS connection path. It discovers the repository's checked-in connection descriptor, obtains normal AKS user credentials with the caller's Azure identity, verifies the live workspace contract, and stores a dedicated local kubeconfig plus a durable configuration pin. This path works without a TTY when the caller already has usable noninteractive Azure authentication and kubelogin state. It then submits a bounded Kubernetes workload using the workspace namespace, queue, and service account. The dedicated kubeconfig is not a researcher-isolation boundary, and the smoke does not verify access to external data services. `tau run train` resolves the checked-in target and submits its Job or RayJob.
 
 Observe and control the submitted run:
 
@@ -51,6 +41,4 @@ Use client dry-run before a new workload shape:
 tau run train --dry-run=client
 ```
 
-The project owns its entrypoint, runtime, model code, data contract, and output
-semantics. Tau owns deterministic resolution, platform policy handoff,
-rendering, submission, and lifecycle commands.
+The project owns its entrypoint, runtime, model code, data contract, and output semantics. Tau owns deterministic resolution, platform policy handoff, rendering, submission, and lifecycle commands.

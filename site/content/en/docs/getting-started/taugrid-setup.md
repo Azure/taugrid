@@ -1,212 +1,147 @@
 ---
 title: TauGrid setup
 linkTitle: TauGrid setup
-weight: 4
-description: What must already exist, how to validate it, and the TauWorkspace readiness gate
+weight: 3
+description: Install the MCR TauGrid Helm chart with the Tau CLI and verify the control plane
 ---
 
-{{< maturity status="ga" reviewed="2026-08-17" >}}
+{{< maturity status="ga" reviewed="2026-08-18" >}}
 
-Researchers and platform owners check the same contract before the first
-run: what must already exist, what a passing check verifies, and what a
-[TauWorkspace](../../concepts/glossary/#tauworkspace)'s
-[status condition](../../concepts/glossary/#status-condition) means. This
-page is that shared contract.
+TauGrid setup is a cluster-administrator workflow that begins after the [AKS setup](../aks-setup/) completion gate passes. It uses the Tau CLI as a Helm wrapper to install the released TauGrid distribution from MCR into an existing Kubernetes cluster, then verifies the in-cluster control plane.
 
-## AKS setup versus TauGrid setup
+This page does not provision AKS, node pools, Azure networking, managed Entra, workload identities, storage accounts, registries, GPU drivers, device plugins, or CSI drivers. Those are Azure/provider responsibilities owned by AKS setup. Workspace resources and the researcher repository are created in the following [workspace setup](../workspace/) phase.
 
-AKS is TauGrid's first-class provider path, but Tau does not provision AKS.
-Use these boundaries consistently:
+## 1. Verify the administrator workstation and AKS context
 
-| Phase | What it owns | Completion gate |
-|---|---|---|
-| **AKS setup (Azure/provider)** | Subscription and resource group, AKS resource and node pools, API networking/private DNS, managed Entra integration, AKS authorization, OIDC/workload-identity enablement, provider CSI/GPU add-ons, Azure storage/registry/managed identities, quota, cost, and cluster lifecycle | The intended normal cluster-user identity can reach the Kubernetes API, required Nodes are `Ready`, provider capabilities are available, and the non-secret AKS handoff values are recorded. |
-| **TauGrid setup (Kubernetes layer)** | Kueue, KubeRay, Tau CRDs and controllers, `TauCluster`, cluster queue policy, topology policy, and platform observability objects | `tau cluster validate installation` and required provider-specific validation pass. |
-| **Workspace setup** | `TauWorkspace`, Namespace, Kubernetes RBAC, LocalQueue, ServiceAccount, StorageClass/PVC declarations, and the repository connection handoff | `tau workspace check <workspace>` exits `0`, and the researcher has the handed-off repository. |
-| **Researcher workflow** | Local `tau` installation, the research repository, connection descriptor, target configs, application image/code, data contract, and result semantics | `tau run smoke` succeeds from the handed-off repository, followed by the project's own target validation. |
-
-Identity and storage cross the boundary but have different owners on each side:
-
-- **Identity:** AKS setup owns managed Entra, AKS cluster-user credential access,
-  OIDC, Azure RBAC when selected, managed identities, and federation. Workspace
-  setup owns the researcher subject, RoleBinding, ServiceAccount, and
-  workload annotations that consume those provider capabilities.
-- **Storage:** AKS setup owns the Azure storage service, network path, identity,
-  and CSI driver. Workspace setup owns the StorageClass and PVC
-  declarations. A Tau target only consumes a PVC that the platform has already
-  made usable.
-
-Other conformant Kubernetes clusters can supply equivalent controllers,
-identity, networking, storage, and accelerator support. That is Tau's portable
-Kubernetes surface. The automatic repository connection bootstrap documented
-here is AKS-specific today: its descriptor names `cluster.provider: azure`, an
-AKS ARM resource ID, and an Entra tenant so Tau can obtain AKS cluster-user
-credentials.
-
-## Prerequisite matrix
-
-| Layer | Owner | Examples | Does Tau provision it? |
-|---|---|---|---|
-| AKS and Azure provider resources | Platform, with Azure tooling | Subscription readiness, AKS cluster and node pools, VNet/subnets, private DNS, managed Entra, AKS/Azure RBAC, storage accounts, managed identities and workload identity federation, container registry | No. Start with [AKS setup](../aks-setup/), then provision outside Tau with Terraform, Bicep/ARM, Azure CLI, Portal, or an existing platform pipeline. |
-| AKS provider add-ons | Platform, with Azure/IaC tooling | GPU drivers/device plugin, storage and Secrets Store CSI drivers, and provider-maintained Node identity labels | No. TauGrid consumes these AKS capabilities but does not provision them. |
-| TauGrid Kubernetes control plane | Platform, with Helm or ArgoCD | Kueue controller, KubeRay operator, Tau CRDs/controller, and baseline queue policy | Yes for a fresh cluster through `tau cluster install` (a thin Helm wrapper). Existing managed clusters use independent ArgoCD Applications instead of the umbrella release. |
-| Kubernetes workspace onboarding | Platform desired state plus `tau-core-controller` | [TauWorkspace](../../concepts/glossary/#tauworkspace), derived Namespace metadata/RBAC/LocalQueue/ServiceAccount, and platform-owned durable PVC policy | The platform declares TauWorkspace through Helm/Kustomize/GitOps. The controller reconciles derived state; it does not create Azure resources or storage. |
-| Project/researcher prerequisites | Researcher | The `tau` CLI and a repository with a checked-in [target](../../concepts/glossary/#target) and `tau/workspace.connection.yaml` | No. Supplied through the platform-to-researcher handoff, not created by TauWorkspace. |
-
-**TauWorkspace itself does not provision Azure resources, the AKS cluster,
-node pools, network, Kueue, KubeRay, Azure RBAC, storage accounts, or managed
-identities.** The controller reconciles namespace metadata/RBAC, a LocalQueue,
-an optional workload-identity ServiceAccount, and declared GPU topology labels.
-Storage remains platform-owned. See
-[TauWorkspace](../../concepts/glossary/#tauworkspace) and
-[workspace](../../concepts/glossary/#workspace) in the glossary.
-
-## Platform component availability
-
-The TauGrid chart installs its pinned Kueue, KubeRay, and Tau controller
-dependencies. It does not install provider GPU/CSI drivers or a monitoring
-stack. Existing ArgoCD clusters install the same control-plane components as
-independent Applications:
-
-| Component | When it is needed | Installation source |
-|---|---|---|
-| Kueue | Required for queued workloads, shared quota, priority, and admission. | TauGrid dependency or the platform's pinned ArgoCD Application |
-| KubeRay operator | Required for RayJob and RayService workloads. | TauGrid dependency or the platform's pinned ArgoCD Application |
-| GPU drivers and device plugin | Required for GPU workloads. | The Kubernetes provider's supported GPU enablement path |
-| Storage and Secrets Store CSI drivers | Required when configs reference their volumes or secret providers. | The Kubernetes provider and CSI driver documentation |
-| Tau workspace controller | Required to reconcile TauWorkspace state and declared Node topology labels. | TauGrid dependency or the platform's independently managed deployment |
-
-Review upstream release notes and pin component versions rather than following
-mutable tags.
-
-**GPU monitoring is not GPU enablement.** The chart assumes the NVIDIA driver
-and GPU device plugin already expose healthy GPU resources to Kubernetes. It
-adds health detection and reporting; it does not install or replace the driver
-or device plugin.
-
-A platform owner must supply the workspace controller. Installing Kueue and
-KubeRay alone does not create a functional TauWorkspace control plane.
-
-## Canonical setup-validation sequence
-
-Every command below uses a public `tau` root: `cluster`, `workspace`, or
-`run`. It never uses a hidden compatibility root. See the
-[CLI reference](../../reference/cli/) for the full command tree. Run these
-in order; each stage assumes the previous one passed.
-
-1. **Optional repository-only inspection, no cluster access required.**
-
-   ```bash
-   tau workspace connection inspect
-   ```
-
-   `tau workspace connection inspect` discovers and validates
-   `tau/workspace.connection.yaml` without contacting a cluster. This command is
-   an optional diagnostic, not an activation prerequisite; `tau run` discovers
-   the descriptor automatically.
-
-2. **TauGrid platform setup, once per cluster after AKS setup.**
-
-   ```bash
-   tau cluster install --version <version> --values taugrid-values.yaml
-   tau cluster validate nodes --gpu-class <class> --min-healthy <n>
-   tau cluster validate topology --preset <preset>
-   ```
-
-   `install` performs only `helm upgrade --install`; it does not directly create
-   storage or patch Nodes. The installed controller reconciles the reviewed
-   `TauCluster.spec.nodes.labelRules`. Existing ArgoCD-managed clusters skip the
-   umbrella install and sync their independent Applications. `validate nodes`
-   and `validate topology` are read-only checks. See the
-   [cluster install values reference](../reference/cluster-install-values/) for
-   all configurable fields, or run `tau cluster explain-values`.
-
-3. **Kubernetes/TauGrid workspace setup, once per workspace.**
-
-   ```bash
-   kubectl apply -f workspace.yaml
-   tau workspace status <workspace> --context <context>
-   ```
-
-   Deliver `workspace.yaml` through the platform's reviewed Helm/Kustomize/
-   GitOps path; the direct `kubectl` command above is the fresh-cluster
-   equivalent. The controller creates and reconciles workspace-derived state.
-   [Enable a workspace](../../tasks/platform/enable-workspace/) documents the
-   native `TauWorkspace` contract and the full
-   platform sequence and the [handoff checklist](../../tasks/platform/handoff/).
-
-4. **Researcher, once handed a repository.**
-
-   ```bash
-   tau run smoke
-   tau run train --dry-run=client
-   ```
-
-   The checked-in descriptor is explicit repository/platform preconfiguration.
-   On first use, Tau automatically obtains a normal AKS cluster-user kubeconfig
-   with the caller's Azure identity, stores it as a private per-connection file,
-   verifies the live workspace contract, and pins that configuration. This works
-   without a TTY when the caller already has a usable noninteractive Azure
-   identity; authentication still fails normally when it does not.
-
-   The bounded smoke then verifies workspace gating, queue admission, scheduling,
-   service-account selection, and container execution. It does not mount the
-   workspace PVC or access external data services. Client dry-run does not
-   submit a workload, but it still discovers and verifies the workspace
-   connection before rendering platform-owned namespace and queue policy.
-
-   Live readiness evidence expires after five minutes. After that, interactive
-   and noninteractive commands re-run the same read-only workspace, LocalQueue,
-   and authorization checks without fetching credentials. Tau fails closed and
-   requires interactive review if the descriptor, cluster/resource, tenant,
-   authorization mode, workspace UID, namespace, LocalQueue, or workload service
-   account changes.
-
-   `workspace-rbac` is the API default and is what `tau workspace create`
-   writes; the controller binds the researcher subject in the workspace
-   namespace. `cluster-wide` is an explicit opt-out that grants no researcher
-   access, and some existing clusters run it. The
-   [multiple-workspace lifecycle](../../concepts/workspaces/#multiple-workspaces)
-   is Alpha: v0 activates one workspace and blocks additional workspace objects
-   until the active workspace is removed.
-
-## TauWorkspace readiness gate
-
-A [TauWorkspace](../../concepts/glossary/#tauworkspace) reports one of
-three phases:
-
-| Phase | Meaning |
-|---|---|
-| `Pending` | No gating condition has failed, but at least one is still unresolved. |
-| `Ready` | All conditions are satisfied; researchers can submit runs. |
-| `Degraded` | At least one gating condition is `False`, or `DriftDetected` is `True`. |
-
-The phase currently gates on `RBACReady` and `QueueReady`, and becomes
-`Degraded` when drift is detected. The status also reports the diagnostic
-`WorkloadIdentityReady` condition, which does not change the overall phase.
-The workspace controller emits no `StorageReady` condition, so confirm the
-durable PVC is `Bound` yourself rather than inferring it from `Ready`.
-
-Inspect the phase and every condition with:
+Install the [Tau CLI](../install/), Helm 3 or 4, and `kubectl`. Use the normal AKS cluster-user or approved administrator context produced by AKS setup; do not rely on an implicit current context.
 
 ```bash
-tau workspace status <workspace> --context <context>
+TAU_CONTEXT="<aks-context>"
+
+tau version --short
+helm version --short
+kubectl --context "$TAU_CONTEXT" version
+kubectl --context "$TAU_CONTEXT" get nodes
 ```
 
-Gate on readiness. This exits non-zero when the workspace is not `Ready`:
+You should see a released Tau version, a Helm 3 or 4 version, a Kubernetes server version of 1.30 or newer, and the required AKS nodes in `Ready` state. Stop here if a command is unavailable, the context points to the wrong cluster, the API is unreachable, or required provider capabilities are not ready.
+
+## 2. Understand what the TauGrid chart installs
+
+The Tau CLI defaults to the versioned public OCI chart at `oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid`. A source checkout and local chart path are not required for the end-user installation path.
+
+The default distribution contains:
+
+| Component | Default | Responsibility |
+| --- | --- | --- |
+| Kueue | Enabled | Queueing, admission, and quota policy |
+| KubeRay operator | Enabled | RayCluster, RayJob, and RayService lifecycle |
+| `tau-core-controller` and `TauCluster` | Enabled | TauWorkspace reconciliation and reviewed node-label rules |
+| Baseline queue and quota guard | Enabled | A portable `jobqueue` policy and fail-closed quota approval contract |
+| GPU monitoring | Enabled with the Tau controller | Profile-specific GPU, interconnect, NVMe, and DCGM health collection; this observes provider-enabled GPUs but does not install a GPU driver or device plugin |
+| `taugrid-core` services chart | Included | Portal, Stellar, lifecycle recorder, and image prewarm remain individually disabled until the platform opts in |
+
+Use [cluster install values](../../reference/cluster-install-values/) for the complete values contract. The `components.gpuMonitoring.enabled` key is intentionally unset by default so GPU monitoring follows `components.tauCoreController.enabled`; set it explicitly only when the cluster has another owner for that monitoring stack.
+
+## 3. Inspect values and preview the release
+
+Print the values reference before creating a cluster-specific values file:
 
 ```bash
-tau workspace check <workspace> --context <context>
+tau cluster explain-values
 ```
 
-`tau run` and `tau run smoke` apply the same gate before submitting. When
-the workspace is not `Ready`, they fail closed with:
+For a default fresh-cluster installation, preview the released chart without contacting or changing the cluster:
+
+```bash
+tau cluster install --context "$TAU_CONTEXT" --dry-run
+```
+
+You should see an installation plan whose chart is the MCR OCI reference, followed by `TauGrid render summary (nothing was applied)` and `Rendered the TauGrid manifests offline. The cluster was not read or changed.`
+
+If the platform needs different queue quotas, GPU flavors, component switches, or service configuration, put the complete reviewed configuration in one file and preview that exact file:
+
+```bash
+tau cluster install \
+  --context "$TAU_CONTEXT" \
+  --values taugrid-values.yaml \
+  --dry-run
+```
+
+`tau cluster install` uses Helm `--reset-values` so the bootstrap phase cannot leak temporary values into the final release. Pass the same complete values file on every upgrade; a later command with only a partial overlay resets omitted settings to chart defaults.
+
+## 4. Install TauGrid from MCR
+
+Install the release-aligned chart with the CLI defaults:
+
+```bash
+tau cluster install --context "$TAU_CONTEXT"
+```
+
+Or install the previously reviewed platform values:
+
+```bash
+tau cluster install \
+  --context "$TAU_CONTEXT" \
+  --values taugrid-values.yaml
+```
+
+The plan should show the MCR chart, the chart version compiled into the Tau CLI release, the `taugrid` Helm release, and the `tau-system` namespace. On a fresh cluster, the CLI performs a control-plane bootstrap Helm pass, applies the baseline queue policy in a second pass, and then runs component-aware readiness checks.
+
+A default successful installation ends with output shaped like:
 
 ```text
-workspace "<workspace>" is not Ready (phase=<phase>)
+TauGrid installation validation
+  PASS  Kubernetes           ...
+  PASS  Kueue                ...
+  PASS  KubeRay              ...
+  PASS  Tau controller       ...
+  PASS  TauCluster           ...
+  PASS  Baseline queue       ...
+  PASS  Quota guard          ...
+READY: 7/7 checks passed
+
+TauGrid is installed and ready as Helm release taugrid in namespace tau-system.
 ```
 
-Tau has no bypass flag, but this is intentionally a CLI readiness check rather
-than a custom cluster admission policy. Raw Kubernetes clients remain governed
-by ordinary RBAC and Kueue. A platform owner should not hand off a repository
-until `tau workspace check` exits `0`.
+Components explicitly disabled in the release are reported as `SKIP` and reduce the required check count. A `FAIL` or `NOT READY` result means TauGrid setup is incomplete even if Helm created resources.
+
+The default command does not enable Helm's generic watcher or rollback. Add `--wait` to run Helm's watcher before Tau's readiness checks, or `--atomic` to roll back a Helm operation that fails. Tau's post-Helm readiness report always runs; a failure in that report leaves a successfully applied release available for inspection.
+
+## 5. Re-run the core control-plane readiness gate
+
+The installation command runs this gate automatically. Re-run it at any time without changing the cluster:
+
+```bash
+tau cluster validate installation --context "$TAU_CONTEXT"
+```
+
+You should again see `READY` with every enabled core check marked `PASS` or an intentionally disabled component marked `SKIP`. This command validates Kubernetes compatibility, Kueue, KubeRay, the Tau controller, `TauCluster`, the baseline queue, and the quota guard. It does not claim that every optional service or every GPU-monitoring DaemonSet is healthy.
+
+When GPU monitoring is enabled, inspect its profile-specific DaemonSets separately:
+
+```bash
+kubectl --context "$TAU_CONTEXT" \
+  --namespace tau-system \
+  get daemonsets \
+  --selector app.kubernetes.io/name=gpu-monitoring
+```
+
+You should see the enabled GPU profiles. Profiles with no matching nodes can correctly show `DESIRED=0`; each profile that matches live GPU nodes should eventually have `READY` equal to `DESIRED`.
+
+For a GPU cluster, an administrator can also run active node health probes after the provider driver and device registration are ready:
+
+```bash
+tau cluster validate nodes \
+  --context "$TAU_CONTEXT" \
+  --gpu-class <gpu-class> \
+  --min-healthy <expected-node-count>
+```
+
+This command creates short-lived privileged Pods on the selected GPU nodes, so run it only with explicit cluster-administrator authorization. A passing result ends with `<healthy>/<selected> nodes healthy` and exits `0`.
+
+## 6. Continue to workspace setup
+
+TauGrid setup is complete when `tau cluster validate installation` exits `0`, required GPU/provider checks pass for the intended workloads, and any explicitly enabled services have their own documented readiness evidence.
+
+Continue with [workspace setup](../workspace/) to create or adopt the TauWorkspace, verify its namespace/RBAC/LocalQueue/ServiceAccount and storage contract, and hand a non-secret Tau-enabled repository to the researcher. Do not treat a healthy cluster control plane as proof that a workspace or its PVC is ready.

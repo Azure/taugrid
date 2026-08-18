@@ -183,7 +183,8 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Version:    %s
   Helm wait:  %s
   Rollback:   %s
-  Components: Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard
+  Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring
+  Opt-in:     Portal, Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane resources ready
 
 `, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)

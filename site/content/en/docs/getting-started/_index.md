@@ -2,28 +2,22 @@
 title: Getting started
 linkTitle: Getting started
 weight: 2
-description: Install Tau and complete a first workflow
+description: Install the Tau CLI, prepare AKS, install TauGrid, and complete a first workflow
 ---
 
-AKS is TauGrid's first-class deployment target. The primary path has four
-explicit phases:
+AKS is TauGrid's first-class deployment target. The primary path has five explicit phases:
 
-1. **AKS setup (Azure/provider):** prepare the subscription, then provision or
-   select AKS, its node pools, network access, managed Entra integration,
-   provider add-ons, and Azure identities.
-2. **TauGrid setup (Kubernetes layer):** install Kueue, KubeRay, and the Tau
-   controllers and cluster-level policies into that reachable cluster.
-3. **Workspace setup:** enable and validate the researcher namespace, queue,
-   service account, storage contract, and repository connection handoff.
-4. **Researcher workflow:** use the handed-off repository to submit and observe
-   workloads.
+1. **Install Tau CLI (local prerequisite):** install the released `tau` CLI on each platform-operator or researcher workstation that will use it.
+2. **AKS setup (Azure/provider):** prepare the subscription, then provision or select AKS, its node pools, network access, managed Entra integration, provider add-ons, and Azure identities.
+3. **TauGrid setup (Kubernetes layer):** use the Tau CLI to install the released MCR Helm chart, then verify the in-cluster control plane.
+4. **Workspace setup:** enable and validate the researcher namespace, queue, service account, storage contract, and repository connection handoff.
+5. **Researcher quickstart:** use the handed-off repository to submit and observe workloads.
 
 Follow the first-class path in this order:
 
-1. [Install Tau](install/).
+1. [Install Tau CLI](install/).
 2. Complete [AKS setup](aks-setup/).
-3. Complete [TauGrid setup](taugrid-setup/) and its readiness gates.
+3. Complete [TauGrid setup](taugrid-setup/) and verify the installation.
 4. [Connect to a platform workspace](workspace/).
 5. Complete the [researcher quickstart](quickstart/).
-6. For GPU HPO, continue with the canonical
-   [Ray Tune on AKS walkthrough](../examples/gpu-ray-tune/).
+6. For GPU HPO, continue with the canonical [Ray Tune on AKS walkthrough](../examples/gpu-ray-tune/).

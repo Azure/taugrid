@@ -4,10 +4,7 @@ weight: 5
 description: Twenty-five diagrams from evaluation through contribution
 ---
 
-Each diagram answers one reader question and preserves an editable source, SVG,
-and PNG. Solid elements represent GA capabilities. Orange dashed elements
-represent Alpha or Beta capabilities. Purple dashed elements represent Planned
-work.
+Each diagram answers one reader question and preserves an editable source, SVG, and PNG. Solid elements represent GA capabilities. Orange dashed elements represent Alpha or Beta capabilities. Purple dashed elements represent Planned work.
 
 ## Understand and evaluate
 
@@ -23,7 +20,7 @@ work.
 
 <div class="tau-visual-grid">
 {{< tau-visual base="Tau-Adoption-Paths" title="Adoption paths" question="How can I try or deploy Tau?" source="excalidraw" >}}
-{{< tau-visual base="Tau-Platform-Researcher-Handoff" title="Platform-to-researcher handoff" question="What must exist before the first run?" source="excalidraw" >}}
+{{< tau-visual base="Tau-Getting-Started-Flow" title="TauGrid getting started flow" question="Who configures each layer before the researcher's first run?" source="svg" >}}
 {{< tau-visual base="Tau-Identity-Security-Trust-Chain" title="Identity and security trust chains" question="Who is the researcher and what may the workload access?" source="excalidraw" >}}
 {{< tau-visual base="Tau-Researcher-Onboarding-Workspace-Design" title="TauWorkspace reconciliation" question="What does TauWorkspace reconcile?" source="drawio" >}}
 {{< tau-visual base="Tau-Azure-Resource-Blueprint" title="Azure resource blueprint" question="Which Azure resources support a Tau-enabled cluster?" source="drawio" >}}
