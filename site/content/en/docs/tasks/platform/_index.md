@@ -5,8 +5,8 @@ weight: 2
 description: Prepare governed clusters and workspaces
 ---
 
-- [Prepare the Azure subscription and choose an infrastructure path](../../getting-started/azure-subscription/)
-- Check the [prerequisite matrix and readiness gate](../../getting-started/prerequisites/)
+- Complete [AKS setup](../../getting-started/aks-setup/)
+- Complete [TauGrid setup and its readiness gates](../../getting-started/taugrid-setup/)
 - [Enable a workspace](enable-workspace/)
 - [Prepare ADX/Kusto for TauGrid](prepare-adx-kusto/)
 - [Enable lifecycle recorder](enable-lifecycle-recorder/)

@@ -50,7 +50,46 @@ test -n "$output"
 test -n "$url"
 cp "$MOCK_RELEASE_DIR/${url##*/}" "$output"
 EOF
-chmod 0755 "$mock_bin/uname" "$mock_bin/curl"
+
+cat > "$mock_bin/gh" <<'EOF'
+#!/bin/sh
+set -eu
+case "${1:-} ${2:-}" in
+  "auth status")
+    test "${MOCK_GH_AUTH:-0}" = "1"
+    ;;
+  "release view")
+    printf '%s\n' 'v1.2.3'
+    ;;
+  "release download")
+    shift 3
+    download_dir=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --dir)
+          download_dir="$2"
+          shift 2
+          ;;
+        --pattern)
+          test -n "$download_dir"
+          cp "$MOCK_RELEASE_DIR/$2" "$download_dir/$2"
+          shift 2
+          ;;
+        --repo)
+          shift 2
+          ;;
+        *)
+          exit 2
+          ;;
+      esac
+    done
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+chmod 0755 "$mock_bin/uname" "$mock_bin/curl" "$mock_bin/gh"
 
 write_binary() {
   asset="$1"
@@ -76,10 +115,12 @@ run_stamped_case() {
   os_name="$1"
   machine="$2"
   asset="$3"
+  gh_auth="$4"
   install_dir="$tmp_dir/install-$os_name-$machine"
   license_dir="$tmp_dir/license-$os_name-$machine"
 
   MOCK_RELEASE_DIR="$release_dir" \
+    MOCK_GH_AUTH="$gh_auth" \
     MOCK_UNAME_M="$machine" \
     MOCK_UNAME_S="$os_name" \
     PATH="$mock_bin:$PATH" \
@@ -96,12 +137,24 @@ write_binary "tau-linux-amd64"
 write_binary "tau-darwin-arm64"
 write_checksums
 
-run_stamped_case "Linux" "x86_64" "tau-linux-amd64"
-run_stamped_case "Darwin" "arm64" "tau-darwin-arm64"
+run_stamped_case "Linux" "x86_64" "tau-linux-amd64" "1"
+run_stamped_case "Darwin" "arm64" "tau-darwin-arm64" "0"
+
+latest_install_dir="$tmp_dir/install-latest"
+MOCK_GH_AUTH="1" \
+  MOCK_RELEASE_DIR="$release_dir" \
+  MOCK_UNAME_M="x86_64" \
+  MOCK_UNAME_S="Linux" \
+  PATH="$mock_bin:$PATH" \
+  TAU_INSTALL_DIR="$latest_install_dir" \
+  TAU_LICENSE_DIR="$tmp_dir/license-latest" \
+  "$installer" >/dev/null
+test "$("$latest_install_dir/tau" version --short)" = "v1.2.3"
 
 printf '%064d  tau-linux-amd64\n' 0 > "$release_dir/SHA256SUMS"
 bad_install_dir="$tmp_dir/install-bad-checksum"
 if MOCK_RELEASE_DIR="$release_dir" \
+  MOCK_GH_AUTH="1" \
   MOCK_UNAME_M="x86_64" \
   MOCK_UNAME_S="Linux" \
   PATH="$mock_bin:$PATH" \

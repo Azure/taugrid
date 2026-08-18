@@ -1,6 +1,6 @@
-name: Release tau CLI
+name: Release TauGrid
 
-run-name: Release tau CLI ${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
+run-name: Release TauGrid ${{ github.ref_type == 'tag' && github.ref_name || 'v0.3.0' }}
 
 on:
   push:
@@ -225,6 +225,14 @@ jobs:
           go-version-file: .go-version
           cache: false
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install wheel build frontend
+        run: python -m pip install --disable-pip-version-check build==1.5.0
+
       - name: Build twice and compare
         env:
           VERSION: ${{ env.RELEASE_TAG }}
@@ -235,10 +243,30 @@ jobs:
           DATE="$(git show -s --format=%cI HEAD)"
           first="$RUNNER_TEMP/tau-release-a"
           second="$RUNNER_TEMP/tau-release-b"
+          wheel_first_dir="$RUNNER_TEMP/tau-python-wheel-a"
+          wheel_second_dir="$RUNNER_TEMP/tau-python-wheel-b"
+
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          python -m build --wheel --outdir "$wheel_first_dir" ./sdk/python/python
+          python -m build --wheel --outdir "$wheel_second_dir" ./sdk/python/python
+
+          shopt -s nullglob
+          wheel_first=("$wheel_first_dir"/tau-*.whl)
+          wheel_second=("$wheel_second_dir"/tau-*.whl)
+          if (( ${#wheel_first[@]} != 1 || ${#wheel_second[@]} != 1 )); then
+            echo "expected exactly one Tau SDK wheel from each build" >&2
+            exit 1
+          fi
+          wheel_name="$(basename "${wheel_first[0]}")"
+          test "$(basename "${wheel_second[0]}")" = "$wheel_name"
+          cmp "${wheel_first[0]}" "${wheel_second[0]}"
+
           make -C cli release-assets \
-            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$first"
+            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$first" \
+            PYTHON_WHEEL="${wheel_first[0]}"
           make -C cli release-assets \
-            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$second"
+            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$second" \
+            PYTHON_WHEEL="${wheel_second[0]}"
 
           expected=(
             LICENSE
@@ -252,6 +280,7 @@ jobs:
             tau-gen-linux-arm64
             tau-linux-amd64
             tau-linux-arm64
+            "$wheel_name"
           )
           printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
           find "$first" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/actual-assets"
@@ -261,9 +290,11 @@ jobs:
           (cd "$first" && shasum -a 256 --check SHA256SUMS)
           while read -r _ asset; do
             cmp "$first/$asset" "$second/$asset"
-            if [[ "$asset" == tau-* ]]; then
-              go version -m "$first/$asset"
-            fi
+            case "$asset" in
+              tau-darwin-* | tau-linux-* | tau-gen-darwin-* | tau-gen-linux-*)
+                go version -m "$first/$asset"
+                ;;
+            esac
           done < "$first/SHA256SUMS"
 
           host_arch="$(go env GOHOSTARCH)"
@@ -329,6 +360,14 @@ jobs:
           release_dir="$RUNNER_TEMP/tau-release"
           (cd "$release_dir" && shasum -a 256 --check SHA256SUMS)
 
+          shopt -s nullglob
+          wheel_assets=("$release_dir"/tau-*.whl)
+          if (( ${#wheel_assets[@]} != 1 )); then
+            echo "expected exactly one Tau SDK wheel" >&2
+            exit 1
+          fi
+          wheel_asset="$(basename "${wheel_assets[0]}")"
+
           expected=(
             LICENSE
             SHA256SUMS
@@ -341,6 +380,7 @@ jobs:
             tau-gen-linux-arm64
             tau-linux-amd64
             tau-linux-arm64
+            "$wheel_asset"
           )
           printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
           find "$release_dir" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/local-assets"
@@ -466,12 +506,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install tagged Python SDK
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check ./sdk/python/python
-
-      - name: Download and exercise published binaries
+      - name: Download and exercise published assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ env.RELEASE_TAG }}
@@ -490,17 +525,31 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern install.sh \
             --pattern "$tau_gen_asset" \
+            --pattern 'tau-*.whl' \
             --pattern SHA256SUMS
 
           TAU_INSTALL_DIR="$bin_dir" TAU_VERSION="$TAG" sh install.sh
-          awk -v asset="$tau_gen_asset" '$2 == asset' SHA256SUMS > tau-gen.checksums
-          test "$(wc -l < tau-gen.checksums)" -eq 1
-          shasum -a 256 --check tau-gen.checksums
+
+          shopt -s nullglob
+          wheel_assets=(tau-*.whl)
+          if (( ${#wheel_assets[@]} != 1 )); then
+            echo "expected exactly one published Tau SDK wheel" >&2
+            exit 1
+          fi
+          wheel_asset="${wheel_assets[0]}"
+
+          for asset in "$tau_gen_asset" "$wheel_asset"; do
+            awk -v asset="$asset" '$2 == asset' SHA256SUMS > asset.checksums
+            test "$(wc -l < asset.checksums)" -eq 1
+            shasum -a 256 --check asset.checksums
+          done
 
           install -m 0755 "$tau_gen_asset" "$bin_dir/tau-gen"
+          python -m pip install --disable-pip-version-check "./$wheel_asset"
           export PATH="$bin_dir:$PATH"
 
           test "$(tau version --short)" = "$TAG"
           tau --help >/dev/null
           tau-gen --help >/dev/null
+          python -c 'import tau; print(tau.__version__)'
           python -m tau.cli --help >/dev/null

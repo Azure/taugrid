@@ -110,6 +110,62 @@ func TestRender_HappyPath_Command(t *testing.T) {
 	}
 }
 
+func TestRender_WorkingDirMapsToMainContainerAndOverridesStorageDefault(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:       "container-cwd",
+		Namespace:  "tau-default",
+		Command:    []string{"python", "train.py"},
+		WorkingDir: "/workspace/slime",
+		PVCMount:   "training-data",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := parseYAML(t, out)
+	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	main := pod["containers"].([]any)[0].(map[string]any)
+	if main["workingDir"] != "/workspace/slime" {
+		t.Fatalf("workingDir = %v, want /workspace/slime", main["workingDir"])
+	}
+}
+
+func TestRender_WorkingDirRejectsInvalidPathAndSourceConflict(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{
+			name: "relative path",
+			opts: Options{
+				Name: "relative-cwd", Namespace: "tau-default",
+				Command: []string{"true"}, WorkingDir: "workspace/slime",
+			},
+			want: "clean absolute container path",
+		},
+		{
+			name: "source conflict",
+			opts: Options{
+				Name: "source-cwd", Namespace: "tau-default", ScriptPath: "train.py",
+				WorkingDir: "/workspace/slime",
+				Source: &runconfig.Source{
+					Image: "example.azurecr.io/research-source@sha256:" + strings.Repeat("a", 64),
+					Path:  "/workspace",
+				},
+			},
+			want: "run.source cannot be used together",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Render(trainProfile(), tt.opts)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Render error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestRender_ImageAssetStagesPinnedDirectoryWithoutConfigMap(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	image := "example.azurecr.io/reference-assets@sha256:" + digest

@@ -1730,6 +1730,38 @@ storage:
 	}
 }
 
+func TestRunConfigDryRunSetsDirectJobContainerWorkingDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "train.py"), []byte("print('train')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: container-cwd
+engine: job
+entrypoint: train.py
+runtime:
+  image: example.azurecr.io/workload:latest
+  working_dir: /workspace/slime
+compute:
+  gpus: 0
+policy:
+  namespace: tau-default
+  queue: research-training
+storage:
+  data_pvc: training-data
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	if !strings.Contains(rendered, "workingDir: /workspace/slime") {
+		t.Fatalf("direct Job working directory was not rendered:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "runtimeEnvYAML") || strings.Contains(rendered, "_tau_project.zip") {
+		t.Fatalf("container working directory must not use Ray project shipping:\n%s", rendered)
+	}
+}
+
 func TestRunConfigDryRunStagesDigestPinnedSourceWithoutLocalEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	digest := strings.Repeat("d", 64)

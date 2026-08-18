@@ -147,5 +147,5 @@ baselineQueue:
 ## See Also
 
 - [CLI reference — `tau cluster`](../cli/#tau-cluster)
-- [Prerequisites](../../getting-started/prerequisites/)
+- [TauGrid setup](../../getting-started/taugrid-setup/)
 - Source: [`charts/taugrid/values.yaml`](https://github.com/Azure/taugrid/blob/main/charts/taugrid/values.yaml)

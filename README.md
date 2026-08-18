@@ -72,27 +72,31 @@ helm install taugrid \
 
 ### Install the tau CLI
 
-Until a GitHub Release is published, install the CLI from a source checkout:
+Install the latest stable GitHub Release with `curl`:
 
 ```bash
-git clone https://github.com/Azure/taugrid.git
-cd taugrid
-make install-tau-cli
+TAU_RELEASE_URL="$(
+  curl -fsSL -o /dev/null -w '%{url_effective}' \
+    https://github.com/Azure/taugrid/releases/latest
+)"
+TAU_VERSION="${TAU_RELEASE_URL##*/}"
 
-TAU_BIN_DIR="$(go env GOBIN)"
-test -n "$TAU_BIN_DIR" || TAU_BIN_DIR="$(go env GOPATH)/bin"
-export PATH="$TAU_BIN_DIR:$PATH"
+curl -fsSL \
+  "https://github.com/Azure/taugrid/releases/download/$TAU_VERSION/install.sh" |
+  TAU_VERSION="$TAU_VERSION" bash
 
+export PATH="$HOME/.local/bin:$PATH"
 command -v tau
 tau version --short
 ```
 
-Use the Go version declared in `cli/go.mod`. The Make target installs `tau` and
-`tau-gen` into `GOBIN`, or `GOPATH/bin` when `GOBIN` is unset, and warns when
-that directory is not on `PATH`. See the
-[installation guide](site/content/en/docs/getting-started/install.md) for PATH
-persistence, upgrades, the optional Python SDK, and the verified-binary path
-available after a GitHub Release is published.
+See the [installation guide](site/content/en/docs/getting-started/install.md)
+for PATH persistence, pinned versions, the Python SDK wheel, upgrades, and the
+advanced source installation.
+
+The historical `v0.3.0` Release predates the release installer. If it is still
+the latest Release, use the guide's source path until a newer Release is
+available.
 
 ### Submit Your First Workload
 

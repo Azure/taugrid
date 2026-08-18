@@ -45,7 +45,7 @@ func TestBuildProjectArchivePackagesProjectAndRelativisesEntrypoint(t *testing.T
 
 	archive, name, err := buildProjectArchive(runDispatchOptions{
 		script:     script,
-		workingDir: root,
+		workingDir: rayProjectWorkingDirectory(root, nil),
 	})
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
@@ -66,7 +66,10 @@ func TestBuildProjectArchiveRejectsEntrypointOutsideWorkingDir(t *testing.T) {
 	writeProjectFile(t, root, "keep.py", "")
 	script := writeProjectFile(t, base, "outside.py", "print(1)\n")
 
-	_, _, err := buildProjectArchive(runDispatchOptions{script: script, workingDir: root})
+	_, _, err := buildProjectArchive(runDispatchOptions{
+		script:     script,
+		workingDir: rayProjectWorkingDirectory(root, nil),
+	})
 	if err == nil {
 		t.Fatal("want error: an entrypoint outside working_dir would never be shipped")
 	}
@@ -80,14 +83,16 @@ func TestBuildProjectArchiveHonoursExcludes(t *testing.T) {
 	script := writeProjectFile(t, root, "train.py", "print(1)\n")
 	writeProjectFile(t, root, "data/blob.bin", strings.Repeat("a", 2048))
 
-	withData, _, err := buildProjectArchive(runDispatchOptions{script: script, workingDir: root})
+	withData, _, err := buildProjectArchive(runDispatchOptions{
+		script:     script,
+		workingDir: rayProjectWorkingDirectory(root, nil),
+	})
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
 	}
 	withoutData, _, err := buildProjectArchive(runDispatchOptions{
-		script:             script,
-		workingDir:         root,
-		workingDirExcludes: []string{"data"},
+		script:     script,
+		workingDir: rayProjectWorkingDirectory(root, []string{"data"}),
 	})
 	if err != nil {
 		t.Fatalf("buildProjectArchive: %v", err)
@@ -112,7 +117,10 @@ func TestEntrypointImportGateSuppressedWhenWorkingDirSet(t *testing.T) {
 
 	// With working_dir the sibling genuinely ships and Ray puts it on
 	// PYTHONPATH, so the same import must be accepted.
-	if err := checkEntrypointImports(runDispatchOptions{script: script, workingDir: root}); err != nil {
+	if err := checkEntrypointImports(runDispatchOptions{
+		script:     script,
+		workingDir: rayProjectWorkingDirectory(root, nil),
+	}); err != nil {
 		t.Fatalf("working_dir ships siblings; gate should pass: %v", err)
 	}
 }
@@ -124,7 +132,10 @@ func TestWorkingDirRejectedForJobEngine(t *testing.T) {
 	// engine: job renders a plain Kubernetes Job, which has no runtime_env.
 	// Accepting working_dir there would also suppress the submit-time import
 	// check, handing back the exact late ModuleNotFoundError it prevents.
-	_, err := newRunJobRequest(runDispatchOptions{script: script, workingDir: root}, "wd-job")
+	_, err := newRunJobRequest(runDispatchOptions{
+		script:     script,
+		workingDir: rayProjectWorkingDirectory(root, nil),
+	}, "wd-job")
 	if err == nil {
 		t.Fatal("want rejection: engine job cannot deliver working_dir")
 	}

@@ -1,11 +1,11 @@
 ---
-title: Prepare an Azure subscription
-linkTitle: Azure subscription
+title: AKS setup
+linkTitle: AKS setup
 weight: 2
 description: Validate subscription access, quota, cost controls, and choose an AKS provisioning path
 ---
 
-{{< maturity status="ga" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-17" >}}
 
 An Azure subscription is the first shared surface for an AKS-backed Tau
 environment. Tau does not create or govern the subscription. A platform owner
@@ -15,7 +15,7 @@ and then enables Tau inside that cluster.
 This page covers **AKS setup**, the Azure/provider side of the boundary. It
 does not install Kueue, KubeRay, Tau controllers, queue policy, workspaces,
 Kubernetes RBAC, or workload objects. Those belong to
-[Kubernetes/TauGrid setup](../prerequisites/#aks-setup-versus-kubernetestaugrid-setup)
+[TauGrid setup](../taugrid-setup/#aks-setup-versus-taugrid-setup)
 after the AKS handoff gate passes.
 
 The subscription gate is the same whether the cluster is created with
@@ -258,7 +258,7 @@ az aks show \
   --output yaml
 ```
 
-## 6. End AKS setup; begin Kubernetes/TauGrid setup
+## 6. End AKS setup; begin TauGrid setup
 
 AKS setup is complete only when:
 
@@ -272,10 +272,10 @@ AKS setup is complete only when:
   explicit.
 
 An AKS cluster that passes that provider gate is still not a Tau-enabled
-cluster. Everything below is Kubernetes/TauGrid setup performed through the
+cluster. Everything below is TauGrid setup performed through the
 Kubernetes API:
 
-1. [Prerequisites and setup readiness](../prerequisites/) to install and
+1. [TauGrid setup](../taugrid-setup/) to install and
    validate Kueue, KubeRay when needed, storage, GPU support, and the
    TauWorkspace controller.
 2. [Enable a workspace](../../tasks/platform/enable-workspace/) to create the

@@ -34,7 +34,7 @@ until the active workspace is removed.
 
 The controller source, image, CRDs, and supported install manifests are not
 publicly released yet. Until that
-[release gate](../../getting-started/prerequisites/#platform-component-availability)
+[release gate](../../getting-started/taugrid-setup/#platform-component-availability)
 is complete, a platform owner must supply the controller and this page is an
 API reference, not a standalone installation path.
 

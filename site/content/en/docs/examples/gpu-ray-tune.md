@@ -5,7 +5,7 @@ weight: 20
 description: Provision GPU-capable AKS, enable TauGrid, and run the six-trial Ray Tune example through a repository workspace.
 ---
 
-{{< maturity status="ga" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-17" >}}
 
 This guide runs the GPU HPO workflow for
 [`examples/ray-tune-smoke`](https://github.com/Azure/taugrid/tree/main/examples/ray-tune-smoke).
@@ -24,10 +24,11 @@ Complete these phases in order:
 | Phase | Owner | Completion gate |
 |---|---|---|
 | **AKS setup (Azure/provider)** | Azure platform operator | Managed-Entra/Azure-RBAC AKS is reachable through normal cluster-user credentials; the CPU system pool and GPU pool are `Ready`; the provider GPU driver and device plugin expose a usable device. |
-| **Kubernetes/TauGrid setup** | Kubernetes/TauGrid platform operator | The checked-in TauGrid chart passes installation and node validation; a `TauWorkspace` for the actual researcher subject is `Ready`; the repository connection descriptor is generated. |
+| **TauGrid setup** | Kubernetes/TauGrid platform operator | The checked-in TauGrid chart passes installation and node validation. |
+| **Workspace setup** | Kubernetes/TauGrid platform operator | A `TauWorkspace` for the actual researcher subject is `Ready`, and the repository connection descriptor is generated. |
 | **Researcher workflow** | Researcher | The repository-first dry-run, optional smoke, six-trial Tune run, logs, result grid, and terminal lifecycle gates all pass without a context, namespace, or queue override. |
 
-See [Prerequisites and setup readiness](../../getting-started/prerequisites/)
+See [TauGrid setup](../../getting-started/taugrid-setup/)
 for the general provider/platform boundary. Tau does not provision AKS, Azure
 RBAC, the GPU driver, or the device plugin.
 
@@ -51,8 +52,7 @@ tau --help >/dev/null
 
 Persist `TAU_BIN_DIR` on `PATH` for later terminals. The
 [Tau installation guide](../../getting-started/install/) explains upgrades,
-the optional Python SDK, and the verified-binary path available after a GitHub
-Release is published.
+the recommended GitHub Release installation, and the optional Python SDK.
 
 Record the original local state and select the target:
 
