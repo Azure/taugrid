@@ -20,7 +20,7 @@ Each diagram answers one reader question and preserves an editable source, SVG, 
 
 <div class="tau-visual-grid">
 {{< tau-visual base="Tau-Adoption-Paths" title="Adoption paths" question="How can I try or deploy Tau?" source="excalidraw" >}}
-{{< tau-visual base="Tau-Getting-Started-Flow" title="TauGrid getting started flow" question="Who configures each layer before the researcher's first run?" source="svg" >}}
+{{< tau-visual base="Tau-Getting-Started-Flow" title="TauGrid quickstart flow" source="svg" >}}
 {{< tau-visual base="Tau-Identity-Security-Trust-Chain" title="Identity and security trust chains" question="Who is the researcher and what may the workload access?" source="excalidraw" >}}
 {{< tau-visual base="Tau-Researcher-Onboarding-Workspace-Design" title="TauWorkspace reconciliation" question="What does TauWorkspace reconcile?" source="drawio" >}}
 {{< tau-visual base="Tau-Azure-Resource-Blueprint" title="Azure resource blueprint" question="Which Azure resources support a Tau-enabled cluster?" source="drawio" >}}
