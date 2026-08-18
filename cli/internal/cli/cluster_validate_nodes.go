@@ -393,9 +393,21 @@ func advertisesNVIDIAResource(allocatable map[string]string) bool {
 // reason the extended-resource path refuses to infer physical GPUs from slice
 // counts: the researcher-visible unit is the GPU, not the partition.
 func nodesWithResourceSlices(ctx context.Context, r validateNodesRunner) map[string]int {
-	raw, err := r.Raw(ctx, []string{"get", "resourceslices", "-o", "json"}, nil)
+	out, err := fetchNodesWithResourceSlices(ctx, r)
 	if err != nil {
 		return nil
+	}
+	return out
+}
+
+// fetchNodesWithResourceSlices is the strict form used when a ClusterQueue
+// explicitly accounts GPUs through DRA. Unlike the best-effort node inventory,
+// topology validation cannot treat an unavailable API or missing RBAC as an
+// empty GPU pool because that would misdiagnose a healthy DRA cluster.
+func fetchNodesWithResourceSlices(ctx context.Context, r validateNodesRunner) (map[string]int, error) {
+	raw, err := r.Raw(ctx, []string{"get", "resourceslices", "-o", "json"}, nil)
+	if err != nil {
+		return nil, err
 	}
 	var doc struct {
 		Items []struct {
@@ -412,7 +424,7 @@ func nodesWithResourceSlices(ctx context.Context, r validateNodesRunner) map[str
 		} `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return nil
+		return nil, fmt.Errorf("parse ResourceSlices json: %w", err)
 	}
 	seen := make(map[string]map[string]bool)
 	for _, it := range doc.Items {
@@ -437,7 +449,7 @@ func nodesWithResourceSlices(ctx context.Context, r validateNodesRunner) map[str
 	for node, devices := range seen {
 		out[node] = len(devices)
 	}
-	return out
+	return out, nil
 }
 
 // isGPUDRADriver reports whether a DRA driver publishes GPUs. DRA is a generic
