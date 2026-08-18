@@ -90,7 +90,7 @@ All paths must produce the same output contract; they differ in ownership and ch
 
 Use the repository's GPU-enabled AKS Terraform root when the environment should
 be reproducible outside an Azure-specific release system. It creates AKS with
-managed Entra authentication, OIDC workload identity, a GPU node pool, and the
+local administrator credentials by default, OIDC workload identity, a GPU node pool, and the
 optional ADX, adx-mon, and Portal integration. Then it installs the released
 TauGrid chart through `tau cluster install`.
 
@@ -106,8 +106,9 @@ terraform plan -out tau-aks.tfplan
 terraform apply tau-aks.tfplan
 ```
 
-Set `subscription_id`, AKS and Entra administrator group inputs, and the GPU
-SKU and labels in `terraform.tfvars`. For WSL, Linux, and macOS, set
+Set `subscription_id` and the GPU SKU and labels in `terraform.tfvars`. To use
+managed Entra AKS authentication, set the optional Entra administrator group
+inputs. For WSL, Linux, and macOS, set
 `command_interpreter = ["bash", "-c"]`. Set `enable_adx = true` only when the
 deployment should create the billable ADX data plane and install adx-mon.
 

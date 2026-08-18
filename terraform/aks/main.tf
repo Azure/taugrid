@@ -21,10 +21,14 @@ resource "azurerm_kubernetes_cluster" "this" {
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
 
-  azure_active_directory_role_based_access_control {
-    azure_rbac_enabled     = var.azure_rbac_enabled
-    tenant_id              = coalesce(var.tenant_id, data.azurerm_client_config.current.tenant_id)
-    admin_group_object_ids = var.aks_admin_group_object_ids
+  dynamic "azure_active_directory_role_based_access_control" {
+    for_each = length(var.aks_admin_group_object_ids) > 0 ? [true] : []
+
+    content {
+      azure_rbac_enabled     = var.azure_rbac_enabled
+      tenant_id              = coalesce(var.tenant_id, data.azurerm_client_config.current.tenant_id)
+      admin_group_object_ids = var.aks_admin_group_object_ids
+    }
   }
 
   default_node_pool {
@@ -242,7 +246,7 @@ resource "terraform_data" "install_taugrid" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
   }
 
   depends_on = [
@@ -290,7 +294,7 @@ resource "terraform_data" "install_dcgm_exporter" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
   }
 
   depends_on = [
@@ -313,7 +317,7 @@ resource "terraform_data" "install_adx_mon" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
   }
 
   depends_on = [

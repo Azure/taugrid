@@ -36,16 +36,18 @@ cp terraform.tfvars.example terraform.tfvars
 subscription_id     = "<subscription-id>"
 resource_group_name = "<resource-group-name>"
 cluster_name        = "<cluster-name>"
-aks_admin_group_object_ids = ["<entra-admin-group-object-id>"]
-
-# Keep Kubernetes RoleBindings as the TauWorkspace authorization mechanism.
-azure_rbac_enabled = false
 
 # Optional ADX, adx-mon, and Portal Kusto integration.
 enable_adx          = true
 adx_cluster_name    = "<globally-unique-adx-cluster-name>"
 
 ```
+
+By default, Terraform uses AKS local administrator credentials for its own
+installation commands and the generated operator command. To opt in to managed
+Entra AKS authentication, set `aks_admin_group_object_ids` to the administrator
+group object IDs. Keep `azure_rbac_enabled = false` when TauWorkspace
+Kubernetes RoleBindings should enforce workspace group access.
 
 ```bash
 terraform apply

@@ -4,19 +4,20 @@ variable "subscription_id" {
 }
 
 variable "tenant_id" {
-  description = "Microsoft Entra tenant ID for AKS authentication. Null uses the tenant of the AzureRM caller."
+  description = "Microsoft Entra tenant ID for advanced managed Entra AKS authentication. Null uses the tenant of the AzureRM caller."
   type        = string
   default     = null
   nullable    = true
 }
 
 variable "aks_admin_group_object_ids" {
-  description = "Microsoft Entra group object IDs granted AKS cluster-admin access."
+  description = "Optional advanced setting. Providing Entra group object IDs enables managed Entra AKS authentication and grants those groups cluster-admin access."
   type        = list(string)
+  default     = []
 }
 
 variable "azure_rbac_enabled" {
-  description = "Use Azure RBAC for Kubernetes authorization. Keep false when TauWorkspace Kubernetes RoleBindings enforce group access."
+  description = "Use Azure RBAC for Kubernetes authorization when managed Entra AKS authentication is enabled. Keep false when TauWorkspace Kubernetes RoleBindings enforce group access."
   type        = bool
   default     = false
 }
