@@ -1,0 +1,70 @@
+name: Trigger chart-integration-test (aks-ai-runtime)
+
+# images/ray builds and runs its integration suite in aks-ai-runtime's ADO
+# pipelines, which can't repo-resource-trigger off a GitHub repo. Queue that
+# pipeline directly instead of relying on someone to remember to run it
+# manually before merging a Ray image change.
+#
+# Requires a repo secret ADO_PAT: an Azure DevOps PAT scoped to
+# "Build (Read & execute)" on the msazure org, stored under
+# Settings > Secrets and variables > Actions in this repo.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - images/ray/**
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: trigger-chart-integration-test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  queue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Queue chart-integration-test
+        id: queue
+        env:
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADO_PAT}" ]; then
+            echo "::error::ADO_PAT secret is not set. Add an Azure DevOps PAT (Build: Read & execute, msazure org) as a repo secret named ADO_PAT." >&2
+            exit 1
+          fi
+
+          response="$(mktemp)"
+          status=$(curl -sS -u ":${ADO_PAT}" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            "https://dev.azure.com/msazure/CloudNativeCompute/_apis/pipelines/470554/runs?api-version=7.1" \
+            -d "{\"templateParameters\": {\"sourceRef\": \"refs/heads/${HEAD_REF}\"}}" \
+            -o "${response}" -w '%{http_code}')
+
+          if [ "${status}" -ge 300 ]; then
+            echo "::error::ADO run-pipeline call failed (HTTP ${status})" >&2
+            cat "${response}" >&2
+            exit 1
+          fi
+
+          run_id=$(jq -r '.id' "${response}")
+          run_url="https://msazure.visualstudio.com/CloudNativeCompute/_build/results?buildId=${run_id}"
+          echo "run_url=${run_url}" >> "$GITHUB_OUTPUT"
+          echo "Queued chart-integration-test run: ${run_url}"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🔄 Queued [chart-integration-test](${{ steps.queue.outputs.run_url }}) in aks-ai-runtime against this branch (\`${{ github.event.pull_request.head.ref }}\`) to validate this Ray image change before merge.`,
+            });
