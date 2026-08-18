@@ -8,6 +8,16 @@ tests:
       - hasDocuments:
           count: 13
 
+  - it: enabledGpuSkus renders collector configuration only for selected profiles
+    set:
+      enabledGpuSkus[0]: h200
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: gpu-monitoring-gpu-metrics-collector-h200
+
   - it: a100 ConfigMap has dcgm-exporter, node-exporter, and NPD scrape targets at expected URLs
     documentSelector:
       path: metadata.name

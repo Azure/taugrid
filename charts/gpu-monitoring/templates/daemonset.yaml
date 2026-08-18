@@ -1,9 +1,17 @@
+{{- include "gpu-monitoring.validateEnabledGpuSkus" . }}
 {{- range $skuName, $sku := .Values.gpuSkus }}
-{{- if $sku }}
+{{- if and $sku (or (empty $.Values.enabledGpuSkus) (has $skuName $.Values.enabledGpuSkus)) }}
 {{- $dsName := printf "gpu-monitoring-%s" $skuName }}
 {{- $nodeExporterEnabled := $.Values.nodeExporter.enabled }}
+{{- $ibPkey := $.Values.ibPkey }}
 {{- if hasKey $sku "nodeExporter" }}
 {{- $nodeExporterEnabled = $sku.nodeExporter }}
+{{- end }}
+{{- if hasKey $sku "ib_pkey" }}
+{{- $ibPkey = $sku.ib_pkey }}
+{{- end }}
+{{- if and $sku.ib_devices (or (not (kindIs "string" $ibPkey)) (not (regexMatch "^0x[0-9a-fA-F]{4}$" (toString $ibPkey)))) }}
+{{- fail (printf "gpuSkus.%s.ib_pkey must be a quoted four-digit hexadecimal PKey such as \"0x8001\"; got %v. YAML parses an unquoted 0x8001 as the integer 32769." $skuName $ibPkey) }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -123,6 +131,8 @@ spec:
               value: {{ $sku.vbios_versions | quote }}
             - name: IB_DEVICES
               value: "{{ $sku.ib_devices }}"
+            - name: EXPECTED_IB_PKEY
+              value: {{ $ibPkey | quote }}
             {{- if $sku.ib_rate_gbps }}
             - name: EXPECTED_IB_GBPS
               value: "{{ $sku.ib_rate_gbps }}"

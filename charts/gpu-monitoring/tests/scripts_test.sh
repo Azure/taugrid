@@ -10,6 +10,18 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 
 mkdir -p "$TEST_ROOT/bin"
 
+fail() {
+  echo "assertion failed: $*" >&2
+  exit 1
+}
+
+assert_contains() {
+  case "$2" in
+    *"$3"*) ;;
+    *) fail "$1: expected to contain '$3', got: $2" ;;
+  esac
+}
+
 cat >"$TEST_ROOT/bin/nvidia-smi" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -138,7 +150,7 @@ if nvlink_empty_output="$(
   echo "expected an empty NVLink status to fail the generic check" >&2
   exit 1
 fi
-[[ "$nvlink_empty_output" == *"NVLINK is not enabled"* ]]
+assert_contains nvlink_empty_output "$nvlink_empty_output" "NVLINK is not enabled"
 
 if b200_empty_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
@@ -148,7 +160,7 @@ if b200_empty_output="$(
   echo "expected an empty NVLink status to fail the Blackwell check" >&2
   exit 1
 fi
-[[ "$b200_empty_output" == *"NVLINK is not enabled"* ]]
+assert_contains b200_empty_output "$b200_empty_output" "NVLINK is not enabled"
 
 if b200_query_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
@@ -158,7 +170,7 @@ if b200_query_output="$(
   echo "expected a failed Blackwell NVLink query to fail the check" >&2
   exit 1
 fi
-[[ "$b200_query_output" == *"error code 1"* ]]
+assert_contains b200_query_output "$b200_query_output" "error code 1"
 
 if b200_c2c_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=GB300 EXPECTED_NUM_GPU=1 \
@@ -168,42 +180,94 @@ if b200_c2c_output="$(
   echo "expected a failed Blackwell C2C query to fail the check" >&2
   exit 1
 fi
-[[ "$b200_c2c_output" == *"error code 1"* ]]
+assert_contains b200_c2c_output "$b200_c2c_output" "error code 1"
 
 skip_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_TYPE=H100 EXPECTED_NUM_GPU=1 \
     bash "$CHART_DIR/scripts/check_gpu_nvlink_b200.sh"
 )"
-[[ "$skip_output" == *"Not a Blackwell node"* ]]
+assert_contains skip_output "$skip_output" "Not a Blackwell node"
 
-readonly PORT_ROOT="$TEST_ROOT/sys/class/infiniband/mlx5_0/ports/1"
-mkdir -p "$PORT_ROOT/pkeys" "$TEST_ROOT/sys/class/infiniband_mad"
-printf '4: ACTIVE\n' >"$PORT_ROOT/state"
-printf '5: LinkUp\n' >"$PORT_ROOT/phys_state"
-printf '0xffff\n' >"$PORT_ROOT/pkeys/0"
-printf '1\n' >"$TEST_ROOT/sys/class/infiniband_mad/abi_version"
+create_ib_fabric() {
+  local root="$1"
+  local device_prefix="$2"
+  local rate="$3"
+  local pkey="$4"
+  local devices=""
 
-printf '400 Gb/sec (4X HDR)\n' >"$PORT_ROOT/rate"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" \
-  bash "$CHART_DIR/scripts/check_ib.sh"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" \
-  bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+  for index in {0..7}; do
+    local device="${device_prefix}${index}"
+    local port_root="$root/class/infiniband/$device/ports/1"
+    mkdir -p "$port_root/pkeys"
+    printf '4: ACTIVE\n' >"$port_root/state"
+    printf '5: LinkUp\n' >"$port_root/phys_state"
+    printf '%s Gb/sec\n' "$rate" >"$port_root/rate"
+    printf '%s\n' "$pkey" >"$port_root/pkeys/0"
+    devices+="${devices:+ }${device}:1"
+  done
 
-printf '800 Gb/sec (8X NDR)\n' >"$PORT_ROOT/rate"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
-  bash "$CHART_DIR/scripts/check_ib.sh"
-SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
-  bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+  printf '%s\n' "$devices"
+}
 
-printf '400 Gb/sec (4X HDR)\n' >"$PORT_ROOT/rate"
-if mismatch_output="$(
-  SYSFS_ROOT="$TEST_ROOT/sys" IB_DEVICES="mlx5_0:1" EXPECTED_IB_GBPS=800 \
-    bash "$CHART_DIR/scripts/check_ib.sh" 2>&1
+readonly FLEX_A100_SYSFS="$TEST_ROOT/flex-a100-sys"
+flex_a100_devices="$(create_ib_fabric "$FLEX_A100_SYSFS" mlx5_ 200 0x8003)"
+SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
+  EXPECTED_IB_GBPS=200 bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
+  EXPECTED_IB_PKEY=0x8003 bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+
+readonly FLEX_H200_SYSFS="$TEST_ROOT/flex-h200-sys"
+flex_h200_devices="$(create_ib_fabric "$FLEX_H200_SYSFS" mlx5_ib 400 0xffff)"
+SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+  EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+  EXPECTED_IB_PKEY=0xffff bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+
+readonly EAST_H200_SYSFS="$TEST_ROOT/east-h200-sys"
+east_h200_devices="$(create_ib_fabric "$EAST_H200_SYSFS" mlx5_ 400 0x8001)"
+SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+  EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh"
+SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+  EXPECTED_IB_PKEY=0x8001 bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+
+# Link health remains healthy when only the PKey is wrong.
+printf '0x8003\n' >"$EAST_H200_SYSFS/class/infiniband/mlx5_0/ports/1/pkeys/0"
+SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+  EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh"
+if pkey_mismatch_output="$(
+  SYSFS_ROOT="$EAST_H200_SYSFS" IB_DEVICES="$east_h200_devices" \
+    EXPECTED_IB_PKEY=0x8001 bash "$CHART_DIR/scripts/check_ib_pkeys.sh" 2>&1
 )"; then
-  echo "expected the 800-Gbps check to reject a 400-Gbps link" >&2
+  echo "expected the PKey check to reject a mismatched East H200 PKey" >&2
   exit 1
 fi
-[[ "$mismatch_output" == *"800 Gb/sec"* ]]
+assert_contains pkey_mismatch_output "$pkey_mismatch_output" \
+  "mlx5_0:1 expected PKey 0x8001; observed 0x8003"
+
+# PKey health remains healthy when only link state and rate are wrong.
+printf '2: DOWN\n' >"$FLEX_H200_SYSFS/class/infiniband/mlx5_ib0/ports/1/state"
+printf '200 Gb/sec\n' >"$FLEX_H200_SYSFS/class/infiniband/mlx5_ib0/ports/1/rate"
+SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+  EXPECTED_IB_PKEY=0xffff bash "$CHART_DIR/scripts/check_ib_pkeys.sh"
+if link_mismatch_output="$(
+  SYSFS_ROOT="$FLEX_H200_SYSFS" IB_DEVICES="$flex_h200_devices" \
+    EXPECTED_IB_GBPS=400 bash "$CHART_DIR/scripts/check_ib.sh" 2>&1
+)"; then
+  echo "expected the link check to reject a down, rate-mismatched Flex H200 port" >&2
+  exit 1
+fi
+assert_contains link_mismatch_output "$link_mismatch_output" \
+  "mlx5_ib0:1 expected state=ACTIVE physical_state=LinkUp rate=400Gbps; observed state=DOWN physical_state=LinkUp rate=200Gbps"
+
+if missing_pkey_output="$(
+  SYSFS_ROOT="$FLEX_A100_SYSFS" IB_DEVICES="$flex_a100_devices" \
+    bash "$CHART_DIR/scripts/check_ib_pkeys.sh" 2>&1
+)"; then
+  echo "expected the PKey check to require an explicit PKey" >&2
+  exit 1
+fi
+assert_contains missing_pkey_output "$missing_pkey_output" \
+  "EXPECTED_IB_PKEY must be an explicit hexadecimal PKey"
 
 if throttle_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
@@ -213,7 +277,7 @@ if throttle_output="$(
   echo "expected hardware slowdown to fail the GPU throttle check" >&2
   exit 1
 fi
-[[ "$throttle_output" == *"GPU 0 throttled"* ]]
+assert_contains throttle_output "$throttle_output" "GPU 0 throttled"
 
 PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("580.126.09")' \
   NVIDIA_SMI_THROTTLE_OUTPUT=0x0000000000000004 \
@@ -226,7 +290,7 @@ empty_version_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("")' \
     bash "$CHART_DIR/scripts/check_gpu_throttle.sh"
 )"
-[[ "$empty_version_output" == *"No GPU throttling detected"* ]]
+assert_contains empty_version_output "$empty_version_output" "No GPU throttling detected"
 if throttle_query_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_DRIVER_VERSIONS='("")' \
     NVIDIA_SMI_THROTTLE_FAIL=1 \
@@ -235,7 +299,7 @@ if throttle_query_output="$(
   echo "expected an active-reason query failure to fail the GPU throttle check" >&2
   exit 1
 fi
-[[ "$throttle_query_output" == *"return code is 1"* ]]
+assert_contains throttle_query_output "$throttle_query_output" "return code is 1"
 
 PATH="$TEST_ROOT/bin:$PATH" NPD_DCGM_REQUIRED=1 \
   DCGMI_HEALTH_OUTPUT="DCGM health check passed" \
@@ -248,19 +312,20 @@ if dcgm_output="$(
   echo "expected a failed dcgmi health command to fail the check" >&2
   exit 1
 fi
-[[ "$dcgm_output" == *"DCGM diagnostic failure"* ]]
-[[ "$dcgm_output" == *"return code 3"* ]]
+assert_contains dcgm_output "$dcgm_output" "DCGM diagnostic failure"
+assert_contains dcgm_output "$dcgm_output" "return code 3"
 
 dcgm_skip_output="$(
   PATH="$TEST_ROOT/bin:$PATH" NPD_DCGM_REQUIRED=0 \
     bash "$CHART_DIR/scripts/check-dcgm-health.sh"
 )"
-[[ "$dcgm_skip_output" == *"not required for this profile"* ]]
+assert_contains dcgm_skip_output "$dcgm_skip_output" "not required for this profile"
 
 readonly NSENTER_LOG="$TEST_ROOT/nsenter-args"
 PATH="$TEST_ROOT/bin:$PATH" NSENTER_ARGS_FILE="$NSENTER_LOG" \
   bash "$CHART_DIR/scripts/dcgmi-wrapper.sh" health -t
-[[ "$(<"$NSENTER_LOG")" == "--target 1 --mount -- dcgmi health -t" ]]
+[[ "$(<"$NSENTER_LOG")" == "--target 1 --mount -- dcgmi health -t" ]] ||
+  fail "unexpected nsenter arguments: $(<"$NSENTER_LOG")"
 
 readonly XID_LOGFILE="$TEST_ROOT/gpu-xid.log"
 readonly XID_EVENT="kernel: NVRM: Xid (PCI:0000:01:00): 79, pid=1234"
@@ -272,7 +337,7 @@ if first_xid_output="$(
   echo "expected an active XID to fail the first check" >&2
   exit 1
 fi
-[[ "$first_xid_output" == *"GPU Xid errors detected"* ]]
+assert_contains first_xid_output "$first_xid_output" "GPU Xid errors detected"
 if second_xid_output="$(
   PATH="$TEST_ROOT/bin:$PATH" GPU_XID_LOGFILE="$XID_LOGFILE" \
     JOURNALCTL_OUTPUT="$XID_EVENT" \
@@ -281,7 +346,7 @@ if second_xid_output="$(
   echo "expected a deduplicated active XID to remain unhealthy" >&2
   exit 1
 fi
-[[ "$second_xid_output" == *"XID 79 already logged"* ]]
+assert_contains second_xid_output "$second_xid_output" "XID 79 already logged"
 
 readonly UNKNOWN_FLAP_STATE_FILE="$TEST_ROOT/ib-flap-unknown-state.txt"
 cat >"$UNKNOWN_FLAP_STATE_FILE" <<'EOF'
@@ -328,10 +393,12 @@ if first_flap_output="$(
   echo "expected two hour-window IB flaps to fail the first check" >&2
   exit 1
 fi
-[[ "$first_flap_output" == *"2 ibstat state flaps"* ]]
-! grep -q '^6300 ' "$FLAP_STATE_FILE"
+assert_contains first_flap_output "$first_flap_output" "2 ibstat state flaps"
+grep -q '^6300 ' "$FLAP_STATE_FILE" &&
+  fail "stale flap entry outside the time window was not pruned"
 grep -q '^6500 ' "$FLAP_STATE_FILE"
-[[ "$(wc -l < "$FLAP_STATE_FILE" | tr -d ' ')" -gt 10 ]]
+[[ "$(wc -l < "$FLAP_STATE_FILE" | tr -d ' ')" -gt 10 ]] ||
+  fail "flap state file was truncated too aggressively"
 if second_flap_output="$(
   PATH="$TEST_ROOT/bin:$PATH" TEST_NOW=10000 IB_DEVICES="mlx5_0:1" \
     IB_FLAP_THRESHOLD_SHORT=2 IB_FLAP_CHECK_WINDOW=3600 \
@@ -341,7 +408,7 @@ if second_flap_output="$(
   echo "expected retained hour-window IB flaps to fail the repeat check" >&2
   exit 1
 fi
-[[ "$second_flap_output" == *"2 ibstat state flaps"* ]]
+assert_contains second_flap_output "$second_flap_output" "2 ibstat state flaps"
 
 readonly ORIGINAL_BUNDLE_NAME="$(
   helm template content-hash "$CHART_DIR" --show-only templates/executable-bundle-secret.yaml |
@@ -354,6 +421,9 @@ readonly MUTATED_BUNDLE_NAME="$(
   helm template content-hash "$MUTATED_CHART_DIR" --show-only templates/executable-bundle-secret.yaml |
     awk '$1 == "name:" { print $2; exit }'
 )"
-[[ "$ORIGINAL_BUNDLE_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
-[[ "$MUTATED_BUNDLE_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]]
-[[ "$ORIGINAL_BUNDLE_NAME" != "$MUTATED_BUNDLE_NAME" ]]
+[[ "$ORIGINAL_BUNDLE_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]] ||
+  fail "unexpected original bundle name: $ORIGINAL_BUNDLE_NAME"
+[[ "$MUTATED_BUNDLE_NAME" =~ ^gpu-monitoring-gpu-[a-f0-9]{10}$ ]] ||
+  fail "unexpected mutated bundle name: $MUTATED_BUNDLE_NAME"
+[[ "$ORIGINAL_BUNDLE_NAME" != "$MUTATED_BUNDLE_NAME" ]] ||
+  fail "bundle name did not change when a script changed"
