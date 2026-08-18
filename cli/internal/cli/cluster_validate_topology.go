@@ -522,7 +522,7 @@ func flavorSelectsGPU(labels map[string]string) bool {
 	if looksLikeGPUNode(labels, nodeInstanceType(labels)) {
 		return true
 	}
-	for _, key := range []string{"kueue.azure.com/gpu-series", "tau.azure.com/gpu-series", "nvidia.com/gpu.product"} {
+	for _, key := range []string{runtopology.ManagedGPUSeriesLabel, "nvidia.com/gpu.product"} {
 		if labels[key] != "" {
 			return true
 		}

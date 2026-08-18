@@ -8,10 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Azure/taugrid/core/kueueapi"
+	runtopology "github.com/Azure/taugrid/core/topology"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 func TestGPUAllocatable(t *testing.T) {
@@ -355,11 +358,22 @@ func TestValidateFlavorWithoutNodeLabelsUsesAllNodes(t *testing.T) {
 	t.Fatalf("missing node-match result: %+v", results)
 }
 
-func TestFlavorSelectsGPURecognizesSeriesLabels(t *testing.T) {
-	for _, key := range []string{"kueue.azure.com/gpu-series", "tau.azure.com/gpu-series"} {
-		if !flavorSelectsGPU(map[string]string{key: "nc-h100-v5"}) {
-			t.Fatalf("%s should identify a GPU-specific ResourceFlavor selector", key)
-		}
+func TestFlavorSelectsGPURecognizesSelectors(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "managed GPU series", key: runtopology.ManagedGPUSeriesLabel, value: "nc-h100-v5"},
+		{name: "GPU class", key: workloadmeta.NodeLabelGPUClass, value: "h100-95gb"},
+		{name: "NVIDIA product", key: "nvidia.com/gpu.product", value: "NVIDIA-H100-80GB-HBM3"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !flavorSelectsGPU(map[string]string{test.key: test.value}) {
+				t.Fatalf("%s should identify a GPU-specific ResourceFlavor selector", test.key)
+			}
+		})
 	}
 }
 
@@ -374,15 +388,18 @@ func TestValidateFlavorMIGUsesConfiguredProfileResource(t *testing.T) {
 		{name: "only whole GPU and another profile", alloc: map[string]string{"nvidia.com/gpu": "1", "nvidia.com/mig-3g.71gb": "1"}, wantStatus: checkError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			const gpuClass = "a100-80gb"
 			node := makeNode("mig-0", "", true, "westus2-1")
-			node.Metadata.Labels["tau.azure.com/gpu-class"] = "a100-80gb"
+			node.Metadata.Labels[workloadmeta.NodeLabelGPUClass] = gpuClass
 			for name, quantity := range tc.alloc {
 				node.Status.Allocatable[name] = quantity
 			}
+			resourceFlavorJSON := fmt.Sprintf(`{"metadata":{"name":"mig-a100"},"spec":{"nodeLabels":{%q:%q}}}`, workloadmeta.NodeLabelGPUClass, gpuClass)
+			selector := workloadmeta.NodeLabelGPUClass + "=" + gpuClass
 			runner := &fakeRawRunner{
 				outputs: map[string]string{
-					fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "mig-a100", "-o", "json"):        `{"metadata":{"name":"mig-a100"},"spec":{"nodeLabels":{"tau.azure.com/gpu-class":"a100-80gb"}}}`,
-					fakeRawKey("get", "nodes", "-l", "tau.azure.com/gpu-class=a100-80gb", "-o", "json"): makeNodeListJSON(node),
+					fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "mig-a100", "-o", "json"): resourceFlavorJSON,
+					fakeRawKey("get", "nodes", "-l", selector, "-o", "json"):                     makeNodeListJSON(node),
 				},
 			}
 
@@ -427,12 +444,15 @@ func TestValidateFlavorDRAUsesResourceSlices(t *testing.T) {
 }
 
 func TestValidateFlavorDRAReportsResourceSliceAccessError(t *testing.T) {
+	const gpuClass = "h200-141gb"
 	node := makeNode("dra-0", "", true, "westus2-1")
-	node.Metadata.Labels["tau.azure.com/gpu-class"] = "h200-141gb"
+	node.Metadata.Labels[workloadmeta.NodeLabelGPUClass] = gpuClass
+	resourceFlavorJSON := fmt.Sprintf(`{"metadata":{"name":"dra-gpu"},"spec":{"nodeLabels":{%q:%q}}}`, workloadmeta.NodeLabelGPUClass, gpuClass)
+	selector := workloadmeta.NodeLabelGPUClass + "=" + gpuClass
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
-			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "dra-gpu", "-o", "json"):          `{"metadata":{"name":"dra-gpu"},"spec":{"nodeLabels":{"tau.azure.com/gpu-class":"h200-141gb"}}}`,
-			fakeRawKey("get", "nodes", "-l", "tau.azure.com/gpu-class=h200-141gb", "-o", "json"): makeNodeListJSON(node),
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "dra-gpu", "-o", "json"): resourceFlavorJSON,
+			fakeRawKey("get", "nodes", "-l", selector, "-o", "json"):                    makeNodeListJSON(node),
 		},
 		errors: map[string]error{
 			fakeRawKey("get", "resourceslices", "-o", "json"): errors.New("forbidden"),
