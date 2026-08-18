@@ -73,7 +73,12 @@ type Metadata struct {
 	Annotations     map[string]string
 	OwnerKind       string
 	OwnerName       string
-	Deleting        bool
+	// OwnerUID identifies the controller instance, not just its name. Job
+	// names are reused: a Job can be deleted in the background and an
+	// identically named one created immediately, so name alone cannot tell
+	// this Job's pods from its predecessor's.
+	OwnerUID string
+	Deleting bool
 }
 
 type Condition struct {
@@ -298,19 +303,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 	}
 	var pending []Record
 	for _, job := range jobs {
-		records := observationsForJob(job, correlatedWorkloads(job.Metadata, runID(job.Metadata), workloads), correlatedPods(job.Metadata, pods), r.Cluster, r.WorkspaceID, r.ResultScope, now)
+		records, rank := observationsForJob(job, correlatedWorkloads(job.Metadata, runID(job.Metadata), workloads), correlatedPods(job.Metadata, pods), r.Cluster, r.WorkspaceID, r.ResultScope, now)
 		assignObservationIDs(records)
-		// Without pod visibility a terminal failure degrades back to the Job's
-		// own "BackoffLimitExceeded". Emitting that for a run whose enriched
-		// cause was already recorded does not add an observation, it competes
-		// with one: both rows carry the same observed_at (derived from the
-		// Job's terminal condition, which does not move), and the dashboards
-		// collapse with arg_max(observed_at, *), whose tie-break is arbitrary.
-		// The degraded row could therefore win and hide the exit code.
-		if podErr != nil {
+		// An observation that explains nothing cannot improve on a failure
+		// already recorded, and re-emitting one only adds a row that loses the
+		// collapse. Correctness does not depend on this — evidence ordering
+		// already guarantees the weaker row cannot win — but it keeps the
+		// table free of restatements of "BackoffLimitExceeded".
+		if rank == evidenceNone {
 			records = r.withoutRecordedFailures(records)
-		} else {
-			records = r.supersedeRecordedFailures(records, now)
 		}
 		pending = append(pending, r.unsent(records)...)
 	}
@@ -389,12 +390,12 @@ func (r *Reconciler) markSeen(records []Record) {
 }
 
 // withoutRecordedFailures drops failed terminal records for runs whose failure
-// has already been written. It is used only when pod evidence was unreadable
-// this pass, so the record being dropped is strictly less informative than the
-// one already durable.
+// has already been written. Callers apply it only to evidence-free
+// observations, so the record being dropped is strictly less informative than
+// the one already durable.
 //
 // A first observation is never dropped: if the failure has not been recorded
-// yet, a degraded record is better than none.
+// yet, a record naming only the Job condition is better than none.
 func (r *Reconciler) withoutRecordedFailures(records []Record) []Record {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -408,42 +409,6 @@ func (r *Reconciler) withoutRecordedFailures(records []Record) []Record {
 		out = append(out, record)
 	}
 	return out
-}
-
-// supersedeRecordedFailures timestamps a terminal failure observation that
-// replaces an already-recorded one with the moment it was observed, rather than
-// the moment the failure occurred.
-//
-// Both records describe the same lifecycle event, so both would otherwise carry
-// the same observed_at — it derives from the Job's terminal condition, which
-// does not move. The dashboards collapse with arg_max(observed_at, *), and on
-// equal values the winner is arbitrary, so a later record carrying the real
-// exit code could lose to an earlier one that says only
-// "BackoffLimitExceeded".
-//
-// This is the ordering that actually occurs in practice: a recorder deployed
-// without the pods read verb records degraded failures, and the enriched
-// records only start once the Role is fixed. Without this the fix would appear
-// not to have worked.
-//
-// Using the observation time is honest — it is genuinely when this observation
-// was made — and it is strictly increasing across passes, so the newest
-// evidence wins. First observations keep lifecycle-event semantics.
-func (r *Reconciler) supersedeRecordedFailures(records []Record, now time.Time) []Record {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := range records {
-		if records[i].State != StateFailed {
-			continue
-		}
-		if _, ok := r.terminalFailed[records[i].DurableID]; !ok {
-			continue
-		}
-		if now.After(records[i].ObservedAt) {
-			records[i].ObservedAt = now
-		}
-	}
-	return records
 }
 
 // notePodsStatus reports pod-visibility transitions exactly once per change.
@@ -489,17 +454,49 @@ func assignObservationIDs(records []Record) {
 	}
 }
 
-func observationsForJob(job Job, workloads []Workload, pods []Pod, cluster, workspaceID, resultScope string, now time.Time) []Record {
+func observationsForJob(job Job, workloads []Workload, pods []Pod, cluster, workspaceID, resultScope string, now time.Time) ([]Record, evidenceRank) {
 	state, reason, message := jobState(job)
 	state, reason, message = applyWorkloadState(state, reason, message, workloads)
+	rank := evidenceNone
 	if state == StateFailed {
-		reason, message = enrichFailureFromPods(reason, message, pods)
+		reason, message, rank = enrichFailureFromPods(reason, message, pods)
 	}
 	record := baseRecord(job.Metadata, cluster, workspaceID, resultScope, "Job", experiment.WorkloadKindJob, workloads, now)
 	record.State, record.Reason, record.Message = state, reason, message
 	record.PodStartedAt = job.StartTime
 	record.CompletionAt = firstTime(job.CompletionTime, terminalConditionTime(job.Conditions))
-	return initialAndCurrent(record)
+	records := initialAndCurrent(record)
+	return withEvidenceOrdering(records, rank), rank
+}
+
+// evidenceOrderingStep separates observations of one terminal failure by how
+// much they explain.
+//
+// Every observation of the same failure derives observed_at from the Job's
+// terminal condition, which does not move, so they all collide. The dashboards
+// collapse with arg_max(observed_at, *), whose tie-break is arbitrary — a row
+// naming the exit code can lose to one saying only "BackoffLimitExceeded".
+//
+// Offsetting by evidence rank makes the collapse resolve to the best available
+// explanation, and does so as a pure function of the record's own content.
+// That matters more than it first appears: the recorder is restartable, so any
+// scheme relying on process-local memory of what was already written silently
+// stops working after a restart, exactly when a degraded record is most likely
+// to be the one already durable. A few milliseconds is far below the
+// resolution at which a lifecycle timestamp is read, and preserves ordering
+// against every other event.
+const evidenceOrderingStep = time.Millisecond
+
+func withEvidenceOrdering(records []Record, rank evidenceRank) []Record {
+	if rank == evidenceNone {
+		return records
+	}
+	for i := range records {
+		if records[i].State == StateFailed {
+			records[i].ObservedAt = records[i].ObservedAt.Add(time.Duration(rank) * evidenceOrderingStep)
+		}
+	}
+	return records
 }
 
 // maxFailureMessageLength bounds the durable message. A Job can fail with
@@ -510,16 +507,20 @@ const maxFailureMessageLength = 512
 
 // correlatedPods returns the pods belonging to one Job.
 //
-// Pods created by a Job carry an ownerReference to it and the
-// batch.kubernetes.io/job-name label (job-name on older clusters). Matching on
-// any of the three keeps this working across Kubernetes versions and across
-// pods whose ownerReference has already been rewritten.
+// Ownership is matched by controller UID whenever both sides carry one,
+// because Job names are reused. With background deletion a pod can outlive its
+// Job while an identically named Job is created immediately after, and
+// name-only matching would then attribute the dead Job's failure to the new
+// one. The batch.kubernetes.io/controller-uid label carries the same identity
+// for pods whose ownerReference has been stripped.
+//
+// Name and job-name labels remain a fallback for pods that carry no ownership
+// at all, which is how older clusters and hand-built pods present. A pod whose
+// ownership contradicts this Job is never matched by name.
 func correlatedPods(metadata Metadata, pods []Pod) []Pod {
 	var out []Pod
 	for _, pod := range pods {
-		if (pod.OwnerKind == "Job" && pod.OwnerName == metadata.Name) ||
-			pod.Labels["batch.kubernetes.io/job-name"] == metadata.Name ||
-			pod.Labels["job-name"] == metadata.Name {
+		if podMatchesJob(pod, metadata) {
 			out = append(out, pod)
 		}
 	}
@@ -527,60 +528,131 @@ func correlatedPods(metadata Metadata, pods []Pod) []Pod {
 	return out
 }
 
+// podMatchesJob decides whether a pod belongs to this Job instance.
+//
+// When both sides can assert a controller UID that comparison is conclusive
+// and nothing else is consulted — this is the case that matters, because Job
+// names are reused and a stale pod would otherwise be adopted by its
+// successor.
+//
+// When identity is unavailable on either side, ownership by name is used, and
+// a pod that names some other Job as its controller is rejected outright
+// rather than falling through to labels. Only a pod with no ownership at all
+// is matched on the job-name labels.
+func podMatchesJob(pod Pod, metadata Metadata) bool {
+	podUID := podControllerUID(pod)
+	jobUID := strings.TrimSpace(metadata.UID)
+	if podUID != "" && jobUID != "" {
+		return podUID == jobUID
+	}
+	if strings.EqualFold(pod.OwnerKind, "Job") && strings.TrimSpace(pod.OwnerName) != "" {
+		return pod.OwnerName == metadata.Name
+	}
+	return pod.Labels["batch.kubernetes.io/job-name"] == metadata.Name ||
+		pod.Labels["job-name"] == metadata.Name
+}
+
+// podControllerUID returns the UID of the Job that created the pod, preferring
+// the ownerReference and falling back to the label the Job controller stamps,
+// which survives an ownerReference being stripped.
+func podControllerUID(pod Pod) string {
+	if uid := strings.TrimSpace(pod.OwnerUID); uid != "" {
+		return uid
+	}
+	if uid := strings.TrimSpace(pod.Labels["batch.kubernetes.io/controller-uid"]); uid != "" {
+		return uid
+	}
+	return strings.TrimSpace(pod.Labels["controller-uid"])
+}
+
+// evidenceRank orders failure explanations by how much they actually explain.
+// It drives three decisions: which candidate is summarised, whether a later
+// observation may supersede an earlier one, and how the durable rows sort when
+// the dashboards collapse them.
+type evidenceRank int
+
+const (
+	// evidenceNone is the Job's own terminal condition, which says only
+	// "BackoffLimitExceeded" and explains nothing.
+	evidenceNone evidenceRank = iota
+	// evidenceWaiting is a container that never ran: ImagePullBackOff,
+	// CreateContainerConfigError. Real, but weaker than an actual exit.
+	evidenceWaiting
+	// evidencePodReason is a pod-level failure with no container detail —
+	// eviction, kubelet admission rejection, node pressure.
+	evidencePodReason
+	// evidenceTerminated is a container that ran and exited without a
+	// distinguishing fatal signal.
+	evidenceTerminated
+	// evidenceFatal is an OOM kill or a non-zero exit: the most specific
+	// cause available, and the one a reader almost always wants.
+	evidenceFatal
+)
+
 // enrichFailureFromPods replaces a Job's generic terminal reason with the
-// actual cause taken from its pods.
+// actual cause taken from its pods, and reports how strong that evidence is.
 //
 // The Job condition reason is kept as a prefix so nothing that used to be in
 // the record is lost — a reader still sees "BackoffLimitExceeded", now followed
 // by the exit code or OOM kill that produced it.
-func enrichFailureFromPods(reason, message string, pods []Pod) (string, string) {
-	failed := failedContainers(pods)
-	if len(failed) == 0 {
-		return reason, message
+func enrichFailureFromPods(reason, message string, pods []Pod) (string, string, evidenceRank) {
+	candidates := failureCandidates(pods)
+	if len(candidates) == 0 {
+		return reason, message, evidenceNone
 	}
-	first := failed[0]
-	cause := first.state.Reason
-	if cause == "" {
-		cause = "Error"
-	}
-	if first.state.OOMKilled {
-		cause = "OOMKilled"
-	}
+	best := candidates[0]
 
 	var summary strings.Builder
-	summary.WriteString(fmt.Sprintf("pod %s container %s: %s", first.pod, first.state.Name, cause))
-	if first.state.Terminated {
-		summary.WriteString(fmt.Sprintf(" (exit code %d)", first.state.ExitCode))
+	if best.container == "" {
+		summary.WriteString(fmt.Sprintf("pod %s: %s", best.pod, best.cause))
+	} else {
+		summary.WriteString(fmt.Sprintf("pod %s container %s: %s", best.pod, best.container, best.cause))
 	}
-	if detail := strings.TrimSpace(first.state.Message); detail != "" {
+	if best.terminated {
+		summary.WriteString(fmt.Sprintf(" (exit code %d)", best.exitCode))
+	}
+	if detail := strings.TrimSpace(best.detail); detail != "" {
 		summary.WriteString(": " + detail)
 	}
-	if extra := len(failed) - 1; extra > 0 {
+	if extra := len(candidates) - 1; extra > 0 {
 		summary.WriteString(fmt.Sprintf(" [+%d more failed container(s)]", extra))
 	}
 	if existing := strings.TrimSpace(message); existing != "" {
 		summary.WriteString(" — " + existing)
 	}
 
-	enrichedReason := cause
-	if base := strings.TrimSpace(reason); base != "" && base != cause {
-		enrichedReason = base + "/" + cause
+	enrichedReason := best.cause
+	if base := strings.TrimSpace(reason); base != "" && base != best.cause {
+		enrichedReason = base + "/" + best.cause
 	}
-	return enrichedReason, truncate(summary.String(), maxFailureMessageLength)
+	return enrichedReason, truncate(summary.String(), maxFailureMessageLength), best.rank
 }
 
-type failedContainer struct {
-	pod   string
-	state ContainerState
+// failureCandidate is one explanation for a Job's failure, drawn either from a
+// container state or from the pod itself.
+type failureCandidate struct {
+	pod        string
+	container  string
+	cause      string
+	detail     string
+	exitCode   int32
+	terminated bool
+	rank       evidenceRank
 }
 
-// failedContainers returns every container that explains a failure, in a stable
-// order so the same Job always produces the same summary. A record whose text
-// churned between polls would defeat the recorder's fingerprint de-duplication
-// and re-ingest on every interval.
-func failedContainers(pods []Pod) []failedContainer {
-	var out []failedContainer
+// failureCandidates returns every explanation a Job's pods offer, strongest
+// first.
+//
+// Ordering is by evidence strength, not by name: a pod named "a" stuck in
+// ImagePullBackOff must not mask a pod named "b" that was OOM-killed, because
+// only the strongest candidate is summarised and the pods are deleted with the
+// Job. Names break ties so the same Job always produces the same summary — a
+// record whose text churned between polls would defeat fingerprint
+// de-duplication and re-ingest on every interval.
+func failureCandidates(pods []Pod) []failureCandidate {
+	var out []failureCandidate
 	for _, pod := range pods {
+		var containerEvidence bool
 		for _, container := range pod.Containers {
 			if container.Terminated && container.ExitCode == 0 && !container.OOMKilled {
 				continue
@@ -588,16 +660,72 @@ func failedContainers(pods []Pod) []failedContainer {
 			if !container.Terminated && container.Reason == "" {
 				continue
 			}
-			out = append(out, failedContainer{pod: pod.Name, state: container})
+			containerEvidence = true
+			out = append(out, containerCandidate(pod.Name, container))
+		}
+		// A pod can fail with no container status at all — evicted, or
+		// rejected by kubelet admission. ListPods captures that reason, and
+		// dropping it here would leave the durable record at
+		// "BackoffLimitExceeded" despite the cause being known.
+		if !containerEvidence {
+			if candidate, ok := podCandidate(pod); ok {
+				out = append(out, candidate)
+			}
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].rank != out[j].rank {
+			return out[i].rank > out[j].rank
+		}
 		if out[i].pod != out[j].pod {
 			return out[i].pod < out[j].pod
 		}
-		return out[i].state.Name < out[j].state.Name
+		return out[i].container < out[j].container
 	})
 	return out
+}
+
+func containerCandidate(podName string, container ContainerState) failureCandidate {
+	candidate := failureCandidate{
+		pod:        podName,
+		container:  container.Name,
+		cause:      container.Reason,
+		detail:     container.Message,
+		exitCode:   container.ExitCode,
+		terminated: container.Terminated,
+	}
+	switch {
+	case container.OOMKilled:
+		candidate.cause = "OOMKilled"
+		candidate.rank = evidenceFatal
+	case container.Terminated && container.ExitCode != 0:
+		candidate.rank = evidenceFatal
+	case container.Terminated:
+		candidate.rank = evidenceTerminated
+	default:
+		candidate.rank = evidenceWaiting
+	}
+	if candidate.cause == "" {
+		candidate.cause = "Error"
+	}
+	return candidate
+}
+
+func podCandidate(pod Pod) (failureCandidate, bool) {
+	reason := strings.TrimSpace(pod.Reason)
+	if reason == "" {
+		// Phase alone is not an explanation, but it is better than silence
+		// when the pod is unambiguously failed.
+		if !strings.EqualFold(pod.Phase, "Failed") {
+			return failureCandidate{}, false
+		}
+		reason = "PodFailed"
+	}
+	return failureCandidate{
+		pod:   pod.Name,
+		cause: reason,
+		rank:  evidencePodReason,
+	}, true
 }
 
 // truncate bounds the summary without splitting a UTF-8 rune. Container

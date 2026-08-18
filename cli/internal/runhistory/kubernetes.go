@@ -187,16 +187,16 @@ func (s *KubernetesSource) ListWorkloads(ctx context.Context, namespace string) 
 }
 
 func typedMetadata(name, namespace, uid, version string, generation int64, created time.Time, labels, annotations map[string]string, owners []metav1.OwnerReference) Metadata {
-	ownerKind, ownerName := ownerReference(owners)
-	return Metadata{Name: name, Namespace: namespace, UID: uid, ResourceVersion: version, Generation: generation, CreatedAt: created, Labels: labels, Annotations: annotations, OwnerKind: ownerKind, OwnerName: ownerName}
+	ownerKind, ownerName, ownerUID := ownerReference(owners)
+	return Metadata{Name: name, Namespace: namespace, UID: uid, ResourceVersion: version, Generation: generation, CreatedAt: created, Labels: labels, Annotations: annotations, OwnerKind: ownerKind, OwnerName: ownerName, OwnerUID: ownerUID}
 }
 
 func unstructuredMetadata(item unstructured.Unstructured) Metadata {
-	ownerKind, ownerName := ownerReference(item.GetOwnerReferences())
+	ownerKind, ownerName, ownerUID := ownerReference(item.GetOwnerReferences())
 	return Metadata{
 		Name: item.GetName(), Namespace: item.GetNamespace(), UID: string(item.GetUID()), ResourceVersion: item.GetResourceVersion(),
 		Generation: item.GetGeneration(), CreatedAt: item.GetCreationTimestamp().Time, Labels: item.GetLabels(), Annotations: item.GetAnnotations(),
-		OwnerKind: ownerKind, OwnerName: ownerName,
+		OwnerKind: ownerKind, OwnerName: ownerName, OwnerUID: ownerUID,
 		Deleting: item.GetDeletionTimestamp() != nil,
 	}
 }
@@ -214,16 +214,16 @@ func hasTauLabel(labels map[string]string) bool {
 	return false
 }
 
-func ownerReference(owners []metav1.OwnerReference) (string, string) {
+func ownerReference(owners []metav1.OwnerReference) (string, string, string) {
 	for _, owner := range owners {
 		if owner.Controller != nil && *owner.Controller {
-			return owner.Kind, owner.Name
+			return owner.Kind, owner.Name, string(owner.UID)
 		}
 	}
 	if len(owners) > 0 {
-		return owners[0].Kind, owners[0].Name
+		return owners[0].Kind, owners[0].Name, string(owners[0].UID)
 	}
-	return "", ""
+	return "", "", ""
 }
 
 func typedJobConditions(conditions []batchv1.JobCondition) []Condition {

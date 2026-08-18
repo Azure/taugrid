@@ -55,6 +55,18 @@ const (
 	ConditionWorkloadIdentityReady = "WorkloadIdentityReady"
 	ConditionDriftDetected         = "DriftDetected"
 
+	// MinWorkspaceTTLSecondsAfterFinished is the smallest retention a
+	// workspace may default to. It is a durability floor, not a tuning knob:
+	// finished-Job retention races the lifecycle recorder, which observes on
+	// an interval (30s by default) and then ingests. Below roughly an order of
+	// magnitude above that window, a Job that finishes just after a poll is
+	// collected with its pods before the next pass, and the terminal lifecycle
+	// row plus the failure evidence are lost rather than merely shortened.
+	//
+	// Keep this in sync with the kubebuilder Minimum marker on
+	// WorkspaceDefaults.TTLSecondsAfterFinished.
+	MinWorkspaceTTLSecondsAfterFinished int64 = 600
+
 	QuotaRequestPhasePendingApproval = "PendingApproval"
 	QuotaRequestPhaseApproved        = "Approved"
 	QuotaRequestPhaseRejected        = "Rejected"
@@ -254,10 +266,19 @@ type WorkspaceDefaults struct {
 	// the Ray cluster's own shutdown behaviour and is not affected by this
 	// field.
 	//
+	// The minimum is deliberately well above a single observation interval.
+	// Retention races the lifecycle recorder, which polls (30s by default) and
+	// then ingests: a Job finishing just after a poll with a very short TTL is
+	// deleted along with its pods before the next pass, so the terminal row and
+	// the failure evidence are lost permanently rather than merely early. Values
+	// below MinWorkspaceTTLSecondsAfterFinished buy nothing — Kubernetes garbage
+	// collection is not the constraint on cluster capacity — and silently defeat
+	// the durable record they would otherwise be paired with.
+	//
 	// A pointer distinguishes "unset" from a zero the API server would
 	// otherwise elide, which matters because zero is a legal Kubernetes TTL
 	// meaning "delete immediately" and must never be inferred from absence.
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Minimum=600
 	// +kubebuilder:validation:Maximum=2147483647
 	TTLSecondsAfterFinished *int64 `json:"ttlSecondsAfterFinished,omitempty"`
 }

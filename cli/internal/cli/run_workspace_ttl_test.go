@@ -65,3 +65,38 @@ func TestUnsetWorkspaceTTLLeavesBuiltInRetention(t *testing.T) {
 		t.Errorf("ttlSecondsAfterFinished = %d, want 0 so the renderer keeps its built-in default", got.ttlSecondsAfterFinished)
 	}
 }
+
+// Retention races the lifecycle recorder: it observes on an interval and then
+// ingests, so a Job finishing just after a poll with a very short TTL is
+// collected along with its pods before the next pass. The terminal row and the
+// failure evidence are then lost permanently rather than merely early.
+//
+// The CRD rejects such values on write, but a workspace created against an
+// older schema still carries one, so the reader re-checks rather than trusting
+// the stored object.
+func TestWorkspaceTTLBelowTheDurabilityFloorIsIgnored(t *testing.T) {
+	o := defaultRunDispatchOptions()
+	o.ttlSecondsAfterFinished = 0
+
+	got, err := applyWorkspaceDefaults(o, workspaceWithTTL(int64Ptr(1)), "smoke")
+	if err != nil {
+		t.Fatalf("applyWorkspaceDefaults: %v", err)
+	}
+	if got.ttlSecondsAfterFinished != 0 {
+		t.Errorf("ttlSecondsAfterFinished = %d; a sub-floor workspace default must be ignored so the built-in retention applies",
+			got.ttlSecondsAfterFinished)
+	}
+}
+
+func TestWorkspaceTTLAtTheFloorIsAccepted(t *testing.T) {
+	o := defaultRunDispatchOptions()
+	o.ttlSecondsAfterFinished = 0
+
+	got, err := applyWorkspaceDefaults(o, workspaceWithTTL(int64Ptr(tauworkspace.MinTTLSecondsAfterFinished)), "smoke")
+	if err != nil {
+		t.Fatalf("applyWorkspaceDefaults: %v", err)
+	}
+	if got.ttlSecondsAfterFinished != tauworkspace.MinTTLSecondsAfterFinished {
+		t.Errorf("ttlSecondsAfterFinished = %d, want %d", got.ttlSecondsAfterFinished, tauworkspace.MinTTLSecondsAfterFinished)
+	}
+}

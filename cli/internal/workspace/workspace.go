@@ -68,6 +68,17 @@ type WorkspaceDefaults struct {
 	TTLSecondsAfterFinished *int64 `json:"ttlSecondsAfterFinished,omitempty" yaml:"ttlSecondsAfterFinished,omitempty"`
 }
 
+// MinTTLSecondsAfterFinished mirrors the CRD's durability floor for
+// WorkspaceDefaults.ttlSecondsAfterFinished. The CRD enforces it on write, but
+// a workspace created against an older schema can still carry a shorter value,
+// so readers re-check rather than trust the stored object.
+//
+// The floor exists because finished-Job retention races the lifecycle
+// recorder: below roughly an order of magnitude above its observation
+// interval, a Job that finishes just after a poll is collected with its pods
+// before the next pass, and the durable record is lost rather than shortened.
+const MinTTLSecondsAfterFinished int64 = 600
+
 type WorkspaceWorkloadIdentity struct {
 	ServiceAccountName string `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
 	ClientID           string `json:"clientId,omitempty" yaml:"clientId,omitempty"`

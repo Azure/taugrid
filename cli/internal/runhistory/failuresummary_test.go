@@ -133,12 +133,89 @@ func TestFailedJobCountsAdditionalFailures(t *testing.T) {
 // Succeeded containers are not failures; a Job that failed for another reason
 // must not be described by a container that exited 0.
 func TestSucceededContainersAreNotTreatedAsFailures(t *testing.T) {
-	record := terminalRecord(t, failedJobSource([]Pod{
-		jobPod("train-abc", ContainerState{Name: "sidecar", Terminated: true, ExitCode: 0, Reason: "Completed"}),
-	}))
+	pod := jobPod("train-abc", ContainerState{Name: "sidecar", Terminated: true, ExitCode: 0, Reason: "Completed"})
+	// A pod whose only container exited 0 reports phase Succeeded. Leaving the
+	// fixture's Failed phase here would assert against a state Kubernetes does
+	// not produce, and would mask the pod-level fallback rather than test it.
+	pod.Phase = "Succeeded"
+	record := terminalRecord(t, failedJobSource([]Pod{pod}))
 
 	if record.Reason != "BackoffLimitExceeded" {
 		t.Errorf("reason was enriched from a successful container: %q", record.Reason)
+	}
+}
+
+// A pod can fail with no container status at all — evicted, or rejected by
+// kubelet admission. The pod-level reason is then the only evidence, and
+// dropping it leaves the durable record at "BackoffLimitExceeded" despite the
+// cause being known and already captured by ListPods.
+func TestFailedJobRecordsPodLevelReasonWhenNoContainerFailed(t *testing.T) {
+	pod := jobPod("train-abc")
+	pod.Reason = "Evicted"
+	record := terminalRecord(t, failedJobSource([]Pod{pod}))
+
+	if !strings.Contains(record.Reason, "Evicted") {
+		t.Errorf("reason did not surface the pod-level cause: %q", record.Reason)
+	}
+	if !strings.Contains(record.Message, "train-abc") {
+		t.Errorf("message did not identify the pod: %q", record.Message)
+	}
+	if strings.Contains(record.Message, "container") {
+		t.Errorf("no container failed; message should not claim one: %q", record.Message)
+	}
+}
+
+// A pod with no reason at all still carries its phase, which is weak evidence
+// but strictly better than restating the Job condition.
+func TestFailedPodWithoutReasonStillRecorded(t *testing.T) {
+	record := terminalRecord(t, failedJobSource([]Pod{jobPod("train-abc")}))
+
+	if !strings.Contains(record.Reason, "PodFailed") {
+		t.Errorf("reason = %q, want the pod-level fallback", record.Reason)
+	}
+}
+
+// Evidence strength, not pod name, must decide what the summary reports. A pod
+// sorting first alphabetically while merely waiting must not mask an OOM kill
+// on a later-named pod: only the strongest candidate is summarised, and the
+// pods are deleted with the Job.
+func TestStrongestEvidenceWinsOverLexicalOrder(t *testing.T) {
+	record := terminalRecord(t, failedJobSource([]Pod{
+		jobPod("train-aaa", ContainerState{Name: "trainer", Reason: "ImagePullBackOff"}),
+		jobPod("train-zzz", ContainerState{Name: "trainer", Terminated: true, ExitCode: 137, Reason: "OOMKilled", OOMKilled: true}),
+	}))
+
+	if !strings.Contains(record.Reason, "OOMKilled") {
+		t.Errorf("reason = %q, want the OOM kill to win over the waiting pod", record.Reason)
+	}
+	if !strings.Contains(record.Message, "train-zzz") {
+		t.Errorf("message = %q, want the OOM-killed pod", record.Message)
+	}
+}
+
+// A non-zero exit outranks a container that terminated cleanly with a reason.
+func TestNonZeroExitOutranksCleanTermination(t *testing.T) {
+	record := terminalRecord(t, failedJobSource([]Pod{
+		jobPod("train-aaa", ContainerState{Name: "trainer", Terminated: true, ExitCode: 0, Reason: "Completed"}),
+		jobPod("train-zzz", ContainerState{Name: "trainer", Terminated: true, ExitCode: 9, Reason: "Error"}),
+	}))
+
+	if !strings.Contains(record.Message, "exit code 9") {
+		t.Errorf("message = %q, want the non-zero exit", record.Message)
+	}
+}
+
+// Container-level evidence outranks a pod-level reason on another pod.
+func TestContainerEvidenceOutranksPodLevelReason(t *testing.T) {
+	evicted := jobPod("train-aaa")
+	evicted.Reason = "Evicted"
+	record := terminalRecord(t, failedJobSource([]Pod{
+		evicted,
+		jobPod("train-zzz", ContainerState{Name: "trainer", Terminated: true, ExitCode: 3, Reason: "Error"}),
+	}))
+
+	if !strings.Contains(record.Message, "exit code 3") {
+		t.Errorf("message = %q, want the container exit over the pod-level reason", record.Message)
 	}
 }
 
@@ -411,4 +488,123 @@ func TestFirstFailureKeepsLifecycleEventTime(t *testing.T) {
 			t.Errorf("first observation used poll time %s instead of the lifecycle event time", record.ObservedAt)
 		}
 	}
+}
+
+// Job names are reused. With background deletion an old pod can outlive its
+// Job while an identically named Job is created immediately after, and
+// name-only correlation would persist the dead Job's failure under the new
+// Job's identity — a durable record that is not merely weak but wrong.
+func TestPodFromAnEarlierSameNameJobIsNotAdopted(t *testing.T) {
+	stale := jobPod("train-old", ContainerState{Name: "trainer", Terminated: true, ExitCode: 99, Reason: "Error"})
+	stale.OwnerUID = "uid-previous-job"
+
+	source := failedJobSource([]Pod{stale})
+	// The live Job carries its own identity; testMetadata sets UID uid-train.
+	record := terminalRecord(t, source)
+
+	if strings.Contains(record.Message, "exit code 99") {
+		t.Errorf("a pod from a previous Job instance was adopted: %q", record.Message)
+	}
+}
+
+func TestPodMatchingThisJobUIDIsAdopted(t *testing.T) {
+	pod := jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 11, Reason: "Error"})
+	pod.OwnerUID = "uid-train"
+
+	record := terminalRecord(t, failedJobSource([]Pod{pod}))
+	if !strings.Contains(record.Message, "exit code 11") {
+		t.Errorf("pod with matching controller UID was not adopted: %q", record.Message)
+	}
+}
+
+// The controller-uid label carries the same identity for pods whose
+// ownerReference has been stripped.
+func TestControllerUIDLabelIsHonoured(t *testing.T) {
+	pod := jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 5, Reason: "Error"})
+	pod.OwnerKind = ""
+	pod.OwnerName = ""
+	pod.Labels["batch.kubernetes.io/controller-uid"] = "uid-someone-else"
+
+	record := terminalRecord(t, failedJobSource([]Pod{pod}))
+	if strings.Contains(record.Message, "exit code 5") {
+		t.Errorf("a pod whose controller-uid names another Job was adopted: %q", record.Message)
+	}
+}
+
+// The recorder is restartable. A scheme that remembers what it already wrote
+// in process memory silently stops working after a restart — exactly when a
+// degraded record is most likely to be the one already durable. Ordering must
+// therefore be a pure function of the record's own evidence.
+func TestEvidenceOrderingSurvivesRecorderRestart(t *testing.T) {
+	source := failedJobSource(nil)
+	source.podErr = context.DeadlineExceeded
+
+	first := &fakeWriter{}
+	if _, err := newTestReconciler(source, first).Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A brand new Reconciler stands in for a restarted recorder: no memory of
+	// the degraded row it is about to supersede.
+	source.podErr = nil
+	source.pods = []Pod{jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 7, Reason: "Error"})}
+	second := &fakeWriter{}
+	if _, err := newTestReconciler(source, second).Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	degraded := terminalFailureRecord(t, first.records)
+	enriched := terminalFailureRecord(t, second.records)
+	if !strings.Contains(enriched.Message, "exit code 7") {
+		t.Fatalf("second recorder did not enrich: %q", enriched.Message)
+	}
+	if !enriched.ObservedAt.After(degraded.ObservedAt) {
+		t.Errorf("after a restart the enriched row (%s) does not outrank the degraded one (%s); arg_max would tie",
+			enriched.ObservedAt, degraded.ObservedAt)
+	}
+}
+
+// A successful pod list that correlates no pods is not enrichment. Such a
+// record must never displace evidence already recorded — the earlier fix
+// retimestamped it as newer, which made arg_max replace an exit code with the
+// generic Job reason deterministically.
+func TestEmptyPodListDoesNotDisplaceRecordedEvidence(t *testing.T) {
+	source := failedJobSource([]Pod{
+		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 42, Reason: "Error"}),
+	})
+	writer := &fakeWriter{}
+	reconciler := newTestReconciler(source, writer)
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+	enriched := terminalFailureRecord(t, writer.records)
+	before := len(writer.records)
+
+	// Pods are gone — listed successfully, but the Job's pods have been
+	// collected. podErr stays nil, so this is the "successful but empty" path.
+	source.pods = nil
+	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, record := range writer.records[before:] {
+		if record.State != StateFailed {
+			continue
+		}
+		if record.ObservedAt.After(enriched.ObservedAt) {
+			t.Errorf("an evidence-free record was timestamped newer than the enriched one and would win arg_max: %q at %s",
+				record.Reason, record.ObservedAt)
+		}
+	}
+}
+
+func terminalFailureRecord(t *testing.T, records []Record) Record {
+	t.Helper()
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].State == StateFailed {
+			return records[i]
+		}
+	}
+	t.Fatal("no terminal failure record written")
+	return Record{}
 }
