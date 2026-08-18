@@ -135,22 +135,36 @@ func TestLoadRejectsInvalidAvailabilityContracts(t *testing.T) {
 			wantErr: "claimed by both",
 		},
 		{
-			name: "duplicate target names",
+			name: "duplicate target name declaring availability",
 			targets: `
   - name: dcgm-exporter
     url: http://localhost:19400/metrics
   - name: dcgm-exporter
     url: http://localhost:19401/metrics
+    required: true
+    availabilityCondition: DcgmExporterUnavailable
 `,
-			wantErr: "duplicate scrapeTarget name",
+			wantErr: "declares an availability contract",
 		},
 		{
-			name: "missing url",
+			name: "required target with no url",
 			targets: `
   - name: dcgm-exporter
     url: ""
+    required: true
+    availabilityCondition: DcgmExporterUnavailable
 `,
-			wantErr: "must set both name and url",
+			wantErr: "declares an availability contract but sets no url",
+		},
+		{
+			name: "unnamed target declaring availability",
+			targets: `
+  - name: ""
+    url: http://localhost:19400/metrics
+    required: true
+    availabilityCondition: DcgmExporterUnavailable
+`,
+			wantErr: "declares an availability contract but sets no name",
 		},
 		{
 			name: "required target with relative url",
@@ -189,9 +203,65 @@ func TestLoadRejectsInvalidAvailabilityContracts(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsDuplicateRuleConditions(t *testing.T) {
+func TestLoadAcceptsLegacyShapesThatPreviouslyLoaded(t *testing.T) {
 	t.Parallel()
 
+	// Every one of these was accepted before the availability contract existed.
+	// Refusing to start would CrashLoopBackOff the collector on an image bump
+	// and freeze every condition it owns, so they must still load.
+	tests := []struct {
+		name    string
+		targets string
+	}{
+		{
+			name: "target with no url",
+			targets: `
+  - name: dcgm-exporter
+    url: http://localhost:19400/metrics
+  - name: extra
+    url: ""
+`,
+		},
+		{
+			name: "target with no name",
+			targets: `
+  - name: dcgm-exporter
+    url: http://localhost:19400/metrics
+  - name: ""
+    url: http://localhost:9100/metrics
+`,
+		},
+		{
+			name: "duplicate target names",
+			targets: `
+  - name: node-problem-detector
+    url: http://localhost:20261/metrics
+  - name: node-problem-detector
+    url: http://localhost:20261/metrics
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, "scrapeTargets:"+tc.targets+rulesBlock))
+			if err != nil {
+				t.Fatalf("legacy config must still load: %v", err)
+			}
+			for _, target := range cfg.ScrapeTargets {
+				if target.Required || target.AvailabilityCondition != "" {
+					t.Fatalf("legacy config must stay inert: %+v", target)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsDuplicateRuleConditions(t *testing.T) {
+	t.Parallel()
+
+	// Previously accepted with last-writer-wins semantics in the condition
+	// writer; it must not become a fatal startup error.
 	path := writeConfig(t, `
 scrapeTargets:
   - name: dcgm-exporter
@@ -208,7 +278,34 @@ rules:
     mode: instant
     threshold: 0
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "claimed by both") {
-		t.Fatalf("expected a duplicate-condition error, got %v", err)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("duplicate rule condition types must still load: %v", err)
+	}
+}
+
+func TestValidationErrorsNeverLeakCredentials(t *testing.T) {
+	t.Parallel()
+
+	// An unnamed target whose URL carries userinfo and a query token: the
+	// startup error must identify the field, never echo the raw URL.
+	path := writeConfig(t, `
+scrapeTargets:
+  - name: ""
+    url: http://user:s3cret@localhost:19400/metrics?token=abc123
+    required: true
+    availabilityCondition: DcgmExporterUnavailable
+`+rulesBlock)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, secret := range []string{"s3cret", "abc123", "user:s3cret", "token="} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("validation error %q leaked %q", err, secret)
+		}
+	}
+	if !strings.Contains(err.Error(), "sets no name") {
+		t.Errorf("error should name the missing field, got %q", err)
 	}
 }

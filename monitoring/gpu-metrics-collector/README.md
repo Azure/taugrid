@@ -218,6 +218,14 @@ which is indistinguishable from a healthy node. Required targets close that gap:
   timers are shifted by the collector's downtime on restore. A restart neither
   re-arms the failure timer from zero nor counts the collector's own downtime as
   continuous scrape failure or continuous recovery.
+- The collector publishes a condition only once it has proven that condition's
+  state itself, or restored continuity from a snapshot written by a process that
+  had. If the snapshot is missing, corrupt, or stale, it stays silent rather
+  than reporting `False`, so a restart in the middle of an outage cannot clear a
+  `True` condition the API server already holds on the strength of a scrape that
+  just failed. Silence leaves the existing condition untouched; the condition is
+  re-asserted after `unavailableFor` of proven failure, or cleared after
+  `availableFor` of proven success.
 - A condition the collector no longer owns (availability disabled, or the
   condition renamed) is published once as `False` on the next start, because
   Kubernetes cannot delete a Node condition and nothing else would clear it.
@@ -230,6 +238,13 @@ which is indistinguishable from a healthy node. Required targets close that gap:
 - Each required target owns exactly one condition type. Config load rejects two
   targets that claim the same condition type and rejects a target that claims a
   condition type also owned by a rule.
+
+Validation is scoped to the availability contract. Configuration shapes that
+earlier versions accepted — a target with no name, a target with no URL, a
+duplicate target name, or two rules sharing a condition type — still load and
+are only logged as warnings. Refusing to start would restart-loop the collector
+and freeze every condition it owns, which is worse than the degraded-but-running
+behavior it replaces.
 
 ### Rule Schema
 

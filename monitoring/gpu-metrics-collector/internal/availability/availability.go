@@ -43,6 +43,17 @@ type targetState struct {
 	failingSince time.Time
 	healthySince time.Time
 	firing       bool
+	// established records that this process has enough evidence to own the
+	// condition: restored continuity, a sustained failure, or a sustained
+	// success. Until then the tracker publishes nothing for it.
+	//
+	// A restart with a missing, corrupt, or stale snapshot starts with
+	// firing=false and no history. Publishing that would clear an outage the
+	// server is already reporting, on the strength of a scrape that just
+	// failed. Staying silent instead leaves the server's condition untouched
+	// until this process has actually proven reachability for availableFor, or
+	// proven failure for unavailableFor.
+	established bool
 }
 
 // New creates a Tracker for the required targets in the given set. Targets
@@ -66,9 +77,12 @@ func (t *Tracker) Tracked() int {
 }
 
 // Evaluate folds this cycle's scrape outcomes into the debounce state and
-// returns one result per tracked condition. Results are returned even when the
-// target is healthy, so the condition is published as an explicit False rather
-// than being silently absent.
+// returns results for the conditions this process can speak to.
+//
+// A tracked condition is reported as an explicit False once reachability has
+// been proven, rather than being silently absent. It is deliberately omitted
+// while this process has no evidence yet — see targetState.established — so an
+// unseeded restart cannot clear an outage the server is already reporting.
 func (t *Tracker) Evaluate(statuses []scraper.TargetStatus, now time.Time) []rules.Result {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -84,7 +98,10 @@ func (t *Tracker) Evaluate(statuses []scraper.TargetStatus, now time.Time) []rul
 			st = &targetState{}
 			t.states[cond] = st
 		}
-		results = append(results, evaluateTarget(st, status, now))
+		result, publish := evaluateTarget(st, status, now)
+		if publish {
+			results = append(results, result)
+		}
 	}
 
 	// A condition this collector no longer owns cannot be deleted from the Node,
@@ -102,7 +119,7 @@ func (t *Tracker) Evaluate(statuses []scraper.TargetStatus, now time.Time) []rul
 	return results
 }
 
-func evaluateTarget(st *targetState, status scraper.TargetStatus, now time.Time) rules.Result {
+func evaluateTarget(st *targetState, status scraper.TargetStatus, now time.Time) (rules.Result, bool) {
 	target := status.Target
 	cond := target.AvailabilityCondition
 	unavailableFor := target.UnavailableWindow()
@@ -113,17 +130,24 @@ func evaluateTarget(st *targetState, status scraper.TargetStatus, now time.Time)
 		if st.healthySince.IsZero() {
 			st.healthySince = now
 		}
-		if st.firing && now.Sub(st.healthySince) >= availableFor {
+		if now.Sub(st.healthySince) >= availableFor {
+			// Proven reachable for the full window: safe to own and to clear.
 			st.firing = false
+			st.established = true
 		}
 	} else {
 		st.healthySince = time.Time{}
 		if st.failingSince.IsZero() {
 			st.failingSince = now
 		}
-		if !st.firing && now.Sub(st.failingSince) >= unavailableFor {
+		if now.Sub(st.failingSince) >= unavailableFor {
 			st.firing = true
+			st.established = true
 		}
+	}
+
+	if !st.established {
+		return rules.Result{}, false
 	}
 
 	result := rules.Result{ConditionType: cond, Firing: st.firing}
@@ -147,7 +171,7 @@ func evaluateTarget(st *targetState, status scraper.TargetStatus, now time.Time)
 			target.Name, status.SafeURL, roundDuration(now.Sub(st.failingSince)), unavailableFor, status.Err)
 	}
 
-	return result
+	return result, true
 }
 
 func roundDuration(d time.Duration) time.Duration {
@@ -170,6 +194,7 @@ func (t *Tracker) ExportState() map[string]state.Availability {
 			FailingSince: st.failingSince,
 			HealthySince: st.healthySince,
 			Firing:       st.firing,
+			Established:  st.established,
 		}
 	}
 	return out
@@ -205,6 +230,12 @@ func (t *Tracker) RestoreState(saved map[string]state.Availability, savedAt, now
 		st.failingSince = shift(s.FailingSince, gap)
 		st.healthySince = shift(s.HealthySince, gap)
 		st.firing = s.Firing
+		// Only continuity with a run that was actually publishing this
+		// condition lets this process speak to it immediately. A snapshot from
+		// a run that had not yet proven the state (or one written before this
+		// field existed) leaves it unestablished, so the restored process still
+		// has to prove the state before it can patch.
+		st.established = s.Established
 	}
 	sort.Strings(t.orphans)
 }
