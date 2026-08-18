@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/core/kube"
+	"github.com/Azure/taugrid/core/kueueapi"
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
@@ -31,9 +32,11 @@ func newClusterValidateTopologyCmd() *cobra.Command {
 
 For each GPU ResourceFlavor referenced by the ClusterQueue, this command checks:
   - nodes matching the flavor's nodeLabels exist
-  - matched GPU nodes report nvidia.com/gpu allocatable > 0
+  - matched GPU nodes expose the ClusterQueue's configured GPU resource
   - GPU nodes have topology.kubernetes.io/zone populated
   - IB-capable SKUs (H200, A100) have Ready nodes
+
+ResourceFlavors without GPU capacity in the ClusterQueue contract are reported and skipped.
 
 Use --preset to validate a single preset's full chain (Kueue objects + node match).
 Without --preset, validates all ResourceFlavors in the ClusterQueue.
@@ -108,16 +111,16 @@ func validateClusterTopology(ctx context.Context, w io.Writer, r validateNodesRu
 	fmt.Fprintf(w, "cluster: %s\n", dash(ctxName))
 	fmt.Fprintf(w, "clusterqueue: %s\n\n", cqName)
 
-	flavorNames := cq.flavorNames()
-	if len(flavorNames) == 0 {
+	contracts := clusterQueueFlavorContracts(cq)
+	if len(contracts) == 0 {
 		fmt.Fprintf(w, "warning: clusterqueue %s has no resource flavors\n", cqName)
 		return fmt.Errorf("clusterqueue %s has no resource flavors", cqName)
 	}
 
 	var passed, warnings, errors int
-	for _, name := range flavorNames {
-		results := validateFlavor(ctx, r, name)
-		fmt.Fprintf(w, "resourceflavor %s:\n", name)
+	for _, contract := range contracts {
+		results := validateFlavor(ctx, r, contract)
+		fmt.Fprintf(w, "resourceflavor %s:\n", contract.name)
 		writeResults(w, results, &passed, &warnings, &errors)
 		fmt.Fprintln(w)
 	}
@@ -138,6 +141,7 @@ func validatePresetTopology(ctx context.Context, w io.Writer, r validateNodesRun
 
 	var passed, warnings, errors int
 	var results []topologyCheckResult
+	clusterQueueExists := p.ClusterQueue == ""
 
 	objChecks := presetObjectChecks(p)
 	for _, check := range objChecks {
@@ -150,16 +154,53 @@ func validatePresetTopology(ctx context.Context, w io.Writer, r validateNodesRun
 			results = append(results, topologyCheckResult{check.label, checkError, detail})
 		} else {
 			results = append(results, topologyCheckResult{check.label, checkOK, "exists"})
+			if check.label == "clusterqueue" {
+				clusterQueueExists = true
+			}
 		}
 	}
 
-	if p.ResourceFlavor != "" {
-		flavorResults := validateFlavor(ctx, r, p.ResourceFlavor)
-		results = append(results, flavorResults...)
+	var contracts []topologyFlavorContract
+	if p.ClusterQueue == "" {
+		results = append(results, topologyCheckResult{"gpu-contract", checkError, "preset does not name a ClusterQueue"})
+	} else if clusterQueueExists {
+		cq, err := fetchClusterQueue(ctx, r, p.ClusterQueue)
+		if err != nil {
+			results = append(results, topologyCheckResult{"gpu-contract", checkError, fmt.Sprintf("cannot fetch clusterqueue contract: %v", err)})
+		} else {
+			allContracts := clusterQueueFlavorContracts(cq)
+			if p.ResourceFlavor != "" {
+				contract, ok := findFlavorContract(allContracts, p.ResourceFlavor)
+				switch {
+				case !ok:
+					results = append(results, topologyCheckResult{"gpu-contract", checkError,
+						fmt.Sprintf("resourceflavor %s is not referenced by clusterqueue %s", p.ResourceFlavor, p.ClusterQueue)})
+				case len(contract.gpuResources) == 0:
+					results = append(results, topologyCheckResult{"gpu-contract", checkError,
+						fmt.Sprintf("resourceflavor %s has no GPU capacity in clusterqueue %s", p.ResourceFlavor, p.ClusterQueue)})
+				default:
+					contracts = append(contracts, contract)
+				}
+			} else {
+				for _, contract := range allContracts {
+					if len(contract.gpuResources) > 0 {
+						contracts = append(contracts, contract)
+					}
+				}
+				if len(contracts) == 0 {
+					results = append(results, topologyCheckResult{"gpu-contract", checkError,
+						fmt.Sprintf("clusterqueue %s has no ResourceFlavor with GPU capacity", p.ClusterQueue)})
+				}
+			}
+		}
 	}
 
 	fmt.Fprintf(w, "preset %s:\n", p.Name)
 	writeResults(w, results, &passed, &warnings, &errors)
+	for _, contract := range contracts {
+		fmt.Fprintf(w, "\nresourceflavor %s:\n", contract.name)
+		writeResults(w, validateFlavor(ctx, r, contract), &passed, &warnings, &errors)
+	}
 
 	return writeSummary(w, passed, warnings, errors)
 }
@@ -192,14 +233,14 @@ func presetObjectChecks(p runtopology.Preset) []objectCheck {
 	return checks
 }
 
-func validateFlavor(ctx context.Context, r validateNodesRunner, name string) []topologyCheckResult {
-	rf, err := fetchResourceFlavor(ctx, r, name)
+func validateFlavor(ctx context.Context, r validateNodesRunner, contract topologyFlavorContract) []topologyCheckResult {
+	rf, err := fetchResourceFlavor(ctx, r, contract.name)
 	if err != nil {
 		return []topologyCheckResult{{label: "fetch", status: checkError, message: fmt.Sprintf("cannot fetch resourceflavor: %v", err)}}
 	}
 
-	if len(rf.Spec.NodeLabels) == 0 {
-		return []topologyCheckResult{{label: "accounting-only", status: checkOK, message: "no nodeLabels (CPU/memory accounting flavor)"}}
+	if len(contract.gpuResources) == 0 {
+		return []topologyCheckResult{{label: "gpu-contract", status: checkOK, message: "no GPU capacity in ClusterQueue contract; GPU topology checks skipped"}}
 	}
 
 	nodes, err := fetchNodesByLabels(ctx, r, rf.Spec.NodeLabels)
@@ -209,21 +250,39 @@ func validateFlavor(ctx context.Context, r validateNodesRunner, name string) []t
 
 	var results []topologyCheckResult
 
-	instanceType := rf.Spec.NodeLabels["node.kubernetes.io/instance-type"]
+	var draDevices map[string]int
+	if contract.hasGPUResource(kueueapi.GPUResource) {
+		draDevices, err = fetchNodesWithResourceSlices(ctx, r)
+		if err != nil {
+			return []topologyCheckResult{{label: "gpu-resourceslices", status: checkError, message: fmt.Sprintf("cannot list ResourceSlices: %v", err)}}
+		}
+	}
+
 	selectorDesc := formatNodeSelector(rf.Spec.NodeLabels)
+	if len(rf.Spec.NodeLabels) == 0 {
+		selectorDesc = "<all nodes>"
+	}
 	if len(nodes) == 0 {
 		results = append(results, topologyCheckResult{"node-match", checkError,
 			fmt.Sprintf("0 nodes match %s — check instance-type label or node pool availability", selectorDesc)})
 		return results
 	}
-	results = append(results, topologyCheckResult{"node-match", checkOK,
-		fmt.Sprintf("%d node(s) match %s", len(nodes), selectorDesc)})
+	gpuNodes := selectFlavorGPUNodes(nodes, rf, contract, draDevices)
+	if len(gpuNodes) == 0 {
+		results = append(results, topologyCheckResult{"node-match", checkError,
+			fmt.Sprintf("0 GPU-capable nodes among %d node(s) matching %s — check ResourceFlavor labels/taints and GPU registration", len(nodes), selectorDesc)})
+		return results
+	}
+	if len(gpuNodes) == len(nodes) {
+		results = append(results, topologyCheckResult{"node-match", checkOK,
+			fmt.Sprintf("%d GPU-capable node(s) match %s", len(gpuNodes), selectorDesc)})
+	} else {
+		results = append(results, topologyCheckResult{"node-match", checkOK,
+			fmt.Sprintf("%d GPU-capable node(s) selected from %d node(s) matching %s", len(gpuNodes), len(nodes), selectorDesc)})
+	}
 
-	gpuReady, zoneReady, readyCount, gpuTotal := 0, 0, 0, len(nodes)
-	for _, n := range nodes {
-		if gpuAllocatable(n) > 0 {
-			gpuReady++
-		}
+	zoneReady, readyCount, gpuTotal := 0, 0, len(gpuNodes)
+	for _, n := range gpuNodes {
 		if n.Metadata.Labels["topology.kubernetes.io/zone"] != "" {
 			zoneReady++
 		}
@@ -232,15 +291,8 @@ func validateFlavor(ctx context.Context, r validateNodesRunner, name string) []t
 		}
 	}
 
-	if gpuReady == gpuTotal {
-		results = append(results, topologyCheckResult{"gpu-allocatable", checkOK,
-			fmt.Sprintf("%d/%d nodes report nvidia.com/gpu > 0", gpuReady, gpuTotal)})
-	} else if gpuReady > 0 {
-		results = append(results, topologyCheckResult{"gpu-allocatable", checkWarn,
-			fmt.Sprintf("%d/%d nodes report nvidia.com/gpu > 0 — device plugin may be starting on remaining nodes", gpuReady, gpuTotal)})
-	} else {
-		results = append(results, topologyCheckResult{"gpu-allocatable", checkError,
-			fmt.Sprintf("0/%d nodes report nvidia.com/gpu — device plugin not running or GPUs not detected", gpuTotal)})
+	for _, resourceName := range contract.gpuResources {
+		results = append(results, validateGPUResource(resourceName, gpuNodes, draDevices))
 	}
 
 	if zoneReady == gpuTotal {
@@ -251,6 +303,7 @@ func validateFlavor(ctx context.Context, r validateNodesRunner, name string) []t
 			fmt.Sprintf("%d/%d nodes have topology.kubernetes.io/zone — Kueue Topology scheduling requires this label", zoneReady, gpuTotal)})
 	}
 
+	instanceType := rf.Spec.NodeLabels["node.kubernetes.io/instance-type"]
 	if sku, ok := ibCapableSKUs[strings.ToLower(instanceType)]; ok {
 		if readyCount == gpuTotal {
 			results = append(results, topologyCheckResult{"ib-capable", checkOK,
@@ -270,7 +323,8 @@ type topologyNodeDoc struct {
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Spec struct {
-		Unschedulable bool `json:"unschedulable"`
+		Unschedulable bool               `json:"unschedulable"`
+		Taints        []topologyTaintDoc `json:"taints"`
 	} `json:"spec"`
 	Status struct {
 		Allocatable map[string]string `json:"allocatable"`
@@ -285,32 +339,103 @@ type topologyNodeListDoc struct {
 	Items []topologyNodeDoc `json:"items"`
 }
 
+type topologyTaintDoc struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Effect string `json:"effect"`
+}
+
+type topologyFlavorContract struct {
+	name         string
+	gpuResources []string
+}
+
+func (c topologyFlavorContract) hasGPUResource(name string) bool {
+	for _, resourceName := range c.gpuResources {
+		if resourceName == name {
+			return true
+		}
+	}
+	return false
+}
+
 type topologyClusterQueueDoc struct {
 	Metadata struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
+		// Kueue v1beta1 uses cohort; v1beta2 uses cohortName.
+		Cohort         string `json:"cohort"`
+		CohortName     string `json:"cohortName"`
 		ResourceGroups []struct {
 			Flavors []struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				Resources []struct {
+					Name           string             `json:"name"`
+					NominalQuota   kueueapi.Quantity  `json:"nominalQuota"`
+					BorrowingLimit *kueueapi.Quantity `json:"borrowingLimit"`
+				} `json:"resources"`
 			} `json:"flavors"`
 		} `json:"resourceGroups"`
 	} `json:"spec"`
 }
 
-func (cq topologyClusterQueueDoc) flavorNames() []string {
-	seen := map[string]bool{}
-	var names []string
+func (cq topologyClusterQueueDoc) hasCohort() bool {
+	return cq.Spec.Cohort != "" || cq.Spec.CohortName != ""
+}
+
+func clusterQueueFlavorContracts(cq topologyClusterQueueDoc) []topologyFlavorContract {
+	capacities := make(map[string]map[string]bool)
+	hasCohort := cq.hasCohort()
 	for _, rg := range cq.Spec.ResourceGroups {
 		for _, f := range rg.Flavors {
-			if f.Name != "" && !seen[f.Name] {
-				seen[f.Name] = true
-				names = append(names, f.Name)
+			if f.Name == "" {
+				continue
+			}
+			if capacities[f.Name] == nil {
+				capacities[f.Name] = make(map[string]bool)
+			}
+			for _, resource := range f.Resources {
+				if isRenderedGPUResource(resource.Name) {
+					capacities[f.Name][resource.Name] = capacities[f.Name][resource.Name] || quotaHasCapacity(resource.NominalQuota, resource.BorrowingLimit, hasCohort)
+				}
 			}
 		}
 	}
-	sort.Strings(names)
-	return names
+	contracts := make([]topologyFlavorContract, 0, len(capacities))
+	for name, resources := range capacities {
+		contract := topologyFlavorContract{name: name}
+		for resourceName, hasCapacity := range resources {
+			if hasCapacity {
+				contract.gpuResources = append(contract.gpuResources, resourceName)
+			}
+		}
+		sort.Strings(contract.gpuResources)
+		contracts = append(contracts, contract)
+	}
+	sort.Slice(contracts, func(i, j int) bool { return contracts[i].name < contracts[j].name })
+	return contracts
+}
+
+func quotaHasCapacity(nominal kueueapi.Quantity, borrowingLimit *kueueapi.Quantity, hasCohort bool) bool {
+	if nominal.Int64() > 0 {
+		return true
+	}
+	if borrowingLimit != nil {
+		return borrowingLimit.Int64() > 0
+	}
+	// In a cohort, an omitted borrowingLimit means unlimited borrowing. Without
+	// a cohort, Kueue requires borrowingLimit to be omitted and no borrowing is possible.
+	return hasCohort
+}
+
+func findFlavorContract(contracts []topologyFlavorContract, name string) (topologyFlavorContract, bool) {
+	for _, contract := range contracts {
+		if contract.name == name {
+			return contract, true
+		}
+	}
+	return topologyFlavorContract{}, false
 }
 
 type topologyResourceFlavorDoc struct {
@@ -318,7 +443,8 @@ type topologyResourceFlavorDoc struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
-		NodeLabels map[string]string `json:"nodeLabels"`
+		NodeLabels map[string]string  `json:"nodeLabels"`
+		NodeTaints []topologyTaintDoc `json:"nodeTaints"`
 	} `json:"spec"`
 }
 
@@ -345,7 +471,12 @@ func fetchResourceFlavor(ctx context.Context, r validateNodesRunner, name string
 
 func fetchNodesByLabels(ctx context.Context, r validateNodesRunner, labels map[string]string) ([]topologyNodeDoc, error) {
 	selector := formatNodeSelector(labels)
-	doc, err := fetchJSON[topologyNodeListDoc](ctx, r, []string{"get", "nodes", "-l", selector, "-o", "json"})
+	args := []string{"get", "nodes"}
+	if len(labels) > 0 {
+		args = append(args, "-l", selector)
+	}
+	args = append(args, "-o", "json")
+	doc, err := fetchJSON[topologyNodeListDoc](ctx, r, args)
 	if err != nil {
 		return nil, err
 	}
@@ -353,11 +484,99 @@ func fetchNodesByLabels(ctx context.Context, r validateNodesRunner, labels map[s
 }
 
 func gpuAllocatable(n topologyNodeDoc) int {
-	count, err := strconv.Atoi(n.Status.Allocatable["nvidia.com/gpu"])
+	return gpuResourceAllocatable(n, kueueapi.GPUResourceDevicePlugin)
+}
+
+func gpuResourceAllocatable(n topologyNodeDoc, resourceName string) int {
+	count, err := strconv.Atoi(n.Status.Allocatable[resourceName])
 	if err != nil {
 		return 0
 	}
 	return count
+}
+
+func selectFlavorGPUNodes(nodes []topologyNodeDoc, rf topologyResourceFlavorDoc, contract topologyFlavorContract, draDevices map[string]int) []topologyNodeDoc {
+	selectorIsGPU := flavorSelectsGPU(rf.Spec.NodeLabels)
+	var selected []topologyNodeDoc
+	for _, node := range nodes {
+		registered := false
+		for _, resourceName := range contract.gpuResources {
+			switch resourceName {
+			case kueueapi.GPUResource:
+				_, registered = draDevices[node.Metadata.Name]
+			default:
+				registered = gpuResourceAllocatable(node, resourceName) > 0
+			}
+			if registered {
+				break
+			}
+		}
+		if registered || selectorIsGPU || nodeMatchesFlavorTaints(node, rf.Spec.NodeTaints) || looksLikeGPUNode(node.Metadata.Labels, nodeInstanceType(node.Metadata.Labels)) {
+			selected = append(selected, node)
+		}
+	}
+	return selected
+}
+
+func flavorSelectsGPU(labels map[string]string) bool {
+	if looksLikeGPUNode(labels, nodeInstanceType(labels)) {
+		return true
+	}
+	for _, key := range []string{runtopology.ManagedGPUSeriesLabel, "nvidia.com/gpu.product"} {
+		if labels[key] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeMatchesFlavorTaints(node topologyNodeDoc, required []topologyTaintDoc) bool {
+	if len(required) == 0 {
+		return false
+	}
+	for _, want := range required {
+		found := false
+		for _, got := range node.Spec.Taints {
+			if got.Key == want.Key && got.Value == want.Value && (want.Effect == "" || got.Effect == want.Effect) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func validateGPUResource(resourceName string, nodes []topologyNodeDoc, draDevices map[string]int) topologyCheckResult {
+	ready := 0
+	for _, node := range nodes {
+		if resourceName == kueueapi.GPUResource {
+			if draDevices[node.Metadata.Name] > 0 {
+				ready++
+			}
+		} else if gpuResourceAllocatable(node, resourceName) > 0 {
+			ready++
+		}
+	}
+	label := "gpu-allocatable"
+	mechanism := fmt.Sprintf("report %s > 0", resourceName)
+	missing := "device plugin may be starting on remaining nodes"
+	if resourceName == kueueapi.GPUResource {
+		label = "gpu-resourceslices"
+		mechanism = fmt.Sprintf("publish %s ResourceSlice devices", resourceName)
+		missing = "DRA driver may be starting on remaining nodes"
+	}
+	message := fmt.Sprintf("%d/%d nodes %s", ready, len(nodes), mechanism)
+	switch {
+	case ready == len(nodes):
+		return topologyCheckResult{label, checkOK, message}
+	case ready > 0:
+		return topologyCheckResult{label, checkWarn, message + " — " + missing}
+	default:
+		return topologyCheckResult{label, checkError, message + " — GPU resource is not registered"}
+	}
 }
 
 func nodeIsReady(n topologyNodeDoc) bool {

@@ -7,8 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/core/kueueapi"
+	runtopology "github.com/Azure/taugrid/core/topology"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 func TestGPUAllocatable(t *testing.T) {
@@ -91,52 +97,82 @@ func TestIBCapableSKUs(t *testing.T) {
 	}
 }
 
-func TestClusterQueueFlavorNames(t *testing.T) {
-	cq := topologyClusterQueueDoc{}
-	cq.Spec.ResourceGroups = []struct {
-		Flavors []struct {
-			Name string `json:"name"`
-		} `json:"flavors"`
-	}{
-		{Flavors: []struct {
-			Name string `json:"name"`
-		}{
-			{Name: "gpu-h200"},
-			{Name: "gpu-a100"},
-			{Name: "gpu-h200"}, // duplicate
-		}},
-		{Flavors: []struct {
-			Name string `json:"name"`
-		}{
-			{Name: "taugrid-default"},
-			{Name: ""},
-		}},
+func TestClusterQueueFlavorContractsUseAvailableGPUCapacity(t *testing.T) {
+	var cq topologyClusterQueueDoc
+	if err := json.Unmarshal([]byte(`{
+		"spec":{"cohort":"research","resourceGroups":[{"flavors":[
+			{"name":"cpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"0","borrowingLimit":"0"}]},
+			{"name":"gpu-dp","resources":[{"name":"nvidia.com/gpu","nominalQuota":"2"}]},
+			{"name":"gpu-dra","resources":[{"name":"gpu.nvidia.com","nominalQuota":"0","borrowingLimit":"1"}]},
+			{"name":"gpu-mig","resources":[{"name":"nvidia.com/mig-1g.18gb","nominalQuota":"7"}]},
+			{"name":"gpu-unlimited","resources":[{"name":"nvidia.com/gpu","nominalQuota":"0"}]}
+		]}]}
+	}`), &cq); err != nil {
+		t.Fatal(err)
 	}
 
-	names := cq.flavorNames()
-	want := []string{"gpu-a100", "gpu-h200", "taugrid-default"}
-	if len(names) != len(want) {
-		t.Fatalf("flavorNames() = %v, want %v", names, want)
+	contracts := clusterQueueFlavorContracts(cq)
+	if len(contracts) != 5 {
+		t.Fatalf("contracts = %+v, want 5 flavors", contracts)
 	}
-	for i, n := range names {
-		if n != want[i] {
-			t.Fatalf("flavorNames()[%d] = %q, want %q", i, n, want[i])
+	want := []topologyFlavorContract{
+		{name: "cpu"},
+		{name: "gpu-dp", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}},
+		{name: "gpu-dra", gpuResources: []string{kueueapi.GPUResource}},
+		{name: "gpu-mig", gpuResources: []string{"nvidia.com/mig-1g.18gb"}},
+		{name: "gpu-unlimited", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}},
+	}
+	for i := range want {
+		if contracts[i].name != want[i].name || strings.Join(contracts[i].gpuResources, ",") != strings.Join(want[i].gpuResources, ",") {
+			t.Fatalf("contracts[%d] = %+v, want %+v", i, contracts[i], want[i])
 		}
 	}
 }
 
-func TestValidateFlavorAccountingOnly(t *testing.T) {
+func TestClusterQueueFlavorContractsRequireCohortForUnlimitedBorrowing(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		spec         string
+		wantResource bool
+	}{
+		{name: "no cohort", spec: `"resourceGroups"`, wantResource: false},
+		{name: "v1beta1 cohort", spec: `"cohort":"research","resourceGroups"`, wantResource: true},
+		{name: "v1beta2 cohort", spec: `"cohortName":"research","resourceGroups"`, wantResource: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cq topologyClusterQueueDoc
+			raw := `{"spec":{` + tc.spec + `:[{"flavors":[{"name":"gpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"0"}]}]}]}}`
+			if err := json.Unmarshal([]byte(raw), &cq); err != nil {
+				t.Fatal(err)
+			}
+
+			contracts := clusterQueueFlavorContracts(cq)
+			if len(contracts) != 1 {
+				t.Fatalf("contracts = %+v, want one flavor", contracts)
+			}
+			gotResource := len(contracts[0].gpuResources) == 1
+			if gotResource != tc.wantResource {
+				t.Fatalf("gpuResources = %v, want resource=%v", contracts[0].gpuResources, tc.wantResource)
+			}
+		})
+	}
+}
+
+func TestValidateFlavorSkipsCPUFlavorWithLinuxLabelAndZeroGPUQuota(t *testing.T) {
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
-			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "taugrid-default", "-o", "json"): `{"metadata":{"name":"taugrid-default"},"spec":{}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "taugrid-default", "-o", "json"): `{"metadata":{"name":"taugrid-default"},"spec":{"nodeLabels":{"kubernetes.io/os":"linux"}}}`,
 		},
 	}
-	results := validateFlavor(context.Background(), runner, "taugrid-default")
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "taugrid-default"})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].status != checkOK || results[0].label != "accounting-only" {
+	if results[0].status != checkOK || results[0].label != "gpu-contract" || !strings.Contains(results[0].message, "skipped") {
 		t.Fatalf("unexpected result: %+v", results[0])
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("CPU flavor should not list nodes or ResourceSlices, calls=%v", runner.calls)
 	}
 }
 
@@ -154,7 +190,7 @@ func TestValidateFlavorHealthyH200(t *testing.T) {
 		},
 	}
 
-	results := validateFlavor(context.Background(), runner, "gpu-h200")
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "gpu-h200", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
 
 	wantChecks := map[string]checkStatus{
 		"node-match":      checkOK,
@@ -188,7 +224,7 @@ func TestValidateFlavorNoNodes(t *testing.T) {
 		},
 	}
 
-	results := validateFlavor(context.Background(), runner, "gpu-h100")
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "gpu-h100", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
 	if len(results) != 1 || results[0].status != checkError || results[0].label != "node-match" {
 		t.Fatalf("expected single node-match error, got %+v", results)
 	}
@@ -208,7 +244,7 @@ func TestValidateFlavorPartialGPU(t *testing.T) {
 		},
 	}
 
-	results := validateFlavor(context.Background(), runner, "gpu-a100")
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "gpu-a100", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
 	statusByLabel := map[string]checkStatus{}
 	for _, r := range results {
 		statusByLabel[r.label] = r.status
@@ -234,7 +270,7 @@ func TestValidateFlavorMissingZone(t *testing.T) {
 		},
 	}
 
-	results := validateFlavor(context.Background(), runner, "gpu-h100")
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "gpu-h100", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
 	statusByLabel := map[string]checkStatus{}
 	for _, r := range results {
 		statusByLabel[r.label] = r.status
@@ -247,16 +283,230 @@ func TestValidateFlavorMissingZone(t *testing.T) {
 	}
 }
 
+func TestValidateFlavorGenericSelectorUsesOnlyGPUCandidateNodes(t *testing.T) {
+	cpu := makeNode("cpu-0", "", true, "westus2-1")
+	gpu := makeNode("gpu-0", "1", true, "westus2-1")
+	gpu.Spec.Taints = []topologyTaintDoc{{Key: "sku", Value: "gpu", Effect: "NoSchedule"}}
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "generic-gpu", "-o", "json"): `{
+				"metadata":{"name":"generic-gpu"},
+				"spec":{"nodeLabels":{"kubernetes.io/os":"linux"},"nodeTaints":[{"key":"sku","value":"gpu","effect":"NoSchedule"}]}
+			}`,
+			fakeRawKey("get", "nodes", "-l", "kubernetes.io/os=linux", "-o", "json"): makeNodeListJSON(cpu, gpu),
+		},
+	}
+
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "generic-gpu", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
+	statusByLabel := make(map[string]checkStatus)
+	messageByLabel := make(map[string]string)
+	for _, result := range results {
+		statusByLabel[result.label] = result.status
+		messageByLabel[result.label] = result.message
+	}
+	if statusByLabel["gpu-allocatable"] != checkOK {
+		t.Fatalf("generic flavor should validate 1/1 GPU nodes, results=%+v", results)
+	}
+	if !strings.Contains(messageByLabel["node-match"], "1 GPU-capable node(s) selected from 2") {
+		t.Fatalf("node-match should exclude the CPU node: %q", messageByLabel["node-match"])
+	}
+}
+
+func TestValidateFlavorTaintKeepsUnregisteredGPUNodeInDenominator(t *testing.T) {
+	node := makeNode("gpu-0", "", true, "westus2-1")
+	node.Spec.Taints = []topologyTaintDoc{{Key: "sku", Value: "gpu", Effect: "NoSchedule"}}
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "generic-gpu", "-o", "json"): `{
+				"metadata":{"name":"generic-gpu"},
+				"spec":{"nodeLabels":{"kubernetes.io/os":"linux"},"nodeTaints":[{"key":"sku","value":"gpu","effect":"NoSchedule"}]}
+			}`,
+			fakeRawKey("get", "nodes", "-l", "kubernetes.io/os=linux", "-o", "json"): makeNodeListJSON(node),
+		},
+	}
+
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "generic-gpu", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
+	statusByLabel := make(map[string]checkStatus)
+	for _, result := range results {
+		statusByLabel[result.label] = result.status
+	}
+	if statusByLabel["node-match"] != checkOK || statusByLabel["gpu-allocatable"] != checkError {
+		t.Fatalf("tainted GPU node should be selected and fail registration, results=%+v", results)
+	}
+}
+
+func TestValidateFlavorWithoutNodeLabelsUsesAllNodes(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "resource-only-gpu", "-o", "json"): `{"metadata":{"name":"resource-only-gpu"},"spec":{}}`,
+			fakeRawKey("get", "nodes", "-o", "json"): makeNodeListJSON(
+				makeNode("cpu-0", "", true, "westus2-1"),
+				makeNode("gpu-0", "1", true, "westus2-1"),
+			),
+		},
+	}
+
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "resource-only-gpu", gpuResources: []string{kueueapi.GPUResourceDevicePlugin}})
+	for _, result := range results {
+		if result.label == "node-match" {
+			if result.status != checkOK || !strings.Contains(result.message, "<all nodes>") || !strings.Contains(result.message, "1 GPU-capable node(s) selected from 2") {
+				t.Fatalf("unexpected all-node match result: %+v", result)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing node-match result: %+v", results)
+}
+
+func TestFlavorSelectsGPURecognizesSelectors(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "managed GPU series", key: runtopology.ManagedGPUSeriesLabel, value: "nc-h100-v5"},
+		{name: "GPU class", key: workloadmeta.NodeLabelGPUClass, value: "h100-95gb"},
+		{name: "NVIDIA product", key: "nvidia.com/gpu.product", value: "NVIDIA-H100-80GB-HBM3"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !flavorSelectsGPU(map[string]string{test.key: test.value}) {
+				t.Fatalf("%s should identify a GPU-specific ResourceFlavor selector", test.key)
+			}
+		})
+	}
+}
+
+func TestValidateFlavorMIGUsesConfiguredProfileResource(t *testing.T) {
+	const migResource = "nvidia.com/mig-1g.18gb"
+	for _, tc := range []struct {
+		name       string
+		alloc      map[string]string
+		wantStatus checkStatus
+	}{
+		{name: "profile registered", alloc: map[string]string{migResource: "7"}, wantStatus: checkOK},
+		{name: "only whole GPU and another profile", alloc: map[string]string{"nvidia.com/gpu": "1", "nvidia.com/mig-3g.71gb": "1"}, wantStatus: checkError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const gpuClass = "a100-80gb"
+			node := makeNode("mig-0", "", true, "westus2-1")
+			node.Metadata.Labels[workloadmeta.NodeLabelGPUClass] = gpuClass
+			for name, quantity := range tc.alloc {
+				node.Status.Allocatable[name] = quantity
+			}
+			resourceFlavorJSON := fmt.Sprintf(`{"metadata":{"name":"mig-a100"},"spec":{"nodeLabels":{%q:%q}}}`, workloadmeta.NodeLabelGPUClass, gpuClass)
+			selector := workloadmeta.NodeLabelGPUClass + "=" + gpuClass
+			runner := &fakeRawRunner{
+				outputs: map[string]string{
+					fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "mig-a100", "-o", "json"): resourceFlavorJSON,
+					fakeRawKey("get", "nodes", "-l", selector, "-o", "json"):                     makeNodeListJSON(node),
+				},
+			}
+
+			results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "mig-a100", gpuResources: []string{migResource}})
+			for _, result := range results {
+				if result.label == "gpu-allocatable" {
+					if result.status != tc.wantStatus || !strings.Contains(result.message, migResource) {
+						t.Fatalf("MIG registration result = %+v, want status %s for %s", result, tc.wantStatus, migResource)
+					}
+					return
+				}
+			}
+			t.Fatalf("missing MIG gpu-allocatable result: %+v", results)
+		})
+	}
+}
+
+func TestValidateFlavorDRAUsesResourceSlices(t *testing.T) {
+	cpu := makeNode("cpu-0", "", true, "westus2-1")
+	gpu := makeNode("dra-0", "", true, "westus2-1")
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "dra-gpu", "-o", "json"): `{"metadata":{"name":"dra-gpu"},"spec":{"nodeLabels":{"kubernetes.io/os":"linux"}}}`,
+			fakeRawKey("get", "nodes", "-l", "kubernetes.io/os=linux", "-o", "json"):    makeNodeListJSON(cpu, gpu),
+			fakeRawKey("get", "resourceslices", "-o", "json"):                           `{"items":[{"spec":{"driver":"gpu.nvidia.com","nodeName":"dra-0","pool":{"name":"dra-0"},"devices":[{"name":"gpu-0"},{"name":"gpu-1"}]}}]}`,
+		},
+	}
+
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "dra-gpu", gpuResources: []string{kueueapi.GPUResource}})
+	statusByLabel := make(map[string]checkStatus)
+	messageByLabel := make(map[string]string)
+	for _, result := range results {
+		statusByLabel[result.label] = result.status
+		messageByLabel[result.label] = result.message
+	}
+	if statusByLabel["gpu-resourceslices"] != checkOK {
+		t.Fatalf("DRA flavor should use ResourceSlices, results=%+v", results)
+	}
+	if !strings.Contains(messageByLabel["node-match"], "1 GPU-capable node(s) selected from 2") {
+		t.Fatalf("DRA node-match should exclude the CPU node: %q", messageByLabel["node-match"])
+	}
+}
+
+func TestValidateFlavorDRAReportsResourceSliceAccessError(t *testing.T) {
+	const gpuClass = "h200-141gb"
+	node := makeNode("dra-0", "", true, "westus2-1")
+	node.Metadata.Labels[workloadmeta.NodeLabelGPUClass] = gpuClass
+	resourceFlavorJSON := fmt.Sprintf(`{"metadata":{"name":"dra-gpu"},"spec":{"nodeLabels":{%q:%q}}}`, workloadmeta.NodeLabelGPUClass, gpuClass)
+	selector := workloadmeta.NodeLabelGPUClass + "=" + gpuClass
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "dra-gpu", "-o", "json"): resourceFlavorJSON,
+			fakeRawKey("get", "nodes", "-l", selector, "-o", "json"):                    makeNodeListJSON(node),
+		},
+		errors: map[string]error{
+			fakeRawKey("get", "resourceslices", "-o", "json"): errors.New("forbidden"),
+		},
+	}
+
+	results := validateFlavor(context.Background(), runner, topologyFlavorContract{name: "dra-gpu", gpuResources: []string{kueueapi.GPUResource}})
+	if len(results) != 1 || results[0].label != "gpu-resourceslices" || results[0].status != checkError || !strings.Contains(results[0].message, "forbidden") {
+		t.Fatalf("DRA API error should be explicit, results=%+v", results)
+	}
+}
+
+func TestValidatePresetTopologyUsesClusterQueueGPUContracts(t *testing.T) {
+	gpu := makeNode("gpu-0", "1", true, "westus2-1")
+	gpu.Spec.Taints = []topologyTaintDoc{{Key: "sku", Value: "gpu", Effect: "NoSchedule"}}
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "taugrid-default", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "name"): "localqueue.kueue.x-k8s.io/jobqueue",
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "name"):                          "clusterqueue.kueue.x-k8s.io/tau-cq",
+			fakeRawKey("get", "topology.kueue.x-k8s.io", "default-node-topology", "-o", "name"):               "topology.kueue.x-k8s.io/default-node-topology",
+			fakeRawKey("get", "workloadpriorityclass.kueue.x-k8s.io", "taugrid-default", "-o", "name"):        "workloadpriorityclass.kueue.x-k8s.io/taugrid-default",
+			fakeRawKey("get", "priorityclass.scheduling.k8s.io", "taugrid-default", "-o", "name"):             "priorityclass.scheduling.k8s.io/taugrid-default",
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json"):                          `{"spec":{"resourceGroups":[{"flavors":[{"name":"cpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"0"}]},{"name":"generic-gpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"1"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "generic-gpu", "-o", "json"):                   `{"metadata":{"name":"generic-gpu"},"spec":{"nodeLabels":{"kubernetes.io/os":"linux"},"nodeTaints":[{"key":"sku","value":"gpu","effect":"NoSchedule"}]}}`,
+			fakeRawKey("get", "nodes", "-l", "kubernetes.io/os=linux", "-o", "json"):                          makeNodeListJSON(gpu),
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := validatePresetTopology(context.Background(), &buf, runner, "azure.research.training.l", "test"); err != nil {
+		t.Fatalf("preset validation failed: %v\n%s", err, buf.String())
+	}
+	output := buf.String()
+	if !strings.Contains(output, "resourceflavor generic-gpu:") || strings.Contains(output, "resourceflavor cpu:") {
+		t.Fatalf("preset should validate only positive GPU contracts:\n%s", output)
+	}
+	if !strings.Contains(output, "summary: 8 passed, 0 warnings, 0 errors") {
+		t.Fatalf("unexpected preset summary:\n%s", output)
+	}
+}
+
 func TestValidateClusterTopologyOutput(t *testing.T) {
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
 			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "taugrid-cq", "-o", "json"): `{
 				"metadata":{"name":"taugrid-cq"},
 				"spec":{"resourceGroups":[
-					{"flavors":[{"name":"gpu-h200"},{"name":"taugrid-default"}]}
+					{"flavors":[
+						{"name":"gpu-h200","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+						{"name":"taugrid-default","resources":[{"name":"nvidia.com/gpu","nominalQuota":"0"}]}
+					]}
 				]}
 			}`,
-			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "taugrid-default", "-o", "json"): `{"metadata":{"name":"taugrid-default"},"spec":{}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "taugrid-default", "-o", "json"): `{"metadata":{"name":"taugrid-default"},"spec":{"nodeLabels":{"kubernetes.io/os":"linux"}}}`,
 			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "gpu-h200", "-o", "json"): `{
 				"metadata":{"name":"gpu-h200"},
 				"spec":{"nodeLabels":{"node.kubernetes.io/instance-type":"Standard_ND96isr_H200_v5"}}
@@ -283,7 +533,7 @@ func TestValidateClusterTopologyOutput(t *testing.T) {
 		"ok    gpu-allocatable:",
 		"ok    topology-zone:",
 		"ok    ib-capable:",
-		"ok    accounting-only:",
+		"ok    gpu-contract: no GPU capacity in ClusterQueue contract; GPU topology checks skipped",
 		"summary: 5 passed, 0 warnings, 0 errors",
 	} {
 		if !strings.Contains(output, want) {
@@ -297,7 +547,7 @@ func TestValidateClusterTopologyErrors(t *testing.T) {
 		outputs: map[string]string{
 			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "taugrid-cq", "-o", "json"): `{
 				"metadata":{"name":"taugrid-cq"},
-				"spec":{"resourceGroups":[{"flavors":[{"name":"gpu-missing"}]}]}
+				"spec":{"resourceGroups":[{"flavors":[{"name":"gpu-missing","resources":[{"name":"nvidia.com/gpu","nominalQuota":"1"}]}]}]}
 			}`,
 			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "gpu-missing", "-o", "json"): `{
 				"metadata":{"name":"gpu-missing"},
