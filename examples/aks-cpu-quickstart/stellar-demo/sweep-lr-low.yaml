@@ -4,7 +4,7 @@
 # package containing the real Stellar SDK -- see tau/__init__.py) is only
 # supported under this schema's `engine: ray`.
 name: sweep-lr-low
-engine: ray
+engine: rayjob
 run:
   entrypoint: train.py
   # Ships this whole directory (train.py + tau/) to every Ray pod so

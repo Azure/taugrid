@@ -30,7 +30,7 @@ import (
 // source of truth for compute and storage; the run config only supplies the
 // scheduling policy and the entrypoint.
 type runManagedWorkflowRequest struct {
-	Options runDispatchOptions
+	Options resolvedRunManagedWorkflowOptions
 }
 
 // managedWorkflowGPUDemand reports the total number of GPUs a managed workflow
@@ -45,12 +45,12 @@ func managedWorkflowGPUDemand(m *manifest.Manifest, workloadKind string) int {
 		return 0
 	}
 	if workloadKind == manifest.WorkloadKindRayJob {
-		return rayRequestedGPUCount(m.Compute.Workers, m.Compute.GPUs)
+		return rayJobRequestedGPUCount(m.Compute.Workers, m.Compute.GPUs)
 	}
 	return m.Compute.GPUs
 }
 
-func newRunManagedWorkflowRequest(o runDispatchOptions) (runManagedWorkflowRequest, error) {
+func newRunManagedWorkflowRequest(o unresolvedRunOptions) (runManagedWorkflowRequest, error) {
 	if strings.TrimSpace(o.file) == "" {
 		return runManagedWorkflowRequest{}, fmt.Errorf("--manifest is required")
 	}
@@ -66,12 +66,12 @@ func newRunManagedWorkflowRequest(o runDispatchOptions) (runManagedWorkflowReque
 	default:
 		return runManagedWorkflowRequest{}, fmt.Errorf("workload_kind must be one of: %s, %s, %s", manifest.WorkloadKindJob, manifest.WorkloadKindRayJob, manifest.WorkloadKindRayJobEval)
 	}
-	return runManagedWorkflowRequest{Options: o}, nil
+	return runManagedWorkflowRequest{Options: resolveRunManagedWorkflowOptions(o)}, nil
 }
 
 // managedWorkflowProfileOptions resolves the nsys profiling window from the run
 // config. Profiling knobs are only meaningful with an explicit profiler.
-func managedWorkflowProfileOptions(o runDispatchOptions) (manifest.ProfileOptions, error) {
+func managedWorkflowProfileOptions(o resolvedRunManagedWorkflowOptions) (manifest.ProfileOptions, error) {
 	resolvedProfiler, err := validateProfiler(o.profiler)
 	if err != nil {
 		return manifest.ProfileOptions{}, err
@@ -136,7 +136,7 @@ func managedWorkflowMetricsOffload(ctx context.Context) (manifest.MetricsOffload
 }
 
 func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, request *runManagedWorkflowRequest, captureCommand string) error {
-	if err := ensureSubmissionID(&request.Options); err != nil {
+	if err := ensureSubmissionIDValue(request.Options.dryRun, &request.Options.submissionID); err != nil {
 		return err
 	}
 	o := request.Options
@@ -267,8 +267,8 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 		m.Runtime.Env = mergedEnv
 	}
 
-	topo := runJobTopologyFlags(o)
-	changed := func(flag string) bool { return runJobTopologyFieldSet(o, flag) }
+	topo := resolvedRunTopologyFlags(o.runPlacement)
+	changed := func(flag string) bool { return resolvedRunTopologyFieldSet(o.runPlacement, flag) }
 	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
 	if err != nil {
 		return err

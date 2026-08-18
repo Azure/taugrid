@@ -29,7 +29,7 @@ import (
 
 type runJobRequest struct {
 	Name    string
-	Options runDispatchOptions
+	Options resolvedRunJobOptions
 }
 
 const (
@@ -39,7 +39,7 @@ const (
 	directMetricsDoneTimeout  = 2 * time.Minute
 )
 
-func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, error) {
+func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest, error) {
 	if strings.TrimSpace(name) == "" {
 		return runJobRequest{}, fmt.Errorf("job runs require NAME")
 	}
@@ -53,8 +53,8 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 		// the ModuleNotFoundError-after-startup failure it exists to prevent.
 		return runJobRequest{}, fmt.Errorf(
 			"run.working_dir is not supported with engine: job.\n" +
-				"It is delivered through Ray's runtime_env, so it applies to engine: ray only.\n" +
-				"Either switch to engine: ray to ship the project directory, or remove run.working_dir " +
+				"It is delivered through Ray's runtime_env, so it applies to engine: rayjob only.\n" +
+				"Either switch to engine: rayjob to ship the project directory, or remove run.working_dir " +
 				"and keep the run to a single self-contained entrypoint.")
 	}
 	if options.output == "" && firstNonEmpty(options.dataPVC, options.resultPVC) != "" {
@@ -72,14 +72,14 @@ func newRunJobRequest(options runDispatchOptions, name string) (runJobRequest, e
 			return runJobRequest{}, err
 		}
 	}
-	if err := ensureArtifactPublicationID(&options); err != nil {
+	if err := ensureArtifactPublicationID(options.outputPublish, &options.artifactPublicationID); err != nil {
 		return runJobRequest{}, err
 	}
-	return runJobRequest{Name: name, Options: options}, nil
+	return runJobRequest{Name: name, Options: resolveRunJobOptions(options)}, nil
 }
 
 func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJobRequest, captureCommand string) error {
-	if err := ensureSubmissionID(&request.Options); err != nil {
+	if err := ensureSubmissionIDValue(request.Options.dryRun, &request.Options.submissionID); err != nil {
 		return err
 	}
 	o := request.Options
@@ -116,7 +116,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		profileDuration = 2 * time.Minute
 	}
 
-	topo := runJobTopologyFlags(o)
+	topo := resolvedRunTopologyFlags(o.runPlacement)
 	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
 	if err != nil {
 		return err
@@ -200,7 +200,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		AzureWorkloadIdentity:   o.azureWorkloadIdentity,
 		ScriptPath:              o.script,
 		Source:                  o.source,
-		WorkingDir:              o.workingDir.jobContainerPath(),
+		WorkingDir:              o.workingDir,
 		Launcher:                o.launcher,
 		ProcessesPerNode:        o.processesPerNode,
 		Nodes:                   o.nodes,
@@ -226,7 +226,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		Annotations:             annotations,
 	}
 	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, preset, func(flag string) bool {
-		return runJobTopologyFieldSet(o, flag)
+		return resolvedRunTopologyFieldSet(o.runPlacement, flag)
 	}, o.workspaceQueueResolved)
 	if err != nil {
 		return err
@@ -282,7 +282,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		}
 	}
 	if o.metricsOffloadEnabled {
-		runtime, err := resolveMetricsOffload(o, request.Name, ns, kubeContext, outputDir, outputWritable, annotations)
+		runtime, err := resolveResolvedMetricsOffload(o.resolvedDirectRunOptions, request.Name, ns, kubeContext, outputDir, outputWritable, annotations)
 		if err != nil {
 			return err
 		}
@@ -454,7 +454,11 @@ func parseRunJobDuration(field, value string) (time.Duration, error) {
 	return parsed, nil
 }
 
-func runJobTopologyFlags(o runDispatchOptions) topologyFlags {
+func runJobTopologyFlags(o unresolvedRunOptions) topologyFlags {
+	return resolvedRunTopologyFlags(o.runPlacement)
+}
+
+func resolvedRunTopologyFlags(o runPlacement) topologyFlags {
 	return topologyFlags{
 		preset:                   o.preset,
 		policyPath:               o.topologyPolicy,
@@ -472,36 +476,32 @@ func runJobTopologyFlags(o runDispatchOptions) topologyFlags {
 	}
 }
 
-func runJobTopologyFieldSet(o runDispatchOptions, flag string) bool {
-	switch flag {
-	case "team":
-		return strings.TrimSpace(o.team) != ""
-	case "lane":
-		return strings.TrimSpace(o.lane) != ""
-	case "mode":
-		return strings.TrimSpace(o.mode) != ""
-	case "topology":
-		return strings.TrimSpace(o.topology) != ""
-	case "shape":
-		return strings.TrimSpace(o.shape) != ""
-	case "gpu-class":
-		return strings.TrimSpace(o.gpuClass) != ""
-	case "queue":
-		return strings.TrimSpace(o.queue) != ""
-	case "priority-tier":
-		return strings.TrimSpace(o.priorityTier) != ""
-	case "workload-priority-class":
-		return strings.TrimSpace(o.workloadPriorityClass) != ""
-	case "pod-priority-class":
-		return strings.TrimSpace(o.podPriorityClass) != ""
-	case "disable-default-priorities":
-		return o.disableDefaultPriorities
-	default:
-		return false
-	}
+func runJobTopologyFieldSet(o unresolvedRunOptions, flag string) bool {
+	return resolvedRunTopologyFieldSet(o.runPlacement, flag)
 }
 
-func validateRunJobStorageConfig(o runDispatchOptions) error {
+var runPlacementValue = map[string]func(runPlacement) string{
+	"team":                    func(o runPlacement) string { return o.team },
+	"lane":                    func(o runPlacement) string { return o.lane },
+	"mode":                    func(o runPlacement) string { return o.mode },
+	"topology":                func(o runPlacement) string { return o.topology },
+	"shape":                   func(o runPlacement) string { return o.shape },
+	"gpu-class":               func(o runPlacement) string { return o.gpuClass },
+	"queue":                   func(o runPlacement) string { return o.queue },
+	"priority-tier":           func(o runPlacement) string { return o.priorityTier },
+	"workload-priority-class": func(o runPlacement) string { return o.workloadPriorityClass },
+	"pod-priority-class":      func(o runPlacement) string { return o.podPriorityClass },
+}
+
+func resolvedRunTopologyFieldSet(o runPlacement, flag string) bool {
+	if flag == "disable-default-priorities" {
+		return o.disableDefaultPriorities
+	}
+	value := runPlacementValue[flag]
+	return value != nil && strings.TrimSpace(value(o)) != ""
+}
+
+func validateRunJobStorageConfig(o unresolvedRunOptions) error {
 	if o.resultPVC != "" && o.dataPVC != "" && o.resultPVC != o.dataPVC {
 		return fmt.Errorf("storage.result_pvc cannot differ from storage.data_pvc for job run configs")
 	}
@@ -511,10 +511,7 @@ func validateRunJobStorageConfig(o runDispatchOptions) error {
 	return nil
 }
 
-func resolveRunJobStorage(o runDispatchOptions) (string, []jobrender.Volume, []jobrender.VolumeMount, error) {
-	if err := validateRunJobStorageConfig(o); err != nil {
-		return "", nil, nil, err
-	}
+func resolveRunJobStorage(o resolvedRunJobOptions) (string, []jobrender.Volume, []jobrender.VolumeMount, error) {
 	volumeSpecs := append([]string{}, o.volumeSpecs...)
 	if dataPVC := firstNonEmpty(o.dataPVC, o.resultPVC); dataPVC != "" {
 		volumeSpecs = append([]string{"data=pvc:" + dataPVC}, volumeSpecs...)
@@ -522,7 +519,11 @@ func resolveRunJobStorage(o runDispatchOptions) (string, []jobrender.Volume, []j
 	return resolvePVCMounts(volumeSpecs, o.mountSpecs)
 }
 
-func resolveMetricsOffload(o runDispatchOptions, runID, namespace, cluster, outputDir string, outputWritable bool, annotations map[string]string) (metricsoffload.Runtime, error) {
+func resolveMetricsOffload(o unresolvedRunOptions, runID, namespace, cluster, outputDir string, outputWritable bool, annotations map[string]string) (metricsoffload.Runtime, error) {
+	return resolveResolvedMetricsOffload(resolveDirectRunOptions(o), runID, namespace, cluster, outputDir, outputWritable, annotations)
+}
+
+func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace, cluster, outputDir string, outputWritable bool, annotations map[string]string) (metricsoffload.Runtime, error) {
 	if strings.TrimSpace(o.workspace) == "" {
 		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires a resolved TauWorkspace; set policy.workspace, --workspace, or a workspace connection")
 	}

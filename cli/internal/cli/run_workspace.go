@@ -11,7 +11,7 @@ import (
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 )
 
-func applyWorkspaceDefaults(o runDispatchOptions, w tauworkspace.Workspace, runName string) (runDispatchOptions, error) {
+func applyWorkspaceDefaults(o unresolvedRunOptions, w tauworkspace.Workspace, runName string) (unresolvedRunOptions, error) {
 	if !tauworkspace.Ready(w) {
 		return o, fmt.Errorf("workspace %q is not Ready (phase=%s)", w.Metadata.Name, w.Status.Phase)
 	}
@@ -79,11 +79,11 @@ func validateRunOutputScope(output, scope string) error {
 	return nil
 }
 
-func workspaceCanSetOutput(o runDispatchOptions) bool {
+func workspaceCanSetOutput(o unresolvedRunOptions) bool {
 	return o.file == ""
 }
 
-func workspaceHasDurableOutputMount(o runDispatchOptions) bool {
+func workspaceHasDurableOutputMount(o unresolvedRunOptions) bool {
 	return firstNonEmpty(o.dataPVC, o.resultPVC) != "" || len(o.volumeSpecs) > 0 || len(o.mountSpecs) > 0
 }
 

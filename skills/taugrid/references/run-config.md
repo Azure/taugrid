@@ -38,7 +38,7 @@ field gpu not found in type runconfig.Compute
 ```
 
 No field is globally required — validity depends on the engine and dispatch
-path. `engine: ray` requires a name and an entrypoint; eval configs require
+path. `engine: rayjob` requires a name and an entrypoint; eval configs require
 `engine: job`.
 
 Validate offline (no cluster call), then render — both steps are needed:
@@ -108,8 +108,8 @@ It does not apply until the Job reaches a terminal condition.
 | Field | Notes |
 |---|---|
 | `runtime.image` | Container image override. Pin a tag or digest. |
-| `runtime.working_dir` | Clean absolute initial directory inside the main container for direct `engine: job` configs. Maps to Kubernetes `container.workingDir`; it does not ship files and cannot be combined with `run.source`. This is distinct from Ray-only, host-relative `run.working_dir`, which packages a local project into `runtime_env`. |
-| `runtime.pip` | Packages installed through Ray `runtime_env` (Ray dispatch). Values are shell-quoted to prevent injection. |
+| `runtime.working_dir` | Clean absolute initial directory inside the main container for direct `engine: job` configs. Maps to Kubernetes `container.workingDir`; it does not ship files and cannot be combined with `run.source`. This is distinct from RayJob-only, host-relative `run.working_dir`, which packages a local project into Ray `runtime_env`. |
+| `runtime.pip` | Packages installed through Ray `runtime_env` (RayJob dispatch). Values are shell-quoted to prevent injection. |
 | `runtime.env` | Literal, non-secret env vars. Values over 64 KiB or aggregate literal payloads over 128 KiB are rejected before workload creation; Tau-generated embedded payload entries are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for content. |
 | `runtime.env_secret` | `NAME: "secret-name:key"` → `valueFrom.secretKeyRef`. Client dry-run redacts name/key but shows the dependency exists. |
 | `runtime.env_kv` | `NAME: "vault/secret"` or bare `"secret"` via Secrets Store CSI. All entries must resolve to one vault. Requires `--key-vault`, `--tenant-id`, `--workload-identity-client-id`, `--service-account`. |
@@ -144,9 +144,9 @@ fields outright** — `workers`, `gpus_per_worker`, `runtime.pip`, and every
 preset/profile, not from `compute`:
 
 ```
-engine=job cannot set compute.gpus_per_worker=8; use engine: ray or remove compute.gpus_per_worker
-engine=job cannot set compute.workers=2; use engine: ray or remove compute.workers
-engine=job cannot set runtime.pip; use engine: ray or bake dependencies into the image
+engine=job cannot set compute.gpus_per_worker=8; use engine: rayjob or remove compute.gpus_per_worker
+engine=job cannot set compute.workers=2; use engine: rayjob or remove compute.workers
+engine=job cannot set runtime.pip; use engine: rayjob or bake dependencies into the image
 ```
 
 This catches people out because "8 GPUs per node" feels like a `compute`
@@ -159,7 +159,7 @@ the GPU count that preset resolves to.
 | `workers` | 1 | ray only | Ray worker pod count |
 | `gpus_per_worker` | 1 | ray only | GPUs per Ray worker |
 | `cpu_workers` | — | eval | CPU eval worker count |
-| `workload_kind` | — | both | `job` \| `rayjob` \| `ray-train` \| `ray_train` |
+| `workload_kind` | — | both | `job` \| `rayjob` |
 | `gpu_resource_mode` | `device-plugin` | both | `device-plugin` \| `nvidia` \| `dra` \| `mig` |
 | `mig_profile` | — | both | e.g. `1g.18gb`, `3g.71gb`. Required when `gpu_resource_mode: mig`. |
 | `cpu_request` / `cpu_limit` | — | both | Job container, or per-pod default for Ray |
@@ -207,10 +207,10 @@ Valid pairings:
 | `mounts` / `volumes` | Additional mount/volume specs. **`engine: job` only.** |
 | `publish` | `staged` — exposes `TAU_OUTPUT_STAGING_DIR` on pod-local `/mnt`, verifies closed regular files into `storage.output`, writes a completion marker |
 
-Ray configs accept `data_pvc` and `output` but reject `mounts`/`volumes`:
+RayJob configs accept `data_pvc` and `output` but reject `mounts`/`volumes`:
 
 ```
-ray run configs support storage.data_pvc/output, but not storage.volumes/mounts
+RayJob run configs support storage.data_pvc/output, but not storage.volumes/mounts
 ```
 
 Checkpoints must land on a durable `/data` mount for `tau run resume` to work.
@@ -236,7 +236,7 @@ these are supplied by workspace policy — set them explicitly only to override.
 | `lane`, `mode`, `shape`, `team` | Admission and placement hints |
 | `topology_policy` | Kueue topology policy override |
 | `node_selector` | Additional node selector labels |
-| `clear_node_selector` | Clear profile/topology selectors first. **`engine: job` native dispatch only** — managed workflow, eval, and Ray dispatch cannot clear them. |
+| `clear_node_selector` | Clear profile/topology selectors first. **`engine: job` native dispatch only** — managed workflow, eval, and RayJob dispatch cannot clear them. |
 | `profile` | Legacy profile name |
 
 ## resilience
@@ -328,14 +328,14 @@ the schema does.
 | `engine=job cannot set compute.gpus_per_worker=N` | Ray-shaped field on a Job | Set `policy.preset` to the node GPU shape |
 | `engine=job cannot set compute.workers=N` | Ray-shaped field on a Job | Use `execution.nodes` for multi-node torchrun |
 | `engine=job cannot set runtime.pip` | Ray-shaped field on a Job | Bake dependencies into the image |
-| `execution.nodes is for engine: job; use compute.workers for Ray pod count` | `nodes` with `engine: ray` | Use `compute.workers` |
+| `execution.nodes is for engine: job; use compute.workers for Ray pod count` | `nodes` with `engine: rayjob` | Use `compute.workers` |
 | `execution.launcher torchrun is for engine: job; Ray Train manages distributed init via TorchConfig` | Cross-engine launcher | Switch engine, or drop `torchrun` |
-| `ray run configs support storage.data_pvc/output, but not storage.volumes/mounts` | Extra mounts on Ray | Use `engine: job`, or drop the mounts |
+| `RayJob run configs support storage.data_pvc/output, but not storage.volumes/mounts` | Extra mounts on RayJob | Use `engine: job`, or drop the mounts |
 | `runtime.env contains Tau-managed keys that cannot be overridden: …` | Reserved env key | Remove it; Tau sets it |
-| `engine=ray requires run.entrypoint` | Missing entrypoint | Set `entrypoint` |
-| `ray runs require NAME` | No run name | Set `name`, or pass positionally |
+| `engine=rayjob requires run.entrypoint` | Missing entrypoint | Set `entrypoint` |
+| `RayJob runs require NAME` | No run name | Set `name`, or pass positionally |
 | `eval run configs require engine: job or workload_kind: job` | Eval with Ray | Set `engine: job` |
-| `storage.result_pvc cannot differ from storage.data_pvc for Ray run configs` | Mismatched PVCs | Make them equal, or drop `result_pvc` |
+| `storage.result_pvc cannot differ from storage.data_pvc for RayJob run configs` | Mismatched PVCs | Make them equal, or drop `result_pvc` |
 
 ## Worked examples
 
@@ -390,7 +390,7 @@ Renders an Indexed Job with `completions: 2`, `parallelism: 2`,
 
 ```yaml
 name: ray-train
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   image: <pinned-image>
@@ -413,7 +413,7 @@ experiment:
 
 ```yaml
 name: tune-lr
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   image: <pinned-image>

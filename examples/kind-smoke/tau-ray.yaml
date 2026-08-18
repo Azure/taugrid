@@ -1,5 +1,5 @@
 name: tau-kind-ray
-engine: ray
+engine: rayjob
 entrypoint: ray_train.py
 runtime:
   image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0

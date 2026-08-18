@@ -287,7 +287,7 @@ func (o Options) validate() error {
 		}
 	}
 	if o.GPUResourceMode != "" && o.GPUResourceMode != "device-plugin" && o.GPUResourceMode != "mig" {
-		return fmt.Errorf("gpu-resource-mode %q is not supported by the Ray engine (supported: device-plugin, mig)", o.GPUResourceMode)
+		return fmt.Errorf("gpu-resource-mode %q is not supported by the RayJob engine (supported: device-plugin, mig)", o.GPUResourceMode)
 	}
 	if o.GPUResourceMode == "mig" && o.MIGProfile == "" {
 		return fmt.Errorf("gpu-resource-mode=mig requires --mig-profile to be set")

@@ -237,10 +237,11 @@ policy:
 			},
 			validateTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
 				validateCalls++
-				if target.job == nil {
+				job := resolvedJobRequestForTest(target)
+				if job == nil {
 					t.Fatal("resume preflight did not resolve a typed Job target")
 				}
-				options := target.job.Options
+				options := job.Options
 				if options.dryRun != "client" ||
 					options.workspace != "sample" ||
 					options.workspaceResultScope != "/data/workspaces/sample" ||
@@ -296,12 +297,15 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 			KubeContext: "test-context",
 			Namespace:   "ray",
 			TargetOptions: runDispatchOptions{
-				engine:                "job",
-				script:                "train.py",
-				metricsOffloadEnabled: true,
-				workers:               1,
-				jobGPUs:               &zeroGPUs,
-				gpusPerWorker:         1,
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runComputeInput: runComputeInput{
+					runRayJobResources: runRayJobResources{workers: 1, gpusPerWorker: 1},
+					jobGPUs:            &zeroGPUs,
+				},
+				runObservabilityInput: runObservabilityInput{
+					runDirectMetrics: runDirectMetrics{metricsOffloadEnabled: true},
+				},
 			},
 		},
 		"/data/resume-job/checkpoints",
@@ -317,10 +321,11 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 				return snapshot, nil
 			},
 			executeTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
-				if target.job == nil {
+				job := resolvedJobRequestForTest(target)
+				if job == nil {
 					t.Fatal("resume did not resolve a direct Job")
 				}
-				gotSession = target.job.Options.metricsSessionID
+				gotSession = job.Options.metricsSessionID
 				return nil
 			},
 		},
@@ -340,9 +345,15 @@ func TestValidateMetricsResumeStateLocationRejectsOutputDrift(t *testing.T) {
 		experiment.AnnotationResultPVC:        "original-pvc",
 	}}
 	options := runDispatchOptions{
-		metricsOffloadEnabled: true,
-		output:                "/data/runs/changed",
-		dataPVC:               "original-pvc",
+		runStorageInput: runStorageInput{
+			runDirectStorage: runDirectStorage{
+				output:  "/data/runs/changed",
+				dataPVC: "original-pvc",
+			},
+		},
+		runObservabilityInput: runObservabilityInput{
+			runDirectMetrics: runDirectMetrics{metricsOffloadEnabled: true},
+		},
 	}
 	if err := validateMetricsResumeStateLocation(snapshot, options, "resume-job"); err == nil ||
 		!strings.Contains(err.Error(), "cannot change storage.output") {
@@ -433,7 +444,7 @@ func TestResumeDoesNotDeleteWhenWorkspaceNamespaceChanged(t *testing.T) {
 			KubeContext: "test-context",
 			Namespace:   "sample-old",
 			TargetOptions: runDispatchOptions{
-				workspace: "sample",
+				runRouting: runRouting{workspace: "sample"},
 			},
 		},
 		"",

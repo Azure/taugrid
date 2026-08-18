@@ -13,14 +13,14 @@ import (
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
-func rayRequestedGPUCount(workers, gpusPerWorker int) int {
+func rayJobRequestedGPUCount(workers, gpusPerWorker int) int {
 	if workers < 1 || gpusPerWorker <= 0 {
 		return 0
 	}
 	return workers * gpusPerWorker
 }
 
-func buildRayCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, scriptPath string, workers, gpusPerWorker int, dataPVC string) (experiment.Metadata, error) {
+func buildRayJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, scriptPath string, workers, gpusPerWorker int, dataPVC string) (experiment.Metadata, error) {
 	configHash, err := experiment.HashFile(scriptPath)
 	if err != nil {
 		return experiment.Metadata{}, err
@@ -56,9 +56,9 @@ func storageMountType(pvc string) string {
 	return "pvc"
 }
 
-func formatRaySubmitHandoff(name, namespace, kubeContext string, preset *runtopology.ResolvedPreset) string {
+func formatRayJobSubmitHandoff(name, namespace, kubeContext string, preset *runtopology.ResolvedPreset) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nsubmitted %s (kind=ray-train, ns=%s)\n", name, namespace)
+	fmt.Fprintf(&b, "\nsubmitted %s (kind=rayjob, ns=%s)\n", name, namespace)
 	fmt.Fprintf(&b, "rayjob:  kubectl get rayjob %s -n %s%s\n", name, namespace, contextFlag(kubeContext))
 	fmt.Fprintf(&b, "head:    cluster=$(kubectl get rayjob %s -n %s -o jsonpath='{.status.rayClusterName}'%s) && kubectl get pod -n %s -l ray.io/cluster=$cluster,ray.io/node-type=head%s\n", name, namespace, contextFlag(kubeContext), namespace, contextFlag(kubeContext))
 	fmt.Fprintf(&b, "logs:    tau run logs %s -n %s -f%s\n", name, namespace, contextFlag(kubeContext))

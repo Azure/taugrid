@@ -122,7 +122,7 @@ type resumeRouting struct {
 	ConfigName    string
 	KubeContext   string
 	Namespace     string
-	TargetOptions runDispatchOptions
+	TargetOptions unresolvedRunOptions
 }
 
 func resolveResumeRouting(
@@ -462,7 +462,7 @@ func runResumeCommand(
 	return hooks.execute(cmd, target, captureCommand, targetOptions.experiment)
 }
 
-func validateMetricsResumeStateLocation(snapshot status.Snapshot, options runDispatchOptions, name string) error {
+func validateMetricsResumeStateLocation(snapshot status.Snapshot, options unresolvedRunOptions, name string) error {
 	if !options.metricsOffloadEnabled ||
 		strings.TrimSpace(snapshot.Annotations[workloadmeta.AnnotationMetricsSession]) == "" {
 		return nil
@@ -491,7 +491,7 @@ func validateMetricsResumeStateLocation(snapshot status.Snapshot, options runDis
 	return nil
 }
 
-func applyResumeOverrides(o *runDispatchOptions, ns, kubeContext, dryRun string) {
+func applyResumeOverrides(o *unresolvedRunOptions, ns, kubeContext, dryRun string) {
 	if ns != "" {
 		o.namespace = ns
 	}

@@ -22,7 +22,7 @@
 
 name: portal-ray-stellar
 
-engine: ray
+engine: rayjob
 entrypoint: train.py
 
 compute:

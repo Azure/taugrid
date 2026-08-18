@@ -10,7 +10,7 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// The `tau run --config` engine:ray path must emit the artifact index that
+// The `tau run --config` engine:rayjob path must emit the artifact index that
 // `tau serve deploy --from-finetune` reads, or CLI-only train->serve is broken.
 func TestRenderEmitsArtifactIndexWhenCheckpointDeclared(t *testing.T) {
 	out, err := Render(Options{

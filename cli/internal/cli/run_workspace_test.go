@@ -20,6 +20,18 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
+func workspaceDirectRunOptions(engine, script, image, profile, dryRun string, workers int, jobGPUs *int) runDispatchOptions {
+	o := defaultRunDispatchOptions()
+	o.engine = engine
+	o.script = script
+	o.image = image
+	o.profileName = profile
+	o.dryRun = dryRun
+	o.workers = workers
+	o.jobGPUs = jobGPUs
+	return o
+}
+
 func TestApplyWorkspaceDefaultsFillsPolicyFields(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	got, err := applyWorkspaceDefaults(o, readyWorkspace(), "smoke")
@@ -91,7 +103,7 @@ func TestApplyWorkspaceDefaultsSetsOutputOnlyWithDurableStorage(t *testing.T) {
 	}
 }
 
-func TestApplyWorkspaceDefaultsSetsOutputForInferredRay(t *testing.T) {
+func TestApplyWorkspaceDefaultsSetsOutputForInferredRayJob(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	o.dataPVC = "blob-training"
 	o.workers = 2
@@ -145,46 +157,7 @@ func TestApplyWorkspaceDefaultsRejectsForeignOutputScope(t *testing.T) {
 	}
 }
 
-func TestWorkspaceServiceAccountReachesDirectDispatch(t *testing.T) {
-	zeroGPUs := 0
-	tests := []struct {
-		name string
-		opts runDispatchOptions
-	}{
-		{
-			name: "job",
-			opts: runDispatchOptions{engine: "job", script: "train.sh", image: "busybox:1.36", workers: 1, jobGPUs: &zeroGPUs, gpusPerWorker: 1, nConcurrent: 1},
-		},
-		{
-			name: "ray",
-			opts: runDispatchOptions{engine: "ray", script: "train.py", workers: 1, gpusPerWorker: 1, nConcurrent: 1},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := applyWorkspaceDefaults(tt.opts, readyWorkspace(), "identity-test")
-			if err != nil {
-				t.Fatalf("applyWorkspaceDefaults: %v", err)
-			}
-			target, err := resolveRunTarget(got, "identity-test")
-			if err != nil {
-				t.Fatalf("resolveRunTarget: %v", err)
-			}
-			options, ok := target.dispatchOptions()
-			if !ok {
-				t.Fatalf("run target has no typed dispatch: %#v", target)
-			}
-			if options.serviceAccountName != "tau-workload" {
-				t.Fatalf("typed dispatch does not carry workspace service account: %#v", options)
-			}
-			if !options.azureWorkloadIdentity {
-				t.Fatalf("typed dispatch does not enable Azure workload identity: %#v", options)
-			}
-		})
-	}
-}
-
-func TestWorkspaceServiceAccountRendersDirectJobAndRayPods(t *testing.T) {
+func TestWorkspaceServiceAccountRendersDirectJobAndRayJobPods(t *testing.T) {
 	zeroGPUs := 0
 	dir := t.TempDir()
 	profileDir := filepath.Join(dir, "profiles")
@@ -222,22 +195,14 @@ spec:
 		wantPodCount int
 	}{
 		{
-			name: "job",
-			opts: runDispatchOptions{
-				engine: "job", script: jobScript, image: "busybox:1.36",
-				profileName: "workspace-test", dryRun: "client",
-				workers: 1, jobGPUs: &zeroGPUs, gpusPerWorker: 1, nConcurrent: 1,
-			},
+			name:         "job",
+			opts:         workspaceDirectRunOptions("job", jobScript, "busybox:1.36", "workspace-test", "client", 1, &zeroGPUs),
 			kind:         "kind: Job",
 			wantPodCount: 1,
 		},
 		{
-			name: "ray",
-			opts: runDispatchOptions{
-				engine: "ray", script: rayScript, image: "example.com/research/ray:cuda13",
-				profileName: "workspace-test", dryRun: "client",
-				workers: 2, gpusPerWorker: 1, nConcurrent: 1,
-			},
+			name:         "ray",
+			opts:         workspaceDirectRunOptions("rayjob", rayScript, "example.com/research/ray:cuda13", "workspace-test", "client", 2, nil),
 			kind:         "kind: RayJob",
 			wantPodCount: 2,
 		},
@@ -358,7 +323,7 @@ spec:
 		wantWorkload string
 	}{
 		{engine: "job", name: "workspace-job", wantKind: "Job", wantWorkload: experiment.WorkloadKindJob},
-		{engine: "ray", name: "workspace-ray", wantKind: "RayJob", wantWorkload: experiment.WorkloadKindRayJob},
+		{engine: "rayjob", name: "workspace-ray", wantKind: "RayJob", wantWorkload: experiment.WorkloadKindRayJob},
 	}
 	for _, tt := range tests {
 		t.Run(tt.engine, func(t *testing.T) {

@@ -25,7 +25,7 @@ func TestValidateRunDispatchOptionsRejectsUnshippedSiblingImport(t *testing.T) {
 		t.Fatalf("write sibling: %v", err)
 	}
 
-	err := validateRunDispatchOptions(runDispatchOptions{script: script})
+	err := validateRunDispatchOptions(runDispatchOptions{runPayloadInput: runPayloadInput{script: script}})
 	if err == nil {
 		t.Fatal("want submit-time failure for an unshipped sibling import")
 	}
@@ -42,7 +42,7 @@ func TestValidateRunDispatchOptionsAcceptsSelfContainedScript(t *testing.T) {
 	if err := os.WriteFile(script, []byte("import ray\nimport torch\n"), 0o644); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
-	if err := validateRunDispatchOptions(runDispatchOptions{script: script}); err != nil {
+	if err := validateRunDispatchOptions(runDispatchOptions{runPayloadInput: runPayloadInput{script: script}}); err != nil {
 		t.Fatalf("self-contained script must validate: %v", err)
 	}
 }
@@ -56,7 +56,7 @@ func TestValidateRunDispatchOptionsAcceptsDeclaredExtraScripts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pipeline.py"), []byte(""), 0o644); err != nil {
 		t.Fatalf("write sibling: %v", err)
 	}
-	o := runDispatchOptions{script: script, extraScripts: []string{filepath.Join(dir, "pipeline.py")}}
+	o := runDispatchOptions{runPayloadInput: runPayloadInput{script: script, extraScripts: []string{filepath.Join(dir, "pipeline.py")}}}
 	if err := validateRunDispatchOptions(o); err != nil {
 		t.Fatalf("a sibling listed in extra_scripts is shipped and must validate: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestValidateRunDispatchOptionsAcceptsDeclaredExtraScripts(t *testing.T) {
 func TestValidateRunDispatchOptionsIgnoresMissingEntrypoint(t *testing.T) {
 	// The dispatch path reports a missing entrypoint with better context; the
 	// import gate must not pre-empt it with a worse message.
-	o := runDispatchOptions{script: filepath.Join(t.TempDir(), "absent.py")}
+	o := runDispatchOptions{runPayloadInput: runPayloadInput{script: filepath.Join(t.TempDir(), "absent.py")}}
 	if err := validateRunDispatchOptions(o); err != nil {
 		t.Fatalf("want no error from the import gate, got %v", err)
 	}
@@ -86,8 +86,8 @@ func TestValidateRunDispatchOptionsChecksManagedWorkflowMainScript(t *testing.T)
 	}
 
 	err := validateRunDispatchOptions(runDispatchOptions{
-		file:       filepath.Join(dir, "workflow.yaml"),
-		mainScript: main,
+		runDispatchInput: runDispatchInput{file: filepath.Join(dir, "workflow.yaml")},
+		runPayloadInput:  runPayloadInput{mainScript: main},
 	})
 	if err == nil {
 		t.Fatal("want submit-time failure for an unshipped import in a managed workflow main script")
@@ -115,7 +115,7 @@ func TestValidateRunDispatchOptionsChecksEntrypointWhenNotAManagedWorkflow(t *te
 		t.Fatalf("write main script: %v", err)
 	}
 
-	err := validateRunDispatchOptions(runDispatchOptions{script: entrypoint, mainScript: unused})
+	err := validateRunDispatchOptions(runDispatchOptions{runPayloadInput: runPayloadInput{script: entrypoint, mainScript: unused}})
 	if err == nil {
 		t.Fatal("want the entrypoint checked when no managed workflow file is set")
 	}
@@ -144,8 +144,7 @@ func TestValidateRunDispatchOptionsAcceptsRenamedExtraScriptDestination(t *testi
 	}
 
 	err := validateRunDispatchOptions(runDispatchOptions{
-		script:       script,
-		extraScripts: []string{src + ":helpers.py"},
+		runPayloadInput: runPayloadInput{script: script, extraScripts: []string{src + ":helpers.py"}},
 	})
 	if err != nil {
 		t.Fatalf("extra script renamed to helpers.py ships as helpers: %v", err)
@@ -166,8 +165,7 @@ func TestValidateRunDispatchOptionsAcceptsExtraScriptWithoutDestination(t *testi
 	}
 
 	if err := validateRunDispatchOptions(runDispatchOptions{
-		script:       script,
-		extraScripts: []string{src},
+		runPayloadInput: runPayloadInput{script: script, extraScripts: []string{src}},
 	}); err != nil {
 		t.Fatalf("extra script without DEST ships under its base name: %v", err)
 	}

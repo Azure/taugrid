@@ -191,11 +191,11 @@ func stdinIsTerminal(input io.Reader) bool {
 
 func applyAutomaticRunConnection(
 	ctx context.Context,
-	options runDispatchOptions,
+	options unresolvedRunOptions,
 	source runConnectionSource,
 	required bool,
 	ensurer runConnectionEnsurer,
-) (runDispatchOptions, workspaceconnection.ActiveConnection, error) {
+) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
 	if options.workspaceExplicit || options.kubeContextExplicit {
 		if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, descriptorFor(source)); err != nil {
 			return options, workspaceconnection.ActiveConnection{}, err

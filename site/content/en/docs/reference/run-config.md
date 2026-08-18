@@ -18,7 +18,7 @@ Normal research projects check in direct config:
 
 ```yaml
 name: train
-engine: ray
+engine: rayjob
 entrypoint: train.py
 
 runtime:
@@ -56,7 +56,7 @@ Tau renders each asset as a pinned init-container image that runs
 container. Source images must provide `/bin/cp`. Names and paths are validated,
 Tau-reserved paths cannot be replaced, and mutable image tags are rejected.
 `storage.image_assets` is intentionally limited to direct `engine: job`
-configs; managed workflows and Ray configs reject it.
+configs; managed workflows and RayJob configs reject it.
 
 Direct Jobs can also stage their complete source tree from an immutable OCI
 image:
@@ -76,7 +76,7 @@ Tau copies `run.source.path` into an `emptyDir` with an init container, mounts
 the per-pod working copy at `/tau/source`, and runs `entrypoint` relative to
 that directory. Source bytes never travel in environment variables or a
 ConfigMap. The source image must provide `/bin/sh`, `cp`, and `chmod`; mutable
-tags, absolute entrypoints, Ray dispatch, managed workflows, and combining
+tags, absolute entrypoints, RayJob dispatch, managed workflows, and combining
 `run.source` with `run.working_dir` are rejected before rendering. The init
 container normalizes working-copy permissions and sets the executable bit on
 the entrypoint before a potentially non-root workload container starts. Build and push the source image once,
