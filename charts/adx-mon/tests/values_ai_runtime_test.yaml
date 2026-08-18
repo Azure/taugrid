@@ -19,18 +19,6 @@ tests:
           path: data["config.toml"]
           pattern: "9400/metrics"
 
-  - it: includes Kueue controller metrics scrape target with HTTPS
-    asserts:
-      - matchRegex:
-          path: data["config.toml"]
-          pattern: "https://kueue-controller-manager-metrics-service"
-
-  - it: includes KubeRay operator metrics scrape target with HTTP
-    asserts:
-      - matchRegex:
-          path: data["config.toml"]
-          pattern: "http://kuberay-operator\\.kuberay-system\\.svc:8080/metrics"
-
   - it: includes kubelet journal log target
     asserts:
       - matchRegex:

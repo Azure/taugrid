@@ -124,7 +124,7 @@ Usage: {{ include "adx-mon.image" (dict "image" .Values.operator.image "chart" .
 
 {{/*
 Effective DaemonSet collector drop-metrics: dropMetrics minus scrapeDropMetricsExclude
-(set difference). Singleton + remote-write keep the full dropMetrics. See PR #975 / #953.
+(set difference).
 Returns a JSON array string. Call with root context.
 */}}
 {{- define "adx-mon.collectorScrapeDropMetrics" -}}
@@ -132,6 +132,24 @@ Returns a JSON array string. Call with root context.
 {{- $exclude := $ps.scrapeDropMetricsExclude | default (list) -}}
 {{- $result := list -}}
 {{- range ($ps.dropMetrics | default (list)) -}}
+{{- if not (has . $exclude) -}}
+{{- $result = append $result . -}}
+{{- end -}}
+{{- end -}}
+{{- $result | toJson -}}
+{{- end -}}
+
+{{/*
+Effective singleton collector drop-metrics: dropMetrics minus the singleton's
+scrapeDropMetricsExclude (set difference). This permits selected families from
+cluster-global targets without enabling them on every DaemonSet collector.
+Returns a JSON array string. Call with root context.
+*/}}
+{{- define "adx-mon.collectorSingletonScrapeDropMetrics" -}}
+{{- $drop := .Values.collector.prometheusScrape.dropMetrics | default (list) -}}
+{{- $exclude := .Values.collectorSingleton.scrapeDropMetricsExclude | default (list) -}}
+{{- $result := list -}}
+{{- range $drop -}}
 {{- if not (has . $exclude) -}}
 {{- $result = append $result . -}}
 {{- end -}}

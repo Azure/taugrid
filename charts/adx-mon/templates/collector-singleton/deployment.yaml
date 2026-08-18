@@ -20,6 +20,7 @@ spec:
         adx-mon/path: /metrics
         adx-mon/log-destination: "Logs:CollectorSingleton"
         adx-mon/log-parsers: json
+        checksum/config: {{ include (print $.Template.BasePath "/collector-singleton/configmap.yaml") . | sha256sum }}
       labels:
         {{- include "adx-mon.componentSelectorLabels" (dict "root" . "component" "collector-singleton") | nindent 8 }}
     spec:

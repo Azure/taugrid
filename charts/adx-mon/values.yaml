@@ -94,14 +94,10 @@ collector:
     # -- Regex patterns for metrics to keep (empty = keep all)
     keepMetrics: []
     # -- Metric families to REMOVE from the DaemonSet collector's effective
-    # drop-list (set difference against `dropMetrics`). Un-drops the KubeRay
-    # operator dashboard metrics on the DaemonSet path only; the singleton +
-    # remote-write receiver keep the full `dropMetrics`. Entries must match
-    # `dropMetrics` verbatim. Rationale/alternatives: see PR #975 / issue #953.
-    scrapeDropMetricsExclude:
-      - '^controller_runtime.*'
-      - '^workqueue.*'
-      - '^leader_election.*'
+    # drop-list (set difference against `dropMetrics`). Entries must match
+    # `dropMetrics` verbatim. Keep this empty for node-local collection; use
+    # collectorSingleton.scrapeDropMetricsExclude for cluster-global targets.
+    scrapeDropMetricsExclude: []
     # -- Regex patterns for metrics to drop
     # IMPORTANT: Regexes must be lowercase (adx-mon matches raw Prometheus names).
     # Emptying this list removes the global filter — CI lint will block the PR.
@@ -368,6 +364,14 @@ collectorSingleton:
   # apiserver/etcd metrics are not required by the PRD and generate ~170 high-
   # cardinality tables that dominate ADX ingestion volume.
   scrapeTargets: []
+  # -- Metric families to REMOVE from the singleton collector's effective
+  # drop-list (set difference against collector.prometheusScrape.dropMetrics).
+  # These dashboard families are collected once from cluster-global controller
+  # targets instead of once per node by the DaemonSet.
+  scrapeDropMetricsExclude:
+    - '^controller_runtime.*'
+    - '^workqueue.*'
+    - '^leader_election.*'
 
 ingestor:
   enabled: true
