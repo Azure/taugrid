@@ -2,7 +2,7 @@
 title: Provision a GPU-enabled TauGrid AKS environment
 linkTitle: Full AKS baseline
 weight: 30
-description: Build AKS, GPU capacity, TauGrid, and Portal with the repository Terraform root.
+description: Build AKS, GPU capacity, TauGrid, and optional Portal integration with the repository Terraform root.
 ---
 
 {{< maturity status="alpha" reviewed="2026-08-17" >}}
@@ -14,7 +14,7 @@ device plugin, and invokes the supported `tau cluster install` command.
 
 Do not separately install Kueue, KubeRay, the Tau controller, or GPU
 monitoring with Helm. `tau cluster install` installs the versioned TauGrid
-distribution that owns those components, the baseline Kueue queue, and Portal.
+distribution that owns those components and the baseline Kueue queue.
 
 ## Prerequisites
 
@@ -45,8 +45,9 @@ terraform apply -var="subscription_id=<your-subscription-id>"
 ```
 
 Terraform creates a local ignored admin kubeconfig and values file under
-`terraform/aks/generated/`. Its final installation step applies the NVIDIA
-device plugin, then runs:
+`terraform/aks/generated/`. For the default A100 pool, it normalizes MIG mode,
+restarts the GPU VM scale set, and waits for allocatable GPUs. It then applies
+the NVIDIA device plugin and runs:
 
 ```bash
 tau cluster install --values generated/taugrid-values.yaml --version 0.3.0
@@ -75,13 +76,11 @@ kubectl get nodes -l accelerator=nvidia
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}'
 ```
 
-Create the default workspace with an actual Entra group object ID, then submit
-the built-in smoke run:
+The default path is an operator sandbox using local administrator credentials.
+Create the default workspace, then submit the built-in smoke run:
 
 ```bash
-tau workspace create taugrid-default \
-  --principal-name <entra-group-object-id> \
-  --apply
+tau workspace create taugrid-default --apply
 tau run smoke
 ```
 
@@ -97,8 +96,8 @@ the TauWorkspace. After creating the workspace above, add these values to the
 same local `terraform.tfvars` file and run `terraform apply` again:
 
 ```hcl
-enable_lifecycle_recorder           = true
-lifecycle_recorder_target_namespace = "taugrid-default"
+enable_lifecycle_recorder = true
+workspace_namespace       = "taugrid-default"
 ```
 
 For a real GPU workload, use
@@ -108,18 +107,11 @@ not only scheduling, and can incur additional GPU cost.
 
 ## Portal
 
-Terraform enables Portal as `tau-portal` in the `tau` namespace. Its Service
-is ClusterIP-only by design. An operator can inspect it with:
-
-```bash
-kubectl port-forward service/tau-portal 18080:80 --namespace=tau
-```
-
-This is an operator diagnostic path, not a researcher endpoint. Before giving
-researchers browser access, deploy a platform-owned authenticated HTTPS proxy,
-then set the Portal access values to describe that reviewed endpoint. The
-default Portal serves Kubernetes-backed boards. Experiment, cluster-health, and
-cost boards require separately configured ADX and Azure Workload Identity.
+Portal is disabled by default. A secure Portal needs a platform-owned
+authenticated HTTPS proxy that resolves workspace identity, strips
+caller-supplied identity headers, and prevents direct backend access. Only
+after that platform boundary is in place, set `enable_portal = true` together
+with `enable_adx = true`. This Terraform root does not deploy that proxy.
 
 ## Destroy
 

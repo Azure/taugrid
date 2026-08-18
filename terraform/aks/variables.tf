@@ -137,7 +137,13 @@ variable "gpu_class" {
 variable "gpu_series" {
   description = "Canonical Kueue GPU series label applied to the GPU nodes and ResourceFlavor."
   type        = string
-  default     = "nc-a100-v4"
+  default     = "nc24ads-a100-v4"
+}
+
+variable "normalize_gpu_mig" {
+  description = "Normalize MIG mode on the GPU pool before TauGrid installation. Keep true for the default A100 SKU; set false only for GPU SKUs that do not support MIG."
+  type        = bool
+  default     = true
 }
 
 variable "taugrid_version" {
@@ -164,8 +170,19 @@ variable "enable_adx" {
   default     = false
 }
 
+variable "enable_portal" {
+  description = "Install Portal. Disabled by default because a secure researcher endpoint requires a platform-owned authenticated proxy that prevents direct backend access."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_portal || var.enable_adx
+    error_message = "enable_portal requires enable_adx=true because this Terraform root configures Portal to use Kusto."
+  }
+}
+
 variable "enable_lifecycle_recorder" {
-  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true and an existing workload namespace."
+  description = "Enable the TauGrid lifecycle recorder. Requires enable_adx=true and an existing workload namespace."
   type        = bool
   default     = false
 

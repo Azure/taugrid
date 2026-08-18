@@ -2,7 +2,8 @@
 
 This Terraform root creates a GPU-enabled AKS environment and then invokes the
 repository's supported `tau cluster install` workflow. TauGrid owns Kueue,
-KubeRay, the Tau controller, GPU monitoring, the baseline queue, and Portal.
+KubeRay, the Tau controller, GPU monitoring, and the baseline queue. Portal
+integration is optional.
 
 The default GPU pool is one `Standard_NC24ads_A100_v4` node. It is billable and
 requires matching regional quota. Change `gpu_vm_size`, `gpu_count_per_node`,
@@ -54,9 +55,11 @@ terraform apply
 ```
 
 Terraform writes an ignored local admin kubeconfig and generated chart values
-under `generated/`. Its final provisioner installs the NVIDIA device plugin and
-runs `tau cluster install`. Do not run a separate Helm installation for Kueue,
-KubeRay, or gpu-monitoring.
+under `generated/`. For the default A100 pool, it normalizes MIG mode, restarts
+the GPU VM scale set, and waits for allocatable GPUs. It then installs the
+NVIDIA device plugin and runs `tau cluster install`. Set `normalize_gpu_mig =
+false` only for a GPU SKU that does not support MIG. Do not run a separate Helm
+installation for Kueue, KubeRay, or gpu-monitoring.
 
 After apply, use an operator kubeconfig and verify the environment:
 
@@ -67,34 +70,29 @@ kubectl get nodes -l accelerator=nvidia
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.allocatable.nvidia\\.com/gpu}{"\\n"}{end}'
 ```
 
-Create a workspace with a real Entra group object ID, then run the standard
-smoke test:
+The default path is an operator sandbox, not an Entra researcher handoff.
+Create the workspace as the local administrator, then run the standard smoke
+test:
 
 ```bash
-tau workspace create taugrid-default --principal-name <entra-group-object-id> --apply
+tau workspace create taugrid-default --apply
 tau run smoke
 ```
 
-Portal is installed as `tau-portal` in the `tau` namespace with a ClusterIP
-Service. This is intentionally not an internet-facing endpoint. For an
-operator diagnostic session:
-
-```bash
-kubectl -n tau port-forward service/tau-portal 18080:80
-```
-
-An authenticated HTTPS proxy is required before giving researchers a browser
-URL. The default Portal deployment exposes Kubernetes-backed boards. Its
-Kusto-backed boards require a separate ADX and workload identity configuration.
+Portal is disabled by default. This prevents an in-cluster caller from using a
+cluster-wide Portal service account to inspect another workspace. Enable it
+only after a platform-owned authenticated HTTPS proxy resolves workspace
+identity, strips caller-supplied identity headers, and prevents direct backend
+access. `enable_portal = true` also requires `enable_adx = true`.
 
 ## Enable lifecycle history
 
 Lifecycle history is a second apply. The target namespace is created by the
 TauWorkspace, which itself requires the TauGrid installation from the first
-apply. First create a workspace with its Entra group object ID:
+apply. First create a workspace:
 
 ```bash
-tau workspace create taugrid-default --principal-name <entra-group-object-id> --apply
+tau workspace create taugrid-default --apply
 ```
 
 Then add the following to the same local `terraform.tfvars` file and apply

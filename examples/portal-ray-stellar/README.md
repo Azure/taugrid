@@ -49,7 +49,7 @@ export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest
 # Keep the offloader checkpoint on its emptyDir. Azure File RWX volumes reject
 # the chmod used for atomic checkpoint writes.
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
-tau run --workspace <workspace-name> --config examples/portal-ray-stellar/tau.yaml --dry-run=client
+tau run --workspace taugrid-default --config examples/portal-ray-stellar/tau.yaml --dry-run=client
 ```
 
 The rendered RayJob must carry
@@ -61,21 +61,22 @@ the retired `tau.azure.com/stellar-experiment-title` annotation.
 Submit:
 
 ```bash
-tau run --workspace <workspace-name> --config examples/portal-ray-stellar/tau.yaml
+tau run --workspace taugrid-default --config examples/portal-ray-stellar/tau.yaml
 tau run status portal-ray-stellar --watch
-kubectl -n <workspace-namespace> get rayjob portal-ray-stellar
-kubectl -n <workspace-namespace> get pod -l ray.io/cluster -o wide
-kubectl logs -n <workspace-namespace> -l tau.azure.com/run-id=portal-ray-stellar -f
+kubectl -n taugrid-default get rayjob portal-ray-stellar
+kubectl -n taugrid-default get pod -l ray.io/cluster -o wide
+kubectl logs -n taugrid-default -l tau.azure.com/run-id=portal-ray-stellar -f
 ```
 
 Then open the portal detail page for the run and confirm both links are lit:
 
 ```
-/portal/runs/<workspace-namespace>/<run-name>
+/portal/runs/taugrid-default/<run-name>
 ```
 
-The deployed Portal must be configured to read the workspace namespace, or the
-operator can open the detail URL directly.
+This example is bound to the `taugrid-default` workspace: its checked-in
+configuration fixes both the namespace and the output root. To use another
+workspace, update those fields in `tau.yaml` together before submitting.
 
 `compute.workers` counts dedicated execution pods; Tau adds a separate
 CPU-only system head. For the multi-node acceptance pass, set it to `2` or greater and use a distinct

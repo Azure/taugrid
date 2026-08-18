@@ -22,16 +22,21 @@ gpu_count_per_node      = 1
 gpu_monitoring_sku_name = "a100-pcie-1g"
 gpu_flavor_name         = "taugrid-a100"
 gpu_class               = "a100-80gb"
-gpu_series              = "nc-a100-v4"
+gpu_series              = "nc24ads-a100-v4"
+
+# The default A100 GPU pool is normalized from MIG mode before TauGrid installs.
+normalize_gpu_mig = true
 
 # Set these instead of gpu_node_count to scale the GPU pool automatically.
 gpu_auto_scaling_enabled = false
 gpu_min_count            = 1
 gpu_max_count            = 1
 
-# ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
+# ADX enables adx-mon and DCGM GPU telemetry. Portal remains disabled until a
+# platform-owned authenticated proxy prevents direct backend access.
 enable_adx       = true
 adx_cluster_name = "<globally-unique-adx-cluster-name>"
+# enable_portal = false
 
 # Keep this false for the first apply. Enable it only after the
 # taugrid-default TauWorkspace has been created, then apply again.

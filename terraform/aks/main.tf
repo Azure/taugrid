@@ -93,11 +93,12 @@ locals {
     gpu_vm_size                  = var.gpu_vm_size
     gpu_count_per_node           = var.gpu_count_per_node
     adx_enabled                  = var.enable_adx
+    portal_enabled               = var.enable_portal
     lifecycle_recorder_enabled   = var.enable_lifecycle_recorder
     lifecycle_recorder_client_id = var.enable_lifecycle_recorder ? azurerm_user_assigned_identity.lifecycle_recorder[0].client_id : ""
     workspace_namespace          = var.workspace_namespace
     adx_endpoint                 = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
-    portal_client_id             = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
+    portal_client_id             = var.enable_adx && var.enable_portal ? azurerm_user_assigned_identity.portal[0].client_id : ""
     cluster_name                 = var.cluster_name
   })
 }
@@ -128,7 +129,7 @@ resource "azurerm_kusto_database" "this" {
 }
 
 resource "azurerm_user_assigned_identity" "portal" {
-  count               = var.enable_adx ? 1 : 0
+  count               = var.enable_adx && var.enable_portal ? 1 : 0
   name                = "taugrid-portal-adx"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
@@ -149,7 +150,7 @@ resource "azurerm_user_assigned_identity" "lifecycle_recorder" {
 }
 
 resource "azurerm_federated_identity_credential" "portal" {
-  count               = var.enable_adx ? 1 : 0
+  count               = var.enable_adx && var.enable_portal ? 1 : 0
   name                = "tau-portal"
   resource_group_name = azurerm_resource_group.this.name
   parent_id           = azurerm_user_assigned_identity.portal[0].id
@@ -201,7 +202,7 @@ resource "azurerm_kusto_database_principal_assignment" "adx_mon" {
 }
 
 resource "azurerm_kusto_database_principal_assignment" "portal" {
-  count               = var.enable_adx ? 1 : 0
+  count               = var.enable_adx && var.enable_portal ? 1 : 0
   name                = "taugrid-portal-viewer"
   resource_group_name = azurerm_resource_group.this.name
   cluster_name        = azurerm_kusto_cluster.this[0].name
@@ -230,6 +231,40 @@ resource "local_file" "taugrid_values" {
   file_permission = "0600"
 }
 
+resource "local_file" "mig_normalizer" {
+  count           = var.normalize_gpu_mig ? 1 : 0
+  filename        = "${local.generated_directory}/mig-normalizer.yaml"
+  file_permission = "0600"
+  content = templatefile("${path.module}/mig-normalizer.yaml.tftpl", {
+    gpu_node_pool_name = var.gpu_node_pool_name
+  })
+}
+
+resource "terraform_data" "normalize_gpu_mig" {
+  count = var.normalize_gpu_mig ? 1 : 0
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    local_file.mig_normalizer[0].content_sha256,
+    var.gpu_count_per_node,
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = local.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f '${local_file.mig_normalizer[0].filename}' && kubectl rollout status daemonset/taugrid-mig-normalizer --namespace kube-system --timeout=10m && az vmss restart --ids $(az vmss list --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --query \"[?starts_with(name, 'aks-${var.gpu_node_pool_name}-')].id | [0]\" --output tsv) && kubectl wait --for=condition=Ready node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl wait --for='jsonpath={.status.allocatable.nvidia\\.com/gpu}'='${var.gpu_count_per_node}' node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl delete -f '${local_file.mig_normalizer[0].filename}' --ignore-not-found"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.gpu,
+    local_file.mig_normalizer,
+  ]
+}
+
 resource "terraform_data" "install_taugrid" {
   count = var.install_taugrid ? 1 : 0
 
@@ -252,6 +287,7 @@ resource "terraform_data" "install_taugrid" {
   depends_on = [
     local_file.taugrid_values,
     azurerm_kubernetes_cluster_node_pool.gpu,
+    terraform_data.normalize_gpu_mig,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
     terraform_data.install_adx_mon,
@@ -283,6 +319,8 @@ resource "terraform_data" "install_dcgm_exporter" {
   count = var.enable_adx ? 1 : 0
 
   triggers_replace = [
+    azurerm_kubernetes_cluster.this.id,
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.dcgm_exporter_values[0].content_sha256,
     var.dcgm_exporter_chart_version,
     join(" ", var.command_interpreter),
@@ -306,6 +344,8 @@ resource "terraform_data" "install_adx_mon" {
   count = var.enable_adx ? 1 : 0
 
   triggers_replace = [
+    azurerm_kubernetes_cluster.this.id,
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.adx_mon_values[0].content_sha256,
     azurerm_kusto_database_principal_assignment.adx_mon,
     join(" ", var.command_interpreter),
