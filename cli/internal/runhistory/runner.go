@@ -16,6 +16,9 @@ func Run(ctx context.Context, reconciler *Reconciler, namespace string, interval
 	for {
 		result, err := reconciler.Reconcile(ctx, namespace)
 		if err != nil {
+			if health != nil {
+				health.MarkFailure()
+			}
 			// A continuously running recorder must tolerate transient ADX failures.
 			// In particular, schema management is asynchronous: the recorder can
 			// start before adx-mon has created its table and mapping. Keep readiness

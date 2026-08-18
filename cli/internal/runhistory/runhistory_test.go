@@ -27,12 +27,18 @@ type fakeSource struct {
 	workloads   []Workload
 	pods        []Pod
 	rayErr      error
+	rayErrAfter int
+	rayCalls    int
 	workloadErr error
 	podErr      error
 }
 
 func (s *fakeSource) ListJobs(context.Context, string) ([]Job, error) { return s.jobs, nil }
 func (s *fakeSource) ListRayJobs(context.Context, string) ([]RayJob, error) {
+	s.rayCalls++
+	if s.rayErrAfter > 0 && s.rayCalls > s.rayErrAfter {
+		return nil, s.rayErr
+	}
 	return s.rayJobs, s.rayErr
 }
 func (s *fakeSource) ListWorkloads(context.Context, string) ([]Workload, error) {
@@ -657,6 +663,32 @@ func TestRunRetriesContinuousRecorderAfterReconcileFailure(t *testing.T) {
 	}
 	if writer.writeCall < 2 {
 		t.Fatalf("continuous recorder write calls = %d, want at least 2", writer.writeCall)
+	}
+}
+
+func TestRunMarksRecorderUnreadyAfterLaterReconcileFailure(t *testing.T) {
+	source := &fakeSource{
+		jobs:        []Job{{Metadata: testMetadata("ready-then-fail")}},
+		rayErr:      errors.New("Kubernetes unavailable"),
+		rayErrAfter: 1,
+	}
+	writer := &fakeWriter{}
+	reconciler := newTestReconciler(source, writer)
+	reconciler.WriterRetries = 0
+	health := &Health{}
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Millisecond)
+	defer cancel()
+	err := Run(ctx, reconciler, "ray", 5*time.Millisecond, false, health)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want context deadline exceeded", err)
+	}
+	if source.rayCalls < 2 {
+		t.Fatalf("continuous recorder RayJob list calls = %d, want at least 2", source.rayCalls)
+	}
+	response := httptest.NewRecorder()
+	health.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("ready status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
 
