@@ -1,0 +1,83 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-kueue-kuberay-admitted
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: e2e-kueue-kuberay-admitted-cpu
+spec: {}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: e2e-kueue-kuberay-admitted-cq
+spec:
+  namespaceSelector: {}
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+  - coveredResources:
+    - cpu
+    - memory
+    flavors:
+    - name: e2e-kueue-kuberay-admitted-cpu
+      resources:
+      - name: cpu
+        nominalQuota: "2"
+      - name: memory
+        nominalQuota: 4Gi
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: e2e-kueue-kuberay-admitted-queue
+  namespace: e2e-kueue-kuberay-admitted
+spec:
+  clusterQueue: e2e-kueue-kuberay-admitted-cq
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: e2e-rayjob-admitted
+  namespace: e2e-kueue-kuberay-admitted
+  labels:
+    kueue.x-k8s.io/queue-name: e2e-kueue-kuberay-admitted-queue
+spec:
+  suspend: true
+  entrypoint: 'python3 -c "import ray; ray.init(); assert ray.get(ray.remote(lambda: 42).remote()) == 42"'
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 60
+  rayClusterSpec:
+    rayVersion: "2.54.0"
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+      template:
+        spec:
+          containers:
+          - name: ray-head
+            image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+            resources:
+              requests:
+                cpu: 20m
+                memory: 512Mi
+    workerGroupSpecs:
+    - groupName: workers
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams:
+        num-cpus: "1"
+      template:
+        spec:
+          containers:
+          - name: ray-worker
+            image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+            resources:
+              requests:
+                cpu: 50m
+                memory: 256Mi
