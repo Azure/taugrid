@@ -60,7 +60,7 @@ func TestHealthyTargetReportsExplicitFalse(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	// A fresh tracker stays silent until reachability is proven for
@@ -86,7 +86,7 @@ func TestTransientFailureBelowThresholdDoesNotFire(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := establish(t, tr, target, time.Now())
 
 	// One failed scrape, then recovery, well inside the 2m failure window.
@@ -115,7 +115,7 @@ func TestSustainedFailureFiresAfterWindow(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := establish(t, tr, target, time.Now())
 
 	for _, offset := range []time.Duration{0, 30 * time.Second, 90 * time.Second} {
@@ -144,7 +144,7 @@ func TestNon2xxFailureFiresWithStatusContext(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "unexpected status 503")}, start)
@@ -161,7 +161,7 @@ func TestRecoveryClearsOnlyAfterRecoveryWindow(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
@@ -184,7 +184,7 @@ func TestRecoveryClearsOnlyAfterRecoveryWindow(t *testing.T) {
 	}
 
 	// A failure during recovery restarts the recovery clock.
-	tr2 := New([]scraper.ScrapeTarget{target})
+	tr2 := New([]scraper.ScrapeTarget{target}, nil)
 	tr2.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
 	tr2.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start.Add(3*time.Minute))
 	tr2.Evaluate([]scraper.TargetStatus{success(target)}, start.Add(3*time.Minute+30*time.Second))
@@ -202,7 +202,7 @@ func TestOptionalTargetsProduceNoCondition(t *testing.T) {
 	nodeExporter := scraper.ScrapeTarget{Name: "node-exporter", URL: "http://localhost:9100/metrics"}
 	npd := scraper.ScrapeTarget{Name: "node-problem-detector", URL: "http://localhost:20261/metrics"}
 
-	tr := New([]scraper.ScrapeTarget{dcgm, nodeExporter, npd})
+	tr := New([]scraper.ScrapeTarget{dcgm, nodeExporter, npd}, nil)
 	if tr.Tracked() != 1 {
 		t.Fatalf("expected 1 tracked condition, got %d", tr.Tracked())
 	}
@@ -229,7 +229,7 @@ func TestRequiredFailureNotMaskedByOtherHealthyTargets(t *testing.T) {
 	dcgm := dcgmTarget()
 	nodeExporter := scraper.ScrapeTarget{Name: "node-exporter", URL: "http://localhost:9100/metrics"}
 
-	tr := New([]scraper.ScrapeTarget{dcgm, nodeExporter})
+	tr := New([]scraper.ScrapeTarget{dcgm, nodeExporter}, nil)
 	start := time.Now()
 
 	tr.Evaluate([]scraper.TargetStatus{failure(dcgm, "connection refused"), success(nodeExporter)}, start)
@@ -255,7 +255,7 @@ func TestIndependentConditionsPerRequiredTarget(t *testing.T) {
 		AvailableFor:          time.Minute,
 	}
 
-	tr := New([]scraper.ScrapeTarget{dcgm, other})
+	tr := New([]scraper.ScrapeTarget{dcgm, other}, nil)
 	start := time.Now()
 	tr.Evaluate([]scraper.TargetStatus{failure(dcgm, "connection refused"), success(other)}, start)
 	results := tr.Evaluate([]scraper.TargetStatus{failure(dcgm, "connection refused"), success(other)}, start.Add(3*time.Minute))
@@ -272,7 +272,7 @@ func TestStateSurvivesRestart(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
@@ -285,7 +285,7 @@ func TestStateSurvivesRestart(t *testing.T) {
 
 	savedAt := start.Add(3 * time.Minute)
 	restartedAt := savedAt.Add(20 * time.Second)
-	restarted := New([]scraper.ScrapeTarget{target})
+	restarted := New([]scraper.ScrapeTarget{target}, nil)
 	restarted.RestoreState(saved, savedAt, restartedAt)
 
 	// The first successful scrape after a restart must not clear the condition
@@ -304,7 +304,7 @@ func TestRestartDowntimeDoesNotCountTowardFailureWindow(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	// One failed scrape is persisted with a non-zero failure timer.
@@ -318,7 +318,7 @@ func TestRestartDowntimeDoesNotCountTowardFailureWindow(t *testing.T) {
 	// The node reboots for five minutes, longer than the failure window.
 	savedAt := start
 	restartedAt := start.Add(5 * time.Minute)
-	restarted := New([]scraper.ScrapeTarget{target})
+	restarted := New([]scraper.ScrapeTarget{target}, nil)
 	restarted.RestoreState(saved, savedAt, restartedAt)
 
 	got = only(t, restarted.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, restartedAt), "DcgmExporterUnavailable")
@@ -338,7 +338,7 @@ func TestRestartDowntimeDoesNotCountTowardRecoveryWindow(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
@@ -349,7 +349,7 @@ func TestRestartDowntimeDoesNotCountTowardRecoveryWindow(t *testing.T) {
 
 	savedAt := start.Add(3*time.Minute + 10*time.Second)
 	restartedAt := savedAt.Add(10 * time.Minute)
-	restarted := New([]scraper.ScrapeTarget{target})
+	restarted := New([]scraper.ScrapeTarget{target}, nil)
 	restarted.RestoreState(saved, savedAt, restartedAt)
 
 	got := only(t, restarted.Evaluate([]scraper.TargetStatus{success(target)}, restartedAt), "DcgmExporterUnavailable")
@@ -362,7 +362,7 @@ func TestDeconfiguredConditionIsClearedOnce(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	now := time.Now()
 	tr.RestoreState(map[string]state.Availability{
 		"DcgmExporterUnavailable":  {Firing: false, HealthySince: now.Add(-time.Hour)},
@@ -386,7 +386,7 @@ func TestRestoreDoesNotResurrectUnknownConditions(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
-	tr := New([]scraper.ScrapeTarget{dcgmTarget()})
+	tr := New([]scraper.ScrapeTarget{dcgmTarget()}, nil)
 	establish(t, tr, dcgmTarget(), now.Add(-2*time.Minute))
 	tr.RestoreState(map[string]state.Availability{
 		"RemovedCondition": {Firing: true, FailingSince: now.Add(-time.Hour), Established: true},
@@ -412,7 +412,7 @@ func TestDefaultWindowsApplyWhenUnset(t *testing.T) {
 		Required:              true,
 		AvailabilityCondition: "DcgmExporterUnavailable",
 	}
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := establish(t, tr, target, time.Now())
 
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
@@ -441,7 +441,7 @@ func TestUnseededRestartDuringOutageNeverClears(t *testing.T) {
 	// so in every case RestoreState is never called and the tracker is fresh.
 	for _, snapshot := range []string{"missing", "corrupt", "stale"} {
 		t.Run(snapshot, func(t *testing.T) {
-			tr := New([]scraper.ScrapeTarget{target})
+			tr := New([]scraper.ScrapeTarget{target}, nil)
 
 			// The outage continues across the restart. Nothing may be published
 			// yet: publishing False here would clear the server's True.
@@ -466,7 +466,7 @@ func TestUnseededRestartClearsOnlyAfterProvenRecovery(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	// Restart with no usable snapshot, and the target is reachable again. The
@@ -492,7 +492,7 @@ func TestUnseededRestartRecoveryInterruptedByFailureStaysSilent(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	// A flapping endpoint after an unseeded restart never accumulates a full
@@ -513,7 +513,7 @@ func TestSeededRestartStillReportsImmediately(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
-	tr := New([]scraper.ScrapeTarget{target})
+	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
 	// Establish a healthy, published condition and snapshot it.
@@ -526,11 +526,65 @@ func TestSeededRestartStillReportsImmediately(t *testing.T) {
 	// A usable snapshot is continuity, so the restarted process may speak to
 	// the condition on its very first cycle.
 	savedAt := start.Add(time.Minute)
-	restarted := New([]scraper.ScrapeTarget{target})
+	restarted := New([]scraper.ScrapeTarget{target}, nil)
 	restarted.RestoreState(saved, savedAt, savedAt.Add(15*time.Second))
 
 	got := only(t, restarted.Evaluate([]scraper.TargetStatus{success(target)}, savedAt.Add(15*time.Second)), "DcgmExporterUnavailable")
 	if got.Firing {
 		t.Fatal("a seeded restart should keep reporting False")
+	}
+}
+
+func TestOrphanConditionIsPublishedExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	target := dcgmTarget()
+	now := time.Now()
+	tr := New([]scraper.ScrapeTarget{target}, nil)
+	establish(t, tr, target, now.Add(-2*time.Minute))
+	tr.RestoreState(map[string]state.Availability{
+		"RenamedExporterCondition": {Firing: true, FailingSince: now.Add(-time.Hour), Established: true},
+	}, now.Add(-time.Minute), now)
+
+	first := tr.Evaluate([]scraper.TargetStatus{success(target)}, now)
+	if got := only(t, first, "RenamedExporterCondition"); got.Firing {
+		t.Fatal("a de-configured condition must be cleared once")
+	}
+
+	// Re-publishing forever would keep asserting a stale False for the life of
+	// the process, and results share one patch keyed by condition type.
+	for i := 1; i <= 3; i++ {
+		at := now.Add(time.Duration(i) * 15 * time.Second)
+		for _, r := range tr.Evaluate([]scraper.TargetStatus{success(target)}, at) {
+			if r.ConditionType == "RenamedExporterCondition" {
+				t.Fatalf("orphan republished on cycle %d", i)
+			}
+		}
+	}
+}
+
+func TestOrphanNeverOverridesARuleOwnedCondition(t *testing.T) {
+	t.Parallel()
+
+	target := dcgmTarget()
+	now := time.Now()
+
+	// The condition type moved from this scrape target to a rule, which
+	// config validation accepts because it only compares config against config.
+	tr := New([]scraper.ScrapeTarget{target}, []string{"MigratedCondition"})
+	establish(t, tr, target, now.Add(-2*time.Minute))
+	tr.RestoreState(map[string]state.Availability{
+		"MigratedCondition": {Firing: true, FailingSince: now.Add(-time.Hour), Established: true},
+	}, now.Add(-time.Minute), now)
+
+	// Clearing it here would overwrite the rule's genuinely firing condition,
+	// since both entries share a merge key and the last one wins.
+	for i := 0; i < 3; i++ {
+		at := now.Add(time.Duration(i) * 15 * time.Second)
+		for _, r := range tr.Evaluate([]scraper.TargetStatus{success(target)}, at) {
+			if r.ConditionType == "MigratedCondition" {
+				t.Fatalf("tracker published a rule-owned condition: %+v", r)
+			}
+		}
 	}
 }

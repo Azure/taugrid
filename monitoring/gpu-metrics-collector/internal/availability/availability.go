@@ -34,9 +34,10 @@ import (
 // per profile (enforced by the chart's disjoint instance-type affinity), so no
 // two writers contend for the same condition.
 type Tracker struct {
-	mu      sync.Mutex
-	states  map[string]*targetState // conditionType → debounce state
-	orphans []string                // conditions published by a previous run that are no longer configured
+	mu       sync.Mutex
+	states   map[string]*targetState // conditionType → debounce state
+	reserved map[string]struct{}     // condition types owned by rules, never published here
+	orphans  []string                // conditions published by a previous run that are no longer configured
 }
 
 type targetState struct {
@@ -58,8 +59,20 @@ type targetState struct {
 
 // New creates a Tracker for the required targets in the given set. Targets
 // without an availability condition are ignored.
-func New(targets []scraper.ScrapeTarget) *Tracker {
-	t := &Tracker{states: make(map[string]*targetState)}
+//
+// ruleConditions lists the condition types owned by the rule engine. The
+// tracker never publishes those, so a condition type that moves from a scrape
+// target to a rule is not clobbered by a stale clear from the old owner.
+func New(targets []scraper.ScrapeTarget, ruleConditions []string) *Tracker {
+	t := &Tracker{
+		states:   make(map[string]*targetState),
+		reserved: make(map[string]struct{}, len(ruleConditions)),
+	}
+	for _, cond := range ruleConditions {
+		if cond != "" {
+			t.reserved[cond] = struct{}{}
+		}
+	}
 	for _, target := range targets {
 		if target.AvailabilityCondition == "" {
 			continue
@@ -107,6 +120,10 @@ func (t *Tracker) Evaluate(statuses []scraper.TargetStatus, now time.Time) []rul
 	// A condition this collector no longer owns cannot be deleted from the Node,
 	// and nothing else will ever clear it. Publish an explicit False so a
 	// de-configured or renamed condition does not strand a node as unhealthy.
+	//
+	// This happens exactly once. Re-publishing every cycle would keep asserting
+	// a stale False for the rest of the process lifetime, and results share one
+	// strategic merge patch keyed by condition type, where the last entry wins.
 	for _, cond := range t.orphans {
 		results = append(results, rules.Result{
 			ConditionType: cond,
@@ -115,6 +132,7 @@ func (t *Tracker) Evaluate(statuses []scraper.TargetStatus, now time.Time) []rul
 			Message:       "availability tracking is no longer configured for this scrape target",
 		})
 	}
+	t.orphans = nil
 
 	return results
 }
@@ -224,7 +242,12 @@ func (t *Tracker) RestoreState(saved map[string]state.Availability, savedAt, now
 	for cond, s := range saved {
 		st, ok := t.states[cond]
 		if !ok {
-			t.orphans = append(t.orphans, cond)
+			// A condition type that a rule now owns must not be cleared here:
+			// the rule is the live owner, and a stale clear sharing the same
+			// merge key would overwrite a genuinely firing condition.
+			if _, claimed := t.reserved[cond]; !claimed {
+				t.orphans = append(t.orphans, cond)
+			}
 			continue
 		}
 		st.failingSince = shift(s.FailingSince, gap)

@@ -228,7 +228,10 @@ which is indistinguishable from a healthy node. Required targets close that gap:
   `availableFor` of proven success.
 - A condition the collector no longer owns (availability disabled, or the
   condition renamed) is published once as `False` on the next start, because
-  Kubernetes cannot delete a Node condition and nothing else would clear it.
+  Kubernetes cannot delete a Node condition and nothing else would clear it. It
+  is published exactly once, and never for a condition type a rule now owns:
+  results share one patch keyed by condition type, so a repeated stale clear
+  would overwrite the live owner's value.
 - Messages carry the target name, a sanitized URL, how long the state has held,
   and the underlying connection or HTTP status error. Userinfo, query strings,
   and fragments are stripped from both the URL and the error text, so a

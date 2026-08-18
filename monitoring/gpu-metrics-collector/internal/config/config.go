@@ -43,6 +43,17 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// RuleConditionTypes returns the condition types owned by the rule engine.
+func (c *Config) RuleConditionTypes() []string {
+	out := make([]string, 0, len(c.Rules))
+	for _, r := range c.Rules {
+		if r.ConditionType != "" {
+			out = append(out, r.ConditionType)
+		}
+	}
+	return out
+}
+
 // validate fails closed on any configuration that would leave a required target
 // unmonitored or leave two writers contending for one Node condition.
 //

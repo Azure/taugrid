@@ -65,7 +65,7 @@ func run() error {
 
 	sc := scraper.New(cfg.ScrapeTargets)
 	engine := rules.NewEngine(cfg.Rules)
-	tracker := availability.New(cfg.ScrapeTargets)
+	tracker := availability.New(cfg.ScrapeTargets, cfg.RuleConditionTypes())
 	writer := conditions.NewWriter(clientset, *nodeName)
 
 	// Restore state from previous run if available.
