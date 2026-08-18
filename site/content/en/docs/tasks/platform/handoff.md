@@ -7,7 +7,7 @@ description: The concrete, non-secret artifact and proof that ends platform Day 
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Complete this checklist after the
-[TauWorkspace readiness gate](../../getting-started/prerequisites/#tauworkspace-readiness-gate)
+[TauWorkspace readiness gate](../../getting-started/taugrid-setup/#tauworkspace-readiness-gate)
 reports `Ready`. A handoff is reproducible only when every step below
 succeeds from a clean checkout — not from a platform owner's already-primed
 shell.

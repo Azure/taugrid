@@ -5,16 +5,17 @@ weight: 6
 description: Run smoke, training, status, logs, and results
 ---
 
-{{< maturity status="ga" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-17" >}}
 
 This is the **researcher workflow**, not cluster setup. It creates no Azure
 resources and installs no Kubernetes controllers. It starts only after:
 
-- **AKS setup** has produced a reachable managed-Entra AKS cluster and normal
-  cluster-user credential path;
-- **Kubernetes/TauGrid setup** has installed and validated Kueue, KubeRay when
-  required, the Tau controllers, queue policy, and a Ready workspace; and
-- a platform operator has handed over a Tau-enabled repository.
+- **[AKS setup](../aks-setup/)** has produced a reachable managed-Entra
+  AKS cluster and normal cluster-user credential path;
+- **[TauGrid setup](../taugrid-setup/)** has installed and validated Kueue,
+  KubeRay when required, the Tau controllers, and cluster-level policy; and
+- **[Workspace setup](../workspace/)** has produced a Ready workspace, and a
+  platform operator has handed over a Tau-enabled repository.
 
 ```bash
 git clone <research-repository>

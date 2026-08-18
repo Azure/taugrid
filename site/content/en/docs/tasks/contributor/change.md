@@ -4,7 +4,7 @@ weight: 1
 description: Choose the owning package and prove the changed contract
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-08-17" >}}
 
 1. Start from the user path and compatibility contract.
 2. Keep Cobra command files focused on wiring, flags, validation, and output.
@@ -21,4 +21,6 @@ go test ./...
 ```
 
 Manifest, runtime, telemetry, or Kubernetes lifecycle changes also require the
-smallest safe end-to-end path that proves the external contract.
+smallest safe end-to-end path that proves the external contract. Use the
+[Kind smoke test](../kind-smoke-test/) when the changed contract belongs to the
+portable Kubernetes path.

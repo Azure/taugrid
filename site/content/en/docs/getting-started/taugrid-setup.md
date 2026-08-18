@@ -1,11 +1,11 @@
 ---
-title: Prerequisites and setup readiness
-linkTitle: Prerequisites and readiness
+title: TauGrid setup
+linkTitle: TauGrid setup
 weight: 4
 description: What must already exist, how to validate it, and the TauWorkspace readiness gate
 ---
 
-{{< maturity status="ga" reviewed="2026-08-11" >}}
+{{< maturity status="ga" reviewed="2026-08-17" >}}
 
 Researchers and platform owners check the same contract before the first
 run: what must already exist, what a passing check verifies, and what a
@@ -13,7 +13,7 @@ run: what must already exist, what a passing check verifies, and what a
 [status condition](../../concepts/glossary/#status-condition) means. This
 page is that shared contract.
 
-## AKS setup versus Kubernetes/TauGrid setup
+## AKS setup versus TauGrid setup
 
 AKS is TauGrid's first-class provider path, but Tau does not provision AKS.
 Use these boundaries consistently:
@@ -21,17 +21,18 @@ Use these boundaries consistently:
 | Phase | What it owns | Completion gate |
 |---|---|---|
 | **AKS setup (Azure/provider)** | Subscription and resource group, AKS resource and node pools, API networking/private DNS, managed Entra integration, AKS authorization, OIDC/workload-identity enablement, provider CSI/GPU add-ons, Azure storage/registry/managed identities, quota, cost, and cluster lifecycle | The intended normal cluster-user identity can reach the Kubernetes API, required Nodes are `Ready`, provider capabilities are available, and the non-secret AKS handoff values are recorded. |
-| **Kubernetes/TauGrid setup** | Kueue, KubeRay, Tau CRDs and controllers, `TauCluster`, queue policy, topology policy, `TauWorkspace`, Namespace, Kubernetes RBAC, LocalQueue, ServiceAccount, StorageClass/PVC declarations, and platform observability objects | `tau cluster validate installation` passes, required provider-specific validation passes, and `tau workspace check <workspace>` exits `0`. |
+| **TauGrid setup (Kubernetes layer)** | Kueue, KubeRay, Tau CRDs and controllers, `TauCluster`, cluster queue policy, topology policy, and platform observability objects | `tau cluster validate installation` and required provider-specific validation pass. |
+| **Workspace setup** | `TauWorkspace`, Namespace, Kubernetes RBAC, LocalQueue, ServiceAccount, StorageClass/PVC declarations, and the repository connection handoff | `tau workspace check <workspace>` exits `0`, and the researcher has the handed-off repository. |
 | **Researcher workflow** | Local `tau` installation, the research repository, connection descriptor, target configs, application image/code, data contract, and result semantics | `tau run smoke` succeeds from the handed-off repository, followed by the project's own target validation. |
 
 Identity and storage cross the boundary but have different owners on each side:
 
 - **Identity:** AKS setup owns managed Entra, AKS cluster-user credential access,
-  OIDC, Azure RBAC when selected, managed identities, and federation. Kubernetes/
-  TauGrid setup owns the workspace subject, RoleBinding, ServiceAccount, and
+  OIDC, Azure RBAC when selected, managed identities, and federation. Workspace
+  setup owns the researcher subject, RoleBinding, ServiceAccount, and
   workload annotations that consume those provider capabilities.
 - **Storage:** AKS setup owns the Azure storage service, network path, identity,
-  and CSI driver. Kubernetes/TauGrid setup owns the StorageClass and PVC
+  and CSI driver. Workspace setup owns the StorageClass and PVC
   declarations. A Tau target only consumes a PVC that the platform has already
   made usable.
 
@@ -46,7 +47,7 @@ credentials.
 
 | Layer | Owner | Examples | Does Tau provision it? |
 |---|---|---|---|
-| AKS and Azure provider resources | Platform, with Azure tooling | Subscription readiness, AKS cluster and node pools, VNet/subnets, private DNS, managed Entra, AKS/Azure RBAC, storage accounts, managed identities and workload identity federation, container registry | No. Start with [Prepare an Azure subscription](../azure-subscription/), then provision outside Tau with Terraform, Bicep/ARM, Azure CLI, Portal, or an existing platform pipeline. |
+| AKS and Azure provider resources | Platform, with Azure tooling | Subscription readiness, AKS cluster and node pools, VNet/subnets, private DNS, managed Entra, AKS/Azure RBAC, storage accounts, managed identities and workload identity federation, container registry | No. Start with [AKS setup](../aks-setup/), then provision outside Tau with Terraform, Bicep/ARM, Azure CLI, Portal, or an existing platform pipeline. |
 | AKS provider add-ons | Platform, with Azure/IaC tooling | GPU drivers/device plugin, storage and Secrets Store CSI drivers, and provider-maintained Node identity labels | No. TauGrid consumes these AKS capabilities but does not provision them. |
 | TauGrid Kubernetes control plane | Platform, with Helm or ArgoCD | Kueue controller, KubeRay operator, Tau CRDs/controller, and baseline queue policy | Yes for a fresh cluster through `tau cluster install` (a thin Helm wrapper). Existing managed clusters use independent ArgoCD Applications instead of the umbrella release. |
 | Kubernetes workspace onboarding | Platform desired state plus `tau-core-controller` | [TauWorkspace](../../concepts/glossary/#tauworkspace), derived Namespace metadata/RBAC/LocalQueue/ServiceAccount, and platform-owned durable PVC policy | The platform declares TauWorkspace through Helm/Kustomize/GitOps. The controller reconciles derived state; it does not create Azure resources or storage. |
@@ -104,7 +105,7 @@ in order; each stage assumes the previous one passed.
    an optional diagnostic, not an activation prerequisite; `tau run` discovers
    the descriptor automatically.
 
-2. **Kubernetes/TauGrid platform setup, once per cluster after AKS setup.**
+2. **TauGrid platform setup, once per cluster after AKS setup.**
 
    ```bash
    tau cluster install --version <version> --values taugrid-values.yaml

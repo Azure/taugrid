@@ -19,7 +19,7 @@ provision a TauWorkspace or replace the platform-owned Tau enablement steps.
 ## Prerequisites
 
 - an Azure subscription that passes the
-  [subscription readiness gate](../../getting-started/azure-subscription/) and
+  [AKS setup gate](../../getting-started/aks-setup/) and
   an approved Terraform identity;
 - Azure CLI, Terraform, kubectl, Helm, and local Python dependencies;
 - permission to provision AKS, networking, storage, and identities; and
