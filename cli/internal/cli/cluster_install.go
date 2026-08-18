@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ type clusterInstallSpec struct {
 	Atomic       bool
 	DryRun       bool
 	DependencyUp bool
+	HistoryMax   int
 }
 
 func newClusterInstallCmd() *cobra.Command {
@@ -54,6 +56,7 @@ func newClusterInstallCmd() *cobra.Command {
 		Wait:         false,
 		Atomic:       false,
 		DependencyUp: true,
+		HistoryMax:   0,
 	}
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -147,6 +150,7 @@ Next:
 	flags.BoolVar(&spec.CreateNS, "create-namespace", spec.CreateNS, "create the release namespace")
 	flags.BoolVar(&spec.Wait, "wait", spec.Wait, "also run Helm's generic resource watcher before Tau's component-aware readiness validation")
 	flags.BoolVar(&spec.Atomic, "atomic", spec.Atomic, "roll back on Helm failure (also enables Helm's generic watcher wait)")
+	flags.IntVar(&spec.HistoryMax, "history-max", spec.HistoryMax, "maximum Helm release revisions to retain; 0 uses Helm's default")
 	flags.BoolVar(&spec.DryRun, "dry-run", false, "summarize the chart manifests offline without contacting the cluster")
 	flags.BoolVar(&spec.DependencyUp, "dependency-update", spec.DependencyUp, "update missing chart dependencies")
 	return cmd
@@ -163,6 +167,9 @@ func validateClusterInstallSpec(spec clusterInstallSpec) error {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s must not be empty", name)
 		}
+	}
+	if spec.HistoryMax < 0 {
+		return fmt.Errorf("--history-max must not be negative")
 	}
 	return nil
 }
@@ -312,6 +319,9 @@ func clusterInstallArgs(spec clusterInstallSpec) []string {
 		"--version", spec.Version,
 		"--timeout", spec.Timeout,
 		"--reset-values",
+	}
+	if spec.HistoryMax > 0 {
+		args = append(args, "--history-max", strconv.Itoa(spec.HistoryMax))
 	}
 	if spec.KubeContext != "" {
 		args = append(args, "--kube-context", spec.KubeContext)

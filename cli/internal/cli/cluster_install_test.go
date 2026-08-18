@@ -121,6 +121,39 @@ func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 	}
 }
 
+func TestClusterInstallRejectsNegativeHistoryMaxBeforeHelm(t *testing.T) {
+	installFakeHelm(t, func(context.Context, io.Reader, io.Writer, io.Writer, []string) error {
+		t.Fatal("Helm must not run for an invalid history limit")
+		return nil
+	})
+
+	out, err := runCluster(t, "install", "--history-max", "-1")
+	if err == nil || !strings.Contains(err.Error(), "--history-max must not be negative") {
+		t.Fatalf("invalid history limit error = %v\n%s", err, out)
+	}
+}
+
+func TestClusterInstallPassesExplicitHistoryMax(t *testing.T) {
+	stubForceConflicts(t, false)
+	var calls [][]string
+	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+		calls = append(calls, append([]string(nil), args...))
+		return nil
+	})
+
+	if _, err := runCluster(t, "install", "--history-max", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("Helm upgrade calls = %d, want 2", len(calls))
+	}
+	for _, args := range calls {
+		if !containsArgPair(args, "--history-max", "1") {
+			t.Fatalf("explicit history retention missing: %#v", args)
+		}
+	}
+}
+
 func TestClusterInstallAtomicUsesHelm3Spelling(t *testing.T) {
 	stubForceConflicts(t, false)
 	stubRollbackOnFailure(t, false)
