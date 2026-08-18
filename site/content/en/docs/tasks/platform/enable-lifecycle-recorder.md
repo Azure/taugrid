@@ -108,25 +108,28 @@ Upgrade the single umbrella release with the complete canonical values file:
 tau cluster install --context <context> --version <taugrid-release-version> \
   --values <platform-values.yaml>
 
-# adx-mon v0.3.0 reconciles ManagementCommands every 10 minutes. The recorder
-# does not start until this command succeeds, so wait for it before checking
-# the Deployment rollout.
-kubectl -n <adx-mon-namespace> wait \
-  --for=condition=managementcommand.adx-mon.azure.com \
-  --timeout=25m managementcommand/taugrid-lifecycle-schema
-
+# adx-mon reconciles ManagementCommands asynchronously. It does not expose a
+# completion condition, so the recorder starts immediately and retries its
+# first ingestion until the schema is available. Wait for the Deployment to
+# become Ready, then inspect adx-mon if it remains NotReady.
 kubectl -n <control-plane-namespace> rollout status \
-  deploy/tau-lifecycle-recorder --timeout=180s
-kubectl -n <adx-mon-namespace> get managementcommand \
-  taugrid-lifecycle-schema \
-  -o jsonpath='{.status.conditions[0].status}{" "}{.status.conditions[0].reason}{"\n"}'
+  deploy/tau-lifecycle-recorder --timeout=25m
+kubectl -n <adx-mon-namespace> describe managementcommand \
+  taugrid-lifecycle-schema
 kubectl -n <control-plane-namespace> logs deploy/tau-lifecycle-recorder --tail=100
 ```
 
-If the wait times out, do not disable the readiness gate: inspect the command
-and adx-mon logs, then correct its ADX role, database configuration, or
-network path. Automatic schema management currently supports only the adx-mon
-configured `Metrics` database and the canonical `TauExpRunLifecycle` table.
+If the recorder remains NotReady, inspect the command and adx-mon logs, then
+correct its ADX role, database configuration, or network path. Automatic schema
+management currently supports only the adx-mon configured `Metrics` database
+and the canonical `TauExpRunLifecycle` table.
+
+> **Known limitation:** adx-mon does not currently publish a reliable success or
+> failure status for `ManagementCommand`. The recorder therefore cannot wait for
+> schema creation before it starts. It retries ingestion until the schema is
+> available, but a short-lived workload that is deleted during this initial
+> window can be absent from lifecycle history. This chart will restore a schema
+> readiness gate after adx-mon publishes that completion contract.
 
 Submit a workload in `targetNamespace`, then query the configured ADX database:
 

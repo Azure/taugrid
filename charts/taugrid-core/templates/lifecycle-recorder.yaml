@@ -8,7 +8,6 @@
 {{- $resourceName := default "tau-lifecycle-recorder" $recorder.resourceName -}}
 {{- $serviceAccountName := $serviceAccount.name -}}
 {{- $schemaResourceName := default "taugrid-lifecycle-schema" $schemaManagement.resourceName -}}
-{{- $schemaWaitImage := default (dict "repository" "mcr.microsoft.com/oss/kubernetes/kubectl" "tag" "" "digest" "sha256:602c8e3ea5c92c8508510566e7ea2dcee65ffe89ca26738823138362753004ef" "pullPolicy" "IfNotPresent") $schemaManagement.waitImage -}}
 {{- if ne $recorder.image.repository "mcr.microsoft.com/aks/ai-runtime/tau" -}}
 {{- fail "lifecycleRecorder.image.repository must be mcr.microsoft.com/aks/ai-runtime/tau when lifecycleRecorder.enabled=true" -}}
 {{- end -}}
@@ -151,29 +150,6 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml $recorder.podSecurityContext | nindent 8 }}
-      {{- if $schemaManagement.enabled }}
-      initContainers:
-        - name: wait-for-lifecycle-schema
-          image: {{ include "taugrid-core.image" (dict "component" "lifecycleRecorder.schemaManagement.wait" "image" $schemaWaitImage) | quote }}
-          imagePullPolicy: {{ default "IfNotPresent" $schemaWaitImage.pullPolicy }}
-          env:
-            - name: HOME
-              value: /tmp
-          args:
-            - wait
-            - --for=condition=managementcommand.adx-mon.azure.com
-            - --timeout={{ default "25m" $schemaManagement.waitTimeout }}
-            - --namespace={{ $schemaManagement.namespace }}
-            - managementcommand/{{ $schemaResourceName }}
-          resources:
-            requests: { cpu: 10m, memory: 32Mi }
-            limits: { cpu: 100m, memory: 128Mi }
-          securityContext:
-            {{- toYaml $recorder.containerSecurityContext | nindent 12 }}
-          volumeMounts:
-            - name: schema-wait-tmp
-              mountPath: /tmp
-      {{- end }}
       containers:
         - name: lifecycle-recorder
           image: {{ $image | quote }}
@@ -229,9 +205,4 @@ spec:
             {{- toYaml $recorder.resources | nindent 12 }}
           securityContext:
             {{- toYaml $recorder.containerSecurityContext | nindent 12 }}
-      {{- if $schemaManagement.enabled }}
-      volumes:
-        - name: schema-wait-tmp
-          emptyDir: {}
-      {{- end }}
 {{- end }}

@@ -30,6 +30,12 @@ func (h *Health) MarkSuccess(result Result, observedAt string) {
 	h.lastReconciled = observedAt
 }
 
+func (h *Health) MarkFailure() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ready = false
+}
+
 func (h *Health) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -44,7 +50,7 @@ func (h *Health) Handler() http.Handler {
 		last := h.lastReconciled
 		h.mu.RUnlock()
 		if !ready {
-			http.Error(w, "first reconcile has not succeeded", http.StatusServiceUnavailable)
+			http.Error(w, "latest reconcile has not succeeded", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
