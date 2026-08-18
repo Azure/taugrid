@@ -9,7 +9,7 @@ description: Install the MCR TauGrid Helm chart with the Tau CLI and verify the 
 
 TauGrid setup is a cluster-administrator workflow that begins after the [AKS setup](../aks-setup/) completion gate passes. It uses the Tau CLI as a Helm wrapper to install the released TauGrid distribution from MCR into an existing Kubernetes cluster, then verifies the in-cluster control plane.
 
-This page does not provision AKS, node pools, Azure networking, managed Entra, workload identities, storage accounts, registries, GPU drivers, device plugins, or CSI drivers. Those are Azure/provider responsibilities owned by AKS setup. Workspace resources and the researcher repository are created in the following [workspace setup](../workspace/) phase.
+This page does not provision AKS, node pools, Azure networking, managed Entra, workload identities, storage accounts, registries, GPU drivers, device plugins, or CSI drivers. Those are Azure/provider responsibilities owned by AKS setup. Workspace resources and the researcher repository are created in the following [Tau Workspace Setup](../tau-workspace-setup/) phase.
 
 ## 1. Verify the administrator workstation and AKS context
 
@@ -163,4 +163,4 @@ This command creates short-lived privileged Pods on the selected GPU nodes, so r
 
 TauGrid setup is complete when `tau cluster validate installation` exits `0`, required GPU/provider checks pass for the intended workloads, and any explicitly enabled services have their own documented readiness evidence.
 
-Continue with [workspace setup](../workspace/) to create or adopt the TauWorkspace, verify its namespace/RBAC/LocalQueue/ServiceAccount and storage contract, and hand a non-secret Tau-enabled repository to the researcher. Do not treat a healthy cluster control plane as proof that a workspace or its PVC is ready.
+Continue with [Tau Workspace Setup](../tau-workspace-setup/) to create or adopt the TauWorkspace, verify its namespace/RBAC/LocalQueue/ServiceAccount and storage contract, and hand a non-secret Tau-enabled repository to the researcher. Do not treat a healthy cluster control plane as proof that a workspace or its PVC is ready.
