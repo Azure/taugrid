@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -804,21 +803,21 @@ func buildRunJobOutputAnnotations(name, output, pvcMount string, volumes []jobre
 			return nil, "", false, nil
 		}
 		mount := mounted[0]
-		defaultOutput := filepath.Clean(filepath.Join(mount.path, name))
+		defaultOutput := path.Clean(path.Join(mount.path, name))
 		return map[string]string{
 			workloadmeta.AnnotationResultPath: defaultOutput,
 			workloadmeta.AnnotationResultPVC:  mount.pvc,
 		}, defaultOutput, !mount.readOnly, nil
 	}
-	if !filepath.IsAbs(output) {
+	if !path.IsAbs(output) {
 		return nil, "", false, fmt.Errorf("storage.output %q: must be an absolute path", output)
 	}
 	if len(mounted) == 0 {
 		return nil, "", false, fmt.Errorf("storage.output %q: no PVC supplied by storage.data_pvc or storage.volumes/mounts; output cannot be retrieved by `tau run get`", output)
 	}
-	cleanOutput := filepath.Clean(output)
+	cleanOutput := path.Clean(output)
 	for _, mount := range mounted {
-		base := filepath.Clean(mount.path)
+		base := path.Clean(mount.path)
 		if cleanOutput == base || strings.HasPrefix(cleanOutput, base+"/") {
 			return map[string]string{
 				workloadmeta.AnnotationResultPath: cleanOutput,
