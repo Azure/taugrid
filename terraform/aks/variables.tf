@@ -13,7 +13,6 @@ variable "tenant_id" {
 variable "aks_admin_group_object_ids" {
   description = "Microsoft Entra group object IDs granted AKS cluster-admin access."
   type        = list(string)
-  default     = []
 }
 
 variable "azure_rbac_enabled" {
