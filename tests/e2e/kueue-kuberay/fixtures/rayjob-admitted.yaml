@@ -60,7 +60,7 @@ spec:
         spec:
           containers:
           - name: ray-head
-            image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+            image: rayproject/ray:2.54.0-py312-cpu@sha256:6eacc8b1bec4aa94467fadcfb967996b963986116509cf8294d12dfd05eb18f9
             resources:
               requests:
                 cpu: 20m
@@ -76,7 +76,7 @@ spec:
         spec:
           containers:
           - name: ray-worker
-            image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+            image: rayproject/ray:2.54.0-py312-cpu@sha256:6eacc8b1bec4aa94467fadcfb967996b963986116509cf8294d12dfd05eb18f9
             resources:
               requests:
                 cpu: 50m

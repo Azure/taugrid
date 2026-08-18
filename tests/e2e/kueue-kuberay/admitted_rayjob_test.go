@@ -59,7 +59,7 @@ func TestAdmittedRayJobRunsToCompletion(t *testing.T) {
 			testNamespace,
 			fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=%s", rayCluster, nodeType),
 			1,
-			3*time.Minute,
+			10*time.Minute,
 		))
 	}
 	require.NoError(t, tc.WaitForRayJobStatus(testNamespace, testRayJob, "SUCCEEDED", 5*time.Minute))
