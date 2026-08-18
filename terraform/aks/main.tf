@@ -1,3 +1,5 @@
+data "azurerm_client_config" "current" {}
+
 resource "azurerm_resource_group" "this" {
   name     = var.resource_group_name
   location = var.location
@@ -18,6 +20,12 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
+
+  azure_active_directory_role_based_access_control {
+    azure_rbac_enabled     = var.azure_rbac_enabled
+    tenant_id              = coalesce(var.tenant_id, data.azurerm_client_config.current.tenant_id)
+    admin_group_object_ids = var.aks_admin_group_object_ids
+  }
 
   default_node_pool {
     name                        = "system"
@@ -45,13 +53,18 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
   name                  = var.gpu_node_pool_name
   kubernetes_cluster_id = azurerm_kubernetes_cluster.this.id
   vm_size               = var.gpu_vm_size
-  node_count            = var.gpu_node_count
+  auto_scaling_enabled  = var.gpu_auto_scaling_enabled
+  node_count            = var.gpu_auto_scaling_enabled ? null : var.gpu_node_count
+  min_count             = var.gpu_auto_scaling_enabled ? var.gpu_min_count : null
+  max_count             = var.gpu_auto_scaling_enabled ? var.gpu_max_count : null
   mode                  = "User"
   os_sku                = "Ubuntu"
   gpu_driver            = "Install"
   node_taints           = ["sku=gpu:NoSchedule"]
   node_labels = {
-    "aks.azure.com/gpu-sku" = var.gpu_monitoring_sku_name
+    "aks.azure.com/gpu-sku"      = var.gpu_monitoring_sku_name
+    "tau.azure.com/gpu-class"    = var.gpu_class
+    "kueue.azure.com/gpu-series" = var.gpu_series
   }
 
   upgrade_settings {
@@ -65,20 +78,23 @@ locals {
   generated_directory = "${path.module}/generated"
   kubeconfig_path     = "${local.generated_directory}/kubeconfig"
   values_path         = "${local.generated_directory}/taugrid-values.yaml"
-  gpu_quota           = var.gpu_node_count * var.gpu_count_per_node
+  gpu_quota           = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
   adx_databases       = toset(["Metrics", "Logs", "CostTracking", "Audit"])
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
-    gpu_quota                           = local.gpu_quota
-    gpu_monitoring_sku_name             = var.gpu_monitoring_sku_name
-    gpu_vm_size                         = var.gpu_vm_size
-    gpu_count_per_node                  = var.gpu_count_per_node
-    adx_enabled                         = var.enable_adx
-    lifecycle_recorder_enabled          = var.enable_lifecycle_recorder
-    lifecycle_recorder_client_id        = var.enable_lifecycle_recorder ? azurerm_user_assigned_identity.lifecycle_recorder[0].client_id : ""
-    lifecycle_recorder_target_namespace = var.lifecycle_recorder_target_namespace
-    adx_endpoint                        = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
-    portal_client_id                    = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
-    cluster_name                        = var.cluster_name
+    gpu_quota                    = local.gpu_quota
+    gpu_monitoring_sku_name      = var.gpu_monitoring_sku_name
+    gpu_flavor_name              = var.gpu_flavor_name
+    gpu_class                    = var.gpu_class
+    gpu_series                   = var.gpu_series
+    gpu_vm_size                  = var.gpu_vm_size
+    gpu_count_per_node           = var.gpu_count_per_node
+    adx_enabled                  = var.enable_adx
+    lifecycle_recorder_enabled   = var.enable_lifecycle_recorder
+    lifecycle_recorder_client_id = var.enable_lifecycle_recorder ? azurerm_user_assigned_identity.lifecycle_recorder[0].client_id : ""
+    workspace_namespace          = var.workspace_namespace
+    adx_endpoint                 = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
+    portal_client_id             = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
+    cluster_name                 = var.cluster_name
   })
 }
 
@@ -226,7 +242,7 @@ resource "terraform_data" "install_taugrid" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
+    command = "az aks get-credentials --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
   }
 
   depends_on = [
@@ -274,7 +290,7 @@ resource "terraform_data" "install_dcgm_exporter" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
+    command = "az aks get-credentials --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
   }
 
   depends_on = [
@@ -297,7 +313,7 @@ resource "terraform_data" "install_adx_mon" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
+    command = "az aks get-credentials --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
   }
 
   depends_on = [

@@ -10,7 +10,7 @@ output "cluster_name" {
 
 output "get_credentials_command" {
   description = "Fetch an operator kubeconfig with Azure CLI."
-  value       = "az aks get-credentials --resource-group ${azurerm_resource_group.this.name} --name ${azurerm_kubernetes_cluster.this.name} --overwrite-existing"
+  value       = "az aks get-credentials --subscription ${var.subscription_id} --resource-group ${azurerm_resource_group.this.name} --name ${azurerm_kubernetes_cluster.this.name} --overwrite-existing"
 }
 
 output "portal_port_forward_command" {

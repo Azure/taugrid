@@ -2,10 +2,12 @@ baselineQueue:
   gpu:
     enabled: true
     flavors:
-      - name: taugrid-a100
+      - name: ${gpu_flavor_name}
         nodeLabels:
           kubernetes.io/os: linux
           aks.azure.com/gpu-sku: ${gpu_monitoring_sku_name}
+          tau.azure.com/gpu-class: ${gpu_class}
+          kueue.azure.com/gpu-series: ${gpu_series}
         nodeTaints:
           - key: sku
             value: gpu
@@ -19,7 +21,7 @@ taugrid-core:
   portal:
     enabled: true
     namespace: tau
-    workloadNamespace: taugrid-default
+    workloadNamespace: ${workspace_namespace}
     source: kusto
     cluster: ${cluster_name}
     serviceAccount:
@@ -48,7 +50,7 @@ taugrid-core:
   lifecycleRecorder:
     enabled: true
     namespace: tau
-    targetNamespace: ${lifecycle_recorder_target_namespace}
+    targetNamespace: ${workspace_namespace}
     cluster: ${cluster_name}
     kusto:
       endpoint: ${adx_endpoint}

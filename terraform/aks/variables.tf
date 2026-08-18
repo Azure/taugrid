@@ -3,6 +3,25 @@ variable "subscription_id" {
   type        = string
 }
 
+variable "tenant_id" {
+  description = "Microsoft Entra tenant ID for AKS authentication. Null uses the tenant of the AzureRM caller."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "aks_admin_group_object_ids" {
+  description = "Microsoft Entra group object IDs granted AKS cluster-admin access."
+  type        = list(string)
+  default     = []
+}
+
+variable "azure_rbac_enabled" {
+  description = "Use Azure RBAC for Kubernetes authorization. Keep false when TauWorkspace Kubernetes RoleBindings enforce group access."
+  type        = bool
+  default     = false
+}
+
 variable "location" {
   description = "Azure region for the resource group and AKS cluster."
   type        = string
@@ -58,9 +77,37 @@ variable "gpu_vm_size" {
 }
 
 variable "gpu_node_count" {
-  description = "Number of GPU nodes."
+  description = "Number of GPU nodes when gpu_auto_scaling_enabled is false."
   type        = number
   default     = 1
+}
+
+variable "gpu_auto_scaling_enabled" {
+  description = "Enable cluster autoscaling for the GPU node pool."
+  type        = bool
+  default     = false
+}
+
+variable "gpu_min_count" {
+  description = "Minimum GPU node count when gpu_auto_scaling_enabled is true."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.gpu_min_count >= 0
+    error_message = "gpu_min_count must be non-negative."
+  }
+}
+
+variable "gpu_max_count" {
+  description = "Maximum GPU node count when gpu_auto_scaling_enabled is true."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.gpu_max_count >= var.gpu_min_count
+    error_message = "gpu_max_count must be greater than or equal to gpu_min_count."
+  }
 }
 
 variable "gpu_count_per_node" {
@@ -73,6 +120,24 @@ variable "gpu_monitoring_sku_name" {
   description = "gpu-monitoring profile name. The default matches Standard_NC24ads_A100_v4."
   type        = string
   default     = "a100-pcie-1g"
+}
+
+variable "gpu_flavor_name" {
+  description = "Kueue ResourceFlavor name for the GPU node pool."
+  type        = string
+  default     = "taugrid-a100"
+}
+
+variable "gpu_class" {
+  description = "Canonical TauGrid GPU class label applied to the GPU nodes and ResourceFlavor."
+  type        = string
+  default     = "a100-80gb"
+}
+
+variable "gpu_series" {
+  description = "Canonical Kueue GPU series label applied to the GPU nodes and ResourceFlavor."
+  type        = string
+  default     = "nc-a100-v4"
 }
 
 variable "taugrid_version" {
@@ -110,8 +175,8 @@ variable "enable_lifecycle_recorder" {
   }
 }
 
-variable "lifecycle_recorder_target_namespace" {
-  description = "Existing workload namespace observed by the lifecycle recorder. Create it through a TauWorkspace before enabling the recorder."
+variable "workspace_namespace" {
+  description = "Existing TauWorkspace namespace shown by Portal and observed by the lifecycle recorder."
   type        = string
   default     = "taugrid-default"
 }

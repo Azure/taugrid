@@ -6,7 +6,8 @@ KubeRay, the Tau controller, GPU monitoring, the baseline queue, and Portal.
 
 The default GPU pool is one `Standard_NC24ads_A100_v4` node. It is billable and
 requires matching regional quota. Change `gpu_vm_size`, `gpu_count_per_node`,
-and `gpu_monitoring_sku_name` together for another supported GPU SKU.
+`gpu_monitoring_sku_name`, `gpu_class`, and `gpu_series` together for another
+supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
 
 ## Prerequisites
 
@@ -35,6 +36,10 @@ cp terraform.tfvars.example terraform.tfvars
 subscription_id     = "<subscription-id>"
 resource_group_name = "<resource-group-name>"
 cluster_name        = "<cluster-name>"
+aks_admin_group_object_ids = ["<entra-admin-group-object-id>"]
+
+# Keep Kubernetes RoleBindings as the TauWorkspace authorization mechanism.
+azure_rbac_enabled = false
 
 # Optional ADX, adx-mon, and Portal Kusto integration.
 enable_adx          = true
@@ -95,7 +100,7 @@ again:
 
 ```hcl
 enable_lifecycle_recorder           = true
-lifecycle_recorder_target_namespace = "taugrid-default"
+workspace_namespace                 = "taugrid-default"
 ```
 
 Terraform creates a least-privilege ADX ingestion identity, enables Portal run

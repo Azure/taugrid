@@ -6,6 +6,12 @@ location            = "swedencentral"
 resource_group_name = "<resource-group-name>"
 cluster_name        = "<cluster-name>"
 
+# A managed Entra AKS admin group is required for operator cluster access.
+aks_admin_group_object_ids = ["<entra-admin-group-object-id>"]
+# Keep Azure RBAC disabled so TauWorkspace Kubernetes RoleBindings grant
+# workspace access to Entra groups.
+azure_rbac_enabled = false
+
 # Use this interpreter on Linux, WSL, and macOS.
 command_interpreter = ["bash", "-c"]
 
@@ -14,6 +20,14 @@ gpu_vm_size             = "Standard_NC24ads_A100_v4"
 gpu_node_count          = 1
 gpu_count_per_node      = 1
 gpu_monitoring_sku_name = "a100-pcie-1g"
+gpu_flavor_name         = "taugrid-a100"
+gpu_class               = "a100-80gb"
+gpu_series              = "nc-a100-v4"
+
+# Set these instead of gpu_node_count to scale the GPU pool automatically.
+gpu_auto_scaling_enabled = false
+gpu_min_count            = 1
+gpu_max_count            = 1
 
 # ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
 enable_adx       = true
@@ -21,5 +35,5 @@ adx_cluster_name = "<globally-unique-adx-cluster-name>"
 
 # Keep this false for the first apply. Enable it only after the
 # taugrid-default TauWorkspace has been created, then apply again.
-enable_lifecycle_recorder           = false
-lifecycle_recorder_target_namespace = "taugrid-default"
+workspace_namespace        = "taugrid-default"
+enable_lifecycle_recorder = false
