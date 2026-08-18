@@ -69,7 +69,7 @@ Install the published OCI chart from Microsoft Container Registry:
 ```bash
 helm upgrade --install gpu-monitoring \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/gpu-monitoring \
-  --version 0.1.4 \
+  --version 0.1.5 \
   --namespace kube-system \
   --create-namespace
 ```
