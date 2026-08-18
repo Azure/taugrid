@@ -10,7 +10,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[?(@.name=="metrics-collector")].image
-          value: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector@sha256:c45fee5ea8a8b7a24a1ff6868d3dfa90b322c7369380e611ea63ae03f5981b59
+          value: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector@sha256:768ba258c817fa07a733626e3594407d4b1152aeb4f5c1ad0e6fb313cc04c1e9
 
   - it: pins every SKU DaemonSet to the same digest
     asserts:

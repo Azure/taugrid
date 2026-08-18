@@ -64,6 +64,170 @@ tests:
           path: data["rules.yaml"]
           pattern: 'http://localhost:19400/metrics'
 
+  - it: the managed localhost:19400 DCGM target carries the availability contract
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics\s+required: true\s+availabilityCondition: DcgmExporterUnavailable\s+unavailableFor: 2m\s+availableFor: 1m'
+
+  - it: a GPU Operator Service DCGM target keeps the availability contract
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h200
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics\s+required: true\s+availabilityCondition: DcgmExporterUnavailable\s+unavailableFor: 2m\s+availableFor: 1m'
+
+  - it: optional node-exporter and NPD targets carry no availability contract
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-exporter\s+url: http://localhost:9100/metrics\s+- name: node-problem-detector'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: node-problem-detector\s+url: http://localhost:20261/metrics\s+rules:'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'availabilityCondition: DcgmExporterUnavailable'
+
+  - it: a per-profile availability override does not leak into another profile
+    set:
+      gpuSkus.h200.dcgmAvailability.unavailableFor: 5m
+      gpuSkus.h200.dcgmAvailability.condition: H200DcgmExporterUnavailable
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'availabilityCondition: DcgmExporterUnavailable\s+unavailableFor: 2m'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'H200DcgmExporterUnavailable'
+
+  - it: a per-profile availability override applies to its own profile
+    set:
+      gpuSkus.h200.dcgmAvailability.unavailableFor: 5m
+      gpuSkus.h200.dcgmAvailability.condition: H200DcgmExporterUnavailable
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h200
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'availabilityCondition: H200DcgmExporterUnavailable\s+unavailableFor: 5m\s+availableFor: 1m'
+
+  - it: the availability condition never collides with the NPD dcgmi condition
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100
+    asserts:
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'availabilityCondition: DcgmHealthProblem'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: DcgmExporterUnavailable'
+
+  - it: disabling the availability contract drops the required-target fields
+    set:
+      metricsCollector.dcgmAvailability.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics\s+- name: node-exporter'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'availabilityCondition'
+
+  - it: an enabled availability contract with no dcgm-exporter target fails to render
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.scrapeTargets:
+        - name: node-exporter
+          url: http://localhost:9100/metrics
+    asserts:
+      - failedTemplate:
+          errorMessage: 'metricsCollector.dcgmAvailability is enabled but no scrapeTarget is named "dcgm-exporter"; add the target or set metricsCollector.dcgmAvailability.enabled=false'
+
+  - it: a malformed availability duration fails to render
+    set:
+      metricsCollector.dcgmAvailability.unavailableFor: 2minutes
+    asserts:
+      - failedTemplate:
+          errorMessage: 'metricsCollector.dcgmAvailability.unavailableFor must be a quoted duration such as "2m" (got 2minutes)'
+
+  - it: a malformed availability condition type fails to render
+    set:
+      metricsCollector.dcgmAvailability.condition: Dcgm-Exporter
+    asserts:
+      - failedTemplate:
+          errorMessage: 'metricsCollector.dcgmAvailability.condition "Dcgm-Exporter" must be an alphanumeric Node condition type'
+
+  - it: a target that declares an availability condition without required fails to render
+    set:
+      enabledGpuSkus[0]: h200
+      metricsCollector.dcgmAvailability.enabled: false
+      gpuSkus.h200.scrapeTargets:
+        - name: dcgm-exporter
+          url: http://localhost:19400/metrics
+          availabilityCondition: DcgmExporterUnavailable
+    asserts:
+      - failedTemplate:
+          errorMessage: 'scrapeTarget "dcgm-exporter" sets availabilityCondition without required: true'
+
+  - it: a required target without an availability condition fails to render
+    set:
+      enabledGpuSkus[0]: h200
+      metricsCollector.dcgmAvailability.enabled: false
+      gpuSkus.h200.scrapeTargets:
+        - name: dcgm-exporter
+          url: http://localhost:19400/metrics
+          required: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'scrapeTarget "dcgm-exporter" is required but sets no availabilityCondition'
+
+  - it: an explicit target with an invalid unavailable window fails to render
+    set:
+      enabledGpuSkus[0]: h200
+      metricsCollector.dcgmAvailability.enabled: false
+      gpuSkus.h200.scrapeTargets:
+        - name: dcgm-exporter
+          url: http://localhost:19400/metrics
+          required: true
+          availabilityCondition: DcgmExporterUnavailable
+          unavailableFor: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'scrapeTarget "dcgm-exporter" unavailableFor must be a quoted duration such as "2m" (got bogus)'
+
+  - it: an explicit target with an invalid available window fails to render
+    set:
+      enabledGpuSkus[0]: h200
+      metricsCollector.dcgmAvailability.enabled: false
+      gpuSkus.h200.scrapeTargets:
+        - name: dcgm-exporter
+          url: http://localhost:19400/metrics
+          required: true
+          availabilityCondition: DcgmExporterUnavailable
+          availableFor: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'scrapeTarget "dcgm-exporter" availableFor must be a quoted duration such as "2m" (got bogus)'
+
   - it: a per-SKU override does not change another profile
     values:
       - mixed-dcgm-values.yaml
@@ -177,3 +341,25 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: two enabled profiles claiming one instance type fail to render
+    set:
+      gpuSkus.h200.instanceTypes[0]: Standard_ND96isr_H100_v5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'instance type "Standard_ND96isr_H100_v5" is claimed by profiles "h100" and "h200"; a node must run exactly one monitoring profile so its Node conditions have a single owner'
+
+  - it: instance type overlap is detected regardless of spelling case
+    set:
+      gpuSkus.h200.instanceTypes[0]: standard_nd96isr_h100_v5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'instance type "standard_nd96isr_h100_v5" is claimed by profiles "h100" and "h200"; a node must run exactly one monitoring profile so its Node conditions have a single owner'
+
+  - it: an overlap outside the enabled profile set does not block rendering
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.instanceTypes[0]: Standard_ND96isr_H100_v5
+    asserts:
+      - hasDocuments:
+          count: 1

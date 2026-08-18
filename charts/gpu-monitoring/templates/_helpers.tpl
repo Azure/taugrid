@@ -63,6 +63,29 @@ silently render a cluster with no GPU health monitoring.
 {{- end }}
 
 {{/*
+Fail closed when two enabled profiles claim the same instance type. Profiles are
+isolated by instance-type node affinity, so a node runs exactly one collector.
+That isolation is what makes a Node condition single-owner: two collectors on one
+node would race to publish the same availability condition from different
+endpoints. Instance types are compared case-insensitively because profiles list
+both the API and lowercase spellings of the same VM size.
+*/}}
+{{- define "gpu-monitoring.validateProfileInstanceTypes" -}}
+{{- $owners := dict -}}
+{{- range $skuName, $sku := .Values.gpuSkus -}}
+{{- if and $sku (or (empty $.Values.enabledGpuSkus) (has $skuName $.Values.enabledGpuSkus)) -}}
+{{- range $instanceType := (default (list) $sku.instanceTypes) -}}
+{{- $key := lower (toString $instanceType) -}}
+{{- if and (hasKey $owners $key) (ne (index $owners $key) $skuName) -}}
+{{- fail (printf "instance type %q is claimed by profiles %q and %q; a node must run exactly one monitoring profile so its Node conditions have a single owner" $instanceType (index $owners $key) $skuName) -}}
+{{- end -}}
+{{- $_ := set $owners $key $skuName -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render the executable scripts and monitor configs stored in the shared Secret.
 The same rendered block is hashed for the Secret name so its identity cannot
 drift from its data.
@@ -154,6 +177,77 @@ DCGM exporter. A profile can override the inference with dcgm_health_required.
 {{- end }}
 
 {{/*
+Resolve the effective DCGM scrape-target availability contract for one profile.
+Per-profile `dcgmAvailability` merges over the chart-level defaults, so a profile
+that only overrides the DCGM endpoint keeps the availability guarantee.
+Returns the settings as YAML; callers decode it with fromYaml.
+*/}}
+{{- define "gpu-monitoring.dcgmAvailability" -}}
+{{- $root := .root -}}
+{{- $sku := .sku -}}
+{{- $availability := deepCopy (default (dict) $root.Values.metricsCollector.dcgmAvailability) -}}
+{{- if hasKey $sku "dcgmAvailability" -}}
+{{- $availability = mergeOverwrite $availability (deepCopy $sku.dcgmAvailability) -}}
+{{- end -}}
+{{- if $availability.enabled -}}
+{{- $condition := default "" $availability.condition -}}
+{{- if not (kindIs "string" $condition) -}}
+{{- fail "metricsCollector.dcgmAvailability.condition must be a quoted string" -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Za-z][A-Za-z0-9]*$" $condition) -}}
+{{- fail (printf "metricsCollector.dcgmAvailability.condition %q must be an alphanumeric Node condition type" $condition) -}}
+{{- end -}}
+{{- range $field := list "unavailableFor" "availableFor" -}}
+{{- $value := default "" (index $availability $field) -}}
+{{- if not (and (kindIs "string" $value) (regexMatch "^[0-9]+(ms|s|m|h)$" $value)) -}}
+{{- fail (printf "metricsCollector.dcgmAvailability.%s must be a quoted duration such as \"2m\" (got %v)" $field $value) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $availability | toYaml -}}
+{{- end }}
+
+{{/*
+Render one scrape target's availability contract, if it declares one. A target
+that publishes an availability condition is always required: the collector
+rejects a condition without `required: true`, and a required target without a
+condition would be monitored only by logs.
+Call with: dict "target" $target "availability" $availability
+*/}}
+{{- define "gpu-monitoring.scrapeTargetAvailability" -}}
+{{- $target := .target -}}
+{{- $availability := .availability -}}
+{{- $condition := default "" $target.availabilityCondition -}}
+{{- $unavailableFor := default "" $target.unavailableFor -}}
+{{- $availableFor := default "" $target.availableFor -}}
+{{- if and (eq $target.name "dcgm-exporter") (default false $availability.enabled) (not $condition) -}}
+{{- $condition = $availability.condition -}}
+{{- $unavailableFor = default "" $availability.unavailableFor -}}
+{{- $availableFor = default "" $availability.availableFor -}}
+{{- else if and (default false $target.required) (not $condition) -}}
+{{- fail (printf "scrapeTarget %q is required but sets no availabilityCondition" $target.name) -}}
+{{- else if and $condition (not (default false $target.required)) -}}
+{{- fail (printf "scrapeTarget %q sets availabilityCondition without required: true" $target.name) -}}
+{{- end -}}
+{{- if $condition -}}
+{{- range $field := list "unavailableFor" "availableFor" -}}
+{{- $value := index (dict "unavailableFor" $unavailableFor "availableFor" $availableFor) $field -}}
+{{- if and $value (not (and (kindIs "string" $value) (regexMatch "^[0-9]+(ms|s|m|h)$" $value))) -}}
+{{- fail (printf "scrapeTarget %q %s must be a quoted duration such as \"2m\" (got %v)" $target.name $field $value) -}}
+{{- end -}}
+{{- end -}}
+required: true
+availabilityCondition: {{ $condition }}
+{{- if $unavailableFor }}
+unavailableFor: {{ $unavailableFor }}
+{{- end }}
+{{- if $availableFor }}
+availableFor: {{ $availableFor }}
+{{- end }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render one SKU's metrics collector rules. The DaemonSet hashes this exact payload
 so ConfigMap changes roll only the affected profile.
 */}}
@@ -164,6 +258,7 @@ so ConfigMap changes roll only the affected profile.
 {{- if hasKey $sku "scrapeTargets" }}
 {{- $scrapeTargets = $sku.scrapeTargets }}
 {{- end }}
+{{- $availability := fromYaml (include "gpu-monitoring.dcgmAvailability" (dict "root" $root "sku" $sku)) }}
 {{- $nodeExporterEnabled := $root.Values.nodeExporter.enabled }}
 {{- if hasKey $sku "nodeExporter" }}
 {{- $nodeExporterEnabled = $sku.nodeExporter }}
@@ -176,16 +271,25 @@ so ConfigMap changes roll only the affected profile.
 {{- $nodeExporterScrapeEnabled = $sku.nodeExporterScrape }}
 {{- end }}
 scrapeTargets:
-  {{- range $scrapeTargets }}
-  {{- if eq .name "node-exporter" }}
+  {{- $dcgmTargetFound := false }}
+  {{- range $target := $scrapeTargets }}
+  {{- if eq $target.name "node-exporter" }}
   {{- if $nodeExporterScrapeEnabled }}
-  - name: {{ .name }}
-    url: {{ .url }}
+  - name: {{ $target.name }}
+    url: {{ $target.url }}
+    {{- with (include "gpu-monitoring.scrapeTargetAvailability" (dict "target" $target "availability" $availability)) }}{{ . | nindent 4 }}{{- end }}
   {{- end }}
   {{- else }}
-  - name: {{ .name }}
-    url: {{ .url }}
+  {{- if eq $target.name "dcgm-exporter" }}
+  {{- $dcgmTargetFound = true }}
   {{- end }}
+  - name: {{ $target.name }}
+    url: {{ $target.url }}
+    {{- with (include "gpu-monitoring.scrapeTargetAvailability" (dict "target" $target "availability" $availability)) }}{{ . | nindent 4 }}{{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if and (default false $availability.enabled) (not $dcgmTargetFound) }}
+  {{- fail "metricsCollector.dcgmAvailability is enabled but no scrapeTarget is named \"dcgm-exporter\"; add the target or set metricsCollector.dcgmAvailability.enabled=false" }}
   {{- end }}
   {{- if $root.Values.metricsCollector.npdScrape }}
   - name: node-problem-detector

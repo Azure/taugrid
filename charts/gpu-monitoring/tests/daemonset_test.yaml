@@ -276,7 +276,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-          value: 714235a3faae83eb79646a80360716e2eebd8341ff83f0184bd3668f3bedc1cf
+          value: 0299caef4fda7e63ed67ae3753b9ec673d21bba507b41728cb2f11670f86f053
 
   - it: per-profile scrape target changes update only that profile checksum
     values:
@@ -287,7 +287,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-          value: 8bceeb43852f6747a2f33b8efb080a175720b7108d27ee0ecda8abb8ccff4fec
+          value: f7c81f2a69ab5658bf1c14f276544b1c335b18f61ed6b34654a18ed0463bb45c
 
   - it: GPU device-file and host DCGM health checks are required
     documentSelector:
