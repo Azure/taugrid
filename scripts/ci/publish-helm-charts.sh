@@ -75,39 +75,6 @@ repository_tags() {
   return 1
 }
 
-verify_existing_chart() {
-  local archive="$1"
-  local chart_name="$2"
-  local chart_version="$3"
-  local work_dir="$4"
-  local repository="${REPOSITORY_NAME}/helm/${chart_name}"
-  local existing_dir="${work_dir}/existing"
-  local candidate_dir="${work_dir}/candidate"
-
-  mkdir -p "$existing_dir" "$candidate_dir"
-  helm pull \
-    "oci://${ACR_NAME}.azurecr.io/${repository}" \
-    --version "$chart_version" \
-    --untar \
-    --untardir "$existing_dir"
-  tar -xzf "$archive" -C "$candidate_dir"
-
-  # Helm rewrites this timestamp on every dependency build. It is not part of
-  # the resolved dependency set, so ignore it when checking publish retries.
-  find \
-    "${existing_dir}/${chart_name}" \
-    "${candidate_dir}/${chart_name}" \
-    -type f -name Chart.lock -exec sed -i '/^generated:/d' {} +
-
-  if ! diff -ru "${existing_dir}/${chart_name}" "${candidate_dir}/${chart_name}"; then
-    echo "Chart ${chart_name}:${chart_version} already exists with different content." >&2
-    echo "Bump version in charts/${chart_name}/Chart.yaml before publishing." >&2
-    return 1
-  fi
-
-  echo "Chart ${chart_name}:${chart_version} is already published with identical content; skipping."
-}
-
 cleanup_work_root() {
   local work_root="$1"
   rm -rf "$work_root"
@@ -116,10 +83,9 @@ cleanup_work_root() {
 publish_charts() {
   local package_dir="$1"
   local work_root
+  local registry_logged_in=false
   work_root=$(mktemp -d)
   trap "cleanup_work_root $(printf '%q' "$work_root")" EXIT
-
-  az acr login --name "$ACR_NAME"
 
   for chart in "${CHARTS[@]}"; do
     local chart_name
@@ -133,19 +99,23 @@ publish_charts() {
     archive="${package_dir}/${chart_name}-${chart_version}.tgz"
     repository="${REPOSITORY_NAME}/helm/${chart_name}"
 
+    tags=$(repository_tags "$repository")
+    if grep -Fxq "$chart_version" <<<"$tags"; then
+      # The backing ACR is the source for MCR synchronization. A version can
+      # exist here before it becomes visible in public MCR, so never repush an
+      # existing tag.
+      echo "Chart ${chart_name}:${chart_version} already exists in the publish registry; skipping."
+      continue
+    fi
+
     if [[ ! -f "$archive" ]]; then
       echo "Expected chart package not found: ${archive}" >&2
       return 1
     fi
 
-    tags=$(repository_tags "$repository")
-    if grep -Fxq "$chart_version" <<<"$tags"; then
-      verify_existing_chart \
-        "$archive" \
-        "$chart_name" \
-        "$chart_version" \
-        "${work_root}/${chart_name}"
-      continue
+    if [[ "$registry_logged_in" == false ]]; then
+      az acr login --name "$ACR_NAME"
+      registry_logged_in=true
     fi
 
     helm push \

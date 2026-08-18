@@ -1,4 +1,4 @@
-# Publishes TauGrid-owned Helm charts to the public ACR that synchronizes to MCR.
+# Publishes TauGrid-owned Helm charts to the backing ACR that synchronizes to MCR.
 
 trigger:
   batch: true
