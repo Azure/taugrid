@@ -6,10 +6,12 @@ package scraper
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +25,64 @@ type Metric struct {
 }
 
 // ScrapeTarget defines an endpoint to scrape.
+//
+// A target may declare itself required, meaning its loss is a node-level health
+// signal rather than a log line. Required targets must name the Node condition
+// that reports their availability so a remediation system can distinguish "no
+// errors reported" from "no metrics collected".
 type ScrapeTarget struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
+	// Required marks the target as mandatory for this node's health signal.
+	Required bool `yaml:"required,omitempty"`
+	// AvailabilityCondition is the Node condition type set while a required
+	// target is unreachable. It reports endpoint reachability only and must not
+	// reuse a condition type owned by a rule or by another target.
+	AvailabilityCondition string `yaml:"availabilityCondition,omitempty"`
+	// UnavailableFor is how long scrapes must fail continuously before the
+	// condition is set. Zero uses DefaultUnavailableFor.
+	UnavailableFor time.Duration `yaml:"unavailableFor,omitempty"`
+	// AvailableFor is how long scrapes must succeed continuously before a set
+	// condition is cleared. Zero uses DefaultAvailableFor.
+	AvailableFor time.Duration `yaml:"availableFor,omitempty"`
+}
+
+// Default debounce windows for required-target availability. They are long
+// enough that a single missed scrape cannot flap a Node condition.
+const (
+	DefaultUnavailableFor = 2 * time.Minute
+	DefaultAvailableFor   = 1 * time.Minute
+)
+
+// UnavailableWindow returns the configured failure debounce, or the default.
+func (t ScrapeTarget) UnavailableWindow() time.Duration {
+	if t.UnavailableFor > 0 {
+		return t.UnavailableFor
+	}
+	return DefaultUnavailableFor
+}
+
+// AvailableWindow returns the configured recovery debounce, or the default.
+func (t ScrapeTarget) AvailableWindow() time.Duration {
+	if t.AvailableFor > 0 {
+		return t.AvailableFor
+	}
+	return DefaultAvailableFor
+}
+
+// TargetStatus is the redacted outcome of scraping one target. Err is safe to
+// publish: it never carries credentials or query parameters from the URL.
+type TargetStatus struct {
+	Target  ScrapeTarget
+	OK      bool
+	SafeURL string
+	Err     string
+}
+
+// ScrapeResult carries the merged metric set plus per-target outcomes.
+type ScrapeResult struct {
+	Metrics  []Metric
+	Statuses []TargetStatus
 }
 
 // Scraper collects metrics from Prometheus exposition endpoints.
@@ -49,9 +106,11 @@ func New(targets []ScrapeTarget) *Scraper {
 	}
 }
 
-// Scrape fetches metrics from all targets concurrently, returning a unified metric set.
-// Targets that are unreachable are logged and skipped.
-func (s *Scraper) Scrape(ctx context.Context) ([]Metric, error) {
+// Scrape fetches metrics from all targets concurrently, returning a unified
+// metric set plus the per-target outcome. Targets that are unreachable are
+// logged and skipped; their loss is reported through ScrapeResult.Statuses so
+// a required target's absence cannot be mistaken for a healthy node.
+func (s *Scraper) Scrape(ctx context.Context) (ScrapeResult, error) {
 	type result struct {
 		metrics []Metric
 		err     error
@@ -66,16 +125,69 @@ func (s *Scraper) Scrape(ctx context.Context) ([]Metric, error) {
 		}(t)
 	}
 
-	var all []Metric
+	out := ScrapeResult{Statuses: make([]TargetStatus, 0, len(s.targets))}
 	for range s.targets {
 		r := <-ch
+		safeURL := SafeURL(r.target.URL)
+		status := TargetStatus{Target: r.target, OK: r.err == nil, SafeURL: safeURL}
 		if r.err != nil {
-			slog.Warn("scrape target unavailable", "target", r.target.Name, "url", r.target.URL, "error", r.err)
-			continue
+			status.Err = redactError(r.err, r.target.URL, safeURL)
+			slog.Warn("scrape target unavailable",
+				"target", r.target.Name,
+				"url", safeURL,
+				"required", r.target.Required,
+				"error", status.Err)
+		} else {
+			out.Metrics = append(out.Metrics, r.metrics...)
 		}
-		all = append(all, r.metrics...)
+		out.Statuses = append(out.Statuses, status)
 	}
-	return all, nil
+	return out, nil
+}
+
+// SafeURL renders a target URL without credentials, query, or fragment so it
+// can be published in a Node condition message. Unparseable URLs collapse to a
+// placeholder rather than leaking their raw contents.
+func SafeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "<redacted-url>"
+	}
+	safe := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
+	return safe.String()
+}
+
+// redactError renders a scrape error without the raw target URL. net/http wraps
+// failures in *url.Error, whose message embeds the full URL including any
+// userinfo and query string.
+func redactError(err error, rawURL, safeURL string) string {
+	msg := err.Error()
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		msg = urlErr.Err.Error()
+	}
+	if rawURL != "" {
+		msg = strings.ReplaceAll(msg, rawURL, safeURL)
+	}
+	if u, parseErr := url.Parse(rawURL); parseErr == nil {
+		if u.User != nil {
+			msg = strings.ReplaceAll(msg, u.User.String(), "<redacted>")
+		}
+		if u.RawQuery != "" {
+			msg = strings.ReplaceAll(msg, u.RawQuery, "<redacted>")
+		}
+	}
+	return truncate(msg, maxErrorLength)
+}
+
+// maxErrorLength bounds the error text copied into a Node condition message.
+const maxErrorLength = 200
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) ([]Metric, error) {

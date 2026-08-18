@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/availability"
 	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/conditions"
 	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/config"
 	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/rules"
@@ -64,6 +65,7 @@ func run() error {
 
 	sc := scraper.New(cfg.ScrapeTargets)
 	engine := rules.NewEngine(cfg.Rules)
+	tracker := availability.New(cfg.ScrapeTargets, cfg.RuleConditionTypes())
 	writer := conditions.NewWriter(clientset, *nodeName)
 
 	// Restore state from previous run if available.
@@ -71,6 +73,7 @@ func run() error {
 		slog.Warn("failed to load state", "error", err)
 	} else if snap != nil {
 		engine.RestoreState(snap.History, snap.Pending)
+		tracker.RestoreState(snap.Availability, snap.SavedAt, time.Now())
 		writer.RestoreLastStatus(snap.LastStatus)
 	}
 
@@ -83,6 +86,7 @@ func run() error {
 		"node", *nodeName,
 		"scrapeInterval", scrapeInterval.String(),
 		"rules", len(cfg.Rules),
+		"availabilityConditions", tracker.Tracked(),
 		"startupJitter", jitter.String())
 
 	select {
@@ -95,45 +99,47 @@ func run() error {
 	defer ticker.Stop()
 
 	// Run immediately on start, then on interval.
-	if err := collect(ctx, sc, engine, writer); err != nil {
+	if err := collect(ctx, sc, engine, tracker, writer); err != nil {
 		slog.Error("collection failed", "error", err)
 	}
-	saveState(engine, writer, *stateDir)
+	saveState(engine, tracker, writer, *stateDir)
 
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("shutting down")
-			saveState(engine, writer, *stateDir)
+			saveState(engine, tracker, writer, *stateDir)
 			return nil
 		case <-ticker.C:
-			if err := collect(ctx, sc, engine, writer); err != nil {
+			if err := collect(ctx, sc, engine, tracker, writer); err != nil {
 				slog.Error("collection failed", "error", err)
 			}
-			saveState(engine, writer, *stateDir)
+			saveState(engine, tracker, writer, *stateDir)
 		}
 	}
 }
 
-func saveState(engine *rules.Engine, writer *conditions.Writer, dir string) {
+func saveState(engine *rules.Engine, tracker *availability.Tracker, writer *conditions.Writer, dir string) {
 	history, pending := engine.ExportState()
 	snap := &state.Snapshot{
-		History:    history,
-		Pending:    pending,
-		LastStatus: writer.ExportLastStatus(),
+		History:      history,
+		Pending:      pending,
+		LastStatus:   writer.ExportLastStatus(),
+		Availability: tracker.ExportState(),
 	}
 	if err := state.Save(dir, snap); err != nil {
 		slog.Warn("failed to save state", "error", err)
 	}
 }
 
-func collect(ctx context.Context, sc *scraper.Scraper, engine *rules.Engine, writer *conditions.Writer) error {
-	metrics, err := sc.Scrape(ctx)
+func collect(ctx context.Context, sc *scraper.Scraper, engine *rules.Engine, tracker *availability.Tracker, writer *conditions.Writer) error {
+	scraped, err := sc.Scrape(ctx)
 	if err != nil {
 		return fmt.Errorf("scraping metrics: %w", err)
 	}
 
-	results := engine.Evaluate(metrics)
+	results := engine.Evaluate(scraped.Metrics)
+	results = append(results, tracker.Evaluate(scraped.Statuses, time.Now())...)
 
 	if err := writer.WriteConditions(ctx, results); err != nil {
 		return fmt.Errorf("writing conditions: %w", err)

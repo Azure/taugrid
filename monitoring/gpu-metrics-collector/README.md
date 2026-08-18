@@ -44,7 +44,8 @@ A lightweight, config-driven sidecar that replaces Prometheus + AlertManager in 
 - **Startup jitter** — random delay before first scrape to prevent thundering herd at fleet scale
 - **Heartbeat throttling** — patches API server every ~5 minutes when nothing changed (immediate on status change)
 - **Per-node jitter offset** — heartbeat cycles are offset randomly so API patches are distributed evenly across the fleet
-- **Graceful degradation** — unavailable scrape targets are logged and skipped (e.g., no GPU = no DCGM)
+- **Graceful degradation** — unavailable optional scrape targets are logged and skipped (e.g., no GPU = no DCGM)
+- **Required-target availability** — a required target's sustained loss is published as its own Node condition, so a silenced exporter cannot look like a healthy GPU
 - **Strategic merge patch** — writes only changed conditions; coexists safely with NPD's own conditions
 
 ## Scale Characteristics (20K nodes)
@@ -70,10 +71,15 @@ monitoring/gpu-metrics-collector/
 │   ├── rules/
 │   │   ├── rules.go               # Rule engine: rate/instant modes, history, cleanup
 │   │   └── rules_test.go
+│   ├── availability/
+│   │   ├── availability.go        # Required-target reachability → debounced conditions
+│   │   └── availability_test.go
 │   ├── conditions/
-│   │   └── conditions.go          # Node condition writer with jittered heartbeat
+│   │   ├── conditions.go          # Node condition writer with jittered heartbeat
+│   │   └── conditions_test.go
 │   └── config/
-│       └── config.go              # YAML config loader with validation
+│       ├── config.go              # YAML config loader with validation
+│       └── config_test.go
 ├── Dockerfile                     # Multi-stage: Microsoft Go 1.26.6 → distroless/static
 ├── Makefile
 ├── go.mod
@@ -81,6 +87,16 @@ monitoring/gpu-metrics-collector/
 ```
 
 ## Building
+
+This repository is the single source of truth for the collector: the Go sources
+here and the build context in `images/gpu-metrics-collector` are what ships.
+There is no second copy of these sources to keep in sync.
+
+Production images are published from merged Azure/TauGrid `main` by external,
+approved automation rather than by a workflow in this repository. Merging a
+change here therefore does not by itself alter any deployed cluster: a chart
+must additionally pin an image digest built from that merged source before new
+collector behavior takes effect.
 
 ```bash
 # Local build (native arch)
@@ -148,6 +164,10 @@ metricsCollector:
   scrapeTargets:
     - name: dcgm-exporter
       url: http://localhost:19400/metrics
+      required: true
+      availabilityCondition: DcgmExporterUnavailable
+      unavailableFor: 2m
+      availableFor: 1m
     - name: node-exporter
       url: http://localhost:9100/metrics
   rules:
@@ -165,6 +185,69 @@ For a GPU Operator-backed profile, set its `gpuSkus.<profile>.scrapeTargets` to
 the node-local Service URL shown above while managed profiles inherit the global
 port-19400 target. Apply the `ClusterPolicy` setting above before enabling
 Node-condition writes.
+
+### Scrape Target Schema
+
+The collector accepts these fields in the `scrapeTargets` entries of its config.
+The bundled `gpu-monitoring` chart does not render the availability fields yet,
+so on a chart that omits them the collector behaves exactly as before; wiring
+them into rendered chart values is a separate change.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Target name, used in logs and condition messages |
+| `url` | string | Absolute `http`/`https` metrics endpoint |
+| `required` | bool | Target loss is a node health signal, not just a log line. Requires `availabilityCondition` |
+| `availabilityCondition` | string | Node condition type reporting this target's reachability. Requires `required: true` |
+| `unavailableFor` | duration | Continuous failure before the condition is set (default `2m`) |
+| `availableFor` | duration | Continuous success before the condition is cleared (default `1m`) |
+
+Targets without `required` keep the previous behavior: failures are logged,
+skipped, and publish no condition.
+
+### Required-Target Availability
+
+A rule can only report on metrics the collector received. When a required
+exporter disappears, every rule reading its metrics evaluates to "not firing",
+which is indistinguishable from a healthy node. Required targets close that gap:
+
+- The condition is set only after `unavailableFor` of continuous failure and
+  cleared only after `availableFor` of continuous success, so one missed scrape
+  cannot flap it.
+- Debounce state is persisted with the rest of the collector state, and both
+  timers are shifted by the collector's downtime on restore. A restart neither
+  re-arms the failure timer from zero nor counts the collector's own downtime as
+  continuous scrape failure or continuous recovery.
+- The collector publishes a condition only once it has proven that condition's
+  state itself, or restored continuity from a snapshot written by a process that
+  had. If the snapshot is missing, corrupt, or stale, it stays silent rather
+  than reporting `False`, so a restart in the middle of an outage cannot clear a
+  `True` condition the API server already holds on the strength of a scrape that
+  just failed. Silence leaves the existing condition untouched; the condition is
+  re-asserted after `unavailableFor` of proven failure, or cleared after
+  `availableFor` of proven success.
+- A condition the collector no longer owns (availability disabled, or the
+  condition renamed) is published once as `False` on the next start, because
+  Kubernetes cannot delete a Node condition and nothing else would clear it. It
+  is published exactly once, and never for a condition type a rule now owns:
+  results share one patch keyed by condition type, so a repeated stale clear
+  would overwrite the live owner's value.
+- Messages carry the target name, a sanitized URL, how long the state has held,
+  and the underlying connection or HTTP status error. Userinfo, query strings,
+  and fragments are stripped from both the URL and the error text, so a
+  credentialed endpoint cannot leak into node status.
+- The condition reports endpoint reachability only. It is distinct from DCGM
+  diagnostic health (NPD's `dcgmi` checks, `DcgmHealthProblem`).
+- Each required target owns exactly one condition type. Config load rejects two
+  targets that claim the same condition type and rejects a target that claims a
+  condition type also owned by a rule.
+
+Validation is scoped to the availability contract. Configuration shapes that
+earlier versions accepted — a target with no name, a target with no URL, a
+duplicate target name, or two rules sharing a condition type — still load and
+are only logged as warnings. Refusing to start would restart-loop the collector
+and freeze every condition it owns, which is worse than the degraded-but-running
+behavior it replaces.
 
 ### Rule Schema
 
