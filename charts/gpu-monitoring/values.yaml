@@ -98,10 +98,21 @@ metricsCollector:
   enabled: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
-    # a9c2591 — golang.org/x/net 0.55.0 (#830). Set exactly one of tag or
-    # digest; tag is for local builds, published deployments use the digest.
+    # e0826b20dd39 — merged collector availability source from TauGrid #118.
+    # Set exactly one of tag or digest; tag is for local builds, published
+    # deployments use the digest.
+    #
+    # dcgmAvailability below requires a collector build that understands the
+    # `required` / `availabilityCondition` scrape-target fields. An older image
+    # ignores them and publishes no condition.
+    #
+    # This repository owns the collector source and build context. MCR
+    # publication runs only from merged TauGrid main. Pin this to the immutable
+    # digest of the public image published from the merged source containing
+    # that support — digest only, never a floating tag and never latest. See the
+    # chart README section "Collector image requirement and release ordering".
     tag: ""
-    digest: sha256:c45fee5ea8a8b7a24a1ff6868d3dfa90b322c7369380e611ea63ae03f5981b59
+    digest: sha256:768ba258c817fa07a733626e3594407d4b1152aeb4f5c1ad0e6fb313cc04c1e9
   scrapeInterval: "15s"
   resources:
     requests:
@@ -121,6 +132,27 @@ metricsCollector:
       url: http://localhost:19400/metrics
     - name: node-exporter
       url: http://localhost:9100/metrics
+  # Required DCGM scrape-target availability.
+  #
+  # Losing the DCGM exporter silences every DCGM rule, and a silenced rule is
+  # indistinguishable from a healthy GPU. The collector therefore publishes the
+  # configured dcgm-exporter target's reachability as its own Node condition,
+  # for both the host-local 19400 endpoint and a GPU Operator Service on 9400.
+  #
+  # This reports endpoint reachability only. It is distinct from NPD's
+  # DcgmHealthProblem, which runs host `dcgmi` diagnostics and cannot cover a
+  # non-loopback exporter.
+  #
+  # The condition is set only after `unavailableFor` of continuous failure and
+  # cleared only after `availableFor` of continuous success, so one missed
+  # scrape cannot flap it; collector downtime counts as neither. Per-profile
+  # overrides go under gpuSkus.<profile>.dcgmAvailability and merge over these
+  # values.
+  dcgmAvailability:
+    enabled: true
+    condition: DcgmExporterUnavailable
+    unavailableFor: 2m
+    availableFor: 1m
   # By default the collector scrapes node-exporter only when this chart deploys
   # the node-exporter sidecar. Set nodeExporterScrape: true to scrape an
   # external hostNetwork node-exporter on :9100 without deploying a second

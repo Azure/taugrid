@@ -69,7 +69,7 @@ Install the published OCI chart from Microsoft Container Registry:
 ```bash
 helm upgrade --install gpu-monitoring \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/gpu-monitoring \
-  --version 0.1.4 \
+  --version 0.1.5 \
   --namespace kube-system \
   --create-namespace
 ```
@@ -107,6 +107,9 @@ Each `gpuSkus` entry may set:
 - `dcgm_health_required` to override whether NPD runs the host `dcgmi` health
   check. By default, the chart requires it only for profiles whose selected
   DCGM scrape target is host-local.
+- `dcgmAvailability` to override the DCGM scrape-target availability contract
+  (condition type and debounce windows) for that profile. See
+  [DCGM scrape-target availability](#dcgm-scrape-target-availability).
 
 Use `enabledGpuSkus` to render only the profiles present in a deployment. An
 empty list preserves the default behavior and renders all profiles.
@@ -170,15 +173,139 @@ the historical `NVLinkB200Inactive` Node condition name for compatibility, but
 the underlying NVLink and IMEX checks accept both models.
 
 For non-host-local DCGM targets, the chart disables the host `dcgmi` check and
-the metrics collector scrapes the configured endpoint. The collector does not
-currently publish endpoint availability as a dedicated Node condition, so
-remediation systems must not treat the absence of `DcgmHealthProblem` as proof
-that a remote exporter is reachable.
+the metrics collector scrapes the configured endpoint. Endpoint reachability is
+published as its own Node condition, described below; the absence of
+`DcgmHealthProblem` alone still says nothing about a remote exporter.
 
 If an expected device or its `pkeys/0` file is missing, both the link and PKey
 conditions may fire: link health cannot find the expected port, and PKey health
 cannot verify partition membership. Consumers should not assume these
 conditions are mutually exclusive.
+
+## DCGM scrape-target availability
+
+Losing the DCGM exporter silences every DCGM rule, and a silenced rule looks
+exactly like a healthy GPU. The collector therefore treats the `dcgm-exporter`
+scrape target as **required** and publishes its reachability as a dedicated Node
+condition:
+
+| | |
+| --- | --- |
+| Condition type | `DcgmExporterUnavailable` (`metricsCollector.dcgmAvailability.condition`) |
+| `True` | The configured DCGM endpoint failed every scrape for `unavailableFor` (default `2m`) |
+| `False` | The endpoint is reachable, or has not yet failed for the full window |
+| Reason | `DcgmExporterUnavailable` when set, `DcgmExporterUnavailableOk` when clear |
+| Cleared | After `availableFor` (default `1m`) of continuous successful scrapes |
+
+The condition message names the target, its URL, how long the state has held,
+and the underlying connection or HTTP status error, for example:
+
+```text
+scrape target "dcgm-exporter" at http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics unavailable for 2m0s: connection refused
+```
+
+Messages are rendered from a sanitized URL: userinfo, query strings, and
+fragments are stripped from both the URL and the error text, so a credentialed
+or token-bearing endpoint cannot leak into node status.
+
+The windows exist so a single missed scrape cannot flap the condition. Debounce
+state is persisted with the rest of the collector state and both timers are
+shifted by the collector's downtime on restore, so a restart neither re-arms the
+failure timer from zero nor lets the collector's own downtime count as
+continuous failure or continuous recovery.
+
+This condition reports **endpoint reachability only**. It is deliberately
+distinct from `DcgmHealthProblem`, which is NPD's host `dcgmi` diagnostic check:
+a reachable exporter can still report unhealthy GPUs, and an unreachable
+exporter says nothing about the GPUs themselves. Consumers that gate workload
+admission should require `DcgmExporterUnavailable=False` in addition to their
+existing GPU health conditions.
+
+It works unchanged for both supported endpoint shapes — the managed host
+exporter on `localhost:19400` and a GPU Operator Service on `:9400` — because a
+per-profile `scrapeTargets` override inherits the contract:
+
+```yaml
+gpuSkus:
+  h200:
+    scrapeTargets:
+      - name: dcgm-exporter
+        url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+      - name: node-exporter
+        url: http://localhost:9100/metrics
+    # Optional: widen the windows for this profile only.
+    dcgmAvailability:
+      unavailableFor: 5m
+```
+
+Optional targets (`node-exporter`, `node-problem-detector`) keep their previous
+behavior: their loss is logged and they publish no condition.
+
+### Ownership
+
+Each Node condition has exactly one writer:
+
+- Within a collector, config load rejects two scrape targets that claim the same
+  condition type, and rejects a scrape target that claims a condition type also
+  owned by a rule.
+- Across collectors, profiles are isolated by instance-type node affinity, so a
+  node runs exactly one profile's DaemonSet. Rendering fails if two enabled
+  profiles claim the same instance type, which would otherwise let two
+  collectors race to publish this condition from different endpoints.
+
+### Fail-closed rendering
+
+Rendering fails, rather than silently dropping the guarantee, when:
+
+- `metricsCollector.dcgmAvailability.enabled` is true but the effective scrape
+  targets contain no `dcgm-exporter` entry;
+- `condition` is not an alphanumeric condition type, or `unavailableFor` /
+  `availableFor` is not a quoted duration such as `"2m"`;
+- a scrape target sets `availabilityCondition` without `required: true`, or is
+  `required` without an `availabilityCondition`.
+
+Set `metricsCollector.dcgmAvailability.enabled: false` to opt a deployment out
+of the contract entirely. Kubernetes cannot delete a Node condition, so on the
+next start the collector publishes one explicit `False` for a condition it no
+longer owns — including a renamed `condition` — rather than stranding a node as
+unhealthy. That relies on the persisted collector state, which is discarded
+after 30 minutes, so opt out or rename by rolling the DaemonSet rather than by
+leaving nodes without a collector.
+
+### Collector image requirement and release ordering
+
+The `required` / `availabilityCondition` fields are read by the collector
+binary, so this chart change must not be activated before a collector image that
+understands them exists.
+
+Azure/TauGrid is the single source of truth for the collector: its Go sources
+live in `monitoring/gpu-metrics-collector` and its build context in
+`images/gpu-metrics-collector`, both in this repository. Publication to MCR is
+external automation: an ADO pipeline in
+`azure-management-and-platforms/aks-ai-runtime`
+(`.pipelines/publish-gpu-metrics-collector.yml`) checks out Azure/TauGrid
+main directly and builds this repository's `images/gpu-metrics-collector`.
+Publication is restricted to merged main so a chart cannot activate collector
+behavior from an unmerged or pre-rebase source commit. That repository holds no
+copy of the collector source, so there is no second source tree to keep in sync.
+
+Release ordering:
+
+1. Merge the base branch's chart release (`gpu-monitoring` 0.1.4) first.
+2. Merge the collector source change to TauGrid main.
+3. Let the merged-main publisher build and publish that source.
+4. Verify the image is live on public MCR and resolve it to an immutable digest.
+5. Set `metricsCollector.image.digest` to that digest — digest only, never a
+   floating tag and never `latest`.
+6. Merge and publish `gpu-monitoring` 0.1.5.
+7. Only then let consumers pin the new chart and gate on
+   `DcgmExporterUnavailable`.
+
+Steps 2–5 completed with TauGrid PR #118, the merged-main publisher from
+`aks-ai-runtime` PR #1453, and ADO run `177042179`. Public tag `e0826b20dd39`
+resolves to OCI index digest
+`sha256:768ba258c817fa07a733626e3594407d4b1152aeb4f5c1ad0e6fb313cc04c1e9`,
+which contains both `linux/amd64` and `linux/arm64` manifests.
 
 ## Security boundary
 

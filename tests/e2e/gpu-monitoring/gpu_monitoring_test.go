@@ -96,6 +96,16 @@ func TestGPUMonitoringCollectorConfigMaps(t *testing.T) {
 			require.NotContains(t, rules, "http://localhost:9400/metrics",
 				"SKU %s should not scrape :9400 — the bundled dcgm-exporter container was removed", sku)
 
+			// The DCGM target must be required and publish its reachability as
+			// a Node condition. Without it, losing the exporter silences every
+			// DCGM rule and the node still looks healthy.
+			require.Contains(t, rules, "availabilityCondition: DcgmExporterUnavailable",
+				"SKU %s should publish DCGM scrape-target availability as a Node condition", sku)
+			require.Regexp(t,
+				`name: dcgm-exporter\s+url: \S+\s+required: true\s+availabilityCondition: DcgmExporterUnavailable`,
+				rules,
+				"SKU %s should mark the dcgm-exporter target required", sku)
+
 			// Rules must be non-empty and include the opinionated default set.
 			// These are the rule names we advertise as "opinionated defaults" that
 			// customers can layer their own rules on top of. If any one of them
