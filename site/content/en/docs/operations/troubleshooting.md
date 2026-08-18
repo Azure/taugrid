@@ -171,7 +171,7 @@ the run.
 [TauWorkspace](../../concepts/glossary/#tauworkspace) is reconciled entirely
 by the platform's workspace controller; do not hand-edit RBAC, queues, or
 storage to work around a `Degraded` condition. See the
-[TauWorkspace reference](../../reference/workspace/#recover-a-degraded-workspace)
+[TauWorkspace reference](../../reference/workspace/#workspace-readiness-and-recovery)
 for the condition-driven recovery path.
 
 ## 3. Client-side config validation and rendering

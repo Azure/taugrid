@@ -16,6 +16,7 @@ func TestReferenceMarkdownContainsCriticalFields(t *testing.T) {
 		"baselineQueue.gpu.flavors",
 		"baselineQueue.name",
 		"components.kueue.enabled",
+		"components.gpuMonitoring.enabled",
 		"tau-core-controller.tauCluster.nodeLabelRules",
 		"taugrid-core.stellar.enabled",
 	}

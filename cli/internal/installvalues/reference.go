@@ -24,6 +24,7 @@ var catalog = []struct {
 	{"components.kuberayOperator.enabled", fieldInfo{"bool", "true", "Install the KubeRay operator"}},
 	{"components.tauCoreController.enabled", fieldInfo{"bool", "true", "Install the Tau core controller"}},
 	{"components.taugridCore.enabled", fieldInfo{"bool", "true", "Install the taugrid-core services chart"}},
+	{"components.gpuMonitoring.enabled", fieldInfo{"bool", "unset (follows tauCoreController)", "Install GPU node health monitoring; set explicitly only to override the controller linkage"}},
 
 	{"baselineQueue.enabled", fieldInfo{"bool", "true", "Create the baseline ClusterQueue, LocalQueue, ResourceFlavor, and Topology"}},
 	{"baselineQueue.name", fieldInfo{"string", "jobqueue", "LocalQueue name (must be a valid DNS label)"}},
@@ -48,6 +49,7 @@ var catalog = []struct {
 	{"taugrid-core.stellar.enabled", fieldInfo{"bool", "false", "Stellar experiment dashboard"}},
 	{"taugrid-core.lifecycleRecorder.enabled", fieldInfo{"bool", "false", "Run lifecycle recorder"}},
 	{"taugrid-core.portal.enabled", fieldInfo{"bool", "false", "Unified observability portal"}},
+	{"gpu-monitoring.*", fieldInfo{"", "", "Pass-through to the embedded GPU monitoring chart"}},
 }
 
 func ReferenceMarkdown() string {

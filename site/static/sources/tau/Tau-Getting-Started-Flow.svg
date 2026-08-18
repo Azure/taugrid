@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1240" viewBox="0 0 2200 1240" role="img" aria-labelledby="title desc">
+  <title id="title">TauGrid Getting Started flow</title>
+  <desc id="desc">Five stages from installing the Tau CLI through AKS setup, TauGrid setup, workspace handoff, and the researcher's first run.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#4B5A70"/>
+    </marker>
+  </defs>
+
+  <rect width="2200" height="1240" fill="#FFFFFF"/>
+  <text x="56" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="700" fill="#000000">From AKS setup to a researcher's first TauGrid run</text>
+  <text x="58" y="120" font-family="Segoe UI, Arial, sans-serif" font-size="22" fill="#4B5A70">The Getting Started path separates provider setup, TauGrid installation, workspace handoff, and research work</text>
+  <line x1="56" y1="154" x2="2144" y2="154" stroke="#0078D4" stroke-width="3"/>
+
+  <rect x="56" y="190" width="2088" height="150" rx="22" fill="#E5F1FB" stroke="#0078D4" stroke-width="3" filter="url(#shadow)"/>
+  <circle cx="122" cy="265" r="31" fill="#FFFFFF" stroke="#0078D4" stroke-width="3"/>
+  <text x="122" y="272" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700">1</text>
+  <text x="176" y="236" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#005A9E">SHARED LOCAL PREREQUISITE</text>
+  <text x="176" y="275" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700">Install Tau CLI on each operator or researcher workstation</text>
+  <text x="176" y="310" font-family="Consolas, Menlo, monospace" font-size="20" fill="#172033">tau version --short</text>
+  <rect x="1740" y="230" width="340" height="70" rx="18" fill="#FFFFFF" stroke="#0078D4" stroke-width="2"/>
+  <text x="1910" y="257" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#005A9E">RELEASED LOCAL TOOL</text>
+  <text x="1910" y="284" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" fill="#172033">No source checkout required</text>
+
+  <rect x="56" y="385" width="2088" height="400" rx="22" fill="#FFFFFF" stroke="#5C2D91" stroke-width="4"/>
+  <text x="86" y="430" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700">PLATFORM / CLUSTER ADMINISTRATOR</text>
+
+  <rect x="100" y="475" width="560" height="240" rx="22" fill="#F3F2F1" stroke="#5B6573" stroke-width="3" filter="url(#shadow)"/>
+  <circle cx="154" cy="529" r="29" fill="#FFFFFF" stroke="#5B6573" stroke-width="2"/>
+  <text x="154" y="536" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">2</text>
+  <text x="202" y="518" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#4B5A70">AZURE / PROVIDER</text>
+  <text x="202" y="558" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700">AKS setup</text>
+  <text x="132" y="615" font-family="Segoe UI, Arial, sans-serif" font-size="19">Subscription · AKS · node pools · network</text>
+  <text x="132" y="646" font-family="Segoe UI, Arial, sans-serif" font-size="19">Managed Entra · OIDC/WI · GPU/CSI add-ons</text>
+  <text x="132" y="684" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#4B5A70">GATE: cluster-user context reaches Ready nodes</text>
+
+  <line x1="660" y1="595" x2="800" y2="595" stroke="#4B5A70" stroke-width="5" marker-end="url(#arrow)"/>
+
+  <rect x="820" y="475" width="560" height="240" rx="22" fill="#E8DAEF" stroke="#5C2D91" stroke-width="3" filter="url(#shadow)"/>
+  <circle cx="874" cy="529" r="29" fill="#FFFFFF" stroke="#5C2D91" stroke-width="2"/>
+  <text x="874" y="536" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">3</text>
+  <text x="922" y="518" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#5C2D91">KUBERNETES PLATFORM</text>
+  <text x="922" y="558" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700">TauGrid setup</text>
+  <text x="852" y="610" font-family="Consolas, Menlo, monospace" font-size="17">tau cluster install --context ...</text>
+  <text x="852" y="642" font-family="Segoe UI, Arial, sans-serif" font-size="18">MCR Chart · Kueue · KubeRay · Tau controller</text>
+  <text x="852" y="674" font-family="Consolas, Menlo, monospace" font-size="16" font-weight="700" fill="#5C2D91">GATE: tau cluster validate installation</text>
+
+  <line x1="1380" y1="595" x2="1520" y2="595" stroke="#4B5A70" stroke-width="5" marker-end="url(#arrow)"/>
+
+  <rect x="1540" y="475" width="560" height="240" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="3" filter="url(#shadow)"/>
+  <circle cx="1594" cy="529" r="29" fill="#FFFFFF" stroke="#F7630C" stroke-width="2"/>
+  <text x="1594" y="536" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">4</text>
+  <text x="1642" y="518" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#C84B00">WORKSPACE POLICY</text>
+  <text x="1642" y="558" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700">Workspace setup &amp; handoff</text>
+  <text x="1572" y="610" font-family="Segoe UI, Arial, sans-serif" font-size="18">TauWorkspace · namespace/RBAC · LocalQueue</text>
+  <text x="1572" y="642" font-family="Segoe UI, Arial, sans-serif" font-size="18">ServiceAccount · platform PVC · repository</text>
+  <text x="1572" y="674" font-family="Consolas, Menlo, monospace" font-size="17" font-weight="700" fill="#C84B00">GATE: tau workspace check</text>
+
+  <rect x="1615" y="742" width="410" height="46" rx="23" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
+  <text x="1820" y="771" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700">READY WORKSPACE + REPOSITORY</text>
+  <line x1="1820" y1="788" x2="1820" y2="885" stroke="#F7630C" stroke-width="5" marker-end="url(#arrow)"/>
+
+  <rect x="56" y="830" width="2088" height="300" rx="22" fill="#FFFFFF" stroke="#0078D4" stroke-width="4"/>
+  <text x="86" y="875" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700">RESEARCHER</text>
+
+  <rect x="100" y="920" width="980" height="155" rx="22" fill="#D8F3F2" stroke="#038387" stroke-width="3" filter="url(#shadow)"/>
+  <text x="132" y="960" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#006B6F">WHAT THE RESEARCHER RECEIVES</text>
+  <text x="132" y="1001" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">A usable contract, not cluster-administrator work</text>
+  <text x="132" y="1042" font-family="Segoe UI, Arial, sans-serif" font-size="18">Ready workspace · normal cluster-user path · tau/workspace.connection.yaml · runnable tau/*.yaml · no credentials</text>
+
+  <rect x="1220" y="900" width="840" height="195" rx="22" fill="#DFF6DD" stroke="#107C10" stroke-width="3" filter="url(#shadow)"/>
+  <circle cx="1274" cy="954" r="29" fill="#FFFFFF" stroke="#107C10" stroke-width="2"/>
+  <text x="1274" y="961" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">5</text>
+  <text x="1322" y="943" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#107C10">RESEARCHER QUICKSTART</text>
+  <text x="1322" y="983" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700">Clone, validate, run, and observe</text>
+  <text x="1252" y="1030" font-family="Consolas, Menlo, monospace" font-size="17">tau run smoke   ·   tau run train</text>
+  <text x="1252" y="1065" font-family="Consolas, Menlo, monospace" font-size="17">tau run status   ·   tau run logs   ·   tau run get</text>
+
+  <rect x="56" y="1160" width="2088" height="55" rx="15" fill="#F3F2F1" stroke="#5B6573" stroke-width="2"/>
+  <text x="1100" y="1194" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" fill="#172033">Tau does not provision AKS or Azure resources. TauGrid setup begins only after the AKS provider handoff gate passes.</text>
+</svg>

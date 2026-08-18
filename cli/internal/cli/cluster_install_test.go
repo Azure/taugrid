@@ -64,6 +64,8 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	for _, want := range []string{
 		"Helm wait:  bootstrap only (Tau readiness validation still runs after queue policy)",
 		"Rollback:   disabled",
+		"Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring",
+		"Opt-in:     Portal, Stellar, lifecycle recorder, image prewarm",
 		"tau workspace create --principal-name <external-group-or-team> --apply",
 		"kubectl get workspaces.tau.azure.com -n tau-platform",
 	} {
