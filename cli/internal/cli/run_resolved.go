@@ -39,10 +39,10 @@ type resolvedRunJobOptions struct {
 	ttlSecondsAfterFinished int64
 }
 
-type resolvedRunRayOptions struct {
+type resolvedRunRayJobOptions struct {
 	resolvedDirectRunOptions
-	runRayResources
-	runRayTuning
+	runRayJobResources
+	runRayJobTuning
 
 	workingDir         string
 	workingDirExcludes []string
@@ -117,11 +117,11 @@ func resolveRunJobOptions(o unresolvedRunOptions) resolvedRunJobOptions {
 	}
 }
 
-func resolveRunRayOptions(o unresolvedRunOptions) resolvedRunRayOptions {
-	return resolvedRunRayOptions{
+func resolveRunRayJobOptions(o unresolvedRunOptions) resolvedRunRayJobOptions {
+	return resolvedRunRayJobOptions{
 		resolvedDirectRunOptions: resolveDirectRunOptions(o),
-		runRayResources:          o.runRayResources,
-		runRayTuning:             o.runRayTuning,
+		runRayJobResources:       o.runRayJobResources,
+		runRayJobTuning:          o.runRayJobTuning,
 		workingDir:               o.workingDir.rayProjectPath(),
 		workingDirExcludes:       slices.Clone(o.workingDir.excludes),
 		runtimePip:               slices.Clone(o.runtimePip),
@@ -166,11 +166,11 @@ func (r *runJobRequest) namespace() string {
 	return r.Options.namespace
 }
 
-func (r *runRayRequest) execute(ctx context.Context, stdout, stderr io.Writer, captureCommand string) error {
-	return executeRunRay(ctx, stdout, stderr, r, captureCommand)
+func (r *runRayJobRequest) execute(ctx context.Context, stdout, stderr io.Writer, captureCommand string) error {
+	return executeRunRayJob(ctx, stdout, stderr, r, captureCommand)
 }
 
-func (r *runRayRequest) namespace() string {
+func (r *runRayJobRequest) namespace() string {
 	return r.Options.namespace
 }
 

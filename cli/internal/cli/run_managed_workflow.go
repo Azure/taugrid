@@ -45,7 +45,7 @@ func managedWorkflowGPUDemand(m *manifest.Manifest, workloadKind string) int {
 		return 0
 	}
 	if workloadKind == manifest.WorkloadKindRayJob {
-		return rayRequestedGPUCount(m.Compute.Workers, m.Compute.GPUs)
+		return rayJobRequestedGPUCount(m.Compute.Workers, m.Compute.GPUs)
 	}
 	return m.Compute.GPUs
 }

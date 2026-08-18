@@ -1,5 +1,5 @@
 name: market-policy
-engine: ray
+engine: rayjob
 entrypoint: train.py
 
 experiment:

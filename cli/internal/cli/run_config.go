@@ -130,7 +130,11 @@ func readRunConfig(path string) (runconfig.Config, unresolvedRunOptions, string,
 func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptions, error) {
 	o := defaultRunDispatchOptions()
 	baseDir := filepath.Dir(configPath)
-	o.engine = firstNonEmpty(c.Run.Engine, c.Engine)
+	engine, err := runconfig.NormalizeEngine(firstNonEmpty(c.Run.Engine, c.Engine))
+	if err != nil {
+		return unresolvedRunOptions{}, err
+	}
+	o.engine = engine
 	entrypoint := firstNonEmpty(c.Run.Entrypoint, c.Run.Script, c.Entrypoint, c.Script)
 	if c.Run.Source != nil {
 		source := *c.Run.Source

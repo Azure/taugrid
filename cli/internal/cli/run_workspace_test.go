@@ -103,7 +103,7 @@ func TestApplyWorkspaceDefaultsSetsOutputOnlyWithDurableStorage(t *testing.T) {
 	}
 }
 
-func TestApplyWorkspaceDefaultsSetsOutputForInferredRay(t *testing.T) {
+func TestApplyWorkspaceDefaultsSetsOutputForInferredRayJob(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	o.dataPVC = "blob-training"
 	o.workers = 2
@@ -157,7 +157,7 @@ func TestApplyWorkspaceDefaultsRejectsForeignOutputScope(t *testing.T) {
 	}
 }
 
-func TestWorkspaceServiceAccountRendersDirectJobAndRayPods(t *testing.T) {
+func TestWorkspaceServiceAccountRendersDirectJobAndRayJobPods(t *testing.T) {
 	zeroGPUs := 0
 	dir := t.TempDir()
 	profileDir := filepath.Join(dir, "profiles")
@@ -202,7 +202,7 @@ spec:
 		},
 		{
 			name:         "ray",
-			opts:         workspaceDirectRunOptions("ray", rayScript, "example.com/research/ray:cuda13", "workspace-test", "client", 2, nil),
+			opts:         workspaceDirectRunOptions("rayjob", rayScript, "example.com/research/ray:cuda13", "workspace-test", "client", 2, nil),
 			kind:         "kind: RayJob",
 			wantPodCount: 2,
 		},
@@ -323,7 +323,7 @@ spec:
 		wantWorkload string
 	}{
 		{engine: "job", name: "workspace-job", wantKind: "Job", wantWorkload: experiment.WorkloadKindJob},
-		{engine: "ray", name: "workspace-ray", wantKind: "RayJob", wantWorkload: experiment.WorkloadKindRayJob},
+		{engine: "rayjob", name: "workspace-ray", wantKind: "RayJob", wantWorkload: experiment.WorkloadKindRayJob},
 	}
 	for _, tt := range tests {
 		t.Run(tt.engine, func(t *testing.T) {

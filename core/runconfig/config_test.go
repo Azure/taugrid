@@ -15,7 +15,7 @@ import (
 
 func TestParseRejectsUnknownDirectRunField(t *testing.T) {
 	_, err := parse([]byte(`name: typo
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   pip:
@@ -96,8 +96,8 @@ run:
 			}
 		})
 	}
-	if err := (Config{Run: Run{TTLSecondsAfterFinished: cfg.Run.TTLSecondsAfterFinished}}).ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
-		t.Fatalf("expected Ray TTL rejection, got %v", err)
+	if err := (Config{Run: Run{TTLSecondsAfterFinished: cfg.Run.TTLSecondsAfterFinished}}).ValidateExecution(EngineRayJob); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
+		t.Fatalf("expected RayJob TTL rejection, got %v", err)
 	}
 }
 
@@ -159,9 +159,9 @@ runtime:
 		want   string
 	}{
 		{
-			name:   "ray engine",
+			name:   "rayjob engine",
 			cfg:    Config{Runtime: Runtime{WorkingDir: "/workspace/slime"}},
-			engine: "ray",
+			engine: EngineRayJob,
 			want:   "requires engine: job",
 		},
 		{
@@ -282,9 +282,9 @@ func TestSourceFailsClosed(t *testing.T) {
 			want: "pinned",
 		},
 		{
-			name:   "ray engine",
+			name:   "rayjob engine",
 			cfg:    Config{Entrypoint: "train.py", Run: Run{Source: validSource}},
-			engine: "ray",
+			engine: EngineRayJob,
 			want:   "requires engine: job",
 		},
 		{
@@ -416,8 +416,8 @@ func TestImageAssetsFailClosed(t *testing.T) {
 		Name: "reference", Image: "example.azurecr.io/reference-assets@sha256:" + digest,
 		SourcePath: "/opt/reference", MountPath: "/opt/reference",
 	}}}}
-	if err := cfg.ValidateExecution("ray"); err == nil || !strings.Contains(err.Error(), "engine: job") {
-		t.Fatalf("ray error = %v", err)
+	if err := cfg.ValidateExecution(EngineRayJob); err == nil || !strings.Contains(err.Error(), "engine: job") {
+		t.Fatalf("rayjob error = %v", err)
 	}
 	cfg.Engine = "job"
 	cfg.Workflow.File = "workflow.yaml"
@@ -503,7 +503,7 @@ research:
 
 func TestParseAcceptsEnvSecretRefs(t *testing.T) {
 	cfg, err := parse([]byte(`name: secret-config
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   env_secret:
@@ -527,7 +527,7 @@ runtime:
 
 func TestParseRejectsInvalidEnvSecretRefs(t *testing.T) {
 	_, err := parse([]byte(`name: secret-config
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   env:
@@ -566,7 +566,7 @@ experiment:
 
 func TestParseAcceptsRayMetricsAndStagedOutput(t *testing.T) {
 	cfg, err := parse([]byte(`name: tracked-ray
-engine: ray
+engine: rayjob
 entrypoint: train.py
 storage:
   data_pvc: research-workspace
@@ -584,13 +584,13 @@ experiment:
 		t.Fatalf("parse should accept Ray metrics and staged output: %v", err)
 	}
 	if cfg.Storage.Publish != "staged" || !cfg.Metrics.Offload.Enabled {
-		t.Fatalf("unexpected Ray config: storage=%+v metrics=%+v", cfg.Storage, cfg.Metrics)
+		t.Fatalf("unexpected RayJob config: storage=%+v metrics=%+v", cfg.Storage, cfg.Metrics)
 	}
 }
 
 func TestParseRejectsNonCanonicalPublicationMode(t *testing.T) {
 	_, err := parse([]byte(`name: tracked-ray
-engine: ray
+engine: rayjob
 entrypoint: train.py
 storage:
   data_pvc: research-workspace
@@ -1066,6 +1066,27 @@ func TestWhitespaceEnvNamesNeverReachAWorkload(t *testing.T) {
 func strPtr(s string) *string { return &s }
 func intPtr(i int) *int       { return &i }
 
+func TestNormalizeEngineCanonicalizesLegacyRayAlias(t *testing.T) {
+	for input, want := range map[string]string{
+		"":       "",
+		"job":    EngineJob,
+		"rayjob": EngineRayJob,
+		"ray":    EngineRayJob,
+		"RayJob": EngineRayJob,
+	} {
+		got, err := NormalizeEngine(input)
+		if err != nil {
+			t.Fatalf("NormalizeEngine(%q): %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("NormalizeEngine(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if _, err := NormalizeEngine("spark"); err == nil || !strings.Contains(err.Error(), "job or rayjob") {
+		t.Fatalf("invalid engine error = %v", err)
+	}
+}
+
 func TestValidateExecution(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1073,16 +1094,17 @@ func TestValidateExecution(t *testing.T) {
 		execution Execution
 		wantErr   string
 	}{
-		// --- engine: ray valid combinations ---
-		{name: "ray/ray-train", engine: "ray", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: ""},
-		{name: "ray/ray-tune", engine: "ray", execution: Execution{Launcher: strPtr("ray-tune"), Metric: "loss", Configs: map[string]any{"lr": []any{0.01}}}, wantErr: ""},
-		{name: "ray/nil-launcher", engine: "ray", execution: Execution{}, wantErr: ""},
+		// --- engine: rayjob valid combinations ---
+		{name: "rayjob/ray-train", engine: "rayjob", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: ""},
+		{name: "rayjob/ray-tune", engine: "rayjob", execution: Execution{Launcher: strPtr("ray-tune"), Metric: "loss", Configs: map[string]any{"lr": []any{0.01}}}, wantErr: ""},
+		{name: "rayjob/nil-launcher", engine: "rayjob", execution: Execution{}, wantErr: ""},
+		{name: "legacy-ray-alias", engine: "ray", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: ""},
 
-		// --- engine: ray cross-engine rejections ---
-		{name: "ray/torchrun", engine: "ray", execution: Execution{Launcher: strPtr("torchrun")}, wantErr: "torchrun is for engine: job"},
-		{name: "ray/python", engine: "ray", execution: Execution{Launcher: strPtr("python")}, wantErr: "python is for engine: job"},
-		{name: "ray/unknown", engine: "ray", execution: Execution{Launcher: strPtr("vllm")}, wantErr: "not valid for engine: ray"},
-		{name: "ray/nodes>1", engine: "ray", execution: Execution{Nodes: intPtr(2)}, wantErr: "execution.nodes is for engine: job"},
+		// --- engine: rayjob cross-engine rejections ---
+		{name: "rayjob/torchrun", engine: "rayjob", execution: Execution{Launcher: strPtr("torchrun")}, wantErr: "torchrun is for engine: job"},
+		{name: "rayjob/python", engine: "rayjob", execution: Execution{Launcher: strPtr("python")}, wantErr: "python is for engine: job"},
+		{name: "rayjob/unknown", engine: "rayjob", execution: Execution{Launcher: strPtr("vllm")}, wantErr: "not valid for engine: rayjob"},
+		{name: "rayjob/nodes>1", engine: "rayjob", execution: Execution{Nodes: intPtr(2)}, wantErr: "execution.nodes is for engine: job"},
 
 		// --- engine: job valid combinations ---
 		{name: "job/python", engine: "job", execution: Execution{Launcher: strPtr("python")}, wantErr: ""},
@@ -1090,8 +1112,8 @@ func TestValidateExecution(t *testing.T) {
 		{name: "job/nil-launcher", engine: "job", execution: Execution{}, wantErr: ""},
 
 		// --- engine: job cross-engine rejections ---
-		{name: "job/ray-train", engine: "job", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: "requires engine: ray"},
-		{name: "job/ray-tune", engine: "job", execution: Execution{Launcher: strPtr("ray-tune")}, wantErr: "requires engine: ray"},
+		{name: "job/ray-train", engine: "job", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: "requires engine: rayjob"},
+		{name: "job/ray-tune", engine: "job", execution: Execution{Launcher: strPtr("ray-tune")}, wantErr: "requires engine: rayjob"},
 		{name: "job/unknown", engine: "job", execution: Execution{Launcher: strPtr("deepspeed")}, wantErr: "not valid for engine: job"},
 
 		// --- inferred engine (empty string) ---
@@ -1099,45 +1121,45 @@ func TestValidateExecution(t *testing.T) {
 		{name: "inferred/python", engine: "", execution: Execution{Launcher: strPtr("python")}, wantErr: ""},
 		{name: "inferred/nil-launcher", engine: "", execution: Execution{}, wantErr: ""},
 		{name: "inferred/unknown", engine: "", execution: Execution{Launcher: strPtr("bogus")}, wantErr: "not valid"},
-		{name: "inferred/ray-train-requires-engine", engine: "", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: "requires engine: ray"},
-		{name: "inferred/ray-tune-requires-engine", engine: "", execution: Execution{Launcher: strPtr("ray-tune")}, wantErr: "requires engine: ray"},
+		{name: "inferred/ray-train-requires-engine", engine: "", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: "requires engine: rayjob"},
+		{name: "inferred/ray-tune-requires-engine", engine: "", execution: Execution{Launcher: strPtr("ray-tune")}, wantErr: "requires engine: rayjob"},
 
 		// --- processes_per_node constraints ---
 		{name: "ppn/torchrun-ok", engine: "job", execution: Execution{Launcher: strPtr("torchrun"), ProcessesPerNode: intPtr(4)}, wantErr: ""},
 		{name: "ppn/python-ppn1-ok", engine: "job", execution: Execution{Launcher: strPtr("python"), ProcessesPerNode: intPtr(1)}, wantErr: ""},
 		{name: "ppn/python-ppn2-rejected", engine: "job", execution: Execution{Launcher: strPtr("python"), ProcessesPerNode: intPtr(2)}, wantErr: "requires execution.launcher: torchrun"},
-		{name: "ppn/ray-train-rejected", engine: "ray", execution: Execution{Launcher: strPtr("ray-train"), ProcessesPerNode: intPtr(4)}, wantErr: "requires execution.launcher: torchrun"},
+		{name: "ppn/ray-train-rejected", engine: "rayjob", execution: Execution{Launcher: strPtr("ray-train"), ProcessesPerNode: intPtr(4)}, wantErr: "requires execution.launcher: torchrun"},
 		{name: "ppn/nil-launcher-rejected", engine: "job", execution: Execution{ProcessesPerNode: intPtr(2)}, wantErr: "requires execution.launcher: torchrun"},
 
 		// --- nodes constraints ---
 		{name: "nodes<1", engine: "job", execution: Execution{Nodes: intPtr(0)}, wantErr: "execution.nodes must be >= 1"},
-		{name: "nodes=1/ray-ok", engine: "ray", execution: Execution{Nodes: intPtr(1)}, wantErr: ""},
+		{name: "nodes=1/rayjob-ok", engine: "rayjob", execution: Execution{Nodes: intPtr(1)}, wantErr: ""},
 		{name: "nodes=2/job-ok", engine: "job", execution: Execution{Nodes: intPtr(2)}, wantErr: ""},
 
 		// --- case insensitivity ---
-		{name: "case/Ray-Train", engine: "ray", execution: Execution{Launcher: strPtr("Ray-Train")}, wantErr: ""},
+		{name: "case/Ray-Train", engine: "RayJob", execution: Execution{Launcher: strPtr("Ray-Train")}, wantErr: ""},
 		{name: "case/TORCHRUN", engine: "job", execution: Execution{Launcher: strPtr("TORCHRUN")}, wantErr: ""},
 
 		// --- ray-tune field validation ---
-		{name: "tune/valid", engine: "ray", execution: Execution{
+		{name: "tune/valid", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-tune"), Metric: "val_loss", Mode: "min",
 			NumSamples: intPtr(5), MaxConcurrentTrials: intPtr(2),
 			Configs: map[string]any{"lr": []any{0.001, 0.01}},
 		}, wantErr: ""},
-		{name: "tune/missing-metric", engine: "ray", execution: Execution{
+		{name: "tune/missing-metric", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-tune"), Configs: map[string]any{"lr": []any{0.001}},
 		}, wantErr: "execution.metric is required"},
-		{name: "tune/missing-param-space", engine: "ray", execution: Execution{
+		{name: "tune/missing-param-space", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-tune"), Metric: "val_loss",
 		}, wantErr: "execution.configs is required"},
-		{name: "tune/bad-mode", engine: "ray", execution: Execution{
+		{name: "tune/bad-mode", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-tune"), Metric: "val_loss", Mode: "fast",
 			Configs: map[string]any{"lr": []any{0.001}},
 		}, wantErr: "execution.mode must be min or max"},
-		{name: "tune/fields-without-tune-launcher", engine: "ray", execution: Execution{
+		{name: "tune/fields-without-tune-launcher", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-train"), Metric: "val_loss",
 		}, wantErr: "require execution.launcher: ray-tune"},
-		{name: "tune/mode-default-empty-ok", engine: "ray", execution: Execution{
+		{name: "tune/mode-default-empty-ok", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-tune"), Metric: "val_loss",
 			Configs: map[string]any{"lr": []any{0.001}},
 		}, wantErr: ""},

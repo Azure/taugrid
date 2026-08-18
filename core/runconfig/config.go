@@ -729,11 +729,38 @@ func ValidateLiteralEnvPayloads(env map[string]string) error {
 	return nil
 }
 
+const (
+	EngineJob    = "job"
+	EngineRayJob = "rayjob"
+)
+
+var engineAliases = map[string]string{
+	"":           "",
+	EngineJob:    EngineJob,
+	"ray":        EngineRayJob,
+	EngineRayJob: EngineRayJob,
+}
+
+// NormalizeEngine returns the canonical workload engine. "ray" remains an
+// accepted compatibility alias, but Tau always submits that path as a RayJob.
+func NormalizeEngine(engine string) (string, error) {
+	raw := strings.ToLower(strings.TrimSpace(engine))
+	normalized, ok := engineAliases[raw]
+	if !ok {
+		return "", fmt.Errorf("engine %q is not valid; use job or rayjob", raw)
+	}
+	return normalized, nil
+}
+
 // ValidateExecution checks that execution.launcher is valid for the given
 // engine and that engine-specific constraints (nodes, processes_per_node,
 // clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
-	engine = strings.ToLower(strings.TrimSpace(engine))
+	var err error
+	engine, err = NormalizeEngine(engine)
+	if err != nil {
+		return err
+	}
 	if err := ValidateContainerWorkingDir(c.Runtime.WorkingDir); err != nil {
 		return err
 	}
@@ -802,45 +829,43 @@ func (c Config) ValidateExecution(engine string) error {
 	}
 
 	switch engine {
-	case "job":
+	case EngineJob:
 		switch launcher {
 		case "", "python", "torchrun":
 		case "ray-train", "ray-tune":
-			return fmt.Errorf("execution.launcher %q requires engine: ray (needs a Ray cluster); got engine: job", launcher)
+			return fmt.Errorf("execution.launcher %q requires engine: rayjob (needs a Ray cluster); got engine: job", launcher)
 		default:
 			return fmt.Errorf("execution.launcher %q is not valid for engine: job; use python or torchrun", launcher)
 		}
-	case "ray":
+	case EngineRayJob:
 		switch launcher {
 		case "", "ray-train", "ray-tune":
 		case "torchrun":
 			return fmt.Errorf("execution.launcher torchrun is for engine: job; Ray Train manages distributed init via TorchConfig")
 		case "python":
-			return fmt.Errorf("execution.launcher python is for engine: job; use ray-train for engine: ray")
+			return fmt.Errorf("execution.launcher python is for engine: job; use ray-train for engine: rayjob")
 		default:
-			return fmt.Errorf("execution.launcher %q is not valid for engine: ray; use ray-train or ray-tune", launcher)
+			return fmt.Errorf("execution.launcher %q is not valid for engine: rayjob; use ray-train or ray-tune", launcher)
 		}
 		if c.Execution.Nodes != nil && *c.Execution.Nodes > 1 {
-			return fmt.Errorf("execution.nodes is for engine: job; use compute.workers for Ray pod count")
+			return fmt.Errorf("execution.nodes is for engine: job; use compute.workers for RayJob pod count")
 		}
 	case "":
 		switch launcher {
 		case "", "python", "torchrun":
 		case "ray-train", "ray-tune":
-			return fmt.Errorf("execution.launcher %q requires engine: ray; set engine: ray explicitly", launcher)
+			return fmt.Errorf("execution.launcher %q requires engine: rayjob; set engine: rayjob explicitly", launcher)
 		default:
-			return fmt.Errorf("execution.launcher %q is not valid; use python, torchrun (engine: job) or ray-train, ray-tune (engine: ray)", launcher)
+			return fmt.Errorf("execution.launcher %q is not valid; use python, torchrun (engine: job) or ray-train, ray-tune (engine: rayjob)", launcher)
 		}
-	default:
-		return fmt.Errorf("engine %q is not valid; use job or ray", engine)
 	}
 
 	if c.Policy.ClearNodeSelector {
 		switch {
 		case c.Workflow.File != "" || c.LooksLikeManagedWorkflow():
 			return fmt.Errorf("policy.clear_node_selector requires native job dispatch; managed workflow dispatch cannot clear profile/topology node selectors")
-		case engine == "ray":
-			return fmt.Errorf("policy.clear_node_selector requires engine: job; the ray engine cannot clear profile/topology node selectors")
+		case engine == EngineRayJob:
+			return fmt.Errorf("policy.clear_node_selector requires engine: job; RayJobs cannot clear profile/topology node selectors")
 		}
 	}
 
@@ -905,7 +930,7 @@ func (c Config) validateConfigs(engine, launcher string) error {
 	effectiveLauncher := launcher
 	if effectiveLauncher == "" {
 		switch engine {
-		case "ray":
+		case EngineRayJob:
 			effectiveLauncher = "ray-train"
 		default:
 			effectiveLauncher = "python"

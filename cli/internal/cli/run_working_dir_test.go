@@ -130,7 +130,7 @@ func TestWorkingDirRejectedForJobEngine(t *testing.T) {
 	if err == nil {
 		t.Fatal("want rejection: engine job cannot deliver working_dir")
 	}
-	for _, want := range []string{"not supported with engine: job", "engine: ray"} {
+	for _, want := range []string{"not supported with engine: job", "engine: rayjob"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error should name the engine and the remedy, got: %v", err)
 		}

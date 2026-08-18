@@ -87,7 +87,7 @@ that `tau run --config` reads. Minimal shape:
 
 ```yaml
 name: train                 # run name; also derives the default checkpoint path
-engine: ray                 # job | ray
+engine: rayjob              # job | rayjob
 entrypoint: train.py        # resolved relative to the config file
 
 runtime:
@@ -139,15 +139,15 @@ They are not interchangeable.
 ### Engine choice constrains everything else
 
 `engine: job` renders a `batch/v1` Job — one pod, or an Indexed Job with
-torchrun. `engine: ray` renders a KubeRay RayJob (head + `compute.workers`
+torchrun. `engine: rayjob` renders a KubeRay RayJob (head + `compute.workers`
 workers). Mixing the two vocabularies is the most common authoring failure:
 
 | Intent | Correct | Common mistake |
 |---|---|---|
-| Multi-node PyTorch DDP | `engine: job` + `launcher: torchrun` + `execution.nodes: N` | `execution.nodes` with `engine: ray` |
-| Ray Train distributed | `engine: ray` + `compute.workers: N` | `launcher: torchrun` with `engine: ray` |
+| Multi-node PyTorch DDP | `engine: job` + `launcher: torchrun` + `execution.nodes: N` | `execution.nodes` with `engine: rayjob` |
+| Ray Train distributed | `engine: rayjob` + `compute.workers: N` | `launcher: torchrun` with `engine: rayjob` |
 | GPUs per pod on a Job | `policy.preset` (the node shape) | `compute.gpus_per_worker` with `engine: job` |
-| Extra PVC mounts | `engine: job` + `storage.mounts` | `storage.mounts` with `engine: ray` |
+| Extra PVC mounts | `engine: job` + `storage.mounts` | `storage.mounts` with `engine: rayjob` |
 
 `compute`'s Ray-shaped fields — `workers`, `gpus_per_worker`, `runtime.pip`,
 `head_*`/`worker_*` — are **rejected on `engine: job`**. For a Job, GPU count

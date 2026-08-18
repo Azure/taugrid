@@ -214,7 +214,7 @@ func TestLooksLikeTauConfigPartitions(t *testing.T) {
 		want bool
 	}{
 		{"direct config", "schema_version: 1\nname: x\nrun:\n  engine: job\n", true},
-		{"engine at top level", "name: x\nengine: ray\nentrypoint: t.py\n", true},
+		{"engine at top level", "name: x\nengine: rayjob\nentrypoint: t.py\n", true},
 		{"run at top level", "name: x\nrun:\n  engine: job\n", true},
 		{"k8s manifest", "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: x\n", false},
 		{"kind cluster", "apiVersion: kind.x-k8s.io/v1alpha4\nkind: Cluster\n", false},

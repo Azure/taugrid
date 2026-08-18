@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/onboarding"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
@@ -288,33 +289,28 @@ func resolveManagedRunTarget(o unresolvedRunOptions, name string) (resolvedRunTa
 type directRunEngine string
 
 const (
-	directRunEngineJob directRunEngine = "job"
-	directRunEngineRay directRunEngine = "ray"
+	directRunEngineJob    directRunEngine = runconfig.EngineJob
+	directRunEngineRayJob directRunEngine = runconfig.EngineRayJob
 )
 
 var (
-	directEngineAliases = map[string]directRunEngine{
-		"":    "",
-		"job": directRunEngineJob,
-		"ray": directRunEngineRay,
-	}
 	directWorkloadKindAliases = map[string]directRunEngine{
 		"":          "",
 		"job":       directRunEngineJob,
-		"ray":       directRunEngineRay,
-		"rayjob":    directRunEngineRay,
-		"ray-train": directRunEngineRay,
-		"ray_train": directRunEngineRay,
+		"ray":       directRunEngineRayJob,
+		"rayjob":    directRunEngineRayJob,
+		"ray-train": directRunEngineRayJob,
+		"ray_train": directRunEngineRayJob,
 	}
 	directRunResolvers = map[directRunEngine]func(unresolvedRunOptions, string) (resolvedRunTarget, error){
-		directRunEngineJob: resolveJobRunTarget,
-		directRunEngineRay: resolveRayRunTarget,
+		directRunEngineJob:    resolveJobRunTarget,
+		directRunEngineRayJob: resolveRayJobRunTarget,
 	}
 )
 
 func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
 	if len(o.envKV) > 0 || o.keyVault != "" || o.kvTenantID != "" || o.kvClientID != "" {
-		return nil, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct job/ray configs must remove runtime.env_kv or use workflow.file")
+		return nil, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct Job/RayJob configs must remove runtime.env_kv or use workflow.file")
 	}
 	if err := ensureArtifactPublicationID(o.outputPublish, &o.artifactPublicationID); err != nil {
 		return nil, err
@@ -329,18 +325,18 @@ func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTar
 	return directRunResolvers[engine](o, name)
 }
 
-func resolveRayRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
+func resolveRayJobRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
 	if o.jobGPUs != nil {
-		return nil, fmt.Errorf("compute.gpus is only supported for engine: job; use compute.gpus_per_worker for Ray")
+		return nil, fmt.Errorf("compute.gpus is only supported for engine: job; use compute.gpus_per_worker for RayJob")
 	}
 	if o.nodes > 1 {
-		return nil, fmt.Errorf("execution.nodes > 1 requires engine: job; cannot combine with Ray dispatch")
+		return nil, fmt.Errorf("execution.nodes > 1 requires engine: job; cannot combine with RayJob dispatch")
 	}
-	ray, err := newRunRayRequest(o, name)
+	rayjob, err := newRunRayJobRequest(o, name)
 	if err != nil {
 		return nil, err
 	}
-	return &ray, nil
+	return &rayjob, nil
 }
 
 func resolveJobRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
@@ -412,14 +408,15 @@ func validateDirectMetricsOffloadDispatch(o unresolvedRunOptions, engine directR
 
 func resolveDirectRunEngine(o unresolvedRunOptions) (directRunEngine, error) {
 	engineName := strings.ToLower(strings.TrimSpace(o.engine))
-	engine, ok := directEngineAliases[engineName]
-	if !ok {
-		return "", fmt.Errorf("engine must be one of: job, ray")
+	normalizedEngine, err := runconfig.NormalizeEngine(engineName)
+	if err != nil {
+		return "", err
 	}
+	engine := directRunEngine(normalizedEngine)
 	workloadKind := strings.ToLower(strings.TrimSpace(o.workloadKind))
 	kindEngine, ok := directWorkloadKindAliases[workloadKind]
 	if !ok {
-		return "", fmt.Errorf("workload_kind must be one of: job, rayjob, ray-train for non-managed run configs")
+		return "", fmt.Errorf("workload_kind must be one of: job, rayjob for non-managed run configs")
 	}
 	if engine != "" && kindEngine != "" && engine != kindEngine {
 		return "", fmt.Errorf("engine=%s conflicts with workload_kind=%s", engineName, workloadKind)
@@ -429,7 +426,7 @@ func resolveDirectRunEngine(o unresolvedRunOptions) (directRunEngine, error) {
 		return directRunEngine(explicit), nil
 	}
 	if o.workers > 1 || o.gpusPerWorker != 1 || o.gpusPerWorkerExplicit || len(o.runtimePip) > 0 {
-		return directRunEngineRay, nil
+		return directRunEngineRayJob, nil
 	}
 	return directRunEngineJob, nil
 }
@@ -437,13 +434,13 @@ func resolveDirectRunEngine(o unresolvedRunOptions) (directRunEngine, error) {
 func validateExplicitJobRunConfig(o unresolvedRunOptions) error {
 	intent := dispatchIntent(o)
 	if o.workers > 1 {
-		return fmt.Errorf("%s cannot set compute.workers=%d; use engine: ray or remove compute.workers", intent, o.workers)
+		return fmt.Errorf("%s cannot set compute.workers=%d; use engine: rayjob or remove compute.workers", intent, o.workers)
 	}
 	if o.gpusPerWorkerExplicit {
-		return fmt.Errorf("%s cannot set compute.gpus_per_worker; use compute.gpus for a direct Job or switch to engine: ray", intent)
+		return fmt.Errorf("%s cannot set compute.gpus_per_worker; use compute.gpus for a direct Job or switch to engine: rayjob", intent)
 	}
 	if len(o.runtimePip) > 0 {
-		return fmt.Errorf("%s cannot set runtime.pip; use engine: ray or bake dependencies into the image", intent)
+		return fmt.Errorf("%s cannot set runtime.pip; use engine: rayjob or bake dependencies into the image", intent)
 	}
 	for field, value := range map[string]string{
 		"compute.head_cpu_request":      o.headCPURequest,
@@ -456,14 +453,14 @@ func validateExplicitJobRunConfig(o unresolvedRunOptions) error {
 		"compute.worker_memory_limit":   o.workerMemoryLimit,
 	} {
 		if strings.TrimSpace(value) != "" {
-			return fmt.Errorf("%s cannot set %s; jobs are single-pod, so use compute.cpu_request, compute.memory_request, compute.cpu_limit, and compute.memory_limit or switch to engine: ray", intent, field)
+			return fmt.Errorf("%s cannot set %s; jobs are single-pod, so use compute.cpu_request, compute.memory_request, compute.cpu_limit, and compute.memory_limit or switch to engine: rayjob", intent, field)
 		}
 	}
 	if o.nodes > 1 && strings.ToLower(strings.TrimSpace(o.launcher)) != "torchrun" {
 		return fmt.Errorf("%s with execution.nodes=%d requires execution.launcher=torchrun", intent, o.nodes)
 	}
 	if strings.TrimSpace(o.migProfile) != "" {
-		return fmt.Errorf("%s cannot set compute.mig_profile; switch to engine: ray", intent)
+		return fmt.Errorf("%s cannot set compute.mig_profile; switch to engine: rayjob", intent)
 	}
 	gpuResourceMode, err := manifest.NormalizeGPUResourceMode(o.gpuResourceMode)
 	if err != nil {

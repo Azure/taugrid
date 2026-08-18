@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestRayMissingRequiredSecretFailsBeforeWorkloadApply(t *testing.T) {
+func TestRayJobMissingRequiredSecretFailsBeforeWorkloadApply(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake kubectl uses a POSIX shell script")
 	}
@@ -40,17 +40,17 @@ esac
 `)
 
 	options := defaultRunDispatchOptions()
-	options.engine = "ray"
+	options.engine = "rayjob"
 	options.script = writeRayScript(t, t.TempDir())
 	options.namespace = "tau-default"
 	options.envSecrets = []string{"CDS_KEY=missing-credentials:key"}
-	request, err := newRunRayRequest(options, "solar-irradiation")
+	request, err := newRunRayJobRequest(options, "solar-irradiation")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = executeRunRay(context.Background(), &stdout, &stderr, &request, "tau run --config tau.yaml")
+	err = executeRunRayJob(context.Background(), &stdout, &stderr, &request, "tau run --config tau.yaml")
 	if err == nil || !strings.Contains(err.Error(), "required Secret tau-default/missing-credentials does not exist") {
 		t.Fatalf("error = %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}

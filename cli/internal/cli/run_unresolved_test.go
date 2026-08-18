@@ -12,8 +12,8 @@ func resolvedJobRequestForTest(target resolvedRunTarget) *runJobRequest {
 	return request
 }
 
-func resolvedRayRequestForTest(target resolvedRunTarget) *runRayRequest {
-	request, _ := target.(*runRayRequest)
+func resolvedRayJobRequestForTest(target resolvedRunTarget) *runRayJobRequest {
+	request, _ := target.(*runRayJobRequest)
 	return request
 }
 

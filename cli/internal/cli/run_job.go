@@ -53,8 +53,8 @@ func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest,
 		// the ModuleNotFoundError-after-startup failure it exists to prevent.
 		return runJobRequest{}, fmt.Errorf(
 			"run.working_dir is not supported with engine: job.\n" +
-				"It is delivered through Ray's runtime_env, so it applies to engine: ray only.\n" +
-				"Either switch to engine: ray to ship the project directory, or remove run.working_dir " +
+				"It is delivered through Ray's runtime_env, so it applies to engine: rayjob only.\n" +
+				"Either switch to engine: rayjob to ship the project directory, or remove run.working_dir " +
 				"and keep the run to a single self-contained entrypoint.")
 	}
 	if options.output == "" && firstNonEmpty(options.dataPVC, options.resultPVC) != "" {

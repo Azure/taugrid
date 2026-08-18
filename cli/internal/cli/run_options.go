@@ -147,7 +147,7 @@ type runResourceLimits struct {
 	memoryLimit   string
 }
 
-type runRayResources struct {
+type runRayJobResources struct {
 	headCPURequest      string
 	headMemoryRequest   string
 	headCPULimit        string
@@ -162,7 +162,7 @@ type runRayResources struct {
 
 type runComputeInput struct {
 	runResourceLimits
-	runRayResources
+	runRayJobResources
 
 	cpuWorkers            int
 	jobGPUs               *int
@@ -189,7 +189,7 @@ type runObservabilityInput struct {
 	runDirectMetrics
 }
 
-type runRayTuning struct {
+type runRayJobTuning struct {
 	tuneMetric              string
 	tuneMode                string
 	tuneParamSpace          string
@@ -199,7 +199,7 @@ type runRayTuning struct {
 }
 
 type runExecutionInput struct {
-	runRayTuning
+	runRayJobTuning
 
 	launcher                string
 	processesPerNode        int

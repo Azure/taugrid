@@ -163,7 +163,7 @@ local/offline compatibility names, not the hosted fleet remote-write contract.
 
 ### Config-first Job and RayJob JSONL producer
 
-A config-first `engine: job` or `engine: ray` workload can opt in to the hosted
+A config-first `engine: job` or `engine: rayjob` workload can opt in to the hosted
 scalar path without a manual backfill:
 
 ```yaml

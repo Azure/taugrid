@@ -1,5 +1,5 @@
 name: tune-smoke
-engine: ray
+engine: rayjob
 entrypoint: train.py
 
 runtime:

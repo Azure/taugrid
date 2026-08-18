@@ -15,23 +15,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The Ray engine has no command root of its own: `tau run --config` with
-// `engine: ray` resolves a typed runRayRequest and calls executeRunRay
+// RayJob has no command root of its own: `tau run --config` with
+// `engine: rayjob` resolves a typed runRayJobRequest and calls executeRunRayJob
 // (run.go, resolveRunTarget). These tests drive that same path directly.
 
-func runRayDryRun(t *testing.T, name string, mutate func(*runDispatchOptions)) string {
+func runRayJobDryRun(t *testing.T, name string, mutate func(*runDispatchOptions)) string {
 	t.Helper()
 	options := defaultRunDispatchOptions()
-	options.engine = "ray"
+	options.engine = "rayjob"
 	options.dryRun = "client"
 	mutate(&options)
 
-	request, err := newRunRayRequest(options, name)
+	request, err := newRunRayJobRequest(options, name)
 	if err != nil {
-		t.Fatalf("newRunRayRequest: %v", err)
+		t.Fatalf("newRunRayJobRequest: %v", err)
 	}
 	var out, stderr bytes.Buffer
-	if err := executeRunRay(context.Background(), &out, &stderr, &request, "tau run --config tau.yaml"); err != nil {
+	if err := executeRunRayJob(context.Background(), &out, &stderr, &request, "tau run --config tau.yaml"); err != nil {
 		t.Fatalf("ray dry-run failed: %v\nstderr:\n%s", err, stderr.String())
 	}
 	return out.String()
@@ -46,9 +46,9 @@ func writeRayScript(t *testing.T, dir string) string {
 	return script
 }
 
-func TestRayDispatchDryRunUsesPresetKueueLane(t *testing.T) {
+func TestRayJobDispatchDryRunUsesPresetKueueLane(t *testing.T) {
 	script := writeRayScript(t, t.TempDir())
-	rendered := runRayDryRun(t, "ray-smoke", func(o *runDispatchOptions) {
+	rendered := runRayJobDryRun(t, "ray-smoke", func(o *runDispatchOptions) {
 		o.script = script
 		o.preset = "azure.research.training.l"
 		o.runtimePip = []string{"torch==2.4.0"}
@@ -74,9 +74,9 @@ func TestRayDispatchDryRunUsesPresetKueueLane(t *testing.T) {
 	}
 }
 
-func TestRayDispatchMIGProfileForcesMIGResourceEvenWithConflictingMode(t *testing.T) {
+func TestRayJobDispatchMIGProfileForcesMIGResourceEvenWithConflictingMode(t *testing.T) {
 	script := writeRayScript(t, t.TempDir())
-	rendered := runRayDryRun(t, "ray-mig", func(o *runDispatchOptions) {
+	rendered := runRayJobDryRun(t, "ray-mig", func(o *runDispatchOptions) {
 		o.script = script
 		o.preset = "azure.research.training.l"
 		o.gpusPerWorker = 1
@@ -91,7 +91,7 @@ func TestRayDispatchMIGProfileForcesMIGResourceEvenWithConflictingMode(t *testin
 	}
 }
 
-func TestRayDispatchUsesPresetNamespaceWhenNamespaceOmitted(t *testing.T) {
+func TestRayJobDispatchUsesPresetNamespaceWhenNamespaceOmitted(t *testing.T) {
 	dir := t.TempDir()
 	script := writeRayScript(t, dir)
 	policy := filepath.Join(dir, "policy.yaml")
@@ -114,7 +114,7 @@ spec:
 		t.Fatal(err)
 	}
 
-	rendered := runRayDryRun(t, "ray-ns", func(o *runDispatchOptions) {
+	rendered := runRayJobDryRun(t, "ray-ns", func(o *runDispatchOptions) {
 		o.script = script
 		o.preset = "test.training"
 		o.topologyPolicy = policy
@@ -124,7 +124,7 @@ spec:
 	}
 }
 
-func TestExecuteRunTargetWritesBackResolvedRayNamespace(t *testing.T) {
+func TestExecuteRunTargetWritesBackResolvedRayJobNamespace(t *testing.T) {
 	dir := t.TempDir()
 	policy := filepath.Join(dir, "policy.yaml")
 	if err := os.WriteFile(policy, []byte(`apiVersion: tau.azure.com/v1alpha1
@@ -146,7 +146,7 @@ spec:
 		t.Fatal(err)
 	}
 	options := defaultRunDispatchOptions()
-	options.engine = "ray"
+	options.engine = "rayjob"
 	options.script = writeRayScript(t, dir)
 	options.preset = "test.training"
 	options.topologyPolicy = policy
@@ -163,44 +163,44 @@ spec:
 	if err := executeRunTarget(parent, target, "tau run", runExperimentMetadata{}); err != nil {
 		t.Fatalf("executeRunTarget: %v", err)
 	}
-	if got := resolvedRayRequestForTest(target).Options.namespace; got != "ray-retry-ns" {
+	if got := resolvedRayJobRequestForTest(target).Options.namespace; got != "ray-retry-ns" {
 		t.Fatalf("resolved ray namespace = %q, want %q", got, "ray-retry-ns")
 	}
 }
 
-func TestRayDispatchRejectsUnsupportedStorageAndMissingEntrypoint(t *testing.T) {
+func TestRayJobDispatchRejectsUnsupportedStorageAndMissingEntrypoint(t *testing.T) {
 	base := func() runDispatchOptions {
 		o := defaultRunDispatchOptions()
-		o.engine = "ray"
+		o.engine = "rayjob"
 		o.script = "train.py"
 		return o
 	}
-	if _, err := newRunRayRequest(base(), ""); err == nil {
-		t.Fatal("ray dispatch without NAME should fail")
+	if _, err := newRunRayJobRequest(base(), ""); err == nil {
+		t.Fatal("RayJob dispatch without NAME should fail")
 	}
 	missingScript := base()
 	missingScript.script = ""
-	if _, err := newRunRayRequest(missingScript, "ray-run"); err == nil {
-		t.Fatal("ray dispatch without run.entrypoint should fail")
+	if _, err := newRunRayJobRequest(missingScript, "ray-run"); err == nil {
+		t.Fatal("RayJob dispatch without run.entrypoint should fail")
 	}
 	conflictingPVC := base()
 	conflictingPVC.dataPVC = "a"
 	conflictingPVC.resultPVC = "b"
-	if _, err := newRunRayRequest(conflictingPVC, "ray-run"); err == nil {
-		t.Fatal("ray dispatch with diverging data/result PVCs should fail")
+	if _, err := newRunRayJobRequest(conflictingPVC, "ray-run"); err == nil {
+		t.Fatal("RayJob dispatch with diverging data/result PVCs should fail")
 	}
 	withMounts := base()
 	withMounts.mountSpecs = []string{"extra=pvc:other:/mnt/extra"}
-	if _, err := newRunRayRequest(withMounts, "ray-run"); err == nil {
-		t.Fatal("ray dispatch with storage.mounts should fail")
+	if _, err := newRunRayJobRequest(withMounts, "ray-run"); err == nil {
+		t.Fatal("RayJob dispatch with storage.mounts should fail")
 	}
 }
 
-func TestRayRequestedGPUCountIncludesWorkerReplicas(t *testing.T) {
-	if got := rayRequestedGPUCount(10, 4); got != 40 {
+func TestRayJobRequestedGPUCountIncludesWorkerReplicas(t *testing.T) {
+	if got := rayJobRequestedGPUCount(10, 4); got != 40 {
 		t.Fatalf("gpu demand = %d, want 40", got)
 	}
-	if got := rayRequestedGPUCount(10, 0); got != 0 {
+	if got := rayJobRequestedGPUCount(10, 0); got != 0 {
 		t.Fatalf("cpu-only demand = %d, want 0", got)
 	}
 }
@@ -209,22 +209,22 @@ func TestRayRequestedGPUCountIncludesWorkerReplicas(t *testing.T) {
 // namespace and queue resolution both need a live cluster, so an offline
 // client dry-run must still render rather than demand values it is forbidden
 // to look up.
-func TestExecuteRunRayClientDryRunWithoutNamespace(t *testing.T) {
+func TestExecuteRunRayJobClientDryRunWithoutNamespace(t *testing.T) {
 	dir := t.TempDir()
 	script := writeRayScript(t, dir)
 	options := defaultRunDispatchOptions()
-	options.engine = "ray"
+	options.engine = "rayjob"
 	options.dryRun = "client"
 	options.script = script
 	options.workers = 2
 	// options.namespace and options.queue deliberately left empty.
 
-	request, err := newRunRayRequest(options, "offline-ray")
+	request, err := newRunRayJobRequest(options, "offline-ray")
 	if err != nil {
-		t.Fatalf("newRunRayRequest: %v", err)
+		t.Fatalf("newRunRayJobRequest: %v", err)
 	}
 	var out, stderr bytes.Buffer
-	if err := executeRunRay(context.Background(), &out, &stderr, &request, "tau run --config tau.yaml"); err != nil {
+	if err := executeRunRayJob(context.Background(), &out, &stderr, &request, "tau run --config tau.yaml"); err != nil {
 		t.Fatalf("client dry-run must render offline without a namespace, got: %v\nstderr:\n%s", err, stderr.String())
 	}
 	rendered := out.String()

@@ -300,8 +300,8 @@ func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 				runDispatchInput: runDispatchInput{engine: "job"},
 				runPayloadInput:  runPayloadInput{script: "train.py"},
 				runComputeInput: runComputeInput{
-					runRayResources: runRayResources{workers: 1, gpusPerWorker: 1},
-					jobGPUs:         &zeroGPUs,
+					runRayJobResources: runRayJobResources{workers: 1, gpusPerWorker: 1},
+					jobGPUs:            &zeroGPUs,
 				},
 				runObservabilityInput: runObservabilityInput{
 					runDirectMetrics: runDirectMetrics{metricsOffloadEnabled: true},

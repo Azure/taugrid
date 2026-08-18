@@ -25,7 +25,7 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// runRayRequest is the typed Ray dispatch for `tau run`.
+// runRayJobRequest is the typed RayJob dispatch for `tau run`.
 //
 // The script stays a normal Ray program: it imports ray.train, configures a
 // TorchTrainer/ScalingConfig, and calls fit(). Tau owns only the cluster
@@ -37,31 +37,31 @@ import (
 // producing a spec the API server will reject.
 const maxProjectArchiveInputBytes = 8 << 20
 
-type runRayRequest struct {
+type runRayJobRequest struct {
 	Name    string
-	Options resolvedRunRayOptions
+	Options resolvedRunRayJobOptions
 }
 
-func newRunRayRequest(options unresolvedRunOptions, name string) (runRayRequest, error) {
+func newRunRayJobRequest(options unresolvedRunOptions, name string) (runRayJobRequest, error) {
 	if name == "" {
-		return runRayRequest{}, fmt.Errorf("ray runs require NAME")
+		return runRayJobRequest{}, fmt.Errorf("RayJob runs require NAME")
 	}
 	if options.script == "" {
-		return runRayRequest{}, fmt.Errorf("engine=ray requires run.entrypoint")
+		return runRayJobRequest{}, fmt.Errorf("engine=rayjob requires run.entrypoint")
 	}
 	if options.resultPVC != "" && options.dataPVC != "" && options.resultPVC != options.dataPVC {
-		return runRayRequest{}, fmt.Errorf("storage.result_pvc cannot differ from storage.data_pvc for Ray run configs")
+		return runRayJobRequest{}, fmt.Errorf("storage.result_pvc cannot differ from storage.data_pvc for RayJob run configs")
 	}
 	if len(options.volumeSpecs) > 0 || len(options.mountSpecs) > 0 {
-		return runRayRequest{}, fmt.Errorf("ray run configs support storage.data_pvc/output, but not storage.volumes/mounts")
+		return runRayJobRequest{}, fmt.Errorf("RayJob run configs support storage.data_pvc/output, but not storage.volumes/mounts")
 	}
 	if strings.TrimSpace(options.workingDir.jobContainerPath()) != "" {
-		return runRayRequest{}, fmt.Errorf("runtime.working_dir requires engine: job")
+		return runRayJobRequest{}, fmt.Errorf("runtime.working_dir requires engine: job")
 	}
-	return runRayRequest{Name: name, Options: resolveRunRayOptions(options)}, nil
+	return runRayJobRequest{Name: name, Options: resolveRunRayJobOptions(options)}, nil
 }
 
-func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRayRequest, captureCommand string) error {
+func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *runRayJobRequest, captureCommand string) error {
 	if err := ensureSubmissionIDValue(request.Options.dryRun, &request.Options.submissionID); err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	}
 	warnings = append(warnings, topoWarnings...)
 
-	gpuDemand := rayRequestedGPUCount(o.workers, o.gpusPerWorker)
+	gpuDemand := rayJobRequestedGPUCount(o.workers, o.gpusPerWorker)
 	p := resourceProfileForRender(resolvedProfileName, preset, topo.resourceProfileOptions(), gpuDemand)
 	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
 	var runner *kube.Runner
@@ -168,7 +168,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 	warnings = append(warnings, resolveWarnings...)
 	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, o.dryRun)
 
-	capture, err := buildRayCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.script, o.workers, o.gpusPerWorker, dataPVC)
+	capture, err := buildRayJobCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.script, o.workers, o.gpusPerWorker, dataPVC)
 	if err != nil {
 		return err
 	}
@@ -326,7 +326,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 		return err
 	}
 	if o.dryRun == "" {
-		fmt.Fprint(stdout, formatRaySubmitHandoff(name, namespace, kubeContext, preset))
+		fmt.Fprint(stdout, formatRayJobSubmitHandoff(name, namespace, kubeContext, preset))
 	}
 	return nil
 }
@@ -334,7 +334,7 @@ func executeRunRay(ctx context.Context, stdout, stderr io.Writer, request *runRa
 // rayTrainConfigForRender passes execution.configs straight through. The
 // argv path used to JSON-encode it and re-parse it on the other side; the
 // typed path keeps the map.
-func rayTrainConfigForRender(o resolvedRunRayOptions) map[string]any {
+func rayTrainConfigForRender(o resolvedRunRayJobOptions) map[string]any {
 	if o.tuneParamSpace != "" || len(o.configs) == 0 {
 		return nil
 	}
@@ -347,10 +347,10 @@ func rayTrainConfigForRender(o resolvedRunRayOptions) map[string]any {
 // and the plain entrypoint base name, which is the pre-existing single-file
 // behaviour.
 func buildProjectArchive(o unresolvedRunOptions) ([]byte, string, error) {
-	return buildResolvedProjectArchive(resolveRunRayOptions(o))
+	return buildResolvedProjectArchive(resolveRunRayJobOptions(o))
 }
 
-func buildResolvedProjectArchive(o resolvedRunRayOptions) ([]byte, string, error) {
+func buildResolvedProjectArchive(o resolvedRunRayJobOptions) ([]byte, string, error) {
 	dir := strings.TrimSpace(o.workingDir)
 	if dir == "" {
 		return nil, filepath.Base(o.script), nil

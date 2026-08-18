@@ -510,13 +510,13 @@ func TestExecuteRunTargetWritesBackResolvedNamespace(t *testing.T) {
 	}
 }
 
-func TestExecuteRunTargetWritesBackResolvedNamespaceRay(t *testing.T) {
+func TestExecuteRunTargetWritesBackResolvedNamespaceRayJob(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "train.py")
 	if err := os.WriteFile(script, []byte("import ray\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	options := defaultRunDispatchOptions()
-	options.engine = "ray"
+	options.engine = "rayjob"
 	options.script = script
 	options.image = "busybox:1.36"
 	options.dryRun = "client"
@@ -527,8 +527,8 @@ func TestExecuteRunTargetWritesBackResolvedNamespaceRay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ray := resolvedRayRequestForTest(target)
-	if ray == nil {
+	rayjob := resolvedRayJobRequestForTest(target)
+	if rayjob == nil {
 		t.Fatal("expected ray target")
 	}
 	parent := &cobra.Command{Use: "run"}
@@ -540,8 +540,8 @@ func TestExecuteRunTargetWritesBackResolvedNamespaceRay(t *testing.T) {
 	}
 	// Verify the retry dispatch switch reads the resolved namespace from
 	// the ray target (not from stale targetOptions).
-	if ray.Options.namespace != "demo" {
-		t.Fatalf("ray target namespace not propagated: got %q, want %q", ray.Options.namespace, "demo")
+	if rayjob.Options.namespace != "demo" {
+		t.Fatalf("RayJob target namespace not propagated: got %q, want %q", rayjob.Options.namespace, "demo")
 	}
 }
 

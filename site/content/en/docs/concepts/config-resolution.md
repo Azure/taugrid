@@ -10,7 +10,7 @@ The normal researcher contract is a checked-in direct run config:
 
 ```yaml
 name: train
-engine: ray
+engine: rayjob
 entrypoint: train.py
 
 compute:

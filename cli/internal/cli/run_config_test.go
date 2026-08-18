@@ -672,7 +672,7 @@ func filesKeys(m map[string][]byte) []string {
 	return keys
 }
 
-func TestRunConfigRayDryRun(t *testing.T) {
+func TestRunConfigRayJobDryRun(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "train.py")
 	if err := os.WriteFile(script, []byte("print('train')\n"), 0o644); err != nil {
@@ -680,7 +680,7 @@ func TestRunConfigRayDryRun(t *testing.T) {
 	}
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: config-ray
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   image: example.com/research/ray:cuda13
@@ -724,16 +724,16 @@ experiment:
 		"serviceAccountName: tau-workload",
 	} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("config ray dry-run missing %q:\n%s", want, rendered)
+			t.Fatalf("config RayJob dry-run missing %q:\n%s", want, rendered)
 		}
 	}
 	for _, leaked := range []string{"hf-secret", "token-key"} {
 		if strings.Contains(rendered, leaked) {
-			t.Fatalf("config ray dry-run leaked secret ref %q:\n%s", leaked, rendered)
+			t.Fatalf("config RayJob dry-run leaked secret ref %q:\n%s", leaked, rendered)
 		}
 	}
 	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 2 {
-		t.Fatalf("GPU config ray dry-run serviceAccountName count=%d want head + worker (2):\n%s", got, rendered)
+		t.Fatalf("GPU config RayJob dry-run serviceAccountName count=%d want head + worker (2):\n%s", got, rendered)
 	}
 	for _, want := range []string{
 		"key: kubernetes.azure.com/mode",
@@ -742,11 +742,37 @@ experiment:
 		"operator: DoesNotExist",
 	} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("GPU config ray dry-run must give its CPU head portable system affinity; missing %q:\n%s", want, rendered)
+			t.Fatalf("GPU config RayJob dry-run must give its CPU head portable system affinity; missing %q:\n%s", want, rendered)
 		}
 	}
 	if strings.Contains(rendered, "azure.workload.identity/use") {
 		t.Fatalf("non-workspace RayJob should not gain the Azure workload identity label:\n%s", rendered)
+	}
+}
+
+func TestRunConfigLegacyRayEngineAliasDryRun(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "train.py"), []byte("print('train')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: legacy-ray-alias
+engine: ray
+entrypoint: train.py
+runtime:
+  image: python:3.12
+compute:
+  gpus_per_worker: 0
+policy:
+  namespace: ray
+  queue: team-a
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	if !strings.Contains(rendered, "kind: RayJob") {
+		t.Fatalf("legacy engine: ray alias did not render a RayJob:\n%s", rendered)
 	}
 }
 
@@ -759,7 +785,7 @@ func TestRunConfigRunImageAliasDryRun(t *testing.T) {
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`run:
   name: config-ray-run-image
-  engine: ray
+  engine: rayjob
   entrypoint: train.py
   image: example.com/research/ray:run-block
 runtime:
@@ -892,7 +918,7 @@ func TestRunConfigRejectsEmbeddedTelemetryPolicy(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: telemetry-out-of-scope
-engine: ray
+engine: rayjob
 entrypoint: train.py
 metrics:
   offload:
@@ -913,7 +939,7 @@ metrics:
 
 func TestRunConfigRejectsUnknownFields(t *testing.T) {
 	err := executeTauConfigError(t, `name: unknown-field
-engine: ray
+engine: rayjob
 entrypoint: train.py
 compute:
   gpus_per_pod: 1
@@ -927,7 +953,7 @@ func TestRunConfigValidateOfflineDoesNotRequireClusterTopologyCapability(t *test
 	dir := t.TempDir()
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: config-ray
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   pip:
@@ -1175,7 +1201,7 @@ func TestRunConfigAcceptsQueueAutoForLiveResolution(t *testing.T) {
 
 func TestRunConfigRejectsMalformedEnvSecret(t *testing.T) {
 	err := executeTauConfigError(t, `name: env-secret
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   env_secret:
@@ -1466,7 +1492,7 @@ func executeTauCommand(t *testing.T, args []string) string {
 
 func TestResolveRunTargetRejectsDirectEnvKV(t *testing.T) {
 	o := defaultRunDispatchOptions()
-	o.engine = "ray"
+	o.engine = "rayjob"
 	o.script = "train.py"
 	o.envKV = []string{"HF_TOKEN=hf-token"}
 	_, err := resolveRunTarget(o, "kv-direct")
@@ -1502,7 +1528,7 @@ experiment:
 
 func TestResolveRunTargetCarriesManagedRayMetricsAndOutput(t *testing.T) {
 	o := defaultRunDispatchOptions()
-	o.engine = "ray"
+	o.engine = "rayjob"
 	o.script = "train.py"
 	o.dataPVC = "research-workspace"
 	o.output = "/data/research-workspace/runs/modernbert-ray"
@@ -1516,11 +1542,11 @@ func TestResolveRunTargetCarriesManagedRayMetricsAndOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ray := resolvedRayRequestForTest(target)
-	if ray == nil {
-		t.Fatalf("expected typed ray dispatch, got %+v", target)
+	rayjob := resolvedRayJobRequestForTest(target)
+	if rayjob == nil {
+		t.Fatalf("expected typed RayJob dispatch, got %+v", target)
 	}
-	opts := ray.Options
+	opts := rayjob.Options
 	if opts.dataPVC != "research-workspace" {
 		t.Fatalf("dataPVC = %q", opts.dataPVC)
 	}
@@ -1603,7 +1629,7 @@ func TestRunConfigRejectsCrossEngineLauncher(t *testing.T) {
 		{
 			name: "ray+torchrun",
 			config: `name: bad-combo
-engine: ray
+engine: rayjob
 entrypoint: train.py
 execution:
   launcher: torchrun
@@ -1613,7 +1639,7 @@ execution:
 		{
 			name: "ray+python",
 			config: `name: bad-combo
-engine: ray
+engine: rayjob
 entrypoint: train.py
 execution:
   launcher: python
@@ -1628,7 +1654,7 @@ entrypoint: train.py
 execution:
   launcher: ray-train
 `,
-			wantErr: "requires engine: ray",
+			wantErr: "requires engine: rayjob",
 		},
 		{
 			name: "job+ray-tune",
@@ -1638,7 +1664,7 @@ entrypoint: train.py
 execution:
   launcher: ray-tune
 `,
-			wantErr: "requires engine: ray",
+			wantErr: "requires engine: rayjob",
 		},
 	}
 
@@ -1664,7 +1690,7 @@ func TestRunConfigAcceptsRayTrainLauncher(t *testing.T) {
 
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: ray-train-explicit
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   image: example.com/research/ray:cuda13
@@ -1817,7 +1843,7 @@ func TestRunConfigAcceptsRayTuneLauncher(t *testing.T) {
 	}
 	config := filepath.Join(dir, "tau.yaml")
 	if err := os.WriteFile(config, []byte(`name: ray-tune-explicit
-engine: ray
+engine: rayjob
 entrypoint: tune.py
 runtime:
   image: example.com/research/ray:cuda13

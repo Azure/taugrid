@@ -6,7 +6,7 @@ submitted by the Go `tau` CLI:
 
 ```yaml
 name: my-ft
-engine: ray
+engine: rayjob
 entrypoint: train.py
 runtime:
   pip: [torch==2.4.0]
