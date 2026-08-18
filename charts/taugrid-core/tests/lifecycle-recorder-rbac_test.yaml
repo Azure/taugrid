@@ -1,0 +1,46 @@
+suite: Lifecycle recorder workload RBAC
+templates:
+  - templates/lifecycle-recorder.yaml
+values:
+  - lifecycle-recorder-values.yaml
+tests:
+  # The recorder reads pods to explain terminal batch Job failures. A Job's own
+  # Failed condition only says "BackoffLimitExceeded"; the exit code or OOM kill
+  # lives on the pods, and those pods are deleted with the Job once
+  # ttlSecondsAfterFinished elapses. Without this permission the durable
+  # lifecycle row silently degrades to the useless generic reason.
+  - it: lets the recorder read the pods behind observed workloads
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tau-lifecycle-recorder
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "watch"]
+
+  - it: keeps the recorder read-only on every workload resource it observes
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["batch"]
+              resources: ["jobs"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["ray.io"]
+              resources: ["rayjobs"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["kueue.x-k8s.io"]
+              resources: ["workloads"]
+              verbs: ["get", "list", "watch"]

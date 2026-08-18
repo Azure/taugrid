@@ -35,6 +35,24 @@ func applyWorkspaceDefaults(o runDispatchOptions, w tauworkspace.Workspace, runN
 	if o.priorityTier == "" {
 		o.priorityTier = workspacePriorityTier(w.Spec.Defaults.Priority)
 	}
+	// Retention precedence: an explicit run.ttl_seconds_after_finished (which
+	// configToDispatch has already applied, and which validates as > 0) wins;
+	// otherwise the workspace default applies; otherwise the renderer keeps its
+	// own built-in retention. The workspace value is an override, never a
+	// floor, so a workspace can neither shorten nor lengthen a run that asked
+	// for a specific TTL.
+	//
+	// The CRD rejects values below the durability floor, but a workspace
+	// created against an older schema can still carry one. Ignoring it is the
+	// safe reading: a retention shorter than the lifecycle recorder's
+	// observation window deletes the Job and its pods before the run can be
+	// recorded, so honouring it would silently destroy the evidence the
+	// default exists to preserve. Fall back to the built-in retention instead.
+	if o.ttlSecondsAfterFinished == 0 && w.Spec.Defaults.TTLSecondsAfterFinished != nil {
+		if ttl := *w.Spec.Defaults.TTLSecondsAfterFinished; ttl >= tauworkspace.MinTTLSecondsAfterFinished {
+			o.ttlSecondsAfterFinished = ttl
+		}
+	}
 	if w.Spec.WorkloadIdentity != nil && w.Spec.WorkloadIdentity.ServiceAccountName != "" {
 		o.azureWorkloadIdentity = true
 		if o.serviceAccountName == "" {

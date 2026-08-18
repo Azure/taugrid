@@ -11,6 +11,7 @@ import (
 
 	"github.com/Azure/taugrid/core/workloadmeta"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -100,6 +101,65 @@ func (s *KubernetesSource) ListRayJobs(ctx context.Context, namespace string) ([
 	return out, nil
 }
 
+// ListPods reads the pods behind Tau workloads so a terminal Job failure can be
+// explained by exit code or OOM kill rather than by the Job's own opaque
+// "BackoffLimitExceeded". Pods are filtered to Tau-labelled workloads, matching
+// how Jobs and RayJobs are filtered above.
+func (s *KubernetesSource) ListPods(ctx context.Context, namespace string) ([]Pod, error) {
+	items, err := s.core.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Pod, 0, len(items.Items))
+	for _, item := range items.Items {
+		if !hasTauLabel(item.Labels) {
+			continue
+		}
+		metadata := typedMetadata(item.Name, item.Namespace, string(item.UID), item.ResourceVersion, item.Generation, item.CreationTimestamp.Time, item.Labels, item.Annotations, item.OwnerReferences)
+		metadata.Deleting = item.DeletionTimestamp != nil
+		out = append(out, Pod{
+			Metadata:   metadata,
+			Phase:      string(item.Status.Phase),
+			Reason:     item.Status.Reason,
+			Containers: containerStates(item.Status),
+		})
+	}
+	return out, nil
+}
+
+// containerStates flattens the terminal or blocked state of every container in
+// a pod. Waiting containers are only reported when they carry a reason
+// (ImagePullBackOff, CreateContainerConfigError and friends) — a container
+// merely waiting to start explains nothing.
+func containerStates(status corev1.PodStatus) []ContainerState {
+	all := make([]corev1.ContainerStatus, 0, len(status.InitContainerStatuses)+len(status.ContainerStatuses))
+	all = append(all, status.InitContainerStatuses...)
+	all = append(all, status.ContainerStatuses...)
+
+	out := make([]ContainerState, 0, len(all))
+	for _, container := range all {
+		switch {
+		case container.State.Terminated != nil:
+			terminated := container.State.Terminated
+			out = append(out, ContainerState{
+				Name:       container.Name,
+				ExitCode:   terminated.ExitCode,
+				Reason:     terminated.Reason,
+				Message:    terminated.Message,
+				Terminated: true,
+				OOMKilled:  strings.EqualFold(terminated.Reason, "OOMKilled"),
+			})
+		case container.State.Waiting != nil && container.State.Waiting.Reason != "":
+			out = append(out, ContainerState{
+				Name:    container.Name,
+				Reason:  container.State.Waiting.Reason,
+				Message: container.State.Waiting.Message,
+			})
+		}
+	}
+	return out
+}
+
 func (s *KubernetesSource) ListWorkloads(ctx context.Context, namespace string) ([]Workload, error) {
 	items, err := s.dynamic.Resource(workloadsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -127,16 +187,16 @@ func (s *KubernetesSource) ListWorkloads(ctx context.Context, namespace string) 
 }
 
 func typedMetadata(name, namespace, uid, version string, generation int64, created time.Time, labels, annotations map[string]string, owners []metav1.OwnerReference) Metadata {
-	ownerKind, ownerName := ownerReference(owners)
-	return Metadata{Name: name, Namespace: namespace, UID: uid, ResourceVersion: version, Generation: generation, CreatedAt: created, Labels: labels, Annotations: annotations, OwnerKind: ownerKind, OwnerName: ownerName}
+	ownerKind, ownerName, ownerUID := ownerReference(owners)
+	return Metadata{Name: name, Namespace: namespace, UID: uid, ResourceVersion: version, Generation: generation, CreatedAt: created, Labels: labels, Annotations: annotations, OwnerKind: ownerKind, OwnerName: ownerName, OwnerUID: ownerUID}
 }
 
 func unstructuredMetadata(item unstructured.Unstructured) Metadata {
-	ownerKind, ownerName := ownerReference(item.GetOwnerReferences())
+	ownerKind, ownerName, ownerUID := ownerReference(item.GetOwnerReferences())
 	return Metadata{
 		Name: item.GetName(), Namespace: item.GetNamespace(), UID: string(item.GetUID()), ResourceVersion: item.GetResourceVersion(),
 		Generation: item.GetGeneration(), CreatedAt: item.GetCreationTimestamp().Time, Labels: item.GetLabels(), Annotations: item.GetAnnotations(),
-		OwnerKind: ownerKind, OwnerName: ownerName,
+		OwnerKind: ownerKind, OwnerName: ownerName, OwnerUID: ownerUID,
 		Deleting: item.GetDeletionTimestamp() != nil,
 	}
 }
@@ -154,16 +214,16 @@ func hasTauLabel(labels map[string]string) bool {
 	return false
 }
 
-func ownerReference(owners []metav1.OwnerReference) (string, string) {
+func ownerReference(owners []metav1.OwnerReference) (string, string, string) {
 	for _, owner := range owners {
 		if owner.Controller != nil && *owner.Controller {
-			return owner.Kind, owner.Name
+			return owner.Kind, owner.Name, string(owner.UID)
 		}
 	}
 	if len(owners) > 0 {
-		return owners[0].Kind, owners[0].Name
+		return owners[0].Kind, owners[0].Name, string(owners[0].UID)
 	}
-	return "", ""
+	return "", "", ""
 }
 
 func typedJobConditions(conditions []batchv1.JobCondition) []Condition {

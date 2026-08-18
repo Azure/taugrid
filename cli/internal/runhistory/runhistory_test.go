@@ -25,8 +25,10 @@ type fakeSource struct {
 	jobs        []Job
 	rayJobs     []RayJob
 	workloads   []Workload
+	pods        []Pod
 	rayErr      error
 	workloadErr error
+	podErr      error
 }
 
 func (s *fakeSource) ListJobs(context.Context, string) ([]Job, error) { return s.jobs, nil }
@@ -35,6 +37,9 @@ func (s *fakeSource) ListRayJobs(context.Context, string) ([]RayJob, error) {
 }
 func (s *fakeSource) ListWorkloads(context.Context, string) ([]Workload, error) {
 	return s.workloads, s.workloadErr
+}
+func (s *fakeSource) ListPods(context.Context, string) ([]Pod, error) {
+	return s.pods, s.podErr
 }
 
 type fakeWriter struct {

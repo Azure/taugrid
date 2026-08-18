@@ -349,39 +349,70 @@ func workloadKindToK8sKind(wk string) string {
 	}
 }
 
-func patchSecretOwnerRef(ctx context.Context, r *kube.Runner, namespace string, secret *manifest.JobSecret, workloadKind string) error {
-	k8sKind := workloadKindToK8sKind(workloadKind)
-	resource := "jobs.batch"
-	if k8sKind == "RayJob" {
-		resource = "rayjobs.ray.io"
-	}
+// ownerRefTarget identifies the workload that should own a generated auxiliary
+// object (the run Secret, the per-run SecretProviderClass) so that Kubernetes
+// garbage-collects the two together instead of leaving the auxiliary object
+// behind forever.
+type ownerRefTarget struct {
+	// APIVersion and Kind go into the ownerReference itself.
+	APIVersion string
+	Kind       string
+	// Name is the workload name, used both for the UID lookup and the ref.
+	Name string
+	// Resource is the kubectl resource used to read the owner's UID.
+	Resource string
+}
 
+func ownerRefTargetFor(workloadKind, ownerName string) ownerRefTarget {
+	if workloadKindToK8sKind(workloadKind) == "RayJob" {
+		return ownerRefTarget{APIVersion: "ray.io/v1", Kind: "RayJob", Name: ownerName, Resource: "rayjobs.ray.io"}
+	}
+	return ownerRefTarget{APIVersion: "batch/v1", Kind: "Job", Name: ownerName, Resource: "jobs.batch"}
+}
+
+// patchOwnerRef adopts an already-applied auxiliary object into its workload's
+// ownerReferences.
+//
+// Ownership cannot be rendered inline: an ownerReference requires the owner's
+// UID, which only exists once the API server has created the workload, and tau
+// submits a multi-document manifest with `kubectl apply`. So the auxiliary
+// object is applied first and adopted immediately afterwards. The window
+// between the two is why every caller also registers the object for cleanup on
+// submission failure — an interrupted run must not leave an unowned object
+// that nothing will ever reclaim.
+func patchOwnerRef(ctx context.Context, r *kube.Runner, namespace, resource, name string, owner ownerRefTarget) error {
 	uidOut, err := r.Raw(ctx, []string{
-		"get", resource, secret.OwnerName, "-n", namespace,
+		"get", owner.Resource, owner.Name, "-n", namespace,
 		"-o", "jsonpath={.metadata.uid}",
 	}, nil)
 	if err != nil {
-		return fmt.Errorf("get %s uid: %w", k8sKind, err)
+		return fmt.Errorf("get %s uid: %w", owner.Kind, err)
 	}
 	uid := strings.TrimSpace(uidOut)
 	if uid == "" {
-		return fmt.Errorf("empty uid for %s/%s", k8sKind, secret.OwnerName)
-	}
-
-	apiVersion := "batch/v1"
-	if k8sKind == "RayJob" {
-		apiVersion = "ray.io/v1"
+		return fmt.Errorf("empty uid for %s/%s", owner.Kind, owner.Name)
 	}
 
 	patch := fmt.Sprintf(`{"metadata":{"ownerReferences":[{"apiVersion":%q,"kind":%q,"name":%q,"uid":%q,"controller":true,"blockOwnerDeletion":true}]}}`,
-		apiVersion, k8sKind, secret.OwnerName, uid)
+		owner.APIVersion, owner.Kind, owner.Name, uid)
 
-	_, err = r.Raw(ctx, []string{
-		"patch", "secret", secret.Name, "-n", namespace,
+	if _, err := r.Raw(ctx, []string{
+		"patch", resource, name, "-n", namespace,
 		"--type=merge", "-p", patch,
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("patch secret ownerRef: %w", err)
+	}, nil); err != nil {
+		return fmt.Errorf("patch %s ownerRef: %w", resource, err)
 	}
 	return nil
+}
+
+func patchSecretOwnerRef(ctx context.Context, r *kube.Runner, namespace string, secret *manifest.JobSecret, workloadKind string) error {
+	return patchOwnerRef(ctx, r, namespace, "secret", secret.Name, ownerRefTargetFor(workloadKind, secret.OwnerName))
+}
+
+// patchSecretProviderClassOwnerRef adopts the per-run SecretProviderClass that
+// manifest.Render emits for Key Vault workloads. It is named after the run
+// (kvspec.SPCName) and is therefore as disposable as the workload itself;
+// without an ownerReference it would accumulate one orphan per Key Vault run.
+func patchSecretProviderClassOwnerRef(ctx context.Context, r *kube.Runner, namespace, spcName, ownerName, workloadKind string) error {
+	return patchOwnerRef(ctx, r, namespace, secretProviderClassResource, spcName, ownerRefTargetFor(workloadKind, ownerName))
 }

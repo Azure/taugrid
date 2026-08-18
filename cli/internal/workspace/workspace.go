@@ -55,10 +55,29 @@ type WorkspaceTarget struct {
 }
 
 type WorkspaceDefaults struct {
-	OutputRoot   string `json:"outputRoot,omitempty" yaml:"outputRoot,omitempty"`
+	OutputRoot string `json:"outputRoot,omitempty" yaml:"outputRoot,omitempty"`
+	// ScratchMount is not part of the TauWorkspace CRD schema, so the API
+	// server prunes it on write. It is kept here only so reads of an object
+	// that somehow carries it do not fail; do not add new consumers.
 	ScratchMount string `json:"scratchMount,omitempty" yaml:"scratchMount,omitempty"`
 	Priority     string `json:"priority,omitempty" yaml:"priority,omitempty"`
+	// TTLSecondsAfterFinished mirrors WorkspaceDefaults.ttlSecondsAfterFinished
+	// in the CRD: the workspace-level default retention for finished batch
+	// Jobs. A pointer keeps "unset" distinct from an explicit value, because
+	// zero is a legal Kubernetes TTL meaning "delete immediately".
+	TTLSecondsAfterFinished *int64 `json:"ttlSecondsAfterFinished,omitempty" yaml:"ttlSecondsAfterFinished,omitempty"`
 }
+
+// MinTTLSecondsAfterFinished mirrors the CRD's durability floor for
+// WorkspaceDefaults.ttlSecondsAfterFinished. The CRD enforces it on write, but
+// a workspace created against an older schema can still carry a shorter value,
+// so readers re-check rather than trust the stored object.
+//
+// The floor exists because finished-Job retention races the lifecycle
+// recorder: below roughly an order of magnitude above its observation
+// interval, a Job that finishes just after a poll is collected with its pods
+// before the next pass, and the durable record is lost rather than shortened.
+const MinTTLSecondsAfterFinished int64 = 600
 
 type WorkspaceWorkloadIdentity struct {
 	ServiceAccountName string `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
