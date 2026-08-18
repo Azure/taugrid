@@ -73,7 +73,7 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 		offloadImage,
 		workloadmeta.AnnotationExperimentSource + ": stellar",
 		workloadmeta.AnnotationStellarExperimentID + ": ray-plus-stellar",
-		"/data/tau-workspaces/default/portal-ray-stellar/metrics-history-attempt-0/*.jsonl",
+		"/data/projects/taugrid-default/runs/portal-ray-stellar/metrics-history-attempt-0/*.jsonl",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("portal Ray + Stellar dry-run missing %q:\n%s", want, rendered)
