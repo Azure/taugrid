@@ -32,6 +32,11 @@ assert_not_older() {
     fail "expected $1 not to be older than $2, got status $status"
 }
 
+assert_equivalent() {
+  assert_not_older "$1" "$2"
+  assert_not_older "$2" "$1"
+}
+
 assert_invalid() {
   local candidate="$1"
   local reference="$2"
@@ -119,15 +124,46 @@ assert_older 0.1.3 0.1.4
 assert_older 0.9.9 1.0.0
 assert_older 1.2.3 1.3.0
 assert_older 9223372036854775807.0.0 9223372036854775808.0.0
+assert_older 1.2.3-rc 1.2.3
+assert_older 1.2.3-rc.1 1.2.3-rc.2
+assert_older 1.2.3-999999999999999999999999999999999999 \
+  1.2.3-1000000000000000000000000000000000000
+assert_older 1.2.3-999999999999999999999999999999999999 \
+  1.2.3-alpha
+
+# Official SemVer 2.0.0 precedence example.
+assert_older 1.0.0-alpha 1.0.0-alpha.1
+assert_older 1.0.0-alpha.1 1.0.0-alpha.beta
+assert_older 1.0.0-alpha.beta 1.0.0-beta
+assert_older 1.0.0-beta 1.0.0-beta.2
+assert_older 1.0.0-beta.2 1.0.0-beta.11
+assert_older 1.0.0-beta.11 1.0.0-rc.1
+assert_older 1.0.0-rc.1 1.0.0
+
 assert_not_older 1.2.3 1.2.3
 assert_not_older 1.2.4 1.2.3
 assert_not_older 2.0.0 1.99.99
 assert_not_older 9223372036854775808.0.0 9223372036854775807.0.0
-assert_invalid 1.2 1.2.3 "expected exactly X.Y.Z"
-assert_invalid 1.02.3 1.2.3 "expected exactly X.Y.Z"
-assert_invalid v1.2.3 1.2.3 "expected exactly X.Y.Z"
-assert_invalid 1.2.3-rc.1 1.2.3 "no prerelease suffix"
-assert_invalid 1.2.3 1.2.3+build.1 "no prerelease suffix"
+assert_not_older 1.2.3-rc.2 1.2.3-rc.1
+assert_not_older 1.2.3-alpha 1.2.3-999999999999999999999999999999999999
+assert_equivalent 1.2.3+build.1 1.2.3+build.2
+assert_equivalent 1.2.3-rc.1+build.1 1.2.3-rc.1+build.2
+assert_equivalent 1.2.3+999999999999999999999999999999999999 1.2.3
+
+assert_invalid 1.2 1.2.3 "core must be MAJOR.MINOR.PATCH"
+assert_invalid 1.2.3.4 1.2.3 "core must be MAJOR.MINOR.PATCH"
+assert_invalid 1.02.3 1.2.3 "no leading zeros"
+assert_invalid 1.2.03 1.2.3 "no leading zeros"
+assert_invalid v1.2.3 1.2.3 "core must be MAJOR.MINOR.PATCH"
+assert_invalid 1.2.3- 1.2.3 "prerelease must contain non-empty"
+assert_invalid 1.2.3-alpha..1 1.2.3 "prerelease must contain non-empty"
+assert_invalid 1.2.3-alpha.01 1.2.3 "must not contain leading zeros"
+assert_invalid 1.2.3-alpha_1 1.2.3 "prerelease identifier"
+assert_invalid 1.2.3+ 1.2.3 "build metadata must contain non-empty"
+assert_invalid 1.2.3+build..1 1.2.3 "build metadata must contain non-empty"
+assert_invalid 1.2.3+build_1 1.2.3 "build metadata identifier"
+assert_invalid 1.2.3+build+1 1.2.3 "build metadata must contain non-empty"
+assert_invalid 1.2.3 1.2.3-01 "reference chart version"
 
 export FAKE_DEPENDENCY_VERSION=0.1.3
 vendor_taugrid_dependencies "$TEST_CHART"

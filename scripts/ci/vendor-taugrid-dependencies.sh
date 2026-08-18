@@ -5,21 +5,68 @@
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
-parse_chart_release_version() {
-  local version="$1"
+parse_semver() {
+  local original="$1"
   local description="$2"
+  local version="$original"
+  local build=""
+  local identifier
+  local identifiers
 
-  if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-    echo "Invalid ${description} chart version '${version}': expected exactly X.Y.Z with three numeric components and no prerelease suffix" >&2
-    return 2
+  SEMVER_MAJOR=""
+  SEMVER_MINOR=""
+  SEMVER_PATCH=""
+  SEMVER_PRERELEASE=""
+
+  if [[ "$version" == *+* ]]; then
+    build="${version#*+}"
+    version="${version%%+*}"
+    if [[ -z "$build" || "$build" == *+* ||
+      "$build" == .* || "$build" == *. || "$build" == *..* ]]; then
+      echo "Invalid ${description} chart version '${original}': build metadata must contain non-empty dot-separated identifiers" >&2
+      return 2
+    fi
+    IFS=. read -r -a identifiers <<<"$build"
+    for identifier in "${identifiers[@]}"; do
+      if [[ ! "$identifier" =~ ^[0-9A-Za-z-]+$ ]]; then
+        echo "Invalid ${description} chart version '${original}': build metadata identifier '${identifier}' must contain only ASCII letters, digits, and hyphens" >&2
+        return 2
+      fi
+    done
   fi
 
-  VERSION_MAJOR="${BASH_REMATCH[1]}"
-  VERSION_MINOR="${BASH_REMATCH[2]}"
-  VERSION_PATCH="${BASH_REMATCH[3]}"
+  if [[ "$version" == *-* ]]; then
+    SEMVER_PRERELEASE="${version#*-}"
+    version="${version%%-*}"
+    if [[ -z "$SEMVER_PRERELEASE" ||
+      "$SEMVER_PRERELEASE" == .* ||
+      "$SEMVER_PRERELEASE" == *. ||
+      "$SEMVER_PRERELEASE" == *..* ]]; then
+      echo "Invalid ${description} chart version '${original}': prerelease must contain non-empty dot-separated identifiers" >&2
+      return 2
+    fi
+    IFS=. read -r -a identifiers <<<"$SEMVER_PRERELEASE"
+    for identifier in "${identifiers[@]}"; do
+      if [[ ! "$identifier" =~ ^[0-9A-Za-z-]+$ ]]; then
+        echo "Invalid ${description} chart version '${original}': prerelease identifier '${identifier}' must contain only ASCII letters, digits, and hyphens" >&2
+        return 2
+      fi
+      if [[ "$identifier" =~ ^[0-9]+$ &&
+        "$identifier" != "0" && "$identifier" == 0* ]]; then
+        echo "Invalid ${description} chart version '${original}': numeric prerelease identifier '${identifier}' must not contain leading zeros" >&2
+        return 2
+      fi
+    done
+  fi
+
+  if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "Invalid ${description} chart version '${original}': core must be MAJOR.MINOR.PATCH with numeric components and no leading zeros" >&2
+    return 2
+  fi
+  IFS=. read -r SEMVER_MAJOR SEMVER_MINOR SEMVER_PATCH <<<"$version"
 }
 
-numeric_component_is_less() {
+numeric_identifier_is_older() {
   local candidate="$1"
   local reference="$2"
 
@@ -31,35 +78,84 @@ numeric_component_is_less() {
 }
 
 version_is_older() {
+  local LC_ALL=C
   local candidate_major
   local candidate_minor
   local candidate_patch
+  local candidate_prerelease
   local reference_major
   local reference_minor
   local reference_patch
+  local reference_prerelease
+  local candidate_identifiers
+  local reference_identifiers
+  local candidate_identifier
+  local reference_identifier
+  local index
 
-  parse_chart_release_version "$1" "candidate" || return $?
-  candidate_major="$VERSION_MAJOR"
-  candidate_minor="$VERSION_MINOR"
-  candidate_patch="$VERSION_PATCH"
+  parse_semver "$1" "candidate" || return $?
+  candidate_major="$SEMVER_MAJOR"
+  candidate_minor="$SEMVER_MINOR"
+  candidate_patch="$SEMVER_PATCH"
+  candidate_prerelease="$SEMVER_PRERELEASE"
 
-  parse_chart_release_version "$2" "reference" || return $?
-  reference_major="$VERSION_MAJOR"
-  reference_minor="$VERSION_MINOR"
-  reference_patch="$VERSION_PATCH"
+  parse_semver "$2" "reference" || return $?
+  reference_major="$SEMVER_MAJOR"
+  reference_minor="$SEMVER_MINOR"
+  reference_patch="$SEMVER_PATCH"
+  reference_prerelease="$SEMVER_PRERELEASE"
 
   if [[ "$candidate_major" != "$reference_major" ]]; then
-    numeric_component_is_less "$candidate_major" "$reference_major"
+    numeric_identifier_is_older "$candidate_major" "$reference_major"
     return
   fi
   if [[ "$candidate_minor" != "$reference_minor" ]]; then
-    numeric_component_is_less "$candidate_minor" "$reference_minor"
+    numeric_identifier_is_older "$candidate_minor" "$reference_minor"
     return
   fi
   if [[ "$candidate_patch" != "$reference_patch" ]]; then
-    numeric_component_is_less "$candidate_patch" "$reference_patch"
+    numeric_identifier_is_older "$candidate_patch" "$reference_patch"
     return
   fi
+
+  if [[ -z "$candidate_prerelease" ]]; then
+    return 1
+  fi
+  if [[ -z "$reference_prerelease" ]]; then
+    return 0
+  fi
+
+  IFS=. read -r -a candidate_identifiers <<<"$candidate_prerelease"
+  IFS=. read -r -a reference_identifiers <<<"$reference_prerelease"
+  for ((index = 0;
+    index < ${#candidate_identifiers[@]} ||
+      index < ${#reference_identifiers[@]};
+    index++)); do
+    if (( index >= ${#candidate_identifiers[@]} )); then
+      return 0
+    fi
+    if (( index >= ${#reference_identifiers[@]} )); then
+      return 1
+    fi
+
+    candidate_identifier="${candidate_identifiers[$index]}"
+    reference_identifier="${reference_identifiers[$index]}"
+    [[ "$candidate_identifier" == "$reference_identifier" ]] && continue
+
+    if [[ "$candidate_identifier" =~ ^[0-9]+$ ]]; then
+      if [[ ! "$reference_identifier" =~ ^[0-9]+$ ]]; then
+        return 0
+      fi
+      numeric_identifier_is_older "$candidate_identifier" "$reference_identifier"
+      return
+    fi
+    if [[ "$reference_identifier" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+    [[ "$candidate_identifier" < "$reference_identifier" ]]
+    return
+  done
+
   return 1
 }
 
