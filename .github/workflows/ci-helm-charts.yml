@@ -7,6 +7,7 @@ on:
     paths:
       - charts/**
       - scripts/ci/vendor-taugrid-dependencies.sh
+      - scripts/ci/tests/vendor-taugrid-dependencies_test.sh
       - .github/workflows/ci-helm-charts.yml
   workflow_dispatch:
 
@@ -46,7 +47,7 @@ jobs:
             | grep '^charts/' \
             | cut -d/ -f1-2 \
             | sort -u || true)
-          if grep -qx 'scripts/ci/vendor-taugrid-dependencies.sh' <<<"${CHANGED_FILES}"; then
+          if grep -Eq '^scripts/ci/(vendor-taugrid-dependencies\.sh|tests/vendor-taugrid-dependencies_test\.sh)$' <<<"${CHANGED_FILES}"; then
             CHANGED_DIRS=$(printf '%s\ncharts/taugrid\n' "${CHANGED_DIRS}" | sort -u)
           fi
 
@@ -94,6 +95,10 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v${{ matrix.helm_version }}
+
+      - name: Run vendoring script tests
+        if: matrix.chart == 'charts/taugrid'
+        run: bash scripts/ci/tests/vendor-taugrid-dependencies_test.sh
 
       - name: Build chart dependencies
         run: |
