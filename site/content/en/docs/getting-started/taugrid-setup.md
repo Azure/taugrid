@@ -45,7 +45,7 @@ Use [cluster install values](../../reference/cluster-install-values/) for the co
 
 ### Controller release artifacts
 
-The controller source and raw Kustomize manifests live in the [`Azure/taugrid`](https://github.com/Azure/taugrid) repository. Versioned runtime artifacts are released separately through MCR: the `mcr.microsoft.com/aks/ai-runtime/tau-core-controller:<version>` image, the standalone controller OCI chart, the TauGrid umbrella OCI chart, and the CRDs packaged by both charts.
+The public [`Azure/taugrid`](https://github.com/Azure/taugrid) repository contains the controller source and raw Kustomize manifests. End users do not need to clone it for installation: the versioned `mcr.microsoft.com/aks/ai-runtime/tau-core-controller:<version>` image, the standalone controller OCI chart, the TauGrid umbrella OCI chart, and the CRDs packaged by both charts are available from MCR.
 
 Inspect a published version without cloning the repository:
 

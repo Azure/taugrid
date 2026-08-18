@@ -24,7 +24,7 @@ tau workspace status <name>
 
 Workspace RBAC is the API default and what `tau workspace create` writes; the controller binds the researcher subject in the workspace namespace. Cluster-wide authorization is an explicit opt-out that grants no researcher access, and some existing clusters run it. The [multiple-workspace lifecycle](../../concepts/workspaces/#multiple-workspaces) is Alpha: v0 activates one workspace and blocks additional workspace objects until the active workspace is removed.
 
-The controller source and raw Kustomize manifests live in the [`Azure/taugrid`](https://github.com/Azure/taugrid) repository. Versioned MCR release artifacts include the controller image, the standalone controller OCI chart, the TauGrid umbrella OCI chart, and the CRDs packaged by both charts.
+The public [`Azure/taugrid`](https://github.com/Azure/taugrid) repository contains the controller source and raw Kustomize manifests. Versioned MCR release artifacts include the controller image, the standalone controller OCI chart, the TauGrid umbrella OCI chart, and the CRDs packaged by both charts.
 
 Fresh clusters consume the umbrella chart through `tau cluster install`. The standalone chart is only for a separately managed controller and must not be installed alongside an umbrella release that already enables `components.tauCoreController`. See [TauGrid setup](../../getting-started/taugrid-setup/#controller-release-artifacts) for the exact artifact references and discovery commands. This page defines the workspace API and readiness contract; it is not a replacement for installing the cluster control plane.
 
