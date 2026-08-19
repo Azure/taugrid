@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-readonly ACR_NAME="${ACR_NAME:-aksmcrimagescommon}"
+readonly ACR_NAME="${ACR_NAME:-}"
 readonly REPOSITORY_NAME="${REPOSITORY_NAME:-public/aks/ai-runtime}"
 readonly CHARTS=(
   charts/tau-core-controller
@@ -84,6 +84,12 @@ publish_charts() {
   local package_dir="$1"
   local work_root
   local registry_logged_in=false
+
+  if [[ -z "$ACR_NAME" ]]; then
+    echo "ACR_NAME must be set to publish Helm charts." >&2
+    return 2
+  fi
+
   work_root=$(mktemp -d)
   trap "cleanup_work_root $(printf '%q' "$work_root")" EXIT
 
