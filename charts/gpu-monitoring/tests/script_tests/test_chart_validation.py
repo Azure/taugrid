@@ -34,6 +34,11 @@ RESERVED_ENV_NAMES = [
     "NPD_GPU_SIMULATION",
 ]
 
+LEGACY_KEY_MIGRATION = (
+    'migrate to dcgmHealth.source and dcgmHealth.exporterUrl (see the README '
+    '"DCGM health sources" section)'
+)
+
 
 def render(values, *, daemonset_only=True):
     with tempfile.NamedTemporaryFile(
@@ -135,41 +140,137 @@ gpuSkus:
             ),
         )
 
-    def test_collector_disabled_host_local_profile_skips_collector_validation(self):
+    def test_host_dcgmi_profile_requires_the_metrics_collector(self):
         result = render(
             """
 enabledGpuSkus:
   - h200
 metricsCollector:
   enabled: false
-  dcgmAvailability:
-    enabled: true
-    condition: invalid-condition
 """
         )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertNotIn("name: metrics-collector", result.stdout)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "gpuSkus.h200 uses dcgmHealth.source=host-dcgmi and requires "
+            "metricsCollector.enabled=true",
+            result.stderr,
+        )
 
-    def test_explicit_availability_condition_is_yaml_safe(self):
+    def test_default_source_is_host_dcgmi(self):
         result = render(
             """
 enabledGpuSkus:
   - h200
-metricsCollector:
-  dcgmAvailability:
-    enabled: false
-gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: http://localhost:19400/metrics
-        required: true
-        availabilityCondition: CustomExporterUnavailable
 """,
             daemonset_only=False,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('availabilityCondition: "CustomExporterUnavailable"', result.stdout)
+        self.assertIn('url: "http://localhost:19400/metrics"', result.stdout)
+
+    def test_exporter_source_with_explicit_exporter_url_renders(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    dcgmHealth:
+      source: exporter
+      exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+""",
+            daemonset_only=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            'url: "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"',
+            result.stdout,
+        )
+
+    def test_invalid_source_is_rejected(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    dcgmHealth:
+      source: gpu-operator
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            'gpuSkus.h200 effective dcgmHealth.source must be exactly one of '
+            '"host-dcgmi" or "exporter"',
+            result.stderr,
+        )
+
+    def test_null_global_dcgm_health_fails_loud_without_a_reflect_panic(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+dcgmHealth: null
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("reflect", result.stderr)
+        self.assertIn(
+            "gpuSkus.h200: global dcgmHealth must be a map with source "
+            "and/or exporterUrl keys; got null",
+            result.stderr,
+        )
+
+    def test_scalar_global_dcgm_health_fails_loud_without_a_reflect_panic(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+dcgmHealth: bogus
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("reflect", result.stderr)
+        self.assertIn(
+            "gpuSkus.h200: global dcgmHealth must be a map with source "
+            "and/or exporterUrl keys; got string",
+            result.stderr,
+        )
+
+    def test_null_per_profile_dcgm_health_fails_loud_without_a_reflect_panic(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    dcgmHealth: null
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("reflect", result.stderr)
+        self.assertIn(
+            "gpuSkus.h200.dcgmHealth must be a map with source and/or "
+            "exporterUrl keys; got null",
+            result.stderr,
+        )
+
+    def test_scalar_per_profile_dcgm_health_fails_loud_without_a_reflect_panic(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    dcgmHealth: bogus
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("reflect", result.stderr)
+        self.assertIn(
+            "gpuSkus.h200.dcgmHealth must be a map with source and/or "
+            "exporterUrl keys; got string",
+            result.stderr,
+        )
 
     def test_invalid_exporter_url_error_redacts_credentials(self):
         result = render(
@@ -178,80 +279,22 @@ enabledGpuSkus:
   - h200
 gpuSkus:
   h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: https://user:secret@host/path?token=abc#frag
+    dcgmHealth:
+      source: exporter
+      exporterUrl: http://user:secret@dcgm.svc/path?token=abc#frag
 """
         )
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("must set an absolute lowercase HTTP(S) url", result.stderr)
+        self.assertIn(
+            "must be a nonempty absolute lowercase http(s) URL", result.stderr
+        )
         for secret in ("user", "secret", "token", "abc", "frag", "?"):
             with self.subTest(secret=secret):
                 self.assertNotIn(secret, result.stderr)
 
-    def test_host_local_url_classification_rejects_trailing_yaml_payloads(self):
+    def test_exporter_urls_rejected_by_the_collector_are_rejected_by_helm(self):
         for url in (
-            "http://localhost:19400/metrics: [marker]",
-            "http://localhost:19400/metrics # marker",
-            "http://127.0.0.1:19400/metrics: [marker]",
-        ):
-            with self.subTest(url=url):
-                result = render(
-                    f"""
-enabledGpuSkus:
-  - h200
-gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: {url!r}
-"""
-                )
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn(
-                    "must set an absolute lowercase HTTP(S) url", result.stderr
-                )
-                self.assertNotIn("marker", result.stderr)
-
-        result = render(
-            """
-enabledGpuSkus:
-  - h200
-gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: |-
-          http://localhost:19400/metrics
-          # marker
-"""
-        )
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("must set an absolute lowercase HTTP(S) url", result.stderr)
-        self.assertNotIn("marker", result.stderr)
-
-    def test_host_local_url_query_and_fragment_remain_supported(self):
-        result = render(
-            """
-enabledGpuSkus:
-  - h200
-gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: "http://localhost:19400/metrics?selector=[gpu:type]#status"
-""",
-            daemonset_only=False,
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(
-            'url: "http://localhost:19400/metrics?selector=[gpu:type]#status"',
-            result.stdout,
-        )
-
-    def test_exporter_urls_rejected_by_collector_are_rejected_by_helm(self):
-        for url in (
-            "HTTP://localhost:19400/metrics",
+            "HTTP://dcgm.svc:9400/metrics",
             "http://dcgm.svc/metrics%zz",
             "http://dcgm.svc:notaport/metrics",
             "http://[::1",
@@ -259,8 +302,9 @@ gpuSkus:
             "http://[1:2:3]:9400/metrics",
             "http://[[::1]:9400/metrics",
             "http://dcgm%2Esvc/metrics",
-            r"http://localhost:19400/metrics\secret",
             r"http://dcgm.svc/metrics\secret",
+            "http://Dcgm.Svc:9400/metrics",
+            "",
         ):
             with self.subTest(url=url):
                 result = render(
@@ -269,88 +313,157 @@ enabledGpuSkus:
   - h200
 gpuSkus:
   h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: {url}
+    dcgmHealth:
+      source: exporter
+      exporterUrl: {url!r}
 """
                 )
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(
-                    "must set an absolute lowercase HTTP(S) url", result.stderr
+                    "must be a nonempty absolute lowercase http(s) URL",
+                    result.stderr,
                 )
 
-    def test_legacy_collector_compatible_shapes_render(self):
-        compatible_values = {
-            "duplicate optional target names": """
+    def test_host_dcgmi_source_requires_loopback_exporter_url(self):
+        result = render(
+            """
 enabledGpuSkus:
   - h200
 gpuSkus:
   h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-      - name: node-exporter
-        url: http://localhost:9100/metrics
-      - name: node-exporter
-        url: http://localhost:9101/metrics
-""",
-            "duplicate rule conditions": """
+    dcgmHealth:
+      exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "gpuSkus.h200 dcgmHealth.source=host-dcgmi requires a loopback "
+            "dcgmHealth.exporterUrl",
+            result.stderr,
+        )
+
+    def test_exporter_source_rejects_loopback_urls(self):
+        for url in (
+            "http://localhost:19400/metrics",
+            "http://127.0.0.1:19400/metrics",
+            "http://127.0.0.2:9400/metrics",
+            "http://[::1]:9400/metrics",
+            "http://[0:0:0:0:0:0:0:1]:9400/metrics",
+        ):
+            with self.subTest(url=url):
+                result = render(
+                    f"""
 enabledGpuSkus:
   - h200
+gpuSkus:
+  h200:
+    dcgmHealth:
+      source: exporter
+      exporterUrl: {url!r}
+"""
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "gpuSkus.h200 dcgmHealth.source=exporter requires an explicit "
+                    "non-loopback dcgmHealth.exporterUrl",
+                    result.stderr,
+                )
+
+    def test_127_0_0_1_is_an_accepted_loopback_form(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
+gpuSkus:
+  h200:
+    dcgmHealth:
+      exporterUrl: http://127.0.0.1:19400/metrics
+""",
+            daemonset_only=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('url: "http://127.0.0.1:19400/metrics"', result.stdout)
+
+    def test_legacy_metrics_collector_scrape_targets_fails_loud(self):
+        result = render(
+            """
 metricsCollector:
-  rules:
-    - name: first
-      metricName: first_metric
-      conditionType: DuplicateCondition
-      mode: instant
-      threshold: 0
-    - name: second
-      metricName: second_metric
-      conditionType: DuplicateCondition
-      mode: instant
-      threshold: 0
-""",
-            "empty optional scrape target": """
-enabledGpuSkus:
-  - h200
+  scrapeTargets:
+    - name: dcgm-exporter
+      url: http://localhost:19400/metrics
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            f"metricsCollector.scrapeTargets was removed in gpu-monitoring "
+            f"0.1.7; {LEGACY_KEY_MIGRATION}",
+            result.stderr,
+        )
+
+    def test_legacy_metrics_collector_dcgm_availability_fails_loud(self):
+        result = render(
+            """
 metricsCollector:
   dcgmAvailability:
-    enabled: false
+    enabled: true
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            f"metricsCollector.dcgmAvailability was removed in gpu-monitoring "
+            f"0.1.7; {LEGACY_KEY_MIGRATION}",
+            result.stderr,
+        )
+
+    def test_legacy_per_profile_scrape_targets_fails_loud(self):
+        result = render(
+            """
+enabledGpuSkus:
+  - h200
 gpuSkus:
   h200:
     scrapeTargets:
       - name: dcgm-exporter
         url: http://localhost:19400/metrics
-      - {}
-""",
-            "explicit remote availability owner": """
-enabledGpuSkus:
-  - h200
-metricsCollector:
-  dcgmAvailability:
-    enabled: false
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            f"gpuSkus.h200.scrapeTargets was removed in gpu-monitoring 0.1.7; "
+            f"{LEGACY_KEY_MIGRATION}",
+            result.stderr,
+        )
+
+    def test_legacy_per_profile_dcgm_availability_fails_loud(self):
+        result = render(
+            """
 gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: https://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-        required: true
-        availabilityCondition: DcgmExporterUnavailable
-""",
-            "absolute IPv6 remote service URL": """
-enabledGpuSkus:
-  - h200
+  a100:
+    dcgmAvailability:
+      enabled: false
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            f"gpuSkus.a100.dcgmAvailability was removed in gpu-monitoring "
+            f"0.1.7; {LEGACY_KEY_MIGRATION}",
+            result.stderr,
+        )
+
+    def test_legacy_dcgm_health_required_fails_loud(self):
+        result = render(
+            """
 gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: http://[fd00::1]:9400/metrics
-""",
-        }
-        for shape, values in compatible_values.items():
-            with self.subTest(shape=shape):
-                result = render(values, daemonset_only=False)
-                self.assertEqual(0, result.returncode, result.stderr)
+  a100:
+    dcgm_health_required: false
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            f"gpuSkus.a100.dcgm_health_required was removed in gpu-monitoring "
+            f"0.1.7; {LEGACY_KEY_MIGRATION}",
+            result.stderr,
+        )
 
 
 if __name__ == "__main__":

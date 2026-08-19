@@ -148,7 +148,7 @@ class BundleWiringTests(unittest.TestCase):
                     permanent_rules,
                 )
 
-    def test_remote_profile_keeps_permanent_dcgm_unknown_transition(self):
+    def test_exporter_source_profile_keeps_permanent_dcgm_unknown_transition(self):
         values = yaml.safe_load((CHART_DIR / "values.yaml").read_text())
         self.assertEqual("v0.8.19", values["image"]["tag"])
         rendered = subprocess.run(
@@ -198,48 +198,6 @@ class BundleWiringTests(unittest.TestCase):
             },
             condition_types,
         )
-
-    def test_host_local_profile_with_dcgm_disabled_omits_dcgm_claims(self):
-        rendered = subprocess.run(
-            [
-                "helm",
-                "template",
-                "disabled-dcgm-wiring",
-                str(CHART_DIR),
-                "--set",
-                "enabledGpuSkus[0]=h200",
-                "--set",
-                "gpuSkus.h200.dcgm_health_required=false",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        documents = [doc for doc in yaml.safe_load_all(rendered) if doc]
-        secret = next(doc for doc in documents if doc["kind"] == "Secret")
-        daemonset = next(doc for doc in documents if doc["kind"] == "DaemonSet")
-        container = daemonset["spec"]["template"]["spec"]["containers"][0]
-        config_key = next(
-            arg.rsplit("/", 1)[1]
-            for arg in container["args"]
-            if arg.startswith("--config.custom-plugin-monitor=")
-        )
-        config = json.loads(secret["stringData"][config_key])
-
-        self.assertIn(
-            {"name": "NPD_DCGM_REQUIRED", "value": "0"}, container["env"]
-        )
-        self.assertIn(
-            "DcgmHealthProblem",
-            {condition["type"] for condition in config["conditions"]},
-        )
-        dcgm_rules = [
-            rule
-            for rule in config["rules"]
-            if rule["path"] == "/custom-config/check-dcgm-health.sh"
-        ]
-        self.assertEqual(1, len(dcgm_rules))
-        self.assertEqual("permanent", dcgm_rules[0]["type"])
 
 
 if __name__ == "__main__":

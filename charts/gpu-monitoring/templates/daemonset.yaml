@@ -2,14 +2,14 @@
 {{- include "gpu-monitoring.validateProfileInstanceTypes" . }}
 {{- include "gpu-monitoring.validateReservedEnv" . }}
 {{- include "gpu-monitoring.validateHostNamespaces" . }}
-{{- include "gpu-monitoring.validateRemoteDcgmObserver" . }}
+{{- include "gpu-monitoring.validateDcgmHealthContracts" . }}
 {{- range $skuName, $sku := .Values.gpuSkus }}
 {{- if and $sku (or (empty $.Values.enabledGpuSkus) (has $skuName $.Values.enabledGpuSkus)) }}
 {{- $dsName := printf "gpu-monitoring-%s" $skuName }}
 {{- $nodeExporterEnabled := $.Values.nodeExporter.enabled }}
 {{- $ibPkey := $.Values.ibPkey }}
-{{- $dcgmHealthRequired := include "gpu-monitoring.dcgmHealthRequired" (dict "root" $ "sku" $sku) }}
-{{- $monitorConfigKey := include "gpu-monitoring.monitorConfigKey" (dict "root" $ "sku" $sku) }}
+{{- $dcgmHealthRequired := include "gpu-monitoring.dcgmHealthRequired" (dict "root" $ "sku" $sku "skuName" $skuName) }}
+{{- $monitorConfigKey := include "gpu-monitoring.monitorConfigKey" (dict "root" $ "sku" $sku "skuName" $skuName) }}
 {{- if hasKey $sku "nodeExporter" }}
 {{- $nodeExporterEnabled = $sku.nodeExporter }}
 {{- end }}

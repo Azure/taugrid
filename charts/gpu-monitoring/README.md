@@ -100,21 +100,14 @@ Each `gpuSkus` entry may set:
   only device identity, `ACTIVE`/`LinkUp`, and rate; the independent PKey check
   validates only this value. Built-in profiles set it explicitly, while custom
   profiles fall back to the global `ibPkey` value.
-- `scrapeTargets` to replace the global `metricsCollector.scrapeTargets` for
-  that profile. When exporter availability is enabled, the effective list must
-  contain exactly one target named `dcgm-exporter`; duplicate optional targets
-  remain compatible.
+- `dcgmHealth` to override the global `dcgmHealth.source` and/or
+  `.exporterUrl` for that profile. See
+  [DCGM health sources](#dcgm-health-sources).
 - `monitor_config` to select one of the five bundled
   `custom-plugin-monitor*.json` configurations. Custom profiles must name the
   bundled key explicitly; paths and external config names are rejected.
 - `ib_rate_gbps` to set the expected InfiniBand rate. GB200 defaults to 400
   Gbps and GB300 defaults to 800 Gbps.
-- `dcgm_health_required: false` to disable the inferred host `dcgmi` lifecycle.
-  The chart enables it only for profiles whose selected DCGM scrape target is
-  host-local and rejects `true` for a remote Service target.
-- `dcgmAvailability` to override the DCGM scrape-target availability contract
-  (condition type and debounce windows) for that profile. See
-  [DCGM scrape-target availability](#dcgm-scrape-target-availability).
 - `create_imex_channel_expected` to validate the NVIDIA driver's
   `CreateImexChannel0` parameter against the profile's contract. Quote `"0"` or
   `"1"` to require that exact value and fail if the parameter is absent. When
@@ -172,42 +165,41 @@ For a mixed cluster with managed A100 nodes and GPU Operator H200 nodes:
 ```yaml
 gpuSkus:
   h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-      - name: node-exporter
-        url: http://localhost:9100/metrics
+    dcgmHealth:
+      source: exporter
+      exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
 ```
 
-The A100 profile continues to use the global
-`http://localhost:19400/metrics` target. Configure the GPU Operator
-`ClusterPolicy.spec.dcgmExporter.service.internalTrafficPolicy` as `Local`;
-otherwise its Service can return another node's metrics. GB200 and GB300 share
-the historical `NVLinkB200Inactive` Node condition name for compatibility, but
-the underlying NVLink and IMEX checks accept both models.
+The A100 profile continues to use the global default
+`dcgmHealth.source: host-dcgmi` and `http://localhost:19400/metrics`. Configure
+the GPU Operator `ClusterPolicy.spec.dcgmExporter.service.internalTrafficPolicy`
+as `Local`; otherwise its Service can return another node's metrics. GB200 and
+GB300 share the historical `NVLinkB200Inactive` Node condition name for
+compatibility, but the underlying NVLink and IMEX checks accept both models.
 
-For non-host-local DCGM targets, the chart disables the host `dcgmi` check and
-the metrics collector scrapes the configured endpoint. Endpoint reachability is
-published as its own Node condition, described below; the host diagnostic's
-`Unknown` status says nothing about a remote exporter.
-Whenever effective `NPD_DCGM_REQUIRED=0`, the chart derives a profile-specific
-custom-plugin monitor config that keeps the `DcgmHealthProblem` declaration and
-its permanent rule, but removes the matching temporary event rule. The check
-returns NPD's Unknown exit status rather than incorrectly publishing
-`DcgmHealthOk`; the detailed rollout semantics are documented below.
+`dcgmHealth.source: exporter` disables the host `dcgmi` check; it scrapes the
+configured endpoint and the collector publishes its reachability as its own
+Node condition, described below — the host diagnostic's `Unknown` status says
+nothing about a remote exporter. Whenever the effective source is not
+`host-dcgmi`, the chart derives a profile-specific custom-plugin monitor
+config that keeps the `DcgmHealthProblem` declaration and its permanent rule,
+but removes the matching temporary event rule. The check returns NPD's
+Unknown exit status rather than incorrectly publishing `DcgmHealthOk`; the
+detailed rollout semantics are documented below.
 
 ### Host DCGM health-watch ownership
 
-Profiles whose effective `NPD_DCGM_REQUIRED` value is `1` own the host-engine
-health-watch lifecycle. Before NPD starts, a privileged init container enters
-the host mount namespace through the bundled `dcgmi` wrapper, enables the DCGM
-4.5.2 watch set with `health -s a`, verifies the full mask with `health -f`, and
-waits 60 seconds for sampled systems. A failed set, incomplete mask, or lost
-watch during warmup leaves the init container failed so Kubernetes retries it;
-NPD cannot publish a false healthy result during that window.
+Profiles whose effective `dcgmHealth.source` is `host-dcgmi` own the
+host-engine health-watch lifecycle. Before NPD starts, a privileged init
+container enters the host mount namespace through the bundled `dcgmi`
+wrapper, enables the DCGM 4.5.2 watch set with `health -s a`, verifies the
+full mask with `health -f`, and waits 60 seconds for sampled systems. A
+failed set, incomplete mask, or lost watch during warmup leaves the init
+container failed so Kubernetes retries it; NPD cannot publish a false healthy
+result during that window.
 The chart rejects these profiles unless `daemonset.hostPID` and
-`daemonset.hostNetwork` are literal `true` values; remote Service-only profiles
-do not require `hostNetwork` for the host lifecycle but still require `hostPID`
+`daemonset.hostNetwork` are literal `true` values; `exporter` profiles do not
+require `hostNetwork` for the host lifecycle but still require `hostPID`
 because the other host wrappers enter PID 1's mount namespace.
 
 NPD evaluates the configured watches with `health -c`. The script parses
@@ -226,9 +218,8 @@ startup, the wrapper sees the init container's complete mask and does not set it
 twice. The temporary and permanent NPD rules may evaluate concurrently, but
 neither mutates watch state.
 
-Profiles using a non-loopback DCGM Service have effective
-`NPD_DCGM_REQUIRED=0`: they render no host-watch init or liveness probe and rely
-on the metrics collector's required exporter-availability condition instead of
+`exporter` profiles render no host-watch init or liveness probe. They rely on
+the metrics collector's required exporter-availability condition instead of
 host `dcgmi`.
 
 If an expected device or its `pkeys/0` file is missing, both the link and PKey
@@ -236,20 +227,61 @@ conditions may fire: link health cannot find the expected port, and PKey health
 cannot verify partition membership. Consumers should not assume these
 conditions are mutually exclusive.
 
-## DCGM scrape-target availability
+## DCGM health sources
 
-Losing the DCGM exporter silences every DCGM rule, and a silenced rule looks
-exactly like a healthy GPU. The collector therefore treats the `dcgm-exporter`
-scrape target as **required** and publishes its reachability as a dedicated Node
-condition:
+This chart accepts exactly two DCGM health fields, at the global level and
+per-profile under `gpuSkus.<profile>.dcgmHealth`:
+
+```yaml
+dcgmHealth:
+  source: host-dcgmi
+  exporterUrl: http://localhost:19400/metrics
+```
+
+`source` is exactly one of two values. The chart itself constructs the
+`dcgm-exporter` scrape target and owns its Node-condition contract; there is
+no configurable `required`, `availabilityCondition`, condition name, or
+debounce. Both values require literal `metricsCollector.enabled: true` —
+every accepted profile's contract includes the fixed `DcgmExporterUnavailable`
+scrape target and every `DCGM_*` collector rule, and the collector is the
+only component that renders them. Disabling DCGM health monitoring entirely
+means disabling the gpu-monitoring component or chart release itself; there
+is no per-profile opt-out.
+
+| `source` | Runs host `dcgmi` | Scrapes exporter | Cross-cloud mapping |
+| --- | --- | --- | --- |
+| `host-dcgmi` (default) | Yes: init/warm/liveness-repair, `dcgmi health -c` | Yes | AKS's managed host DCGM engine |
+| `exporter` | No | Yes | GKE/EKS/GPU Operator DCGM exporter pods (a Service or node-local endpoint) |
+
+`exporterUrl` must be a nonempty, absolute, entirely lowercase `http://` or
+`https://` URL with no whitespace, backslashes, userinfo credentials, query
+string, or fragment. Authentication belongs in the exporter deployment rather
+than in a URL embedded in the collector ConfigMap.
+`host-dcgmi` additionally requires a loopback URL (`localhost`, IPv4
+`127.0.0.0/8`, or IPv6 `::1`) — this pod runs with `hostNetwork: true`, so
+loopback reaches the host-level exporter. `exporter` requires an explicit
+non-loopback URL: it must
+not silently inherit the global `host-dcgmi` loopback default, because that
+would scrape nothing on a Service-backed node. Rendering fails before any
+manifest is produced if a profile's effective source is `exporter` but its
+effective `exporterUrl` resolves to loopback; set the profile's own
+`dcgmHealth.exporterUrl` to its real endpoint instead.
+
+These are global defaults; only `gpuSkus.<profile>.dcgmHealth.source` and
+`.exporterUrl` may override them, so a mixed cluster can run managed AKS
+nodes (`host-dcgmi`) and GPU Operator nodes (`exporter`) side by side without
+touching the rest of each profile.
+
+For both `host-dcgmi` and `exporter`, the collector scrapes the effective
+`exporterUrl` and publishes its reachability as a fixed Node condition:
 
 | | |
 | --- | --- |
-| Condition type | `DcgmExporterUnavailable` (`metricsCollector.dcgmAvailability.condition`) |
-| `True` | The configured DCGM endpoint failed every scrape for `unavailableFor` (default `2m`) |
+| Condition type | `DcgmExporterUnavailable` (fixed; not configurable) |
+| `True` | The configured DCGM endpoint failed every scrape for 2 minutes |
 | `False` | The endpoint is reachable, or has not yet failed for the full window |
 | Reason | `DcgmExporterUnavailable` when set, `DcgmExporterUnavailableOk` when clear |
-| Cleared | After `availableFor` (default `1m`) of continuous successful scrapes |
+| Cleared | After 1 minute of continuous successful scrapes |
 
 The condition message names the target, its URL, how long the state has held,
 and the underlying connection or HTTP status error, for example:
@@ -262,11 +294,11 @@ Messages are rendered from a sanitized URL: userinfo, query strings, and
 fragments are stripped from both the URL and the error text, so a credentialed
 or token-bearing endpoint cannot leak into node status.
 
-The windows exist so a single missed scrape cannot flap the condition. Debounce
-state is persisted with the rest of the collector state and both timers are
-shifted by the collector's downtime on restore, so a restart neither re-arms the
-failure timer from zero nor lets the collector's own downtime count as
-continuous failure or continuous recovery.
+The 2-minute unavailable / 1-minute available windows exist so a single missed
+scrape cannot flap the condition. Debounce state is persisted with the rest of
+the collector state and both timers are shifted by the collector's downtime on
+restore, so a restart neither re-arms the failure timer from zero nor lets the
+collector's own downtime count as continuous failure or continuous recovery.
 
 This condition reports **endpoint reachability only**. It is deliberately
 distinct from `DcgmHealthProblem`, which is NPD's host `dcgmi` diagnostic check:
@@ -275,47 +307,27 @@ exporter says nothing about the GPUs themselves. Consumers that gate workload
 admission should require `DcgmExporterUnavailable=False` in addition to their
 existing GPU health conditions.
 
-For a remote exporter, or when a profile explicitly sets
-`dcgm_health_required: false`, the host diagnostic is not applicable. The
-derived NPD monitor keeps `DcgmHealthProblem` and its permanent boot rule, but
-removes the matching temporary event rule. `check-dcgm-health.sh` exits `2`,
-which NPD v0.8.19 maps to `Unknown`. NPD briefly initializes declared conditions
-to `False`, then the boot rule transitions both that value and any stale
+For `exporter` profiles, the host diagnostic is not applicable. The derived
+NPD monitor keeps `DcgmHealthProblem` and its permanent boot rule, but removes
+the matching temporary event rule. `check-dcgm-health.sh` exits `2`, which NPD
+v0.8.19 maps to `Unknown`. NPD briefly initializes declared conditions to
+`False`, then the boot rule transitions both that value and any stale
 pre-rollout `False` to `Unknown` without recurring warning events.
-`DcgmHealthProblem=Unknown` in this mode is neither a healthy-host assertion nor
-an exporter-health signal; `DcgmExporterUnavailable` remains authoritative for
-exporter reachability. This follows NPD v0.8.19's
-`pkg/custompluginmonitor/plugin/plugin.go` exit-code mapping (0 = OK, 1 = NonOK,
-other = Unknown) and `pkg/custompluginmonitor/custom_plugin_monitor.go`
-permanent-condition handling.
-
-It works unchanged for both supported endpoint shapes — the managed host
-exporter on `localhost:19400` and a GPU Operator Service on `:9400` — because a
-per-profile `scrapeTargets` override inherits the contract:
-
-```yaml
-gpuSkus:
-  h200:
-    scrapeTargets:
-      - name: dcgm-exporter
-        url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-      - name: node-exporter
-        url: http://localhost:9100/metrics
-    # Optional: widen the windows for this profile only.
-    dcgmAvailability:
-      unavailableFor: 5m
-```
-
-Optional targets (`node-exporter`, `node-problem-detector`) keep their previous
-behavior: their loss is logged and they publish no condition.
+`DcgmHealthProblem=Unknown` in this mode is neither a healthy-host assertion
+nor an exporter-health signal; `DcgmExporterUnavailable` remains authoritative
+for exporter reachability. This follows NPD v0.8.19's
+`pkg/custompluginmonitor/plugin/plugin.go` exit-code mapping (0 = OK, 1 =
+NonOK, other = Unknown) and
+`pkg/custompluginmonitor/custom_plugin_monitor.go` permanent-condition
+handling.
 
 ### Ownership
 
 Each Node condition has exactly one writer:
 
-- Within a collector, config load rejects two scrape targets that claim the same
-  condition type, and rejects a scrape target that claims a condition type also
-  owned by a rule.
+- The fixed `DcgmExporterUnavailable` condition is reserved: rendering fails
+  if a `metricsCollector.rules` entry or the profile's effective NPD monitor
+  conditions claim that name.
 - Across collectors, profiles are isolated by instance-type node affinity, so a
   node runs exactly one profile's DaemonSet. Rendering fails if two enabled
   profiles claim the same instance type, which would otherwise let two
@@ -325,26 +337,39 @@ Each Node condition has exactly one writer:
 
 Rendering fails, rather than silently dropping the guarantee, when:
 
-- `metricsCollector.dcgmAvailability.enabled` is true but the effective scrape
-  targets contain no `dcgm-exporter` entry;
-- `condition` is not an alphanumeric condition type, or `unavailableFor` /
-  `availableFor` is not a quoted duration such as `"2m"`;
-- a scrape target sets `availabilityCondition` without `required: true`, or is
-  `required` without an `availabilityCondition`.
+- the effective `dcgmHealth` is not a map, `source` is not exactly one of
+  `host-dcgmi` or `exporter`, or `exporterUrl` is not a nonempty absolute
+  lowercase HTTP(S) URL without whitespace, backslashes, credentials, query
+  strings, or fragments — the error text never echoes the URL;
+- the global `dcgmHealth` or a profile's `gpuSkus.<profile>.dcgmHealth` is
+  present but not a map — for example `null` or a bare string — rather than
+  silently falling back to a default or panicking on the merge;
+- `source: host-dcgmi` and the effective `exporterUrl` is not loopback;
+- `source: exporter` and the effective `exporterUrl` is loopback (including
+  silent inheritance of the `host-dcgmi` default);
+- `metricsCollector.enabled` is not `true` for any enabled profile, regardless
+  of its effective source — there would be no component to render the fixed
+  `DcgmExporterUnavailable` scrape target and collector rules;
+- a collector rule or effective NPD monitor condition claims the reserved
+  `DcgmExporterUnavailable` name.
 
-Set `metricsCollector.dcgmAvailability.enabled: false` to opt a deployment out
-of the contract entirely. Kubernetes cannot delete a Node condition, so on the
-next start the collector publishes one explicit `False` for a condition it no
-longer owns — including a renamed `condition` — rather than stranding a node as
-unhealthy. That relies on the persisted collector state, which is discarded
-after 30 minutes, so opt out or rename by rolling the DaemonSet rather than by
-leaving nodes without a collector.
+### Migrating from chart 0.1.6
+
+Chart 0.1.6 exposed a generic scrape-target availability/ownership API:
+`metricsCollector.scrapeTargets`, `metricsCollector.dcgmAvailability`,
+`gpuSkus.<profile>.scrapeTargets`, `gpuSkus.<profile>.dcgmAvailability`, and
+`gpuSkus.<profile>.dcgm_health_required`. Chart 0.1.7 removed all of these in
+favor of the constrained `dcgmHealth.source` / `dcgmHealth.exporterUrl`
+contract above. Supplying any of the removed keys fails Helm rendering with a
+migration message rather than silently ignoring them or falling back to a
+default.
 
 ### Collector image requirement and release ordering
 
-The `required` / `availabilityCondition` fields are read by the collector
-binary, so this chart change must not be activated before a collector image that
-understands them exists.
+The `required` / `availabilityCondition` fields the chart renders into the
+fixed dcgm-exporter scrape target are read by the collector binary, so this
+chart change must not be activated before a collector image that understands
+them exists.
 
 Azure/TauGrid is the single source of truth for the collector: its Go sources
 live in `monitoring/gpu-metrics-collector` and its build context in

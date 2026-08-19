@@ -496,7 +496,7 @@ tests:
           value:
             - /custom-config/start-node-problem-detector.sh
 
-  - it: GPU Operator DCGM Service profiles do not require a host dcgmi binary
+  - it: exporter-source profiles do not require a host dcgmi binary
     values:
       - mixed-dcgm-values.yaml
     documentSelector:
@@ -520,14 +520,45 @@ tests:
           path: spec.template.spec.containers[0].args[3]
           pattern: '^--config.custom-plugin-monitor=/custom-config/no-host-dcgm-monitor-[a-f0-9]{10}\.json$'
 
-  - it: remote DCGM Service profiles cannot force host dcgmi lifecycle
-    values:
-      - mixed-dcgm-values.yaml
+  - it: an invalid dcgmHealth.source fails before deployment
     set:
-      gpuSkus.h200.dcgm_health_required: true
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: bogus
     asserts:
       - failedTemplate:
-          errorMessage: 'dcgm_health_required=true requires a host-local dcgm-exporter scrape target; remote Service profiles must rely on exporter availability'
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.source must be exactly one of "host-dcgmi" or "exporter"'
+
+  - it: a null global dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      dcgmHealth: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200: global dcgmHealth must be a map with source and/or exporterUrl keys; got null'
+
+  - it: a scalar global dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      dcgmHealth: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200: global dcgmHealth must be a map with source and/or exporterUrl keys; got string'
+
+  - it: a null per-profile dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200.dcgmHealth must be a map with source and/or exporterUrl keys; got null'
+
+  - it: a scalar per-profile dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200.dcgmHealth must be a map with source and/or exporterUrl keys; got string'
 
   - it: reserved DCGM runtime environment cannot override rendered lifecycle
     values:
@@ -558,13 +589,13 @@ tests:
       - failedTemplate:
           errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
 
-  - it: host DCGM lifecycle requires hostNetwork true
+  - it: host-dcgmi source requires hostNetwork true
     set:
       enabledGpuSkus[0]: a100
       daemonset.hostNetwork: false
     asserts:
       - failedTemplate:
-          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses host-local DCGM'
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
 
   - it: host DCGM lifecycle rejects string hostPID
     set:
@@ -574,13 +605,13 @@ tests:
       - failedTemplate:
           errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
 
-  - it: host DCGM lifecycle rejects string hostNetwork
+  - it: host-dcgmi source rejects string hostNetwork
     set:
       enabledGpuSkus[0]: a100
       daemonset.hostNetwork: "true"
     asserts:
       - failedTemplate:
-          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses host-local DCGM'
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
 
   - it: host DCGM lifecycle rejects null hostPID
     set:
@@ -590,15 +621,15 @@ tests:
       - failedTemplate:
           errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
 
-  - it: host DCGM lifecycle rejects null hostNetwork
+  - it: host-dcgmi source rejects null hostNetwork
     set:
       enabledGpuSkus[0]: a100
       daemonset.hostNetwork: null
     asserts:
       - failedTemplate:
-          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses host-local DCGM'
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
 
-  - it: remote-only profile still requires hostPID
+  - it: exporter-source profile still requires hostPID
     values:
       - mixed-dcgm-values.yaml
     set:
@@ -608,7 +639,7 @@ tests:
       - failedTemplate:
           errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
 
-  - it: remote-only profile can disable hostNetwork and ignores disabled host profiles
+  - it: exporter-source profile can disable hostNetwork
     values:
       - mixed-dcgm-values.yaml
     set:
@@ -627,7 +658,7 @@ tests:
           path: spec.template.spec.hostNetwork
           value: false
 
-  - it: remote-only profile requires the metrics collector observer
+  - it: exporter-source profile requires the metrics collector
     values:
       - mixed-dcgm-values.yaml
     set:
@@ -635,116 +666,119 @@ tests:
       metricsCollector.enabled: false
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 uses a remote dcgm-exporter target and requires metricsCollector.enabled=true'
+          errorMessage: 'gpuSkus.h200 uses dcgmHealth.source=exporter and requires metricsCollector.enabled=true'
 
-  - it: collector-disabled profiles still reject duplicate availability exporters
+  - it: host-dcgmi source also requires the metrics collector
     set:
-      enabledGpuSkus[0]: h200
+      enabledGpuSkus[0]: a100
       metricsCollector.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: dcgm-exporter
-          url: http://localhost:19401/metrics
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 must define exactly one effective dcgm-exporter scrapeTarget; found 2'
+          errorMessage: 'gpuSkus.a100 uses dcgmHealth.source=host-dcgmi and requires metricsCollector.enabled=true'
 
-  - it: collector-disabled profiles still require an availability exporter
+  - it: disabling the custom plugin monitor also disables the host dcgmi lifecycle
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    set:
+      enabledGpuSkus[0]: a100
+      monitors.customPluginMonitor: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-dcgm-health
+          any: true
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor.json
+
+  - it: custom plugin monitor must be an actual boolean
+    set:
+      enabledGpuSkus[0]: a100
+      monitors.customPluginMonitor: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitors.customPluginMonitor must be a boolean'
+
+  - it: exporter source rejects the inherited host-dcgmi loopback default
     set:
       enabledGpuSkus[0]: h200
-      metricsCollector.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: node-exporter
-          url: http://localhost:9100/metrics
+      gpuSkus.h200.dcgmHealth.source: exporter
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 must define exactly one effective dcgm-exporter scrapeTarget; found 0'
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=exporter requires an explicit non-loopback dcgmHealth.exporterUrl; it must not inherit the host-dcgmi loopback default'
 
-  - it: remote-only profile requires effective exporter availability ownership
-    values:
-      - mixed-dcgm-values.yaml
+  - it: host-dcgmi source rejects a non-loopback exporterUrl
     set:
       enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 uses a remote dcgm-exporter target and requires effective exporter availability ownership'
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=host-dcgmi requires a loopback dcgmHealth.exporterUrl'
 
-  - it: whitespace exporter conditions do not override default ownership
-    values:
-      - mixed-dcgm-values.yaml
+  - it: exporter source rejects another IPv4 loopback address
     set:
       enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-          required: true
-          availabilityCondition: "   "
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://127.0.0.2:9400/metrics
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" must set a nonempty alphanumeric availabilityCondition'
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=exporter requires an explicit non-loopback dcgmHealth.exporterUrl; it must not inherit the host-dcgmi loopback default'
 
-  - it: uppercase localhost remains host-local
+  - it: exporter source rejects IPv6 loopback
     set:
       enabledGpuSkus[0]: h200
-      daemonset.hostNetwork: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://LOCALHOST:19400/metrics
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://[::1]:9400/metrics
     asserts:
       - failedTemplate:
-          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses host-local DCGM'
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=exporter requires an explicit non-loopback dcgmHealth.exporterUrl; it must not inherit the host-dcgmi loopback default'
 
-  - it: localhost with a query remains host-local
+  - it: a credentialed exporterUrl is rejected without echoing it
     set:
       enabledGpuSkus[0]: h200
-      daemonset.hostNetwork: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400?format=prometheus
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://user:secret@dcgm-operator.svc:9400/metrics?token=abc
     asserts:
       - failedTemplate:
-          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses host-local DCGM'
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.exporterUrl must be a nonempty absolute lowercase http(s) URL without whitespace, backslashes, credentials, or URL suffix parameters'
 
-  - it: a dcgm-exporter URL without an authority is rejected
+  - it: an exporterUrl query string is rejected without echoing it
     set:
       enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http:///metrics
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://dcgm-operator.svc:9400/metrics?token=supersecret
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" declares availability but must set an absolute lowercase HTTP(S) url with a host'
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.exporterUrl must be a nonempty absolute lowercase http(s) URL without whitespace, backslashes, credentials, or URL suffix parameters'
 
-  - it: a userinfo dcgm-exporter URL is rejected as ambiguous
+  - it: an exporterUrl fragment is rejected without echoing it
     set:
       enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://observer@localhost:19400/metrics
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://dcgm-operator.svc:9400/metrics#supersecret
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" declares availability but must set an absolute lowercase HTTP(S) url with a host'
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.exporterUrl must be a nonempty absolute lowercase http(s) URL without whitespace, backslashes, credentials, or URL suffix parameters'
 
-  - it: a non-string dcgm-exporter URL is rejected
+  - it: legacy gpuSkus.<profile>.scrapeTargets fails loud with a migration message
     set:
       enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: 123
+      gpuSkus.h200.scrapeTargets[0].name: dcgm-exporter
+      gpuSkus.h200.scrapeTargets[0].url: http://localhost:19400/metrics
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" declares availability but must set an absolute lowercase HTTP(S) url with a host'
+          errorMessage: 'gpuSkus.h200.scrapeTargets was removed in gpu-monitoring 0.1.7; migrate to dcgmHealth.source and dcgmHealth.exporterUrl (see the README "DCGM health sources" section)'
 
-  - it: a missing dcgm-exporter URL is rejected
+  - it: legacy gpuSkus.<profile>.dcgm_health_required fails loud with a migration message
     set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
+      gpuSkus.a100.dcgm_health_required: true
     asserts:
       - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" declares availability but must set an absolute lowercase HTTP(S) url with a host'
+          errorMessage: 'gpuSkus.a100.dcgm_health_required was removed in gpu-monitoring 0.1.7; migrate to dcgmHealth.source and dcgmHealth.exporterUrl (see the README "DCGM health sources" section)'
 
   - it: spark DaemonSet mounts the spark per-SKU collector-config ConfigMap (not shared)
     documentSelector:
@@ -837,36 +871,6 @@ tests:
             values:
               - Standard_ND96asr_v4
               - Standard_ND96amsr_A100_v4
-          any: true
-
-  - it: metricsCollector.enabled=false omits the sidecar and collector-config volume
-    set:
-      metricsCollector.enabled: false
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-a100
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers
-          content:
-            name: metrics-collector
-          any: true
-      - notContains:
-          path: spec.template.spec.volumes
-          content:
-            name: collector-config
-          any: true
-      - notExists:
-          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-      - contains:
-          path: spec.template.spec.initContainers
-          content:
-            name: init-dcgm-health
-          any: true
-      - notContains:
-          path: spec.template.spec.initContainers
-          content:
-            name: init-collector-state
           any: true
 
   - it: nodeTainter.enabled=true adds tolerations for NoSchedule and NoExecute

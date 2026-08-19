@@ -18,7 +18,7 @@ tests:
           path: metadata.name
           value: gpu-monitoring-gpu-metrics-collector-h200
 
-  - it: a100 ConfigMap has dcgm-exporter, node-exporter, and NPD scrape targets at expected URLs
+  - it: a100 ConfigMap has the fixed dcgm-exporter, node-exporter, and NPD scrape targets
     documentSelector:
       path: metadata.name
       value: gpu-monitoring-gpu-metrics-collector-a100
@@ -27,7 +27,7 @@ tests:
           of: ConfigMap
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"'
+          pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"\s+required: true\s+availabilityCondition: "DcgmExporterUnavailable"\s+unavailableFor: "2m"\s+availableFor: "1m"'
       - matchRegex:
           path: data["rules.yaml"]
           pattern: 'name: "node-exporter"\s+url: "http://localhost:9100/metrics"'
@@ -35,7 +35,7 @@ tests:
           path: data["rules.yaml"]
           pattern: 'name: "node-problem-detector"\s+url: "http://localhost:20261/metrics"'
 
-  - it: profiles use the global localhost:19400 DCGM URL by default
+  - it: profiles use the global host-dcgmi localhost:19400 exporterUrl by default
     documentSelector:
       path: metadata.name
       value: gpu-monitoring-gpu-metrics-collector-spark
@@ -43,37 +43,8 @@ tests:
       - matchRegex:
           path: data["rules.yaml"]
           pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "node-exporter"\s+url: "http://localhost:9100/metrics"'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "node-problem-detector"\s+url: "http://localhost:20261/metrics"'
 
-  - it: a per-SKU scrape target overrides the global DCGM URL
-    values:
-      - mixed-dcgm-values.yaml
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-h200
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "dcgm-exporter"\s+url: "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"'
-      - notMatchRegex:
-          path: data["rules.yaml"]
-          pattern: 'http://localhost:19400/metrics'
-
-  - it: the managed localhost:19400 DCGM target carries the availability contract
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-a100
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"\s+required: true\s+availabilityCondition: "DcgmExporterUnavailable"\s+unavailableFor: "2m"\s+availableFor: "1m"'
-
-  - it: a GPU Operator Service DCGM target keeps the availability contract
+  - it: a per-profile dcgmHealth.source=exporter overrides the global exporterUrl
     values:
       - mixed-dcgm-values.yaml
     documentSelector:
@@ -83,493 +54,11 @@ tests:
       - matchRegex:
           path: data["rules.yaml"]
           pattern: 'name: "dcgm-exporter"\s+url: "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"\s+required: true\s+availabilityCondition: "DcgmExporterUnavailable"\s+unavailableFor: "2m"\s+availableFor: "1m"'
-
-  - it: optional node-exporter and NPD targets carry no availability contract
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-a100
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "node-exporter"\s+url: "http://localhost:9100/metrics"\s+- name: "node-problem-detector"'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "node-problem-detector"\s+url: "http://localhost:20261/metrics"\s+rules:'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition: "DcgmExporterUnavailable"'
-
-  - it: a per-profile availability override does not leak into another profile
-    set:
-      gpuSkus.h200.dcgmAvailability.unavailableFor: 5m
-      gpuSkus.h200.dcgmAvailability.condition: H200DcgmExporterUnavailable
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-a100
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition: "DcgmExporterUnavailable"\s+unavailableFor: "2m"'
       - notMatchRegex:
           path: data["rules.yaml"]
-          pattern: 'H200DcgmExporterUnavailable'
+          pattern: 'http://localhost:19400/metrics'
 
-  - it: a per-profile availability override applies to its own profile
-    set:
-      gpuSkus.h200.dcgmAvailability.unavailableFor: 5m
-      gpuSkus.h200.dcgmAvailability.condition: H200DcgmExporterUnavailable
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-h200
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition: "H200DcgmExporterUnavailable"\s+unavailableFor: "5m"\s+availableFor: "1m"'
-
-  - it: the availability condition never collides with the NPD dcgmi condition
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-h100
-    asserts:
-      - notMatchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition: DcgmHealthProblem'
-      - notMatchRegex:
-          path: data["rules.yaml"]
-          pattern: 'conditionType: DcgmExporterUnavailable'
-
-  - it: disabling the availability contract drops the required-target fields
-    set:
-      metricsCollector.dcgmAvailability.enabled: false
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-a100
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"\s+- name: "node-exporter"'
-      - notMatchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition'
-
-  - it: an enabled availability contract with no dcgm-exporter target fails to render
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: node-exporter
-          url: http://localhost:9100/metrics
-    asserts:
-      - failedTemplate:
-          errorMessage: 'profile must define exactly one effective dcgm-exporter scrapeTarget; found 0'
-
-  - it: duplicate dcgm-exporter targets fail when availability is enabled
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: dcgm-exporter
-          url: http://localhost:19401/metrics
-    asserts:
-      - failedTemplate:
-          errorMessage: 'profile must define exactly one effective dcgm-exporter scrapeTarget; found 2'
-
-  - it: duplicate explicit exporters fail when global availability is disabled
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: https://dcgm-a.gpu-operator.svc:9400/metrics
-          required: true
-          availabilityCondition: DcgmExporterUnavailable
-        - name: dcgm-exporter
-          url: https://dcgm-b.gpu-operator.svc:9400/metrics
-          required: true
-          availabilityCondition: DcgmExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'profile must define exactly one effective dcgm-exporter scrapeTarget; found 2'
-
-  - it: one explicit remote owner renders when global availability is disabled
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: https://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-          required: true
-          availabilityCondition: DcgmExporterUnavailable
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-h200
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "dcgm-exporter"\s+url: "https://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"\s+required: true\s+availabilityCondition: "DcgmExporterUnavailable"'
-
-  - it: duplicate optional node-exporter targets remain compatible
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: node-exporter
-          url: http://localhost:9100/metrics
-        - name: node-exporter
-          url: http://localhost:9101/metrics
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-h200
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "node-exporter"\s+url: "http://localhost:9100/metrics"\s+- name: "node-exporter"\s+url: "http://localhost:9101/metrics"'
-
-  - it: empty-equivalent optional availability conditions remain inert
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: optional-false
-          url: http://localhost:9500/metrics
-          availabilityCondition: false
-        - name: optional-zero
-          url: http://localhost:9501/metrics
-          availabilityCondition: 0
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'name: "optional-false"\s+url: "http://localhost:9500/metrics"\s+- name: "optional-zero"\s+url: "http://localhost:9501/metrics"'
-      - notMatchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition: "(false|0)"'
-
-  - it: a required non-exporter target with a relative URL fails
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          url: localhost:9500/metrics
-          required: true
-          availabilityCondition: FabricExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "fabric-exporter" declares availability but must set an absolute lowercase HTTP(S) url with a host'
-
-  - it: a required non-exporter target with a missing URL fails
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          required: true
-          availabilityCondition: FabricExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "fabric-exporter" declares availability but must set an absolute lowercase HTTP(S) url with a host'
-
-  - it: a required non-exporter target without a condition fails
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          url: http://localhost:9500/metrics
-          required: true
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "fabric-exporter" must set a nonempty alphanumeric availabilityCondition'
-
-  - it: an availability target requires an actual boolean true
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          url: http://localhost:9500/metrics
-          required: "true"
-          availabilityCondition: FabricExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "fabric-exporter" sets availabilityCondition without required: true'
-
-  - it: an availability target requires a nonempty string name
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: 9500
-          url: http://localhost:9500/metrics
-          required: true
-          availabilityCondition: FabricExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget at index 1 declares availability but must set a nonempty string name'
-
-  - it: availability durations must be quoted strings
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          url: http://localhost:9500/metrics
-          required: true
-          availabilityCondition: FabricExporterUnavailable
-          unavailableFor: 30
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "fabric-exporter" unavailableFor must be a quoted nonnegative duration such as "2m"'
-
-  - it: duplicate names fail when either target declares availability
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          url: http://localhost:9500/metrics
-          required: true
-          availabilityCondition: FabricExporterUnavailable
-        - name: fabric-exporter
-          url: http://localhost:9501/metrics
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 has duplicate scrapeTarget name "fabric-exporter" where at least one target declares availability'
-
-  - it: two availability targets cannot claim the same condition
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: fabric-exporter
-          url: http://localhost:9500/metrics
-          required: true
-          availabilityCondition: DcgmExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 availabilityCondition "DcgmExporterUnavailable" is claimed by both scrapeTargets "dcgm-exporter" and "fabric-exporter"'
-
-  - it: an availability target cannot collide with a collector rule
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: GPUECCDoubleRetired
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "GPUECCDoubleRetired" collides with a collector rule'
-
-  - it: an availability target cannot collide with its effective NPD monitor
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: NvidiaSmiProblem
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "NvidiaSmiProblem" collides with its effective NPD monitor'
-
-  - it: an availability target cannot collide with an enabled kernel monitor
-    set:
-      enabledGpuSkus[0]: h200
-      monitors.kernelMonitor: true
-      metricsCollector.dcgmAvailability.condition: KernelDeadlock
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "KernelDeadlock" collides with its effective NPD monitor'
-
-  - it: a disabled custom monitor does not reserve its conditions
-    set:
-      enabledGpuSkus[0]: h200
-      monitors.customPluginMonitor: false
-      metricsCollector.dcgmAvailability.condition: NvidiaSmiProblem
-    asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'availabilityCondition: "NvidiaSmiProblem"'
-
-  - it: an availability target cannot duplicate the implicit NPD scrape target
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: node-problem-detector
-          url: http://localhost:20261/metrics
-          required: true
-          availabilityCondition: NpdExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 has duplicate scrapeTarget name "node-problem-detector" where at least one target declares availability'
-
-  - it: a remote profile cannot claim the retained NPD DCGM condition
-    set:
-      enabledGpuSkus[0]: h200
-      daemonset.hostNetwork: false
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: https://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-          required: true
-          availabilityCondition: DcgmHealthProblem
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "DcgmHealthProblem" collides with its effective NPD monitor'
-
-  - it: numeric and string-equivalent target names cannot bypass ownership
-    set:
-      enabledGpuSkus[0]: h200
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-        - name: 9500
-          url: http://localhost:9500/metrics
-        - name: "9500"
-          url: http://localhost:9501/metrics
-          required: true
-          availabilityCondition: FabricExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 has duplicate scrapeTarget name "9500" where at least one target declares availability'
-
-  - it: boolean rule condition identifiers cannot bypass ownership
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: "true"
-      metricsCollector.rules[0].conditionType: true
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "true" collides with a collector rule'
-
-  - it: numeric rule condition identifiers cannot bypass ownership
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: "9500"
-      metricsCollector.rules[0].conditionType: 9500
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "9500" collides with a collector rule'
-
-  - it: availability owners cannot use Kubernetes Ready
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: Ready
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "Ready" is owned by Kubernetes'
-
-  - it: availability owners cannot use Kubernetes MemoryPressure
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: MemoryPressure
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "MemoryPressure" is owned by Kubernetes'
-
-  - it: availability owners cannot use Kubernetes DiskPressure
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: DiskPressure
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "DiskPressure" is owned by Kubernetes'
-
-  - it: availability owners cannot use Kubernetes PIDPressure
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: PIDPressure
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "PIDPressure" is owned by Kubernetes'
-
-  - it: availability owners cannot use Kubernetes NetworkUnavailable
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.condition: NetworkUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availabilityCondition "NetworkUnavailable" is owned by Kubernetes'
-
-  - it: a malformed availability duration fails to render
-    set:
-      metricsCollector.dcgmAvailability.unavailableFor: 2minutes
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.a10-2g scrapeTarget "dcgm-exporter" unavailableFor must be a quoted nonnegative duration such as "2m"'
-
-  - it: a malformed availability condition type fails to render
-    set:
-      metricsCollector.dcgmAvailability.condition: Dcgm-Exporter
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.a10-2g scrapeTarget "dcgm-exporter" must set a nonempty alphanumeric availabilityCondition'
-
-  - it: a target that declares an availability condition without required fails to render
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-          availabilityCondition: DcgmExporterUnavailable
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" sets availabilityCondition without required: true'
-
-  - it: a required target without an availability condition fails to render
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-          required: true
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" must set a nonempty alphanumeric availabilityCondition'
-
-  - it: an explicit target with an invalid unavailable window fails to render
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-          required: true
-          availabilityCondition: DcgmExporterUnavailable
-          unavailableFor: bogus
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" unavailableFor must be a quoted nonnegative duration such as "2m"'
-
-  - it: an explicit target with an invalid available window fails to render
-    set:
-      enabledGpuSkus[0]: h200
-      metricsCollector.dcgmAvailability.enabled: false
-      gpuSkus.h200.scrapeTargets:
-        - name: dcgm-exporter
-          url: http://localhost:19400/metrics
-          required: true
-          availabilityCondition: DcgmExporterUnavailable
-          availableFor: bogus
-    asserts:
-      - failedTemplate:
-          errorMessage: 'gpuSkus.h200 scrapeTarget "dcgm-exporter" availableFor must be a quoted nonnegative duration such as "2m"'
-
-  - it: a per-SKU override does not change another profile
+  - it: a per-profile override does not leak into another profile
     values:
       - mixed-dcgm-values.yaml
     documentSelector:
@@ -580,56 +69,60 @@ tests:
           path: data["rules.yaml"]
           pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"'
 
-  - it: rules section is non-empty (ECC/NVLink/XID etc. all render)
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-a100
+  - it: an invalid dcgmHealth.source fails to render
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: bogus
     asserts:
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'ecc-dbe-retired'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'DCGM_FI_DEV_XID_ERRORS'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_port_link_downed_total'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_port_symbol_error_total'
-      - notMatchRegex:
-          path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_(link_downed|symbol_error)_total'
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.source must be exactly one of "host-dcgmi" or "exporter"'
 
-  - it: all raw XID gauges use exporter err_code labels and instant thresholds
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-gpu-metrics-collector-a100
+  - it: every accepted profile always renders the dcgm-exporter target and keeps every DCGM_* rule
+    documentIndex: -1
     asserts:
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'conditionType: XIDError48\s+labels:\s+err_code: "48"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-48\s+threshold: 0'
+          pattern: 'name: "dcgm-exporter"\s+url: "[^"]+"\s+required: true\s+availabilityCondition: "DcgmExporterUnavailable"\s+unavailableFor: "2m"\s+availableFor: "1m"'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'conditionType: XIDError63\s+labels:\s+err_code: "63"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-63\s+threshold: 0'
+          pattern: 'metricName: DCGM_FI_DEV_XID_ERRORS'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'conditionType: XIDError64\s+labels:\s+err_code: "64"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-64\s+threshold: 0'
+          pattern: 'rules:\s*\n\s*- '
+
+  - it: an exporter-source profile still renders the fixed dcgm-exporter target and every DCGM_* rule
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h200
+    asserts:
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'conditionType: XIDError79\s+labels:\s+err_code: "79"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-79\s+threshold: 0'
+          pattern: 'name: "dcgm-exporter"'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'conditionType: XIDError94\s+labels:\s+err_code: "94"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-94\s+threshold: 0'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'conditionType: XIDError95\s+labels:\s+err_code: "95"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-95\s+threshold: 0'
+          pattern: 'metricName: DCGM_FI_DEV_XID_ERRORS'
+
+  - it: the fixed DcgmExporterUnavailable condition cannot collide with a collector rule
+    set:
+      enabledGpuSkus[0]: h200
+      metricsCollector.rules[0].conditionType: DcgmExporterUnavailable
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 cannot use conditionType "DcgmExporterUnavailable"; it is reserved for the chart-owned dcgm-exporter availability condition'
+
+  - it: the availability condition never collides with the NPD dcgmi condition
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100
+    asserts:
       - notMatchRegex:
           path: data["rules.yaml"]
-          pattern: '\bxid:'
+          pattern: 'availabilityCondition: "DcgmHealthProblem"'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: DcgmExporterUnavailable'
 
   - it: per-SKU nodeExporter=false drops the node-exporter target from that SKU's ConfigMap
     set:
@@ -682,6 +175,57 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: rules section is non-empty (ECC/NVLink/XID etc. all render)
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'ecc-dbe-retired'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_XID_ERRORS'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_port_link_downed_total'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_port_symbol_error_total'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_(link_downed|symbol_error)_total'
+
+  - it: all raw XID gauges use exporter err_code labels and instant thresholds
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError48\s+labels:\s+err_code: "48"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-48\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError63\s+labels:\s+err_code: "63"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-63\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError64\s+labels:\s+err_code: "64"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-64\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError79\s+labels:\s+err_code: "79"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-79\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError94\s+labels:\s+err_code: "94"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-94\s+threshold: 0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: XIDError95\s+labels:\s+err_code: "95"\s+metricName: DCGM_FI_DEV_XID_ERRORS\s+mode: instant\s+name: xid-95\s+threshold: 0'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: '\bxid:'
 
   - it: two enabled profiles claiming one instance type fail to render
     set:
