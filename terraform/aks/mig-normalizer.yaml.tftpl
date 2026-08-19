@@ -28,10 +28,17 @@ spec:
             - -c
             - >-
               set -euo pipefail; tdnf install -y --quiet util-linux >/dev/null 2>&1
-              || tdnf install -y util-linux >/dev/null 2>&1; mig_mode=$(nsenter -t 1
+              || tdnf install -y util-linux >/dev/null 2>&1; mig_modes=$(nsenter -t 1
               -m -u -i -n -p -- nvidia-smi --query-gpu=mig.mode.current
-              --format=csv,noheader | tr -d '[:space:]'); case "$mig_mode" in Enabled)
-              nsenter -t 1 -m -u -i -n -p -- nvidia-smi -mig 0 ;; Disabled|N/A) ;;
-              *) echo "unexpected MIG mode: $mig_mode" >&2; exit 1 ;; esac; exec sleep infinity
+              --format=csv,noheader | tr -d '\r'); if printf '%s\n' "$mig_modes" | grep
+              -Ev '^(Enabled|Disabled|N/A)$' | grep -q .; then echo "unexpected MIG modes:
+              $mig_modes" >&2; exit 1; fi; if printf '%s\n' "$mig_modes" | grep -qx Enabled;
+              then nsenter -t 1 -m -u -i -n -p -- nvidia-smi -mig 0; fi; touch
+              /tmp/taugrid-mig-normalized; exec sleep infinity
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "test -f /tmp/taugrid-mig-normalized"]
+            periodSeconds: 1
+            failureThreshold: 30
           securityContext:
             privileged: true
