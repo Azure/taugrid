@@ -147,6 +147,18 @@ func TestLoadRejectsInvalidAvailabilityContracts(t *testing.T) {
 			wantErr: "declares an availability contract",
 		},
 		{
+			name: "optional duplicate after availability owner",
+			targets: `
+  - name: dcgm-exporter
+    url: http://localhost:19400/metrics
+    required: true
+    availabilityCondition: DcgmExporterUnavailable
+  - name: dcgm-exporter
+    url: http://localhost:19401/metrics
+`,
+			wantErr: "at least one target declares an availability contract",
+		},
+		{
 			name: "required target with no url",
 			targets: `
   - name: dcgm-exporter
@@ -198,6 +210,35 @@ func TestLoadRejectsInvalidAvailabilityContracts(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("error %q does not contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsKubernetesOwnedAvailabilityConditions(t *testing.T) {
+	t.Parallel()
+
+	for _, condition := range []string{
+		"Ready",
+		"MemoryPressure",
+		"DiskPressure",
+		"PIDPressure",
+		"NetworkUnavailable",
+	} {
+		t.Run(condition, func(t *testing.T) {
+			path := writeConfig(t, `
+scrapeTargets:
+  - name: dcgm-exporter
+    url: http://localhost:19400/metrics
+    required: true
+    availabilityCondition: `+condition+`
+`+rulesBlock)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !strings.Contains(err.Error(), "owned by Kubernetes") {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
