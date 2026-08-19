@@ -127,3 +127,4 @@ Prevents unbounded tag growth in ACR by removing PR-scoped image tags:
 6. GNU Wget 1.x is installed (not wget2)
 7. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
 8. NCCL (`libnccl`) is loadable
+
