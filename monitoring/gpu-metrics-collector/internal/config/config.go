@@ -15,6 +15,14 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/scraper"
 )
 
+var kubernetesCoreConditionTypes = map[string]struct{}{
+	"Ready":              {},
+	"MemoryPressure":     {},
+	"DiskPressure":       {},
+	"PIDPressure":        {},
+	"NetworkUnavailable": {},
+}
+
 // Config is the top-level collector configuration.
 type Config struct {
 	ScrapeTargets []scraper.ScrapeTarget `yaml:"scrapeTargets"`
@@ -94,13 +102,15 @@ func (c *Config) validate() error {
 			}
 			slog.Warn("scrapeTarget has no url and can never be scraped", "index", i, "target", t.Name)
 		}
-		if t.Name != "" && seenNames[t.Name] {
-			if declaresAvailability {
-				return fmt.Errorf("duplicate scrapeTarget name %q declares an availability contract", t.Name)
+		if t.Name != "" {
+			if previousDeclaresAvailability, seen := seenNames[t.Name]; seen {
+				if declaresAvailability || previousDeclaresAvailability {
+					return fmt.Errorf("duplicate scrapeTarget name %q where at least one target declares an availability contract", t.Name)
+				}
+				slog.Warn("duplicate scrapeTarget name; the endpoint will be scraped more than once", "target", t.Name)
 			}
-			slog.Warn("duplicate scrapeTarget name; the endpoint will be scraped more than once", "target", t.Name)
+			seenNames[t.Name] = seenNames[t.Name] || declaresAvailability
 		}
-		seenNames[t.Name] = true
 
 		if err := validateAvailability(t); err != nil {
 			return err
@@ -124,6 +134,9 @@ func validateAvailability(t scraper.ScrapeTarget) error {
 	}
 	if t.AvailabilityCondition != "" && !t.Required {
 		return fmt.Errorf("scrapeTarget %q sets availabilityCondition without required: true", t.Name)
+	}
+	if _, reserved := kubernetesCoreConditionTypes[t.AvailabilityCondition]; reserved {
+		return fmt.Errorf("scrapeTarget %q availabilityCondition %q is owned by Kubernetes", t.Name, t.AvailabilityCondition)
 	}
 	if t.UnavailableFor < 0 || t.AvailableFor < 0 {
 		return fmt.Errorf("scrapeTarget %q must not set a negative unavailableFor or availableFor", t.Name)
