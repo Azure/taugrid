@@ -8,7 +8,8 @@ name: Trigger chart-integration-test (aks-ai-runtime)
 # Uses aks-ai-runtime's chart-integration-test.yml TauGridRayImagePR incoming
 # webhook resource, not the PAT-gated "Run pipeline" REST API — this org
 # blocks ADO PAT creation. The webhook is authenticated with an HMAC-SHA1
-# signature over the request body, keyed by a shared secret set on the
+# checksum over the request body (bare uppercase hex, no "sha1=" prefix —
+# ADO's own convention, not GitHub's), keyed by a shared secret set on the
 # Incoming WebHook service connection (ADO project settings), not a PAT.
 #
 # Requires a repo secret ADO_WEBHOOK_SECRET matching that service connection's
@@ -53,7 +54,10 @@ jobs:
             --argjson pr "${PR_NUMBER}" \
             --arg url "${PR_URL}" \
             '{sourceRef: $ref, prNumber: $pr, prUrl: $url}')
-          signature="sha1=$(printf '%s' "${payload}" | openssl dgst -sha1 -hmac "${ADO_WEBHOOK_SECRET}" | awk '{print $NF}')"
+          # ADO computes SHA1(secret).ComputeHash(body) and compares the raw
+          # hex digest as-is (uppercase, no prefix) against this header —
+          # see https://learn.microsoft.com/azure/devops/pipelines/yaml-schema/resources-webhooks-webhook
+          signature=$(printf '%s' "${payload}" | openssl dgst -sha1 -hmac "${ADO_WEBHOOK_SECRET}" | awk '{print $NF}' | tr '[:lower:]' '[:upper:]')
 
           response="$(mktemp)"
           status=$(curl -sS \
