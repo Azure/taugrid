@@ -15,10 +15,6 @@ trigger:
 pr: none
 
 variables:
-  - name: ACR_NAME
-    # Set this in the publishing pipeline configuration; there is no default
-    # registry because the publish script requires an explicit target.
-    value: ''
   - name: REPOSITORY_NAME
     value: public/aks/ai-runtime
   - name: azureServiceConnection
