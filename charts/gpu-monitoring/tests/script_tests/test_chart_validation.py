@@ -5,7 +5,6 @@ import re
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
 
 from helpers import CHART_DIR
 
