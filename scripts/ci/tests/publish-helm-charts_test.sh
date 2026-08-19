@@ -150,6 +150,7 @@ EOF
 chmod +x "${TEST_ROOT}/bin/az"
 
 export COMMAND_LOG
+export ACR_NAME=testacr
 PATH="${TEST_ROOT}/bin:${PATH}"
 export PATH
 
@@ -186,11 +187,11 @@ assert_output_contains "$new_version_output" \
 assert_log_count 1 "az acr login"
 assert_log_count 1 "helm push"
 assert_log_contains \
-  "helm push ${PACKAGE_DIR}/taugrid-0.3.0.tgz oci://aksmcrimagescommon.azurecr.io/public/aks/ai-runtime/helm"
+  "helm push ${PACKAGE_DIR}/taugrid-0.3.0.tgz oci://testacr.azurecr.io/public/aks/ai-runtime/helm"
 assert_log_contains \
-  "az acr repository show --name aksmcrimagescommon --image public/aks/ai-runtime/helm/taugrid:0.3.0"
+  "az acr repository show --name testacr --image public/aks/ai-runtime/helm/taugrid:0.3.0"
 assert_log_contains \
-  "helm pull oci://aksmcrimagescommon.azurecr.io/public/aks/ai-runtime/helm/taugrid --version 0.3.0"
+  "helm pull oci://testacr.azurecr.io/public/aks/ai-runtime/helm/taugrid --version 0.3.0"
 
 # Registry lookup failures remain fatal instead of being mistaken for a
 # missing version and triggering a write.
