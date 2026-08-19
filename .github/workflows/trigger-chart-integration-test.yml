@@ -5,9 +5,17 @@ name: Trigger chart-integration-test (aks-ai-runtime)
 # pipeline directly instead of relying on someone to remember to run it
 # manually before merging a Ray image change.
 #
-# Requires a repo secret ADO_PAT: an Azure DevOps PAT scoped to
-# "Build (Read & execute)" on the msazure org, stored under
-# Settings > Secrets and variables > Actions in this repo.
+# Uses aks-ai-runtime's chart-integration-test.yml TauGridRayImagePR incoming
+# webhook resource, not the PAT-gated "Run pipeline" REST API — this org
+# blocks ADO PAT creation. The webhook is authenticated with an HMAC-SHA1
+# signature over the request body, keyed by a shared secret set on the
+# Incoming WebHook service connection (ADO project settings), not a PAT.
+#
+# Requires a repo secret ADO_WEBHOOK_SECRET matching that service connection's
+# secret, stored under Settings > Secrets and variables > Actions.
+#
+# The webhook response doesn't reliably expose the queued run's ID, so the PR
+# comment links to the pipeline's run list instead of a specific run.
 
 on:
   pull_request:
@@ -28,35 +36,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Queue chart-integration-test
-        id: queue
         env:
-          ADO_PAT: ${{ secrets.ADO_PAT }}
+          ADO_WEBHOOK_SECRET: ${{ secrets.ADO_WEBHOOK_SECRET }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
-          if [ -z "${ADO_PAT}" ]; then
-            echo "::error::ADO_PAT secret is not set. Add an Azure DevOps PAT (Build: Read & execute, msazure org) as a repo secret named ADO_PAT." >&2
+          if [ -z "${ADO_WEBHOOK_SECRET}" ]; then
+            echo "::error::ADO_WEBHOOK_SECRET secret is not set. Create it to match the TauGridRayImagePR Incoming WebHook service connection's secret in the CloudNativeCompute ADO project, then add it as a repo secret named ADO_WEBHOOK_SECRET." >&2
             exit 1
           fi
 
+          payload=$(jq -nc \
+            --arg ref "refs/heads/${HEAD_REF}" \
+            --argjson pr "${PR_NUMBER}" \
+            --arg url "${PR_URL}" \
+            '{sourceRef: $ref, prNumber: $pr, prUrl: $url}')
+          signature="sha1=$(printf '%s' "${payload}" | openssl dgst -sha1 -hmac "${ADO_WEBHOOK_SECRET}" | awk '{print $NF}')"
+
           response="$(mktemp)"
-          status=$(curl -sS -u ":${ADO_PAT}" \
+          status=$(curl -sS \
             -H "Content-Type: application/json" \
+            -H "X-Hub-Signature: ${signature}" \
             -X POST \
-            "https://dev.azure.com/msazure/CloudNativeCompute/_apis/pipelines/470554/runs?api-version=7.1" \
-            -d "{\"templateParameters\": {\"sourceRef\": \"refs/heads/${HEAD_REF}\"}}" \
+            "https://dev.azure.com/msazure/_apis/public/distributedtask/webhooks/TauGridRayImagePR?api-version=6.0-preview" \
+            -d "${payload}" \
             -o "${response}" -w '%{http_code}')
 
-          if [ "${status}" -ge 300 ]; then
-            echo "::error::ADO run-pipeline call failed (HTTP ${status})" >&2
+          if [ "${status}" != "200" ]; then
+            echo "::error::ADO webhook call failed (HTTP ${status})" >&2
             cat "${response}" >&2
             exit 1
           fi
 
-          run_id=$(jq -r '.id' "${response}")
-          run_url="https://msazure.visualstudio.com/CloudNativeCompute/_build/results?buildId=${run_id}"
-          echo "run_url=${run_url}" >> "$GITHUB_OUTPUT"
-          echo "Queued chart-integration-test run: ${run_url}"
+          echo "Triggered chart-integration-test webhook for refs/heads/${HEAD_REF} (HTTP ${status})"
 
       - name: Comment on PR
         uses: actions/github-script@v7
@@ -66,5 +80,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🔄 Queued [chart-integration-test](${{ steps.queue.outputs.run_url }}) in aks-ai-runtime against this branch (\`${{ github.event.pull_request.head.ref }}\`) to validate this Ray image change before merge.`,
+              body: `🔄 Triggered [chart-integration-test](https://msazure.visualstudio.com/CloudNativeCompute/_build?definitionId=470554) in aks-ai-runtime against this branch (\`${{ github.event.pull_request.head.ref }}\`) to validate this Ray image change before merge. Look for the newest run against \`refs/heads/${{ github.event.pull_request.head.ref }}\`.`,
             });
