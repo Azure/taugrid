@@ -340,7 +340,7 @@ it is the only source that reaches the host-local exporter over loopback.
 {{- $profileCount = add1 $profileCount -}}
 {{- $effective := fromYaml (include "gpu-monitoring.effectiveDcgmHealth" (dict "root" $ "sku" $sku "skuName" $skuName)) -}}
 {{- include "gpu-monitoring.validateDcgmHealth" (dict "skuName" $skuName "effective" $effective) -}}
-{{- if and $.Values.monitors.customPluginMonitor (eq $effective.source "host-dcgmi") -}}
+{{- if eq $effective.source "host-dcgmi" -}}
 {{- $hostDcgmi = true -}}
 {{- end -}}
 {{- end -}}

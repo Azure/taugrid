@@ -645,6 +645,7 @@ tests:
     set:
       enabledGpuSkus[0]: h200
       daemonset.hostNetwork: false
+      monitors.customPluginMonitor: false
     asserts:
       - hasDocuments:
           count: 1
@@ -694,6 +695,15 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor.json
+
+  - it: disabling the custom plugin monitor does not relax host-dcgmi hostNetwork
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostNetwork: false
+      monitors.customPluginMonitor: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
 
   - it: custom plugin monitor must be an actual boolean
     set:

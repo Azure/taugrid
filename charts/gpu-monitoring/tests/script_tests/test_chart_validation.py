@@ -156,6 +156,57 @@ metricsCollector:
             result.stderr,
         )
 
+    def test_host_network_requirement_is_independent_of_custom_plugin_monitor(self):
+        host_without_network = render(
+            """
+enabledGpuSkus:
+  - h200
+daemonset:
+  hostNetwork: false
+monitors:
+  customPluginMonitor: false
+"""
+        )
+        self.assertNotEqual(0, host_without_network.returncode)
+        self.assertIn(
+            "daemonset.hostNetwork must be boolean true when an enabled profile "
+            "uses dcgmHealth.source=host-dcgmi",
+            host_without_network.stderr,
+        )
+
+        host_with_network = render(
+            """
+enabledGpuSkus:
+  - h200
+daemonset:
+  hostNetwork: true
+monitors:
+  customPluginMonitor: false
+"""
+        )
+        self.assertEqual(0, host_with_network.returncode, host_with_network.stderr)
+        self.assertIn("hostNetwork: true", host_with_network.stdout)
+
+        exporter_without_network = render(
+            """
+enabledGpuSkus:
+  - h200
+daemonset:
+  hostNetwork: false
+monitors:
+  customPluginMonitor: false
+gpuSkus:
+  h200:
+    dcgmHealth:
+      source: exporter
+      exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+"""
+        )
+        self.assertEqual(
+            0, exporter_without_network.returncode, exporter_without_network.stderr
+        )
+        self.assertIn("hostNetwork: false", exporter_without_network.stdout)
+
     def test_default_source_is_host_dcgmi(self):
         result = render(
             """
