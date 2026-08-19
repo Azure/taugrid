@@ -1,0 +1,8 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+enabledGpuSkus:
+  - custom
+gpuSkus:
+  custom:
+    instanceTypes: Custom_GPU_VM

@@ -91,6 +91,29 @@ nodeExporter:
       cpu: "100m"
       memory: "128Mi"
 
+# The chart's constrained DCGM health-source contract. These are the only two
+# fields this chart accepts for DCGM health; the chart itself owns the
+# dcgm-exporter scrape target, its fixed DcgmExporterUnavailable condition, and
+# its 2m unavailable / 1m available debounce. See README "DCGM health
+# sources" for the full per-source contract and cross-cloud mapping.
+#
+# These are global defaults. gpuSkus.<profile>.dcgmHealth overrides only
+# `source` and/or `exporterUrl` for that profile, so a mixed cluster can run
+# managed AKS nodes alongside GPU Operator nodes without touching the rest of
+# each profile's configuration. metricsCollector.enabled must be literal
+# `true` for every enabled profile; both sources' contracts include the fixed
+# DcgmExporterUnavailable scrape target and every DCGM_* collector rule, and
+# the collector is the only component that renders them. Disabling DCGM
+# health monitoring entirely means disabling the gpu-monitoring component or
+# chart release itself, not disabling the collector alone.
+dcgmHealth:
+  # Exactly one of:
+  #   host-dcgmi — run the host `dcgmi` health-watch lifecycle (init, warm,
+  #     liveness repair, `dcgmi health -c`) and scrape the host-local exporter.
+  #   exporter   — scrape a remote/Service DCGM exporter only; no host dcgmi.
+  source: host-dcgmi
+  exporterUrl: http://localhost:19400/metrics
+
 # Lightweight metrics collector — replaces Prometheus sidecar.
 # Scrapes DCGM + node-exporter, evaluates threshold/rate rules,
 # and patches Kubernetes Node conditions directly.
@@ -98,13 +121,14 @@ metricsCollector:
   enabled: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
-    # e0826b20dd39 — merged collector availability source from TauGrid #118.
+    # 9632b704bca1 — merged TauGrid main source containing collector PR #140.
     # Set exactly one of tag or digest; tag is for local builds, published
     # deployments use the digest.
     #
-    # dcgmAvailability below requires a collector build that understands the
-    # `required` / `availabilityCondition` scrape-target fields. An older image
-    # ignores them and publishes no condition.
+    # The fixed DcgmExporterUnavailable contract below requires a collector
+    # build that understands the `required` / `availabilityCondition`
+    # scrape-target fields. An older image ignores them and publishes no
+    # condition.
     #
     # This repository owns the collector source and build context. MCR
     # publication runs only from merged TauGrid main. Pin this to the immutable
@@ -112,7 +136,7 @@ metricsCollector:
     # that support — digest only, never a floating tag and never latest. See the
     # chart README section "Collector image requirement and release ordering".
     tag: ""
-    digest: sha256:768ba258c817fa07a733626e3594407d4b1152aeb4f5c1ad0e6fb313cc04c1e9
+    digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
   scrapeInterval: "15s"
   resources:
     requests:
@@ -124,35 +148,6 @@ metricsCollector:
       # DCGM scrape returns far more series than on smaller SKUs and the rule
       # engine retains per-series history across the rate windows.
       memory: "512Mi"
-  scrapeTargets:
-    # DCGM exporter runs as a host systemd unit (port 19400) on AKS managed
-    # GPU nodes (see tests/e2e/managedgpu/harness/README.md). This pod runs
-    # with hostNetwork: true, so localhost reaches the host-level exporter.
-    - name: dcgm-exporter
-      url: http://localhost:19400/metrics
-    - name: node-exporter
-      url: http://localhost:9100/metrics
-  # Required DCGM scrape-target availability.
-  #
-  # Losing the DCGM exporter silences every DCGM rule, and a silenced rule is
-  # indistinguishable from a healthy GPU. The collector therefore publishes the
-  # configured dcgm-exporter target's reachability as its own Node condition,
-  # for both the host-local 19400 endpoint and a GPU Operator Service on 9400.
-  #
-  # This reports endpoint reachability only. It is distinct from NPD's
-  # DcgmHealthProblem, which runs host `dcgmi` diagnostics and cannot cover a
-  # non-loopback exporter.
-  #
-  # The condition is set only after `unavailableFor` of continuous failure and
-  # cleared only after `availableFor` of continuous success, so one missed
-  # scrape cannot flap it; collector downtime counts as neither. Per-profile
-  # overrides go under gpuSkus.<profile>.dcgmAvailability and merge over these
-  # values.
-  dcgmAvailability:
-    enabled: true
-    condition: DcgmExporterUnavailable
-    unavailableFor: 2m
-    availableFor: 1m
   # By default the collector scrapes node-exporter only when this chart deploys
   # the node-exporter sidecar. Set nodeExporterScrape: true to scrape an
   # external hostNetwork node-exporter on :9100 without deploying a second
@@ -160,8 +155,7 @@ metricsCollector:
   # nodeExporterScrape: true
   # Implicitly append an NPD scrape target to every per-SKU collector ConfigMap.
   # NPD's Prometheus exporter listens on `npdPort + 1` (see daemonset.yaml
-  # `--prometheus-port`). Set to false to disable, e.g. if you fully override
-  # scrapeTargets above.
+  # `--prometheus-port`). Set to false to disable.
   npdScrape: true
   rules:
     # Critical: ECC Double-Bit Errors (any increase over 1m → drain)
@@ -330,10 +324,11 @@ enabledGpuSkus: []
 # To add a new GPU SKU, add an entry here with the appropriate instanceTypes
 # and monitoring parameters.
 #
-# scrapeTargets optionally replaces metricsCollector.scrapeTargets for one
-# profile. This supports mixed clusters where managed GPU nodes expose DCGM on
-# localhost:19400 and GPU Operator nodes use a node-local Service on port 9400.
-# A non-loopback DCGM Service must use internalTrafficPolicy: Local.
+# dcgmHealth optionally overrides the global dcgmHealth.source and/or
+# .exporterUrl for one profile. This supports mixed clusters where managed GPU
+# nodes use the default host-dcgmi source and GPU Operator nodes use a
+# node-local exporter Service instead. A non-loopback DCGM Service must use
+# internalTrafficPolicy: Local.
 # --------------------------------------------------------------------------
 gpuSkus:
   a100:

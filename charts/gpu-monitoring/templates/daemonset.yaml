@@ -1,10 +1,15 @@
 {{- include "gpu-monitoring.validateEnabledGpuSkus" . }}
 {{- include "gpu-monitoring.validateProfileInstanceTypes" . }}
+{{- include "gpu-monitoring.validateReservedEnv" . }}
+{{- include "gpu-monitoring.validateHostNamespaces" . }}
+{{- include "gpu-monitoring.validateDcgmHealthContracts" . }}
 {{- range $skuName, $sku := .Values.gpuSkus }}
 {{- if and $sku (or (empty $.Values.enabledGpuSkus) (has $skuName $.Values.enabledGpuSkus)) }}
 {{- $dsName := printf "gpu-monitoring-%s" $skuName }}
 {{- $nodeExporterEnabled := $.Values.nodeExporter.enabled }}
 {{- $ibPkey := $.Values.ibPkey }}
+{{- $dcgmHealthRequired := include "gpu-monitoring.dcgmHealthRequired" (dict "root" $ "sku" $sku "skuName" $skuName) }}
+{{- $monitorConfigKey := include "gpu-monitoring.monitorConfigKey" (dict "root" $ "sku" $sku "skuName" $skuName) }}
 {{- if hasKey $sku "nodeExporter" }}
 {{- $nodeExporterEnabled = $sku.nodeExporter }}
 {{- end }}
@@ -35,7 +40,7 @@ spec:
     metadata:
       {{- if $.Values.metricsCollector.enabled }}
       annotations:
-        checksum/metrics-collector-config: {{ include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "sku" $sku) | sha256sum | quote }}
+        checksum/metrics-collector-config: {{ include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "skuName" $skuName "sku" $sku) | sha256sum | quote }}
       {{- end }}
       labels:
         app: {{ $dsName }}
@@ -86,27 +91,54 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $.Values.metricsCollector.enabled }}
+      {{- if or $.Values.metricsCollector.enabled (eq $dcgmHealthRequired "1") }}
       initContainers:
+        {{- if eq $dcgmHealthRequired "1" }}
+        - name: init-dcgm-health
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            - /custom-config/init-dcgm-health.sh
+          env:
+            - name: NPD_DCGM_REQUIRED
+              value: "1"
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: custom-config
+              mountPath: /usr/local/bin/dcgmi
+              subPath: dcgmi-wrapper.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/init-dcgm-health.sh
+              subPath: init-dcgm-health.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check-dcgm-watches.sh
+              subPath: check-dcgm-watches.sh
+              readOnly: true
+        {{- end }}
+        {{- if $.Values.metricsCollector.enabled }}
         - name: init-collector-state
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
           command: ["sh", "-c", "chown -R 65532:65532 /var/lib/npd-metrics-collector"]
           volumeMounts:
             - name: collector-state
               mountPath: /var/lib/npd-metrics-collector
+        {{- end }}
       {{- end }}
       containers:
         - name: gpu-monitoring
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           command:
-            - /node-problem-detector
+            - /custom-config/start-node-problem-detector.sh
           args:
             - --logtostderr
             - --port={{ $.Values.npdPort }}
             - --prometheus-port={{ add $.Values.npdPort 1 }}
             {{- if $.Values.monitors.customPluginMonitor }}
-            - --config.custom-plugin-monitor=/custom-config/{{ $sku.monitor_config }}
+            - --config.custom-plugin-monitor=/custom-config/{{ $monitorConfigKey }}
             {{- end }}
             {{- if $.Values.monitors.systemLogMonitor }}
             - --config.system-log-monitor=/custom-config/system-log-monitor.json
@@ -128,42 +160,42 @@ spec:
             - name: NPD_GPU_REQUIRED
               value: "1"
             - name: NPD_DCGM_REQUIRED
-              value: {{ include "gpu-monitoring.dcgmHealthRequired" (dict "root" $ "sku" $sku) | quote }}
+              value: {{ $dcgmHealthRequired | quote }}
             - name: EXPECTED_NUM_GPU
-              value: "{{ $sku.num_gpus }}"
+              value: {{ $sku.num_gpus | toString | quote }}
             - name: VBIOS_VERSIONS
               value: {{ $sku.vbios_versions | quote }}
             - name: IB_DEVICES
-              value: "{{ $sku.ib_devices }}"
+              value: {{ $sku.ib_devices | toString | quote }}
             - name: EXPECTED_IB_PKEY
               value: {{ $ibPkey | quote }}
             {{- if $sku.ib_rate_gbps }}
             - name: EXPECTED_IB_GBPS
-              value: "{{ $sku.ib_rate_gbps }}"
+              value: {{ $sku.ib_rate_gbps | toString | quote }}
             {{- end }}
             - name: IB_FLAP_THRESHOLD_SHORT
-              value: "{{ $sku.ib_flap_threshold_short }}"
+              value: {{ $sku.ib_flap_threshold_short | toString | quote }}
             - name: IB_FLAP_CHECK_WINDOW
-              value: "{{ $sku.ib_flap_check_window }}"
+              value: {{ $sku.ib_flap_check_window | toString | quote }}
             - name: NVME_TOTAL
-              value: "{{ $sku.nvme_total }}"
+              value: {{ $sku.nvme_total | toString | quote }}
             - name: NVME_SIZE_COUNT
-              value: "{{ $sku.nvme_size_count }}"
+              value: {{ $sku.nvme_size_count | toString | quote }}
             - name: NVME_SIZE
-              value: "{{ $sku.nvme_size }}"
+              value: {{ $sku.nvme_size | toString | quote }}
             - name: IMEX_PROCNAME
-              value: "{{ $sku.imex_procname }}"
+              value: {{ $sku.imex_procname | toString | quote }}
             {{- if hasKey $sku "create_imex_channel_expected" }}
             - name: CREATE_IMEX_CHANNEL_EXPECTED
               value: {{ $sku.create_imex_channel_expected | quote }}
             {{- end }}
             {{- if $sku.roce_devices }}
             - name: ROCE_DEVICES
-              value: "{{ $sku.roce_devices }}"
+              value: {{ $sku.roce_devices | toString | quote }}
             {{- end }}
             {{- if $sku.gpu_type }}
             - name: GPU_TYPE
-              value: "{{ $sku.gpu_type }}"
+              value: {{ $sku.gpu_type | toString | quote }}
             {{- end }}
             {{- if $sku.gpu_driver_versions }}
             - name: GPU_DRIVER_VERSIONS
@@ -174,6 +206,18 @@ spec:
             {{- end }}
           securityContext:
             {{- toYaml $.Values.securityContext | nindent 12 }}
+          {{- if eq $dcgmHealthRequired "1" }}
+          # Watch loss after a host-engine restart restarts this container; its
+          # startup wrapper reinitializes and warms watches before running NPD.
+          livenessProbe:
+            exec:
+              command:
+                - /custom-config/check-dcgm-watches.sh
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 2
+          {{- end }}
           {{- with $.Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -191,8 +235,8 @@ spec:
               mountPath: /etc/localtime
               readOnly: true
             - name: custom-config
-              mountPath: /custom-config/{{ $sku.monitor_config }}
-              subPath: {{ $sku.monitor_config }}
+              mountPath: /custom-config/{{ $monitorConfigKey }}
+              subPath: {{ $monitorConfigKey }}
               readOnly: true
             - name: custom-config
               mountPath: /usr/local/bin/nvidia-smi
@@ -213,6 +257,18 @@ spec:
             - name: custom-config
               mountPath: /custom-config/check-dcgm-health.sh
               subPath: check-dcgm-health.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/check-dcgm-watches.sh
+              subPath: check-dcgm-watches.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/init-dcgm-health.sh
+              subPath: init-dcgm-health.sh
+              readOnly: true
+            - name: custom-config
+              mountPath: /custom-config/start-node-problem-detector.sh
+              subPath: start-node-problem-detector.sh
               readOnly: true
             - name: custom-config
               mountPath: /custom-config/check_gpu_count.sh

@@ -1,0 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+env:
+  - name: NPD_GPU_SIMULATION
+    value: healthy

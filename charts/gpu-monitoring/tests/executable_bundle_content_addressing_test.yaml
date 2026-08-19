@@ -24,6 +24,12 @@ tests:
           path: stringData["check_gpu_xid.sh"]
       - isNotEmpty:
           path: stringData["dcgmi-wrapper.sh"]
+      - isNotEmpty:
+          path: stringData["check-dcgm-watches.sh"]
+      - isNotEmpty:
+          path: stringData["init-dcgm-health.sh"]
+      - isNotEmpty:
+          path: stringData["start-node-problem-detector.sh"]
 
   - it: truncates a custom base so the hashed name remains a DNS label
     set:

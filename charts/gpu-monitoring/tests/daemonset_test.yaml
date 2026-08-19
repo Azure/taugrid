@@ -237,6 +237,129 @@ tests:
       - failedTemplate:
           errorMessage: 'enabledGpuSkus contains unknown profile "h20o"'
 
+  - it: enabledGpuSkus rejects a null selected profile
+    values:
+      - custom-profile-null-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'enabledGpuSkus profile "custom" must resolve to a non-empty map'
+
+  - it: enabledGpuSkus rejects an empty selected profile
+    values:
+      - custom-profile-empty-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'enabledGpuSkus profile "custom" must resolve to a non-empty map'
+
+  - it: selected profiles require instanceTypes
+    values:
+      - custom-profile-instance-types-missing-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.instanceTypes must be a non-empty list of non-empty strings'
+
+  - it: selected profiles reject empty instanceTypes
+    values:
+      - custom-profile-instance-types-empty-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.instanceTypes must be a non-empty list of non-empty strings'
+
+  - it: selected profiles reject non-list instanceTypes
+    values:
+      - custom-profile-instance-types-invalid-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.instanceTypes must be a non-empty list of non-empty strings'
+
+  - it: selected profiles reject empty-string instanceTypes
+    values:
+      - custom-profile-instance-types-empty-string-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.instanceTypes must be a non-empty list of non-empty strings'
+
+  - it: selected profiles require a numeric GPU count
+    values:
+      - custom-profile-minimal-values.yaml
+    set:
+      gpuSkus.custom.num_gpus: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.num_gpus must be a nonnegative integer'
+
+  - it: selected profiles require monitor_config
+    values:
+      - custom-profile-monitor-config-missing-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.monitor_config must name a bundled custom-plugin monitor config'
+
+  - it: selected profiles reject null monitor_config
+    values:
+      - custom-profile-minimal-values.yaml
+    set:
+      gpuSkus.custom.monitor_config: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.monitor_config must name a bundled custom-plugin monitor config'
+
+  - it: selected profiles reject empty monitor_config
+    values:
+      - custom-profile-minimal-values.yaml
+    set:
+      gpuSkus.custom.monitor_config: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.monitor_config must name a bundled custom-plugin monitor config'
+
+  - it: selected profiles reject non-string monitor_config
+    values:
+      - custom-profile-minimal-values.yaml
+    set:
+      gpuSkus.custom.monitor_config: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.monitor_config must name a bundled custom-plugin monitor config'
+
+  - it: selected profiles reject unknown monitor_config
+    values:
+      - custom-profile-minimal-values.yaml
+    set:
+      gpuSkus.custom.monitor_config: unknown-monitor.json
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.monitor_config must name a bundled custom-plugin monitor config'
+
+  - it: selected profiles reject monitor_config path traversal
+    values:
+      - custom-profile-minimal-values.yaml
+    set:
+      gpuSkus.custom.monitor_config: ../custom-plugin-monitor-spark.json
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.custom.monitor_config must name a bundled custom-plugin monitor config'
+
+  - it: a minimal custom profile renders exactly one DaemonSet
+    values:
+      - custom-profile-minimal-values.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: gpu-monitoring-custom
+
+  - it: a dotted custom profile name remains valid
+    values:
+      - custom-profile-dotted-values.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: gpu-monitoring-custom.gpu
+
   - it: custom profiles without a PKey use the global fallback
     set:
       ibPkey: "0x8007"
@@ -318,7 +441,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-          value: 0299caef4fda7e63ed67ae3753b9ec673d21bba507b41728cb2f11670f86f053
+          value: 7a683260ac52258d9134ee7d08bf6791e3d445eb24fd845473f1feaceb79a6be
 
   - it: per-profile scrape target changes update only that profile checksum
     values:
@@ -329,7 +452,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-          value: f7c81f2a69ab5658bf1c14f276544b1c335b18f61ed6b34654a18ed0463bb45c
+          value: d23cdf182b434153a13bff355a82888884856889259806fc5259fe5bf9bb3179
 
   - it: GPU device-file and host DCGM health checks are required
     documentSelector:
@@ -356,8 +479,24 @@ tests:
             subPath: dcgmi-wrapper.sh
             readOnly: true
           any: true
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-dcgm-health
+          any: true
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          value:
+            - /custom-config/check-dcgm-watches.sh
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /custom-config/start-node-problem-detector.sh
 
-  - it: GPU Operator DCGM Service profiles do not require a host dcgmi binary
+  - it: exporter-source profiles do not require a host dcgmi binary
     values:
       - mixed-dcgm-values.yaml
     documentSelector:
@@ -370,6 +509,286 @@ tests:
             name: NPD_DCGM_REQUIRED
             value: "0"
           any: true
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-dcgm-health
+          any: true
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[3]
+          pattern: '^--config.custom-plugin-monitor=/custom-config/no-host-dcgm-monitor-[a-f0-9]{10}\.json$'
+
+  - it: an invalid dcgmHealth.source fails before deployment
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.source must be exactly one of "host-dcgmi" or "exporter"'
+
+  - it: a null global dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      dcgmHealth: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200: global dcgmHealth must be a map with source and/or exporterUrl keys; got null'
+
+  - it: a scalar global dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      dcgmHealth: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200: global dcgmHealth must be a map with source and/or exporterUrl keys; got string'
+
+  - it: a null per-profile dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200.dcgmHealth must be a map with source and/or exporterUrl keys; got null'
+
+  - it: a scalar per-profile dcgmHealth fails with a profile-scoped message, not a reflect panic
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200.dcgmHealth must be a map with source and/or exporterUrl keys; got string'
+
+  - it: reserved DCGM runtime environment cannot override rendered lifecycle
+    values:
+      - reserved-dcgm-env-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'env must not override reserved variable NPD_DCGM_REQUIRED'
+
+  - it: production values cannot enable DCGM health simulation
+    values:
+      - reserved-dcgm-simulation-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'env must not override reserved variable NPD_DCGM_SIMULATION'
+
+  - it: production values cannot enable NVIDIA GPU simulation
+    values:
+      - reserved-gpu-simulation-values.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'env must not override reserved variable NPD_GPU_SIMULATION'
+
+  - it: host DCGM lifecycle requires hostPID true
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostPID: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
+
+  - it: host-dcgmi source requires hostNetwork true
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostNetwork: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
+
+  - it: host DCGM lifecycle rejects string hostPID
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostPID: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
+
+  - it: host-dcgmi source rejects string hostNetwork
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostNetwork: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
+
+  - it: host DCGM lifecycle rejects null hostPID
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostPID: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
+
+  - it: host-dcgmi source rejects null hostNetwork
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostNetwork: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
+
+  - it: exporter-source profile still requires hostPID
+    values:
+      - mixed-dcgm-values.yaml
+    set:
+      enabledGpuSkus[0]: h200
+      daemonset.hostPID: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostPID must be boolean true when any GPU profile is enabled'
+
+  - it: exporter-source profile can disable hostNetwork
+    values:
+      - mixed-dcgm-values.yaml
+    set:
+      enabledGpuSkus[0]: h200
+      daemonset.hostNetwork: false
+      monitors.customPluginMonitor: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: gpu-monitoring-h200
+      - equal:
+          path: spec.template.spec.hostPID
+          value: true
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: false
+
+  - it: exporter-source profile requires the metrics collector
+    values:
+      - mixed-dcgm-values.yaml
+    set:
+      enabledGpuSkus[0]: h200
+      metricsCollector.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 uses dcgmHealth.source=exporter and requires metricsCollector.enabled=true'
+
+  - it: host-dcgmi source also requires the metrics collector
+    set:
+      enabledGpuSkus[0]: a100
+      metricsCollector.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.a100 uses dcgmHealth.source=host-dcgmi and requires metricsCollector.enabled=true'
+
+  - it: disabling the custom plugin monitor also disables the host dcgmi lifecycle
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-a100
+    set:
+      enabledGpuSkus[0]: a100
+      monitors.customPluginMonitor: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-dcgm-health
+          any: true
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --config.custom-plugin-monitor=/custom-config/custom-plugin-monitor.json
+
+  - it: disabling the custom plugin monitor does not relax host-dcgmi hostNetwork
+    set:
+      enabledGpuSkus[0]: a100
+      daemonset.hostNetwork: false
+      monitors.customPluginMonitor: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'daemonset.hostNetwork must be boolean true when an enabled profile uses dcgmHealth.source=host-dcgmi'
+
+  - it: custom plugin monitor must be an actual boolean
+    set:
+      enabledGpuSkus[0]: a100
+      monitors.customPluginMonitor: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitors.customPluginMonitor must be a boolean'
+
+  - it: exporter source rejects the inherited host-dcgmi loopback default
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: exporter
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=exporter requires an explicit non-loopback dcgmHealth.exporterUrl; it must not inherit the host-dcgmi loopback default'
+
+  - it: host-dcgmi source rejects a non-loopback exporterUrl
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=host-dcgmi requires a loopback dcgmHealth.exporterUrl'
+
+  - it: exporter source rejects another IPv4 loopback address
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://127.0.0.2:9400/metrics
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=exporter requires an explicit non-loopback dcgmHealth.exporterUrl; it must not inherit the host-dcgmi loopback default'
+
+  - it: exporter source rejects IPv6 loopback
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://[::1]:9400/metrics
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 dcgmHealth.source=exporter requires an explicit non-loopback dcgmHealth.exporterUrl; it must not inherit the host-dcgmi loopback default'
+
+  - it: a credentialed exporterUrl is rejected without echoing it
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://user:secret@dcgm-operator.svc:9400/metrics?token=abc
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.exporterUrl must be a nonempty absolute lowercase http(s) URL without whitespace, backslashes, credentials, or URL suffix parameters'
+
+  - it: an exporterUrl query string is rejected without echoing it
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://dcgm-operator.svc:9400/metrics?token=supersecret
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.exporterUrl must be a nonempty absolute lowercase http(s) URL without whitespace, backslashes, credentials, or URL suffix parameters'
+
+  - it: an exporterUrl fragment is rejected without echoing it
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.dcgmHealth.source: exporter
+      gpuSkus.h200.dcgmHealth.exporterUrl: http://dcgm-operator.svc:9400/metrics#supersecret
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200 effective dcgmHealth.exporterUrl must be a nonempty absolute lowercase http(s) URL without whitespace, backslashes, credentials, or URL suffix parameters'
+
+  - it: legacy gpuSkus.<profile>.scrapeTargets fails loud with a migration message
+    set:
+      enabledGpuSkus[0]: h200
+      gpuSkus.h200.scrapeTargets[0].name: dcgm-exporter
+      gpuSkus.h200.scrapeTargets[0].url: http://localhost:19400/metrics
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.h200.scrapeTargets was removed in gpu-monitoring 0.1.7; migrate to dcgmHealth.source and dcgmHealth.exporterUrl (see the README "DCGM health sources" section)'
+
+  - it: legacy gpuSkus.<profile>.dcgm_health_required fails loud with a migration message
+    set:
+      gpuSkus.a100.dcgm_health_required: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'gpuSkus.a100.dcgm_health_required was removed in gpu-monitoring 0.1.7; migrate to dcgmHealth.source and dcgmHealth.exporterUrl (see the README "DCGM health sources" section)'
 
   - it: spark DaemonSet mounts the spark per-SKU collector-config ConfigMap (not shared)
     documentSelector:
@@ -463,26 +882,6 @@ tests:
               - Standard_ND96asr_v4
               - Standard_ND96amsr_A100_v4
           any: true
-
-  - it: metricsCollector.enabled=false omits the sidecar and collector-config volume
-    set:
-      metricsCollector.enabled: false
-    documentSelector:
-      path: metadata.name
-      value: gpu-monitoring-a100
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers
-          content:
-            name: metrics-collector
-          any: true
-      - notContains:
-          path: spec.template.spec.volumes
-          content:
-            name: collector-config
-          any: true
-      - notExists:
-          path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
 
   - it: nodeTainter.enabled=true adds tolerations for NoSchedule and NoExecute
     documentSelector:
