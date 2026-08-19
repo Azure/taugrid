@@ -94,10 +94,10 @@ collector:
     # -- Regex patterns for metrics to keep (empty = keep all)
     keepMetrics: []
     # -- Metric families to REMOVE from the DaemonSet collector's effective
-    # drop-list (set difference against `dropMetrics`). Un-drops the KubeRay
-    # operator dashboard metrics on the DaemonSet path only; the singleton +
-    # remote-write receiver keep the full `dropMetrics`. Entries must match
-    # `dropMetrics` verbatim. Rationale/alternatives: see PR #975 / issue #953.
+    # drop-list (set difference against `dropMetrics`). The KubeRay operator is
+    # discovered by pod annotation so each HA replica retains its own identity;
+    # do not move these families behind a load-balanced Service target.
+    # Entries must match `dropMetrics` verbatim.
     scrapeDropMetricsExclude:
       - '^controller_runtime.*'
       - '^workqueue.*'

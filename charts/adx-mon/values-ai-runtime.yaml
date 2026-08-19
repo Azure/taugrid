@@ -1,8 +1,8 @@
 # values-ai-runtime.yaml - GPU cluster preset
 #
 # Applied on top of values.yaml for GPU-enabled clusters. Enables GPU-specific
-# telemetry, kernel error monitoring, journal log collection, and Kueue
-# controller scraping.
+# telemetry, kernel error monitoring, journal log collection, and controller
+# metric filtering.
 #
 # Usage:
 #   helm install adx-mon charts/adx-mon/ \
@@ -68,7 +68,7 @@ collector:
         parsers: ["json"]
 
 
-  # -- Prometheus scrape targets for scheduler components
+  # -- Prometheus scrape configuration for scheduler components
   prometheusScrape:
     # -- Drop high-cardinality low-value metrics to reduce ADX table count
     # Without filtering, ~1118 tables are created. The PRD (§F2-F5) only requires
@@ -83,22 +83,12 @@ collector:
     # fail to match anything.
     # dropMetrics: inherited from values.yaml (moved there so all overlays
     # get the canonical list without needing to sync base-values.yaml copies).
-    extraStaticTargets:
-      # Kueue controller metrics (TLS on :8443)
-      - hostRegex: '.*'
-        url: 'https://kueue-controller-manager-metrics-service.kueue-system.svc:8443/metrics'
-        namespace: kueue-system
-        pod: kueue-controller-manager
-        container: manager
-      # KubeRay operator metrics (HTTP on :8080). This is also annotation-discovered,
-      # but keep a static target as a fallback for existing pods and overlay drift.
-      - hostRegex: '.*'
-        url: 'http://kuberay-operator.kuberay-system.svc:8080/metrics'
-        namespace: kuberay-system
-        pod: kuberay-operator
-        container: kuberay-operator
-      # NOTE: DCGM exporter is discovered via pod annotations (adx-mon/scrape=true)
-      # rather than a static target, since it uses containerPort (not hostPort).
+    # Keep this explicit so Helm upgrades clear the old Kueue/KubeRay Service
+    # targets even when stored release values are replayed. Both controllers
+    # use node-local annotation discovery to preserve HA replica identity.
+    extraStaticTargets: []
+    # NOTE: DCGM exporter is discovered via pod annotations (adx-mon/scrape=true)
+    # rather than a static target, since it uses containerPort (not hostPort).
 
 # -- Enable all pre-built Function CRDs
 functions:

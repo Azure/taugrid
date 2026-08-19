@@ -50,6 +50,7 @@ data:
     [prometheus-scrape]
       database = '{{ .Values.adx.metricsDatabase }}'
       default-drop-metrics = false
+      disable-discovery = true
       static-scrape-target = [
         {{- range .Values.collectorSingleton.scrapeTargets }}
         { host-regex = '{{ .hostRegex }}', url = '{{ .url }}', namespace = '{{ .namespace }}', pod = '{{ .pod }}', container = '{{ .container }}' },

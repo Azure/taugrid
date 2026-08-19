@@ -124,7 +124,7 @@ Usage: {{ include "adx-mon.image" (dict "image" .Values.operator.image "chart" .
 
 {{/*
 Effective DaemonSet collector drop-metrics: dropMetrics minus scrapeDropMetricsExclude
-(set difference). Singleton + remote-write keep the full dropMetrics. See PR #975 / #953.
+(set difference).
 Returns a JSON array string. Call with root context.
 */}}
 {{- define "adx-mon.collectorScrapeDropMetrics" -}}

@@ -164,9 +164,10 @@ Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific 
 | `collector.prometheusScrape.enabled` | Enable Prometheus scraping | `true` |
 | `collector.prometheusScrape.scrapeIntervalSeconds` | Scrape interval | `30` |
 | `collector.prometheusScrape.scrapeTimeoutSeconds` | Scrape timeout | `25` |
-| `collector.prometheusScrape.extraStaticTargets` | Additional static scrape targets | `[]` |
+| `collector.prometheusScrape.extraStaticTargets` | Additional node-local static scrape targets | `[]` |
 | `collector.prometheusScrape.keepMetrics` | Regex allowlist for metrics | `[]` (keep all) |
 | `collector.prometheusScrape.dropMetrics` | Regex denylist for metrics | `[]` |
+| `collector.prometheusScrape.scrapeDropMetricsExclude` | Families retained for node-local HA pod scrapes | controller-runtime, workqueue, leader-election |
 
 > **Tip:** The `values-ai-runtime.yaml` preset includes 23 `dropMetrics` regex patterns that reduce ADX table count from ~1074 to ~200, preventing ingestion saturation.
 
@@ -190,7 +191,7 @@ Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `collectorSingleton.enabled` | Deploy singleton collector | `true` |
-| `collectorSingleton.scrapeTargets` | API server scrape targets | kube-apiserver `/metrics` |
+| `collectorSingleton.scrapeTargets` | Cluster-global scrape targets, collected once per cluster | `[]` |
 
 ### Ingestor (StatefulSet)
 
