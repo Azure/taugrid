@@ -28,8 +28,8 @@ nothing and never publishes the terminal marker. Any other numeric keys become
 tracked scalar metrics.
 
 Entrypoint contract: ``engine: ray`` renders a bare ``python3 train.py``
-entrypoint. This bounded acceptance driver uses Ray Core tasks so the canonical
-CPU Ray image needs no undeclared framework dependency.
+entrypoint. This bounded acceptance driver uses one GPU Ray Core task and needs
+no undeclared framework dependency.
 """
 
 import json
@@ -85,7 +85,7 @@ def publish_metrics_row(metrics_dir: Path, step: int, loss: float, accuracy: flo
     return final
 
 
-@ray.remote(num_cpus=1)
+@ray.remote(num_cpus=1, num_gpus=1)
 def run_worker(worker_index: int, steps: int, output_dir: str) -> dict:
     """Run one bounded task; worker 0 is the only metrics producer."""
     metrics_dir = _metrics_dir(output_dir) if worker_index == 0 else None
@@ -108,8 +108,8 @@ def run_worker(worker_index: int, steps: int, output_dir: str) -> dict:
 
 
 def main():
-    # tau.yaml pins compute.workers: 1 / gpus_per_worker: 0 — a single CPU
-    # worker is all this link-lighting demo needs.
+    # tau.yaml pins compute.workers: 1 / gpus_per_worker: 1 so the acceptance
+    # run also exercises the GPU-only metrics offload path.
     num_workers = int(os.environ.get("TAU_NUM_WORKERS", "1"))
     steps = int(os.environ.get("PORTAL_DEMO_STEPS", "20"))
 
@@ -117,7 +117,7 @@ def main():
     print("cluster_resources", ray.cluster_resources(), flush=True)
 
     group = placement_group(
-        [{"CPU": 1} for _ in range(num_workers)],
+        [{"CPU": 1, "GPU": 1} for _ in range(num_workers)],
         strategy="STRICT_SPREAD",
     )
     ray.get(group.ready(), timeout=120)

@@ -1,0 +1,79 @@
+baselineQueue:
+  gpu:
+    enabled: true
+    flavors:
+      - name: ${gpu_flavor_name}
+        nodeLabels:
+          kubernetes.io/os: linux
+          aks.azure.com/gpu-sku: ${gpu_monitoring_sku_name}
+          tau.azure.com/gpu-class: ${gpu_class}
+          kueue.azure.com/gpu-series: ${gpu_series}
+        nodeTaints:
+          - key: sku
+            value: gpu
+            effect: NoSchedule
+        tolerations: []
+        resources:
+          - name: nvidia.com/gpu
+            nominalQuota: "${gpu_quota}"
+
+taugrid-core:
+  portal:
+    enabled: true
+    namespace: tau
+    workloadNamespace: ${workspace_namespace}
+    source: kusto
+    cluster: ${cluster_name}
+    serviceAccount:
+      create: true
+      name: tau-portal
+%{ if adx_enabled }
+      annotations:
+        azure.workload.identity/client-id: ${portal_client_id}
+%{ endif }
+    rbac:
+      create: true
+    access:
+      mode: cluster-internal
+      externalURL: ""
+%{ if adx_enabled }
+    kusto:
+      endpoint: ${adx_endpoint}
+      database: Metrics
+      ingestion: remote-write
+%{ if lifecycle_recorder_enabled }
+    runHistory:
+      enabled: true
+      table: TauExpRunLifecycle
+%{ endif }
+%{ if lifecycle_recorder_enabled }
+  lifecycleRecorder:
+    enabled: true
+    namespace: tau
+    targetNamespace: ${workspace_namespace}
+    cluster: ${cluster_name}
+    kusto:
+      endpoint: ${adx_endpoint}
+      database: Metrics
+      table: TauExpRunLifecycle
+    schemaManagement:
+      enabled: true
+      namespace: adx-mon
+    workloadIdentity:
+      enabled: true
+    serviceAccount:
+      create: true
+      name: tau-lifecycle-recorder
+      annotations:
+        azure.workload.identity/client-id: ${lifecycle_recorder_client_id}
+    rbac:
+      create: true
+%{ endif }
+%{ endif }
+
+gpu-monitoring:
+  gpuSkus:
+    ${gpu_monitoring_sku_name}:
+      instanceTypes:
+        - ${gpu_vm_size}
+      num_gpus: ${gpu_count_per_node}

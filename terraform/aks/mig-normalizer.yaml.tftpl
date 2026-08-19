@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: taugrid-mig-normalizer
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taugrid-mig-normalizer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taugrid-mig-normalizer
+    spec:
+      hostPID: true
+      nodeSelector:
+        agentpool: ${gpu_node_pool_name}
+      tolerations:
+        - key: sku
+          operator: Equal
+          value: gpu
+          effect: NoSchedule
+      containers:
+        - name: normalizer
+          image: mcr.microsoft.com/azurelinux/base/core@sha256:4ecd6b297db85c54ec2df07145a28536c3655a3e98e54eb2364189bc4e6eac23
+          command:
+            - /bin/bash
+            - -c
+            - >-
+              set -euo pipefail; tdnf install -y --quiet util-linux >/dev/null 2>&1
+              || tdnf install -y util-linux >/dev/null 2>&1; mig_modes=$(nsenter -t 1
+              -m -u -i -n -p -- nvidia-smi --query-gpu=mig.mode.current
+              --format=csv,noheader | tr -d '\r'); if printf '%s\n' "$mig_modes" | grep
+              -Ev '^(Enabled|Disabled|N/A)$' | grep -q .; then echo "unexpected MIG modes:
+              $mig_modes" >&2; exit 1; fi; if printf '%s\n' "$mig_modes" | grep -qx Enabled;
+              then nsenter -t 1 -m -u -i -n -p -- nvidia-smi -mig 0; fi; touch
+              /tmp/taugrid-mig-normalized; exec sleep infinity
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "test -f /tmp/taugrid-mig-normalized"]
+            periodSeconds: 1
+            failureThreshold: 30
+          securityContext:
+            privileged: true

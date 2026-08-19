@@ -78,7 +78,7 @@ All paths must produce the same output contract; they differ in ownership and ch
 
 | Path | Best fit | What to retain | Start here |
 | --- | --- | --- | --- |
-| **Terraform** | Reproducible open-source environments and teams already using Terraform | Reviewed plan, protected remote state, provider lock file, non-secret variables, and destroy procedure | [Tau full AKS baseline](../../examples/full-cluster/) and the [official AKS Terraform quickstart](https://learn.microsoft.com/azure/aks/learn/quick-kubernetes-deploy-terraform) |
+| **Terraform** | Reproducible open-source environments and teams already using Terraform | Reviewed plan, protected remote state, provider lock file, non-secret variables, and destroy procedure | [TauGrid AKS Terraform](https://github.com/Azure/taugrid/tree/main/terraform/aks) and the [official AKS Terraform quickstart](https://learn.microsoft.com/azure/aks/learn/quick-kubernetes-deploy-terraform) |
 | **Bicep** | Azure-native infrastructure as code with concise authoring and ARM what-if | Bicep modules, parameter files, what-if output, and deployment history | [Official AKS Bicep quickstart](https://learn.microsoft.com/azure/aks/learn/quick-kubernetes-deploy-bicep) |
 | **ARM JSON template** | Existing ARM, EV2, or deployment-spec pipelines | Template, parameter files, what-if output, and deployment history | Compile reviewed Bicep to ARM JSON or adapt the repository's `ev2/templates/aks-cluster.template.json`; the EV2 template is a production reference, not a drop-in quickstart |
 | **Azure Developer CLI (`azd`)** | A developer-facing template that packages infrastructure and application setup | `azure.yaml`, AKS-capable Bicep or Terraform source, environment inputs, and pipeline configuration | [Official AKS `azd` quickstart](https://learn.microsoft.com/azure/aks/learn/quick-kubernetes-deploy-azd) |
@@ -88,15 +88,33 @@ All paths must produce the same output contract; they differ in ownership and ch
 
 ### Terraform
 
-Use Terraform when the environment should be reproducible outside an Azure-specific release system. Review before applying:
+Use the repository's GPU-enabled AKS Terraform root when the environment should
+be reproducible outside an Azure-specific release system. It creates AKS with
+local administrator credentials by default, OIDC workload identity, a GPU node pool, and the
+optional ADX, adx-mon, and Portal integration. Then it installs the released
+TauGrid chart through `tau cluster install`.
+
+Clone the repository, create an untracked parameter file, and review before
+applying:
 
 ```bash
+git clone https://github.com/Azure/taugrid.git
+cd taugrid/terraform/aks
+cp terraform.tfvars.example terraform.tfvars
 terraform init
 terraform plan -out tau-aks.tfplan
 terraform apply tau-aks.tfplan
 ```
 
-Use remote state with locking for shared environments. The [full AKS baseline](../../examples/full-cluster/) provides a concrete AKS/Kueue/Ray example and a CPU-only option.
+Set `subscription_id` and the GPU SKU and labels in `terraform.tfvars`. To use
+managed Entra AKS authentication, set the optional Entra administrator group
+inputs. For WSL, Linux, and macOS, set
+`command_interpreter = ["bash", "-c"]`. Set `enable_adx = true` only when the
+deployment should create the billable ADX data plane and install adx-mon.
+
+Use remote state with locking for shared environments. The tracked
+`.terraform.lock.hcl` pins provider versions and must remain committed; do not
+copy it into a local parameter file.
 
 Terraform state, saved plans, and secret-bearing variable files can contain sensitive values even when terminal output is redacted. Do not commit them. Store shared state in an encrypted, access-controlled backend and protect saved plan artifacts with equivalent access and retention controls.
 
