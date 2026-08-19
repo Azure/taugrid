@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from helpers import CHART_DIR
 
 
@@ -30,7 +32,7 @@ class BundleWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             mutated_chart = Path(temp) / "gpu-monitoring"
             shutil.copytree(CHART_DIR, mutated_chart)
-            script = mutated_chart / "scripts/check_gpu_xid.sh"
+            script = mutated_chart / "scripts/init-dcgm-health.sh"
             script.write_text(script.read_text() + "\n# content hash regression probe\n")
             mutated = render(
                 "templates/executable-bundle-secret.yaml", mutated_chart
@@ -40,6 +42,50 @@ class BundleWiringTests(unittest.TestCase):
             )
             self.assertIsNotNone(mutated_name)
             self.assertNotEqual(original_name.group(1), mutated_name.group(1))
+
+    def test_every_builtin_host_profile_initializes_and_monitors_watches(self):
+        daemonsets = [
+            document
+            for document in render("templates/daemonset.yaml").split("---")
+            if "kind: DaemonSet" in document
+        ]
+        self.assertEqual(13, len(daemonsets))
+        for daemonset in daemonsets:
+            name = re.search(r"^  name: (gpu-monitoring-[a-z0-9-]+)$", daemonset, re.M)
+            self.assertIsNotNone(name)
+            with self.subTest(daemonset=name.group(1)):
+                self.assertIn("- name: init-dcgm-health", daemonset)
+                self.assertIn("livenessProbe:", daemonset)
+                self.assertIn("- /custom-config/check-dcgm-watches.sh", daemonset)
+                self.assertIn("- /custom-config/start-node-problem-detector.sh", daemonset)
+
+    def test_host_required_monitor_config_stays_byte_identical(self):
+        rendered = subprocess.run(
+            [
+                "helm",
+                "template",
+                "host-config",
+                str(CHART_DIR),
+                "--set",
+                "enabledGpuSkus[0]=h200",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        documents = [doc for doc in yaml.safe_load_all(rendered) if doc]
+        secret = next(doc for doc in documents if doc["kind"] == "Secret")
+        daemonset = next(doc for doc in documents if doc["kind"] == "DaemonSet")
+        config_key = next(
+            arg.rsplit("/", 1)[1]
+            for arg in daemonset["spec"]["template"]["spec"]["containers"][0]["args"]
+            if arg.startswith("--config.custom-plugin-monitor=")
+        )
+        self.assertEqual("custom-plugin-monitor-h100.json", config_key)
+        self.assertEqual(
+            (CHART_DIR / "configs" / config_key).read_text(),
+            secret["stringData"][config_key],
+        )
 
     def test_every_plugin_is_bundled_and_mounted(self):
         secret = render("templates/executable-bundle-secret.yaml")
@@ -101,6 +147,99 @@ class BundleWiringTests(unittest.TestCase):
                     ),
                     permanent_rules,
                 )
+
+    def test_remote_profile_keeps_permanent_dcgm_unknown_transition(self):
+        values = yaml.safe_load((CHART_DIR / "values.yaml").read_text())
+        self.assertEqual("v0.8.19", values["image"]["tag"])
+        rendered = subprocess.run(
+            [
+                "helm",
+                "template",
+                "remote-wiring",
+                str(CHART_DIR),
+                "--values",
+                str(CHART_DIR / "tests" / "mixed-dcgm-values.yaml"),
+                "--set",
+                "enabledGpuSkus[0]=h200",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        documents = [doc for doc in yaml.safe_load_all(rendered) if doc]
+        secret = next(doc for doc in documents if doc["kind"] == "Secret")
+        daemonset = next(doc for doc in documents if doc["kind"] == "DaemonSet")
+        config_arg = next(
+            arg
+            for arg in daemonset["spec"]["template"]["spec"]["containers"][0]["args"]
+            if arg.startswith("--config.custom-plugin-monitor=")
+        )
+        config_key = config_arg.rsplit("/", 1)[1]
+        config = json.loads(secret["stringData"][config_key])
+
+        condition_types = {condition["type"] for condition in config["conditions"]}
+        self.assertIn("DcgmHealthProblem", condition_types)
+        dcgm_rules = [
+            rule
+            for rule in config["rules"]
+            if rule["path"] == "/custom-config/check-dcgm-health.sh"
+        ]
+        self.assertEqual(1, len(dcgm_rules))
+        self.assertEqual("permanent", dcgm_rules[0]["type"])
+        self.assertEqual("DcgmHealthProblem", dcgm_rules[0]["condition"])
+        self.assertFalse(
+            any(rule["type"] == "temporary" for rule in dcgm_rules)
+        )
+        self.assertLessEqual(
+            {
+                rule["condition"]
+                for rule in config["rules"]
+                if rule["type"] == "permanent"
+            },
+            condition_types,
+        )
+
+    def test_host_local_profile_with_dcgm_disabled_omits_dcgm_claims(self):
+        rendered = subprocess.run(
+            [
+                "helm",
+                "template",
+                "disabled-dcgm-wiring",
+                str(CHART_DIR),
+                "--set",
+                "enabledGpuSkus[0]=h200",
+                "--set",
+                "gpuSkus.h200.dcgm_health_required=false",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        documents = [doc for doc in yaml.safe_load_all(rendered) if doc]
+        secret = next(doc for doc in documents if doc["kind"] == "Secret")
+        daemonset = next(doc for doc in documents if doc["kind"] == "DaemonSet")
+        container = daemonset["spec"]["template"]["spec"]["containers"][0]
+        config_key = next(
+            arg.rsplit("/", 1)[1]
+            for arg in container["args"]
+            if arg.startswith("--config.custom-plugin-monitor=")
+        )
+        config = json.loads(secret["stringData"][config_key])
+
+        self.assertIn(
+            {"name": "NPD_DCGM_REQUIRED", "value": "0"}, container["env"]
+        )
+        self.assertIn(
+            "DcgmHealthProblem",
+            {condition["type"] for condition in config["conditions"]},
+        )
+        dcgm_rules = [
+            rule
+            for rule in config["rules"]
+            if rule["path"] == "/custom-config/check-dcgm-health.sh"
+        ]
+        self.assertEqual(1, len(dcgm_rules))
+        self.assertEqual("permanent", dcgm_rules[0]["type"])
 
 
 if __name__ == "__main__":

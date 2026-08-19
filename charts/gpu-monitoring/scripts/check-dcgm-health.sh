@@ -6,31 +6,12 @@ set -euo pipefail
 
 readonly OK=0
 readonly NONOK=1
-
-case "${NPD_DCGM_SIMULATION:-}" in
-  healthy)
-    echo "dcgm health ok"
-    exit 0
-    ;;
-  unhealthy)
-    echo "DCGM health check failed: XID error"
-    exit 1
-    ;;
-  missing-driver)
-    echo "DCGM error: driver not loaded"
-    exit 1
-    ;;
-  "")
-    ;;
-  *)
-    echo "Unknown NPD_DCGM_SIMULATION value: ${NPD_DCGM_SIMULATION}"
-    exit 2
-    ;;
-esac
+readonly UNKNOWN=2
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${NPD_DCGM_REQUIRED:-0}" != "1" ]]; then
-  echo "dcgm health check not required for this profile"
-  exit 0
+  echo "dcgm host diagnostic not applicable for this profile; exporter availability is reported separately"
+  exit $UNKNOWN
 fi
 
 if ! command -v dcgmi >/dev/null 2>&1; then
@@ -38,24 +19,81 @@ if ! command -v dcgmi >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! dcgmi health -c >/dev/null 2>&1; then
-  echo "dcgmi health configuration failed"
-  exit 1
-fi
-
-if output="$(dcgmi health -t 2>&1)"; then
+if output="$(LC_ALL=C dcgmi health -c 2>&1)"; then
   health_rc=$OK
 else
   health_rc=$?
 fi
 if [[ $health_rc -ne $OK ]]; then
-  [[ -n "${output}" ]] && echo "${output}"
+  if [[ -n "${output}" ]]; then
+    printf '%s\n' "${output}" | awk '
+    {
+      line = tolower($0)
+      if (line !~ /overall[[:space:]]+health/) {
+        print
+      }
+    }'
+  fi
   echo "dcgmi health check failed with return code ${health_rc}"
   exit $NONOK
 fi
 if [[ -z "${output}" ]]; then
-  echo "dcgmi health check failed"
+  echo "dcgm health check returned no result"
   exit $NONOK
 fi
 
+if status_summary="$(printf '%s\n' "${output}" | awk -F "|" '
+function trim(value) {
+  gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+  return value
+}
+BEGIN {
+  rows = 0
+  healthy = 0
+  warning = 0
+  failure = 0
+  unknown = 0
+  malformed = 0
+}
+{
+  line = tolower($0)
+  if (line !~ /overall[[:space:]]+health/) {
+    next
+  }
+
+  if (NF != 4 || trim($1) != "" || trim($4) != "") {
+    malformed++
+    next
+  }
+
+  label = tolower(trim($2))
+  status = tolower(trim($3))
+  if (label != "overall health") {
+    malformed++
+    next
+  }
+
+  rows++
+  if (status == "healthy") {
+    healthy++
+  } else if (status == "warning") {
+    warning++
+  } else if (status == "failure") {
+    failure++
+  } else {
+    unknown++
+  }
+}
+END {
+  printf "rows=%d Healthy=%d Warning=%d Failure=%d Unknown=%d Malformed=%d", rows, healthy, warning, failure, unknown, malformed
+  exit !(rows == 1 && healthy == 1 && warning == 0 && failure == 0 && unknown == 0 && malformed == 0)
+}')"; then
+  :
+else
+  echo "dcgm health check rejected Overall Health result set: ${status_summary}"
+  exit $NONOK
+fi
+
+bash "${SCRIPT_DIR}/check-dcgm-watches.sh"
 echo "${output}"
+exit $OK

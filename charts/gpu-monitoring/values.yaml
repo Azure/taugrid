@@ -98,7 +98,7 @@ metricsCollector:
   enabled: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
-    # e0826b20dd39 — merged collector availability source from TauGrid #118.
+    # 9632b704bca1 — merged TauGrid main source containing collector PR #140.
     # Set exactly one of tag or digest; tag is for local builds, published
     # deployments use the digest.
     #
@@ -112,7 +112,7 @@ metricsCollector:
     # that support — digest only, never a floating tag and never latest. See the
     # chart README section "Collector image requirement and release ordering".
     tag: ""
-    digest: sha256:768ba258c817fa07a733626e3594407d4b1152aeb4f5c1ad0e6fb313cc04c1e9
+    digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
   scrapeInterval: "15s"
   resources:
     requests:
@@ -128,6 +128,8 @@ metricsCollector:
     # DCGM exporter runs as a host systemd unit (port 19400) on AKS managed
     # GPU nodes (see tests/e2e/managedgpu/harness/README.md). This pod runs
     # with hostNetwork: true, so localhost reaches the host-level exporter.
+    # Host-local DCGM targets also make the profile own host health-watch
+    # initialization, 60-second sampling warmup, and restart recovery.
     - name: dcgm-exporter
       url: http://localhost:19400/metrics
     - name: node-exporter
@@ -141,7 +143,8 @@ metricsCollector:
   #
   # This reports endpoint reachability only. It is distinct from NPD's
   # DcgmHealthProblem, which runs host `dcgmi` diagnostics and cannot cover a
-  # non-loopback exporter.
+  # non-loopback exporter. Service-backed profiles rely on this availability
+  # contract and do not initialize or evaluate host health watches.
   #
   # The condition is set only after `unavailableFor` of continuous failure and
   # cleared only after `availableFor` of continuous success, so one missed

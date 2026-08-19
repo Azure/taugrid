@@ -3,7 +3,7 @@
 {{- if .Values.metricsCollector.enabled }}
 {{- range $skuName, $sku := .Values.gpuSkus }}
 {{- if and $sku (or (empty $.Values.enabledGpuSkus) (has $skuName $.Values.enabledGpuSkus)) }}
-{{- $collectorConfig := include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "sku" $sku) }}
+{{- $collectorConfig := include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "skuName" $skuName "sku" $sku) }}
 ---
 apiVersion: v1
 kind: ConfigMap

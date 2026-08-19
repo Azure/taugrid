@@ -18,7 +18,12 @@ name = Path(sys.argv[0]).name
 args = " ".join(sys.argv[1:])
 
 if name == "nvidia-smi":
-    if args == "nvlink --status":
+    if args == "-L":
+        if os.environ.get("NVIDIA_SMI_LIST_FAIL") == "1":
+            print("Failed to initialize NVML", file=sys.stderr)
+            sys.exit(1)
+        print("GPU 0: NVIDIA GPU (UUID: GPU-REAL)")
+    elif args == "nvlink --status":
         if os.environ.get("NVIDIA_SMI_NVLINK_STATUS_FAIL") == "1":
             print("nvlink status query failed", file=sys.stderr)
             sys.exit(1)
@@ -60,14 +65,74 @@ if name == "nvidia-smi":
 elif name == "pgrep":
     sys.exit(0)
 elif name == "dcgmi":
-    if args == "health -c":
+    state_file = Path(os.environ["DCGMI_WATCH_STATE_FILE"])
+    command_log = os.environ.get("DCGMI_COMMAND_LOG")
+    if command_log:
+        with Path(command_log).open("a") as log:
+            log.write(args + "\n")
+    if args == "health -s a":
+        if os.environ.get("DCGMI_SET_FAIL") == "1":
+            print("Error: Unable to set health watches.", file=sys.stderr)
+            sys.exit(int(os.environ.get("DCGMI_SET_EXIT_CODE", "5")))
+        state_file.write_text("a\n")
+        print("Health monitor systems set successfully.")
         sys.exit(0)
-    if args == "health -t":
-        print(os.environ.get("DCGMI_HEALTH_OUTPUT", "DCGM health check passed"))
+    if args == "health -f":
+        if os.environ.get("DCGMI_FETCH_FAIL") == "1":
+            print("Error: Unable to get health watches.", file=sys.stderr)
+            sys.exit(int(os.environ.get("DCGMI_FETCH_EXIT_CODE", "6")))
+        enabled = state_file.exists()
+        partial = os.environ.get("DCGMI_PARTIAL_WATCHES") == "1" or (
+            enabled and state_file.read_text().strip() == "partial"
+        )
+        print("Health monitor systems report")
+        for system in (
+            "PCIe",
+            "NVLINK",
+            "Memory",
+            "SM",
+            "InfoROM",
+            "Thermal",
+            "Power",
+            "Driver",
+            "NvSwitch NF",
+            "NvSwitch F",
+        ):
+            on = enabled and system != "SM" and not (partial and system == "Driver")
+            print(f"| {system:<12} | {'On' if on else 'Off':<3} |")
+        sys.exit(0)
+    if args == "health -c":
+        if not state_file.exists():
+            print(
+                "Error: Health watches not enabled. Please enable watches.",
+                file=sys.stderr,
+            )
+            sys.exit(253)
+        print(
+            os.environ.get(
+                "DCGMI_HEALTH_OUTPUT",
+                "Health Monitor Report\n| Overall Health | Healthy |",
+            )
+        )
+        if os.environ.get("DCGMI_PARTIAL_WATCHES_AFTER_CHECK") == "1":
+            state_file.write_text("partial\n")
         sys.exit(int(os.environ.get("DCGMI_HEALTH_EXIT_CODE", "0")))
+    if args == "health -t":
+        print("PARSE ERROR: Argument: -t", file=sys.stderr)
+        sys.exit(254)
     sys.exit(2)
 elif name == "nsenter":
     Path(os.environ["NSENTER_ARGS_FILE"]).write_text(args + "\n")
+elif name == "node-problem-detector":
+    Path(os.environ["NPD_ARGS_FILE"]).write_text(args + "\n")
+elif name == "sleep":
+    sleep_log = os.environ.get("SLEEP_ARGS_FILE")
+    if sleep_log:
+        with Path(sleep_log).open("a") as log:
+            log.write(args + "\n")
+    state_file = Path(os.environ["DCGMI_WATCH_STATE_FILE"])
+    if os.environ.get("DCGMI_DROP_WATCHES_DURING_SLEEP") == "1":
+        state_file.unlink(missing_ok=True)
 elif name == "journalctl":
     print(os.environ.get("JOURNALCTL_OUTPUT", ""))
     sys.exit(int(os.environ.get("JOURNALCTL_EXIT_CODE", "0")))
@@ -91,6 +156,8 @@ class ScriptTestCase(unittest.TestCase):
         self.test_root = Path(self._temporary_directory.name)
         self.mock_bin = self.test_root / "bin"
         self.mock_bin.mkdir()
+        self.dcgm_state_file = self.test_root / "dcgm-watches"
+        self.dcgm_command_log = self.test_root / "dcgmi-commands"
         dispatcher = self.mock_bin / "mock-command"
         dispatcher.write_text(MOCK_COMMAND)
         dispatcher.chmod(0o755)
@@ -101,7 +168,9 @@ class ScriptTestCase(unittest.TestCase):
             "journalctl",
             "nsenter",
             "nvidia-smi",
+            "node-problem-detector",
             "pgrep",
+            "sleep",
             "timeout",
         ):
             (self.mock_bin / command).symlink_to(dispatcher)
@@ -112,6 +181,8 @@ class ScriptTestCase(unittest.TestCase):
     def run_script(self, script, *, expected=0, env=None, args=()):
         command_env = os.environ.copy()
         command_env["PATH"] = f"{self.mock_bin}{os.pathsep}{command_env['PATH']}"
+        command_env["DCGMI_WATCH_STATE_FILE"] = str(self.dcgm_state_file)
+        command_env["DCGMI_COMMAND_LOG"] = str(self.dcgm_command_log)
         command_env.update(env or {})
         result = subprocess.run(
             ["bash", str(CHART_DIR / "scripts" / script), *args],

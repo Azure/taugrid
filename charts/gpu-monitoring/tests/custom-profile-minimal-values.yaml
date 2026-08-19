@@ -1,0 +1,20 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+enabledGpuSkus:
+  - custom
+gpuSkus:
+  custom:
+    instanceTypes:
+      - Custom_GPU_VM
+    num_gpus: 1
+    monitor_config: custom-plugin-monitor-spark.json
+    vbios_versions: '("")'
+    ib_devices: ""
+    ib_pkey: ""
+    ib_flap_threshold_short: 2
+    ib_flap_check_window: 3600
+    nvme_total: 0
+    nvme_size_count: 0
+    nvme_size: "0"
+    imex_procname: ""
