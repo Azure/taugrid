@@ -15,7 +15,9 @@
   </a>
   <figcaption>
     <strong>{{ $title }}</strong>
-    <span>{{ $question }}</span>
+    {{- with $question }}
+    <span>{{ . }}</span>
+    {{- end }}
     <span class="tau-visual__links">
       <a href="{{ printf "images/tau/%s.svg" $base | relURL }}">SVG</a>
       <a href="{{ printf "images/tau/%s.png" $base | relURL }}">PNG</a>
