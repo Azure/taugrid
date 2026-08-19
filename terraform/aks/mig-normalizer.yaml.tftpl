@@ -24,11 +24,14 @@ spec:
         - name: normalizer
           image: mcr.microsoft.com/azurelinux/base/core@sha256:4ecd6b297db85c54ec2df07145a28536c3655a3e98e54eb2364189bc4e6eac23
           command:
-            - /bin/sh
+            - /bin/bash
             - -c
             - >-
-              nsenter -t 1 -m -u -i -n -p -- sh -c 'if nvidia-smi
-              --query-gpu=mig.mode.current --format=csv,noheader | grep -qx Enabled;
-              then nvidia-smi -mig 0; fi'; exec sleep infinity
+              set -euo pipefail; tdnf install -y --quiet util-linux >/dev/null 2>&1
+              || tdnf install -y util-linux >/dev/null 2>&1; mig_mode=$(nsenter -t 1
+              -m -u -i -n -p -- nvidia-smi --query-gpu=mig.mode.current
+              --format=csv,noheader | tr -d '[:space:]'); case "$mig_mode" in Enabled)
+              nsenter -t 1 -m -u -i -n -p -- nvidia-smi -mig 0 ;; Disabled|N/A) ;;
+              *) echo "unexpected MIG mode: $mig_mode" >&2; exit 1 ;; esac; exec sleep infinity
           securityContext:
             privileged: true

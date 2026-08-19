@@ -76,6 +76,13 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = !var.normalize_gpu_mig || !var.gpu_auto_scaling_enabled
+      error_message = "gpu_auto_scaling_enabled cannot be used with normalize_gpu_mig because newly scaled A100 nodes would not be normalized. Set normalize_gpu_mig=false only after validating the selected GPU SKU does not require MIG normalization."
+    }
+  }
 }
 
 locals {
@@ -239,6 +246,27 @@ resource "local_file" "mig_normalizer" {
   })
 }
 
+resource "terraform_data" "install_nvidia_device_plugin" {
+  triggers_replace = [
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    filesha256("${path.module}/nvidia-device-plugin.yaml"),
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = local.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && kubectl rollout status daemonset/nvidia-device-plugin-daemonset --namespace kube-system --timeout=10m"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.gpu,
+  ]
+}
+
 resource "terraform_data" "normalize_gpu_mig" {
   count = var.normalize_gpu_mig ? 1 : 0
 
@@ -255,12 +283,13 @@ resource "terraform_data" "normalize_gpu_mig" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f '${local_file.mig_normalizer[0].filename}' && kubectl rollout status daemonset/taugrid-mig-normalizer --namespace kube-system --timeout=10m && az vmss restart --ids $(az vmss list --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --query \"[?starts_with(name, 'aks-${var.gpu_node_pool_name}-')].id | [0]\" --output tsv) && kubectl wait --for=condition=Ready node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl wait --for='jsonpath={.status.allocatable.nvidia\\.com/gpu}'='${var.gpu_count_per_node}' node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl delete -f '${local_file.mig_normalizer[0].filename}' --ignore-not-found"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f '${local_file.mig_normalizer[0].filename}' && kubectl rollout status daemonset/taugrid-mig-normalizer --namespace kube-system --timeout=10m && az vmss restart --ids $(az vmss list --subscription '${var.subscription_id}' --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --query \"[?starts_with(name, 'aks-${var.gpu_node_pool_name}-')].id | [0]\" --output tsv) && kubectl wait --for=condition=Ready node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl wait --for='jsonpath={.status.allocatable.nvidia\\.com/gpu}'='${var.gpu_count_per_node}' node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl delete -f '${local_file.mig_normalizer[0].filename}' --ignore-not-found"
   }
 
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
     local_file.mig_normalizer,
+    terraform_data.install_nvidia_device_plugin,
   ]
 }
 
@@ -280,12 +309,13 @@ resource "terraform_data" "install_taugrid" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
   }
 
   depends_on = [
     local_file.taugrid_values,
     azurerm_kubernetes_cluster_node_pool.gpu,
+    terraform_data.install_nvidia_device_plugin,
     terraform_data.normalize_gpu_mig,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,

@@ -54,16 +54,24 @@ terraform apply
 ```
 
 Terraform writes an ignored local admin kubeconfig and generated chart values
-under `generated/`. For the default A100 pool, it normalizes MIG mode, restarts
-the GPU VM scale set, and waits for allocatable GPUs. It then installs the
-NVIDIA device plugin and runs `tau cluster install`. Set `normalize_gpu_mig =
-false` only for a GPU SKU that does not support MIG. Do not run a separate Helm
-installation for Kueue, KubeRay, or gpu-monitoring.
+under `generated/`. It installs the NVIDIA device plugin before any GPU
+readiness check. For the default A100 pool, it then normalizes MIG mode,
+restarts the GPU VM scale set, and waits for allocatable GPUs before running
+`tau cluster install`. `normalize_gpu_mig = true` cannot be combined with GPU
+autoscaling, because later autoscaled nodes are not normalized. Set it false
+only for a GPU SKU that does not require MIG normalization. Do not run a
+separate Helm installation for Kueue, KubeRay, or gpu-monitoring.
 
 After apply, use an operator kubeconfig and verify the environment:
 
 ```bash
-eval "$(terraform output -raw get_credentials_command)"
+terraform output -raw get_credentials_command
+```
+
+Run the command printed above to fetch the operator kubeconfig. Then verify the
+environment:
+
+```bash
 tau cluster validate installation --timeout 10m
 kubectl get nodes -l accelerator=nvidia
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.allocatable.nvidia\\.com/gpu}{"\\n"}{end}'

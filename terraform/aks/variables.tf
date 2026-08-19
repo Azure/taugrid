@@ -83,7 +83,7 @@ variable "gpu_node_count" {
 }
 
 variable "gpu_auto_scaling_enabled" {
-  description = "Enable cluster autoscaling for the GPU node pool."
+  description = "Enable cluster autoscaling for the GPU node pool. This cannot be combined with normalize_gpu_mig=true."
   type        = bool
   default     = false
 }
@@ -141,7 +141,7 @@ variable "gpu_series" {
 }
 
 variable "normalize_gpu_mig" {
-  description = "Normalize MIG mode on the GPU pool before TauGrid installation. Keep true for the default A100 SKU; set false only for GPU SKUs that do not support MIG."
+  description = "Normalize MIG mode on the initial GPU pool before TauGrid installation. Keep true for the default A100 SKU. It cannot be combined with GPU autoscaling because newly scaled nodes are not normalized."
   type        = bool
   default     = true
 }

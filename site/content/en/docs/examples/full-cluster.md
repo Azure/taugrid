@@ -45,9 +45,9 @@ terraform apply -var="subscription_id=<your-subscription-id>"
 ```
 
 Terraform creates a local ignored admin kubeconfig and values file under
-`terraform/aks/generated/`. For the default A100 pool, it normalizes MIG mode,
-restarts the GPU VM scale set, and waits for allocatable GPUs. It then applies
-the NVIDIA device plugin and runs:
+`terraform/aks/generated/`. It installs the NVIDIA device plugin before any
+GPU readiness check. For the default A100 pool, it then normalizes MIG mode,
+restarts the GPU VM scale set, and waits for allocatable GPUs before running:
 
 ```bash
 tau cluster install --values generated/taugrid-values.yaml --version 0.3.0
@@ -62,11 +62,10 @@ when its cluster, generated values, or TauGrid version changes.
 Fetch an operator kubeconfig:
 
 ```bash
-az aks get-credentials \
-  --resource-group "$(terraform output -raw resource_group_name)" \
-  --name "$(terraform output -raw cluster_name)" \
-  --overwrite-existing
+terraform output -raw get_credentials_command
 ```
+
+Run the command printed above to fetch the operator kubeconfig.
 
 Verify both TauGrid and GPU capacity:
 
