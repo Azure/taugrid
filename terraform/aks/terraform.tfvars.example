@@ -32,11 +32,9 @@ gpu_auto_scaling_enabled = false
 gpu_min_count            = 1
 gpu_max_count            = 1
 
-# ADX enables adx-mon and DCGM GPU telemetry. Portal remains disabled until a
-# platform-owned authenticated proxy prevents direct backend access.
+# ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
 enable_adx       = true
 adx_cluster_name = "<globally-unique-adx-cluster-name>"
-# enable_portal = false
 
 # Keep this false for the first apply. Enable it only after the
 # taugrid-default TauWorkspace has been created, then apply again.

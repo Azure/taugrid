@@ -93,12 +93,11 @@ locals {
     gpu_vm_size                  = var.gpu_vm_size
     gpu_count_per_node           = var.gpu_count_per_node
     adx_enabled                  = var.enable_adx
-    portal_enabled               = var.enable_portal
     lifecycle_recorder_enabled   = var.enable_lifecycle_recorder
     lifecycle_recorder_client_id = var.enable_lifecycle_recorder ? azurerm_user_assigned_identity.lifecycle_recorder[0].client_id : ""
     workspace_namespace          = var.workspace_namespace
     adx_endpoint                 = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
-    portal_client_id             = var.enable_adx && var.enable_portal ? azurerm_user_assigned_identity.portal[0].client_id : ""
+    portal_client_id             = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
     cluster_name                 = var.cluster_name
   })
 }
@@ -129,7 +128,7 @@ resource "azurerm_kusto_database" "this" {
 }
 
 resource "azurerm_user_assigned_identity" "portal" {
-  count               = var.enable_adx && var.enable_portal ? 1 : 0
+  count               = var.enable_adx ? 1 : 0
   name                = "taugrid-portal-adx"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
@@ -150,7 +149,7 @@ resource "azurerm_user_assigned_identity" "lifecycle_recorder" {
 }
 
 resource "azurerm_federated_identity_credential" "portal" {
-  count               = var.enable_adx && var.enable_portal ? 1 : 0
+  count               = var.enable_adx ? 1 : 0
   name                = "tau-portal"
   resource_group_name = azurerm_resource_group.this.name
   parent_id           = azurerm_user_assigned_identity.portal[0].id
@@ -202,7 +201,7 @@ resource "azurerm_kusto_database_principal_assignment" "adx_mon" {
 }
 
 resource "azurerm_kusto_database_principal_assignment" "portal" {
-  count               = var.enable_adx && var.enable_portal ? 1 : 0
+  count               = var.enable_adx ? 1 : 0
   name                = "taugrid-portal-viewer"
   resource_group_name = azurerm_resource_group.this.name
   cluster_name        = azurerm_kusto_cluster.this[0].name

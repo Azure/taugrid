@@ -2,8 +2,7 @@
 
 This Terraform root creates a GPU-enabled AKS environment and then invokes the
 repository's supported `tau cluster install` workflow. TauGrid owns Kueue,
-KubeRay, the Tau controller, GPU monitoring, and the baseline queue. Portal
-integration is optional.
+KubeRay, the Tau controller, GPU monitoring, the baseline queue, and Portal.
 
 The default GPU pool is one `Standard_NC24ads_A100_v4` node. It is billable and
 requires matching regional quota. Change `gpu_vm_size`, `gpu_count_per_node`,
@@ -79,11 +78,17 @@ tau workspace create taugrid-default --apply
 tau run smoke
 ```
 
-Portal is disabled by default. This prevents an in-cluster caller from using a
-cluster-wide Portal service account to inspect another workspace. Enable it
-only after a platform-owned authenticated HTTPS proxy resolves workspace
-identity, strips caller-supplied identity headers, and prevents direct backend
-access. `enable_portal = true` also requires `enable_adx = true`.
+Portal is installed as `tau-portal` in the `tau` namespace with a ClusterIP
+Service. Terraform does not expose it outside the cluster. For an operator
+diagnostic session:
+
+```bash
+kubectl -n tau port-forward service/tau-portal 18080:80
+```
+
+An authenticated HTTPS proxy is required before giving researchers a browser
+URL. The default Portal deployment exposes Kubernetes-backed boards. Its
+Kusto-backed boards require a separate ADX and workload identity configuration.
 
 ## Enable lifecycle history
 
