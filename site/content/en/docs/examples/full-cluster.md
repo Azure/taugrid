@@ -9,8 +9,8 @@ description: Build AKS, GPU capacity, TauGrid, and Portal with the repository Te
 
 Use the repository's [`terraform/aks`](https://github.com/Azure/taugrid/tree/main/terraform/aks)
 root to create a GPU-enabled AKS environment. It provisions a system pool and
-a GPU pool, enables OIDC and Azure Workload Identity, installs the NVIDIA
-device plugin, and invokes the supported `tau cluster install` command.
+an AKS-managed GPU pool, enables OIDC and Azure Workload Identity, and invokes
+the supported `tau cluster install` command.
 
 Do not separately install Kueue, KubeRay, the Tau controller, or GPU
 monitoring with Helm. `tau cluster install` installs the versioned TauGrid
@@ -25,6 +25,8 @@ distribution that owns those components, the baseline Kueue queue, and Portal.
   dependencies;
 - Azure credentials accepted by the AzureRM Terraform provider and permission
   to provision AKS, networking, storage, and identities; and
+- access to AKS Managed GPU Experience preview in the selected subscription
+  and region; and
 - `tau` and PowerShell 7 on PATH. Linux and macOS users can configure the
   Terraform command interpreter to use Bash.
 
@@ -44,10 +46,12 @@ terraform init
 terraform apply -var="subscription_id=<your-subscription-id>"
 ```
 
-Terraform creates a local ignored admin kubeconfig and values file under
-`terraform/aks/generated/`. It installs the NVIDIA device plugin before any
-GPU readiness check. For the default A100 pool, it then normalizes MIG mode,
-restarts the GPU VM scale set, and waits for allocatable GPUs before running:
+Terraform creates the GPU pool with AKS Managed GPU Experience enabled. AKS
+owns the NVIDIA driver, device plugin, and DCGM exporter host service. It also
+creates a local ignored admin kubeconfig and values file under
+`terraform/aks/generated/`. For the default A100 pool, it then normalizes MIG
+mode, restarts the GPU VM scale set, and waits for allocatable GPUs before
+running:
 
 ```bash
 tau cluster install --values generated/taugrid-values.yaml --version 0.3.0

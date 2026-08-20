@@ -53,16 +53,19 @@ Kubernetes RoleBindings should enforce workspace group access.
 terraform apply
 ```
 
-Terraform writes an ignored local admin kubeconfig and generated chart values
-under `generated/`. It installs the NVIDIA device plugin before any GPU
-readiness check. For the default A100 pool, it then normalizes MIG mode,
-restarts the GPU VM scale set, and waits for allocatable GPUs before running
+Terraform creates the GPU pool with AKS Managed GPU Experience enabled. AKS
+then owns the NVIDIA driver, device plugin, and DCGM exporter host service.
+The preview must be available in the target subscription and region. Terraform
+writes an ignored local admin kubeconfig and generated chart values under
+`generated/`. For the default A100 pool, it then normalizes MIG mode, restarts
+the GPU VM scale set, and waits for allocatable GPUs before running
 `tau cluster install`. `normalize_gpu_mig = true` cannot be combined with GPU
 autoscaling, because later autoscaled nodes are not normalized. Set it false
 only for a GPU SKU that does not require MIG normalization. Do not run a
-separate Helm installation for Kueue, KubeRay, or gpu-monitoring.
+separate Helm installation for Kueue, KubeRay, GPU monitoring, or the NVIDIA
+device plugin.
 
-When ADX is enabled, adx-mon collects DCGM metrics from the AKS managed GPU
+When ADX is enabled, adx-mon collects DCGM metrics from the AKS-managed GPU
 node host service at port `19400`. Terraform does not install a separate DCGM
 exporter Pod.
 

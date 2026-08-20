@@ -75,7 +75,12 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
     max_surge = "10%"
   }
 
-  tags = var.tags
+  # AKS enables its managed GPU stack only when this tag is present as the
+  # GPU pool is created. The stack owns the NVIDIA driver, device plugin, and
+  # DCGM exporter host service used by adx-mon on port 19400.
+  tags = merge(var.tags, {
+    EnableManagedGPUExperience = "true"
+  })
 
   lifecycle {
     precondition {
@@ -246,27 +251,6 @@ resource "local_file" "mig_normalizer" {
   })
 }
 
-resource "terraform_data" "install_nvidia_device_plugin" {
-  triggers_replace = [
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
-    filesha256("${path.module}/nvidia-device-plugin.yaml"),
-    join(" ", var.command_interpreter),
-  ]
-
-  provisioner "local-exec" {
-    working_dir = path.module
-    interpreter = var.command_interpreter
-    environment = {
-      KUBECONFIG = local.kubeconfig_path
-    }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && kubectl rollout status daemonset/nvidia-device-plugin-daemonset --namespace kube-system --timeout=10m"
-  }
-
-  depends_on = [
-    azurerm_kubernetes_cluster_node_pool.gpu,
-  ]
-}
-
 resource "terraform_data" "normalize_gpu_mig" {
   count = var.normalize_gpu_mig ? 1 : 0
 
@@ -289,7 +273,6 @@ resource "terraform_data" "normalize_gpu_mig" {
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
     local_file.mig_normalizer,
-    terraform_data.install_nvidia_device_plugin,
   ]
 }
 
@@ -315,7 +298,6 @@ resource "terraform_data" "install_taugrid" {
   depends_on = [
     local_file.taugrid_values,
     azurerm_kubernetes_cluster_node_pool.gpu,
-    terraform_data.install_nvidia_device_plugin,
     terraform_data.normalize_gpu_mig,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
@@ -334,27 +316,6 @@ resource "local_file" "adx_mon_values" {
     location           = var.location
     gpu_node_pool_name = var.gpu_node_pool_name
   })
-}
-
-resource "terraform_data" "remove_legacy_dcgm_exporter" {
-  count = var.enable_adx ? 1 : 0
-
-  triggers_replace = [
-    azurerm_kubernetes_cluster.this.id,
-    join(" ", var.command_interpreter),
-  ]
-
-  # Earlier Terraform revisions installed this release. terraform_data does
-  # not remove external Helm state when its configuration is deleted, so clean
-  # it up explicitly before switching adx-mon to the AKS host DCGM endpoint.
-  provisioner "local-exec" {
-    working_dir = path.module
-    interpreter = var.command_interpreter
-    environment = {
-      KUBECONFIG = local.kubeconfig_path
-    }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm uninstall dcgm-exporter --namespace dcgm-exporter --ignore-not-found"
-  }
 }
 
 resource "terraform_data" "install_adx_mon" {
@@ -378,7 +339,6 @@ resource "terraform_data" "install_adx_mon" {
   }
 
   depends_on = [
-    terraform_data.remove_legacy_dcgm_exporter,
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
