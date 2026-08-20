@@ -21,7 +21,7 @@ import (
 // controller contract is internal to this module. Their shared surface remains
 // intentionally small, so a source-parsing contract test is cheaper and safer
 // than a third module or a controller dependency in the CLI.
-const cliMetadataPath = "../../../../core/workloadmeta/metadata.go"
+const cliMetadataPath = "../../../../core/workloadmeta/keys.go"
 
 var tauTokenRe = regexp.MustCompile(regexp.QuoteMeta(Domain) + `[A-Za-z0-9._-]*`)
 
