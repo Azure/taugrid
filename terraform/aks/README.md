@@ -31,11 +31,13 @@ provided:
   does not support GPU cluster autoscaling during the preview.
 
 Before using `aks_managed_preview`, register the feature and wait until its
-state is `Registered`:
+state is `Registered`, then refresh the AKS resource provider:
 
 ```bash
 az feature register --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview
 az feature show --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview --query properties.state --output tsv
+az provider register --namespace Microsoft.ContainerService
+az provider show --namespace Microsoft.ContainerService --query registrationState --output tsv
 ```
 
 The AzureRM provider does not currently expose

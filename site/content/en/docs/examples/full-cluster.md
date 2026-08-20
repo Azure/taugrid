@@ -58,11 +58,14 @@ tau cluster install --values generated/taugrid-values.yaml --version 0.3.0
 Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience.
 This preview mode uses `EnableManagedGPUExperience=true` at GPU pool creation;
 AKS then owns the driver, device plugin, and DCGM exporter host service at port
-`19400`. Before applying, register the feature and wait for `Registered`:
+`19400`. Before applying, register the feature, wait for `Registered`, and
+refresh the AKS resource provider:
 
 ```bash
 az feature register --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview
 az feature show --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview --query properties.state --output tsv
+az provider register --namespace Microsoft.ContainerService
+az provider show --namespace Microsoft.ContainerService --query registrationState --output tsv
 ```
 
 GPU cluster autoscaling is not supported in the managed preview. The current

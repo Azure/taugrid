@@ -164,7 +164,7 @@ variable "taugrid_version" {
 }
 
 variable "install_taugrid" {
-  description = "Install or upgrade TauGrid with tau cluster install after AKS and the NVIDIA device plugin are ready. Requires tau, helm, and kubectl on PATH."
+  description = "Install or upgrade TauGrid with tau cluster install after AKS and the selected GPU stack are ready. Requires tau, helm, and kubectl on PATH."
   type        = bool
   default     = true
 }
