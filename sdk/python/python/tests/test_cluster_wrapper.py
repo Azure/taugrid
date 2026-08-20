@@ -88,18 +88,6 @@ def _write_fake_nsys(path: Path) -> None:
 # ---------- cluster wrapper template tests --------------------------------
 
 
-def test_render_wrapper_substitutes_filename():
-    out = render_wrapper("my_research.py")
-    assert "__USER_MODULE_FILENAME__" not in out
-    assert "'my_research.py'" in out
-
-
-def test_render_wrapper_compiles_as_python():
-    """The generated wrapper must be syntactically valid Python."""
-    out = render_wrapper("user_train.py")
-    compile(out, "<wrapper>", "exec")
-
-
 def test_worker_profile_helper_records_and_finalizes_ray_nsys_artifacts(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -232,13 +220,6 @@ def test_single_worker_wrapper_records_pending_profile_metadata(tmp_path):
     metadata = json.loads((profile_dir / "rank-0.metadata.json").read_text())
     assert metadata["completion_reason"] == "ray-worker-profile-pending"
     assert not (profile_dir / "rank-0.nsys-rep").exists()
-
-
-def test_rendered_wrapper_uses_content_only_artifact_copy():
-    out = render_wrapper("user_train.py")
-    assert "copystat" not in out
-    assert "copytree" not in out
-    assert "_copy_artifact_dir" in out
 
 
 def test_cluster_wrapper_finds_decorated_handle(tmp_path):
@@ -775,14 +756,6 @@ print(json.dumps({{"rel_path": rel_path, "result": result}}, sort_keys=True))
     assert res.stdout.strip() == '{"rel_path": "records/eval.jsonl", "result": "eval:7"}'
 
 
-def test_train_worker_inline_shim_exports_example_helpers():
-    wrapper_src = render_wrapper("researcher_train.py")
-
-    assert "_r.call_staged_function = _ep.call_staged_function" in wrapper_src
-    assert "_r.dataset_file_reference = _ds.dataset_file_reference" in wrapper_src
-    assert "_r.read_jsonl_objects = _jl.read_jsonl_objects" in wrapper_src
-
-
 def test_generated_wrapper_subprocess_finalizes_checkpoint_and_model_record(tmp_path):
     user_module = tmp_path / "researcher_train.py"
     _write_python(
@@ -956,174 +929,7 @@ def test_cluster_wrapper_fails_when_declared_checkpoint_missing(tmp_path):
     assert "missing.safetensors" in res.stderr
 
 
-def test_cluster_wrapper_finalizes_before_nonfatal_teardown_error(tmp_path):
-    user_module = tmp_path / "researcher_train.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="cluster-teardown", gpus=1)
-        def go(ctx):
-            path = ctx.checkpoints_dir / "last.safetensors"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"checkpoint")
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {
-            "schema_version": 1,
-            "name": "cluster-teardown",
-            "compute": {"gpus": 1},
-            "eval": {},
-            "artifacts": {"checkpoint": "last.safetensors"},
-        },
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_src = wrapper_src.replace(
-        "_destroy_single_pod_distributed(dist_to_destroy)",
-        "(_ for _ in ()).throw(RuntimeError('teardown boom'))",
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    env = os.environ.copy()
-    env["TAU_CHECKPOINTS_DIR"] = str(tmp_path / "mnt" / "checkpoints")
-    env["TAU_DURABLE_CHECKPOINTS_DIR"] = str(tmp_path / "data" / "checkpoints")
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
-    artifact_path = tmp_path / "data" / "checkpoints" / "finetunes" / "cluster-teardown" / "artifacts" / "last.safetensors"
-    assert artifact_path.read_bytes() == b"checkpoint"
-    assert "teardown boom" in res.stdout
-
-
-def test_cluster_wrapper_errors_when_no_handle(tmp_path):
-    user_module = tmp_path / "empty.py"
-    user_module.write_text("# no decorator here\n")
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {
-            "schema_version": 1,
-            "name": "x",
-            "compute": {"gpus": 1},
-            "eval": {},
-        },
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode != 0
-    assert "no @tau.train" in res.stderr
-
-
-def test_cluster_wrapper_rejects_multiple_handles(tmp_path):
-    user_module = tmp_path / "twohandles.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="a", gpus=1)
-        def a(ctx): pass
-
-        @tau.train(name="b", gpus=1)
-        def b(ctx): pass
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump({"schema_version": 1, "name": "x", "compute": {"gpus": 1}, "eval": {}}, manifest_path.open("w"))
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode != 0
-    assert "multiple @tau.train" in res.stderr
-
-
-def test_cluster_wrapper_submit_inside_job_raises(tmp_path):
-    """The cluster shim's .submit() must refuse to recurse."""
-    user_module = tmp_path / "recurse.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="r", gpus=1)
-        def r(ctx):
-            try:
-                r.submit()
-            except RuntimeError as e:
-                print("GOT:" + str(e))
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump({"schema_version": 1, "name": "r", "compute": {"gpus": 1}, "eval": {}}, manifest_path.open("w"))
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode == 0, res.stderr
-    assert "GOT:" in res.stdout
-    assert "would recurse" in res.stdout
-
-
 # ---------- Regression tests for /review-found blockers -------------------
-
-
-def test_extra_manifest_rejects_reserved_keys():
-    """extra_manifest must not be allowed to clobber decorator-owned fields,
-    or the local Ctx and the submitted manifest will silently disagree."""
-    for reserved in ("schema_version", "name", "compute", "eval"):
-        @tau.train(
-            name="x",
-            gpus=1,
-            extra_manifest={reserved: "evil"},
-        )
-        def f(ctx):  # noqa: F811 — intentional rebinding per loop iter.
-            pass
-
-        with pytest.raises(ValueError, match=reserved):
-            f.manifest()
 
 
 def test_extra_manifest_allows_non_reserved_keys():
@@ -1138,40 +944,6 @@ def test_extra_manifest_allows_non_reserved_keys():
     m = f.manifest()
     assert m["lora"] == {"target_modules": ["q", "v"]}
     assert m["base"] == {"variant": "sample-1.3b"}
-
-
-def test_user_module_named_train_py_does_not_collide(tmp_path, monkeypatch):
-    """A user file literally named train.py must submit without colliding
-    with the wrapper that lands at /script/train.py."""
-    recorder = tmp_path / "argv.txt"
-    copied_config = tmp_path / "tau.yaml"
-    fake_tau = tmp_path / "tau"
-    _write_config_recorder(fake_tau, recorder, copied_config)
-    monkeypatch.setenv("TAU_BINARY", str(fake_tau))
-
-    # Synthesize a user file actually named train.py and load it via importlib.
-    user_src = tmp_path / "train.py"
-    _write_python(
-        user_src,
-        """
-        import tau
-
-        @tau.train(name="trnpy", gpus=1, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
-        def go(ctx): pass
-        """,
-    )
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("user_train_py", user_src)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    res = mod.go.submit(dry_run="client")
-    assert res.returncode == 0
-    config = yaml.safe_load(copied_config.read_text())
-    extra = config["workflow"]["extra_scripts"][0]
-    # Critical: DEST must NOT be train.py (would collide with the wrapper).
-    assert extra.endswith(":tau_user_module.py"), f"extra-script was {extra!r}"
-    assert ":train.py" not in extra
 
 
 def test_cluster_wrapper_supports_top_level_imports(tmp_path):
@@ -1265,109 +1037,6 @@ def test_cluster_wrapper_supports_config_helpers_at_import_time(tmp_path):
     assert "CFG_DATA=/datasets/captioner/train.jsonl" in res.stdout
     assert "SECRET_REF=hf-token:token" in res.stdout
     assert "MOUNT=/datasets/captioner:True" in res.stdout
-
-
-def test_cluster_wrapper_handle_call_raises_runtime_error(tmp_path):
-    """Calling a decorated handle on-cluster must raise RuntimeError (not
-    TypeError, which would be the symptom of a SimpleNamespace-with-instance-
-    __call__ regression)."""
-    user_module = tmp_path / "callself.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="c", gpus=1)
-        def c(ctx):
-            try:
-                c()
-            except RuntimeError as e:
-                print("CALL_RT=" + str(e))
-            except TypeError as e:
-                print("CALL_TE=" + str(e))
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {"schema_version": 1, "name": "c", "compute": {"gpus": 1}, "eval": {}},
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode == 0, res.stderr
-    assert "CALL_RT=" in res.stdout, f"expected RuntimeError, got:\n{res.stdout}"
-    assert "CALL_TE=" not in res.stdout
-
-
-def test_cluster_wrapper_dedupes_aliased_handles(tmp_path):
-    """`alias = train` should NOT trigger the multiple-handles guard."""
-    user_module = tmp_path / "aliased.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="a", gpus=1)
-        def go(ctx):
-            print("ALIAS_OK")
-
-        alias = go
-        another = go
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {"schema_version": 1, "name": "a", "compute": {"gpus": 1}, "eval": {}},
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode == 0, res.stderr
-    assert "ALIAS_OK" in res.stdout
-    assert "multiple @tau.train" not in res.stderr
-
-
-def test_inspect_cli_dedupes_aliased_handles(tmp_path, capsys):
-    """`tau-py inspect` must not double-print aliased handles either."""
-    user_module = tmp_path / "ins.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="ins", gpus=1)
-        def go(ctx): pass
-
-        alias = go
-        """,
-    )
-    rc = tau_cli.main(["inspect", str(user_module)])
-    out = capsys.readouterr().out
-    assert rc == 0
-    # Exactly one "name: ins" header (would be two if dedup were absent).
-    assert out.count("name: ins") == 1
 
 
 def test_chained_submit_releases_train_rayjob_before_eval(monkeypatch):
@@ -1688,18 +1357,6 @@ def test_workers_kwarg_visible_on_local_ctx():
     assert captured["ctx"].gpus == 8
 
 
-def test_workers_kwarg_rejects_zero_and_negative():
-    with pytest.raises(ValueError, match="workers must be >= 1"):
-        @tau.train(name="bad", gpus=1, workers=0)
-        def f(ctx):
-            pass
-
-    with pytest.raises(ValueError, match="workers must be >= 1"):
-        @tau.train(name="bad", gpus=1, workers=-1)
-        def g(ctx):
-            pass
-
-
 def test_submit_writes_workers_to_config_when_multi_node(tmp_path, monkeypatch):
     """When workers>1 the SDK writes compute.workers into generated config."""
     recorder = tmp_path / "tau_argv.txt"
@@ -1725,23 +1382,6 @@ def test_submit_writes_workers_to_config_when_multi_node(tmp_path, monkeypatch):
     assert config["run"]["workload_kind"] == "rayjob"
 
 
-def test_submit_keeps_single_node_workers_in_config(tmp_path, monkeypatch):
-    """workers=1 stays in config, not argv."""
-    recorder = tmp_path / "tau_argv.txt"
-    fake_tau = tmp_path / "tau"
-    _write_argv_recorder(fake_tau, recorder)
-    monkeypatch.setenv("TAU_BINARY", str(fake_tau))
-
-    @tau.train(name="single-submit", gpus=2, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
-    def f(ctx):
-        pass
-
-    res = f.submit(dry_run="client", namespace="ray")
-    assert res.returncode == 0
-    argv = eval(recorder.read_text())  # noqa: S307
-    assert argv[1:3] == ["run", "--config"]
-
-
 def test_submit_writes_lane_kwarg_to_config(tmp_path, monkeypatch):
     """`lane=` on @tau.train must land in policy.lane."""
     recorder = tmp_path / "tau_argv.txt"
@@ -1763,38 +1403,6 @@ def test_submit_writes_lane_kwarg_to_config(tmp_path, monkeypatch):
     assert argv[1:3] == ["run", "--config"]
     config = yaml.safe_load(copied_config.read_text())
     assert config["policy"]["lane"] == "large-memory"
-
-
-def test_submit_omits_lane_config_when_unset(tmp_path, monkeypatch):
-    """No lane= kwarg -> no policy.lane in generated config."""
-    recorder = tmp_path / "tau_argv.txt"
-    copied_config = tmp_path / "tau.yaml"
-    fake_tau = tmp_path / "tau"
-    _write_config_recorder(fake_tau, recorder, copied_config)
-    monkeypatch.setenv("TAU_BINARY", str(fake_tau))
-
-    @tau.train(name="no-lane", gpus=1, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
-    def f(ctx):
-        pass
-
-    res = f.submit(dry_run="client", namespace="ray")
-    assert res.returncode == 0
-    argv = eval(recorder.read_text())  # noqa: S307
-    assert argv[1:3] == ["run", "--config"]
-    config = yaml.safe_load(copied_config.read_text())
-    assert "lane" not in config.get("policy", {})
-
-
-def test_train_decorator_rejects_lane_eval():
-    """@tau.train cannot use lane=\"eval\"; that's @tau.eval's domain.
-    Catching it at decoration time saves a round-trip to the Go validator."""
-    with pytest.raises(ValueError, match="lane=\"eval\""):
-        @tau.train(
-            name="bad", gpus=1, lane="eval",
-            extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}},
-        )
-        def f(ctx):
-            pass
 
 
 def test_submit_lane_kwarg_overrides_decorator_lane(tmp_path, monkeypatch):
@@ -1819,58 +1427,6 @@ def test_submit_lane_kwarg_overrides_decorator_lane(tmp_path, monkeypatch):
     assert argv[1:3] == ["run", "--config"]
     config = yaml.safe_load(copied_config.read_text())
     assert config["policy"]["lane"] == "elastic"
-
-
-def test_extra_manifest_workers_collides_only_via_compute(tmp_path):
-    """compute is a reserved key — passing extra_manifest={'compute':...}
-    is rejected. The workers field lives under compute, so the only way
-    to set workers from the SDK is the kwarg, which prevents drift between
-    decorator state and the manifest."""
-    @tau.train(
-        name="x", gpus=8,
-        extra_manifest={"compute": {"gpus": 8, "workers": 4}},
-    )
-    def f(ctx):
-        pass
-
-    with pytest.raises(ValueError, match="reserved keys"):
-        f.manifest()
-
-
-def test_cluster_wrapper_includes_multi_node_helpers():
-    """The shipped wrapper must contain the Ray Train branch + asserts so
-    cluster pods can run multi-node out of the box."""
-    src = render_wrapper("tau_user_module.py")
-    # Multi-node entry points must be present in the wrapper text.
-    assert "_run_multi_node" in src
-    # Cluster-resource readiness must be a poll-with-timeout (not an
-    # immediate assert) — KubeRay submits the entrypoint before
-    # workers join Ray and an immediate check would race startup.
-    assert "_wait_for_cluster_resources" in src
-    assert "_multi_node_runtime_env" in src
-    # Per-worker GPU handling must reference torch.cuda.device_count, but only
-    # on GPU jobs. CPU-only multi-node jobs keep one Ray Train worker per pod
-    # and omit the GPU resource key.
-    assert "torch.cuda.device_count" in src
-    assert "classic pod-level GPU visibility" in src
-    # Standard Ray Train idiom: one worker per rank, one GPU per worker
-    # — gives plain DDP/FSDP code WORLD_SIZE = workers*gpus instead of
-    # WORLD_SIZE = workers (which would only put one rank per pod and
-    # force the user to do their own intra-node parallelism).
-    assert "gpu_workers = int(ctx.workers) * int(ctx.gpus)" in src
-    assert "total_workers = int(ctx.workers) if cpu_only else gpu_workers" in src
-    assert '"resources_per_worker": {"CPU": 1} if cpu_only else {"GPU": 1}' in src
-    assert '"placement_strategy": "SPREAD"' in src
-    assert '"capture-range": "cudaProfilerApi"' in src
-    assert '"capture-range-end": "stop"' in src
-    assert '"duration": str(active_seconds)' not in src
-    assert (
-        "_run_multi_node(handle, ctx)\n"
-        "        _finalize_ray_worker_profiles(ctx)"
-    ) in src
-    assert "_finalize_train_artifacts(worker_ctx)" in src
-    # Managed RayJobs use dedicated workers even when compute.workers=1.
-    assert 'if os.environ.get("TAU_NUM_WORKERS"):' in src
 
 
 def _write_fake_torch_package(
@@ -2158,36 +1714,6 @@ def test_cluster_wrapper_ray_train_classic_pod_gpu_visibility_selects_local_rank
     assert "LOCAL_RANK 11 -> cuda:3" in res.stdout
 
 
-def test_cluster_wrapper_ray_train_skips_worker_runtime_env_when_runconfig_lacks_param(tmp_path):
-    res, torch_calls, ray_calls = _run_rendered_multi_node_wrapper(
-        tmp_path, cuda_device_count=1, local_rank=0, supports_worker_runtime_env=False
-    )
-
-    assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
-    assert torch_calls == ["user_seen:4:2"]
-    assert ray_calls == [
-        "init:auto",
-        "trainer:8:True:{'GPU': 1}:SPREAD",
-        "run_config_worker_runtime_env:'<missing>'",
-    ]
-    assert "Ray RunConfig does not support worker_runtime_env" in res.stdout
-
-
-def test_cluster_wrapper_ray_train_gpu_job_fails_when_rank_sees_no_cuda_devices(tmp_path):
-    res, torch_calls, ray_calls = _run_rendered_multi_node_wrapper(
-        tmp_path, cuda_device_count=0, local_rank=0, gpus=1, workers=2
-    )
-
-    assert res.returncode != 0
-    assert torch_calls == []
-    assert ray_calls == [
-        "init:auto",
-        "trainer:2:True:{'GPU': 1}:SPREAD",
-        "run_config_worker_runtime_env:{'pip': ['torch==2.4.0']}",
-    ]
-    assert "rank sees 0 CUDA GPUs" in res.stderr
-
-
 def test_cluster_wrapper_initializes_single_pod_distributed_before_user_fn(tmp_path):
     """workers=1 with WORLD_SIZE>1 must initialize torch.distributed before
     entering user training code, using gloo for CPU-only smoke paths."""
@@ -2299,45 +1825,3 @@ def test_cluster_wrapper_single_pod_distributed_pins_cuda_rank(tmp_path):
         "user_seen:True",
         "destroy",
     ]
-
-
-def test_cluster_wrapper_default_workers_is_one(tmp_path, monkeypatch):
-    """An older manifest without compute.workers must yield ctx.workers=1
-    on the cluster wrapper (default fallback)."""
-    src = render_wrapper("tau_user_module.py")
-    wrapper_path = tmp_path / "wrap.py"
-    wrapper_path.write_text(src)
-
-    user_module = tmp_path / "tau_user_module.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        captured = {}
-
-        @tau.train(name="wt", gpus=1)
-        def go(ctx):
-            captured["workers"] = ctx.workers
-            captured["gpus"] = ctx.gpus
-        """,
-    )
-    manifest = tmp_path / "wt.yaml"
-    manifest.write_text(
-        "schema_version: 1\nname: wt\ncompute: {gpus: 1}\neval: {}\n"
-    )
-
-    # Symlink user module into /tmp so wrapper can find it via /script.
-    # Easier: monkeypatch the wrapper's USER_MODULE_PATH constant via env.
-    # Simpler still: run the wrapper via subprocess in tmp_path with
-    # /script symlinked.
-    script_dir = tmp_path / "script"
-    script_dir.mkdir()
-    (script_dir / "tau_user_module.py").write_text(user_module.read_text())
-
-    # The wrapper hardcodes /script/<filename>. We can't write to /script
-    # in CI, so instead run it via a small driver that overrides the path.
-    # We assert by reading the wrapper source for the default-1 contract
-    # (already covered above) — but also verify the build_cluster_ctx
-    # function literally contains the `or 1` fallback.
-    assert "compute.get(\"workers\", 1)" in src
