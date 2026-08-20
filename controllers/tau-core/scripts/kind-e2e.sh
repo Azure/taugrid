@@ -686,6 +686,7 @@ cluster:
   provider: azure
   resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/kind/providers/Microsoft.ContainerService/managedClusters/${CLUSTER_NAME}
   contextName: researcher
+  systemNamespace: ${SYSTEM_NAMESPACE}
 identity:
   tenantID: 11111111-1111-1111-1111-111111111111
 authorization:
