@@ -14,28 +14,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-func TestHasTauLabel(t *testing.T) {
-	tests := []struct {
-		name   string
-		labels map[string]string
-		want   bool
-	}{
-		{"matching label", map[string]string{workloadmeta.LabelJob: "train"}, true},
-		{"non-matching label", map[string]string{"app": "foo"}, false},
-		{"empty map", map[string]string{}, false},
-		{"nil map", nil, false},
-		{"mixed labels", map[string]string{"app": "foo", workloadmeta.LabelRun: "r1"}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hasTauLabel(tt.labels); got != tt.want {
-				t.Fatalf("hasTauLabel(%v) = %v, want %v", tt.labels, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestBoardIncludesExternalWorkloadsOnlyWhenRequested(t *testing.T) {
 	reader := fakeReader{
 		jobs: []byte(`{"items":[
@@ -367,30 +345,30 @@ func TestOwnedByRayJob(t *testing.T) {
 }
 
 func TestJobStatus(t *testing.T) {
-	cond := func(typ, status string) jobCondition {
-		return jobCondition{Type: typ, Status: status}
+	cond := func(typ, status string) StatusCondition {
+		return StatusCondition{Type: typ, Status: status}
 	}
 	tests := []struct {
 		name       string
-		conditions []jobCondition
+		conditions []StatusCondition
 		active     int
 		succeeded  int
 		failed     int
 		want       string
 	}{
-		{"failed condition", []jobCondition{cond("Failed", "True")}, 0, 0, 1, "Failed"},
-		{"complete condition", []jobCondition{cond("Complete", "True")}, 0, 1, 0, "Complete"},
-		{"suspended condition", []jobCondition{cond("Suspended", "True")}, 0, 0, 0, "Suspended"},
-		{"failed takes precedence over complete", []jobCondition{cond("Failed", "True"), cond("Complete", "True")}, 0, 0, 1, "Failed"},
-		{"condition not true is ignored", []jobCondition{cond("Complete", "False")}, 1, 0, 0, "Running"},
-		{"active pods running", []jobCondition{}, 2, 0, 0, "Running"},
-		{"no conditions no active", []jobCondition{}, 0, 0, 0, "Pending"},
+		{"failed condition", []StatusCondition{cond("Failed", "True")}, 0, 0, 1, "Failed"},
+		{"complete condition", []StatusCondition{cond("Complete", "True")}, 0, 1, 0, "Complete"},
+		{"suspended condition", []StatusCondition{cond("Suspended", "True")}, 0, 0, 0, "Suspended"},
+		{"failed takes precedence over complete", []StatusCondition{cond("Failed", "True"), cond("Complete", "True")}, 0, 0, 1, "Failed"},
+		{"condition not true is ignored", []StatusCondition{cond("Complete", "False")}, 1, 0, 0, "Running"},
+		{"active pods running", []StatusCondition{}, 2, 0, 0, "Running"},
+		{"no conditions no active", []StatusCondition{}, 0, 0, 0, "Pending"},
 		{"nil conditions no active", nil, 0, 0, 0, "Pending"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := jobStatus(tt.conditions, tt.active, tt.succeeded, tt.failed); got != tt.want {
-				t.Fatalf("jobStatus() = %q, want %q", got, tt.want)
+			if got := JobStatus(tt.conditions, tt.active, tt.succeeded, tt.failed); got != tt.want {
+				t.Fatalf("JobStatus() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -410,8 +388,8 @@ func TestRayJobStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rayJobStatus(tt.deploymentStatus, tt.jobStatus); got != tt.want {
-				t.Fatalf("rayJobStatus(%q, %q) = %q, want %q", tt.deploymentStatus, tt.jobStatus, got, tt.want)
+			if got := RayJobStatus(tt.deploymentStatus, tt.jobStatus); got != tt.want {
+				t.Fatalf("RayJobStatus(%q, %q) = %q, want %q", tt.deploymentStatus, tt.jobStatus, got, tt.want)
 			}
 		})
 	}
@@ -465,7 +443,7 @@ func TestAggregate(t *testing.T) {
 		 "status":{"jobDeploymentStatus":"Running"}}
 	]}`)
 
-	snap := aggregate(now, jobsJSON, rayJSON)
+	snap := aggregateWithExternal(now, jobsJSON, rayJSON, false)
 
 	// Expect 3 kept: tau-job, tau-complete (Jobs), tau-rayjob (RayJob).
 	// Excluded: not-tau (no label), rayjob-submitter (RayJob-owned), not-tau-ray (no label).
@@ -517,7 +495,7 @@ func TestAggregateDerivesLiveTrackingFromWorkloadEvidence(t *testing.T) {
 		},
 		"status":{"jobDeploymentStatus":"Running"}
 	}]}`)
-	snap := aggregate(now, jobsJSON, rayJSON)
+	snap := aggregateWithExternal(now, jobsJSON, rayJSON, false)
 	if len(snap.Runs) != 2 {
 		t.Fatalf("runs = %+v", snap.Runs)
 	}
@@ -531,7 +509,7 @@ func TestAggregateDerivesLiveTrackingFromWorkloadEvidence(t *testing.T) {
 		"metadata":{"name":"not-yet-tracked","labels":{"` + workloadmeta.LabelRunID + `":"not-yet-tracked"},"annotations":{"` + workloadmeta.AnnotationExperimentSource + `":"stellar"}},
 		"status":{"jobDeploymentStatus":"Running"}
 	}]}`)
-	untracked := aggregate(now, nil, missingSession)
+	untracked := aggregateWithExternal(now, nil, missingSession, false)
 	if untracked.Runs[0].ExperimentTracking != experimentTrackingUntracked {
 		t.Fatalf("source-only RayJob tracking = %q, want untracked without a metrics session", untracked.Runs[0].ExperimentTracking)
 	}
@@ -542,7 +520,7 @@ func TestAggregateDerivesLiveTrackingFromWorkloadEvidence(t *testing.T) {
 func TestAggregateToleratesInvalidJSON(t *testing.T) {
 	now := time.Now()
 	jobsJSON := []byte(`{"items":[{"metadata":{"name":"tau-job","labels":{"` + workloadmeta.LabelJob + `":"t"}},"status":{"active":1}}]}`)
-	snap := aggregate(now, jobsJSON, []byte("error: the server doesn't have a resource type \"rayjobs\""))
+	snap := aggregateWithExternal(now, jobsJSON, []byte("error: the server doesn't have a resource type \"rayjobs\""), false)
 	if snap.Total != 1 || snap.Runs[0].Name != "tau-job" {
 		t.Fatalf("aggregate with invalid ray JSON = %+v, want just tau-job", snap)
 	}

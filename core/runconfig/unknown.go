@@ -66,13 +66,6 @@ var managedPassthroughPaths = map[string]bool{
 	"storage.mounts.readOnly":     false,
 }
 
-// documentedPassthroughPaths are keys that belong to neither schema and are
-// tolerated anyway. It is deliberately empty: provenance and commentary belong
-// in YAML comments, which have the virtue of not looking like configuration
-// that does something. Adding an entry here should require justifying why a
-// key must look live but do nothing.
-var documentedPassthroughPaths = map[string]bool{}
-
 // configSchemaPaths reports every path Config models, mapping each to whether it
 // is a nested struct worth descending into. Free-form maps (policy.node_selector,
 // runtime.env_secret, execution.param_space, configs) are leaves: their keys are
@@ -111,9 +104,6 @@ func IsKnownManagedKey(path string) bool {
 	if _, ok := managedPassthroughPaths[path]; ok {
 		return true
 	}
-	if documentedPassthroughPaths[path] {
-		return true
-	}
 	// A key nested under a pass-through parent is covered by that parent, but
 	// only when that parent is opaque. A structured pass-through models its own
 	// children, so an unlisted child under it is a typo, not user data.
@@ -125,9 +115,6 @@ func IsKnownManagedKey(path string) bool {
 		prefix = prefix[:idx]
 		if descend, ok := managedPassthroughPaths[prefix]; ok {
 			return !descend
-		}
-		if documentedPassthroughPaths[prefix] {
-			return true
 		}
 		if descend, ok := configSchemaPaths()[prefix]; ok && !descend {
 			// Parent is a leaf in Config (a free-form map or scalar), so its
@@ -214,9 +201,6 @@ func collectUnknown(node *yaml.Node, prefix string, known map[string]bool, out *
 			if descend {
 				collectUnknownNode(node.Content[i+1], path, known, out)
 			}
-			continue
-		}
-		if documentedPassthroughPaths[path] {
 			continue
 		}
 		descend, ok := known[path]
