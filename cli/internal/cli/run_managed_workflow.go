@@ -169,12 +169,6 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	if raw, err = applyRuntimeImageOverride(raw, m, o.image); err != nil {
 		return err
 	}
-	// compute.workers from the run config overrides the manifest so the
-	// manifest stays the source of truth while one-off submits can still
-	// resize the gang.
-	if o.workers > 1 {
-		m.Compute.Workers = o.workers
-	}
 	if m.IsCPUOnly() {
 		switch workloadKind {
 		case manifest.WorkloadKindJob:
@@ -269,58 +263,44 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 
 	topo := resolvedRunTopologyFlags(o.runPlacement)
 	changed := func(flag string) bool { return resolvedRunTopologyFieldSet(o.runPlacement, flag) }
-	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
-	if err != nil {
+	selected := o.selectedWorkloadProfile
+	if err := validateSelectedWorkloadProfileMode(selected, dryRun); err != nil {
 		return err
 	}
-	// Eval workloads belong on the eval lane (separate Kueue queue, separate
-	// priority class, doesn't compete with training). Pick the inferred lane up
-	// front so both preset suggestion and the validate step agree on the target.
-	inferLane := "training"
-	if workloadKind == manifest.WorkloadKindRayJobEval {
-		inferLane = "eval"
+	resolvedProfileName := selected.Selection.Profile.Name
+	warnings := []string{}
+	if m.Compute.GPUs != int(selected.Selection.Profile.GPUsPerWorker) {
+		return profileCardinalityConflict(
+			selected.Selection.Profile.Name,
+			"compute.gpus",
+			m.Compute.GPUs,
+			int(selected.Selection.Profile.GPUsPerWorker),
+		)
 	}
-	explicitQueueOnlyDevicePlugin := gpuResourceMode == manifest.GPUResourceModeDevicePlugin && strings.TrimSpace(topo.queue) != ""
-	if preset == nil && resolvedProfileName == "" && !explicitQueueOnlyDevicePlugin {
-		inferred, source, ierr := suggestManagedWorkflowPreset(topo, m.Compute.GPUs, m.Compute.Workers, inferLane)
-		if ierr == nil {
-			preset = &inferred
-			resolvedProfileName = inferred.Preset.Profile
-			warnings = append(warnings, fmt.Sprintf("inferred preset: %s (team=%s from %s, lane=%s, gpus=%d, workers=%d; set policy.preset to override or policy.team to switch teams)", inferred.Preset.Name, inferred.Preset.Team, source, inferLane, m.Compute.GPUs, m.Compute.Workers))
-		}
-	}
-	if preset != nil && !namespaceExplicit && preset.Preset.Namespace != "" {
-		namespace = preset.Preset.Namespace
-	}
-	if preset != nil && gpuResourceMode == manifest.GPUResourceModeDRA {
-		draPreset := runtopology.WithDRAQueue(*preset)
-		preset = &draPreset
+	if m.Compute.Workers != int(selected.Selection.Profile.WorkerCount) {
+		return profileCardinalityConflict(
+			selected.Selection.Profile.Name,
+			"compute.workers",
+			m.Compute.Workers,
+			int(selected.Selection.Profile.WorkerCount),
+		)
 	}
 	topologyHolder := jobrender.Options{}
-	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&topologyHolder, preset, changed, o.workspaceQueueResolved)
+	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&topologyHolder, changed, o.workspaceQueueResolved)
 	if err != nil {
 		return err
 	}
 	configureGPUQueueModeWithChanged(gpuResourceMode, &topologyHolder, changed)
-	if o.workspaceQueueResolved {
-		makeWorkspaceQueueAuthoritative(&topologyHolder)
-	}
 	if nodeSelector, err = mergeNodeSelectors(nodeSelector, topologyHolder.NodeSelector); err != nil {
 		return err
 	}
-	if gpuResourceMode == manifest.GPUResourceModeDevicePlugin && preset == nil {
-		topologyHolder.DisableDefaultPriorities = true
-	}
 	warnings = append(warnings, topoWarnings...)
-	if err := validateManagedWorkflowTopologyIntent(m, topologyHolder, preset, workloadKind); err != nil {
+	if err := validateManagedWorkflowTopologyIntent(m, topologyHolder, workloadKind); err != nil {
 		return err
 	}
-	var topologyProfile *profile.Profile
-	if resolvedProfileName != "" || preset != nil {
-		p := resourceProfileForRender(resolvedProfileName, preset, topo.resourceProfileOptions(), m.Compute.GPUs)
-		topologyProfile = &p
-		topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
-	}
+	topologyRenderProfile := selected.Render
+	var topologyProfile *profile.Profile = &topologyRenderProfile
+	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(topologyRenderProfile, topologyHolder.GPUClass)
 	var kvSpec *kvspec.Spec
 	if len(m.Runtime.EnvKV) > 0 || o.keyVault != "" {
 		entries, err := kvspec.ParseEntries(m.Runtime.EnvKV, o.keyVault)
@@ -351,7 +331,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	if dryRun != "client" {
 		r = kube.New(kubeContext)
 	}
-	allowImplicitAuto := preset == nil && resolvedProfileName == ""
+	allowImplicitAuto := false
 	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, r, namespaceExplicit, &namespace, &topologyHolder, dryRun, workloadKindK8sResource(workloadKind), allowImplicitAuto)
 	if err == nil {
 		namespace, err = requireWorkloadNamespace(namespace)
@@ -381,13 +361,17 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 			return err
 		}
 	}
-	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, dryRun)
+	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, allowImplicitAuto, dryRun)
 	capture := buildManagedWorkflowCaptureMetadata(ctx, captureCommand, m, raw, namespace, workloadKind)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
 	if o.submissionID != "" {
 		annotations[workloadmeta.AnnotationSubmissionID] = o.submissionID
+	}
+	labels, annotations, err = stampSelectedWorkloadProfile(labels, annotations, selected)
+	if err != nil {
+		return err
 	}
 
 	if jobSecret != nil {
@@ -440,7 +424,15 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	}
 	warnings = append(warnings, autoWarnings...)
 	if dryRun != "client" {
-		rendered, err = prepareGeneratedQueueTopology(ctx, r, namespace, rendered, &topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved), renderManagedWorkflow)
+		rendered, err = prepareGeneratedQueueTopology(
+			ctx,
+			r,
+			namespace,
+			rendered,
+			&topologyHolder,
+			queueValidationPolicy{ClusterQueue: selected.ClusterQueue},
+			renderManagedWorkflow,
+		)
 		if err != nil {
 			return err
 		}
@@ -524,11 +516,11 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	if activationErr != nil {
 		return withRunSubmissionCleanup(activationErr, submissionRunner, cleanupSubmissions...)
 	}
-	printManagedWorkflowSubmission(stdout, m, namespace, kubeContext, workloadKind, resolvedProfileName, extras, preset)
+	printManagedWorkflowSubmission(stdout, m, namespace, kubeContext, workloadKind, resolvedProfileName, extras)
 	return nil
 }
 
-func printManagedWorkflowSubmission(stdout io.Writer, m *manifest.Manifest, namespace, kubeContext, workloadKind, resolvedProfileName string, extras []manifest.ExtraScript, preset *runtopology.ResolvedPreset) {
+func printManagedWorkflowSubmission(stdout io.Writer, m *manifest.Manifest, namespace, kubeContext, workloadKind, resolvedProfileName string, extras []manifest.ExtraScript) {
 	profileDetail := ""
 	if resolvedProfileName != "" {
 		profileDetail = fmt.Sprintf(", profile=%s", resolvedProfileName)
@@ -587,8 +579,5 @@ func printManagedWorkflowSubmission(stdout io.Writer, m *manifest.Manifest, name
 		} else {
 			fmt.Fprintf(stdout, "output:  %s (ephemeral; set storage.data_pvc to persist and fetch results)\n", resultPath)
 		}
-	}
-	if preset != nil {
-		fmt.Fprint(stdout, formatPresetHandoff(*preset))
 	}
 }

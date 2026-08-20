@@ -5,6 +5,7 @@ package queueresolve
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -30,6 +31,18 @@ func (f *validationFakeRunner) Raw(_ context.Context, args []string, _ []byte) (
 	if !ok {
 		return "", fmt.Errorf("unexpected kubectl args: %v", args)
 	}
+	if len(args) >= 2 && args[0] == "get" &&
+		args[1] == "clusterqueue.kueue.x-k8s.io" &&
+		!strings.Contains(out, `"status"`) {
+		var object map[string]any
+		if err := json.Unmarshal([]byte(out), &object); err == nil {
+			object["status"] = map[string]any{"conditions": []any{
+				map[string]any{"type": "Active", "status": "True"},
+			}}
+			encoded, _ := json.Marshal(object)
+			out = string(encoded)
+		}
+	}
 	return out, nil
 }
 
@@ -37,37 +50,27 @@ func validationKey(args ...string) string {
 	return strings.Join(args, "\x00")
 }
 
-func g5A100Preset() *topology.ResolvedPreset {
-	return &topology.ResolvedPreset{
-		Preset: topology.Preset{
-			Name:           "azure.research.training.l",
-			Namespace:      "ray",
-			ClusterQueue:   "tau-cq",
-			ResourceFlavor: "ndm-a100-v4",
-		},
-		Options: topology.Options{
-			Team:      "training",
-			Lane:      "training",
-			GPUClass:  topology.GPUClassA10080GB,
-			QueueName: "team-b",
-		},
+func g5A100Options() ValidationOptions {
+	return ValidationOptions{
+		Namespace:      "ray",
+		QueueName:      "team-b",
+		Team:           "training",
+		Lane:           "training",
+		GPUClass:       topology.GPUClassA10080GB,
+		ClusterQueue:   "tau-cq",
+		ResourceFlavor: "ndm-a100-v4",
 	}
 }
 
-func g5H200Preset() *topology.ResolvedPreset {
-	return &topology.ResolvedPreset{
-		Preset: topology.Preset{
-			Name:           "azure.research.large-memory.xl",
-			Namespace:      "ray",
-			ClusterQueue:   "tau-cq",
-			ResourceFlavor: "nd-h200-v5",
-		},
-		Options: topology.Options{
-			Team:      "research",
-			Lane:      "large-memory",
-			GPUClass:  topology.GPUClassH200141GB,
-			QueueName: "team-a",
-		},
+func g5H200Options() ValidationOptions {
+	return ValidationOptions{
+		Namespace:      "ray",
+		QueueName:      "team-a",
+		Team:           "research",
+		Lane:           "large-memory",
+		GPUClass:       topology.GPUClassH200141GB,
+		ClusterQueue:   "tau-cq",
+		ResourceFlavor: "nd-h200-v5",
 	}
 }
 
@@ -99,18 +102,16 @@ func g5ValidationRunner() *validationFakeRunner {
 func TestValidateSelectionAcceptsExactGPUClassFlavorLabel(t *testing.T) {
 	runner := g5ValidationRunner()
 
-	report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
-		Preset:       g5H200Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB},
-	})
+	opts := g5H200Options()
+	opts.NodeSelector = map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB}
+	report, err := ValidateSelection(context.Background(), runner, opts)
 	if err != nil {
 		t.Fatalf("ValidateSelection: %v", err)
 	}
 	if report.Namespace != "ray" ||
 		report.QueueName != "team-a" ||
 		report.ClusterQueue != "tau-cq" ||
-		report.ResourceFlavor != "nd-h200-v5" ||
-		report.Preset != "azure.research.large-memory.xl" {
+		report.ResourceFlavor != "nd-h200-v5" {
 		t.Fatalf("report did not preserve resolved queue topology: %+v", report)
 	}
 	for _, call := range runner.calls {
@@ -130,15 +131,29 @@ func TestValidateSelectionAcceptsExactGPUClassFlavorLabel(t *testing.T) {
 	}
 }
 
+func TestValidateSelectionRejectsAuthoritativeClusterQueueWithoutActiveCondition(t *testing.T) {
+	runner := g5ValidationRunner()
+	key := validationKey("get", "clusterqueue.kueue.x-k8s.io", "tau-cq", "-o", "json")
+	runner.outputs[key] = `{
+		"metadata":{"name":"tau-cq"},
+		"spec":{"resourceGroups":[]},
+		"status":{"conditions":[]}
+	}`
+
+	_, err := ValidateSelection(context.Background(), runner, g5H200Options())
+	if err == nil || !strings.Contains(err.Error(), "Active condition is not reported") {
+		t.Fatalf("inactive authoritative ClusterQueue error = %v", err)
+	}
+}
+
 func TestValidateSelectionRejectsUnlabeledFlavorForSpecificGPUClass(t *testing.T) {
 	runner := g5ValidationRunner()
 	runner.outputs[validationKey("get", "resourceflavor.kueue.x-k8s.io", "nd-h200-v5", "-o", "json")] =
 		resourceFlavorObject("nd-h200-v5", "", "", "")
 
-	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
-		Preset:       g5H200Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB},
-	})
+	opts := g5H200Options()
+	opts.NodeSelector = map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB}
+	_, err := ValidateSelection(context.Background(), runner, opts)
 	if err == nil || !strings.Contains(err.Error(), topology.NodeLabelGPUClass) || !strings.Contains(err.Error(), "exact node-label match") {
 		t.Fatalf("expected exact gpu class label error, got %v", err)
 	}
@@ -262,7 +277,7 @@ func TestValidateSelectionChecksA100AndH200QueuesIndependently(t *testing.T) {
 
 	for _, tc := range []struct {
 		name         string
-		preset       *topology.ResolvedPreset
+		options      ValidationOptions
 		gpuClass     string
 		queue        string
 		clusterQ     string
@@ -270,7 +285,7 @@ func TestValidateSelectionChecksA100AndH200QueuesIndependently(t *testing.T) {
 	}{
 		{
 			name:         "a100-training",
-			preset:       g5A100Preset(),
+			options:      g5A100Options(),
 			gpuClass:     topology.GPUClassA10080GB,
 			queue:        "team-b",
 			clusterQ:     "tau-cq",
@@ -278,7 +293,7 @@ func TestValidateSelectionChecksA100AndH200QueuesIndependently(t *testing.T) {
 		},
 		{
 			name:         "h200-research",
-			preset:       g5H200Preset(),
+			options:      g5H200Options(),
 			gpuClass:     topology.GPUClassH200141GB,
 			queue:        "team-a",
 			clusterQ:     "tau-cq",
@@ -286,18 +301,17 @@ func TestValidateSelectionChecksA100AndH200QueuesIndependently(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			report, err := ValidateSelection(context.Background(), runner, ValidationOptions{
-				Preset:       tc.preset,
-				NodeSelector: map[string]string{topology.NodeLabelGPUClass: tc.gpuClass},
-			})
+			opts := tc.options
+			opts.NodeSelector = map[string]string{topology.NodeLabelGPUClass: tc.gpuClass}
+			report, err := ValidateSelection(context.Background(), runner, opts)
 			if err != nil {
 				t.Fatalf("ValidateSelection: %v", err)
 			}
 			if report.QueueName != tc.queue || report.ClusterQueue != tc.clusterQ {
 				t.Fatalf("report = %+v, want queue=%s clusterQueue=%s", report, tc.queue, tc.clusterQ)
 			}
-			if tc.preset.Options.Team != tc.expectedTeam {
-				t.Fatalf("preset team = %q, want %q", tc.preset.Options.Team, tc.expectedTeam)
+			if tc.options.Team != tc.expectedTeam {
+				t.Fatalf("profile team = %q, want %q", tc.options.Team, tc.expectedTeam)
 			}
 		})
 	}
@@ -307,10 +321,9 @@ func TestValidateSelectionRejectsClusterQueueDrift(t *testing.T) {
 	runner := g5ValidationRunner()
 	runner.outputs[validationKey("-n", "ray", "get", "localqueue.kueue.x-k8s.io", "team-b", "-o", "json")] = localQueueObject("team-b", "other-cq", nil)
 
-	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
-		Preset:       g5A100Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
-	})
+	opts := g5A100Options()
+	opts.NodeSelector = map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB}
+	_, err := ValidateSelection(context.Background(), runner, opts)
 	if err == nil || !strings.Contains(err.Error(), `points to ClusterQueue "other-cq"`) || !strings.Contains(err.Error(), `expects "tau-cq"`) {
 		t.Fatalf("expected ClusterQueue drift error, got %v", err)
 	}
@@ -325,29 +338,27 @@ func TestValidateSelectionRejectsTeamLabelDrift(t *testing.T) {
 		topology.LabelTeam: "research",
 	})
 
-	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
-		Preset:       g5A100Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
-	})
+	opts := g5A100Options()
+	opts.NodeSelector = map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB}
+	_, err := ValidateSelection(context.Background(), runner, opts)
 	if err == nil || !strings.Contains(err.Error(), topology.LabelTeam) || !strings.Contains(err.Error(), "research") {
 		t.Fatalf("expected team label drift error, got %v", err)
 	}
 }
 
-func TestValidateSelectionReportsMissingLocalQueueWithPresetContext(t *testing.T) {
+func TestValidateSelectionReportsMissingLocalQueueWithProfileContext(t *testing.T) {
 	runner := g5ValidationRunner()
 	key := validationKey("-n", "ray", "get", "localqueue.kueue.x-k8s.io", "team-b", "-o", "json")
 	delete(runner.outputs, key)
 	runner.errors[key] = fmt.Errorf("not found")
 
-	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
-		Preset:       g5A100Preset(),
-		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
-	})
+	opts := g5A100Options()
+	opts.NodeSelector = map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB}
+	_, err := ValidateSelection(context.Background(), runner, opts)
 	if err == nil {
 		t.Fatal("expected missing LocalQueue error")
 	}
-	for _, want := range []string{"azure.research.training.l", `LocalQueue "team-b"`, `namespace "ray"`, "ask the platform owner to validate preset azure.research.training.l"} {
+	for _, want := range []string{`LocalQueue "team-b"`, `namespace "ray"`, "ask the platform owner"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing LocalQueue error missing %q: %v", want, err)
 		}

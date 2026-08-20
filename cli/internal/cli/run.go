@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/manifest"
 	"github.com/Azure/taugrid/cli/internal/onboarding"
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
@@ -37,6 +38,7 @@ func newRunCmdWithConnectionFactory(connectionFactory runConnectionEnsurerFactor
 		serviceAccountName string
 		projectName        string
 		systemNamespace    string
+		betaFeatures       []string
 	)
 
 	cmd := &cobra.Command{
@@ -58,6 +60,14 @@ Evaluation is not a separate command or config shape: an eval is just a run
 whose image evaluates instead of trains. Point script/image at your eval
 entrypoint, pass model and output paths through runtime.env, and set
 storage.output so "tau run get" can fetch the results.
+
+Connected runs, including --dry-run=client, select a ready workload profile
+from the configured cluster's TauCluster. Offline rendering is explicit:
+policy.workload_profile_snapshot must name a TauWorkloadProfileSnapshot and is
+accepted only with --dry-run=client; Tau never falls back to an environment or
+embedded profile catalog. MultiKueue Beta profiles additionally require
+execution.beta_features: [multikueue] or
+--acknowledge-beta-feature multikueue.
 See: tau run explain-config
 
 Common examples:
@@ -141,68 +151,63 @@ Common examples:
 			targetOptions.kvTenantID = kvTenantID
 			targetOptions.kvClientID = kvClientID
 			targetOptions.serviceAccountName = serviceAccountName
-			connectionEnsurer := connectionFactory(cmd)
-			targetOptions, connection, err := applyAutomaticRunConnection(
-				cmd.Context(),
-				targetOptions,
-				resolution.Connection,
-				false,
-				connectionEnsurer,
-			)
+			targetOptions.betaFeatures, err = mergeBetaFeatureAcknowledgements(targetOptions.betaFeatures, betaFeatures)
 			if err != nil {
 				return err
 			}
-			restoreKubeconfig, err := useKubeconfig(connection.KubeconfigPath)
-			if err != nil {
-				return err
-			}
-			defer restoreKubeconfig()
-			effectiveSystemNamespace := systemNamespaceForConnection(cmd, connection)
-			// TauGrid v0 activates exactly one workspace per cluster, so a
-			// researcher should not have to name it. When --workspace was not
-			// given and the connection descriptor did not carry one, resolve
-			// the cluster's primary workspace instead of silently running
-			// without workspace defaults.
-			//
-			// Discovery is best-effort: clusters without TauGrid installed
-			// legitimately have no TauWorkspace and ran fine before this, so a
-			// failure here warns and falls through to the pre-existing
-			// namespace handling rather than failing the run.
-			// Workspace discovery is skipped for --dry-run=client so a
-			// client-side render still works on a cluster without a
-			// TauWorkspace. This is not an offline path: the connection step
-			// above may already have contacted the cluster.
-			if strings.TrimSpace(targetOptions.workspace) == "" && targetOptions.dryRun != "client" {
-				discovered, derr := discoverPrimaryWorkspace(cmd, targetOptions.kubeContext)
-				if derr != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not resolve this cluster's workspace automatically: %v\n", derr)
-				} else {
-					targetOptions.workspace = discovered.Metadata.Name
-				}
-			}
-			// A client render may retain an explicitly named workspace as
-			// metadata, but it must not fetch that workspace. Values normally
-			// inherited from the live object remain explicit config values or
-			// unresolved client-side placeholders.
-			if targetOptions.workspace != "" && targetOptions.dryRun != "client" {
-				workspaceStatus, err := fetchWorkspace(cmd, targetOptions.kubeContext, effectiveSystemNamespace, targetOptions.workspace)
+
+			if strings.TrimSpace(targetOptions.workloadProfileSnapshot) != "" {
+				targetOptions, err = resolveSnapshotRunWorkloadProfile(cmd.Context(), targetOptions)
 				if err != nil {
 					return err
 				}
-				targetOptions, err = applyWorkspaceDefaults(targetOptions, workspaceStatus, name)
+			} else {
+				connectionEnsurer := connectionFactory(cmd)
+				var connection workspaceconnection.ActiveConnection
+				targetOptions, connection, err = applyAutomaticRunConnection(
+					cmd.Context(),
+					targetOptions,
+					resolution.Connection,
+					true,
+					connectionEnsurer,
+				)
 				if err != nil {
 					return err
 				}
-			}
-			// The workspace owns the target namespace. When the TauWorkspace
-			// itself is unreachable, fall back to the namespace recorded in the
-			// active connection descriptor, which is what the lifecycle
-			// subcommands already use. Without this the render path dropped
-			// connection.Namespace and inherited an unrelated flag default, so
-			// `tau run` applied into a different namespace than `tau run status`
-			// went on to query.
-			if strings.TrimSpace(targetOptions.namespace) == "" {
-				targetOptions.namespace = strings.TrimSpace(connection.Namespace)
+				restoreKubeconfig, err := useKubeconfig(connection.KubeconfigPath)
+				if err != nil {
+					return err
+				}
+				defer restoreKubeconfig()
+				effectiveSystemNamespace := systemNamespaceForConnection(cmd, connection)
+				// TauGrid v0 activates exactly one workspace per cluster, so a
+				// researcher should not have to name it. Discovery remains
+				// best-effort for clusters without a TauWorkspace.
+				if strings.TrimSpace(targetOptions.workspace) == "" && targetOptions.dryRun != "client" {
+					discovered, derr := discoverPrimaryWorkspace(cmd, targetOptions.kubeContext)
+					if derr != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not resolve this cluster's workspace automatically: %v\n", derr)
+					} else {
+						targetOptions.workspace = discovered.Metadata.Name
+					}
+				}
+				if targetOptions.workspace != "" && targetOptions.dryRun != "client" {
+					workspaceStatus, err := fetchWorkspace(cmd, targetOptions.kubeContext, effectiveSystemNamespace, targetOptions.workspace)
+					if err != nil {
+						return err
+					}
+					targetOptions, err = applyWorkspaceDefaults(targetOptions, workspaceStatus, name)
+					if err != nil {
+						return err
+					}
+				}
+				if strings.TrimSpace(targetOptions.namespace) == "" {
+					targetOptions.namespace = strings.TrimSpace(connection.Namespace)
+				}
+				targetOptions, err = resolveClusterRunWorkloadProfile(cmd.Context(), targetOptions)
+				if err != nil {
+					return err
+				}
 			}
 			if err := validateRunDispatchOptions(targetOptions); err != nil {
 				return err
@@ -250,7 +255,7 @@ Common examples:
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "explicit Tau experiment config (default: tau.yaml; named targets use tau/TARGET.yaml)")
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace (default: config, target command, or profile/preset)")
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace (default: config, connection, workspace, or workload profile)")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "TauWorkspace name to use for namespace, queue, priority, output, and workload identity defaults")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
@@ -258,6 +263,7 @@ Common examples:
 	cmd.Flags().StringVar(&kvTenantID, "tenant-id", "", "Azure AD tenant ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&kvClientID, "workload-identity-client-id", "", "Managed identity client ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&serviceAccountName, "service-account", "", "pod ServiceAccount for workload cloud identity (overrides the TauWorkspace default; authorization remains server-side)")
+	cmd.Flags().StringSliceVar(&betaFeatures, "acknowledge-beta-feature", nil, "acknowledge a Beta execution feature (supported: multikueue; repeatable)")
 	cmd.PersistentFlags().StringVar(&projectName, "project", "", "Tau project name from the repository's tau.projects.yaml")
 	cmd.PersistentFlags().StringVar(&systemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 
@@ -472,10 +478,10 @@ func validateExplicitJobRunConfig(o unresolvedRunOptions) error {
 	if gpuResourceMode != manifest.GPUResourceModeDevicePlugin {
 		return fmt.Errorf("%s cannot use compute.gpu_resource_mode=%q; direct Jobs support device-plugin GPUs", intent, o.gpuResourceMode)
 	}
-	if o.jobGPUs == nil && strings.TrimSpace(o.preset) == "" {
+	if o.jobGPUs == nil {
 		shape := strings.TrimSpace(o.shape)
 		if shape == "" {
-			return fmt.Errorf("%s has ambiguous resources: set compute.gpus explicitly (0 for CPU, positive for GPU) or use a preset with a GPU shape; policy.profile does not define Job resources", intent)
+			return fmt.Errorf("%s has no resolved GPU cardinality; select a ready TauCluster workload profile or set compute.gpus for local config validation", intent)
 		}
 		if _, ok, err := runtopology.GPUCountFromShape(shape); err != nil {
 			return fmt.Errorf("policy.shape: %w", err)

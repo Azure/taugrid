@@ -16,8 +16,10 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
+	"github.com/spf13/cobra"
 )
 
 func TestPortalRayStellarExampleUsesCanonicalExperimentIdentity(t *testing.T) {
@@ -156,6 +158,7 @@ spec:
 engine: job
 entrypoint: train.sh
 runtime:
+  image: busybox:1.36
   env_secret:
     HF_TOKEN: hf-secret:token-key
 compute:
@@ -168,7 +171,6 @@ policy:
   profile: test-submit
   queue: training-queue
   namespace: ray
-  priority: priority
   disable_default_priorities: true
 storage:
   data_pvc: training-nfs
@@ -181,8 +183,6 @@ storage:
 	for _, want := range []string{
 		"kind: Job",
 		"name: config-job",
-		"kueue.x-k8s.io/priority-class: taugrid-priority",
-		"priorityClassName: taugrid-priority",
 		"claimName: training-nfs",
 		"TAU_OUTPUT_DIR",
 		"/data/checkpoints/workflows/config-job",
@@ -228,7 +228,6 @@ policy:
   queue: jobqueue
   lane: training
   mode: fixed
-  gpu_class: any
 `, script)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -242,28 +241,13 @@ policy:
 	}
 }
 
-func TestRunConfigJobRejectsAmbiguousOrRayGPUIntent(t *testing.T) {
+func TestRunConfigJobRejectsRayGPUIntent(t *testing.T) {
 	tests := []struct {
 		name    string
 		compute string
 		profile string
 		want    string
 	}{
-		{
-			name:    "gpu profile without resource count",
-			profile: "rune-gpu-train",
-			want:    "policy.profile does not define Job resources",
-		},
-		{
-			name:    "unrecognized GPU SKU profile",
-			profile: "l40s-1x",
-			want:    "policy.profile does not define Job resources",
-		},
-		{
-			name:    "CPU profile without explicit zero",
-			profile: "tau-cpu-train",
-			want:    "policy.profile does not define Job resources",
-		},
 		{
 			name:    "ray gpu field",
 			compute: "compute:\n  gpus_per_worker: 1\n",
@@ -291,60 +275,14 @@ policy:
 `, script, tt.compute, tt.profile)), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := NewRoot()
+			cmd := newConnectedRunConfigTestCommand(t, []string{"run", "--config", config, "--dry-run=client"})
 			cmd.SetOut(&bytes.Buffer{})
 			cmd.SetErr(&bytes.Buffer{})
-			cmd.SetArgs([]string{"run", "--config", config, "--dry-run=client"})
 			err := cmd.Execute()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected error containing %q, got %v", tt.want, err)
 			}
 		})
-	}
-}
-
-func TestRunConfigJobRejectsPresetWithoutGPUCardinality(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "train.py")
-	if err := os.WriteFile(script, []byte("print('ok')\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	policy := filepath.Join(dir, "policy.yaml")
-	if err := os.WriteFile(policy, []byte(`apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata: { name: shapeless-policy }
-spec:
-  presets:
-    shapeless:
-      lane: training
-      mode: fixed
-      team: default
-      queue: jobqueue
-      clusterQueue: tau-cq
-      gpuClass: any
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config := filepath.Join(dir, "tau.yaml")
-	if err := os.WriteFile(config, []byte(fmt.Sprintf(`name: shapeless-job
-engine: job
-entrypoint: %q
-runtime:
-  image: python:3.12
-policy:
-  preset: shapeless
-  topology_policy: %q
-  namespace: default
-`, script, policy)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := NewRoot()
-	cmd.SetOut(&bytes.Buffer{})
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"run", "--config", config, "--dry-run=client"})
-	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), `preset "shapeless" does not define a direct Job GPU count`) {
-		t.Fatalf("expected shape-less preset rejection, got %v", err)
 	}
 }
 
@@ -695,8 +633,6 @@ storage:
 policy:
   namespace: ray
   queue: team-a
-  gpu_class: h200-141gb
-  priority: priority
   disable_default_priorities: true
 experiment:
   project: NanoGPT FineWeb
@@ -711,8 +647,6 @@ experiment:
 		"kind: RayJob",
 		"name: config-ray",
 		"kueue.x-k8s.io/queue-name: team-a",
-		"kueue.x-k8s.io/priority-class: taugrid-priority",
-		"priorityClassName: taugrid-priority",
 		"claimName: vision-lustre",
 		"image: example.com/research/ray:cuda13",
 		"torch==2.4.0",
@@ -1427,24 +1361,54 @@ func executeTauConfigError(t *testing.T, configBody string) error {
 	if err := os.WriteFile(config, []byte(configBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := NewRoot()
+	cmd := newConnectedRunConfigTestCommand(t, []string{"run", "--config", config, "--dry-run=client"})
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"run", "--config", config, "--dry-run=client"})
 	return cmd.Execute()
 }
 
 func executeTauConfigDryRun(t *testing.T, args []string) string {
 	t.Helper()
-	cmd := NewRoot()
+	cmd := newConnectedRunConfigTestCommand(t, args)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs(args)
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("command %v failed: %v\nstderr:\n%s\nstdout:\n%s", args, err, stderr.String(), out.String())
 	}
 	return out.String()
+}
+
+func newConnectedRunConfigTestCommand(t *testing.T, args []string) *cobra.Command {
+	t.Helper()
+	runArgs := append([]string{}, args...)
+	if len(runArgs) > 0 && runArgs[0] == "run" {
+		runArgs = runArgs[1:]
+	}
+	configPath := ""
+	for i, arg := range runArgs {
+		switch {
+		case arg == "--config" || arg == "-c":
+			if i+1 < len(runArgs) {
+				configPath = runArgs[i+1]
+			}
+		case strings.HasPrefix(arg, "--config="):
+			configPath = strings.TrimPrefix(arg, "--config=")
+		}
+	}
+	if configPath == "" {
+		t.Fatal("connected run config test requires --config")
+	}
+	installClusterProfileClientForTest(t, runConfigProfileForTest(t, configPath))
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		ContextName: "test-context",
+		Namespace:   "test-workspace",
+	}}
+	cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer {
+		return ensurer
+	})
+	cmd.SetArgs(runArgs)
+	return cmd
 }
 
 func renderedJobResources(t *testing.T, rendered string) map[string]any {

@@ -442,21 +442,10 @@ func parseRunRoutingYAML(t *testing.T, rendered string) map[string]any {
 
 func configureRunRoutingProfile(t *testing.T) {
 	t.Helper()
-	profileDir := t.TempDir()
-	writeRunRoutingFile(t, filepath.Join(profileDir, "test-routing.yaml"), `apiVersion: tau.azure.com/v1alpha1
-kind: Profile
-metadata:
-  name: test-routing
-spec:
-  queue:
-    localQueue: jobqueue
-  resources:
-    requests:
-      cpu: "1"
-      memory: 1Gi
-  runtime:
-    image: busybox:1.36
-`)
+	installClusterProfileClientForTest(
+		t,
+		resolvedWorkloadProfileForTest("test-routing", "jobqueue", 0, 1),
+	)
 }
 
 func multiProjectRunRoutingRepo(t *testing.T) string {

@@ -39,7 +39,7 @@ func serveQueueKey(args ...string) string {
 
 func serveDeployRender(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
-	cmd := NewRoot()
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -49,8 +49,7 @@ func serveDeployRender(t *testing.T, args ...string) (string, string, error) {
 }
 
 // TestServeDeployStampsQueueOnPodTemplate is the regression guard for #1317.
-// Client dry-run uses a visible placeholder because it cannot query Kueue, but
-// it exercises the same target -> profile -> pod-template wiring as a live run.
+// Client dry-run resolves the same authoritative queue and profile as apply.
 func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 	rendered, stderr, err := serveDeployRender(t,
 		"h100-infer",
@@ -65,7 +64,7 @@ func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 		t.Fatalf("serve deploy failed: %v\nstderr:\n%s", err, stderr)
 	}
 	podTemplateLabels := decodePodTemplateLabels(t, rendered)
-	if podTemplateLabels["kueue.x-k8s.io/queue-name"] != clientDryRunQueuePlaceholder {
+	if podTemplateLabels["kueue.x-k8s.io/queue-name"] != "jobqueue" {
 		t.Fatalf("pod template must carry the resolved queue or Kueue gates it forever: %v", podTemplateLabels)
 	}
 	if podTemplateLabels["kueue.x-k8s.io/managed"] != "true" {
@@ -74,8 +73,8 @@ func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 	if !strings.Contains(rendered, "kueue.x-k8s.io/pod-suspending-parent: deployment") {
 		t.Fatalf("pod template lost the suspending-parent annotation:\n%s", rendered)
 	}
-	if !strings.Contains(stderr, "queue shown as a placeholder") {
-		t.Fatalf("client dry-run should identify the unresolved platform default:\n%s", stderr)
+	if stderr != "" {
+		t.Fatalf("connected client dry-run emitted an unexpected warning:\n%s", stderr)
 	}
 }
 
@@ -111,6 +110,18 @@ func TestServeDeployDoesNotExposeQueueFlag(t *testing.T) {
 	if cmd.Flags().Lookup("queue") != nil {
 		t.Fatal("the Kueue LocalQueue is a platform default, not a researcher-facing flag")
 	}
+	profileFlag := cmd.Flags().Lookup("profile")
+	if profileFlag == nil || !strings.Contains(profileFlag.Usage, "TauCluster workload profile") {
+		t.Fatalf("--profile help must describe the authoritative TauCluster profile: %#v", profileFlag)
+	}
+	for _, name := range []string{"team", "lane"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Fatalf("serve deploy must derive %s from the platform profile/namespace contract", name)
+		}
+	}
+	if cmd.Flags().Lookup("acknowledge-beta-feature") == nil {
+		t.Fatal("serve deploy is missing --acknowledge-beta-feature")
+	}
 }
 
 func TestResolveServeTargetUsesKueueDefaultQueue(t *testing.T) {
@@ -128,7 +139,7 @@ func TestResolveServeTargetUsesKueueDefaultQueue(t *testing.T) {
 		}`,
 	}}
 
-	target, warning, err := resolveServeTarget(context.Background(), runner, "", "", "deployments.apps")
+	target, warning, err := resolveServeTarget(context.Background(), runner, "", "deployments.apps")
 	if err != nil {
 		t.Fatalf("resolveServeTarget: %v", err)
 	}
@@ -159,7 +170,7 @@ func TestResolveServeTargetUsesNamespaceOnlyToDisambiguate(t *testing.T) {
 		}`,
 	}}
 
-	target, _, err := resolveServeTarget(context.Background(), runner, "team-b", "", "rayservices.ray.io")
+	target, _, err := resolveServeTarget(context.Background(), runner, "team-b", "rayservices.ray.io")
 	if err != nil {
 		t.Fatalf("resolveServeTarget: %v", err)
 	}
@@ -168,16 +179,10 @@ func TestResolveServeTargetUsesNamespaceOnlyToDisambiguate(t *testing.T) {
 	}
 }
 
-func TestResolveServeTargetClientDryRunStaysOffline(t *testing.T) {
-	target, warning, err := resolveServeTarget(context.Background(), nil, "", "client", "deployments.apps")
-	if err != nil {
-		t.Fatalf("resolveServeTarget: %v", err)
-	}
-	if target.Queue != clientDryRunQueuePlaceholder || target.Namespace != clientDryRunNamespacePlaceholder {
-		t.Fatalf("client dry-run must use visible placeholders, got %+v", target)
-	}
-	if warning == "" {
-		t.Fatal("client dry-run must explain that platform defaults are unresolved")
+func TestResolveServeTargetRequiresConnectedRunner(t *testing.T) {
+	_, _, err := resolveServeTarget(context.Background(), nil, "", "deployments.apps")
+	if err == nil || !strings.Contains(err.Error(), "Kubernetes runner is required") {
+		t.Fatalf("connected serving resolution error = %v", err)
 	}
 }
 
@@ -186,7 +191,7 @@ func TestResolveServeTargetFailsWhenKueueHasNoDefault(t *testing.T) {
 		serveQueueKey("get", "namespaces", "-l", queueresolve.DefaultLocalQueueLabel, "-o", "json"): `{"items":[]}`,
 	}}
 
-	_, _, err := resolveServeTarget(context.Background(), runner, "", "", "deployments.apps")
+	_, _, err := resolveServeTarget(context.Background(), runner, "", "deployments.apps")
 	if err == nil {
 		t.Fatal("missing platform default must fail before rendering a permanently gated workload")
 	}
@@ -207,7 +212,7 @@ func TestResolveServeTargetRejectsNamespaceWithoutKueueDefault(t *testing.T) {
 		}`,
 	}}
 
-	_, _, err := resolveServeTarget(context.Background(), runner, "unconfigured-team", "", "deployments.apps")
+	_, _, err := resolveServeTarget(context.Background(), runner, "unconfigured-team", "deployments.apps")
 	if err == nil {
 		t.Fatal("an explicit namespace without a platform default must fail")
 	}

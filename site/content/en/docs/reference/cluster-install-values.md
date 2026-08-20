@@ -16,6 +16,23 @@ tau cluster explain-values
 
 The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. `tau cluster install` defaults it to `tau-system`; `--namespace <name>` moves the Kueue, KubeRay, Tau controller, Portal, GPU monitoring, and other enabled first-party workloads together. The first-party charts follow their Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 
+## Beta feature gates
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `global.betaFeatures` | enum list | `[]` | Platform-approved Beta capabilities; currently only `multikueue` |
+| `global.betaRiskAcknowledgements` | enum list | `[]` | Independent risk acknowledgement for each enabled Beta capability |
+
+MultiKueue requires `multikueue` in both lists and the reviewed
+`charts/taugrid/values-multikueue-beta.yaml` activation file. One value without
+the other fails schema/template validation. Raw Kueue settings, aliases, or
+custom queue values cannot bypass the check. Default installs omit
+MultiKueue-specific CRDs and RBAC and keep both Kueue and Tau controller runtime
+support disabled. The reviewed file does not authorize operator use: after
+manager prerequisites are ready, the platform owner must separately set
+`tau-core-controller.tauCluster.features.multiKueue=Beta`. See
+[Multi-cluster execution](../../operations/multicluster/) before enabling it.
+
 ## Components
 
 Toggle sub-charts with `components.<key>.enabled`:

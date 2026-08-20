@@ -125,7 +125,7 @@ func TestSelectFinetuneArtifact(t *testing.T) {
 }
 
 func TestServeDeployDeploymentServiceAndProbes(t *testing.T) {
-	cmd := NewRoot()
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -167,8 +167,8 @@ func TestServeDeployDeploymentServiceAndProbes(t *testing.T) {
 	}
 }
 
-func TestServeDeployGPUsFlag(t *testing.T) {
-	cmd := NewRoot()
+func TestServeDeployGPUsDefaultsFromProfile(t *testing.T) {
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -177,22 +177,21 @@ func TestServeDeployGPUsFlag(t *testing.T) {
 		"--kind=deployment",
 		"--profile", "model-serve",
 		"--image", "test:v1",
-		"--gpus", "4",
 		"--dry-run=client",
 		"-n", "tau",
 	})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("serve deploy --gpus 4 failed: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("serve deploy with profile GPUs failed: %v\nstderr:\n%s", err, stderr.String())
 	}
 
 	rendered := out.String()
-	if !strings.Contains(rendered, "nvidia.com/gpu: 4") {
-		t.Fatalf("expected nvidia.com/gpu: 4 in rendered manifest:\n%s", rendered)
+	if !strings.Contains(rendered, "nvidia.com/gpu: 1") {
+		t.Fatalf("expected profile nvidia.com/gpu: 1 in rendered manifest:\n%s", rendered)
 	}
 }
 
 func TestServeDeployGPUsRejectsNegative(t *testing.T) {
-	cmd := NewRoot()
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -212,8 +211,8 @@ func TestServeDeployGPUsRejectsNegative(t *testing.T) {
 	}
 }
 
-func TestServeDeployGPUsZero(t *testing.T) {
-	cmd := NewRoot()
+func TestServeDeployGPUsConflict(t *testing.T) {
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -226,18 +225,15 @@ func TestServeDeployGPUsZero(t *testing.T) {
 		"--dry-run=client",
 		"-n", "tau",
 	})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("serve deploy --gpus 0 failed: %v\nstderr:\n%s", err, stderr.String())
-	}
-
-	rendered := out.String()
-	if strings.Contains(rendered, "nvidia.com/gpu") {
-		t.Fatalf("expected no nvidia.com/gpu for --gpus 0:\n%s", rendered)
+	if err := cmd.Execute(); err == nil {
+		t.Fatalf("expected --gpus 0 to conflict with profile; stdout=%s stderr=%s", out.String(), stderr.String())
+	} else if !strings.Contains(err.Error(), "--gpus=0 conflicts") {
+		t.Fatalf("serve deploy --gpus 0 error = %v", err)
 	}
 }
 
 func TestServeDeployMaxReplicas_Deployment(t *testing.T) {
-	cmd := NewRoot()
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -275,7 +271,7 @@ func TestServeDeployMaxReplicas_Deployment(t *testing.T) {
 }
 
 func TestServeDeployMaxReplicas_RayService(t *testing.T) {
-	cmd := NewRoot()
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -308,7 +304,7 @@ func TestServeDeployMaxReplicas_RayService(t *testing.T) {
 func TestServeDeploySubFlagsWithoutMaxReplicas(t *testing.T) {
 	for _, flag := range []string{"--min-replicas=2", "--target-qps=50", "--scale-down-delay=600"} {
 		t.Run(flag, func(t *testing.T) {
-			cmd := NewRoot()
+			cmd := newConnectedServeTestRoot(t)
 			var out, stderr bytes.Buffer
 			cmd.SetOut(&out)
 			cmd.SetErr(&stderr)
@@ -331,7 +327,7 @@ func TestServeDeploySubFlagsWithoutMaxReplicas(t *testing.T) {
 }
 
 func TestServeDeployMaxReplicasAndReplicasMutuallyExclusive(t *testing.T) {
-	cmd := NewRoot()
+	cmd := newConnectedServeTestRoot(t)
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
@@ -364,7 +360,7 @@ func TestServeDeployAutoscalingRejectsNegativeValues(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cmd := NewRoot()
+			cmd := newConnectedServeTestRoot(t)
 			var out, stderr bytes.Buffer
 			cmd.SetOut(&out)
 			cmd.SetErr(&stderr)

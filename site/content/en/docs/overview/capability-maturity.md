@@ -66,5 +66,11 @@ No capabilities are currently labeled Deprecated.
 A design document or partial implementation does not change a capability's
 feature stage.
 
+The `features.multiKueue: Beta` value is an opt-in feature-gate name; it does
+not promote MultiKueue beyond Alpha. Promotion still requires the environment
+matrix, E2E, security/authorization, credential lifecycle, enablement, drain,
+and rollback evidence listed in
+[multi-cluster execution](../../operations/multicluster/).
+
 Longer-term direction, including what is deliberately out of scope, is described
 in the [roadmap](https://github.com/Azure/taugrid/blob/main/ROADMAP.md).

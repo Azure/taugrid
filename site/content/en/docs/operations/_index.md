@@ -13,4 +13,5 @@ layer owns the problem.
 - [Troubleshooting by lifecycle layer](troubleshooting/) -- start here first
 - [Observability and evidence](observability/)
 - [Retry and resume](recovery/) -- only after the layer above identifies the failure
+- [Workload profile migration](workload-profiles/)
 - [Multi-cluster execution](multicluster/) (Alpha)

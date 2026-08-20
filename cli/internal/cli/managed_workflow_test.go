@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Azure/taugrid/cli/internal/manifest"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -27,9 +28,25 @@ func runManagedWorkflowDispatch(t *testing.T, o runDispatchOptions) (string, str
 	// workspace (applyWorkspaceDefaults / the workspace connection descriptor).
 	// These tests call the executor directly, so stand in for that here rather
 	// than making every case repeat it. Cases that exercise namespace
-	// resolution itself set o.namespace or a preset explicitly.
-	if strings.TrimSpace(o.namespace) == "" && o.preset == "" {
+	// resolution itself set o.namespace explicitly.
+	if strings.TrimSpace(o.namespace) == "" {
 		o.namespace = "test-workspace"
+	}
+	explicitProfile := strings.TrimSpace(o.profileName) != ""
+	raw, err := os.ReadFile(o.file)
+	if err != nil {
+		return "", "", err
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return "", "", err
+	}
+	if !explicitProfile && (o.workloadKind == "rayjob-eval" || o.cpuWorkers > 0 || m.Eval.CPUWorkers > 0) {
+		o.profileName = "test.research.eval.single-gpu"
+	}
+	attachAuthoritativeProfileForTest(&o)
+	if !explicitProfile {
+		setAuthoritativeProfileCardinalityForTest(&o, m.Compute.GPUs, m.Compute.Workers)
 	}
 	request, err := newRunManagedWorkflowRequest(o)
 	if err != nil {
@@ -142,33 +159,14 @@ runtime:
   pip:
     - torch==2.4.0
 `)
-	dir := t.TempDir()
-	policy := filepath.Join(dir, "policy.yaml")
-	if err := os.WriteFile(policy, []byte(`apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata: { name: test-policy }
-spec:
-  presets:
-    test.training:
-      team: research
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: research-training
-      clusterQueue: research-cq
-      namespace: managed-retry-ns
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	options := defaultRunDispatchOptions()
 	options.file = manifestPath
 	options.mainScript = writeMainScript(t)
 	options.workloadKind = "job"
-	options.preset = "test.training"
-	options.topologyPolicy = policy
+	options.profileName = "test.training"
+	options.namespace = "managed-retry-ns"
 	options.dryRun = "client"
+	attachAuthoritativeProfileForTest(&options)
 
 	target, err := resolveRunTarget(options, "")
 	if err != nil {
@@ -423,7 +421,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.l"
+	o.profileName = "azure.research.training.l"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
@@ -464,7 +462,7 @@ runtime:
 	o.file = manifestPath
 	o.mainScript = mainScript
 	o.workloadKind = "rayjob"
-	o.preset = "azure.research.large-memory.2x"
+	o.profileName = "azure.research.large-memory.2x"
 	o.gpuResourceMode = "dra"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
@@ -475,9 +473,6 @@ runtime:
 	for _, want := range []string{
 		"kueue.x-k8s.io/queue-name: jobqueue-dra",
 		"resourceClaimTemplateName: ds-2gpus",
-		`kueue.azure.com/gpu-series: "nd-h200-v5"`,
-		workloadmeta.AnnotationResourceFlavor + `: "nd-h200-v5-dra"`,
-		workloadmeta.AnnotationClusterQueue + `: "tau-dra-cq"`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("DRA dry-run manifest missing %q:\n%s", want, rendered)
@@ -485,6 +480,9 @@ runtime:
 	}
 	for _, forbidden := range []string{
 		`nvidia.com/gpu: "2"`,
+		"kueue.azure.com/gpu-series:",
+		workloadmeta.AnnotationResourceFlavor + ":",
+		workloadmeta.AnnotationClusterQueue + ":",
 		"kueue.x-k8s.io/podset-unconstrained-topology",
 		"kueue.x-k8s.io/podset-required-topology",
 		"kueue.x-k8s.io/podset-preferred-topology",
@@ -513,6 +511,7 @@ runtime:
 	o.namespace = "e2e-stack"
 	o.queue = "e2e-stack-large-gpu-queue"
 	o.nodeSelectors = append(o.nodeSelectors, "gpu=a100")
+	o.disableDefaultPriorities = true
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
@@ -762,7 +761,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.eval.gpu"
+	o.profileName = "azure.research.eval.gpu"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err == nil || !strings.Contains(err.Error(), "lane=eval") || !strings.Contains(err.Error(), "rayjob-eval") {
@@ -793,7 +792,7 @@ runtime:
 	}{
 		{
 			name:    "preset-train-lane",
-			policy:  func(o *runDispatchOptions) { o.preset = "azure.research.training.l" },
+			policy:  func(o *runDispatchOptions) { o.profileName = "azure.research.training.l" },
 			wantSub: "lane=\"training\"",
 		},
 		{
@@ -840,15 +839,15 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.xl"
+	o.profileName = "azure.research.training.xl"
 	o.dryRun = "client"
 	_, stderr, err := runManagedWorkflowDispatch(t, o)
-	if err == nil || !strings.Contains(err.Error(), "shape \"8xgpu\" requests 8 GPU(s), but manifest compute.gpus=1") {
-		t.Fatalf("expected shape mismatch rejection, got %v\nstderr:\n%s", err, stderr)
+	if err == nil || !strings.Contains(err.Error(), `compute.gpus=1 conflicts with authoritative workload profile "azure.research.training.xl" value 8`) {
+		t.Fatalf("expected workload profile cardinality mismatch rejection, got %v\nstderr:\n%s", err, stderr)
 	}
 }
 
-func TestManagedWorkflowSubmitPresetQueueOverrideInfersTeam(t *testing.T) {
+func TestManagedWorkflowSubmitAuthoritativeQueueAndTeamRender(t *testing.T) {
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: queue-team-infer
@@ -861,29 +860,27 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.l"
+	o.profileName = "azure.research.training.l"
 	o.queue = "sample-training"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
-		t.Fatalf("managed workflow submit should infer team from queue override: %v\nstderr:\n%s", err, stderr)
+		t.Fatalf("managed workflow submit should use the selected profile queue and team: %v\nstderr:\n%s", err, stderr)
 	}
 	rendered := out
 	for _, want := range []string{
 		"kueue.x-k8s.io/queue-name: sample-training",
 	} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("inferred queue/team render missing %q:\n%s", want, rendered)
+			t.Fatalf("authoritative queue/team render missing %q:\n%s", want, rendered)
 		}
 	}
-	for _, want := range []string{"inferred --team=sample", "--queue=\"sample-training\""} {
-		if !strings.Contains(stderr, want) {
-			t.Fatalf("queue/team inference warning missing %q: %s", want, stderr)
-		}
+	if strings.Contains(stderr, "inferred") {
+		t.Fatalf("authoritative profile selection must not emit legacy inference warnings: %s", stderr)
 	}
 }
 
-func TestManagedWorkflowSubmitRejectsExplicitQueueTeamConflict(t *testing.T) {
+func TestManagedWorkflowSubmitUsesAuthoritativeExplicitScope(t *testing.T) {
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: queue-team-conflict
@@ -896,18 +893,16 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.l"
+	o.profileName = "azure.research.training.l"
 	o.queue = "sample-training"
 	o.team = "research"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
-	if err == nil {
-		t.Fatalf("expected explicit queue/team conflict to fail; stdout:\n%s\nstderr:\n%s", out, stderr)
+	if err != nil {
+		t.Fatalf("authoritative queue/team scope should render: %v\nstdout:\n%s\nstderr:\n%s", err, out, stderr)
 	}
-	for _, want := range []string{"--queue=\"sample-training\"", "--team=\"research\"", "team intent consistent"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("queue/team conflict error missing %q: %v", want, err)
-		}
+	if !strings.Contains(out, "kueue.x-k8s.io/queue-name: sample-training") {
+		t.Fatalf("authoritative queue missing from render:\n%s", out)
 	}
 }
 
@@ -924,7 +919,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.l"
+	o.profileName = "azure.research.training.l"
 	o.queue = "sample-training"
 	o.team = "sample"
 	o.dryRun = "client"
@@ -955,7 +950,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.large-memory.xl"
+	o.profileName = "azure.research.large-memory.xl"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
@@ -1006,17 +1001,12 @@ runtime:
 			t.Errorf("inferred render missing %q", want)
 		}
 	}
-	if !strings.Contains(stderr, "inferred preset: azure.research.training.2x") {
-		t.Errorf("expected stderr to surface inference, got:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "team=research from --team") {
-		t.Errorf("expected stderr to name team source, got:\n%s", stderr)
+	if strings.Contains(stderr, "inferred preset:") {
+		t.Errorf("authoritative profile render emitted legacy preset inference:\n%s", stderr)
 	}
 }
 
-// TestManagedWorkflowSubmitInferenceUsesTeamFlag verifies that --team selects the
-// correct team in the inference path, picking experimental.training.2x.
-func TestManagedWorkflowSubmitInferenceUsesTeamFlag(t *testing.T) {
+func TestManagedWorkflowSubmitUsesSelectedProfileTeam(t *testing.T) {
 	t.Setenv("TAU_TEAM", "")
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
@@ -1036,14 +1026,12 @@ runtime:
 	if err != nil {
 		t.Fatalf("managed workflow submit: %v\nstderr:\n%s", err, stderr)
 	}
-	if !strings.Contains(stderr, "team=experimental from --team") {
-		t.Errorf("expected stderr to name --team source, got:\n%s", stderr)
+	if strings.Contains(stderr, "inferred") {
+		t.Errorf("selected profile team emitted legacy inference warning:\n%s", stderr)
 	}
 }
 
-// TestManagedWorkflowSubmitInferenceUsesEnvVar verifies that TAU_TEAM takes effect
-// when --team is not passed.
-func TestManagedWorkflowSubmitInferenceUsesEnvVar(t *testing.T) {
+func TestManagedWorkflowSubmitIgnoresLegacyTeamEnvironmentInference(t *testing.T) {
 	t.Setenv("TAU_TEAM", "research")
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
@@ -1062,8 +1050,8 @@ runtime:
 	if err != nil {
 		t.Fatalf("managed workflow submit: %v\nstderr:\n%s", err, stderr)
 	}
-	if !strings.Contains(stderr, "team=research from TAU_TEAM env") {
-		t.Errorf("expected stderr to name env source, got:\n%s", stderr)
+	if strings.Contains(stderr, "inferred") {
+		t.Errorf("selected profile emitted legacy environment inference warning:\n%s", stderr)
 	}
 }
 
@@ -1112,7 +1100,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.2x"
+	o.profileName = "azure.research.training.2x"
 	o.dryRun = "client"
 	_, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
@@ -1156,7 +1144,7 @@ case "$*" in
     printf '%s\n' '{"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"tau-cq"}}'
     ;;
   *clusterqueue.kueue.x-k8s.io*)
-    printf '%s\n' '{"metadata":{"name":"tau-cq"},"spec":{"resourceGroups":[]}}'
+    printf '%s\n' '{"metadata":{"name":"tau-cq"},"spec":{"resourceGroups":[]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
     ;;
   *"get rayjobs.ray.io"*)
     printf '%s\n' '{"metadata":{"uid":"uid-submit","annotations":{"` + workloadmeta.AnnotationSubmissionID + `":"submission-test"},"labels":{}}}'
@@ -1218,14 +1206,13 @@ func writeMainScript(t *testing.T) string {
 
 // --- multi-node CLI dispatch tests ---
 
-func TestManagedWorkflowSubmitMultiNodeWorkersFlagOverridesManifest(t *testing.T) {
-	// --workers overrides compute.workers in the manifest. With workers>1
-	// and --workload-kind omitted, dispatch infers rayjob and emits a
-	// stderr warning so the researcher knows the dispatch was implicit.
+func TestManagedWorkflowSubmitMultiNodeProfileMatchesManifest(t *testing.T) {
+	// The authoritative profile and manifest agree on worker cardinality.
+	// With workers>1 and --workload-kind omitted, dispatch infers rayjob.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: mn-cli
-compute: { gpus: 8 }
+compute: { gpus: 8, workers: 2 }
 runtime:
   pip:
     - torch==2.4.0
@@ -1236,9 +1223,8 @@ runtime:
 	}
 	o := defaultRunDispatchOptions()
 	o.file = manifest
-	o.workers = 2
 	o.mainScript = mainScript
-	o.preset = "azure.research.large-memory.2node"
+	o.profileName = "azure.research.large-memory.2node"
 	o.dryRun = "client"
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
@@ -1308,7 +1294,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifest
 	o.mainScript = writeMainScript(t)
-	o.preset = "azure.research.training.l"
+	o.profileName = "azure.research.training.l"
 	o.queue = "workspace-jobqueue"
 	o.workspaceQueueResolved = true
 	o.dryRun = "client"
@@ -1319,7 +1305,6 @@ runtime:
 	for _, want := range []string{
 		"kueue.x-k8s.io/queue-name: workspace-jobqueue",
 		`kueue.x-k8s.io/podset-unconstrained-topology: "true"`,
-		workloadmeta.AnnotationTopologyQueue + `: "workspace-jobqueue"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("workspace managed workflow missing %q:\n%s", want, out)
@@ -1384,14 +1369,15 @@ runtime:
 	}
 	o := defaultRunDispatchOptions()
 	o.file = manifest
-	o.preset = "azure.research.large-memory.2node"
+	o.profileName = "azure.research.large-memory.2node"
 	o.mainScript = mainScript
 	o.dryRun = "client"
 	_, _, err := runManagedWorkflowDispatch(t, o)
 	if err == nil {
 		t.Fatalf("expected preset/manifest workers mismatch to fail")
 	}
-	if !strings.Contains(err.Error(), "compute.workers=2") || !strings.Contains(err.Error(), "compute.workers=4") {
+	if !strings.Contains(err.Error(), "compute.workers=4") ||
+		!strings.Contains(err.Error(), `authoritative workload profile "azure.research.large-memory.2node" value 2`) {
 		t.Errorf("error should call out the mismatch with both values; got: %v", err)
 	}
 }
@@ -1411,7 +1397,7 @@ runtime:
 `)
 	o := defaultRunDispatchOptions()
 	o.file = manifest
-	o.preset = "azure.research.large-memory.2node"
+	o.profileName = "azure.research.large-memory.2node"
 	o.dryRun = "client"
 	_, _, err := runManagedWorkflowDispatch(t, o)
 	if err == nil {
@@ -1660,7 +1646,7 @@ runtime:
 	o := defaultRunDispatchOptions()
 	o.file = manifestPath
 	o.mainScript = mainScript
-	o.preset = "azure.research.training.l"
+	o.profileName = "azure.research.training.l"
 	o.keyVault = "my-vault"
 	o.kvTenantID = "tenant-abc"
 	o.kvClientID = "client-xyz"

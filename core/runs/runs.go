@@ -38,6 +38,7 @@ const tauLabelPrefix = workloadmeta.Domain
 
 const (
 	labelQueue                    = "kueue.x-k8s.io/queue-name"
+	multiKueueManagedBy           = "kueue.x-k8s.io/multikueue"
 	experimentTrackingTracked     = "tracked"
 	experimentTrackingAvailable   = "available"
 	experimentTrackingUntracked   = "untracked"
@@ -96,6 +97,8 @@ type Run struct {
 	Source             string    `json:"source,omitempty"`
 	ExperimentTracking string    `json:"experimentTracking"`
 	ExperimentPath     string    `json:"experimentPath,omitempty"`
+	ExecutionTarget    string    `json:"executionTarget,omitempty"`
+	Stage              string    `json:"stage,omitempty"`
 }
 
 // Snapshot is the Jobs board payload: the Tau-managed workloads, newest first.
@@ -251,6 +254,9 @@ type jobList struct {
 			Annotations       map[string]string `json:"annotations"`
 			OwnerReferences   []ownerRef        `json:"ownerReferences"`
 		} `json:"metadata"`
+		Spec struct {
+			ManagedBy string `json:"managedBy"`
+		} `json:"spec"`
 		Status struct {
 			Conditions []jobCondition `json:"conditions"`
 			Active     int            `json:"active"`
@@ -271,6 +277,9 @@ type rayJobList struct {
 			Labels            map[string]string `json:"labels"`
 			Annotations       map[string]string `json:"annotations"`
 		} `json:"metadata"`
+		Spec struct {
+			ManagedBy string `json:"managedBy"`
+		} `json:"spec"`
 		Status struct {
 			JobDeploymentStatus string `json:"jobDeploymentStatus"`
 			JobStatus           string `json:"jobStatus"`
@@ -303,6 +312,7 @@ func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			}
 		}
 		created := parseTime(item.Metadata.CreationTimestamp)
+		executionTarget, stage := runtimeExecutionTarget(item.Spec.ManagedBy, item.Metadata.Annotations)
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "Job",
@@ -316,6 +326,8 @@ func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			DurableID:          durableID(item.Metadata.Labels, item.Metadata.Annotations),
 			Source:             source,
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
+			ExecutionTarget:    executionTarget,
+			Stage:              stage,
 		})
 	}
 	return out
@@ -341,6 +353,7 @@ func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			}
 		}
 		created := parseTime(item.Metadata.CreationTimestamp)
+		executionTarget, stage := runtimeExecutionTarget(item.Spec.ManagedBy, item.Metadata.Annotations)
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "RayJob",
@@ -354,9 +367,20 @@ func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			DurableID:          durableID(item.Metadata.Labels, item.Metadata.Annotations),
 			Source:             source,
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
+			ExecutionTarget:    executionTarget,
+			Stage:              stage,
 		})
 	}
+
 	return out
+}
+
+func runtimeExecutionTarget(managedBy string, annotations map[string]string) (string, string) {
+	if strings.TrimSpace(managedBy) == multiKueueManagedBy ||
+		strings.EqualFold(strings.TrimSpace(annotations[workloadmeta.AnnotationMultiKueueStage]), "beta") {
+		return "multiKueueBeta", "Beta"
+	}
+	return "", ""
 }
 
 // hasTauLabel reports whether any label key is under the Tau prefix.

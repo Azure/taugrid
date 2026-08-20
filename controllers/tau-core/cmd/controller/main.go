@@ -40,12 +40,14 @@ func main() {
 	var enableLeaderElection bool
 	var systemNamespace string
 	var legacyNamespace string
+	var betaFeatureGates string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager")
 	flag.StringVar(&systemNamespace, "system-namespace", "", "Namespace containing TauWorkspace and TauQuotaRequest objects")
 	flag.StringVar(&legacyNamespace, "platform-namespace", "", "Deprecated alias for --system-namespace")
+	flag.StringVar(&betaFeatureGates, "beta-feature-gates", "", "Comma-separated Beta runtime capabilities; supported: multikueue")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{})))
@@ -53,6 +55,11 @@ func main() {
 	systemNamespace, err = resolveSystemNamespaceFlag(systemNamespace, legacyNamespace)
 	if err != nil {
 		setupLog.Error(err, "invalid namespace flags")
+		os.Exit(1)
+	}
+	betaFeatures, err := parseBetaFeatureGates(betaFeatureGates)
+	if err != nil {
+		setupLog.Error(err, "invalid Beta feature gates")
 		os.Exit(1)
 	}
 
@@ -68,8 +75,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	var multiKueuePrerequisites corecontroller.MultiKueuePrerequisiteReader
+	if betaFeatures.MultiKueue {
+		multiKueuePrerequisites = &corecontroller.KubernetesMultiKueuePrerequisites{
+			Reader: mgr.GetAPIReader(),
+		}
+	}
 	if err := (&corecontroller.TauClusterReconciler{
-		Client: mgr.GetClient(),
+		Client:                       mgr.GetClient(),
+		MultiKueueBetaRuntimeEnabled: betaFeatures.MultiKueue,
+		MultiKueuePrerequisites:      multiKueuePrerequisites,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TauCluster")
 		os.Exit(1)
@@ -99,11 +114,42 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
+	setupLog.Info("starting manager", "multiKueueBetaRuntimeEnabled", betaFeatures.MultiKueue)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+type betaFeatures struct {
+	MultiKueue bool
+}
+
+func parseBetaFeatureGates(raw string) (betaFeatures, error) {
+	var features betaFeatures
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return features, nil
+	}
+
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(raw, ",") {
+		name := strings.ToLower(strings.TrimSpace(item))
+		if name == "" {
+			return betaFeatures{}, fmt.Errorf("--beta-feature-gates contains an empty feature name")
+		}
+		if _, ok := seen[name]; ok {
+			return betaFeatures{}, fmt.Errorf("--beta-feature-gates contains duplicate feature %q", name)
+		}
+		seen[name] = struct{}{}
+		switch name {
+		case "multikueue":
+			features.MultiKueue = true
+		default:
+			return betaFeatures{}, fmt.Errorf("unsupported Beta feature %q; supported: multikueue", name)
+		}
+	}
+	return features, nil
 }
 
 func resolveSystemNamespaceFlag(systemNamespace, legacyNamespace string) (string, error) {

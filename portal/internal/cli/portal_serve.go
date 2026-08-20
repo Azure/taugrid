@@ -46,7 +46,6 @@ func newPortalServeCmd(storePath *string) *cobra.Command {
 	var (
 		kubeconfig     string
 		namespace      string
-		policyPath     string
 		jobsScopeMode  string
 		operatorScopes []string
 		clusterName    string
@@ -92,7 +91,6 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			jobsOpts := portalapi.JobsOptions{
 				ScopeMode:      portalapi.JobsScopeMode(jobsScopeMode),
 				OperatorScopes: parsedOperatorScopes,
-				PolicyPath:     policyPath,
 			}
 			// The Jobs, Ray, Nodes, and Runs boards share one Kubernetes reader:
 			// a portal on a host without cluster access still serves the shell,
@@ -104,6 +102,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, and Runs boards disabled (no Kubernetes access): %v\n", err)
 			} else {
 				jobsOpts.Reader = client
+				jobsOpts.Profiles = client
 				rayOpts.Reader = client
 				nodesOpts.Reader = client
 				runsOpts.Reader = client
@@ -185,7 +184,6 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	addExpServeFlags(cmd, &opts, false)
 	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig for the Jobs board when running out-of-cluster (default: in-cluster ServiceAccount, then $KUBECONFIG)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "optional legacy namespace for the Ray and Runs boards; empty reads cluster-wide and managed workspaces override it")
-	cmd.Flags().StringVar(&policyPath, "policy", "", "topology policy file for the Jobs board (default: TAU_TOPOLOGY_POLICY, in-tree, or embedded Azure policy)")
 	cmd.Flags().StringVar(&jobsScopeMode, "jobs-scope-mode", string(portalapi.JobsScopeDisabled), "computed Jobs board scope mode: disabled, workspace, or operator")
 	cmd.Flags().StringSliceVar(&operatorScopes, "jobs-operator-scope", nil, "trusted operator Jobs scope as team=namespace/localQueue (repeatable; operator mode only)")
 	cmd.Flags().StringVar(&clusterName, "cluster", "", "legacy/default cluster scope for Kusto-backed boards (required when durable run history is configured)")

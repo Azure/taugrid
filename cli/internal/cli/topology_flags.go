@@ -26,8 +26,6 @@ import (
 // flag surface for them on `tau run`, and adding one would create a second
 // source of truth alongside `policy.*`.
 type topologyFlags struct {
-	preset                   string
-	policyPath               string
 	team                     string
 	lane                     string
 	mode                     string
@@ -41,114 +39,47 @@ type topologyFlags struct {
 	disableDefaultPriorities bool
 }
 
-func formatPresetHandoff(p runtopology.ResolvedPreset) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "preset:  %s", p.Preset.Name)
-	if p.Preset.Description != "" {
-		fmt.Fprintf(&b, " — %s", p.Preset.Description)
-	}
-	b.WriteString("\n")
-	if p.Preset.Explain != "" {
-		fmt.Fprintf(&b, "why:     %s\n", p.Preset.Explain)
-	}
-	return b.String()
+func (f topologyFlags) applyWithChanged(o *jobrender.Options, changed func(string) bool) ([]string, error) {
+	return f.applyWithChangedAndWorkspaceQueue(o, changed, false)
 }
 
-func (f topologyFlags) resolvePreset(explicitProfile string) (string, *runtopology.ResolvedPreset, []string, error) {
-	if f.preset == "" {
-		return explicitProfile, nil, nil, nil
-	}
-	resolved, err := runtopology.ResolvePreset(f.policyPath, f.preset)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	profileName := explicitProfile
+func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, changed func(string) bool, _ bool) ([]string, error) {
 	warnings := []string{}
-	if profileName == "" {
-		profileName = resolved.Preset.Profile
-	} else if resolved.Preset.Profile != "" && profileName != resolved.Preset.Profile {
-		warnings = append(warnings, fmt.Sprintf("warning: --profile %q overrides preset %s profile %q", profileName, resolved.Preset.Name, resolved.Preset.Profile))
-	}
-	return profileName, &resolved, warnings, nil
-}
 
-func (f topologyFlags) applyWithChanged(o *jobrender.Options, preset *runtopology.ResolvedPreset, changed func(string) bool) ([]string, error) {
-	return f.applyWithChangedAndWorkspaceQueue(o, preset, changed, false)
-}
-
-func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, preset *runtopology.ResolvedPreset, changed func(string) bool, workspaceQueueResolved bool) ([]string, error) {
-	warnings := []string{}
-	if preset != nil {
-		presetOptions := preset.Options
-		jobrender.ApplyTopologyOptions(o, presetOptions)
-		if series, ok := runtopology.ManagedGPUSeriesForFlavor(preset.Preset.ResourceFlavor); ok && !workspaceQueueResolved {
-			if o.NodeSelector == nil {
-				o.NodeSelector = map[string]string{}
-			}
-			if current := o.NodeSelector[runtopology.ManagedGPUSeriesLabel]; current != "" && current != series {
-				return nil, fmt.Errorf("preset %s requires %s=%s, but the workload selects %s", preset.Preset.Name, runtopology.ManagedGPUSeriesLabel, series, current)
-			}
-			o.NodeSelector[runtopology.ManagedGPUSeriesLabel] = series
-		}
-		if o.Labels == nil {
-			o.Labels = map[string]string{}
-		}
-		for k, v := range preset.Labels {
-			o.Labels[k] = v
-		}
-		if o.Annotations == nil {
-			o.Annotations = map[string]string{}
-		}
-		for k, v := range preset.Annotations {
-			o.Annotations[k] = v
-		}
-	}
-
-	override := func(flag, raw, presetValue string, set func(string)) {
+	override := func(flag, raw string, set func(string)) {
 		if !changed(flag) {
 			return
 		}
-		if flag != "queue" && preset != nil && presetValue != "" && raw != "" && raw != presetValue {
-			warnings = append(warnings, fmt.Sprintf("warning: --%s=%q overrides preset %s value %q", flag, raw, preset.Preset.Name, presetValue))
-		}
 		set(raw)
 	}
-	override("team", f.team, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.Team }), func(v string) { o.Team = v })
-	override("lane", f.lane, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.Lane }), func(v string) { o.Lane = v })
-	override("mode", f.mode, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.Mode }), func(v string) { o.Mode = v })
-	override("topology", f.topology, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.Placement }), func(v string) { o.Topology = v })
-	override("shape", f.shape, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.Shape }), func(v string) { o.Shape = v })
-	override("gpu-class", f.gpuClass, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.GPUClass }), func(v string) { o.GPUClass = v })
-	override("queue", f.queue, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.QueueName }), func(v string) { o.QueueName = v })
-	if preset != nil && !workspaceQueueResolved && changed("queue") &&
-		!strings.EqualFold(strings.TrimSpace(o.QueueName), "auto") &&
-		strings.TrimSpace(o.QueueName) != strings.TrimSpace(preset.Options.QueueName) {
-		o.DisableKueueTopologyAnnotations = true
-		delete(o.Annotations, workloadmeta.AnnotationKueueTopology)
-	}
-	override("priority-tier", f.priorityTier, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.PriorityTier }), func(v string) {
+	override("team", f.team, func(v string) { o.Team = v })
+	override("lane", f.lane, func(v string) { o.Lane = v })
+	override("mode", f.mode, func(v string) { o.Mode = v })
+	override("topology", f.topology, func(v string) { o.Topology = v })
+	override("shape", f.shape, func(v string) { o.Shape = v })
+	override("gpu-class", f.gpuClass, func(v string) { o.GPUClass = v })
+	override("queue", f.queue, func(v string) { o.QueueName = v })
+	override("priority-tier", f.priorityTier, func(v string) {
 		o.PriorityTier = v
 		o.WorkloadPriorityClassName = ""
 		o.PodPriorityClassName = ""
 	})
-	override("workload-priority-class", f.workloadPriorityClass, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.WorkloadPriorityClassName }), func(v string) { o.WorkloadPriorityClassName = v })
-	override("pod-priority-class", f.podPriorityClass, valueOrEmpty(preset, func(p runtopology.ResolvedPreset) string { return p.Options.PodPriorityClassName }), func(v string) { o.PodPriorityClassName = v })
+	override("workload-priority-class", f.workloadPriorityClass, func(v string) { o.WorkloadPriorityClassName = v })
+	override("pod-priority-class", f.podPriorityClass, func(v string) { o.PodPriorityClassName = v })
 
-	if preset == nil {
-		jobrender.ApplyTopologyOptions(o, runtopology.Options{
-			Team:                      f.team,
-			Lane:                      f.lane,
-			Mode:                      f.mode,
-			Placement:                 f.topology,
-			Shape:                     f.shape,
-			GPUClass:                  f.gpuClass,
-			QueueName:                 f.queue,
-			PriorityTier:              f.priorityTier,
-			WorkloadPriorityClassName: f.workloadPriorityClass,
-			PodPriorityClassName:      f.podPriorityClass,
-			DisableDefaultPriorities:  f.disableDefaultPriorities,
-		})
-	}
+	jobrender.ApplyTopologyOptions(o, runtopology.Options{
+		Team:                      f.team,
+		Lane:                      f.lane,
+		Mode:                      f.mode,
+		Placement:                 f.topology,
+		Shape:                     f.shape,
+		GPUClass:                  f.gpuClass,
+		QueueName:                 f.queue,
+		PriorityTier:              f.priorityTier,
+		WorkloadPriorityClassName: f.workloadPriorityClass,
+		PodPriorityClassName:      f.podPriorityClass,
+		DisableDefaultPriorities:  f.disableDefaultPriorities,
+	})
 	if changed("disable-default-priorities") {
 		o.DisableDefaultPriorities = f.disableDefaultPriorities
 	}
@@ -157,13 +88,6 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, p
 			"warning: gpu_class %q is deprecated; use %q instead (placement and interconnect belong in policy.topology)",
 			o.GPUClass, canonical))
 		o.GPUClass = canonical
-	}
-	if !workspaceQueueResolved && !strings.EqualFold(strings.TrimSpace(o.QueueName), "auto") {
-		if warning, err := f.reconcilePresetQueueTeamOverride(o, preset, changed("queue"), changed("team")); err != nil {
-			return nil, err
-		} else if warning != "" {
-			warnings = append(warnings, warning)
-		}
 	}
 	return warnings, nil
 }
@@ -200,12 +124,12 @@ func mergeNodeSelectors(base, required map[string]string) (map[string]string, er
 	return base, nil
 }
 
-func prepareAutoQueueRender(o *jobrender.Options, preset *runtopology.ResolvedPreset, allowImplicit bool, dryRun string) (bool, bool) {
+func prepareAutoQueueRender(o *jobrender.Options, allowImplicit bool, dryRun string) (bool, bool) {
 	if o == nil {
 		return false, false
 	}
 	explicit := strings.EqualFold(strings.TrimSpace(o.QueueName), "auto")
-	implicit := dryRun != "client" && allowImplicit && strings.TrimSpace(o.QueueName) == "" && preset == nil
+	implicit := dryRun != "client" && allowImplicit && strings.TrimSpace(o.QueueName) == ""
 	if implicit {
 		// Render a valid provisional manifest, then select from its effective
 		// scheduling contract and render once more with the selected queue.
@@ -332,25 +256,6 @@ func formatQueueCandidates(candidates []queueresolve.QueueCandidate) string {
 	return b.String()
 }
 
-func valueOrEmpty(preset *runtopology.ResolvedPreset, get func(runtopology.ResolvedPreset) string) string {
-	if preset == nil {
-		return ""
-	}
-	return get(*preset)
-}
-
-func (f topologyFlags) reconcilePresetQueueTeamOverride(o *jobrender.Options, preset *runtopology.ResolvedPreset, queueChanged, teamChanged bool) (string, error) {
-	if preset == nil {
-		return "", nil
-	}
-	result, err := runtopology.ReconcilePresetQueueOverride(*preset, o.QueueName, o.Team, o.Lane, queueChanged, teamChanged)
-	if err != nil {
-		return "", err
-	}
-	o.Team = result.Team
-	return result.Warning, nil
-}
-
 type kubeRawRunner interface {
 	Raw(context.Context, []string, []byte) (string, error)
 }
@@ -366,9 +271,9 @@ type renderedQueueContract struct {
 }
 
 type queueValidationPolicy struct {
-	Preset                  *runtopology.ResolvedPreset
 	TopologyName            string
 	CatalogTopologyContract bool
+	ClusterQueue            string
 }
 
 func inspectRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string, manifest []byte, opts jobrender.Options, policy queueValidationPolicy) (queueresolve.ValidationReport, error) {
@@ -398,7 +303,7 @@ func inspectRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string
 	validationOpts := queueresolve.ValidationOptions{
 		Namespace:               namespace,
 		QueueName:               queueName,
-		Preset:                  policy.Preset,
+		ClusterQueue:            policy.ClusterQueue,
 		Team:                    opts.Team,
 		Lane:                    opts.Lane,
 		GPUClass:                gpuClass,

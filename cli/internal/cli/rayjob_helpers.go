@@ -10,7 +10,6 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/rayjobrender"
 	"github.com/Azure/taugrid/core/experiment"
-	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
 func rayJobRequestedGPUCount(workers, gpusPerWorker int) int {
@@ -56,7 +55,7 @@ func storageMountType(pvc string) string {
 	return "pvc"
 }
 
-func formatRayJobSubmitHandoff(name, namespace, kubeContext string, preset *runtopology.ResolvedPreset) string {
+func formatRayJobSubmitHandoff(name, namespace, kubeContext string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nsubmitted %s (kind=rayjob, ns=%s)\n", name, namespace)
 	fmt.Fprintf(&b, "rayjob:  kubectl get rayjob %s -n %s%s\n", name, namespace, contextFlag(kubeContext))
@@ -64,8 +63,5 @@ func formatRayJobSubmitHandoff(name, namespace, kubeContext string, preset *runt
 	fmt.Fprintf(&b, "logs:    tau run logs %s -n %s -f%s\n", name, namespace, contextFlag(kubeContext))
 	fmt.Fprintf(&b, "kueue:   uid=$(kubectl get rayjob %s -n %s -o jsonpath='{.metadata.uid}'%s) && kubectl get workload -n %s -l kueue.x-k8s.io/job-uid=$uid%s\n", name, namespace, contextFlag(kubeContext), namespace, contextFlag(kubeContext))
 	fmt.Fprintf(&b, "delete:  kubectl delete rayjob %s -n %s%s\n", name, namespace, contextFlag(kubeContext))
-	if preset != nil {
-		b.WriteString(formatPresetHandoff(*preset))
-	}
 	return b.String()
 }

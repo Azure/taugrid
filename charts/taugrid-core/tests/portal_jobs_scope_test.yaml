@@ -16,6 +16,9 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --namespace
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --policy
 
   - it: renders an explicit disabled mode for compatible images
     set:
@@ -124,3 +127,25 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --workspace-directory
+
+  - it: grants only singleton TauCluster profile status read
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - tau.azure.com
+            resources:
+              - clusters
+            resourceNames:
+              - cluster
+            verbs:
+              - get

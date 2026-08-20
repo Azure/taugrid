@@ -165,6 +165,14 @@ assert_invalid 1.2.3+build_1 1.2.3 "build metadata identifier"
 assert_invalid 1.2.3+build+1 1.2.3 "build metadata must contain non-empty"
 assert_invalid 1.2.3 1.2.3-01 "reference chart version"
 
+if gate_output="$(gate_kueue_multikueue_beta "$TEST_ROOT/unused.tgz" 0.18.3 2>&1)"; then
+  fail "unreviewed Kueue version unexpectedly accepted the MultiKueue gate patch"
+fi
+case "$gate_output" in
+  *"Refusing to apply"*"unreviewed Kueue chart version 0.18.3"*) ;;
+  *) fail "Kueue gate version refusal was not actionable: $gate_output" ;;
+esac
+
 export FAKE_DEPENDENCY_VERSION=0.1.3
 vendor_taugrid_dependencies "$TEST_CHART"
 [[ -f "$TEST_CHART/charts/gpu-monitoring-0.1.3.tgz" ]] ||

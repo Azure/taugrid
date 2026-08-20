@@ -4,7 +4,34 @@
   "additionalProperties": false,
   "properties": {
     "global": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "betaFeatures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "multikueue"
+            ]
+          }
+        },
+        "betaRiskAcknowledgements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "multikueue"
+            ]
+          }
+        }
+      },
+      "required": [
+        "betaFeatures",
+        "betaRiskAcknowledgements"
+      ]
     },
     "tauCluster": {
       "type": "object",
@@ -12,7 +39,9 @@
       "required": [
         "managementMode",
         "deletionPolicy",
-        "queues"
+        "features",
+        "queues",
+        "workloadProfiles"
       ],
       "properties": {
         "managementMode": {
@@ -29,6 +58,22 @@
             "DeleteManaged"
           ]
         },
+        "features": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "multiKueue"
+          ],
+          "properties": {
+            "multiKueue": {
+              "type": "string",
+              "enum": [
+                "Disabled",
+                "Beta"
+              ]
+            }
+          }
+        },
         "nodeLabelRules": {
           "type": "array",
           "minItems": 0,
@@ -44,6 +89,12 @@
         },
         "queues": {
           "$ref": "#/definitions/ownership"
+        },
+        "workloadProfiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/workloadProfile"
+          }
         }
       }
     },
@@ -85,6 +136,7 @@
     }
   },
   "required": [
+    "global",
     "partOf",
     "image",
     "tauCluster"
@@ -138,6 +190,111 @@
           "additionalProperties": {
             "type": "string"
           }
+        }
+      }
+    },
+    "workloadProfile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "gpusPerWorker",
+          "workerCount",
+          "mode",
+          "placement",
+          "defaultLocalQueue",
+          "executionTarget",
+          "priorities"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+          },
+          "description": {
+            "type": "string"
+          },
+          "applicability": {
+            "$ref": "#/definitions/profileApplicability"
+          },
+          "gpusPerWorker": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "workerCount": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "fixed",
+              "elastic"
+            ]
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "independent",
+              "single-node-nvlink",
+              "multi-node-nccl"
+            ]
+          },
+          "defaultLocalQueue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "executionTarget": {
+            "type": "string",
+            "enum": [
+              "singleCluster",
+              "multiKueueBeta"
+            ]
+          },
+          "priorities": {
+            "$ref": "#/definitions/profilePriorities"
+          }
+        }
+      },
+    "profileApplicability": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "lanes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "namespaces": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+    "profilePriorities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workloadPriorityClassName": {
+          "type": "string"
+        },
+        "podPriorityClassName": {
+          "type": "string"
+        },
+        "disableDefaultPriorities": {
+          "type": "boolean"
         }
       }
     }

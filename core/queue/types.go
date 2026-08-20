@@ -23,24 +23,21 @@ const (
 
 // Options controls live queue fetches and post-fetch filtering.
 type Options struct {
-	Namespace  string
-	PolicyPath string
-	Team       string
-	Lane       string
-	GPUClass   string
+	Namespace string
+	Team      string
+	Lane      string
+	GPUClass  string
 }
 
 // Snapshot is the machine-readable queue/capacity view returned by Tau.
 type Snapshot struct {
-	Namespace    string   `json:"namespace"`
-	PolicySource string   `json:"policySource,omitempty"`
-	Groups       []Group  `json:"groups"`
-	Hints        []string `json:"hints,omitempty"`
-	Warnings     []string `json:"warnings,omitempty"`
+	Namespace string   `json:"namespace"`
+	Groups    []Group  `json:"groups"`
+	Hints     []string `json:"hints,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
 }
 
-// Group is one user-facing queue slice, normally mapped from a topology preset
-// group to a Kueue local queue + cluster queue + resource flavor.
+// Group is one user-facing queue slice projected from live Kueue objects.
 type Group struct {
 	// Namespace is the LocalQueue namespace this group reports on. It is set
 	// on every group so a cluster-wide snapshot can distinguish the same queue

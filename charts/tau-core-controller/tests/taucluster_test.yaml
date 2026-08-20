@@ -49,6 +49,18 @@ tests:
       - equal:
           path: spec.queues.ownership
           value: External
+      - lengthEqual:
+          path: spec.workloadProfiles
+          count: 15
+      - equal:
+          path: spec.workloadProfiles[0].executionTarget
+          value: singleCluster
+      - equal:
+          path: spec.features.multiKueue
+          value: Disabled
+      - notEqual:
+          path: spec.workloadProfiles[0].executionTarget
+          value: multiKueueBeta
 
   - it: replaces the catalog and appends a platform supplied mapping
     set:
@@ -74,3 +86,28 @@ tests:
       - equal:
           path: spec.nodes.labelRules[1].match.vmSizes[0]
           value: Standard_NC40ads_H100_v5
+
+  - it: replaces the complete workload profile catalog for a site
+    set:
+      tauCluster.workloadProfiles:
+        - name: site.training
+          applicability:
+            teams: [site-team]
+            lanes: [training]
+            namespaces: [site-workloads]
+          gpusPerWorker: 2
+          workerCount: 1
+          mode: fixed
+          placement: independent
+          defaultLocalQueue: site-queue
+          executionTarget: singleCluster
+          priorities:
+            workloadPriorityClassName: site-default
+            podPriorityClassName: site-default
+    asserts:
+      - lengthEqual:
+          path: spec.workloadProfiles
+          count: 1
+      - equal:
+          path: spec.workloadProfiles[0].name
+          value: site.training

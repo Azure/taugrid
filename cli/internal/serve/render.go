@@ -57,6 +57,8 @@ type Options struct {
 	Env         map[string]string
 	EnvVars     []envspec.Var
 	RuntimePip  []string
+	Labels      map[string]string
+	Annotations map[string]string
 
 	VolumeMounts []VolumeMount
 	Volumes      []Volume
@@ -106,19 +108,24 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if queueName == "" {
 		return nil, errors.New("render RayService: Kueue LocalQueue is required")
 	}
-	labels := map[string]any{
-		workloadmeta.LabelService:   o.Name,
-		workloadmeta.LabelProfile:   p.Name,
-		"kueue.x-k8s.io/queue-name": queueName,
-	}
+	labels := stringMapToAny(o.Labels)
+	labels[workloadmeta.LabelService] = o.Name
+	labels[workloadmeta.LabelProfile] = p.Name
+	labels["kueue.x-k8s.io/queue-name"] = queueName
 	for k, v := range gpuLabels {
 		labels[k] = v
 	}
-	headPodLabels := map[string]any{
-		workloadmeta.LabelService: o.Name,
-	}
+	headPodLabels := stringMapToAny(o.Labels)
+	headPodLabels[workloadmeta.LabelService] = o.Name
+	headPodLabels[workloadmeta.LabelProfile] = p.Name
 	for k, v := range gpuLabels {
 		headPodLabels[k] = v
+	}
+	rootAnnotations := stringMapToAny(o.Annotations)
+	headPodAnnotations := stringMapToAny(o.Annotations)
+	for k, v := range gpuAnnotations {
+		rootAnnotations[k] = v
+		headPodAnnotations[k] = v
 	}
 
 	headPodSpec := map[string]any{}
@@ -209,7 +216,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			"name":        o.Name,
 			"namespace":   o.Namespace,
 			"labels":      labels,
-			"annotations": stringMapToAny(gpuAnnotations),
+			"annotations": rootAnnotations,
 		},
 		"spec": map[string]any{
 			"serveConfigV2": serveConfig.String(),
@@ -222,7 +229,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 					"template": map[string]any{
 						"metadata": map[string]any{
 							"labels":      headPodLabels,
-							"annotations": stringMapToAny(gpuAnnotations),
+							"annotations": headPodAnnotations,
 						},
 						"spec": headPodSpec,
 					},
@@ -230,8 +237,10 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 			},
 		},
 	}
-	if len(gpuAnnotations) == 0 {
+	if len(rootAnnotations) == 0 {
 		delete(rayService["metadata"].(map[string]any), "annotations")
+	}
+	if len(headPodAnnotations) == 0 {
 		tmpl := rayService["spec"].(map[string]any)["rayClusterConfig"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)
 		delete(tmpl["metadata"].(map[string]any), "annotations")
 	}

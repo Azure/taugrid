@@ -14,8 +14,6 @@ import (
 
 func testPolicy() topology.Policy {
 	return topology.Policy{
-		Name:       "test-azure",
-		SourceFile: "test-policy.yaml",
 		Presets: map[string]topology.Preset{
 			"azure.research.training.l": {
 				Name:           "azure.research.training.l",
@@ -65,8 +63,8 @@ func TestBuildSnapshotMapsA100PressureAndH200Headroom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Namespace != "ray" || snap.PolicySource != "test-policy.yaml" {
-		t.Fatalf("snapshot metadata not preserved: %#v", snap)
+	if snap.Namespace != "ray" {
+		t.Fatalf("snapshot namespace not preserved: %#v", snap)
 	}
 	if len(snap.Groups) != 2 {
 		t.Fatalf("groups=%d want 2: %#v", len(snap.Groups), snap.Groups)

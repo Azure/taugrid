@@ -1,3 +1,7 @@
+global:
+  betaFeatures: []
+  betaRiskAcknowledgements: []
+
 components:
   kueue:
     enabled: true
@@ -154,6 +158,8 @@ tau-core-controller:
     repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
   tauCluster:
+    features:
+      multiKueue: Disabled
     # Inherits the controller chart's reviewed AKS GPU VM-size catalog, which
     # reconciles gpu-class and gpu-series labels from instance-type. Append
     # cluster-specific hardware without replacing that catalog.

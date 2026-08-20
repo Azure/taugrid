@@ -6,7 +6,10 @@ description: How policy intent becomes admitted and scheduled pods
 
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
-Tau resolves workload policy; upstream systems enforce it.
+Tau resolves the selected ready `TauCluster` workload profile; upstream systems
+enforce the rendered queue, priority, resource, and placement contract. The
+controller's resolved profile status is authoritative and stale status fails
+closed. See [workload profile migration](../../operations/workload-profiles/).
 
 | Stage | Owner | Decision |
 |---|---|---|

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
@@ -64,6 +65,7 @@ func TestTauClusterRoundTrip(t *testing.T) {
 		Spec: TauClusterSpec{
 			ManagementMode: ClusterManagementModeObserve,
 			DeletionPolicy: ClusterDeletionPolicyRetain,
+			Features:       TauClusterFeaturesSpec{MultiKueue: TauClusterFeatureBeta},
 			Nodes: TauClusterNodesSpec{
 				Selector: map[string]string{"kubernetes.azure.com/agentpool": "gpu"},
 				LabelRules: []TauNodeLabelRule{{
@@ -78,11 +80,48 @@ func TestTauClusterRoundTrip(t *testing.T) {
 				ClusterQueues:     []TauClusterObjectReference{{Name: "tau-cq"}},
 				SharedLocalQueues: []TauNamespacedObjectReference{{Namespace: "ray", Name: "jobqueue"}},
 			},
+			WorkloadProfiles: []profile.WorkloadProfile{{
+				Name:              "research-1gpu",
+				GPUsPerWorker:     1,
+				WorkerCount:       1,
+				Mode:              profile.ModeFixed,
+				Placement:         profile.PlacementIndependent,
+				DefaultLocalQueue: "jobqueue",
+				ExecutionTarget:   profile.ExecutionTargetMultiKueueBeta,
+				Applicability: profile.ProfileApplicability{
+					Teams: []string{"research"}, Namespaces: []string{"ray"},
+				},
+				Priorities: profile.ProfilePriorities{
+					WorkloadPriorityClassName: "tau-default",
+					PodPriorityClassName:      "tau-default",
+				},
+			}},
 		},
 		Status: TauClusterStatus{
 			Phase:              ClusterPhasePending,
 			ObservedGeneration: 1,
 			DesiredStateHash:   "abc123",
+			WorkloadProfiles: profile.ProfileSetStatus{
+				ObservedGeneration: 1,
+				Observed:           1,
+				Ready:              1,
+				ProfileSetHash:     "profile123",
+				Profiles: []profile.ResolvedWorkloadProfile{{
+					WorkloadProfile: profile.WorkloadProfile{
+						Name:              "research-1gpu",
+						GPUsPerWorker:     1,
+						WorkerCount:       1,
+						Mode:              profile.ModeFixed,
+						Placement:         profile.PlacementIndependent,
+						DefaultLocalQueue: "jobqueue",
+						Priorities:        profile.ProfilePriorities{DisableDefaultPriorities: true},
+					},
+					LocalQueues: []profile.ResolvedLocalQueue{{
+						Namespace: "ray", Name: "jobqueue", ClusterQueue: "tau-cq",
+					}},
+					ResourceFlavors: []string{"h100"},
+				}},
+			},
 			Conditions: []metav1.Condition{{
 				Type:               ConditionObserveOnly,
 				Status:             metav1.ConditionTrue,
@@ -104,11 +143,23 @@ func TestTauClusterRoundTrip(t *testing.T) {
 	if got.Name != TauClusterSingletonName || got.Spec.ManagementMode != ClusterManagementModeObserve {
 		t.Fatalf("TauCluster identity/mode = %q/%q", got.Name, got.Spec.ManagementMode)
 	}
+	if got.Spec.Features.MultiKueue != TauClusterFeatureBeta ||
+		got.Spec.WorkloadProfiles[0].ExecutionTarget != profile.ExecutionTargetMultiKueueBeta {
+		t.Fatalf("TauCluster feature/profile execution contract = %#v", got.Spec)
+	}
 	if len(got.Spec.Queues.SharedLocalQueues) != 1 || got.Spec.Queues.SharedLocalQueues[0].Namespace != "ray" {
 		t.Fatalf("TauCluster queue references = %#v", got.Spec.Queues.SharedLocalQueues)
 	}
 	if got.Status.DesiredStateHash != "abc123" {
 		t.Fatalf("TauCluster desired state hash = %q", got.Status.DesiredStateHash)
+	}
+	if len(got.Spec.WorkloadProfiles) != 1 || got.Spec.WorkloadProfiles[0].Name != "research-1gpu" {
+		t.Fatalf("TauCluster workload profile spec = %#v", got.Spec.WorkloadProfiles)
+	}
+	if got.Status.WorkloadProfiles.ProfileSetHash != "profile123" ||
+		len(got.Status.WorkloadProfiles.Profiles) != 1 ||
+		got.Status.WorkloadProfiles.Profiles[0].LocalQueues[0].ClusterQueue != "tau-cq" {
+		t.Fatalf("TauCluster workload profile status = %#v", got.Status.WorkloadProfiles)
 	}
 }
 
@@ -172,7 +223,7 @@ func TestTauClusterCRDContract(t *testing.T) {
 
 	version := cluster.Spec.Versions[0]
 	specProps := version.Schema.OpenAPIV3Schema.Properties["spec"].Properties
-	for _, field := range []string{"managementMode", "deletionPolicy", "nodes", "queues", "workspaceDefaults"} {
+	for _, field := range []string{"managementMode", "deletionPolicy", "nodes", "queues", "workspaceDefaults", "features", "workloadProfiles"} {
 		if _, ok := specProps[field]; !ok {
 			t.Fatalf("TauCluster spec schema missing %q", field)
 		}
@@ -198,6 +249,82 @@ func TestTauClusterCRDContract(t *testing.T) {
 	}
 	if got := string(workspaceDefaults["defaultQueue"].Default.Raw); got != `"jobqueue"` {
 		t.Fatalf("workspaceDefaults.defaultQueue default = %s, want jobqueue", got)
+	}
+	multiKueue := specProps["features"].Properties["multiKueue"]
+	if got := string(multiKueue.Default.Raw); got != `"Disabled"` {
+		t.Fatalf("features.multiKueue default = %s, want Disabled", got)
+	}
+	if len(multiKueue.Enum) != 2 {
+		t.Fatalf("features.multiKueue enum = %v, want Disabled and Beta", multiKueue.Enum)
+	}
+
+	profiles := specProps["workloadProfiles"]
+	if profiles.XListType == nil || *profiles.XListType != "map" ||
+		len(profiles.XListMapKeys) != 1 || profiles.XListMapKeys[0] != "name" {
+		t.Fatalf("spec.workloadProfiles list semantics = type %v keys %v, want map/name", profiles.XListType, profiles.XListMapKeys)
+	}
+	profileProps := profiles.Items.Schema.Properties
+	for _, field := range []string{"name", "description", "applicability", "gpusPerWorker", "workerCount", "mode", "placement", "defaultLocalQueue", "executionTarget", "priorities"} {
+		if _, ok := profileProps[field]; !ok {
+			t.Fatalf("TauCluster workload profile schema missing %q", field)
+		}
+	}
+	for _, field := range []string{"quota", "capacity", "resourceFlavor", "topologyName", "resourceSelector", "topologySelector"} {
+		if _, ok := profileProps[field]; ok {
+			t.Fatalf("TauCluster workload profile spec must not expose %q", field)
+		}
+	}
+	if len(profileProps["mode"].Enum) != 2 || len(profileProps["placement"].Enum) != 3 {
+		t.Fatalf("workload profile enums = mode %v placement %v", profileProps["mode"].Enum, profileProps["placement"].Enum)
+	}
+	if got := string(profileProps["executionTarget"].Default.Raw); got != `"singleCluster"` ||
+		len(profileProps["executionTarget"].Enum) != 2 {
+		t.Fatalf("workload profile executionTarget schema = %#v", profileProps["executionTarget"])
+	}
+
+	statusProps := version.Schema.OpenAPIV3Schema.Properties["status"].Properties
+	statusProfiles := statusProps["workloadProfiles"].Properties
+	for _, field := range []string{"observedGeneration", "observed", "ready", "drifted", "profileSetHash", "profiles"} {
+		if _, ok := statusProfiles[field]; !ok {
+			t.Fatalf("TauCluster workload profile status schema missing %q", field)
+		}
+	}
+	resolved := statusProfiles["profiles"]
+	if resolved.XListType == nil || *resolved.XListType != "map" ||
+		len(resolved.XListMapKeys) != 1 || resolved.XListMapKeys[0] != "name" {
+		t.Fatalf("status.workloadProfiles.profiles list semantics = type %v keys %v", resolved.XListType, resolved.XListMapKeys)
+	}
+	resolvedProps := resolved.Items.Schema.Properties
+	for _, field := range []string{"name", "localQueues", "clusterQueues", "resourceFlavors", "topologies", "workloadPriorityClasses", "podPriorityClasses", "conditions"} {
+		if _, ok := resolvedProps[field]; !ok {
+			t.Fatalf("resolved workload profile schema missing %q", field)
+		}
+	}
+}
+
+func TestTauClusterDeepCopyCopiesSharedProfileSlices(t *testing.T) {
+	cluster := TauCluster{
+		Spec: TauClusterSpec{WorkloadProfiles: []profile.WorkloadProfile{{
+			Name:          "research-1gpu",
+			Applicability: profile.ProfileApplicability{Teams: []string{"research"}},
+		}}},
+		Status: TauClusterStatus{WorkloadProfiles: profile.ProfileSetStatus{
+			Profiles: []profile.ResolvedWorkloadProfile{{
+				WorkloadProfile: profile.WorkloadProfile{Name: "research-1gpu"},
+				ResourceFlavors: []string{"h100"},
+				Conditions:      []metav1.Condition{{Type: profile.ConditionReady, Message: "ready"}},
+			}},
+		}},
+	}
+
+	copy := cluster.DeepCopy()
+	copy.Spec.WorkloadProfiles[0].Applicability.Teams[0] = "other"
+	copy.Status.WorkloadProfiles.Profiles[0].ResourceFlavors[0] = "h200"
+	copy.Status.WorkloadProfiles.Profiles[0].Conditions[0].Message = "changed"
+	if cluster.Spec.WorkloadProfiles[0].Applicability.Teams[0] != "research" ||
+		cluster.Status.WorkloadProfiles.Profiles[0].ResourceFlavors[0] != "h100" ||
+		cluster.Status.WorkloadProfiles.Profiles[0].Conditions[0].Message != "ready" {
+		t.Fatal("TauCluster.DeepCopy() shallow-copied imported workload profile data")
 	}
 }
 

@@ -6,6 +6,7 @@ package queueresolve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -25,7 +26,6 @@ type RawRunner interface {
 type ValidationOptions struct {
 	Namespace               string
 	QueueName               string
-	Preset                  *topology.ResolvedPreset
 	Team                    string
 	Lane                    string
 	GPUClass                string
@@ -49,14 +49,12 @@ type ValidationReport struct {
 	TopologyName     string   `json:"topologyName,omitempty"`
 	RequiredTopology string   `json:"requiredTopology,omitempty"`
 	GPUMax           int64    `json:"gpuMax,omitempty"`
-	Preset           string   `json:"preset,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
 type validationTarget struct {
 	Namespace               string
 	QueueName               string
-	Preset                  *topology.ResolvedPreset
 	Team                    string
 	Lane                    string
 	GPUClass                string
@@ -75,15 +73,13 @@ type validationTarget struct {
 // objects. It only performs kubectl get calls; it never creates, patches, or
 // repairs queue resources.
 func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions) (ValidationReport, error) {
+	requireActiveClusterQueue := strings.TrimSpace(opts.ClusterQueue) != ""
 	target := opts.resolve()
 	report := ValidationReport{
 		Namespace:      target.Namespace,
 		QueueName:      target.QueueName,
 		ClusterQueue:   target.ClusterQueue,
 		ResourceFlavor: target.ResourceFlavor,
-	}
-	if target.Preset != nil {
-		report.Preset = target.Preset.Preset.Name
 	}
 	if target.QueueName == "" {
 		return report, nil
@@ -100,7 +96,7 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		return report, fmt.Errorf("LocalQueue %q in namespace %q has empty spec.clusterQueue; ask the platform owner to inspect that LocalQueue on the workspace cluster and repair it", target.QueueName, target.Namespace)
 	}
 	if target.ClusterQueue != "" && actualClusterQueue != target.ClusterQueue {
-		return report, fmt.Errorf("LocalQueue %q in namespace %q points to ClusterQueue %q, but the selected preset expects %q; ask the platform owner to inspect that LocalQueue on the workspace cluster, choose a different preset, or pass a matching --queue/--team override", target.QueueName, target.Namespace, actualClusterQueue, target.ClusterQueue)
+		return report, fmt.Errorf("LocalQueue %q in namespace %q points to ClusterQueue %q, but the selected workload profile expects %q; ask the platform owner to inspect that LocalQueue on the workspace cluster or select a matching profile", target.QueueName, target.Namespace, actualClusterQueue, target.ClusterQueue)
 	}
 	target.ClusterQueue = firstNonEmpty(target.ClusterQueue, actualClusterQueue)
 	report.ClusterQueue = target.ClusterQueue
@@ -109,9 +105,19 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 	if err != nil {
 		return report, fmt.Errorf("LocalQueue %q in namespace %q points to ClusterQueue %q, but it was not found (%s); ask the platform owner to inspect and repair that ClusterQueue on the workspace cluster", target.QueueName, target.Namespace, target.ClusterQueue, err)
 	}
+	if requireActiveClusterQueue {
+		if err := validateClusterQueueActive(cq); err != nil {
+			return report, fmt.Errorf(
+				"authoritative workload profile ClusterQueue %q is not ready: %w; ask the platform owner to inspect its Active condition",
+				target.ClusterQueue,
+				err,
+			)
+		}
+	}
 	if err := validateOptionalTopologyLabels("ClusterQueue", target.ClusterQueue, cq.Metadata.Labels, target); err != nil {
 		return report, err
 	}
+
 	policyTopologyContract := target.CatalogTopologyContract
 	if policyTopologyContract {
 		capabilityFlavor, compatibleFlavors, err := findCatalogTopologyFlavor(ctx, r, cq, target)
@@ -161,7 +167,7 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		if !ok {
 			if target.GPUClass == "" || target.GPUClass == topology.GPUClassAny {
 				return report, fmt.Errorf(
-					"ClusterQueue %q has no GPU quota flavor for resource %q compatible with the rendered pod selectors, tolerations, and topology policy; choose another queue or ask the platform owner to repair its ResourceFlavors",
+					"ClusterQueue %q has no GPU quota flavor for resource %q compatible with the rendered pod selectors, tolerations, and topology requirements; choose another queue or ask the platform owner to repair its ResourceFlavors",
 					target.ClusterQueue, target.GPUResourceName)
 			}
 			return report, fmt.Errorf(
@@ -173,12 +179,12 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 	}
 	if target.ResourceFlavor != "" {
 		if !cq.HasResourceFlavor(target.ResourceFlavor) {
-			return report, fmt.Errorf("ClusterQueue %q does not include ResourceFlavor %q required by preset %s; ask the platform owner to inspect that ClusterQueue on the workspace cluster and update the lane manifest", target.ClusterQueue, target.ResourceFlavor, presetName(target))
+			return report, fmt.Errorf("ClusterQueue %q does not include required ResourceFlavor %q; ask the platform owner to inspect that ClusterQueue on the workspace cluster", target.ClusterQueue, target.ResourceFlavor)
 		}
 		if !policyTopologyContract {
 			rf, err := getResourceFlavor(ctx, r, target.ResourceFlavor)
 			if err != nil {
-				return report, fmt.Errorf("ResourceFlavor %q required by preset %s was not found (%s); ask the platform owner to inspect and repair that ResourceFlavor on the workspace cluster", target.ResourceFlavor, presetName(target), err)
+				return report, fmt.Errorf("required ResourceFlavor %q was not found (%s); ask the platform owner to inspect and repair that ResourceFlavor on the workspace cluster", target.ResourceFlavor, err)
 			}
 			if err := validateResourceFlavor(rf, target); err != nil {
 				return report, err
@@ -204,6 +210,29 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		return report, fmt.Errorf("LocalQueue %q in namespace %q points to ClusterQueue %q, but that queue can admit at most %d NVIDIA GPU(s) for this flavor and the workload requests %d; choose a queue with enough GPU quota or use policy.queue: auto", target.QueueName, target.Namespace, target.ClusterQueue, maxGPU, target.GPUCount)
 	}
 	return report, nil
+}
+
+func validateClusterQueueActive(clusterQueue kueueapi.ClusterQueue) error {
+	for _, condition := range clusterQueue.Status.Conditions {
+		if condition.Type != "Active" {
+			continue
+		}
+		if condition.Status == "True" {
+			return nil
+		}
+		detail := strings.TrimSpace(condition.Reason)
+		if message := strings.TrimSpace(condition.Message); message != "" {
+			if detail != "" {
+				detail += ": "
+			}
+			detail += message
+		}
+		if detail != "" {
+			return fmt.Errorf("Active=%s (%s)", condition.Status, detail)
+		}
+		return fmt.Errorf("Active=%s", condition.Status)
+	}
+	return errors.New("Active condition is not reported")
 }
 
 func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) (string, []kueueapi.ResourceFlavor, error) {
@@ -276,7 +305,6 @@ func (o ValidationOptions) resolve() validationTarget {
 	target := validationTarget{
 		Namespace:               ns,
 		QueueName:               strings.TrimSpace(o.QueueName),
-		Preset:                  o.Preset,
 		Team:                    strings.TrimSpace(o.Team),
 		Lane:                    strings.TrimSpace(o.Lane),
 		GPUClass:                gpuClass,
@@ -289,33 +317,6 @@ func (o ValidationOptions) resolve() validationTarget {
 		PodTolerations:          o.PodTolerations,
 		GPUCount:                o.GPUCount,
 		GPUResourceName:         strings.TrimSpace(o.GPUResourceName),
-	}
-	if o.Preset != nil {
-		target.Namespace = topology.PresetLocalQueueNamespace(ns, *o.Preset)
-		presetQueue := o.Preset.Options.QueueName
-		if target.QueueName == "" {
-			target.QueueName = presetQueue
-		}
-		if target.Team == "" {
-			target.Team = o.Preset.Options.Team
-		}
-		if target.Lane == "" {
-			target.Lane = o.Preset.Options.Lane
-		}
-		if target.GPUClass == "" {
-			target.GPUClass, _ = topology.NormalizeGPUClass(o.Preset.Options.GPUClass)
-		}
-		if target.QueueName == presetQueue {
-			if target.ClusterQueue == "" {
-				target.ClusterQueue = o.Preset.Preset.ClusterQueue
-			}
-			if target.ResourceFlavor == "" {
-				target.ResourceFlavor = o.Preset.Preset.ResourceFlavor
-			}
-			if target.TopologyName == "" {
-				target.TopologyName = o.Preset.Preset.TopologyName
-			}
-		}
 	}
 	if target.Namespace == "" {
 		target.Namespace = topology.DefaultLocalQueueNamespace
@@ -601,7 +602,7 @@ func validateResourceFlavor(rf kueueapi.ResourceFlavor, target validationTarget)
 	if target.TopologyName != "" {
 		got := strings.TrimSpace(rf.Spec.TopologyName)
 		if got != target.TopologyName {
-			return fmt.Errorf("ResourceFlavor %q topologyName=%q, but preset %s expects %q", target.ResourceFlavor, got, presetName(target), target.TopologyName)
+			return fmt.Errorf("ResourceFlavor %q topologyName=%q, but the authoritative workload profile expects %q", target.ResourceFlavor, got, target.TopologyName)
 		}
 	}
 	if target.GPUCount > 0 && !resourceFlavorMatchesNodeSelector(rf, target.NodeSelector) {
@@ -804,17 +805,7 @@ func requiredTopologyForFlavor(rf kueueapi.ResourceFlavor, clusterQueue string) 
 }
 
 func missingLocalQueueError(target validationTarget, detail string) error {
-	if target.Preset != nil {
-		return topology.MissingPresetLocalQueueError(*target.Preset, target.Namespace, target.QueueName, detail)
-	}
 	return fmt.Errorf("LocalQueue %q in namespace %q was not found (%s); choose a different --queue or ask the platform owner to inspect and repair that LocalQueue on the workspace cluster", target.QueueName, target.Namespace, detail)
-}
-
-func presetName(target validationTarget) string {
-	if target.Preset == nil || target.Preset.Preset.Name == "" {
-		return "<none>"
-	}
-	return target.Preset.Preset.Name
 }
 
 // firstNonEmpty returns the first non-empty string, used to fill a validation

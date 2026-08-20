@@ -48,3 +48,22 @@ Call with: include "taugrid-core.image" (dict "component" "portal" "image" .Valu
 {{- printf "%s:%s" $repository $tag -}}
 {{- end -}}
 {{- end }}
+
+{{- define "taugrid-core.validateMultiKueueBetaGate" -}}
+{{- $global := .Values.global | default dict -}}
+{{- $features := get $global "betaFeatures" | default list -}}
+{{- $acknowledgements := get $global "betaRiskAcknowledgements" | default list -}}
+{{- $featureEnabled := has "multikueue" $features -}}
+{{- $riskAcknowledged := has "multikueue" $acknowledgements -}}
+{{- if ne $featureEnabled $riskAcknowledged -}}
+{{- fail "MultiKueue Beta requires both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]; enabling only one is not permitted" -}}
+{{- end -}}
+{{- $scan := deepCopy .Values -}}
+{{- $scanGlobal := deepCopy $global -}}
+{{- $_ := unset $scanGlobal "betaFeatures" -}}
+{{- $_ := unset $scanGlobal "betaRiskAcknowledgements" -}}
+{{- $_ := set $scan "global" $scanGlobal -}}
+{{- if and (contains "multikueue" (lower (toJson $scan))) (not (and $featureEnabled $riskAcknowledged)) -}}
+{{- fail "MultiKueue configuration was supplied without the required Beta gate; set both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]" -}}
+{{- end -}}
+{{- end -}}

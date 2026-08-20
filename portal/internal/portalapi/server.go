@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/expapi"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
@@ -97,12 +98,13 @@ type Options struct {
 
 // JobsOptions configures the Jobs/Queue board's data access. Reader is the
 // client-go-backed Kueue reader (internal/portal/kubeclient); tests inject a
-// fake. Namespace and PolicyPath mirror the `tau queue status` defaults.
+// fake. Profile readiness is fetched independently so profile failures never
+// hide existing Kueue observations.
 type JobsOptions struct {
 	Reader         jobs.Reader
+	Profiles       jobs.ProfileReader
 	ScopeMode      JobsScopeMode
 	OperatorScopes []jobs.Scope
-	PolicyPath     string
 }
 
 // ClusterOptions configures the Cluster Health board's data access. Querier is
@@ -435,10 +437,11 @@ type boardLink struct {
 // RunningUnavailable explains a disabled running-now section (no cluster access)
 // so the frontend can render a hint instead of an empty table.
 type overviewResponse struct {
-	Boards             []boardLink   `json:"boards"`
-	Cards              overviewCards `json:"cards"`
-	Running            []runningItem `json:"running"`
-	RunningUnavailable string        `json:"runningUnavailable,omitempty"`
+	Boards             []boardLink              `json:"boards"`
+	Cards              overviewCards            `json:"cards"`
+	Running            []runningItem            `json:"running"`
+	RunningUnavailable string                   `json:"runningUnavailable,omitempty"`
+	WorkloadProfiles   jobs.ProfileAvailability `json:"workloadProfiles"`
 }
 
 // overviewCards carries the headline status of each board so the home page is a
@@ -525,6 +528,8 @@ type runningItem struct {
 	Group              string `json:"group,omitempty"`
 	ExperimentPath     string `json:"experimentPath,omitempty"`
 	ExperimentTracking string `json:"experimentTracking"`
+	ExecutionTarget    string `json:"executionTarget,omitempty"`
+	Stage              string `json:"stage,omitempty"`
 }
 
 // portalBoards is the canonical board list surfaced by the shell. Experiments
@@ -576,6 +581,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := overviewResponse{Boards: s.boardsForScope(scope), Running: []runningItem{}}
+	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
 	s.resolveCards(r.Context(), &resp, scope)
 	s.resolveRunning(r.Context(), &resp, scope)
 	writeScopedJSON(w, http.StatusOK, resp, scope, "ready")
@@ -638,10 +644,10 @@ func (s *Server) resolveCards(ctx context.Context, resp *overviewResponse, scope
 		resp.Cards.QueueUnavailable = "portal started without Kubernetes access"
 	} else if jobScopes, err := s.resolvedJobScopes(scope); err != nil {
 		resp.Cards.QueueUnavailable = err.Error()
-	} else if snap, err := jobs.Board(ctx, s.jobs.Reader, jobs.Options{Scopes: jobScopes, PolicyPath: s.jobs.PolicyPath}); err != nil {
+	} else if snap, err := jobs.Board(ctx, s.jobs.Reader, jobs.Options{Scopes: jobScopes}); err != nil {
 		resp.Cards.QueueUnavailable = err.Error()
 	} else {
-		summary := jobs.Summarize(snap)
+		summary := jobs.Summarize(snap.Snapshot)
 		resp.Cards.Queue = &queueCard{
 			Pending: summary.Pending, Admitted: summary.Admitted,
 			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
@@ -738,8 +744,20 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 			Group:              wl.Group,
 			ExperimentPath:     experimentPath,
 			ExperimentTracking: experimentTracking,
+			ExecutionTarget:    wl.ExecutionTarget,
+			Stage:              wl.Stage,
 		})
 	}
+}
+
+func (s *Server) profileScopes(scope WorkspaceScope) []jobs.Scope {
+	if scope.Managed && scope.Team != "" && scope.Namespace != "" {
+		return []jobs.Scope{{Team: scope.Team, Namespace: scope.Namespace, Queue: scope.LocalQueue}}
+	}
+	if jobsMode(s.jobs) == JobsScopeOperator {
+		return s.jobs.OperatorScopes
+	}
+	return nil
 }
 
 func (s *Server) resolvedJobScopes(scope WorkspaceScope) ([]jobs.Scope, error) {
@@ -799,11 +817,11 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot, err := jobs.Board(r.Context(), s.jobs.Reader, jobs.Options{
-		Scopes:     jobScopes,
-		PolicyPath: s.jobs.PolicyPath,
-		Team:       q.Get("team"),
-		Lane:       q.Get("lane"),
-		GPUClass:   q.Get("gpu-class"),
+		Scopes:   jobScopes,
+		Profiles: s.jobs.Profiles,
+		Team:     q.Get("team"),
+		Lane:     q.Get("lane"),
+		GPUClass: q.Get("gpu-class"),
 	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
@@ -1144,7 +1162,47 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
+	s.annotateMultiKueueRuns(r.Context(), &snapshot, namespace)
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0))
+}
+
+// annotateMultiKueueRuns adds observation-only Beta identity from authoritative
+// Kueue Workload placement/admission-check status. Read failures are ignored:
+// live Job/RayJob rows remain visible and usable for status/log/cleanup.
+func (s *Server) annotateMultiKueueRuns(ctx context.Context, snapshot *runs.Snapshot, namespace string) {
+	if s.jobs.Reader == nil {
+		return
+	}
+	workloads, err := links.ListWorkloads(ctx, s.jobs.Reader, namespace)
+	if err != nil {
+		return
+	}
+	betaRunIDs := map[string]struct{}{}
+	betaNames := map[string]struct{}{}
+	for _, workload := range workloads {
+		if workload.Stage != "Beta" {
+			continue
+		}
+		if workload.RunID != "" {
+			betaRunIDs[workload.RunID] = struct{}{}
+			continue
+		}
+		if workload.Job != "" {
+			betaNames[workload.Job] = struct{}{}
+		}
+		for _, owner := range workload.Owners {
+			betaNames[owner] = struct{}{}
+		}
+	}
+	for i := range snapshot.Runs {
+		_, matchedRunID := betaRunIDs[snapshot.Runs[i].RunID]
+		_, matchedName := betaNames[snapshot.Runs[i].Name]
+		if snapshot.Runs[i].RunID != "" && !matchedRunID || snapshot.Runs[i].RunID == "" && !matchedName {
+			continue
+		}
+		snapshot.Runs[i].ExecutionTarget = string(profile.ExecutionTargetMultiKueueBeta)
+		snapshot.Runs[i].Stage = "Beta"
+	}
 }
 
 // handleJobDetail serves the per-job detail page at

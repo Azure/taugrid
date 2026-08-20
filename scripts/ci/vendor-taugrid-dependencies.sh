@@ -159,6 +159,36 @@ version_is_older() {
   return 1
 }
 
+gate_kueue_multikueue_beta() {
+  local archive="$1"
+  local version="$2"
+  local patch_file="${REPO_ROOT}/scripts/ci/patches/kueue-0.18.2-multikueue-beta-gate.patch"
+  local work_dir
+  local repacked
+
+  if [[ "$version" != "0.18.2" ]]; then
+    echo "Refusing to apply the reviewed MultiKueue Beta gate patch to unreviewed Kueue chart version ${version}" >&2
+    return 1
+  fi
+  if [[ ! -f "$patch_file" ]]; then
+    echo "Missing Kueue MultiKueue Beta gate patch: ${patch_file}" >&2
+    return 1
+  fi
+
+  work_dir="$(mktemp -d)"
+  repacked="${archive}.gated"
+  if ! tar -xzf "$archive" -C "$work_dir" ||
+    ! patch --batch --forward --directory "$work_dir/kueue" -p1 <"$patch_file" ||
+    ! COPYFILE_DISABLE=1 tar -czf "$repacked" -C "$work_dir" kueue; then
+    rm -rf "$work_dir"
+    rm -f "$repacked"
+    echo "Failed to apply the reviewed MultiKueue Beta gate to ${archive}" >&2
+    return 1
+  fi
+  mv "$repacked" "$archive"
+  rm -rf "$work_dir"
+}
+
 vendor_taugrid_dependencies() {
   local chart_dir="${1:-${REPO_ROOT}/charts/taugrid}"
   local vendor_dir="${chart_dir}/charts"
@@ -206,6 +236,9 @@ vendor_taugrid_dependencies() {
     case "$repository" in
       oci://*)
         helm pull "${repository}/${name}" --version "$version" --destination "$vendor_dir"
+        if [[ "$name" == "kueue" ]]; then
+          gate_kueue_multikueue_beta "${vendor_dir}/${name}-${version}.tgz" "$version"
+        fi
         ;;
       http://*|https://*)
         helm pull "$name" --repo "$repository" --version "$version" --destination "$vendor_dir"

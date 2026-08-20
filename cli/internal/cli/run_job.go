@@ -116,19 +116,18 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	}
 
 	topo := resolvedRunTopologyFlags(o.runPlacement)
-	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
-	if err != nil {
+	selected := o.selectedWorkloadProfile
+	if err := validateSelectedWorkloadProfileMode(selected, o.dryRun); err != nil {
 		return err
 	}
-	if resolvedProfileName == "" && preset == nil {
-		resolvedProfileName = "direct-job"
-	}
+	resolvedProfileName := selected.Selection.Profile.Name
+	warnings := []string{}
 
-	jobGPUCount, err := resolveDirectJobGPUCount(o.jobGPUs, topo.shape, preset)
+	jobGPUCount, err := resolveDirectJobGPUCount(o.jobGPUs, topo.shape)
 	if err != nil {
 		return err
 	}
-	p := resourceProfileForRender(resolvedProfileName, preset, topo.resourceProfileOptions(), jobGPUCount)
+	p := selected.Render
 	namespaceExplicit := strings.TrimSpace(o.namespace) != ""
 	ns := o.namespace
 	if ns == "" {
@@ -224,7 +223,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		TTLSecondsAfterFinished: o.ttlSecondsAfterFinished,
 		Annotations:             annotations,
 	}
-	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, preset, func(flag string) bool {
+	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, func(flag string) bool {
 		return resolvedRunTopologyFieldSet(o.runPlacement, flag)
 	}, o.workspaceQueueResolved)
 	if err != nil {
@@ -233,9 +232,6 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if jobGPUCount > 0 {
 		configureGPUQueueModeWithChanged("device-plugin", &opts, func(string) bool { return false })
 	}
-	if o.workspaceQueueResolved {
-		makeWorkspaceQueueAuthoritative(&opts)
-	}
 	opts.GPUClass, _ = runtopology.ResolveGPUClass(p, opts.GPUClass)
 	warnings = append(warnings, topoWarnings...)
 
@@ -243,7 +239,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.dryRun != "client" {
 		runner = kube.New(kubeContext)
 	}
-	allowImplicitAuto := preset == nil && resolvedProfileName == ""
+	allowImplicitAuto := false
 	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &ns, &opts, o.dryRun, "jobs.batch", allowImplicitAuto)
 	if err != nil {
 		return err
@@ -274,7 +270,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	opts.Namespace = ns
 	request.Options.namespace = ns
 	warnings = append(warnings, resolveWarnings...)
-	explicitAuto, implicitAuto := prepareAutoQueueRender(&opts, preset, allowImplicitAuto, o.dryRun)
+	explicitAuto, implicitAuto := prepareAutoQueueRender(&opts, allowImplicitAuto, o.dryRun)
 	if o.dryRun != "client" {
 		if err := secretpreflight.ValidateRequiredEnv(ctx, runner, ns, envSecrets); err != nil {
 			return err
@@ -326,6 +322,14 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.metricsOffloadEnabled {
 		opts.Annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
+	opts.Labels, opts.Annotations, err = stampSelectedWorkloadProfile(
+		opts.Labels,
+		opts.Annotations,
+		selected,
+	)
+	if err != nil {
+		return err
+	}
 	renderJob := func() ([]byte, error) {
 		return jobrender.Render(p, opts)
 	}
@@ -345,7 +349,15 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
-		manifest, err = prepareGeneratedQueueTopology(ctx, kube.New(kubeContext), ns, manifest, &opts, queueValidationPolicyFor(preset, o.workspaceQueueResolved), renderJob)
+		manifest, err = prepareGeneratedQueueTopology(
+			ctx,
+			kube.New(kubeContext),
+			ns,
+			manifest,
+			&opts,
+			queueValidationPolicy{ClusterQueue: selected.ClusterQueue},
+			renderJob,
+		)
 		if err != nil {
 			return err
 		}
@@ -385,18 +397,12 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		if profiler != "" {
 			fmt.Fprintf(stdout, "profile artifacts: stored under %s on PVC %s\n", outputDir, annotations[workloadmeta.AnnotationResultPVC])
 		}
-		if preset != nil {
-			fmt.Fprint(stdout, formatPresetHandoff(*preset))
-		}
 	}
 	return nil
 }
 
-func resolveDirectJobGPUCount(explicit *int, shape string, preset *runtopology.ResolvedPreset) (int, error) {
+func resolveDirectJobGPUCount(explicit *int, shape string) (int, error) {
 	effectiveShape := strings.TrimSpace(shape)
-	if effectiveShape == "" && preset != nil {
-		effectiveShape = strings.TrimSpace(preset.Preset.Shape)
-	}
 	if effectiveShape != "" {
 		shapeCount, ok, err := runtopology.GPUCountFromShape(effectiveShape)
 		if err != nil {
@@ -410,36 +416,9 @@ func resolveDirectJobGPUCount(explicit *int, shape string, preset *runtopology.R
 		}
 	}
 	if explicit == nil {
-		if preset != nil {
-			return 0, fmt.Errorf("preset %q does not define a direct Job GPU count; set compute.gpus explicitly (0 for CPU, positive for GPU)", preset.Preset.Name)
-		}
 		return 0, nil
 	}
 	return *explicit, nil
-}
-
-func makeWorkspaceQueueAuthoritative(opts *jobrender.Options) {
-	if opts.Annotations == nil {
-		opts.Annotations = map[string]string{}
-	}
-	opts.Annotations[runtopology.AnnotationTopologyQueue] = opts.QueueName
-	opts.Team = ""
-	delete(opts.Labels, workloadmeta.LabelTeam)
-	delete(opts.Annotations, workloadmeta.AnnotationClusterQueue)
-	delete(opts.Annotations, workloadmeta.AnnotationResourceFlavor)
-}
-
-func queueValidationPolicyFor(preset *runtopology.ResolvedPreset, workspaceQueueResolved bool) queueValidationPolicy {
-	if !workspaceQueueResolved || preset == nil {
-		return queueValidationPolicy{Preset: preset}
-	}
-	if strings.TrimSpace(preset.Preset.TopologyName) == "" {
-		return queueValidationPolicy{}
-	}
-	return queueValidationPolicy{
-		TopologyName:            preset.Preset.TopologyName,
-		CatalogTopologyContract: true,
-	}
 }
 
 func parseRunJobDuration(field, value string) (time.Duration, error) {
@@ -459,8 +438,6 @@ func runJobTopologyFlags(o unresolvedRunOptions) topologyFlags {
 
 func resolvedRunTopologyFlags(o runPlacement) topologyFlags {
 	return topologyFlags{
-		preset:                   o.preset,
-		policyPath:               o.topologyPolicy,
 		team:                     o.team,
 		lane:                     o.lane,
 		mode:                     o.mode,

@@ -1,0 +1,41 @@
+suite: MultiKueue Beta core gate
+templates:
+  - beta-feature-gates.yaml
+tests:
+  - it: renders no MultiKueue resources by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rejects feature enablement without risk acknowledgement
+    set:
+      global.betaFeatures:
+        - multikueue
+    asserts:
+      - failedTemplate:
+          errorMessage: MultiKueue Beta requires both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]; enabling only one is not permitted
+
+  - it: rejects risk acknowledgement without feature enablement
+    set:
+      global.betaRiskAcknowledgements:
+        - multikueue
+    asserts:
+      - failedTemplate:
+          errorMessage: MultiKueue Beta requires both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]; enabling only one is not permitted
+
+  - it: rejects custom MultiKueue values without both gates
+    set:
+      customQueue.controllerName: kueue.x-k8s.io/multikueue
+    asserts:
+      - failedTemplate:
+          errorMessage: MultiKueue configuration was supplied without the required Beta gate; set both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]
+
+  - it: accepts the shared gate without creating activation resources
+    set:
+      global.betaFeatures:
+        - multikueue
+      global.betaRiskAcknowledgements:
+        - multikueue
+    asserts:
+      - hasDocuments:
+          count: 0

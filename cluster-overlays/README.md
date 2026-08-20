@@ -9,7 +9,6 @@ by their chosen capabilities, normally through GitOps.
 | --- | --- | --- |
 | `queues/` | Kueue ResourceFlavors, ClusterQueues, LocalQueues, and targeted quota patches | The baseline `jobqueue` does not express the cluster's GPU pools, team quotas, or serving policy |
 | `azure/storage/` | Azure Blob and Azure Managed Lustre storage examples | Workloads need the corresponding persistent storage backend |
-| `azure/topology/` | Azure GPU placement and topology policy | Workloads use the matching hardware-specific placement presets |
 | `dashboards/` | Ray dashboard definitions | A compatible Grafana/observability stack is available |
 
 These manifests are templates, not portable defaults. Before applying one,

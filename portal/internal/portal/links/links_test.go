@@ -247,7 +247,34 @@ func TestListWorkloadsWithoutStellarIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkloads: %v", err)
 	}
+
 	if got[0].Project != "" || got[0].Experiment != "" || got[0].Group != "" || got[0].Workspace != "" {
 		t.Fatalf("identity = %+v, want all empty for an unstamped workload", got[0])
+	}
+}
+
+func TestListWorkloadsLabelsMultiKueuePlacementBetaWithoutNameHeuristics(t *testing.T) {
+	const raw = `{"items":[
+		{"metadata":{"name":"selected","namespace":"ray"},"spec":{"queueName":"ordinary"},
+		 "status":{"clusterName":"worker-a"}},
+		{"metadata":{"name":"checked","namespace":"ray"},"spec":{"queueName":"ordinary"},
+		 "status":{"admissionChecks":[{"name":"multikueue","state":"Ready"}]}},
+		{"metadata":{"name":"plain","namespace":"ray"},"spec":{"queueName":"multikueue"},"status":{}}
+	]}`
+	got, err := ListWorkloads(context.Background(), &stubReader{json: raw}, "ray")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Workload{}
+	for _, workload := range got {
+		byName[workload.Name] = workload
+	}
+	if byName["selected"].ExecutionTarget != "multiKueueBeta" || byName["selected"].Stage != "Beta" {
+		t.Fatalf("selected workload = %#v", byName["selected"])
+	}
+	for _, name := range []string{"checked", "plain"} {
+		if byName[name].Stage != "" {
+			t.Fatalf("name heuristic labelled %s workload Beta: %#v", name, byName[name])
+		}
 	}
 }

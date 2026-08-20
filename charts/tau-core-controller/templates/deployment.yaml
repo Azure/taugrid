@@ -32,6 +32,9 @@ spec:
             # aligned image release is available. The value is the unified
             # system namespace selected by the Helm release.
             - --platform-namespace={{ include "tau-core-controller.namespace" . }}
+            {{- if include "tau-core-controller.multiKueueBetaEnabled" . }}
+            - --beta-feature-gates=multikueue
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 8080

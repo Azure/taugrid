@@ -21,7 +21,6 @@ policy:
   profile: kind-cpu
   queue: kind-cpu
   lane: training
-  priority: default
 experiment:
   project: Tau Local
   name: kind-ray-smoke

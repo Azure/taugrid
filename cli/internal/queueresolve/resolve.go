@@ -34,9 +34,10 @@ func normalizeOptions(opts ResolveAccessibleQueueOptions) ResolveAccessibleQueue
 }
 
 type AccessibleQueue struct {
-	Namespace string
-	QueueName string
-	Team      string
+	Namespace    string
+	QueueName    string
+	ClusterQueue string
+	Team         string
 }
 
 // rejection records why a labelled namespace was not usable, so the failure
@@ -124,7 +125,8 @@ namespaceLoop:
 				continue namespaceLoop
 			}
 		}
-		if _, err := getLocalQueue(ctx, r, ns.Namespace, queueName); err != nil {
+		localQueue, err := getLocalQueue(ctx, r, ns.Namespace, queueName)
+		if err != nil {
 			reason := fmt.Sprintf("cannot read LocalQueue %q: %s", queueName, firstErrorLine(err))
 			if isNotFoundError(err) {
 				reason = fmt.Sprintf("LocalQueue %q not found", queueName)
@@ -133,6 +135,7 @@ namespaceLoop:
 			continue
 		}
 		ns.QueueName = queueName
+		ns.ClusterQueue = strings.TrimSpace(localQueue.Spec.ClusterQueue)
 		candidates = append(candidates, ns)
 	}
 	sort.Slice(candidates, func(i, j int) bool {

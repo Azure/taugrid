@@ -51,6 +51,9 @@ func TestPortalJobsScopeDefaultsFailClosed(t *testing.T) {
 	if got := serve.Flags().Lookup("namespace").DefValue; got != "" {
 		t.Fatalf("--namespace default = %q, want empty for cluster-wide legacy Ray/Runs reads", got)
 	}
+	if flag := serve.Flags().Lookup("policy"); flag != nil {
+		t.Fatalf("portal serve still exposes removed --policy flag: %#v", flag)
+	}
 }
 
 func TestPortalServeKeepsRunningWithoutKubernetesCredentials(t *testing.T) {

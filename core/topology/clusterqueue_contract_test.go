@@ -92,37 +92,3 @@ func TestSharedClusterQueueNamesExistInGitOpsOverlays(t *testing.T) {
 		}
 	}
 }
-
-func TestTopologyAssetClusterQueuesMatchConstants(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("assets", "azure-topology-policy.yaml"))
-	if err != nil {
-		t.Fatalf("read topology asset: %v", err)
-	}
-
-	var assetQueues []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "clusterQueue:") {
-			continue
-		}
-		name := strings.TrimSpace(strings.TrimPrefix(trimmed, "clusterQueue:"))
-		assetQueues = append(assetQueues, strings.Trim(name, `"'`))
-	}
-
-	// Positive control: the asset does declare clusterQueue lines. If this ever
-	// returns zero the assertion below proves nothing.
-	if len(assetQueues) == 0 {
-		t.Fatalf("found no clusterQueue: lines in the topology asset; the parser is broken, not the asset")
-	}
-
-	allowed := map[string]bool{
-		SharedGPUClusterQueueName: true,
-		sharedDRAClusterQueueName: true,
-	}
-	for _, q := range assetQueues {
-		if !allowed[q] {
-			t.Errorf("topology asset names ClusterQueue %q, which matches neither SharedGPUClusterQueueName (%q) nor sharedDRAClusterQueueName (%q)",
-				q, SharedGPUClusterQueueName, sharedDRAClusterQueueName)
-		}
-	}
-}

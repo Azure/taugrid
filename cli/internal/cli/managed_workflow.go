@@ -163,7 +163,7 @@ func topologyOptionsFromSubmit(o jobrender.Options) runtopology.Options {
 	}
 }
 
-func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Options, preset *runtopology.ResolvedPreset, workloadKind string) error {
+func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Options, workloadKind string) error {
 	// Workload-kind ↔ lane consistency. Lane is the Kueue-queue selector,
 	// so the eval lane (lane=eval) and the training lanes (training,
 	// elastic, large-memory) route to physically
@@ -175,29 +175,20 @@ func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Opt
 		// Train lanes (or no explicit lane). REJECT on rayjob-eval —
 		// the eval shape (system head + GPU actor + CPU workers) belongs on lane=workload.
 		// "" passes here because a missing lane is normal for the train
-		// path (suggestManagedWorkflowPreset stamps lane=training by default).
-		// On rayjob-eval, however, "" means the caller forgot to pick an
-		// eval-lane preset, which would land the workload on the train
-		// queue with the wrong priority class.
+		// path. On rayjob-eval, however, a non-eval lane would land the
+		// workload on the train queue with the wrong priority class.
 		if workloadKind == manifest.WorkloadKindRayJobEval && o.Lane != "" {
-			return fmt.Errorf("--workload-kind=rayjob-eval requires lane=eval, got lane=%q; pick an eval-lane preset (e.g. azure.research.eval.gpu) or pass --lane=eval", o.Lane)
+			return fmt.Errorf("--workload-kind=rayjob-eval requires lane=eval, got lane=%q; select an eval workload profile", o.Lane)
 		}
 	case "eval":
 		// Eval lane is only valid for the rayjob-eval shape (system head +
 		// GPU actor worker + CPU workers). A normal finetune (Job or RayJob multi-node) on
 		// the eval lane would be misdispatched.
 		if workloadKind != manifest.WorkloadKindRayJobEval {
-			return fmt.Errorf("preset uses lane=eval, but workload kind is %q; eval lane is only valid for --workload-kind=rayjob-eval", workloadKind)
+			return fmt.Errorf("workload profile uses lane=eval, but workload kind is %q; eval lane is only valid for --workload-kind=rayjob-eval", workloadKind)
 		}
 	default:
-		return fmt.Errorf("finetune training cannot use lane %q; use a training, elastic, large-memory, or eval preset", o.Lane)
-	}
-
-	// Cross-check: when a multi-node preset is in play, the manifest's
-	// workers must match the preset's workers (analogous to the gpus/shape
-	// cross-check below). A 2-node preset can't host a 4-pod manifest.
-	if preset != nil && preset.Preset.Workers > 0 && m.Compute.Workers != preset.Preset.Workers {
-		return fmt.Errorf("preset %s expects compute.workers=%d, but manifest has compute.workers=%d; pick a different preset or update the manifest", preset.Preset.Name, preset.Preset.Workers, m.Compute.Workers)
+		return fmt.Errorf("finetune training cannot use lane %q; select a training, elastic, large-memory, or eval workload profile", o.Lane)
 	}
 
 	shape := o.Shape
@@ -212,49 +203,13 @@ func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Opt
 		return nil
 	}
 	if m.Compute.GPUs != want {
-		source := "--shape"
-		if preset != nil {
-			source = fmt.Sprintf("preset %s shape", preset.Preset.Name)
-		}
-		return fmt.Errorf("%s %q requests %d GPU(s), but manifest compute.gpus=%d; use a matching preset or update the manifest", source, shape, want, m.Compute.GPUs)
+		return fmt.Errorf("policy.shape %q requests %d GPU(s), but manifest compute.gpus=%d; select a matching workload profile or update the manifest", shape, want, m.Compute.GPUs)
 	}
 	return nil
 }
 
 func gpuCountFromShape(shape string) (int, bool, error) {
 	return runtopology.GPUCountFromShape(shape)
-}
-
-// suggestManagedWorkflowPreset is the one-line gap-closer that turns
-// `tau run --config tau.yaml` into a managed-lane submit without the
-// researcher having to remember preset names. Lane is "training" by default
-// but switches to "eval" when the manifest declares an eval shape (so the
-// eval RayJob lands on the right Kueue queue and priority class). Team comes
-// from --team, then $TAU_TEAM. There is no default team — every team owns
-// its own Kueue quota slice and we refuse to silently land workloads on
-// somebody else's reservation. Returns the resolved preset and a
-// human-readable description of where the team came from for the stderr
-// message.
-func suggestManagedWorkflowPreset(topo topologyFlags, gpus, workers int, lane string) (runtopology.ResolvedPreset, string, error) {
-	team := topo.team
-	source := "--team"
-	if team == "" {
-		if env := os.Getenv("TAU_TEAM"); env != "" {
-			team = env
-			source = "TAU_TEAM env"
-		}
-	}
-	if team == "" {
-		return runtopology.ResolvedPreset{}, "", fmt.Errorf("no team supplied: pass --team, set TAU_TEAM, or pick a preset with --preset")
-	}
-	if lane == "" {
-		lane = "training"
-	}
-	resolved, err := runtopology.SuggestPreset(topo.policyPath, team, lane, gpus, workers)
-	if err != nil {
-		return runtopology.ResolvedPreset{}, "", err
-	}
-	return resolved, source, nil
 }
 
 func extraScriptPaths(extras []manifest.ExtraScript) string {

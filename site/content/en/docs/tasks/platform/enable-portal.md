@@ -15,7 +15,7 @@ The default distribution creates `deployment/tau-portal`, `service/tau-portal`, 
 | Capability | Default state | Additional requirement |
 |---|---|---|
 | Portal shell, Runs, run detail, Cluster Nodes, live Ray discovery | Available through the default Kubernetes client and RBAC | A matching live workload or Ray head Service; Events remain a separate RBAC capability |
-| Jobs / Queue computed board | Disabled | `portal.jobs.scopeMode` plus reviewed workspace-directory or operator scopes and a matching topology policy |
+| Jobs / Queue computed board | Disabled | `portal.jobs.scopeMode` plus reviewed workspace-directory or operator scopes; workload profiles are read-only from ready TauCluster status |
 | Kueue (Live) | Disabled | KueueViz Deployments/Services and `portal.kueueviz.enabled=true` |
 | Experiments, Cluster Health, Cost | Degraded | ADX/Kusto endpoint, database, and a query identity |
 | Durable Ray history | Disabled | Lifecycle recorder, successful schema management, and `portal.runHistory.enabled=true` |

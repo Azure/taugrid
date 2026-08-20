@@ -280,6 +280,56 @@ policy:
 	}
 }
 
+func TestResumeObservesExistingWorkloadBeforeReplacementProfileGate(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: resume-job\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	fetchCalls := 0
+	profileCalls := 0
+	deleteCalls := 0
+	err := runResumeCommand(
+		command,
+		"resume-job",
+		resumeRouting{
+			ConfigPath:  config,
+			KubeContext: "test-context",
+			Namespace:   "ray",
+			TargetOptions: runDispatchOptions{
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+			},
+		},
+		"",
+		"client",
+		true,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				fetchCalls++
+				snapshot := failedJobSnapshot("resume-job")
+				snapshot.Events = []status.Event{{Reason: "Evicted"}}
+				return snapshot, nil
+			},
+			resolveProfile: func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error) {
+				profileCalls++
+				return unresolvedRunOptions{}, fmt.Errorf("missing execution.beta_features/--acknowledge-beta-feature acknowledgement")
+			},
+			deleteOld: func(context.Context, string, string, string, io.Writer) error {
+				deleteCalls++
+				return nil
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "execution.beta_features") {
+		t.Fatalf("profile gate error = %v", err)
+	}
+	if fetchCalls != 1 || profileCalls != 1 || deleteCalls != 0 {
+		t.Fatalf("fetch=%d profile=%d delete=%d", fetchCalls, profileCalls, deleteCalls)
+	}
+}
+
 func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 	zeroGPUs := 0
 	config := filepath.Join(t.TempDir(), "tau.yaml")

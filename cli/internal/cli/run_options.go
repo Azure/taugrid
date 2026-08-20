@@ -35,24 +35,27 @@ type runRoutingInput struct {
 }
 
 type runPlacement struct {
-	profileName              string
-	queue                    string
-	preset                   string
-	team                     string
-	lane                     string
-	gpuClass                 string
-	mode                     string
-	topology                 string
-	shape                    string
-	topologyPolicy           string
-	priorityTier             string
-	workloadPriorityClass    string
-	podPriorityClass         string
-	nodeSelectors            []string
-	clearNodeSelector        bool
-	disableDefaultPriorities bool
-	gpuResourceMode          string
-	migProfile               string
+	profileName               string
+	profileNameExplicit       bool
+	queue                     string
+	workloadProfileSnapshot   string
+	selectedWorkloadProfile   *selectedWorkloadProfile
+	team                      string
+	lane                      string
+	gpuClass                  string
+	mode                      string
+	topology                  string
+	shape                     string
+	priorityTier              string
+	workloadPriorityClass     string
+	podPriorityClass          string
+	nodeSelectors             []string
+	clearNodeSelector         bool
+	disableDefaultPriorities  bool
+	disablePrioritiesExplicit bool
+	explicitPolicyFields      map[string]bool
+	gpuResourceMode           string
+	migProfile                string
 }
 
 type runPayloadInput struct {
@@ -166,6 +169,8 @@ type runComputeInput struct {
 
 	cpuWorkers            int
 	jobGPUs               *int
+	jobGPUsExplicit       bool
+	workersExplicit       bool
 	gpusPerWorkerExplicit bool
 }
 
@@ -204,10 +209,12 @@ type runExecutionInput struct {
 	launcher                string
 	processesPerNode        int
 	nodes                   int
+	nodesExplicit           bool
 	ttlSecondsAfterFinished int64
 	configs                 map[string]any
 	smokePairs              int
 	upstreamCheckpoint      string
+	betaFeatures            []runconfig.BetaFeature
 }
 
 type runResilienceInput struct {

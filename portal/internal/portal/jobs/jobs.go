@@ -19,6 +19,7 @@ import (
 
 	"github.com/Azure/taugrid/core/kueueapi"
 	"github.com/Azure/taugrid/core/queue"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/topology"
 )
 
@@ -30,6 +31,12 @@ type Reader interface {
 	ListWorkloads(ctx context.Context, namespace string) ([]byte, error)
 }
 
+// ProfileReader reads the current singleton TauCluster workload-profile status.
+// The concrete portal kubeclient delegates this to resourceprofile.Provider.
+type ProfileReader interface {
+	ProfileSet(ctx context.Context) (profile.ProfileSet, error)
+}
+
 // Scope is one explicitly configured or authorized LocalQueue view.
 type Scope struct {
 	Team      string
@@ -39,11 +46,41 @@ type Scope struct {
 
 // Options controls the board fetch and post-fetch filtering.
 type Options struct {
-	Scopes     []Scope
-	PolicyPath string
-	Team       string
-	Lane       string
-	GPUClass   string
+	Scopes   []Scope
+	Profiles ProfileReader
+	Team     string
+	Lane     string
+	GPUClass string
+}
+
+// ProfileAvailability is the read-only workload-profile state attached to every
+// Jobs response. Profile read failures never suppress live Kueue observations.
+type ProfileAvailability struct {
+	Available        bool             `json:"available"`
+	Error            string           `json:"error,omitempty"`
+	Generation       int64            `json:"tauClusterGeneration,omitempty"`
+	ProfileSetHash   string           `json:"profileSetHash,omitempty"`
+	ReadyProfiles    []ProfileSummary `json:"readyProfiles"`
+	ReadOnly         bool             `json:"readOnly"`
+	SelectionEnabled bool             `json:"selectionEnabled"`
+}
+
+// ProfileSummary is one current, Ready profile authorized for a viewed scope.
+type ProfileSummary struct {
+	Name              string                  `json:"name"`
+	ExecutionTarget   profile.ExecutionTarget `json:"executionTarget"`
+	Stage             string                  `json:"stage"`
+	Placement         string                  `json:"placement"`
+	DefaultLocalQueue string                  `json:"defaultLocalQueue"`
+	GPUsPerWorker     int32                   `json:"gpusPerWorker"`
+	WorkerCount       int32                   `json:"workerCount"`
+}
+
+// Snapshot keeps the queue.Snapshot wire contract while attaching profile
+// readiness. Portal has no workload submission or profile-selection surface.
+type Snapshot struct {
+	queue.Snapshot
+	WorkloadProfiles ProfileAvailability `json:"workloadProfiles"`
 }
 
 // Summary is the deduplicated Overview headline for a queue Snapshot.
@@ -62,26 +99,32 @@ func ValidateScopes(scopes []Scope) error {
 
 // Board fetches each explicit scope and aggregates it with queue.BuildSnapshot.
 // LocalQueue names never select a namespace or team; callers must provide both.
-func Board(ctx context.Context, r Reader, opts Options) (queue.Snapshot, error) {
+func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	scopes, err := normalizeScopes(opts.Scopes)
 	if err != nil {
-		return queue.Snapshot{}, err
+		return Snapshot{}, err
 	}
-	pol, err := topology.LoadPolicy(opts.PolicyPath)
-	if err != nil {
-		return queue.Snapshot{}, err
+	profileScopes := scopes
+	if opts.Team != "" {
+		profileScopes = nil
+		for _, scope := range scopes {
+			if normalize(opts.Team) == scope.Team {
+				profileScopes = append(profileScopes, scope)
+			}
+		}
 	}
+	profiles := ReadProfiles(ctx, opts.Profiles, profileScopes, opts.Lane)
 	clusterQueues, err := r.ListClusterQueues(ctx)
 	if err != nil {
-		return queue.Snapshot{}, fmt.Errorf("list clusterqueues: %w", err)
+		return Snapshot{}, fmt.Errorf("list clusterqueues: %w", err)
 	}
 
-	out := queue.Snapshot{
-		PolicySource: pol.SourceFile,
-		Groups:       []queue.Group{},
+	out := Snapshot{
+		Snapshot:         queue.Snapshot{Groups: []queue.Group{}},
+		WorkloadProfiles: profiles,
 	}
 	if len(scopes) == 1 {
-		out.Namespace = scopes[0].Namespace
+		out.Snapshot.Namespace = scopes[0].Namespace
 	}
 	hints := map[string]struct{}{}
 	for _, scope := range scopes {
@@ -90,21 +133,30 @@ func Board(ctx context.Context, r Reader, opts Options) (queue.Snapshot, error) 
 		}
 		localQueues, err := r.ListLocalQueues(ctx, scope.Namespace)
 		if err != nil {
-			return queue.Snapshot{}, fmt.Errorf("list localqueues in %s: %w", scope.Namespace, err)
+			return Snapshot{}, fmt.Errorf("list localqueues in %s: %w", scope.Namespace, err)
 		}
 		workloads, err := r.ListWorkloads(ctx, scope.Namespace)
 		if err != nil {
-			return queue.Snapshot{}, fmt.Errorf("list workloads in %s: %w", scope.Namespace, err)
+			return Snapshot{}, fmt.Errorf("list workloads in %s: %w", scope.Namespace, err)
 		}
-		snapshot, err := queue.BuildSnapshot(scope.Namespace, pol, localQueues, clusterQueues, workloads, queue.Options{
-			Namespace:  scope.Namespace,
-			PolicyPath: opts.PolicyPath,
-			Team:       scope.Team,
-			Lane:       opts.Lane,
-			GPUClass:   opts.GPUClass,
+		clusterQueue, err := liveClusterQueue(localQueues, scope)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		// This policy is an in-memory projection of the explicitly authorized,
+		// live LocalQueue binding. It is not a profile catalog or fallback source.
+		observed := topology.Policy{Presets: map[string]topology.Preset{
+			"portal-observed-scope": {
+				Name: "portal-observed-scope", Team: scope.Team,
+				QueueName: scope.Queue, ClusterQueue: clusterQueue,
+			},
+		}}
+		snapshot, err := queue.BuildSnapshot(scope.Namespace, observed, localQueues, clusterQueues, workloads, queue.Options{
+			Namespace: scope.Namespace,
+			Team:      scope.Team,
 		})
 		if err != nil {
-			return queue.Snapshot{}, err
+			return Snapshot{}, err
 		}
 		groups := snapshot.Groups[:0]
 		for _, group := range snapshot.Groups {
@@ -112,23 +164,17 @@ func Board(ctx context.Context, r Reader, opts Options) (queue.Snapshot, error) 
 				groups = append(groups, group)
 			}
 		}
-		if len(groups) == 0 {
-			return queue.Snapshot{}, fmt.Errorf("jobs scope %s/%s for team %s has no matching topology policy group", scope.Namespace, scope.Queue, scope.Team)
-		}
-		if err := validateScopeBinding(localQueues, scope, groups); err != nil {
-			return queue.Snapshot{}, err
-		}
-		out.Groups = append(out.Groups, groups...)
+		out.Snapshot.Groups = append(out.Snapshot.Groups, groups...)
 		for _, hint := range snapshot.Hints {
 			hints[hint] = struct{}{}
 		}
 	}
 	for hint := range hints {
-		out.Hints = append(out.Hints, hint)
+		out.Snapshot.Hints = append(out.Snapshot.Hints, hint)
 	}
-	sort.Strings(out.Hints)
-	sort.Slice(out.Groups, func(i, j int) bool {
-		a, b := out.Groups[i], out.Groups[j]
+	sort.Strings(out.Snapshot.Hints)
+	sort.Slice(out.Snapshot.Groups, func(i, j int) bool {
+		a, b := out.Snapshot.Groups[i], out.Snapshot.Groups[j]
 		for _, pair := range [][2]string{
 			{a.Namespace, b.Namespace},
 			{a.Team, b.Team},
@@ -146,12 +192,12 @@ func Board(ctx context.Context, r Reader, opts Options) (queue.Snapshot, error) 
 	return out, nil
 }
 
-func validateScopeBinding(raw []byte, scope Scope, groups []queue.Group) error {
+func liveClusterQueue(raw []byte, scope Scope) (string, error) {
 	var list kueueapi.LocalQueueList
 	if err := json.Unmarshal(raw, &list); err != nil {
-		return fmt.Errorf("decode LocalQueues in %s: %w", scope.Namespace, err)
+		return "", fmt.Errorf("decode LocalQueues in %s: %w", scope.Namespace, err)
 	}
-	liveClusterQueue := ""
+	clusterQueue := ""
 	for _, localQueue := range list.Items {
 		if localQueue.Metadata.Name != scope.Queue {
 			continue
@@ -159,29 +205,66 @@ func validateScopeBinding(raw []byte, scope Scope, groups []queue.Group) error {
 		if localQueue.Metadata.Namespace != "" && localQueue.Metadata.Namespace != scope.Namespace {
 			continue
 		}
-		liveClusterQueue = strings.TrimSpace(localQueue.Spec.ClusterQueue)
+		clusterQueue = strings.TrimSpace(localQueue.Spec.ClusterQueue)
 		break
 	}
-	if liveClusterQueue == "" {
-		return fmt.Errorf("jobs scope %s/%s does not resolve to a live LocalQueue", scope.Namespace, scope.Queue)
+	if clusterQueue == "" {
+		return "", fmt.Errorf("jobs scope %s/%s does not resolve to a live LocalQueue", scope.Namespace, scope.Queue)
 	}
-	policyClusterQueue := ""
-	for _, group := range groups {
-		if policyClusterQueue == "" {
-			policyClusterQueue = group.ClusterQueue
+	return clusterQueue, nil
+}
+
+// ReadProfiles fetches and filters the profile set on every request. A failure
+// is data attached to the response, not a failure of queue/status observation.
+func ReadProfiles(ctx context.Context, reader ProfileReader, scopes []Scope, lane string) ProfileAvailability {
+	out := ProfileAvailability{ReadyProfiles: []ProfileSummary{}, ReadOnly: true}
+	if reader == nil {
+		out.Error = "workload profile status unavailable: portal started without a TauCluster profile reader"
+		return out
+	}
+	set, err := reader.ProfileSet(ctx)
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Available = true
+	out.Generation = set.Generation
+	out.ProfileSetHash = set.ProfileSetHash
+	for _, candidate := range set.Profiles {
+		if profile.ValidateReady(candidate, set.Generation) != nil ||
+			!profileMatchesAnyScope(candidate, scopes, lane) {
 			continue
 		}
-		if group.ClusterQueue != policyClusterQueue {
-			return fmt.Errorf("jobs scope %s/%s maps to multiple policy ClusterQueues", scope.Namespace, scope.Queue)
+		stage := "Stable"
+		if candidate.ExecutionTarget == profile.ExecutionTargetMultiKueueBeta {
+			stage = "Beta"
+		}
+		out.ReadyProfiles = append(out.ReadyProfiles, ProfileSummary{
+			Name: candidate.Name, ExecutionTarget: candidate.ExecutionTarget,
+			Stage: stage, Placement: candidate.Placement,
+			DefaultLocalQueue: candidate.DefaultLocalQueue,
+			GPUsPerWorker:     candidate.GPUsPerWorker, WorkerCount: candidate.WorkerCount,
+		})
+	}
+	sort.Slice(out.ReadyProfiles, func(i, j int) bool {
+		return out.ReadyProfiles[i].Name < out.ReadyProfiles[j].Name
+	})
+	return out
+}
+
+func profileMatchesAnyScope(candidate profile.ResolvedWorkloadProfile, scopes []Scope, lane string) bool {
+	for _, scope := range scopes {
+		requestLane := lane
+		if requestLane == "" && len(candidate.Applicability.Lanes) > 0 {
+			requestLane = candidate.Applicability.Lanes[0]
+		}
+		if profile.ValidateApplicability(candidate, profile.SelectionRequest{
+			Name: candidate.Name, Namespace: scope.Namespace, Team: scope.Team, Lane: requestLane,
+		}) == nil {
+			return true
 		}
 	}
-	if policyClusterQueue == "" || policyClusterQueue != liveClusterQueue {
-		return fmt.Errorf(
-			"jobs scope %s/%s policy ClusterQueue %q does not match live LocalQueue ClusterQueue %q",
-			scope.Namespace, scope.Queue, policyClusterQueue, liveClusterQueue,
-		)
-	}
-	return nil
+	return false
 }
 
 // Summarize counts each LocalQueue and ClusterQueue flavor once even when

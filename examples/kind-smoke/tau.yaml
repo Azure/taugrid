@@ -9,7 +9,6 @@ policy:
   namespace: ray
   queue: kind-cpu
   lane: training
-  priority: default
 experiment:
   project: Tau Local
   name: kind-smoke

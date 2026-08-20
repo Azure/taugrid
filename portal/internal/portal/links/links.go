@@ -79,6 +79,10 @@ type Workload struct {
 	Experiment string `json:"experiment,omitempty"`
 	Group      string `json:"group,omitempty"`
 	Workspace  string `json:"workspace,omitempty"`
+	// ExecutionTarget/Stage are observation-only runtime identity. They never
+	// gate status access when the current capability/profile is unavailable.
+	ExecutionTarget string `json:"executionTarget,omitempty"`
+	Stage           string `json:"stage,omitempty"`
 }
 
 // Running reports whether the workload is admitted and not yet finished — the
@@ -108,6 +112,7 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 	for _, it := range list.Items {
 		admitted, finished := admissionState(it.Status.Conditions)
 		labels := it.Metadata.Labels
+		executionTarget, stage := workloadExecutionTarget(it)
 		var owners []string
 		for _, ref := range it.Metadata.OwnerReferences {
 			if ref.Name != "" {
@@ -115,22 +120,25 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 			}
 		}
 		out = append(out, Workload{
-			Name:         it.Metadata.Name,
-			Namespace:    it.Metadata.Namespace,
-			Job:          labels[workloadmeta.LabelJob],
-			RunID:        labels[experiment.LabelRunID],
-			Owners:       owners,
-			Queue:        it.Spec.QueueName,
-			ClusterQueue: it.Status.Admission.ClusterQueue,
-			Admitted:     admitted,
-			Finished:     finished,
-			CreatedAt:    it.Metadata.CreationTimestamp,
-			Project:      labels[workloadmeta.LabelStellarProject],
-			Experiment:   labels[workloadmeta.LabelStellarExperiment],
-			Group:        labels[workloadmeta.LabelStellarGroup],
-			Workspace:    labels[workloadmeta.LabelWorkspace],
+			Name:            it.Metadata.Name,
+			Namespace:       it.Metadata.Namespace,
+			Job:             labels[workloadmeta.LabelJob],
+			RunID:           labels[experiment.LabelRunID],
+			Owners:          owners,
+			Queue:           it.Spec.QueueName,
+			ClusterQueue:    it.Status.Admission.ClusterQueue,
+			Admitted:        admitted,
+			Finished:        finished,
+			CreatedAt:       it.Metadata.CreationTimestamp,
+			Project:         labels[workloadmeta.LabelStellarProject],
+			Experiment:      labels[workloadmeta.LabelStellarExperiment],
+			Group:           labels[workloadmeta.LabelStellarGroup],
+			Workspace:       labels[workloadmeta.LabelWorkspace],
+			ExecutionTarget: executionTarget,
+			Stage:           stage,
 		})
 	}
+
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if a.Namespace != b.Namespace {
@@ -140,6 +148,14 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 		return ja < jb
 	})
 	return out, nil
+}
+
+func workloadExecutionTarget(it workloadItem) (string, string) {
+	if strings.EqualFold(strings.TrimSpace(it.Metadata.Annotations[workloadmeta.AnnotationMultiKueueStage]), "beta") ||
+		it.Status.ClusterName != "" || len(it.Status.NominatedClusterNames) > 0 {
+		return "multiKueueBeta", "Beta"
+	}
+	return "", ""
 }
 
 // sortKey orders workloads by job name when present, falling back to the
@@ -260,6 +276,7 @@ type workloadItem struct {
 		Namespace         string            `json:"namespace"`
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
+		Annotations       map[string]string `json:"annotations"`
 		OwnerReferences   []struct {
 			Name string `json:"name"`
 		} `json:"ownerReferences"`
@@ -271,7 +288,12 @@ type workloadItem struct {
 		Admission struct {
 			ClusterQueue string `json:"clusterQueue"`
 		} `json:"admission"`
-		Conditions []conditionJSON `json:"conditions"`
+		Conditions            []conditionJSON `json:"conditions"`
+		ClusterName           string          `json:"clusterName"`
+		NominatedClusterNames []string        `json:"nominatedClusterNames"`
+		AdmissionChecks       []struct {
+			Name string `json:"name"`
+		} `json:"admissionChecks"`
 	} `json:"status"`
 }
 

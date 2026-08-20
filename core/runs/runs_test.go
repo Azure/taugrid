@@ -643,7 +643,37 @@ func TestBoardFiltersResolvedLocalQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
+
 	if snap.Total != 1 || snap.Runs[0].Name != "alpha" || snap.Runs[0].Queue != "alpha-queue" {
 		t.Fatalf("queue-filtered snapshot = %+v", snap)
+	}
+}
+
+func TestBoardLabelsAuthoritativeMultiKueueRuntimeAsBeta(t *testing.T) {
+	jobsJSON := []byte(`{"items":[
+		{"metadata":{"name":"managed","labels":{"` + workloadmeta.LabelJob + `":"managed"}},
+		 "spec":{"managedBy":"kueue.x-k8s.io/multikueue"}},
+		{"metadata":{"name":"annotated","labels":{"` + workloadmeta.LabelJob + `":"annotated"},
+		 "annotations":{"` + workloadmeta.AnnotationMultiKueueStage + `":"Beta"}}},
+		{"metadata":{"name":"queue-name-is-not-identity","labels":{"` + workloadmeta.LabelJob + `":"plain",
+		 "kueue.x-k8s.io/queue-name":"multikueue"}}}
+	]}`)
+	snapshot, err := Board(context.Background(), fakeReader{
+		jobs: jobsJSON, ray: []byte(`{"items":[]}`),
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Run{}
+	for _, run := range snapshot.Runs {
+		byName[run.Name] = run
+	}
+	for _, name := range []string{"managed", "annotated"} {
+		if byName[name].ExecutionTarget != "multiKueueBeta" || byName[name].Stage != "Beta" {
+			t.Fatalf("%s run = %#v", name, byName[name])
+		}
+	}
+	if byName["queue-name-is-not-identity"].Stage != "" {
+		t.Fatalf("queue-name heuristic labelled run Beta: %#v", byName["queue-name-is-not-identity"])
 	}
 }
