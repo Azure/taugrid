@@ -26,5 +26,16 @@ fi
 
 echo "Local Python setup complete."
 cat <<'EOF'
-Next: follow README.md to publish the image, validate configs, and run.
+Next steps:
+  source ./.env
+  docker build -f images/train.Dockerfile -t "$IMAGE" .
+  docker push "$IMAGE"
+  ./scripts/configure.sh --image "$IMAGE"
+  tau run validate --config tau/smoke.yaml
+  tau run validate --config tau/train.yaml
+{{if .HasWorkspaceConnection}}  tau run smoke
+  tau run --config tau/smoke.yaml
+  tau run train
+{{else}}  # Ask the platform owner to add tau/workspace.connection.yaml before cluster runs.
+{{end}}
 EOF

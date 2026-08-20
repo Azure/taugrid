@@ -26,7 +26,7 @@ This step is local-only: it does not log into Azure, change kube context, or sub
 
 ```bash
 cp .env.example .env
-$EDITOR .env
+${EDITOR:-vi} .env
 ./scripts/setup.sh
 uv run python -m {{.Package}}.smoke
 ```

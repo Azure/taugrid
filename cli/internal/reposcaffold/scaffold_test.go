@@ -85,6 +85,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertNotContains(t, pyproject, "[tool.uv.sources]")
 	readme := readFile(t, filepath.Join(dir, "README.md"))
 	assertContains(t, readme, "This step is local-only")
+	assertContains(t, readme, "${EDITOR:-vi} .env")
 	assertContains(t, readme, "Generated from the standalone `tau-gen` workflow")
 	assertContains(t, readme, "docker build -f images/train.Dockerfile -t \"$BUILD_IMAGE\" .")
 	assertContains(t, readme, "requires `workspace-rbac` authorization and role `tau-researcher-v1`")
@@ -110,8 +111,17 @@ func TestRenderPythonScaffold(t *testing.T) {
 	setup := readFile(t, filepath.Join(dir, "scripts/setup.sh"))
 	assertContains(t, setup, "uv sync --extra dev")
 	assertNotContains(t, setup, "uv sync --extra dev --extra tau")
-	assertContains(t, setup, "Next: follow README.md")
-	assertNotContains(t, setup, "tau run validate --config")
+	assertInOrder(t, setup,
+		`source ./.env`,
+		`docker build -f images/train.Dockerfile -t "$IMAGE" .`,
+		`docker push "$IMAGE"`,
+		`./scripts/configure.sh --image "$IMAGE"`,
+		`tau run validate --config tau/smoke.yaml`,
+		`tau run validate --config tau/train.yaml`,
+		`tau run smoke`,
+		`tau run --config tau/smoke.yaml`,
+		`tau run train`,
+	)
 	assertNotContains(t, readme, "Tau SDK setup")
 	setupAzure := readFile(t, filepath.Join(dir, "scripts/setup-azure.sh"))
 	assertContains(t, setupAzure, "Tau workspace authentication and AKS credentials are handled by tau run")
@@ -200,6 +210,15 @@ func TestUnconnectedScaffoldDoesNotClaimAuthorizationMode(t *testing.T) {
 			assertNotContains(t, file.Content, "`workspace-rbac` authorization")
 			assertNotContains(t, file.Content, "`cluster-wide` authorization")
 		}
+	}
+	for _, file := range files {
+		if file.Path != "scripts/setup.sh" {
+			continue
+		}
+		assertContains(t, file.Content, "tau run validate --config tau/smoke.yaml")
+		assertContains(t, file.Content, "# Ask the platform owner to add tau/workspace.connection.yaml before cluster runs.")
+		assertNotContains(t, file.Content, "tau run smoke")
+		assertNotContains(t, file.Content, "follow README.md")
 	}
 }
 
