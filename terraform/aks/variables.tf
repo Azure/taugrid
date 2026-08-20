@@ -70,6 +70,17 @@ variable "gpu_node_pool_name" {
   default     = "gpu"
 }
 
+variable "gpu_stack_mode" {
+  description = "GPU software stack. self_managed installs the device plugin and DCGM exporter. aks_managed_preview uses the AKS Managed GPU Experience preview."
+  type        = string
+  default     = "self_managed"
+
+  validation {
+    condition     = contains(["self_managed", "aks_managed_preview"], var.gpu_stack_mode)
+    error_message = "gpu_stack_mode must be self_managed or aks_managed_preview."
+  }
+}
+
 variable "gpu_vm_size" {
   description = "GPU VM SKU. Standard_NC24ads_A100_v4 provides one A100 80 GB GPU and is the default cost-conscious GPU option."
   type        = string
@@ -203,6 +214,12 @@ variable "adx_sku_capacity" {
   description = "Number of Azure Data Explorer instances."
   type        = number
   default     = 1
+}
+
+variable "dcgm_exporter_chart_version" {
+  description = "Pinned upstream NVIDIA DCGM exporter Helm chart version used when gpu_stack_mode is self_managed."
+  type        = string
+  default     = "4.8.3"
 }
 
 variable "tags" {

@@ -75,17 +75,21 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
     max_surge = "10%"
   }
 
-  # AKS enables its managed GPU stack only when this tag is present as the
-  # GPU pool is created. The stack owns the NVIDIA driver, device plugin, and
-  # DCGM exporter host service used by adx-mon on port 19400.
-  tags = merge(var.tags, {
+  tags = merge(var.tags, var.gpu_stack_mode == "aks_managed_preview" ? {
+    # This preview tag is the current workaround until the AzureRM provider
+    # exposes gpuProfile.nvidia.managementMode for a standard node pool.
     EnableManagedGPUExperience = "true"
-  })
+  } : {})
 
   lifecycle {
     precondition {
       condition     = !var.normalize_gpu_mig || !var.gpu_auto_scaling_enabled
       error_message = "gpu_auto_scaling_enabled cannot be used with normalize_gpu_mig because newly scaled A100 nodes would not be normalized. Set normalize_gpu_mig=false only after validating the selected GPU SKU does not require MIG normalization."
+    }
+
+    precondition {
+      condition     = var.gpu_stack_mode != "aks_managed_preview" || !var.gpu_auto_scaling_enabled
+      error_message = "gpu_auto_scaling_enabled is not supported with gpu_stack_mode=aks_managed_preview during the AKS Managed GPU Experience preview."
     }
   }
 }
@@ -104,6 +108,7 @@ locals {
     gpu_series                   = var.gpu_series
     gpu_vm_size                  = var.gpu_vm_size
     gpu_count_per_node           = var.gpu_count_per_node
+    gpu_stack_mode               = var.gpu_stack_mode
     adx_enabled                  = var.enable_adx
     lifecycle_recorder_enabled   = var.enable_lifecycle_recorder
     lifecycle_recorder_client_id = var.enable_lifecycle_recorder ? azurerm_user_assigned_identity.lifecycle_recorder[0].client_id : ""
@@ -251,6 +256,29 @@ resource "local_file" "mig_normalizer" {
   })
 }
 
+resource "terraform_data" "install_nvidia_device_plugin" {
+  count = var.gpu_stack_mode == "self_managed" ? 1 : 0
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    filesha256("${path.module}/nvidia-device-plugin.yaml"),
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = local.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && kubectl rollout status daemonset/nvidia-device-plugin-daemonset --namespace kube-system --timeout=10m"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.gpu,
+  ]
+}
+
 resource "terraform_data" "normalize_gpu_mig" {
   count = var.normalize_gpu_mig ? 1 : 0
 
@@ -273,6 +301,7 @@ resource "terraform_data" "normalize_gpu_mig" {
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
     local_file.mig_normalizer,
+    terraform_data.install_nvidia_device_plugin,
   ]
 }
 
@@ -298,6 +327,8 @@ resource "terraform_data" "install_taugrid" {
   depends_on = [
     local_file.taugrid_values,
     azurerm_kubernetes_cluster_node_pool.gpu,
+    terraform_data.install_nvidia_device_plugin,
+    terraform_data.install_dcgm_exporter,
     terraform_data.normalize_gpu_mig,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
@@ -315,7 +346,42 @@ resource "local_file" "adx_mon_values" {
     cluster_name       = var.cluster_name
     location           = var.location
     gpu_node_pool_name = var.gpu_node_pool_name
+    gpu_stack_mode     = var.gpu_stack_mode
   })
+}
+
+resource "local_file" "dcgm_exporter_values" {
+  count           = var.gpu_stack_mode == "self_managed" ? 1 : 0
+  filename        = "${local.generated_directory}/dcgm-exporter-values.yaml"
+  file_permission = "0600"
+  content = templatefile("${path.module}/dcgm-exporter-values.yaml.tftpl", {
+    gpu_node_pool_name = var.gpu_node_pool_name
+  })
+}
+
+resource "terraform_data" "install_dcgm_exporter" {
+  count = var.gpu_stack_mode == "self_managed" ? 1 : 0
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster.this.id,
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    local_file.dcgm_exporter_values[0].content_sha256,
+    var.dcgm_exporter_chart_version,
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = local.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.gpu,
+  ]
 }
 
 resource "terraform_data" "install_adx_mon" {
@@ -339,6 +405,7 @@ resource "terraform_data" "install_adx_mon" {
   }
 
   depends_on = [
+    terraform_data.install_dcgm_exporter,
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,

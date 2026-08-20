@@ -1,0 +1,24 @@
+# The upstream chart defaults to nvcr.io/nvidia/k8s/dcgm-exporter. The chart
+# version is pinned by dcgm_exporter_chart_version in variables.tf.
+nodeSelector:
+  kubernetes.azure.com/agentpool: ${gpu_node_pool_name}
+
+tolerations:
+  - key: sku
+    operator: Equal
+    value: gpu
+    effect: NoSchedule
+
+podAnnotations:
+  adx-mon/scrape: "true"
+
+service:
+  # gpu-monitoring runs on every GPU node and must scrape the exporter that
+  # runs on the same node.
+  internalTrafficPolicy: Local
+
+kubernetes:
+  # Keep one DCGM series per physical GPU. The Portal fleet board keys a GPU
+  # by node and device, while DCGM Pod labels would create an additional row
+  # for every workload using that device.
+  enablePodLabels: false

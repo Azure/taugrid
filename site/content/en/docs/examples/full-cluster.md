@@ -9,8 +9,8 @@ description: Build AKS, GPU capacity, TauGrid, and Portal with the repository Te
 
 Use the repository's [`terraform/aks`](https://github.com/Azure/taugrid/tree/main/terraform/aks)
 root to create a GPU-enabled AKS environment. It provisions a system pool and
-an AKS-managed GPU pool, enables OIDC and Azure Workload Identity, and invokes
-the supported `tau cluster install` command.
+a GPU pool, enables OIDC and Azure Workload Identity, and invokes the supported
+`tau cluster install` command.
 
 Do not separately install Kueue, KubeRay, the Tau controller, or GPU
 monitoring with Helm. `tau cluster install` installs the versioned TauGrid
@@ -25,8 +25,6 @@ distribution that owns those components, the baseline Kueue queue, and Portal.
   dependencies;
 - Azure credentials accepted by the AzureRM Terraform provider and permission
   to provision AKS, networking, storage, and identities; and
-- access to AKS Managed GPU Experience preview in the selected subscription
-  and region; and
 - `tau` and PowerShell 7 on PATH. Linux and macOS users can configure the
   Terraform command interpreter to use Bash.
 
@@ -46,9 +44,9 @@ terraform init
 terraform apply -var="subscription_id=<your-subscription-id>"
 ```
 
-Terraform creates the GPU pool with AKS Managed GPU Experience enabled. AKS
-owns the NVIDIA driver, device plugin, and DCGM exporter host service. It also
-creates a local ignored admin kubeconfig and values file under
+By default, Terraform uses `gpu_stack_mode = "self_managed"`: it installs the
+NVIDIA device plugin and the upstream NVIDIA DCGM exporter. It also creates a
+local ignored admin kubeconfig and values file under
 `terraform/aks/generated/`. For the default A100 pool, it then normalizes MIG
 mode, restarts the GPU VM scale set, and waits for allocatable GPUs before
 running:
@@ -56,6 +54,22 @@ running:
 ```bash
 tau cluster install --values generated/taugrid-values.yaml --version 0.3.0
 ```
+
+Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience.
+This preview mode uses `EnableManagedGPUExperience=true` at GPU pool creation;
+AKS then owns the driver, device plugin, and DCGM exporter host service at port
+`19400`. Before applying, register the feature and wait for `Registered`:
+
+```bash
+az feature register --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview
+az feature show --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview --query properties.state --output tsv
+```
+
+GPU cluster autoscaling is not supported in the managed preview. The current
+AzureRM provider does not expose `gpuProfile.nvidia.managementMode`, so the tag
+is a temporary workaround. When AzureRM exposes that field, replace the tag
+with the provider setting; retain the feature registration until AKS makes the
+feature generally available.
 
 If the local installation step fails after AKS has been created, correct the
 local prerequisite and rerun `terraform apply`. Terraform replaces that step
@@ -91,8 +105,10 @@ tau run smoke
 
 ADX observability is opt-in because it creates additional billable resources.
 Set `enable_adx = true` and a globally unique `adx_cluster_name` before the
-first apply. This installs adx-mon and configures it to collect DCGM telemetry
-from the AKS managed GPU node host service alongside TauGrid.
+first apply. This installs adx-mon alongside TauGrid. In self-managed mode it
+discovers the upstream DCGM exporter Pod. TauGrid GPU monitoring uses that
+exporter's node-local Service in self-managed mode; in AKS managed preview mode
+it collects from the GPU node host service.
 
 Portal lifecycle history is a second apply: its target namespace is created by
 the TauWorkspace. After creating the workspace above, add these values to the

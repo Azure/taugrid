@@ -8,6 +8,7 @@ global:
   clusterName: ${cluster_name}
   region: ${location}
 
+%{ if gpu_stack_mode == "aks_managed_preview" }
 collector:
   prometheusScrape:
     extraStaticTargets:
@@ -19,3 +20,4 @@ collector:
         namespace: gpu-monitoring
         pod: host-dcgm-exporter
         container: dcgm-exporter
+%{ endif }
