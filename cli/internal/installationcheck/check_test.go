@@ -40,11 +40,12 @@ func TestCheckReportsReadyInstallation(t *testing.T) {
 		"PASS  Kubernetes",
 		"PASS  Kueue",
 		"PASS  KubeRay",
+		"PASS  Portal",
 		"PASS  Tau controller",
 		"PASS  TauCluster",
 		"PASS  Baseline queue",
 		"PASS  Quota guard",
-		"READY: 7/7 checks passed",
+		"READY: 8/8 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -57,7 +58,8 @@ func TestCheckReportsActionableReadinessFailures(t *testing.T) {
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
 		output: `{"items":[
 			{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0}},
-			{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+			{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 		]}`,
 	}
 	runner["get clusters.tau.azure.com cluster --output=json"] = fakeResponse{
@@ -76,7 +78,7 @@ func TestCheckReportsActionableReadinessFailures(t *testing.T) {
 		"Deployment taugrid-kueue-controller-manager is not ready",
 		"NodesReady=False (NoMatchingNodes: no nodes match the configured VM-size rules)",
 		"validationActions=[Warn]",
-		"NOT READY: 4/7 checks passed",
+		"NOT READY: 5/8 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -104,7 +106,9 @@ func TestCheckRejectsBroadQuotaGuard(t *testing.T) {
 func TestCheckSkipsDisabledComponents(t *testing.T) {
 	runner := readyRunner()
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
-		output: `{"items":[]}`,
+		output: `{"items":[
+			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+		]}`,
 	}
 	opts := testOptions()
 	opts.DisabledComponents = []Component{ComponentKueue, ComponentKubeRay}
@@ -120,7 +124,7 @@ func TestCheckSkipsDisabledComponents(t *testing.T) {
 	for _, want := range []string{
 		"SKIP  Kueue                components.kueue.enabled is false in the Helm release",
 		"SKIP  KubeRay              components.kuberayOperator.enabled is false in the Helm release",
-		"READY: 5/5 checks passed",
+		"READY: 6/6 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -128,10 +132,55 @@ func TestCheckSkipsDisabledComponents(t *testing.T) {
 	}
 }
 
+func TestCheckSkipsDisabledPortalWithoutReadingItsDeployment(t *testing.T) {
+	runner := readyRunner()
+	opts := testOptions()
+	opts.DisabledComponents = []Component{ComponentPortal}
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("disabled Portal blocked readiness:\n%s", report.Summary())
+	}
+	if !strings.Contains(report.Summary(), "SKIP  Portal") {
+		t.Fatalf("summary missing Portal skip:\n%s", report.Summary())
+	}
+}
+
+func TestCheckFindsPortalByStableComponentLabel(t *testing.T) {
+	runner := readyRunner()
+	key := "get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"
+	runner[key] = fakeResponse{output: `{"items":[
+		{"metadata":{"name":"taugrid-kueue-controller-manager","generation":1,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+		{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+		{"metadata":{"name":"custom-portal-name","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+	]}`}
+
+	report := Check(context.Background(), runner, testOptions())
+	if !report.Ready() {
+		t.Fatalf("Portal with a customized resource name was not ready:\n%s", report.Summary())
+	}
+}
+
+func TestCheckUsesConfiguredSystemNamespaceForPortalAndController(t *testing.T) {
+	runner := fakeRunner{}
+	for key, response := range readyRunner() {
+		runner[strings.ReplaceAll(key, "tau-system", "custom-system")] = response
+	}
+	opts := testOptions()
+	opts.SystemNamespace = "custom-system"
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("custom namespace report not ready:\n%s", report.Summary())
+	}
+}
+
 func TestCheckStillValidatesEnabledComponentsWhenAnotherIsDisabled(t *testing.T) {
 	runner := readyRunner()
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
-		output: `{"items":[]}`,
+		output: `{"items":[
+			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+		]}`,
 	}
 	opts := testOptions()
 	opts.DisabledComponents = []Component{ComponentKueue}
@@ -144,14 +193,14 @@ func TestCheckStillValidatesEnabledComponentsWhenAnotherIsDisabled(t *testing.T)
 	if !strings.Contains(summary, "SKIP  Kueue") {
 		t.Fatalf("summary missing Kueue skip:\n%s", summary)
 	}
-	if !strings.Contains(summary, "FAIL  KubeRay") || !strings.Contains(summary, "NOT READY: 5/6 checks passed") {
+	if !strings.Contains(summary, "FAIL  KubeRay") || !strings.Contains(summary, "NOT READY: 6/7 checks passed") {
 		t.Fatalf("summary did not fail the enabled component:\n%s", summary)
 	}
 }
 
 func TestCheckSkipsDisabledTauCoreSurfaces(t *testing.T) {
 	runner := readyRunner()
-	delete(runner, "get deployment tau-core-controller --namespace tau-platform --output=json")
+	delete(runner, "get deployment tau-core-controller --namespace tau-system --output=json")
 	delete(runner, "get clusters.tau.azure.com cluster --output=json")
 	delete(runner, "get validatingadmissionpolicy tau-quota-approval-guard --output=json")
 	delete(runner, "get validatingadmissionpolicybinding tau-quota-approval-guard --output=json")
@@ -167,7 +216,7 @@ func TestCheckSkipsDisabledTauCoreSurfaces(t *testing.T) {
 		"SKIP  Tau controller       components.tauCoreController.enabled is false in the Helm release",
 		"SKIP  TauCluster           components.tauCoreController.enabled is false in the Helm release",
 		"SKIP  Quota guard          components.tauCoreController.enabled is false in the Helm release",
-		"READY: 4/4 checks passed",
+		"READY: 5/5 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -209,8 +258,8 @@ func TestDisabledComponentsReadsChartSwitches(t *testing.T) {
 		},
 		{
 			name:   "all validated components disabled",
-			values: `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false}}}`,
-			want:   []Component{ComponentKueue, ComponentKubeRay, ComponentTauCore},
+			values: `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false},"taugridCore":{"enabled":false}}}`,
+			want:   []Component{ComponentKueue, ComponentKubeRay, ComponentTauCore, ComponentPortal},
 		},
 		{
 			name:   "only kuberay disabled",
@@ -221,6 +270,11 @@ func TestDisabledComponentsReadsChartSwitches(t *testing.T) {
 			name:   "only tau core disabled",
 			values: `{"components":{"tauCoreController":{"enabled":false}}}`,
 			want:   []Component{ComponentTauCore},
+		},
+		{
+			name:   "only portal disabled",
+			values: `{"taugrid-core":{"portal":{"enabled":false}}}`,
+			want:   []Component{ComponentPortal},
 		},
 		{
 			name:   "shorthand bool leaves the subchart installed",
@@ -300,10 +354,10 @@ func (blockingRunner) Raw(ctx context.Context, _ []string, _ []byte) (string, er
 
 func testOptions() Options {
 	return Options{
-		Release:               "taugrid",
-		ControlPlaneNamespace: "tau-system",
-		Timeout:               time.Second,
-		PollInterval:          time.Millisecond,
+		Release:         "taugrid",
+		SystemNamespace: "tau-system",
+		Timeout:         time.Second,
+		PollInterval:    time.Millisecond,
 	}
 }
 
@@ -315,10 +369,11 @@ func readyRunner() fakeRunner {
 		"get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json": {
 			output: `{"items":[
 				{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
-				{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+				{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+				{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 			]}`,
 		},
-		"get deployment tau-core-controller --namespace tau-platform --output=json": {
+		"get deployment tau-core-controller --namespace tau-system --output=json": {
 			output: `{"metadata":{"name":"tau-core-controller","generation":4},"spec":{"replicas":1},"status":{"observedGeneration":4,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}`,
 		},
 		"get clusters.tau.azure.com cluster --output=json": {

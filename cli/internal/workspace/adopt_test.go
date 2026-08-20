@@ -44,7 +44,7 @@ func (f *adoptFakeRunner) Raw(_ context.Context, args []string, stdin []byte) (s
 
 func successfulAdoptRunner() *adoptFakeRunner {
 	return &adoptFakeRunner{responses: map[string][]adoptFakeResponse{
-		"-n tau-platform get workspace.tau.azure.com -o json": {{
+		"-n tau-system get workspace.tau.azure.com -o json": {{
 			out: `{"items":[]}`,
 		}},
 		"get namespace sample -o json": {{
@@ -62,7 +62,7 @@ func successfulAdoptRunner() *adoptFakeRunner {
 		"get storageclass.storage.k8s.io azureblob-fuse-premium -o json": {{
 			out: `{"metadata":{"name":"azureblob-fuse-premium","uid":"storage-class-uid"}}`,
 		}},
-		"-n tau-platform get workspace.tau.azure.com sample --ignore-not-found -o json": {{
+		"-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json": {{
 			out: "",
 		}},
 	}}
@@ -70,12 +70,12 @@ func successfulAdoptRunner() *adoptFakeRunner {
 
 func defaultAdoptOptions() AdoptOptions {
 	return AdoptOptions{
-		Name:              "sample",
-		Namespace:         "sample",
-		Queue:             "jobqueue",
-		PlatformNamespace: "tau-platform",
-		DataPVC:           "blob-training",
-		OutputRoot:        "/data/projects/sample/runs",
+		Name:            "sample",
+		Namespace:       "sample",
+		Queue:           "jobqueue",
+		SystemNamespace: "tau-system",
+		DataPVC:         "blob-training",
+		OutputRoot:      "/data/projects/sample/runs",
 	}
 }
 
@@ -91,7 +91,7 @@ func TestRenderAdoptionManifest(t *testing.T) {
 		"apiVersion: tau.azure.com/v1alpha1",
 		"kind: TauWorkspace",
 		"name: sample",
-		"namespace: tau-platform",
+		"namespace: tau-system",
 		"mode: cluster-wide",
 		"namespace: sample",
 		"createNamespace: false",
@@ -148,7 +148,7 @@ func TestPreflightAdoptionSuccess(t *testing.T) {
 
 func TestPreflightAdoptionEnforcesSingleV0Workspace(t *testing.T) {
 	runner := successfulAdoptRunner()
-	runner.responses["-n tau-platform get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
 		out: `{"items":[{"metadata":{"name":"other"},"spec":{"queue":"jobqueue"}}]}`,
 	}}
 	_, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
@@ -273,7 +273,7 @@ func TestPreflightAdoptionRefusals(t *testing.T) {
 		{
 			name: "existing workspace conflict",
 			change: func(r *adoptFakeRunner) {
-				r.responses["-n tau-platform get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
+				r.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
 					out: compatibleWorkspaceJSON("other-queue"),
 				}}
 			},
@@ -332,7 +332,7 @@ func compatibleWorkspaceJSON(queue string) string {
 	return `{
 		"apiVersion":"tau.azure.com/v1alpha1",
 		"kind":"TauWorkspace",
-		"metadata":{"name":"sample","namespace":"tau-platform","uid":"workspace-uid","resourceVersion":"17"},
+		"metadata":{"name":"sample","namespace":"tau-system","uid":"workspace-uid","resourceVersion":"17"},
 		"spec":{
 			"authorization":{"mode":"cluster-wide"},
 			"target":{"namespace":"sample","createNamespace":false},
@@ -344,7 +344,7 @@ func compatibleWorkspaceJSON(queue string) string {
 
 func TestPreflightAdoptionAcceptsCompatibleWorkspace(t *testing.T) {
 	runner := successfulAdoptRunner()
-	runner.responses["-n tau-platform get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
+	runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
 		out: compatibleWorkspaceJSON("jobqueue"),
 	}}
 	report, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
@@ -365,11 +365,11 @@ func TestPreflightAdoptionRejectsTerminatingWorkspace(t *testing.T) {
 		`"resourceVersion":"17","deletionTimestamp":"2026-07-28T00:00:00Z"`,
 		1,
 	)
-	runner.responses["-n tau-platform get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
+	runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
 		out: terminating,
 	}}
 	_, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
-	if err == nil || !strings.Contains(err.Error(), `TauWorkspace "tau-platform/sample" is terminating`) {
+	if err == nil || !strings.Contains(err.Error(), `TauWorkspace "tau-system/sample" is terminating`) {
 		t.Fatalf("expected terminating TauWorkspace refusal, got %v", err)
 	}
 }
@@ -381,7 +381,7 @@ func TestApplyAdoptionCreatesOnlyTauWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	createArgs := "-n tau-platform create -f -"
+	createArgs := "-n tau-system create -f -"
 	runner.responses[createArgs+" --dry-run=server"] = []adoptFakeResponse{{out: "dry-run"}}
 	runner.responses[createArgs] = []adoptFakeResponse{{out: "workspace.example.com/sample created\n"}}
 
@@ -417,7 +417,7 @@ func TestApplyAdoptionCreatesOnlyTauWorkspace(t *testing.T) {
 
 func TestApplyAdoptionIsIdempotentForCompatibleWorkspace(t *testing.T) {
 	runner := successfulAdoptRunner()
-	runner.responses["-n tau-platform get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
+	runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
 		out: compatibleWorkspaceJSON("jobqueue"),
 	}}
 	options := defaultAdoptOptions()

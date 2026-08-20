@@ -15,7 +15,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/manifest"
 	"github.com/Azure/taugrid/cli/internal/onboarding"
-	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
@@ -37,6 +36,7 @@ func newRunCmdWithConnectionFactory(connectionFactory runConnectionEnsurerFactor
 		kvClientID         string
 		serviceAccountName string
 		projectName        string
+		systemNamespace    string
 	)
 
 	cmd := &cobra.Command{
@@ -101,6 +101,7 @@ Common examples:
 					KubeContextExplicit: runContextExplicit(cmd),
 					KubeContextFromFlag: cmd.Flags().Changed("context"),
 					DryRun:              dryRun,
+					SystemNamespace:     systemNamespace,
 					Connection:          resolution.Connection,
 					ConnectionFactory:   connectionFactory,
 				})
@@ -156,6 +157,7 @@ Common examples:
 				return err
 			}
 			defer restoreKubeconfig()
+			effectiveSystemNamespace := systemNamespaceForConnection(cmd, connection)
 			// TauGrid v0 activates exactly one workspace per cluster, so a
 			// researcher should not have to name it. When --workspace was not
 			// given and the connection descriptor did not carry one, resolve
@@ -183,7 +185,7 @@ Common examples:
 			// inherited from the live object remain explicit config values or
 			// unresolved client-side placeholders.
 			if targetOptions.workspace != "" && targetOptions.dryRun != "client" {
-				workspaceStatus, err := fetchWorkspace(cmd, targetOptions.kubeContext, tauworkspace.PlatformNamespace, targetOptions.workspace)
+				workspaceStatus, err := fetchWorkspace(cmd, targetOptions.kubeContext, effectiveSystemNamespace, targetOptions.workspace)
 				if err != nil {
 					return err
 				}
@@ -257,6 +259,7 @@ Common examples:
 	cmd.Flags().StringVar(&kvClientID, "workload-identity-client-id", "", "Managed identity client ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&serviceAccountName, "service-account", "", "pod ServiceAccount for workload cloud identity (overrides the TauWorkspace default; authorization remains server-side)")
 	cmd.PersistentFlags().StringVar(&projectName, "project", "", "Tau project name from the repository's tau.projects.yaml")
+	cmd.PersistentFlags().StringVar(&systemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 
 	cmd.AddCommand(newRunValidateCmd(), newRunSchemaCmd(), newRunExplainConfigCmd(), newRunGetCmd(), newRunListCmd(), newRunStatusCmd(), newRunLogsCmd(), newRunCancelCmd(), newRunResumeCmdWithConnectionFactory(connectionFactory), newRunHistoryCmd())
 	return cmd

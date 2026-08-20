@@ -144,6 +144,7 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  # Keep this legacy object name so Helm upgrades do not leave an orphaned Role.
   name: tau-workspace-platform-rbac-manager
   namespace: {{ include "tau-core-controller.namespace" . }}
   annotations:

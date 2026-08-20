@@ -1,5 +1,6 @@
 {{- if .Values.lifecycleRecorder.enabled }}
 {{- $recorder := .Values.lifecycleRecorder -}}
+{{- $systemNamespace := .Release.Namespace -}}
 {{- $kusto := default dict $recorder.kusto -}}
 {{- $serviceAccount := default dict $recorder.serviceAccount -}}
 {{- $rbac := default dict $recorder.rbac -}}
@@ -57,7 +58,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $serviceAccountName }}
-  namespace: {{ $recorder.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}
@@ -103,7 +104,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ $serviceAccountName }}
-    namespace: {{ $recorder.namespace }}
+    namespace: {{ $systemNamespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -113,7 +114,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $resourceName }}
-  namespace: {{ $recorder.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}

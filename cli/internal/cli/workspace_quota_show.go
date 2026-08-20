@@ -15,7 +15,7 @@ import (
 )
 
 func newWorkspaceQuotaShowCmd() *cobra.Command {
-	var namespace, kubeContext, output, clusterQueue string
+	var namespace, legacyNamespace, kubeContext, output, clusterQueue string
 	cmd := &cobra.Command{
 		Use:   "show <workspace>",
 		Short: "Show the Kueue quota and node placement backing a workspace",
@@ -35,6 +35,11 @@ Examples:
   tau workspace quota show pretraining-data -o json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)
+			if err != nil {
+				return err
+			}
 			if output != "table" && output != "json" {
 				return fmt.Errorf("-o/--output must be one of: table, json")
 			}
@@ -65,7 +70,9 @@ Examples:
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", tauworkspace.PlatformNamespace, "namespace containing TauWorkspace objects")
+	cmd.Flags().StringVar(&namespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
+	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
 	// The ClusterQueue normally comes from workspace status. The override

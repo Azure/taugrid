@@ -19,7 +19,7 @@ set -euo pipefail
 #   4. Prove the Workspace reaches Ready without a storage readiness condition,
 #      while a platform-owned PVC binds for later workloads.
 #   5. Prove the researcher subject can get the one workspace in
-#      tau-platform and create/read ordinary namespaced workload resources,
+#      tau-system and create/read ordinary namespaced workload resources,
 #      but cannot read another namespace's secrets or create cluster-scoped
 #      resources.
 #   6. Delete only the TauWorkspace desired state and prove the controller's
@@ -48,7 +48,7 @@ IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 
 CLUSTER_NAME="${TAU_CORE_KIND_CLUSTER_NAME:-tau-core-e2e}"
 KUBE_CONTEXT="${TAU_CORE_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"
-PLATFORM_NAMESPACE="tau-platform" # fixed: cli/internal/workspace.PlatformNamespace
+SYSTEM_NAMESPACE="tau-system" # fixed: cli/internal/workspace.SystemNamespace
 WORKSPACE_NAME="${TAU_CORE_KIND_WORKSPACE:-aurora}"
 WORKSPACE_GROUP="${TAU_CORE_KIND_GROUP:-aurora-researchers}"
 TARGET_NAMESPACE="${TAU_CORE_KIND_TARGET_NAMESPACE:-aurora}"
@@ -365,7 +365,7 @@ sed -E \
   -e "s#- --leader-elect\$#- --leader-elect=false#" \
   "${APP_BASE_DIR}/kustomize/deployment.yaml" >"${SCRATCH_DIR}/deployment.local.yaml"
 kubectl apply -f "${SCRATCH_DIR}/deployment.local.yaml"
-kubectl -n "${PLATFORM_NAMESPACE}" rollout status deployment/tau-core-controller --timeout="${ROLLOUT_WAIT_SECONDS}s"
+kubectl -n "${SYSTEM_NAMESPACE}" rollout status deployment/tau-core-controller --timeout="${ROLLOUT_WAIT_SECONDS}s"
 
 # --- Continuous native/Flex Node topology reconciliation -------------------
 #
@@ -495,7 +495,7 @@ apiVersion: tau.azure.com/v1alpha1
 kind: TauWorkspace
 metadata:
   name: ${WORKSPACE_NAME}
-  namespace: ${PLATFORM_NAMESPACE}
+  namespace: ${SYSTEM_NAMESPACE}
 spec:
   authorization:
     mode: workspace-rbac
@@ -567,26 +567,26 @@ kubectl -n "${TARGET_NAMESPACE}" get pvc blob-training -o jsonpath='{.status.pha
 
 deadline=$((SECONDS + WAIT_SECONDS))
 while (( SECONDS < deadline )); do
-  phase="$(kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   [[ "${phase}" == "Ready" ]] && break
   sleep 1
 done
-phase="$(kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o jsonpath='{.status.phase}')"
+phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o jsonpath='{.status.phase}')"
 if [[ "${phase}" != "Ready" ]]; then
   echo "workspace ${WORKSPACE_NAME} did not reach Ready (phase=${phase})" >&2
-  kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o yaml >&2 || true
-  kubectl -n "${PLATFORM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
   exit 1
 fi
 
 echo "== verifying StorageReady is absent and the workspace-cleanup finalizer exists =="
-workspace_conditions="$(kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+workspace_conditions="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{range .status.conditions[*]}{.type}{"\n"}{end}')"
 if grep -qx StorageReady <<<"${workspace_conditions}"; then
   echo "workspace status unexpectedly contains StorageReady" >&2
   exit 1
 fi
-kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{.metadata.finalizers}' | grep -q "tau.azure.com/workspace-cleanup"
 
 # ---------------------------------------------------------------------------
@@ -599,16 +599,16 @@ kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@ex
 kubectl auth can-i get jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i create configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
-kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
-kubectl auth can-i create quotarequests.tau.azure.com -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+kubectl auth can-i create quotarequests.tau.azure.com -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get "clusterqueues.kueue.x-k8s.io/${WORKSPACE_NAME}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 [[ "$(kubectl auth can-i list clusterqueues.kueue.x-k8s.io --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
-[[ "$(kubectl auth can-i list workspaces.tau.azure.com -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
-[[ "$(kubectl auth can-i update "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i list workspaces.tau.azure.com -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i update "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 # Cannot read another namespace's secrets: tau-researcher-v1 is bound via a
 # namespace-scoped RoleBinding in the target namespace only, so this same
-# subject has zero permissions in tau-platform (or any other namespace).
-[[ "$(kubectl auth can-i get secrets -n "${PLATFORM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+# subject has zero permissions in tau-system (or any other namespace).
+[[ "$(kubectl auth can-i get secrets -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 kubectl auth can-i list secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 # Cannot create cluster-scoped resources.
@@ -622,7 +622,7 @@ apiVersion: tau.azure.com/v1alpha1
 kind: TauQuotaRequest
 metadata:
   name: ${WORKSPACE_NAME}-pending
-  namespace: ${PLATFORM_NAMESPACE}
+  namespace: ${SYSTEM_NAMESPACE}
 spec:
   workspace: ${WORKSPACE_NAME}
   resource: h200
@@ -638,7 +638,7 @@ apiVersion: tau.azure.com/v1alpha1
 kind: TauQuotaRequest
 metadata:
   name: ${WORKSPACE_NAME}-self-approved
-  namespace: ${PLATFORM_NAMESPACE}
+  namespace: ${SYSTEM_NAMESPACE}
   annotations:
     tau.azure.com/approved: "true"
     tau.azure.com/reviewed-by: platform
@@ -686,6 +686,7 @@ cluster:
   provider: azure
   resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/kind/providers/Microsoft.ContainerService/managedClusters/${CLUSTER_NAME}
   contextName: researcher
+  systemNamespace: ${SYSTEM_NAMESPACE}
 identity:
   tenantID: 11111111-1111-1111-1111-111111111111
 authorization:
@@ -831,7 +832,7 @@ kubectl -n "${TARGET_NAMESPACE}" delete job "${smoke_job}" --wait=false >/dev/nu
 # stale subject-specific RBAC. Existing workload identity remains intact.
 # ---------------------------------------------------------------------------
 echo "== switching TauWorkspace to cluster-wide existing authorization =="
-kubectl -n "${PLATFORM_NAMESPACE}" patch "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+kubectl -n "${SYSTEM_NAMESPACE}" patch "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   --type=json -p='[
     {"op":"replace","path":"/spec/authorization/mode","value":"cluster-wide"},
     {"op":"remove","path":"/spec/principalRef"},
@@ -841,14 +842,14 @@ kubectl -n "${PLATFORM_NAMESPACE}" patch "workspaces.tau.azure.com/${WORKSPACE_N
 
 deadline=$((SECONDS + WAIT_SECONDS))
 while (( SECONDS < deadline )); do
-  reason="$(kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+  reason="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
     -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' 2>/dev/null || true)"
   [[ "${reason}" == "ExistingClusterAuthorization" ]] && break
   sleep 1
 done
-kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{.spec.authorization.mode}' | grep -qx cluster-wide
-kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' | grep -qx ExistingClusterAuthorization
 if kubectl -n "${TARGET_NAMESPACE}" get rolebinding tau-researcher-v1 >/dev/null 2>&1; then
   echo "cluster-wide authorization retained the researcher RoleBinding" >&2
@@ -858,8 +859,8 @@ if kubectl get clusterrolebinding "tau-clusterqueue-reader-${WORKSPACE_NAME}" >/
   echo "cluster-wide authorization retained the ClusterQueue reader ClusterRoleBinding" >&2
   exit 1
 fi
-if kubectl -n "${PLATFORM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1 ||
-   kubectl -n "${PLATFORM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
+if kubectl -n "${SYSTEM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1 ||
+   kubectl -n "${SYSTEM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
   echo "cluster-wide authorization retained platform-reader RBAC" >&2
   exit 1
 fi
@@ -871,15 +872,15 @@ kubectl -n "${TARGET_NAMESPACE}" get serviceaccount tau-workload >/dev/null
 # RBAC/ServiceAccount, and platform-reader access are removed by the finalizer.
 # ---------------------------------------------------------------------------
 echo "== delete TauWorkspace desired state and wait for finalizer =="
-if ! kubectl -n "${PLATFORM_NAMESPACE}" delete \
+if ! kubectl -n "${SYSTEM_NAMESPACE}" delete \
   "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   --wait=true --timeout="${WAIT_SECONDS}s"; then
-  kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o yaml >&2 || true
-  kubectl -n "${PLATFORM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
   exit 1
 fi
 
-if kubectl -n "${PLATFORM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" >/dev/null 2>&1; then
+if kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" >/dev/null 2>&1; then
   echo "TauWorkspace ${WORKSPACE_NAME} still exists after desired-state deletion (finalizer stuck?)" >&2
   exit 1
 fi
@@ -901,12 +902,12 @@ if [[ -n "$(kubectl -n "${TARGET_NAMESPACE}" get rolebindings -l "tau.azure.com/
   echo "target-namespace RoleBindings labeled tau.azure.com/workspace=${WORKSPACE_NAME} were not cleaned up" >&2
   exit 1
 fi
-if kubectl -n "${PLATFORM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
-  echo "platform-namespace reader Role tau-workspace-reader-${WORKSPACE_NAME} was not cleaned up" >&2
+if kubectl -n "${SYSTEM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
+  echo "system-namespace reader Role tau-workspace-reader-${WORKSPACE_NAME} was not cleaned up" >&2
   exit 1
 fi
-if kubectl -n "${PLATFORM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
-  echo "platform-namespace reader RoleBinding tau-workspace-reader-${WORKSPACE_NAME} was not cleaned up" >&2
+if kubectl -n "${SYSTEM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
+  echo "system-namespace reader RoleBinding tau-workspace-reader-${WORKSPACE_NAME} was not cleaned up" >&2
   exit 1
 fi
 if kubectl get clusterrolebinding "tau-clusterqueue-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then

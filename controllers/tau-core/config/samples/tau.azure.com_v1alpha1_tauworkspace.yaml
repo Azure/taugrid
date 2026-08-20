@@ -2,7 +2,7 @@ apiVersion: tau.azure.com/v1alpha1
 kind: TauWorkspace
 metadata:
   name: aurora
-  namespace: tau-platform
+  namespace: tau-system
 spec:
   principalRef:
     provider: entra

@@ -1,0 +1,123 @@
+suite: Portal is part of the default TauGrid distribution
+templates:
+  - charts/taugrid-core/templates/portal.yaml
+tests:
+  - it: deploys Portal in tau-system with a dedicated ServiceAccount
+    release:
+      namespace: tau-system
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tau-system
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: portal
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: tau-portal
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.3.0
+      - notExists:
+          path: spec.template.spec.nodeSelector
+
+  - it: creates the default ClusterIP Service
+    release:
+      namespace: tau-system
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tau-system
+      - equal:
+          path: metadata.name
+          value: tau-portal
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: creates read-only Kubernetes RBAC for Portal
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - batch
+            resources:
+              - jobs
+            verbs:
+              - get
+              - list
+              - watch
+          any: true
+
+  - it: binds the dedicated ServiceAccount in tau-system
+    release:
+      namespace: tau-system
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tau-portal
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: tau-portal
+            namespace: tau-system
+
+  - it: creates the dedicated ServiceAccount in tau-system
+    release:
+      namespace: tau-system
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tau-portal
+      - equal:
+          path: metadata.namespace
+          value: tau-system
+
+  - it: follows a custom TauGrid release namespace
+    release:
+      namespace: custom-system
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+
+  - it: binds the Portal ServiceAccount from a custom release namespace
+    release:
+      namespace: custom-system
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: tau-portal
+            namespace: custom-system
+
+  - it: can disable Portal explicitly
+    set:
+      taugrid-core.portal.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

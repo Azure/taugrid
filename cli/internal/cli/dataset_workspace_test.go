@@ -382,7 +382,7 @@ func TestRunIngestWorkspace_DryRunDoesNotApply(t *testing.T) {
 	err := runIngestWorkspace(context.Background(), &out, &errOut,
 		"ds", "v1",
 		"az://acct/ctr/ds/v1", "az://acct/ctr/ds/v1", testDigestImage, "sample",
-		"az://acct/ctr", "", false, true, "table")
+		"az://acct/ctr", "", "tau-system", false, true, "table")
 	if err != nil {
 		t.Fatalf("dry-run ingest: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestRunIngestWorkspace_WaitSuccessBuildsResultWithReference(t *testing.T) {
 	err := runIngestWorkspace(context.Background(), &out, &errOut,
 		"ds", "v1",
 		"az://acct/ctr/ds/v1", "az://acct/ctr/ds/v1", testDigestImage, "sample",
-		"az://acct/ctr", "", true, false, "json")
+		"az://acct/ctr", "", "tau-system", true, false, "json")
 	if err != nil {
 		t.Fatalf("wait ingest: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestRunIngestWorkspace_FailedJobSurfacesLogs(t *testing.T) {
 	err := runIngestWorkspace(context.Background(), &out, &errOut,
 		"ds", "v1",
 		"az://acct/ctr/ds/v1", "az://acct/ctr/ds/v1", testDigestImage, "sample",
-		"az://acct/ctr", "", true, false, "table")
+		"az://acct/ctr", "", "tau-system", true, false, "table")
 	if err == nil {
 		t.Fatalf("failed job must error")
 	}
@@ -548,7 +548,7 @@ func TestRunIngestWorkspace_NotReadyWorkspaceFails(t *testing.T) {
 	err := runIngestWorkspace(context.Background(), &out, &errOut,
 		"ds", "v1",
 		"az://acct/ctr/ds/v1", "az://acct/ctr/ds/v1", testDigestImage, "sample",
-		"az://acct/ctr", "", true, false, "table")
+		"az://acct/ctr", "", "tau-system", true, false, "table")
 	if err == nil {
 		t.Fatalf("not-Ready workspace must fail")
 	}

@@ -17,7 +17,7 @@ RG="${TAU_QUICKSTART_RG:-taugrid-cpu-quickstart-rg}"
 CLUSTER="${TAU_QUICKSTART_CLUSTER:-tau-cpu-quickstart}"
 NAMESPACE="${TAU_QUICKSTART_NAMESPACE:-research}"
 WORKSPACE="${TAU_QUICKSTART_WORKSPACE:-research}"
-PLATFORM_NS="${TAU_QUICKSTART_PLATFORM_NS:-tau-platform}"
+SYSTEM_NS="${TAU_QUICKSTART_SYSTEM_NS:-tau-system}"
 # Empty uses Tau's public MCR default. Keep this aligned with run.sh when a
 # contributor explicitly overrides the chart.
 CHART="${TAU_QUICKSTART_CHART:-}"
@@ -48,8 +48,8 @@ done
 step "Verify no RayJobs remain"
 run kubectl get rayjob -n "$NAMESPACE"
 
-step "2. Delete the TauWorkspace (lives in $PLATFORM_NS, not $NAMESPACE)"
-run kubectl delete workspace.tau.azure.com "${WORKSPACE}" -n "$PLATFORM_NS" --ignore-not-found
+step "2. Delete the TauWorkspace (lives in $SYSTEM_NS, not $NAMESPACE)"
+run kubectl delete workspace.tau.azure.com "${WORKSPACE}" -n "$SYSTEM_NS" --ignore-not-found
 
 step "3. Uninstall TauGrid"
 # --yes is required once TauWorkspace objects have existed on the cluster.

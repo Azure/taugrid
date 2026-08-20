@@ -1,0 +1,48 @@
+suite: First-party services follow the Helm release namespace
+templates:
+  - templates/prewarm.yaml
+  - templates/stellar.yaml
+  - templates/lifecycle-recorder.yaml
+tests:
+  - it: renders prewarm in a custom release namespace
+    template: templates/prewarm.yaml
+    release:
+      namespace: custom-system
+    set:
+      prewarm.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: baked-image-prewarm
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+
+  - it: renders Stellar in a custom release namespace
+    template: templates/stellar.yaml
+    release:
+      namespace: custom-system
+    set:
+      stellar.enabled: true
+      stellar.kusto.queryCommand: /bin/true
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+
+  - it: renders the lifecycle recorder in a custom release namespace
+    template: templates/lifecycle-recorder.yaml
+    release:
+      namespace: custom-system
+    values:
+      - lifecycle-recorder-values.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-system

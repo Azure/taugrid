@@ -1,0 +1,18 @@
+suite: GPU monitoring system namespace
+templates:
+  - serviceaccount.yaml
+tests:
+  - it: follows the Helm release namespace
+    release:
+      namespace: custom-system
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+
+  - it: rejects the deprecated namespace override
+    set:
+      namespace: other-system
+    asserts:
+      - failedTemplate:
+          errorMessage: gpu-monitoring.namespace is no longer supported; install the release with --namespace to move TauGrid system components together

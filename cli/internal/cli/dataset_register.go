@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/cli/internal/dataset"
-	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -318,7 +317,7 @@ func runRegisterWorkspace(
 		)
 	}
 
-	ws, err := datasetFetchWorkspace(ctx, rf.kubeContext, tauworkspace.PlatformNamespace, wsName)
+	ws, err := datasetFetchWorkspace(ctx, rf.kubeContext, firstNonEmpty(rf.systemNamespace, defaultSystemNamespace()), wsName)
 	if err != nil {
 		return fmt.Errorf("fetch workspace %q: %w", wsName, err)
 	}

@@ -14,7 +14,7 @@ func defaultCreateOptions() CreateOptions {
 	return CreateOptions{
 		Name:                  "research",
 		Namespace:             "research",
-		PlatformNamespace:     PlatformNamespace,
+		SystemNamespace:       SystemNamespace,
 		Queue:                 DefaultWorkspaceQueue,
 		PrincipalProvider:     "entra",
 		PrincipalName:         "researchers",
@@ -30,7 +30,7 @@ func successfulCreateRunner() *adoptFakeRunner {
 		"get clusterqueue.kueue.x-k8s.io jobqueue -o json": {{
 			out: `{"metadata":{"name":"jobqueue","uid":"cq-uid"}}`,
 		}},
-		"-n tau-platform get workspace.tau.azure.com -o json": {{
+		"-n tau-system get workspace.tau.azure.com -o json": {{
 			out: `{"items":[]}`,
 		}},
 	}}
@@ -48,7 +48,7 @@ func TestRenderCreationDeclaresResearcherReadyWorkspace(t *testing.T) {
 	for _, want := range []string{
 		"kind: TauWorkspace",
 		"name: research",
-		"namespace: tau-platform",
+		"namespace: tau-system",
 		"mode: workspace-rbac",
 		"provider: entra",
 		"name: researchers",
@@ -263,7 +263,7 @@ func TestPreflightCreationRefusesMissingOrTerminatingClusterQueue(t *testing.T) 
 
 func TestPreflightCreationEnforcesSingleWorkspace(t *testing.T) {
 	runner := successfulCreateRunner()
-	runner.responses["-n tau-platform get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
 		out: `{"items":[
 			{"metadata":{"name":"first"},"spec":{"queue":"jobqueue"}},
 			{"metadata":{"name":"second"},"spec":{"queue":"jobqueue"}}
@@ -277,9 +277,9 @@ func TestPreflightCreationEnforcesSingleWorkspace(t *testing.T) {
 
 func TestPreflightCreationCompatibleWorkspaceIsNoOp(t *testing.T) {
 	runner := successfulCreateRunner()
-	runner.responses["-n tau-platform get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
 		out: `{"items":[{
-			"metadata":{"name":"research","namespace":"tau-platform"},
+			"metadata":{"name":"research","namespace":"tau-system"},
 			"spec":{
 				"authorization":{"mode":"workspace-rbac"},
 				"principalRef":{"provider":"entra","name":"researchers"},
@@ -313,11 +313,11 @@ func TestApplyCreationRechecksAndConditionallyCreatesWorkspaceOnly(t *testing.T)
 		{out: `{"metadata":{"name":"jobqueue","uid":"cq-uid"}}`},
 		{out: `{"metadata":{"name":"jobqueue","uid":"cq-uid"}}`},
 	}
-	runner.responses["-n tau-platform get workspace.tau.azure.com -o json"] = []adoptFakeResponse{
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{
 		{out: `{"items":[]}`},
 		{out: `{"items":[]}`},
 	}
-	createArgs := "-n tau-platform create -f -"
+	createArgs := "-n tau-system create -f -"
 	runner.responses[createArgs+" --dry-run=server"] = []adoptFakeResponse{{out: "dry run passed\n"}}
 	runner.responses[createArgs] = []adoptFakeResponse{{out: "workspace.example.com/research created\n"}}
 

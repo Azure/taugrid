@@ -23,6 +23,28 @@ func TestRootIncludesWorkspaceStatus(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadCommandsKeepDeprecatedNamespaceAlias(t *testing.T) {
+	for _, args := range [][]string{
+		{"workspace", "list"},
+		{"workspace", "status"},
+		{"workspace", "check"},
+		{"workspace", "quota", "request"},
+		{"workspace", "quota", "show"},
+	} {
+		cmd, _, err := NewRoot().Find(args)
+		if err != nil {
+			t.Fatalf("Find(%v): %v", args, err)
+		}
+		if cmd.Flags().Lookup("system-namespace") == nil {
+			t.Fatalf("%v missing --system-namespace", args)
+		}
+		legacy := cmd.Flags().Lookup("namespace")
+		if legacy == nil || legacy.Shorthand != "n" {
+			t.Fatalf("%v does not preserve deprecated -n/--namespace", args)
+		}
+	}
+}
+
 func TestRootIncludesWorkspaceInitRepo(t *testing.T) {
 	cmd, _, err := NewRoot().Find([]string{"workspace", "init-repo"})
 	if err != nil {
@@ -175,7 +197,7 @@ func TestWorkspaceQuotaRequestDryRun(t *testing.T) {
 		"apiVersion: tau.azure.com/v1alpha1",
 		"kind: TauQuotaRequest",
 		"name: sample-h200-quota-request",
-		"namespace: tau-platform",
+		"namespace: tau-system",
 		"workspace: sample",
 		"mutationMode: ReportOnly",
 	} {

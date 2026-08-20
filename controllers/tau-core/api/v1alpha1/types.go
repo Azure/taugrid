@@ -9,7 +9,8 @@ import (
 )
 
 const (
-	PlatformNamespace = "tau-platform"
+	SystemNamespace       = "tau-system"
+	LegacySystemNamespace = "tau-platform"
 
 	KindTauCluster      = "TauCluster"
 	KindTauWorkspace    = "TauWorkspace"

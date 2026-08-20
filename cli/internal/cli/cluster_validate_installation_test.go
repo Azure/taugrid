@@ -44,13 +44,13 @@ func TestClusterValidateInstallationUsesSharedReadinessPath(t *testing.T) {
 		t.Fatalf("validate installation errored: %v\n%s", err, out)
 	}
 	if got.Release != "research-grid" ||
-		got.ControlPlaneNamespace != "tau-control" ||
+		got.SystemNamespace != "tau-control" ||
 		got.Timeout != 3*time.Minute ||
 		got.PollInterval != 2*time.Second {
 		t.Fatalf("validation options = %+v", got)
 	}
 	if !strings.Contains(out, "Waiting for TauGrid installation readiness") ||
-		!strings.Contains(out, "READY: 7/7 checks passed") {
+		!strings.Contains(out, "READY: 8/8 checks passed") {
 		t.Fatalf("validation output missing readiness report:\n%s", out)
 	}
 }
@@ -60,7 +60,7 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	original := runHelmCommand
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
 		helmArgs = append([]string(nil), args...)
-		_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false}}}`)
+		_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false},"taugridCore":{"enabled":false}}}`)
 		return nil
 	}
 	t.Cleanup(func() { runHelmCommand = original })
@@ -79,7 +79,7 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	if !slices.Equal(helmArgs, want) {
 		t.Fatalf("helm args:\n got: %#v\nwant: %#v", helmArgs, want)
 	}
-	if !slices.Equal(got.DisabledComponents, []installationcheck.Component{installationcheck.ComponentKueue, installationcheck.ComponentKubeRay, installationcheck.ComponentTauCore}) {
+	if !slices.Equal(got.DisabledComponents, []installationcheck.Component{installationcheck.ComponentKueue, installationcheck.ComponentKubeRay, installationcheck.ComponentTauCore, installationcheck.ComponentPortal}) {
 		t.Fatalf("disabled components = %v, want all disabled readiness components", got.DisabledComponents)
 	}
 }

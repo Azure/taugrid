@@ -19,6 +19,7 @@ cluster:
   provider: azure
   resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/taugrid-flex
   contextName: taugrid-flex
+  systemNamespace: tau-system
 identity:
   tenantID: 11111111-1111-1111-1111-111111111111
 authorization:
@@ -54,6 +55,35 @@ func TestDiscoverWalksParents(t *testing.T) {
 	}
 	if got.Descriptor.Workspace != "sample" || got.Digest == "" {
 		t.Fatalf("descriptor = %#v", got)
+	}
+}
+
+func TestLegacyDescriptorResolvesLegacySystemNamespace(t *testing.T) {
+	raw := strings.Replace(validDescriptorYAML, "  systemNamespace: tau-system\n", "", 1)
+	descriptor, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := descriptor.ResolvedSystemNamespace(); got != "tau-platform" {
+		t.Fatalf("ResolvedSystemNamespace() = %q, want tau-platform", got)
+	}
+}
+
+func TestDescriptorResolvesConfiguredSystemNamespace(t *testing.T) {
+	raw := strings.Replace(validDescriptorYAML, "  systemNamespace: tau-system\n", "  systemNamespace: custom-system\n", 1)
+	descriptor, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := descriptor.ResolvedSystemNamespace(); got != "custom-system" {
+		t.Fatalf("ResolvedSystemNamespace() = %q, want custom-system", got)
+	}
+}
+
+func TestDescriptorRejectsInvalidSystemNamespace(t *testing.T) {
+	raw := strings.Replace(validDescriptorYAML, "  systemNamespace: tau-system\n", "  systemNamespace: Invalid_Namespace\n", 1)
+	if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "cluster.systemNamespace") {
+		t.Fatalf("Parse() error = %v, want invalid cluster.systemNamespace", err)
 	}
 }
 

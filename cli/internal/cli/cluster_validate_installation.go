@@ -40,8 +40,8 @@ func newClusterValidateInstallationCmd() *cobra.Command {
 
 Validation covers the supported Kubernetes version, Kueue, KubeRay,
 tau-core-controller, the singleton TauCluster, the Helm-owned baseline
-ClusterQueue, and the narrow fail-closed quota decision admission guard. It does
-not submit a workload or mutate the cluster.
+ClusterQueue, the default Portal, and the narrow fail-closed quota decision
+admission guard. It does not submit a workload or mutate the cluster.
 
 Components the release turned off through components.<name>.enabled are reported
 as SKIP and do not fail validation, so a cluster that keeps its own Kueue or
@@ -67,11 +67,11 @@ KubeRay can still use this command as a gate.`,
 				cmd.Context(),
 				newInstallationCheckRunner(kubeContext),
 				installationcheck.Options{
-					Release:               release,
-					ControlPlaneNamespace: namespace,
-					Timeout:               timeout,
-					PollInterval:          pollInterval,
-					DisabledComponents:    disabled,
+					Release:            release,
+					SystemNamespace:    namespace,
+					Timeout:            timeout,
+					PollInterval:       pollInterval,
+					DisabledComponents: disabled,
 				},
 				cmd.OutOrStdout(),
 			)
@@ -81,7 +81,7 @@ KubeRay can still use this command as a gate.`,
 	flags := cmd.Flags()
 	flags.StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	flags.StringVar(&release, "release", release, "Helm release name")
-	flags.StringVar(&namespace, "namespace", namespace, "namespace containing Kueue and KubeRay")
+	flags.StringVar(&namespace, "namespace", namespace, "namespace containing all TauGrid system components")
 	flags.StringVar(&timeoutText, "timeout", timeoutText, "maximum readiness wait")
 	flags.StringVar(&pollText, "poll-interval", pollText, "readiness poll interval")
 	return cmd
@@ -103,8 +103,8 @@ func runTauGridInstallationValidation(
 
 // disabledTauGridComponents reads the release's coalesced Helm values so
 // validation can skip components the operator turned off. A component switch
-// can come from a values file or an earlier upgrade, so the live release is
-// the only source that sees all of them.
+// can come from a values file or an earlier upgrade, so the live release is the
+// only source that sees all of them.
 //
 // An unreadable release degrades to validating every component rather than
 // aborting: the command still works without Helm on PATH, and a bad read can

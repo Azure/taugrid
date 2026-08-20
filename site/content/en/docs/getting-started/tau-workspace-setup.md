@@ -28,7 +28,7 @@ TauGrid v0 has one active workspace per cluster. Use a separate cluster, not a s
 
 ## What TauWorkspace creates
 
-`tau workspace create` creates one `TauWorkspace` object in `tau-platform`. The Tau controller then reconciles the workspace-owned Kubernetes resources:
+`tau workspace create` creates one `TauWorkspace` object in the selected TauGrid system namespace (`tau-system` by default). The Tau controller then reconciles the workspace-owned Kubernetes resources:
 
 | Reconciled by TauWorkspace | Must already exist or be provisioned separately |
 |---|---|
@@ -51,6 +51,7 @@ kubectl cluster-info
 
 export TAU_WORKSPACE="taugrid-default"
 export TAU_NAMESPACE="$TAU_WORKSPACE"
+export TAU_SYSTEM_NAMESPACE="tau-system"
 export TAU_QUEUE="jobqueue"
 
 # Use the exact identity value that AKS presents to Kubernetes.
@@ -76,6 +77,7 @@ The stock defaults are:
 | Setting | Default |
 |---|---|
 | Workspace name | `taugrid-default` |
+| TauGrid system Namespace | `tau-system` |
 | Workload Namespace | Workspace name |
 | LocalQueue and backing ClusterQueue | `jobqueue` |
 | Authorization mode | `workspace-rbac` |
@@ -83,6 +85,8 @@ The stock defaults are:
 | Output root | `/data/projects/<workspace>/runs` |
 | Priority | `normal` |
 | Workload ServiceAccount without workload identity | Kubernetes `default` ServiceAccount |
+
+`tau workspace create --system-namespace <name>` selects the namespace that stores the `TauWorkspace` object; omit it to use a discovered repository descriptor, then `TAU_SYSTEM_NAMESPACE`, then `tau-system`. `--namespace <name>` selects the separate researcher workload Namespace; omit it to use the workspace name. The deprecated `--platform-namespace` alias is accepted for existing automation but should not be used in new commands.
 
 ## 2. Verify the cluster is ready for a workspace
 
@@ -134,7 +138,7 @@ Confirm that preview did not mutate the cluster:
 
 ```bash
 kubectl get workspaces.tau.azure.com "$TAU_WORKSPACE" \
-  -n tau-platform
+  -n "$TAU_SYSTEM_NAMESPACE"
 ```
 
 Expected: `NotFound`. Any created object at this point means the command was run previously with `--apply` or the cluster was not fresh.
@@ -179,7 +183,7 @@ The command creates only the `TauWorkspace`. It does not create an AKS cluster, 
 kubectl wait \
   --for=jsonpath='{.status.phase}'=Ready \
   "workspaces.tau.azure.com/$TAU_WORKSPACE" \
-  -n tau-platform \
+  -n "$TAU_SYSTEM_NAMESPACE" \
   --timeout=5m
 
 tau workspace status "$TAU_WORKSPACE"
@@ -230,11 +234,11 @@ kubectl get clusterrolebinding "tau-clusterqueue-reader-$TAU_WORKSPACE" \
   -o yaml
 
 kubectl get role "tau-workspace-reader-$TAU_WORKSPACE" \
-  -n tau-platform \
+  -n "$TAU_SYSTEM_NAMESPACE" \
   -o yaml
 
 kubectl get rolebinding "tau-workspace-reader-$TAU_WORKSPACE" \
-  -n tau-platform \
+  -n "$TAU_SYSTEM_NAMESPACE" \
   -o yaml
 
 test "$(
@@ -261,7 +265,7 @@ test "$(
 
 test "$(
   kubectl get rolebinding "tau-workspace-reader-$TAU_WORKSPACE" \
-    -n tau-platform \
+    -n "$TAU_SYSTEM_NAMESPACE" \
     -o jsonpath='{.subjects[0].kind}:{.subjects[0].name}'
 )" = "${TAU_SUBJECT_KIND}:${TAU_PRINCIPAL}"
 ```
@@ -272,7 +276,7 @@ Expected:
 - LocalQueue `jobqueue` points to ClusterQueue `jobqueue`;
 - RoleBinding `tau-researcher-v1` grants the exact researcher subject access in the workload Namespace;
 - ClusterRoleBinding `tau-clusterqueue-reader-$TAU_WORKSPACE` grants that subject read access to the backing ClusterQueue;
-- the matching Role and RoleBinding `tau-workspace-reader-$TAU_WORKSPACE` exist in `tau-platform` for the same subject; and
+- the matching Role and RoleBinding `tau-workspace-reader-$TAU_WORKSPACE` exist in `$TAU_SYSTEM_NAMESPACE` for the same subject; and
 - all five shell assertions exit `0` without output.
 
 If no workload identity was configured, workloads that do not override `serviceAccountName` use the Namespace's Kubernetes `default` ServiceAccount. The current `tau workspace status` output does not print that implicit value.
@@ -301,7 +305,7 @@ export TAU_STORAGE_PROBE_IMAGE="mcr.microsoft.com/azurelinux/base/core@sha256:8b
 
 export TAU_WORKLOAD_SERVICE_ACCOUNT="$(
   kubectl get workspaces.tau.azure.com "$TAU_WORKSPACE" \
-    -n tau-platform \
+    -n "$TAU_SYSTEM_NAMESPACE" \
     -o jsonpath='{.spec.workloadIdentity.serviceAccountName}'
 )"
 : "${TAU_WORKLOAD_SERVICE_ACCOUNT:=default}"
@@ -477,6 +481,7 @@ export TAU_PROJECT_IMAGE="<registry>/<repository>:<immutable-tag>"
 tau workspace init-repo "$TAU_REPO_NAME" \
   --image "$TAU_PROJECT_IMAGE" \
   --workspace "$TAU_WORKSPACE" \
+  --system-namespace "$TAU_SYSTEM_NAMESPACE" \
   --azure-subscription-id "$TAU_SUBSCRIPTION_ID" \
   --azure-tenant-id "$TAU_TENANT_ID" \
   --aks-resource-group "$TAU_AKS_RESOURCE_GROUP" \
@@ -499,7 +504,7 @@ scripts/
   configure.sh
 ```
 
-`tau/workspace.connection.yaml` contains the AKS resource ID, tenant, context, workspace, minimum Tau version, and `workspace-rbac` requirement. It must not contain a kubeconfig, client secret, access token, or other credential.
+`tau/workspace.connection.yaml` contains the AKS resource ID, tenant, context, TauGrid system namespace, workspace, minimum Tau version, and `workspace-rbac` requirement. It must not contain a kubeconfig, client secret, access token, or other credential.
 
 If every researcher already receives a working kubeconfig through another process, you may omit all four Azure/AKS flags. `init-repo` still generates the Tau configs and project scaffold, but it does not create `tau/workspace.connection.yaml`; cluster-backed Tau commands then use the current kubeconfig, and you may pass `--workspace "$TAU_WORKSPACE"` when the workspace cannot be discovered. This manual kubeconfig path supports basic operation, but it is not the clean-machine repository bootstrap accepted in step 9.
 
@@ -527,6 +532,7 @@ tau workspace connection inspect --output yaml
 
 grep -Fx "workspace: $TAU_WORKSPACE" tau/workspace.connection.yaml
 grep -Fxi "  resourceID: $TAU_AKS_RESOURCE_ID" tau/workspace.connection.yaml
+grep -Fx "  systemNamespace: $TAU_SYSTEM_NAMESPACE" tau/workspace.connection.yaml
 grep -Fxi "  tenantID: $TAU_TENANT_ID" tau/workspace.connection.yaml
 grep -Fx "  mode: workspace-rbac" tau/workspace.connection.yaml
 grep -Fx "  requiredRole: tau-researcher-v1" tau/workspace.connection.yaml

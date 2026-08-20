@@ -37,18 +37,18 @@ type AdoptRunner interface {
 // AdoptOptions describes an existing namespace and its platform-owned
 // dependencies. Adoption never creates these resources.
 type AdoptOptions struct {
-	Name              string
-	Namespace         string
-	Queue             string
-	PlatformNamespace string
-	DataPVC           string
-	NamespaceUID      string
-	QueueUID          string
-	PVCUID            string
-	StorageClass      string
-	ClusterQueue      string
-	OutputRoot        string
-	Priority          string
+	Name            string
+	Namespace       string
+	Queue           string
+	SystemNamespace string
+	DataPVC         string
+	NamespaceUID    string
+	QueueUID        string
+	PVCUID          string
+	StorageClass    string
+	ClusterQueue    string
+	OutputRoot      string
+	Priority        string
 }
 
 func (o AdoptOptions) withDefaults() AdoptOptions {
@@ -58,8 +58,8 @@ func (o AdoptOptions) withDefaults() AdoptOptions {
 	if o.Queue == "" {
 		o.Queue = DefaultAdoptQueue
 	}
-	if o.PlatformNamespace == "" {
-		o.PlatformNamespace = PlatformNamespace
+	if o.SystemNamespace == "" {
+		o.SystemNamespace = SystemNamespace
 	}
 	if o.OutputRoot == "" && o.Name != "" {
 		o.OutputRoot = "/data/projects/" + o.Name + "/runs"
@@ -75,7 +75,7 @@ func (o AdoptOptions) validate() error {
 		{"NAME", o.Name},
 		{"--namespace", o.Namespace},
 		{"--queue", o.Queue},
-		{"--platform-namespace", o.PlatformNamespace},
+		{"--system-namespace", o.SystemNamespace},
 		{"--cluster-queue", o.ClusterQueue},
 		{"--storage-class", o.StorageClass},
 	}
@@ -109,7 +109,7 @@ func (o AdoptOptions) validate() error {
 		value string
 	}{
 		{"--namespace", o.Namespace},
-		{"--platform-namespace", o.PlatformNamespace},
+		{"--system-namespace", o.SystemNamespace},
 	} {
 		if errs := validation.IsDNS1123Label(namespace.value); len(errs) > 0 {
 			return fmt.Errorf("%s %q is not a valid Namespace name: %s", namespace.flag, namespace.value, strings.Join(errs, "; "))
@@ -182,7 +182,7 @@ func desiredAdoption(o AdoptOptions) Workspace {
 		Kind:       KindWorkspace,
 		Metadata: ObjectMeta{
 			Name:      o.Name,
-			Namespace: o.PlatformNamespace,
+			Namespace: o.SystemNamespace,
 		},
 		Spec: WorkspaceSpec{
 			Authorization: &WorkspaceAuthorization{Mode: AuthorizationModeClusterWide},
@@ -202,7 +202,7 @@ func renderAdoption(o AdoptOptions, metadata ObjectMeta) ([]byte, error) {
 		Kind:       KindWorkspace,
 		Metadata: adoptObjectMeta{
 			Name:            o.Name,
-			Namespace:       o.PlatformNamespace,
+			Namespace:       o.SystemNamespace,
 			UID:             metadata.UID,
 			ResourceVersion: metadata.ResourceVersion,
 		},
@@ -337,9 +337,9 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 	}
 	desired := desiredAdoption(o)
 	raw, err := runner.Raw(ctx,
-		[]string{"-n", o.PlatformNamespace, "get", tauWorkspaceResource, "-o", "json"}, nil)
+		[]string{"-n", o.SystemNamespace, "get", tauWorkspaceResource, "-o", "json"}, nil)
 	if err != nil {
-		return AdoptionPreflight{}, fmt.Errorf("preflight: list TauWorkspaces in %q: %w", o.PlatformNamespace, err)
+		return AdoptionPreflight{}, fmt.Errorf("preflight: list TauWorkspaces in %q: %w", o.SystemNamespace, err)
 	}
 	list, err := ParseList([]byte(raw))
 	if err != nil {
@@ -349,12 +349,12 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 		return AdoptionPreflight{}, fmt.Errorf(
 			"preflight: v0 supports one TauWorkspace, but %d already exist in %q",
 			len(list.Items),
-			o.PlatformNamespace,
+			o.SystemNamespace,
 		)
 	}
 	if len(list.Items) == 1 {
 		existing := list.Items[0]
-		if err := requireNotTerminating("TauWorkspace", o.PlatformNamespace+"/"+existing.Metadata.Name, existing.Metadata.DeletionTimestamp); err != nil {
+		if err := requireNotTerminating("TauWorkspace", o.SystemNamespace+"/"+existing.Metadata.Name, existing.Metadata.DeletionTimestamp); err != nil {
 			return AdoptionPreflight{}, err
 		}
 		if existing.Metadata.Name != o.Name || !sameAdoptionIntent(existing, desired) {
@@ -471,9 +471,9 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 	}
 
 	raw, err = runner.Raw(ctx,
-		[]string{"-n", o.PlatformNamespace, "get", tauWorkspaceResource, o.Name, "--ignore-not-found", "-o", "json"}, nil)
+		[]string{"-n", o.SystemNamespace, "get", tauWorkspaceResource, o.Name, "--ignore-not-found", "-o", "json"}, nil)
 	if err != nil {
-		return AdoptionPreflight{}, fmt.Errorf("preflight: read TauWorkspace %s/%s: %w", o.PlatformNamespace, o.Name, err)
+		return AdoptionPreflight{}, fmt.Errorf("preflight: read TauWorkspace %s/%s: %w", o.SystemNamespace, o.Name, err)
 	}
 	if strings.TrimSpace(raw) == "" {
 		report.ExistingWorkspaceIntent = "absent"
@@ -484,13 +484,13 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 		return AdoptionPreflight{}, fmt.Errorf("preflight: %w", err)
 	}
 	if existing.Metadata.UID == "" || existing.Metadata.ResourceVersion == "" {
-		return AdoptionPreflight{}, fmt.Errorf("preflight: existing TauWorkspace %s/%s lacks metadata.uid or metadata.resourceVersion", o.PlatformNamespace, o.Name)
+		return AdoptionPreflight{}, fmt.Errorf("preflight: existing TauWorkspace %s/%s lacks metadata.uid or metadata.resourceVersion", o.SystemNamespace, o.Name)
 	}
-	if err := requireNotTerminating("TauWorkspace", o.PlatformNamespace+"/"+o.Name, existing.Metadata.DeletionTimestamp); err != nil {
+	if err := requireNotTerminating("TauWorkspace", o.SystemNamespace+"/"+o.Name, existing.Metadata.DeletionTimestamp); err != nil {
 		return AdoptionPreflight{}, err
 	}
 	if !sameAdoptionIntent(existing, desired) {
-		return AdoptionPreflight{}, fmt.Errorf("preflight: existing TauWorkspace %s/%s has a conflicting spec; refusing to overwrite it", o.PlatformNamespace, o.Name)
+		return AdoptionPreflight{}, fmt.Errorf("preflight: existing TauWorkspace %s/%s has a conflicting spec; refusing to overwrite it", o.SystemNamespace, o.Name)
 	}
 	report.ExistingWorkspace = true
 	report.ExistingWorkspaceUID = existing.Metadata.UID
@@ -545,7 +545,7 @@ func ApplyAdoption(ctx context.Context, runner AdoptRunner, options AdoptOptions
 	if current.ExistingWorkspace {
 		return fmt.Sprintf(
 			"TauWorkspace %s/%s already exists with compatible intent; no changes applied\n",
-			o.PlatformNamespace,
+			o.SystemNamespace,
 			o.Name,
 		), nil
 	}
@@ -554,7 +554,7 @@ func ApplyAdoption(ctx context.Context, runner AdoptRunner, options AdoptOptions
 		return "", err
 	}
 	args := []string{
-		"-n", o.PlatformNamespace,
+		"-n", o.SystemNamespace,
 		"create",
 		"-f", "-",
 	}

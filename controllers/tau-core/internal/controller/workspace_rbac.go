@@ -21,7 +21,7 @@ func (r *TauWorkspaceReconciler) reconcileRBAC(ctx context.Context, workspace *t
 		if err := r.cleanupClusterQueueReaderRBAC(ctx, workspace.Name); err != nil {
 			return false, "failed to remove subject-specific ClusterQueue reader RBAC for cluster-wide authorization", err
 		}
-		if err := r.cleanupPlatformReaderRBAC(ctx, workspace.Name); err != nil {
+		if err := r.cleanupSystemReaderRBAC(ctx, workspace.Name); err != nil {
 			return false, "failed to remove subject-specific workspace reader RBAC for cluster-wide authorization", err
 		}
 		return true, "workspace relies on pre-existing cluster authorization; the controller grants no researcher access", nil
@@ -45,7 +45,7 @@ func (r *TauWorkspaceReconciler) reconcileRBAC(ctx context.Context, workspace *t
 	if err := r.reconcileClusterQueueReaderRBAC(ctx, workspace, targetNamespace); err != nil {
 		return false, "failed to reconcile ClusterQueue reader ClusterRoleBinding", err
 	}
-	if err := r.reconcilePlatformReaderRBAC(ctx, workspace); err != nil {
+	if err := r.reconcileSystemReaderRBAC(ctx, workspace); err != nil {
 		return false, "failed to reconcile workspace reader RoleBinding", err
 	}
 	return true, "researcher namespace and ClusterQueue reader bindings are reconciled", nil
@@ -123,9 +123,9 @@ func (r *TauWorkspaceReconciler) reconcileWorkloadIdentity(ctx context.Context, 
 	return true, "workload identity ServiceAccount is reconciled", nil
 }
 
-func (r *TauWorkspaceReconciler) reconcilePlatformReaderRBAC(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
+func (r *TauWorkspaceReconciler) reconcileSystemReaderRBAC(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
 	name := workspaceReaderRBACName(workspace.Name)
-	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: platformNamespace(r.PlatformNamespace)}}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: systemNamespace(r.SystemNamespace)}}
 	if err := r.getAndValidateWorkspaceOwnership(ctx, role, workspace.Name); err != nil {
 		return err
 	}
@@ -140,14 +140,14 @@ func (r *TauWorkspaceReconciler) reconcilePlatformReaderRBAC(ctx context.Context
 	if err != nil {
 		return err
 	}
-	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: platformNamespace(r.PlatformNamespace)}}
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: systemNamespace(r.SystemNamespace)}}
 	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace.Name); err != nil {
 		return err
 	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
 		binding.Labels = workspaceLabels(workspace.Name)
 		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}
-		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, platformNamespace(r.PlatformNamespace))}
+		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, systemNamespace(r.SystemNamespace))}
 		return nil
 	})
 	return err

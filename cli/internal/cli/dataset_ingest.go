@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/dataset"
 	"github.com/Azure/taugrid/cli/internal/datasetingest"
 	"github.com/Azure/taugrid/cli/internal/storage"
-	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -127,7 +126,7 @@ Security:
 			if !isLocalSource {
 				return runIngestWorkspace(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(),
 					ref.Name, ref.Version, sourceRoot, destination, workerImage, workspace,
-					rf.registry, rf.kubeContext, wait, dryRun, output)
+					rf.registry, rf.kubeContext, rf.systemNamespace, wait, dryRun, output)
 			}
 
 			// Direct/file mode may read the caller-selected registry.
@@ -281,11 +280,11 @@ func runIngestWorkspace(
 	ctx context.Context, out, errOut io.Writer,
 	name, version string,
 	sourceRoot, destination, workerImage, wsName,
-	registry, kubeContext string,
+	registry, kubeContext, systemNamespace string,
 	wait, dryRun bool, output string,
 ) error {
 	// Fetch and validate the workspace identity (Ready, namespace, WI SA+client).
-	ws, err := datasetFetchWorkspace(ctx, kubeContext, tauworkspace.PlatformNamespace, wsName)
+	ws, err := datasetFetchWorkspace(ctx, kubeContext, firstNonEmpty(systemNamespace, defaultSystemNamespace()), wsName)
 	if err != nil {
 		return fmt.Errorf("fetch workspace %q: %w", wsName, err)
 	}
@@ -508,7 +507,7 @@ func runStatusWorkspace(
 			"workspace status requires --wait so the worker result can be read from its logs")
 	}
 
-	ws, err := datasetFetchWorkspace(ctx, rf.kubeContext, tauworkspace.PlatformNamespace, wsName)
+	ws, err := datasetFetchWorkspace(ctx, rf.kubeContext, firstNonEmpty(rf.systemNamespace, defaultSystemNamespace()), wsName)
 	if err != nil {
 		return dataset.IngestStatus{}, fmt.Errorf("fetch workspace %q: %w", wsName, err)
 	}

@@ -20,10 +20,9 @@ const (
 	minimumKubernetesMajor = 1
 	minimumKubernetesMinor = 30
 
-	tauPlatformNamespace = "tau-platform"
-	tauControllerName    = "tau-core-controller"
-	tauClusterName       = "cluster"
-	quotaGuardName       = "tau-quota-approval-guard"
+	tauControllerName = "tau-core-controller"
+	tauClusterName    = "cluster"
+	quotaGuardName    = "tau-quota-approval-guard"
 )
 
 // Runner is the read-only kubectl surface used by installation validation.
@@ -33,10 +32,10 @@ type Runner interface {
 
 // Options identifies the Helm release and bounds readiness polling.
 type Options struct {
-	Release               string
-	ControlPlaneNamespace string
-	Timeout               time.Duration
-	PollInterval          time.Duration
+	Release         string
+	SystemNamespace string
+	Timeout         time.Duration
+	PollInterval    time.Duration
 	// DisabledComponents names chart components the release turned off. They
 	// are reported as skipped instead of failing. The zero value validates
 	// every component.
@@ -50,6 +49,7 @@ const (
 	ComponentKueue   Component = "Kueue"
 	ComponentKubeRay Component = "KubeRay"
 	ComponentTauCore Component = "Tau controller"
+	ComponentPortal  Component = "Portal"
 )
 
 type chartComponent struct {
@@ -75,7 +75,12 @@ var componentSwitches = []chartComponent{
 // given the release's coalesced Helm values as JSON.
 func DisabledComponents(helmValues []byte) ([]Component, error) {
 	var values struct {
-		Components map[string]any `json:"components"`
+		Components  map[string]any `json:"components"`
+		TauGridCore struct {
+			Portal struct {
+				Enabled *bool `json:"enabled"`
+			} `json:"portal"`
+		} `json:"taugrid-core"`
 	}
 	if err := json.Unmarshal(helmValues, &values); err != nil {
 		return nil, fmt.Errorf("decode Helm release values: %w", err)
@@ -88,6 +93,15 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 		if enabled, ok := settings["enabled"].(bool); ok && !enabled {
 			disabled = append(disabled, component.name)
 		}
+	}
+	tauGridCoreEnabled := true
+	if settings, ok := values.Components["taugridCore"].(map[string]any); ok {
+		if enabled, ok := settings["enabled"].(bool); ok {
+			tauGridCoreEnabled = enabled
+		}
+	}
+	if !tauGridCoreEnabled || (values.TauGridCore.Portal.Enabled != nil && !*values.TauGridCore.Portal.Enabled) {
+		disabled = append(disabled, ComponentPortal)
 	}
 	return disabled, nil
 }
@@ -199,8 +213,8 @@ func validateOptions(opts Options) error {
 	if strings.TrimSpace(opts.Release) == "" {
 		return errors.New("release must not be empty")
 	}
-	if strings.TrimSpace(opts.ControlPlaneNamespace) == "" {
-		return errors.New("control-plane namespace must not be empty")
+	if strings.TrimSpace(opts.SystemNamespace) == "" {
+		return errors.New("system namespace must not be empty")
 	}
 	if opts.Timeout <= 0 {
 		return errors.New("timeout must be greater than zero")
@@ -214,21 +228,28 @@ func validateOptions(opts Options) error {
 // Check evaluates every required readiness surface once without mutating the
 // cluster. Components the release disabled are reported as skipped.
 func Check(ctx context.Context, runner Runner, opts Options) Report {
-	results := make([]Result, 0, 7)
+	results := make([]Result, 0, 8)
 
 	results = append(results, checkKubernetesVersion(ctx, runner))
 
-	deployments, listErr := getDeploymentList(ctx, runner, opts.ControlPlaneNamespace, opts.Release)
+	deployments, listErr := getDeploymentList(ctx, runner, opts.SystemNamespace, opts.Release)
 	for _, component := range chartComponents {
 		name := string(component.name)
 		switch {
 		case slices.Contains(opts.DisabledComponents, component.name):
 			results = append(results, skip(name, fmt.Sprintf("components.%s.enabled is false in the Helm release", component.valuesKey)))
 		case listErr != nil:
-			results = append(results, fail(name, fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.ControlPlaneNamespace)))
+			results = append(results, fail(name, fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.SystemNamespace)))
 		default:
 			results = append(results, checkChartDeployment(name, deployments, component.chartPrefix))
 		}
+	}
+	if slices.Contains(opts.DisabledComponents, ComponentPortal) {
+		results = append(results, skip("Portal", "taugrid-core Portal is disabled in the Helm release"))
+	} else if listErr != nil {
+		results = append(results, fail("Portal", fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.SystemNamespace)))
+	} else {
+		results = append(results, checkLabelledDeployment("Portal", deployments, "app.kubernetes.io/component", "portal"))
 	}
 
 	if slices.Contains(opts.DisabledComponents, ComponentTauCore) {
@@ -239,7 +260,7 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 		)
 	} else {
 		results = append(results,
-			checkTauController(ctx, runner),
+			checkTauController(ctx, runner, opts.SystemNamespace),
 			checkTauCluster(ctx, runner),
 		)
 	}
@@ -330,9 +351,21 @@ func getDeploymentList(ctx context.Context, runner Runner, namespace, release st
 }
 
 func checkChartDeployment(component string, deployments []deploymentDoc, chartPrefix string) Result {
+	return checkMatchingDeployment(component, deployments, func(deployment deploymentDoc) bool {
+		return strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], chartPrefix)
+	})
+}
+
+func checkLabelledDeployment(component string, deployments []deploymentDoc, key, value string) Result {
+	return checkMatchingDeployment(component, deployments, func(deployment deploymentDoc) bool {
+		return deployment.Metadata.Labels[key] == value
+	})
+}
+
+func checkMatchingDeployment(component string, deployments []deploymentDoc, matchesDeployment func(deploymentDoc) bool) Result {
 	var matches []deploymentDoc
 	for _, deployment := range deployments {
-		if strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], chartPrefix) {
+		if matchesDeployment(deployment) {
 			matches = append(matches, deployment)
 		}
 	}
@@ -345,13 +378,17 @@ func checkChartDeployment(component string, deployments []deploymentDoc, chartPr
 	return deploymentReadinessResult(component, matches[0])
 }
 
-func checkTauController(ctx context.Context, runner Runner) Result {
+func checkTauController(ctx context.Context, runner Runner, namespace string) Result {
+	return checkNamedDeployment(ctx, runner, "Tau controller", tauControllerName, namespace)
+}
+
+func checkNamedDeployment(ctx context.Context, runner Runner, component, name, namespace string) Result {
 	var deployment deploymentDoc
-	args := []string{"get", "deployment", tauControllerName, "--namespace", tauPlatformNamespace, "--output=json"}
+	args := []string{"get", "deployment", name, "--namespace", namespace, "--output=json"}
 	if err := getJSON(ctx, runner, args, &deployment); err != nil {
-		return fail("Tau controller", fmt.Sprintf("%v; inspect with kubectl -n %s get deploy,pods", err, tauPlatformNamespace))
+		return fail(component, fmt.Sprintf("%v; inspect with kubectl -n %s get deploy,pods", err, namespace))
 	}
-	return deploymentReadinessResult("Tau controller", deployment)
+	return deploymentReadinessResult(component, deployment)
 }
 
 func deploymentReadinessResult(component string, deployment deploymentDoc) Result {

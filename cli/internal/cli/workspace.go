@@ -133,6 +133,7 @@ generated repo includes a non-secret tau/workspace.connection.yaml descriptor.`,
 	cmd.Flags().StringVar(&opts.AzureTenantID, "azure-tenant-id", "", "Microsoft Entra tenant ID for the workspace connection descriptor")
 	cmd.Flags().StringVar(&opts.AKSResourceGroup, "aks-resource-group", "", "AKS resource group for the connection descriptor")
 	cmd.Flags().StringVar(&opts.AKSCluster, "aks-cluster", "", "AKS cluster name for the connection descriptor")
+	cmd.Flags().StringVar(&opts.SystemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 	cmd.Flags().StringVar(&opts.ACRName, "acr-name", "", "ACR name placeholder for .env.example and setup-azure.sh")
 	cmd.Flags().StringVar(&opts.UpstreamRepo, "upstream", "", "open GitHub repo URL for external-github/dpr templates")
 	cmd.Flags().StringVar(&opts.UpstreamRef, "ref", "", "upstream branch, tag, or commit for external-github/dpr templates")
@@ -144,11 +145,16 @@ generated repo includes a non-secret tau/workspace.connection.yaml descriptor.`,
 }
 
 func newWorkspaceListCmd() *cobra.Command {
-	var namespace, kubeContext, output string
+	var namespace, legacyNamespace, kubeContext, output string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List visible Tau workspaces",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			var err error
+			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)
+			if err != nil {
+				return err
+			}
 			if output != "table" && output != "json" {
 				return fmt.Errorf("-o/--output must be one of: table, json")
 			}
@@ -173,14 +179,16 @@ func newWorkspaceListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", tauworkspace.PlatformNamespace, "namespace containing TauWorkspace objects")
+	cmd.Flags().StringVar(&namespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
+	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
 	return cmd
 }
 
 func newWorkspaceStatusCmd(check bool) *cobra.Command {
-	var namespace, kubeContext, output, dataPVC string
+	var namespace, legacyNamespace, kubeContext, output, dataPVC string
 	use := "status <name>"
 	short := "Show Tau workspace status"
 	if check {
@@ -192,6 +200,11 @@ func newWorkspaceStatusCmd(check bool) *cobra.Command {
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)
+			if err != nil {
+				return err
+			}
 			if output != "table" && output != "json" {
 				return fmt.Errorf("-o/--output must be one of: table, json")
 			}
@@ -236,7 +249,9 @@ func newWorkspaceStatusCmd(check bool) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", tauworkspace.PlatformNamespace, "namespace containing TauWorkspace objects")
+	cmd.Flags().StringVar(&namespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
+	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
 	if check {
@@ -325,7 +340,7 @@ func newWorkspaceQuotaCmd() *cobra.Command {
 }
 
 func newWorkspaceQuotaRequestCmd() *cobra.Command {
-	var namespace, kubeContext, resource, duration, reason, mutationMode string
+	var namespace, legacyNamespace, kubeContext, resource, duration, reason, mutationMode string
 	var current, requested int64
 	var apply bool
 	cmd := &cobra.Command{
@@ -333,6 +348,11 @@ func newWorkspaceQuotaRequestCmd() *cobra.Command {
 		Short: "Create a structured workspace quota request",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)
+			if err != nil {
+				return err
+			}
 			if resource == "" {
 				return fmt.Errorf("--resource is required")
 			}
@@ -377,7 +397,9 @@ func newWorkspaceQuotaRequestCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", tauworkspace.PlatformNamespace, "namespace containing TauQuotaRequest objects")
+	cmd.Flags().StringVar(&namespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
+	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVar(&resource, "resource", "", "quota resource being requested, e.g. h200")
 	cmd.Flags().Int64Var(&current, "current", 0, "current workspace quota for the resource")

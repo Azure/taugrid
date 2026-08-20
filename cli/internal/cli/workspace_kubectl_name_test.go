@@ -21,7 +21,6 @@ import (
 var workspaceKubectlHintFiles = []string{
 	repoPath("cli", "internal", "cli", "cluster_install.go"),
 	repoPath("cli", "internal", "cli", "workspace_create.go"),
-	repoPath("cli", "internal", "queueresolve", "resolve.go"),
 	repoPath("charts", "taugrid", "templates", "NOTES.txt"),
 	repoPath("skills", "taugrid", "references", "platform.md"),
 	repoPath("examples", "aks-cpu-quickstart", "README.md"),
@@ -166,17 +165,17 @@ func TestAcceptedKubectlNamesFollowBothResolutionRules(t *testing.T) {
 // first version of this pattern missed.
 func TestWorkspaceKubectlHintsMatchEveryFlagOrdering(t *testing.T) {
 	for _, tc := range []struct{ name, line, want string }{
-		{"plain", "kubectl get tauworkspace -n tau-platform", "tauworkspace"},
-		{"leading -n", "kubectl -n tau-platform get tauworkspace", "tauworkspace"},
-		{"leading --context", "kubectl --context ai get tauworkspace -n tau-platform", "tauworkspace"},
-		{"context then -n", "kubectl --context ai -n tau-platform get tauworkspace", "tauworkspace"},
-		{"flag after verb", "kubectl get -n tau-platform tauworkspace", "tauworkspace"},
+		{"plain", "kubectl get tauworkspace -n tau-system", "tauworkspace"},
+		{"leading -n", "kubectl -n tau-system get tauworkspace", "tauworkspace"},
+		{"leading --context", "kubectl --context ai get tauworkspace -n tau-system", "tauworkspace"},
+		{"context then -n", "kubectl --context ai -n tau-system get tauworkspace", "tauworkspace"},
+		{"flag after verb", "kubectl get -n tau-system tauworkspace", "tauworkspace"},
 		{"equals form", "kubectl --context=ai get tauworkspace", "tauworkspace"},
-		{"edit", "kubectl edit tauworkspace demo -n tau-platform", "tauworkspace"},
+		{"edit", "kubectl edit tauworkspace demo -n tau-system", "tauworkspace"},
 		{"delete", "kubectl delete tauworkspace demo", "tauworkspace"},
 		{"wait on a named object", `kubectl wait --for=condition=Ready workspace.tau.azure.com/demo`, "workspace.tau.azure.com"},
 		{"quoted", `kubectl -n x get "tauworkspace/demo"`, "tauworkspace"},
-		{"line continuation", "kubectl --context ai -n tau-platform wait \\\n  --for=jsonpath='{.status.phase}'=Ready \\\n  tauworkspace/demo \\\n  --timeout=5m", "tauworkspace"},
+		{"line continuation", "kubectl --context ai -n tau-system wait \\\n  --for=jsonpath='{.status.phase}'=Ready \\\n  tauworkspace/demo \\\n  --timeout=5m", "tauworkspace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := workspaceKubectlHints(tc.line)
@@ -189,7 +188,7 @@ func TestWorkspaceKubectlHintsMatchEveryFlagOrdering(t *testing.T) {
 	// Resources that merely mention a workspace in their name are a different
 	// kind and must not be reported as unresolvable.
 	for _, line := range []string{
-		"kubectl -n tau-platform get role tau-workspace-reader-demo",
+		"kubectl -n tau-system get role tau-workspace-reader-demo",
 		"kubectl get rolebinding tau-workspace-reader-demo",
 	} {
 		if got := workspaceKubectlHints(line); len(got) != 0 {

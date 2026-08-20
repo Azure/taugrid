@@ -15,7 +15,7 @@ output "get_credentials_command" {
 
 output "portal_port_forward_command" {
   description = "Operator-only Portal access command. A production browser endpoint needs an authenticated HTTPS proxy."
-  value       = "kubectl -n tau port-forward service/tau-portal 18080:80"
+  value       = "kubectl -n tau-system port-forward service/tau-portal 18080:80"
 }
 
 output "adx_endpoint" {

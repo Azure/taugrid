@@ -1,8 +1,6 @@
 # TauGrid Distribution Chart
 
-Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core
-controller, GPU node health monitoring, and a portable baseline queue on fresh
-AKS clusters.
+Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core controller, GPU node health monitoring, the operator Portal, and a portable baseline queue on fresh AKS clusters.
 
 ## Install
 
@@ -30,7 +28,7 @@ Use `tau cluster explain-values` to print the full field reference.
 | Kueue | `components.kueue.enabled` | Job scheduling, admission, quota |
 | KubeRay Operator | `components.kuberayOperator.enabled` | RayCluster/RayJob/RayService lifecycle |
 | tau-core-controller | `components.tauCoreController.enabled` | TauWorkspace reconciliation, Node topology labels |
-| taugrid-core | `components.taugridCore.enabled` | Stellar, Portal, image prewarm, ResourceFlavors |
+| taugrid-core | `components.taugridCore.enabled` | Default Portal plus opt-in Stellar, lifecycle recorder, and image prewarm services |
 | gpu-monitoring | follows `components.tauCoreController.enabled` | GPU/IB/NVMe node health checks, DCGM, Node conditions |
 
 All components are enabled by default. Disable any with
@@ -213,7 +211,6 @@ for the complete reference.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `tau-core-controller.platformNamespace` | string | `tau-platform` | Namespace where TauWorkspace CRs live |
 | `tau-core-controller.image.repository` | string | `mcr.microsoft.com/aks/ai-runtime/tau-core-controller` | Controller image |
 | `tau-core-controller.tauCluster.nodeLabelRules` | list | reviewed AKS GPU catalog | VM-size rules that reconcile GPU class and series labels |
 | `tau-core-controller.tauCluster.extraNodeLabelRules` | list | `[]` | Additional cluster-specific GPU label rules |
@@ -246,15 +243,20 @@ Set `nodeLabelRules` only to replace this catalog. Use
 
 ### `taugrid-core`
 
-Services chart (Stellar, Portal, prewarm, ResourceFlavors). All services
-default to disabled in the distribution chart.
+Services chart. The TauGrid distribution overrides the standalone child chart so Portal is available by default in the Helm release namespace (`tau-system` for `tau cluster install`); Stellar, lifecycle recorder, and prewarm remain disabled.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `taugrid-core.prewarm.enabled` | bool | `false` | GPU image pre-pull DaemonSet |
 | `taugrid-core.stellar.enabled` | bool | `false` | Stellar experiment dashboard |
 | `taugrid-core.lifecycleRecorder.enabled` | bool | `false` | Run lifecycle recorder |
-| `taugrid-core.portal.enabled` | bool | `false` | Unified observability portal |
+| `taugrid-core.portal.enabled` | bool | `true` | Unified operator observability portal |
+| `taugrid-core.portal.serviceAccount.create` | bool | `true` | Create the dedicated Portal ServiceAccount |
+| `taugrid-core.portal.rbac.create` | bool | `true` | Create cluster-wide read-only Kubernetes RBAC for Portal |
+
+All enabled system workloads and Services follow the Helm release namespace. Use `tau cluster install --namespace <name>` for a non-default system namespace on a fresh installation. Administrative workspace commands use the same value through `--system-namespace <name>`, and generated workspace connection descriptors persist it as `cluster.systemNamespace`. The deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+
+Do not change the namespace of an existing Helm release in place. Releases from before namespace unification can also contain `TauWorkspace` and `TauQuotaRequest` objects in a legacy namespace. This chart does not migrate those objects automatically; use an explicit reviewed migration before a direct Helm upgrade, or use `tau cluster install` and keep the existing release version when its preflight reports legacy objects.
 
 See `applications/taugrid/deploy/taugrid-core/README.md` for the full
 taugrid-core values reference.
@@ -272,7 +274,7 @@ gets DaemonSets that schedule nothing, so bundling is safe on CPU-only clusters.
 | `gpu-monitoring.gpuSkus` | map | 13 profiles covering A10, A100, H100, H200, GB200, and GB300 | Per-SKU DaemonSet definitions |
 | `gpu-monitoring.gpuSkus.<profile>.scrapeTargets` | list | global collector targets | Per-profile DCGM/node-exporter endpoints for mixed managed and GPU Operator clusters |
 | `gpu-monitoring.daemonset.requireAcceleratorLabel` | bool | `false` | Also require `kubernetes.azure.com/accelerator=nvidia`. Externally-joined GPU nodes never receive that label, so requiring it leaves them unmonitored |
-| `gpu-monitoring.namespace` | string | `""` (release namespace) | Where the DaemonSets are installed |
+| `gpu-monitoring.namespace` | string | `""` (deprecated) | Must remain empty; use Helm `--namespace` for all TauGrid system components |
 
 See `charts/gpu-monitoring/README.md` for the full reference.
 

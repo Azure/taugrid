@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: tau-prewarm-images
-  namespace: {{ .Values.prewarm.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "taugrid-core.labels" . | nindent 4 }}
 data:
@@ -16,7 +16,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: baked-image-prewarm
-  namespace: {{ .Values.prewarm.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "taugrid-core.labels" . | nindent 4 }}
 spec:

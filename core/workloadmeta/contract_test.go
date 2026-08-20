@@ -511,7 +511,7 @@ func TestTauTokensRequiresLeftBoundary(t *testing.T) {
 		want: []string{key},
 	}, {
 		name: "kubectl resource reference is a name, not a key",
-		in:   "kubectl delete workspace." + workloadmeta.Domain + "taugrid-default -n tau-platform",
+		in:   "kubectl delete workspace." + workloadmeta.Domain + "taugrid-default -n tau-system",
 		want: nil,
 	}, {
 		name: "resource reference does not mask a real key on the same line",

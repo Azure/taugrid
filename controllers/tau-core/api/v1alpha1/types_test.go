@@ -18,7 +18,7 @@ import (
 func TestTauWorkspaceRoundTrip(t *testing.T) {
 	ws := TauWorkspace{
 		TypeMeta:   metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: KindTauWorkspace},
-		ObjectMeta: metav1.ObjectMeta{Name: "aurora", Namespace: PlatformNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "aurora", Namespace: SystemNamespace},
 		Spec: TauWorkspaceSpec{
 			PrincipalRef:      &PrincipalRef{Provider: PrincipalProviderEntra, Name: "aurora-researchers"},
 			KubernetesSubject: &KubernetesSubject{Kind: "Group", Name: "aurora-researchers"},
@@ -52,8 +52,8 @@ func TestTauWorkspaceRoundTrip(t *testing.T) {
 	if got.APIVersion != GroupVersion.String() || got.Kind != KindTauWorkspace {
 		t.Fatalf("GVK = %s/%s, want %s/%s", got.APIVersion, got.Kind, GroupVersion.String(), KindTauWorkspace)
 	}
-	if got.Namespace != PlatformNamespace {
-		t.Fatalf("namespace = %q, want %q", got.Namespace, PlatformNamespace)
+	if got.Namespace != SystemNamespace {
+		t.Fatalf("namespace = %q, want %q", got.Namespace, SystemNamespace)
 	}
 }
 

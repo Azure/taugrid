@@ -230,7 +230,7 @@ policy:
 			},
 			fetchWorkspace: func(_ *cobra.Command, kubeContext, namespace, name string) (tauworkspace.Workspace, error) {
 				workspaceCalls++
-				if kubeContext != "catalog-context" || namespace != tauworkspace.PlatformNamespace || name != "sample" {
+				if kubeContext != "catalog-context" || namespace != tauworkspace.SystemNamespace || name != "sample" {
 					t.Fatalf("workspace route context=%q namespace=%q name=%q", kubeContext, namespace, name)
 				}
 				return currentWorkspace, nil

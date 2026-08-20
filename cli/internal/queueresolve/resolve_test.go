@@ -138,7 +138,7 @@ func TestResolveAccessibleQueueNamesTheMissingOnboardingStep(t *testing.T) {
 		_, _, err := ResolveAccessibleQueue(context.Background(), runner, ResolveAccessibleQueueOptions{})
 		requireErrContains(t, err,
 			`research: LocalQueue "jobqueue" not found`,
-			"kubectl get workspaces.tau.azure.com -n tau-platform")
+			"tau workspace list")
 	})
 
 	t.Run("authorization check failed", func(t *testing.T) {

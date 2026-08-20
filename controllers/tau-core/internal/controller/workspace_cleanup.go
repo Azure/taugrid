@@ -36,7 +36,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(ctx context.Conte
 	// reconcileNamespace, so it needs its own reserved-namespace check: a
 	// workspace that once targeted a reserved namespace must not strip its
 	// labels on the way out.
-	if reservedNamespaceReason(namespaceName, platformNamespace(r.PlatformNamespace)) != "" {
+	if reservedNamespaceReason(namespaceName, systemNamespace(r.SystemNamespace)) != "" {
 		return nil
 	}
 	var namespace corev1.Namespace
@@ -73,7 +73,7 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	if err := r.cleanupStaleWorkspaceLocalQueues(ctx, workspaceName, "", ""); err != nil {
 		return err
 	}
-	return r.cleanupPlatformReaderRBAC(ctx, workspaceName)
+	return r.cleanupSystemReaderRBAC(ctx, workspaceName)
 }
 
 // ownerWorkspaceAbsent reports whether the TauWorkspace named on a namespace's
@@ -81,7 +81,7 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 // deletion, so this check allows a later workspace to reclaim an orphaned target.
 func (r *TauWorkspaceReconciler) ownerWorkspaceAbsent(ctx context.Context, owner string) (bool, error) {
 	var existing tauv1alpha1.TauWorkspace
-	err := r.APIReader.Get(ctx, client.ObjectKey{Name: owner, Namespace: platformNamespace(r.PlatformNamespace)}, &existing)
+	err := r.APIReader.Get(ctx, client.ObjectKey{Name: owner, Namespace: systemNamespace(r.SystemNamespace)}, &existing)
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
@@ -130,7 +130,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 			if !ok {
 				continue
 			}
-			if obj.GetNamespace() == platformNamespace(r.PlatformNamespace) {
+			if obj.GetNamespace() == systemNamespace(r.SystemNamespace) {
 				continue
 			}
 			if keepNamespace != "" && obj.GetNamespace() == keepNamespace && candidate.keep(obj) {
@@ -167,11 +167,11 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(ctx context.Co
 	return nil
 }
 
-func (r *TauWorkspaceReconciler) cleanupPlatformReaderRBAC(ctx context.Context, workspaceName string) error {
+func (r *TauWorkspaceReconciler) cleanupSystemReaderRBAC(ctx context.Context, workspaceName string) error {
 	name := workspaceReaderRBACName(workspaceName)
 	for _, obj := range []client.Object{
-		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: platformNamespace(r.PlatformNamespace)}},
-		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: platformNamespace(r.PlatformNamespace)}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: systemNamespace(r.SystemNamespace)}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: systemNamespace(r.SystemNamespace)}},
 	} {
 		if err := r.deleteOwnedObject(ctx, obj, workspaceName); err != nil {
 			return err

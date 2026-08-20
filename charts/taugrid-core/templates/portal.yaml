@@ -1,5 +1,6 @@
 {{- if .Values.portal.enabled }}
 {{- $portal := .Values.portal -}}
+{{- $systemNamespace := .Release.Namespace -}}
 {{- $source := lower (default "kusto" $portal.source) -}}
 {{- $kusto := default dict $portal.kusto -}}
 {{- $runHistory := default dict $portal.runHistory -}}
@@ -104,7 +105,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $workspaceConfigMapName }}
-  namespace: {{ $portal.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}
@@ -166,7 +167,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ $serviceAccountName }}
-    namespace: {{ $portal.namespace }}
+    namespace: {{ $systemNamespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -178,7 +179,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $serviceAccountName }}
-  namespace: {{ $portal.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}
@@ -192,9 +193,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $resourceName }}
-  namespace: {{ $portal.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: {{ $resourceName }}
+    app.kubernetes.io/component: portal
     {{- include "taugrid-core.labels" . | nindent 4 }}
 spec:
   replicas: {{ $portal.replicaCount }}
@@ -208,6 +210,7 @@ spec:
     metadata:
       labels:
         app: {{ $resourceName }}
+        app.kubernetes.io/component: portal
         {{- include "taugrid-core.labels" . | nindent 8 }}
         {{- if $workloadIdentityClientID }}
         azure.workload.identity/use: "true"
@@ -380,7 +383,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ $serviceName }}
-  namespace: {{ $portal.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}

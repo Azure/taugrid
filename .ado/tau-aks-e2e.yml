@@ -179,14 +179,14 @@ stages:
                       --wait=false \
                       --atomic=false
                     kubectl --context "${KUBE_CONTEXT}" \
-                      --namespace tau-platform \
+                      --namespace tau-system \
                       rollout status deployment/tau-core-controller \
                       --timeout=5m
                     tau cluster validate installation --context "${KUBE_CONTEXT}"
 
                     deployed_image="$(
                       kubectl --context "${KUBE_CONTEXT}" \
-                        --namespace tau-platform \
+                        --namespace tau-system \
                         get deployment/tau-core-controller \
                         -o jsonpath='{.spec.template.spec.containers[0].image}'
                     )"
@@ -210,7 +210,7 @@ stages:
                       --context "${KUBE_CONTEXT}" \
                       --apply
                     kubectl --context "${KUBE_CONTEXT}" \
-                      --namespace tau-platform \
+                      --namespace tau-system \
                       wait \
                       --for=jsonpath='{.status.phase}'=Ready \
                       "workspace.tau.azure.com/${WORKSPACE_NAME}" \
@@ -247,7 +247,7 @@ stages:
                       | tee "${diagnostics}/pods.txt"
                     kubectl --request-timeout=15s get events -A --sort-by=.lastTimestamp \
                       | tee "${diagnostics}/events.txt"
-                    kubectl --request-timeout=15s --namespace tau-platform logs \
+                    kubectl --request-timeout=15s --namespace tau-system logs \
                       deployment/tau-core-controller \
                       --all-containers=true \
                       --tail=500 \

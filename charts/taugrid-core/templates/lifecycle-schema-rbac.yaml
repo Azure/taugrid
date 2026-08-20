@@ -1,5 +1,6 @@
 {{- if and .Values.lifecycleRecorder.enabled .Values.lifecycleRecorder.schemaManagement.enabled }}
 {{- $recorder := .Values.lifecycleRecorder -}}
+{{- $systemNamespace := .Release.Namespace -}}
 {{- $serviceAccount := default dict $recorder.serviceAccount -}}
 {{- $schemaManagement := default dict $recorder.schemaManagement -}}
 {{- $resourceName := default "tau-lifecycle-recorder" $recorder.resourceName -}}
@@ -33,7 +34,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ $serviceAccount.name }}
-    namespace: {{ $recorder.namespace }}
+    namespace: {{ $systemNamespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

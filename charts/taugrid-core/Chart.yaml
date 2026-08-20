@@ -1,7 +1,7 @@
 apiVersion: v2
 name: taugrid-core
 description: |
-  taugrid-core: Stellar + prewarm + optional ResourceFlavors + namespaces. The
+  taugrid-core: Portal + Stellar + prewarm + optional ResourceFlavors. The
   first-party Tau-owned bits of a TauGrid-on-AKS install.
 
   Assumes Kueue, kuberay-operator, and AKS managed GPU readiness are already

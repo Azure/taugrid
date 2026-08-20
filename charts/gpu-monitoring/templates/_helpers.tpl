@@ -25,7 +25,10 @@ Create a default fully qualified app name.
 Create a default namespace.
 */}}
 {{- define "gpu-monitoring.namespace" -}}
-{{- default .Release.Namespace .Values.namespace -}}
+{{- if trim (default "" .Values.namespace) -}}
+{{- fail "gpu-monitoring.namespace is no longer supported; install the release with --namespace to move TauGrid system components together" -}}
+{{- end -}}
+{{- .Release.Namespace -}}
 {{- end }}
 
 {{/*

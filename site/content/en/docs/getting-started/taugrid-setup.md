@@ -39,7 +39,7 @@ The default distribution contains:
 | `tau-core-controller` and `TauCluster` | Enabled | TauWorkspace reconciliation and reviewed node-label rules |
 | Baseline queue and quota guard | Enabled | A portable `jobqueue` policy and fail-closed quota approval contract |
 | GPU monitoring | Enabled with the Tau controller | Profile-specific GPU, interconnect, NVMe, and DCGM health collection; this observes provider-enabled GPUs but does not install a GPU driver or device plugin |
-| `taugrid-core` services chart | Included | Portal, Stellar, lifecycle recorder, and image prewarm remain individually disabled until the platform opts in |
+| `taugrid-core` services chart | Included | Portal is enabled in `tau-system` with a dedicated ServiceAccount and read-only Kubernetes RBAC; Stellar, lifecycle recorder, and image prewarm remain opt-in |
 
 Use [cluster install values](../../reference/cluster-install-values/) for the complete values contract. The `components.gpuMonitoring.enabled` key is intentionally unset by default so GPU monitoring follows `components.tauCoreController.enabled`; set it explicitly only when the cluster has another owner for that monitoring stack.
 
@@ -107,6 +107,10 @@ tau cluster install \
 
 The plan should show the MCR chart, the chart version compiled into the Tau CLI release, the `taugrid` Helm release, and the `tau-system` namespace. On a fresh cluster, the CLI performs a control-plane bootstrap Helm pass, applies the baseline queue policy in a second pass, and then runs component-aware readiness checks.
 
+Use `--namespace <name>` only for a fresh installation that deliberately uses a non-default system namespace. Every TauGrid component follows that Helm release namespace. Record the same value in generated workspace connection descriptors and pass it to administrative workspace commands with `--system-namespace <name>` when you are outside such a repository.
+
+Helm cannot move an existing release or namespaced custom resources to another namespace in place. Releases created before namespace unification may still have `TauWorkspace` or `TauQuotaRequest` objects in a legacy namespace. TauGrid does not provide an automatic migration for those objects in this release. The CLI stops before upgrading when it finds them outside the selected system namespace; keep the existing release version until you have a reviewed migration, and do not bypass the preflight with a direct Helm upgrade or by deleting the legacy namespace.
+
 A default successful installation ends with output shaped like:
 
 ```text
@@ -114,11 +118,12 @@ TauGrid installation validation
   PASS  Kubernetes           ...
   PASS  Kueue                ...
   PASS  KubeRay              ...
+  PASS  Portal               ...
   PASS  Tau controller       ...
   PASS  TauCluster           ...
   PASS  Baseline queue       ...
   PASS  Quota guard          ...
-READY: 7/7 checks passed
+READY: 8/8 checks passed
 
 TauGrid is installed and ready as Helm release taugrid in namespace tau-system.
 ```
@@ -135,7 +140,7 @@ The installation command runs this gate automatically. Re-run it at any time wit
 tau cluster validate installation --context "$TAU_CONTEXT"
 ```
 
-You should again see `READY` with every enabled core check marked `PASS` or an intentionally disabled component marked `SKIP`. This command validates Kubernetes compatibility, Kueue, KubeRay, the Tau controller, `TauCluster`, the baseline queue, and the quota guard. It does not claim that every optional service or every GPU-monitoring DaemonSet is healthy.
+You should again see `READY` with every enabled core check marked `PASS` or an intentionally disabled component marked `SKIP`. This command validates Kubernetes compatibility, Kueue, KubeRay, the default Portal Deployment, the Tau controller, `TauCluster`, the baseline queue, and the quota guard. It does not claim that every Portal board, optional service, or GPU-monitoring DaemonSet is healthy.
 
 When GPU monitoring is enabled, inspect its profile-specific DaemonSets separately:
 

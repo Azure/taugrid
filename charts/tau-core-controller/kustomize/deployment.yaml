@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tau-core-controller
-  namespace: tau-platform
+  namespace: tau-system
   annotations:
     argocd.argoproj.io/sync-wave: "0"
   labels:
@@ -30,7 +30,7 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - --leader-elect
-            - --platform-namespace=tau-platform
+            - --platform-namespace=tau-system
           ports:
             - name: metrics
               containerPort: 8080

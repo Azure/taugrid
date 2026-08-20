@@ -1,10 +1,10 @@
 {{/*
-Platform namespace that owns the controller, its RBAC, and every TauWorkspace.
-It is also passed to the binary as --platform-namespace, so the two can never
-disagree.
+System namespace that owns the controller, its RBAC, and every TauWorkspace.
+The Helm release namespace is passed to the binary so every TauGrid system
+component follows the chart installation namespace.
 */}}
 {{- define "tau-core-controller.namespace" -}}
-{{- required "platformNamespace must not be empty" .Values.platformNamespace -}}
+{{- .Release.Namespace -}}
 {{- end -}}
 
 {{/*

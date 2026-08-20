@@ -19,6 +19,9 @@ func TestReferenceMarkdownContainsCriticalFields(t *testing.T) {
 		"components.gpuMonitoring.enabled",
 		"tau-core-controller.tauCluster.nodeLabelRules",
 		"taugrid-core.stellar.enabled",
+		"taugrid-core.portal.enabled",
+		"taugrid-core.portal.serviceAccount.create",
+		"taugrid-core.portal.rbac.create",
 	}
 	for _, field := range required {
 		if !strings.Contains(md, field) {

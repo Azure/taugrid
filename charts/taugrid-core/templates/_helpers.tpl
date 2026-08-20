@@ -24,38 +24,6 @@ reachable
 {{- end }}
 
 {{/*
-Whether this release may render a Namespace object for a given name.
-
-Helm refuses to apply over an object it does not own: a namespace that already
-exists without this release's ownership metadata fails install with `exists and
-cannot be imported into the current release: invalid ownership metadata`. The
-three keys checked below are exactly what Helm's own ownership check requires,
-so a rendered namespace is always one Helm will accept. Helm stamps them on
-apply; this template cannot write the two annotations itself.
-
-A namespace owned by anything else — including this chart under a former release
-name — is skipped, and keeps whatever labels it has. README covers adopting one.
-
-An absent object and an unreachable API both read as "render": absent is the
-case this chart exists to handle, and render mode must keep emitting the full
-manifest.
-
-Call with: include "taugrid-core.mayOwnNamespace" (dict "name" $name "root" $)
-Returns a non-empty string when the namespace should be rendered.
-*/}}
-{{- define "taugrid-core.mayOwnNamespace" -}}
-{{- $live := lookup "v1" "Namespace" "" .name -}}
-{{- $labels := default dict (default dict $live.metadata).labels -}}
-{{- $annotations := default dict (default dict $live.metadata).annotations -}}
-{{- if or (not $live) (and
-      (eq (get $labels "app.kubernetes.io/managed-by") "Helm")
-      (eq (get $annotations "meta.helm.sh/release-name") .root.Release.Name)
-      (eq (get $annotations "meta.helm.sh/release-namespace") .root.Release.Namespace)) -}}
-render
-{{- end -}}
-{{- end }}
-
-{{/*
 Render a first-party image from exactly one release tag or immutable digest.
 Call with: include "taugrid-core.image" (dict "component" "portal" "image" .Values.portal.image)
 */}}

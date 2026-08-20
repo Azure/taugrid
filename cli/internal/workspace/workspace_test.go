@@ -12,7 +12,7 @@ func TestParseAndRenderStatus(t *testing.T) {
 	w, err := Parse([]byte(`{
 	  "apiVersion": "tau.azure.com/v1alpha1",
 	  "kind": "TauWorkspace",
-	  "metadata": {"name": "sample", "namespace": "tau-platform", "generation": 7},
+	  "metadata": {"name": "sample", "namespace": "tau-system", "generation": 7},
 	  "spec": {
 	    "queue": "sample",
 	    "defaults": {"outputRoot": "/data/projects/sample/runs"}
@@ -61,8 +61,8 @@ func TestNewQuotaRequestDefaultsNamespaceAndMode(t *testing.T) {
 		Requested: 32,
 		Reason:    "checkpoint sweep",
 	})
-	if req.Metadata.Namespace != PlatformNamespace {
-		t.Fatalf("namespace = %q, want %q", req.Metadata.Namespace, PlatformNamespace)
+	if req.Metadata.Namespace != SystemNamespace {
+		t.Fatalf("namespace = %q, want %q", req.Metadata.Namespace, SystemNamespace)
 	}
 	if req.Spec.MutationMode != "ReportOnly" {
 		t.Fatalf("mutation mode = %q, want ReportOnly", req.Spec.MutationMode)

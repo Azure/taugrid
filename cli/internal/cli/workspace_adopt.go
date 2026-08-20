@@ -21,6 +21,7 @@ func newWorkspaceAdoptCmd() *cobra.Command {
 	var options tauworkspace.AdoptOptions
 	var kubeContext string
 	var apply bool
+	var legacySystemNamespace string
 
 	cmd := &cobra.Command{
 		Use:   "adopt NAME",
@@ -41,6 +42,11 @@ does not create Namespace, RBAC, LocalQueue, PVC, StorageClass, ClusterQueue,
 Secret, or Azure resources.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedSystemNamespace, err := resolveSystemNamespaceAlias(cmd, options.SystemNamespace, "platform-namespace", legacySystemNamespace)
+			if err != nil {
+				return err
+			}
+			options.SystemNamespace = resolvedSystemNamespace
 			options.Name = args[0]
 			if options.Namespace == "" {
 				options.Namespace = options.Name
@@ -79,7 +85,9 @@ Secret, or Azure resources.`,
 
 	cmd.Flags().StringVarP(&options.Namespace, "namespace", "n", "", "existing workload namespace (default: NAME)")
 	cmd.Flags().StringVar(&options.Queue, "queue", tauworkspace.DefaultAdoptQueue, "existing LocalQueue in the workload namespace")
-	cmd.Flags().StringVar(&options.PlatformNamespace, "platform-namespace", tauworkspace.PlatformNamespace, "namespace containing the TauWorkspace CR")
+	cmd.Flags().StringVar(&options.SystemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVar(&legacySystemNamespace, "platform-namespace", "", "deprecated alias for --system-namespace")
+	_ = cmd.Flags().MarkDeprecated("platform-namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVar(&options.DataPVC, "data-pvc", tauworkspace.DefaultAdoptDataPVC, "existing Bound data PVC to validate (empty skips PVC validation)")
 	cmd.Flags().StringVar(&options.NamespaceUID, "namespace-uid", "", "expected immutable Namespace UID")

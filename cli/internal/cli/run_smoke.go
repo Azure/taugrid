@@ -32,6 +32,7 @@ type builtinSmokeCLIOptions struct {
 	KubeContextExplicit bool
 	KubeContextFromFlag bool
 	DryRun              string
+	SystemNamespace     string
 	Connection          runConnectionSource
 	ConnectionFactory   runConnectionEnsurerFactory
 	WorkspaceFetcher    smokeWorkspaceFetcher
@@ -65,6 +66,10 @@ func executeBuiltinSmoke(cmd *cobra.Command, cliOptions builtinSmokeCLIOptions) 
 		return err
 	}
 	defer restoreKubeconfig()
+	systemNamespace := systemNamespaceForConnection(cmd, connection)
+	if cliOptions.SystemNamespace != "" && cmd.Flag("system-namespace") == nil {
+		systemNamespace = cliOptions.SystemNamespace
+	}
 
 	if resolved.workspace == "" {
 		// v0 has one workspace per cluster, so resolve it instead of asking
@@ -85,7 +90,7 @@ func executeBuiltinSmoke(cmd *cobra.Command, cliOptions builtinSmokeCLIOptions) 
 	if workspaceFetcher == nil {
 		workspaceFetcher = fetchWorkspace
 	}
-	workspace, err := workspaceFetcher(cmd, resolved.kubeContext, tauworkspace.PlatformNamespace, resolved.workspace)
+	workspace, err := workspaceFetcher(cmd, resolved.kubeContext, systemNamespace, resolved.workspace)
 	if err != nil {
 		return err
 	}

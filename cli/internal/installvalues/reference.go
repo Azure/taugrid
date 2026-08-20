@@ -41,14 +41,15 @@ var catalog = []struct {
 
 	{"kueue.*", fieldInfo{"", "", "Pass-through to the embedded Kueue chart (v0.18)"}},
 	{"kuberay-operator.*", fieldInfo{"", "", "Pass-through to the embedded KubeRay chart (v1.6)"}},
-	{"tau-core-controller.platformNamespace", fieldInfo{"string", "tau-platform", "Namespace for TauWorkspace CRs"}},
 	{"tau-core-controller.image.repository", fieldInfo{"string", "mcr.microsoft.com/aks/ai-runtime/tau-core-controller", "Controller image repository"}},
 	{"tau-core-controller.tauCluster.nodeLabelRules", fieldInfo{"list", "reviewed AKS GPU catalog", "VM-size rules that reconcile gpu-class and gpu-series Node labels"}},
 	{"tau-core-controller.tauCluster.extraNodeLabelRules", fieldInfo{"list", "[]", "Additional cluster-specific GPU label reconciliation rules"}},
 	{"taugrid-core.prewarm.enabled", fieldInfo{"bool", "false", "GPU image pre-pull DaemonSet"}},
 	{"taugrid-core.stellar.enabled", fieldInfo{"bool", "false", "Stellar experiment dashboard"}},
 	{"taugrid-core.lifecycleRecorder.enabled", fieldInfo{"bool", "false", "Run lifecycle recorder"}},
-	{"taugrid-core.portal.enabled", fieldInfo{"bool", "false", "Unified observability portal"}},
+	{"taugrid-core.portal.enabled", fieldInfo{"bool", "true", "Unified operator observability portal"}},
+	{"taugrid-core.portal.serviceAccount.create", fieldInfo{"bool", "true", "Create the Portal ServiceAccount in the umbrella distribution"}},
+	{"taugrid-core.portal.rbac.create", fieldInfo{"bool", "true", "Grant the Portal read-only Kubernetes access in the umbrella distribution"}},
 	{"gpu-monitoring.*", fieldInfo{"", "", "Pass-through to the embedded GPU monitoring chart"}},
 }
 

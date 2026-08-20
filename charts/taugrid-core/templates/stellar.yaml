@@ -6,6 +6,7 @@ that plan. See README.md "Upgrading existing releases".
 */ -}}
 {{- if .Values.stellar.enabled }}
 {{- $stellar := .Values.stellar -}}
+{{- $systemNamespace := .Release.Namespace -}}
 {{- $source := lower (default "kusto" $stellar.source) -}}
 {{- $usesExpstore := ne $source "kusto" -}}
 {{- $discovery := default dict $stellar.discovery -}}
@@ -56,7 +57,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $serviceAccountName }}
-  namespace: {{ $stellar.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: tau-stellar
     {{- include "taugrid-core.labels" . | nindent 4 }}
@@ -70,7 +71,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tau-stellar
-  namespace: {{ $stellar.namespace }}
+  namespace: {{ $systemNamespace }}
   {{- with $stellar.deploymentAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -340,7 +341,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ $stellar.serviceName }}
-  namespace: {{ $stellar.namespace }}
+  namespace: {{ $systemNamespace }}
   labels:
     app: tau-stellar
     {{- include "taugrid-core.labels" . | nindent 4 }}

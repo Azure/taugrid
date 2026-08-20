@@ -21,6 +21,7 @@ func newWorkspaceCreateCmd() *cobra.Command {
 	var options tauworkspace.CreateOptions
 	var kubeContext string
 	var apply bool
+	var legacySystemNamespace string
 
 	cmd := &cobra.Command{
 		Use:   "create [NAME]",
@@ -44,7 +45,7 @@ nobody access until a real group is named. v0 permits one workspace, so once it
 is created, naming the group is an edit of that object rather than a second
 create:
 
-  kubectl edit workspaces.tau.azure.com <name> -n tau-platform
+  kubectl edit workspaces.tau.azure.com <name> -n <system-namespace>
 
 Every other combination requires --principal-name. A GitHub team slug, an Entra
 UPN, and a ServiceAccount name all share a shape with workspace names, so the
@@ -54,9 +55,18 @@ Storage and Azure workload identity resources remain platform-owned. Optional
 workload identity flags configure only the Kubernetes ServiceAccount.
 
 --principal-name is required and identifies the external Entra group or GitHub
-team that receives access to the workspace.`,
+team that receives access to the workspace.
+
+--system-namespace selects where the TauWorkspace object is stored and defaults
+to the TauGrid system namespace. --namespace selects the researcher workload
+namespace and defaults to NAME.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedSystemNamespace, err := resolveSystemNamespaceAlias(cmd, options.SystemNamespace, "platform-namespace", legacySystemNamespace)
+			if err != nil {
+				return err
+			}
+			options.SystemNamespace = resolvedSystemNamespace
 			options.Name = tauworkspace.DefaultWorkspaceName
 			if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 				options.Name = strings.TrimSpace(args[0])
@@ -106,7 +116,9 @@ team that receives access to the workspace.`,
 	}
 
 	cmd.Flags().StringVar(&options.Namespace, "namespace", "", "researcher workload namespace (default NAME)")
-	cmd.Flags().StringVar(&options.PlatformNamespace, "platform-namespace", tauworkspace.PlatformNamespace, "namespace containing TauWorkspace objects")
+	cmd.Flags().StringVar(&options.SystemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVar(&legacySystemNamespace, "platform-namespace", "", "deprecated alias for --system-namespace")
+	_ = cmd.Flags().MarkDeprecated("platform-namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&options.Queue, "queue", tauworkspace.DefaultWorkspaceQueue, "baseline ClusterQueue and LocalQueue name")
 	cmd.Flags().StringVar(&options.PrincipalProvider, "principal-provider", "entra", "external identity provider: entra|github")
 	cmd.Flags().StringVar(&options.PrincipalName, "principal-name", "", "external researcher group or team name (default NAME for an Entra Group)")
@@ -129,7 +141,7 @@ func inertSubjectNotice(options tauworkspace.CreateOptions, workspaceExists bool
 	remediation := "rerun with --principal-name <group>"
 	if workspaceExists {
 		remediation = fmt.Sprintf("name the real group with: kubectl edit workspaces.tau.azure.com %s -n %s",
-			options.Name, options.ResolvedPlatformNamespace())
+			options.Name, options.ResolvedSystemNamespace())
 	}
 	return fmt.Sprintf(
 		"the RBAC subject defaulted to Group %q, which no identity provider asserts, so this workspace grants nobody access; %s",

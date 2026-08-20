@@ -70,7 +70,7 @@ Install the published OCI chart from Microsoft Container Registry:
 helm upgrade --install gpu-monitoring \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/gpu-monitoring \
   --version 0.1.7 \
-  --namespace kube-system \
+  --namespace tau-system \
   --create-namespace
 ```
 
@@ -82,7 +82,7 @@ To install from a source checkout instead:
 
 ```bash
 helm upgrade --install gpu-monitoring ./charts/gpu-monitoring \
-  --namespace kube-system \
+  --namespace tau-system \
   --create-namespace
 ```
 

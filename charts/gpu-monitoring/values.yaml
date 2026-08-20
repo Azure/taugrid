@@ -6,6 +6,8 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
+# Deprecated compatibility key. Namespaced resources always follow the Helm
+# release namespace; any non-empty value is rejected during rendering.
 namespace: ""
 labels: {}
 

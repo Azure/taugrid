@@ -15,7 +15,7 @@ import (
 
 type TauQuotaRequestReconciler struct {
 	client.Client
-	PlatformNamespace string
+	SystemNamespace string
 }
 
 // +kubebuilder:rbac:groups=tau.azure.com,resources=quotarequests,verbs=get;list;watch
@@ -27,8 +27,8 @@ func (r *TauQuotaRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, &request); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if request.Namespace != platformNamespace(r.PlatformNamespace) {
-		logger.Info("ignoring quota request outside platform namespace", "platformNamespace", platformNamespace(r.PlatformNamespace))
+	if request.Namespace != systemNamespace(r.SystemNamespace) {
+		logger.Info("ignoring quota request outside system namespace", "systemNamespace", systemNamespace(r.SystemNamespace))
 		return ctrl.Result{}, nil
 	}
 

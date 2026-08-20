@@ -1,24 +1,5 @@
 # taugrid-core defaults. Override per cluster.
 
-# Namespace where taugrid-core resources live unless a component overrides it.
-namespace: tau
-
-# Namespace objects are enabled by default for standalone Helm installs.
-# GitOps overlays that adopt resources in an already-owned namespace can turn
-# this off without disabling the namespaced workloads.
-#
-# `create: true` is safe on a cluster where the namespace already exists: the
-# chart renders a Namespace only when it is absent or already carries this
-# release's Helm ownership metadata, and skips one owned by anything else
-# rather than failing the install. A skipped namespace keeps the labels it
-# has — including its Pod Security Standards labels, which this chart then
-# does not reconcile. See the chart README to adopt one deliberately.
-#
-# This covers only the namespaces listed in templates/namespaces.yaml.
-# lifecycleRecorder.targetNamespace is never created here; see below.
-namespaces:
-  create: true
-
 # Optional Kueue ResourceFlavors. Most clusters manage these with their lane
 # manifests/GitOps, so the chart leaves generation off by default. A
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class
@@ -45,7 +26,6 @@ resourceFlavors:
 # override nodeSelector to whatever that provisioner stamps.
 prewarm:
   enabled: true
-  namespace: tau
   nodeSelector:
     kubernetes.azure.com/accelerator: nvidia
   tolerations:
@@ -65,10 +45,8 @@ spegel:
 # clusters should enable it with values-test-clusters.yaml and configure Kusto.
 stellar:
   enabled: false
-  # Stellar is a control-plane/operator UI and runs in `tau`. Researcher
-  # workloads, RayJobs, Kueue LocalQueues, and blob-training /data PVCs live in
-  # the separate `ray` workload namespace.
-  namespace: tau
+  # Stellar is a control-plane/operator UI and runs in the Helm release
+  # namespace. Researcher workloads and LocalQueues live in workspace namespaces.
   replicaCount: 1
   serviceName: tau-stellar
   storePath: /var/lib/tau/expstore
@@ -189,8 +167,7 @@ stellar:
 # access. It never mounts workload storage or reads workload logs/secrets.
 lifecycleRecorder:
   enabled: false
-  # Namespace for this control-plane Deployment and its ServiceAccount.
-  namespace: tau
+  # The system Deployment and ServiceAccount run in the Helm release namespace.
   # Names the Deployment and sets the `app` label on every recorder object. The
   # ServiceAccount, Role, and RoleBinding take their names from
   # serviceAccount.name, which is required separately. Changing this on a live
@@ -279,15 +256,15 @@ lifecycleRecorder:
 # Unified observability portal. Serves `taugrid-portal portal serve`: a single read-only
 # web entry point that aggregates and cross-links the runtime's dashboards
 # (Experiments, Jobs/Queue, Cluster Health, Cluster Nodes, Ray, Cost). Stellar is
-# embedded as the Experiments board. Disabled by default; enable on clusters with
-# a pinned Tau image plus a Kusto query source (for the Experiments/Cluster/Cost
-# boards) and, for the Jobs/Ray/Nodes boards, in-cluster RBAC (portal.rbac.create).
+# embedded as the Experiments board. Disabled by default in this standalone
+# chart; the TauGrid distribution enables it with a dedicated ServiceAccount
+# and read-only RBAC. Kusto-backed boards still require a query source.
 portal:
   enabled: false
-  # Control-plane/operator UI; runs in `tau`. Researcher
-  # workloads, RayJobs, and Kueue LocalQueues live in the `ray` namespace, which
-  # the portal reads across via its ClusterRole.
-  namespace: tau
+  # Control-plane/operator UI; runs with the rest of the TauGrid control plane
+  # in the Helm release namespace. Researcher workloads, RayJobs, and Kueue
+  # LocalQueues live in workspace namespaces, which the portal reads across via
+  # its ClusterRole.
   resourceName: tau-portal
   replicaCount: 1
   serviceName: tau-portal
@@ -419,8 +396,9 @@ portal:
     loadBalancerSourceRanges: []
     port: 80
     targetPort: 8080
-  nodeSelector:
-    kubernetes.azure.com/mode: system
+  # Keep the default portable. Platforms may pin Portal to dedicated system
+  # nodes in their canonical values file.
+  nodeSelector: {}
   tolerations: []
   podSecurityContext:
     runAsNonRoot: true

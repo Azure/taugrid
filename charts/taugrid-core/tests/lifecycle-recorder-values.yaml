@@ -1,6 +1,5 @@
 lifecycleRecorder:
   enabled: true
-  namespace: tau
   targetNamespace: ray
   cluster: chart-test-cluster
   workspaceId: workspace-a

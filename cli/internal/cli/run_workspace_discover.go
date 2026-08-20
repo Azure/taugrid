@@ -47,10 +47,11 @@ import (
 // a missing workspace is fatal; not every command needs one.
 func discoverPrimaryWorkspace(cmd *cobra.Command, kubeContext string) (tauworkspace.Workspace, error) {
 	r := kube.New(kubeContext)
+	systemNamespace := systemNamespaceFromCommand(cmd)
 
 	for _, name := range namedWorkspaceCandidates() {
 		raw, err := r.Raw(cmd.Context(), []string{
-			"-n", tauworkspace.PlatformNamespace,
+			"-n", systemNamespace,
 			"get", "workspaces.tau.azure.com", name, "-o", "json",
 		}, nil)
 		if err != nil {
@@ -83,7 +84,7 @@ func discoverPrimaryWorkspace(cmd *cobra.Command, kubeContext string) (tauworksp
 	}
 
 	raw, err := r.Raw(cmd.Context(), []string{
-		"-n", tauworkspace.PlatformNamespace,
+		"-n", systemNamespace,
 		"get", "workspaces.tau.azure.com", "-o", "json",
 	}, nil)
 	if err != nil {
@@ -100,7 +101,7 @@ func discoverPrimaryWorkspace(cmd *cobra.Command, kubeContext string) (tauworksp
 			// the command that fixes it rather than reporting an empty list.
 			return tauworkspace.Workspace{}, fmt.Errorf(
 				"no TauWorkspace found in namespace %s; a platform owner creates the cluster workspace with `tau workspace create <name> --apply`",
-				tauworkspace.PlatformNamespace,
+				systemNamespace,
 			)
 		}
 		return tauworkspace.Workspace{}, err

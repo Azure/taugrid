@@ -440,7 +440,7 @@ func TestApplyWorkspaceDefaultsRejectsStaleReadyWorkspace(t *testing.T) {
 
 func readyWorkspace() tauworkspace.Workspace {
 	return tauworkspace.Workspace{
-		Metadata: tauworkspace.ObjectMeta{Name: "sample", Namespace: tauworkspace.PlatformNamespace, Generation: 3},
+		Metadata: tauworkspace.ObjectMeta{Name: "sample", Namespace: tauworkspace.SystemNamespace, Generation: 3},
 		Spec: tauworkspace.WorkspaceSpec{
 			Queue:  "sample",
 			Target: tauworkspace.WorkspaceTarget{Namespace: "sample"},

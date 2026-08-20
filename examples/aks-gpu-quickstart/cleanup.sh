@@ -43,7 +43,7 @@ try tau run cancel "$RUN_NAME" -n "$NAMESPACE" --context "$CLUSTER"
 
 step "2. Delete the workspace"
 # There is no `tau workspace delete` verb; kubectl is the documented path.
-try kubectl delete workspace.tau.azure.com "$WORKSPACE" -n tau-platform --context "$CLUSTER"
+try kubectl delete workspace.tau.azure.com "$WORKSPACE" -n tau-system --context "$CLUSTER"
 
 step "3. Uninstall TauGrid"
 # Uninstall drains the queue policy while Kueue still runs, so its finalizers
