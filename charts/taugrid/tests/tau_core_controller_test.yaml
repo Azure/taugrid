@@ -3,18 +3,20 @@ templates:
   - charts/tau-core-controller/templates/deployment.yaml
   - charts/tau-core-controller/templates/taucluster.yaml
 tests:
-  - it: renders the controller into the platform namespace as part of TauGrid
+  - it: renders the controller into the TauGrid release namespace
     template: charts/tau-core-controller/templates/deployment.yaml
+    release:
+      namespace: tau-system
     asserts:
       - equal:
           path: metadata.namespace
-          value: tau-platform
+          value: tau-system
       - equal:
           path: metadata.labels["app.kubernetes.io/part-of"]
           value: taugrid
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --platform-namespace=tau-platform
+          content: --platform-namespace=tau-system
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent

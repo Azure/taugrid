@@ -6,13 +6,15 @@ description: TauGrid distribution chart configurable values
 
 {{< maturity status="ga" reviewed="2026-08-18" >}}
 
-This page documents the Helm values accepted by `tau cluster install`. The distribution chart bundles Kueue, KubeRay, the Tau core controller, GPU monitoring, the `taugrid-core` services chart, and a portable baseline queue into a single versioned release. Portal, Stellar, lifecycle recorder, and image prewarm remain individually disabled by default.
+This page documents the Helm values accepted by `tau cluster install`. The distribution chart bundles Kueue, KubeRay, the Tau core controller, GPU monitoring, the `taugrid-core` services chart, and a portable baseline queue into a single versioned release. Portal is enabled by default for the operator quickstart; Stellar, lifecycle recorder, and image prewarm remain disabled until the platform opts in.
 
 Print this reference from your terminal:
 
 ```bash
 tau cluster explain-values
 ```
+
+The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. `tau cluster install` defaults it to `tau-system`; `--namespace <name>` moves the Kueue, KubeRay, Tau controller, Portal, GPU monitoring, and other enabled first-party workloads together. The first-party charts follow their Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 
 ## Components
 
@@ -23,7 +25,7 @@ Toggle sub-charts with `components.<key>.enabled`:
 | `components.kueue.enabled` | `true` | Kueue job scheduler |
 | `components.kuberayOperator.enabled` | `true` | KubeRay operator |
 | `components.tauCoreController.enabled` | `true` | Tau core controller (TauWorkspace, TauCluster) |
-| `components.taugridCore.enabled` | `true` | Include the services chart; each service keeps its own default-off switch |
+| `components.taugridCore.enabled` | `true` | Include the services chart, including the default Portal |
 | `components.gpuMonitoring.enabled` | unset | GPU monitoring follows `components.tauCoreController.enabled` until explicitly set |
 
 ## Baseline Queue
@@ -45,6 +47,19 @@ A portable Kueue queue bootstrapped on first install. These quotas bound concurr
 | `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu` | GPU flavors and per-flavor quotas |
 
 CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all of its requested resources. `taugrid-default-cpu` has zero GPU quota, while the generic `taugrid-default-gpu` has CPU/memory plus GPU quota and supports `gpu_class: any` on a fresh install. When hardware is known, replace the GPU flavor list with class-specific flavors and label matching nodes with the canonical A10, A100, H100, H200, GB200, or GB300 class from `policy.gpu_class`. Only GPU flavors carry `topologyName` and the managed `kueue.x-k8s.io/podset-required-topology` metadata annotation. Connected Tau submission copies that requirement onto generated GPU pod templates when no explicit placement policy is present. Raw Kubernetes manifests remain expert-controlled. The CPU/memory flavor remains non-TAS. For upgrades with saved legacy values, remove GPU resources from `baselineQueue.resources` and move all GPU class/series labels and GPU-node tolerations out of `baselineQueue.flavor` before adding their replacements under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's `nodeTaints`. TauGrid fails template rendering if the old mixed values would duplicate GPU coverage or constrain CPU-only admission. Do not keep the generic GPU flavor beside class-specific flavors: exact class quota must not fall back to an unlabeled ResourceFlavor.
+
+## Portal
+
+The following are defaults of the TauGrid umbrella distribution used by `tau cluster install`. The standalone `taugrid-core` chart keeps Portal disabled, so platforms that install that child chart directly must opt in explicitly. Portal follows the Helm release namespace selected by `tau cluster install --namespace`; the CLI default is `tau-system`.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `taugrid-core.portal.enabled` | bool | `true` | Install the operator Portal |
+| `taugrid-core.portal.serviceAccount.create` | bool | `true` | Create the dedicated Portal ServiceAccount |
+| `taugrid-core.portal.serviceAccount.name` | string | `tau-portal` | Portal ServiceAccount name |
+| `taugrid-core.portal.rbac.create` | bool | `true` | Create cluster-wide read-only Kubernetes RBAC for Portal |
+
+These defaults make the Portal shell, Runs and run-detail views, Cluster Nodes view, and live Ray discovery available to an operator through the ClusterIP Service. They do not configure Kusto-backed boards, the scoped computed Jobs board, KueueViz, an authenticated researcher endpoint, or a durable experiment store. See [Configure Portal](../../tasks/platform/enable-portal/) for those capability-specific requirements.
 
 ### `baselineQueue.gpu.flavors`
 
@@ -77,7 +92,7 @@ The remaining top-level keys pass values directly to embedded sub-charts:
 | --- | --- | --- |
 | `kueue.*` | Kueue v0.18 | `controllerManager.manager.image`, `managerConfig` |
 | `kuberay-operator.*` | KubeRay v1.6 | `image`, `configuration`, `podAnnotations` |
-| `tau-core-controller.*` | Tau controller | `platformNamespace`, `image`, `tauCluster.nodeLabelRules` |
+| `tau-core-controller.*` | Tau controller | `image`, `tauCluster.nodeLabelRules` |
 | `taugrid-core.*` | Services chart | `prewarm.enabled`, `stellar.enabled`, `portal.enabled` |
 | `gpu-monitoring.*` | GPU monitoring | `gpuSkus`, `daemonset`, `metricsCollector`, `namespace` |
 

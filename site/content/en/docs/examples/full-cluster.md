@@ -106,12 +106,10 @@ not only scheduling, and can incur additional GPU cost.
 
 ## Portal
 
-Terraform enables Portal as `tau-portal` in the `tau` namespace. Its Service
-is ClusterIP-only and Terraform does not expose it outside the cluster. An
-operator can inspect it with:
+Terraform uses the TauGrid distribution default and installs Portal as `tau-portal` in the `tau-system` namespace. Its Service is ClusterIP-only and Terraform does not expose it outside the cluster. An operator can inspect it with:
 
 ```bash
-kubectl port-forward service/tau-portal 18080:80 --namespace=tau
+kubectl port-forward service/tau-portal 18080:80 --namespace=tau-system
 ```
 
 This is an operator diagnostic path, not a researcher endpoint. Before giving

@@ -1,7 +1,3 @@
-# Namespace that owns the controller, its RBAC, and every TauWorkspace object.
-# It is also passed to the binary as --platform-namespace.
-platformNamespace: tau-platform
-
 # app.kubernetes.io/part-of for every rendered object. The TauGrid distribution
 # leaves this as taugrid; GitOps paths rendering the literal manifests under
 # kustomize/ should keep the same value.

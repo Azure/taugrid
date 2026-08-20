@@ -1,0 +1,8 @@
+{{- $gpuMonitoringValues := index .Values "gpu-monitoring" -}}
+{{- $gpuMonitoringNamespace := "" -}}
+{{- if $gpuMonitoringValues -}}
+{{- $gpuMonitoringNamespace = trim (default "" (index $gpuMonitoringValues "namespace")) -}}
+{{- end -}}
+{{- if $gpuMonitoringNamespace -}}
+{{- fail "gpu-monitoring.namespace is no longer supported; use --namespace to move every TauGrid system component together" -}}
+{{- end -}}

@@ -27,7 +27,7 @@ Before enabling the recorder:
    subject:
 
    ```text
-   system:serviceaccount:<control-plane-namespace>:tau-lifecycle-recorder
+   system:serviceaccount:<system-namespace>:tau-lifecycle-recorder
    ```
 
 4. Grant that identity the ADX database `Ingestor` role. This role is separate
@@ -69,7 +69,7 @@ and image must be released together.
 taugrid-core:
   lifecycleRecorder:
     enabled: true
-    namespace: <control-plane-namespace>
+    namespace: <system-namespace>
     targetNamespace: <workspace-namespace>
     cluster: <aks-name>
     workspaceId: <workspace-name>
@@ -112,11 +112,11 @@ tau cluster install --context <context> --version <taugrid-release-version> \
 # completion condition, so the recorder starts immediately and retries its
 # first ingestion until the schema is available. Wait for the Deployment to
 # become Ready, then inspect adx-mon if it remains NotReady.
-kubectl -n <control-plane-namespace> rollout status \
+kubectl -n <system-namespace> rollout status \
   deploy/tau-lifecycle-recorder --timeout=25m
 kubectl -n <adx-mon-namespace> describe managementcommand \
   taugrid-lifecycle-schema
-kubectl -n <control-plane-namespace> logs deploy/tau-lifecycle-recorder --tail=100
+kubectl -n <system-namespace> logs deploy/tau-lifecycle-recorder --tail=100
 ```
 
 If the recorder remains NotReady, inspect the command and adx-mon logs, then
@@ -143,7 +143,7 @@ TauExpRunLifecycle
 Rows appear after the recorder's polling interval and ADX queued-ingestion
 latency. Check the ManagementCommand, recorder logs, and managed identities'
 database roles if no rows appear. To expose these rows in Portal, follow
-[Enable Portal](../enable-portal/) and set its `portal.runHistory.enabled` only
+[Configure Portal](../enable-portal/) and set its `portal.runHistory.enabled` only
 after recorder writes succeed.
 
 For an ADX-side diagnosis that distinguishes ingestion from Kubernetes

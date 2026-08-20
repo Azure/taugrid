@@ -107,7 +107,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: tau-core-controller
-    namespace: tau-platform
+    namespace: tau-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -117,7 +117,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: tau-workspace-leader-election
-  namespace: tau-platform
+  namespace: tau-system
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 rules:
@@ -129,13 +129,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: tau-workspace-leader-election
-  namespace: tau-platform
+  namespace: tau-system
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 subjects:
   - kind: ServiceAccount
     name: tau-core-controller
-    namespace: tau-platform
+    namespace: tau-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -144,8 +144,9 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  # Keep this legacy object name so upgrades do not leave an orphaned Role.
   name: tau-workspace-platform-rbac-manager
-  namespace: tau-platform
+  namespace: tau-system
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 rules:
@@ -157,13 +158,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: tau-workspace-platform-rbac-manager
-  namespace: tau-platform
+  namespace: tau-system
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 subjects:
   - kind: ServiceAccount
     name: tau-core-controller
-    namespace: tau-platform
+    namespace: tau-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

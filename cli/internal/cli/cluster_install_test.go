@@ -64,10 +64,10 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	for _, want := range []string{
 		"Helm wait:  bootstrap only (Tau readiness validation still runs after queue policy)",
 		"Rollback:   disabled",
-		"Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring",
-		"Opt-in:     Portal, Stellar, lifecycle recorder, image prewarm",
-		"tau workspace create --principal-name <external-group-or-team> --apply",
-		"kubectl get workspaces.tau.azure.com -n tau-platform",
+		"Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal",
+		"Opt-in:     Stellar, lifecycle recorder, image prewarm",
+		"tau workspace create --system-namespace tau-system --principal-name <external-group-or-team> --apply",
+		"kubectl get workspaces.tau.azure.com -n tau-system",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install output missing %q:\n%s", want, out)
@@ -76,7 +76,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	if strings.Contains(out, "kubectl get tauworkspace ") {
 		t.Fatalf("install output names a nonexistent resource type:\n%s", out)
 	}
-	if !strings.Contains(out, "READY: 7/7 checks passed") {
+	if !strings.Contains(out, "READY: 8/8 checks passed") {
 		t.Fatalf("install output missing readiness report:\n%s", out)
 	}
 	if !strings.Contains(out, "TauGrid is installed and ready as Helm release") {
@@ -199,7 +199,7 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
 		switch {
 		case len(args) > 0 && args[0] == "list":
-			_, _ = io.WriteString(out, `[{"name":"taugrid"}]`)
+			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"tau-system"}]`)
 			return nil
 		case len(args) > 1 && args[0] == "get" && args[1] == "values":
 			_, _ = io.WriteString(out, "{}")
@@ -251,9 +251,56 @@ func TestClusterInstallListAvoidsHelm4RemovedAllFlag(t *testing.T) {
 			t.Errorf("helm list must not pass --all (removed in Helm 4); got %v", listArgs)
 		}
 	}
+	if !containsArg(listArgs, "--all-namespaces") || containsArg(listArgs, "--namespace") {
+		t.Errorf("helm list must inspect every namespace before install; got %v", listArgs)
+	}
 	for _, want := range helmListAllStateFlags {
 		if !slices.Contains(listArgs, want) {
 			t.Errorf("helm list missing state flag %q; got %v", want, listArgs)
+		}
+	}
+}
+
+func TestClusterInstallRejectsReleaseInAnotherNamespace(t *testing.T) {
+	original := runHelmCommand
+	var upgrades int
+	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
+		if len(args) > 0 && args[0] == "list" {
+			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"old-system"}]`)
+			return nil
+		}
+		upgrades++
+		return nil
+	}
+	t.Cleanup(func() { runHelmCommand = original })
+	installFakeInstallationValidation(t)
+
+	_, err := runCluster(t, "install", "--namespace", "new-system")
+	if err == nil || !strings.Contains(err.Error(), `Helm release "taugrid" already exists in namespace old-system`) ||
+		!strings.Contains(err.Error(), "cannot be changed in place") {
+		t.Fatalf("cross-namespace release error = %v", err)
+	}
+	if upgrades != 0 {
+		t.Fatalf("cross-namespace release attempted %d Helm upgrades, want none", upgrades)
+	}
+}
+
+func TestClusterInstallCustomNamespaceFlowsIntoNextSteps(t *testing.T) {
+	installFakeHelm(t, func(context.Context, io.Reader, io.Writer, io.Writer, []string) error {
+		return nil
+	})
+
+	out, err := runCluster(t, "install", "--namespace", "custom-system")
+	if err != nil {
+		t.Fatalf("install errored: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"namespace custom-system",
+		"tau workspace create --system-namespace custom-system",
+		"kubectl get workspaces.tau.azure.com -n custom-system",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("custom install output missing %q:\n%s", want, out)
 		}
 	}
 }
@@ -540,7 +587,7 @@ func installFakeInstallationValidation(t *testing.T) {
 	originalWait := waitForTauGridInstallation
 	originalRunner := newInstallationCheckRunner
 	newInstallationCheckRunner = func(string) installationcheck.Runner {
-		return nil
+		return emptyInstallationRunner{}
 	}
 	waitForTauGridInstallation = func(context.Context, installationcheck.Runner, installationcheck.Options) (installationcheck.Report, error) {
 		return readyInstallationReport(), nil
@@ -551,8 +598,65 @@ func installFakeInstallationValidation(t *testing.T) {
 	})
 }
 
+type emptyInstallationRunner struct{}
+
+func (emptyInstallationRunner) Raw(context.Context, []string, []byte) (string, error) {
+	return `{"items":[]}`, nil
+}
+
+type namespaceMigrationResponse struct {
+	output string
+	err    error
+}
+
+type namespaceMigrationRunner map[string]namespaceMigrationResponse
+
+func (r namespaceMigrationRunner) Raw(_ context.Context, args []string, _ []byte) (string, error) {
+	response, ok := r[strings.Join(args, " ")]
+	if !ok {
+		return "", fmt.Errorf("unexpected kubectl args: %s", strings.Join(args, " "))
+	}
+	return response.output, response.err
+}
+
+func TestEnsureSystemNamespaceMigrationSafe(t *testing.T) {
+	runner := namespaceMigrationRunner{
+		"get workspaces.tau.azure.com --all-namespaces --output=json":    {output: `{"items":[{"metadata":{"name":"demo","namespace":"tau-system"}}]}`},
+		"get quotarequests.tau.azure.com --all-namespaces --output=json": {output: `{"items":[]}`},
+	}
+	if err := ensureSystemNamespaceMigrationSafe(context.Background(), runner, "tau-system"); err != nil {
+		t.Fatalf("safe namespace migration check failed: %v", err)
+	}
+}
+
+func TestEnsureSystemNamespaceMigrationRejectsObjectsElsewhere(t *testing.T) {
+	runner := namespaceMigrationRunner{
+		"get workspaces.tau.azure.com --all-namespaces --output=json":    {output: `{"items":[{"metadata":{"name":"demo","namespace":"legacy-system"}}]}`},
+		"get quotarequests.tau.azure.com --all-namespaces --output=json": {output: `{"items":[{"metadata":{"name":"gpu","namespace":"requests"}}]}`},
+	}
+	err := ensureSystemNamespaceMigrationSafe(context.Background(), runner, "tau-system")
+	if err == nil || !strings.Contains(err.Error(), "TauWorkspace legacy-system/demo") ||
+		!strings.Contains(err.Error(), "TauQuotaRequest requests/gpu") {
+		t.Fatalf("unsafe namespace migration error = %v", err)
+	}
+}
+
+func TestEnsureSystemNamespaceMigrationAllowsMissingCRDs(t *testing.T) {
+	runner := namespaceMigrationRunner{
+		"get workspaces.tau.azure.com --all-namespaces --output=json": {
+			err: errors.New(`the server doesn't have a resource type "workspaces"`),
+		},
+		"get quotarequests.tau.azure.com --all-namespaces --output=json": {
+			err: errors.New("the server could not find the requested resource"),
+		},
+	}
+	if err := ensureSystemNamespaceMigrationSafe(context.Background(), runner, "tau-system"); err != nil {
+		t.Fatalf("missing Tau CRDs should be treated as no legacy objects: %v", err)
+	}
+}
+
 func readyInstallationReport() installationcheck.Report {
-	names := []string{"Kubernetes", "Kueue", "KubeRay", "Tau controller", "TauCluster", "Baseline queue", "Quota guard"}
+	names := []string{"Kubernetes", "Kueue", "KubeRay", "Portal", "Tau controller", "TauCluster", "Baseline queue", "Quota guard"}
 	results := make([]installationcheck.Result, 0, len(names))
 	for _, name := range names {
 		results = append(results, installationcheck.Result{Name: name, Status: installationcheck.StatusPass, Detail: "ready"})

@@ -18,8 +18,7 @@ Wraps the resources we wrote and want to ship as one helm release:
    helps when researchers submit without overriding `runtime.image`; workloads
    that build their own image want a peer-to-peer mirror instead (see Spegel in
    [`../INSTALL.md`](../INSTALL.md)).
-4. **Resource flavors + namespaces** — optional static glue for clusters that
-   want the chart to own those objects.
+4. **Resource flavors** — optional static glue for clusters that want the chart to own those objects.
 5. **Tau run lifecycle recorder** — optional, metadata-only projection of
    Jobs, RayJobs, and Kueue Workloads into ADX. It is disabled by default and
    requires explicit identity, endpoint, retention, and workload-TTL planning.
@@ -83,55 +82,19 @@ recorder, or their shared namespaced resources.
 ```bash
 # Assumes Kueue + KubeRay are installed and GPU nodes expose nvidia.com/gpu.
 # See ../INSTALL.md.
-helm upgrade --install taugrid-core ./taugrid-core --kube-context my-cluster
+helm upgrade --install taugrid-core ./taugrid-core --kube-context my-cluster \
+  --namespace tau-system --create-namespace
 ```
 
-### Namespace ownership
+### Release namespace
 
-`namespaces.create` (default `true`) covers only the namespaces this chart's own
-components render into: `prewarm.namespace`, `stellar.namespace`,
-`portal.namespace`, and `lifecycleRecorder.namespace`.
+Prewarm, Stellar, Portal, and the lifecycle recorder run in the Helm release namespace. This chart does not create that Namespace object; standalone installs must pass `--namespace <name> --create-namespace`, while `tau cluster install` does so automatically for the umbrella release. A Helm release cannot be moved to another namespace in place. Keep the existing namespace during upgrades, or use an explicit migration plan before uninstalling and reinstalling the release.
 
-Helm refuses to apply over an object it did not create. A namespace that already
-exists out-of-band — from platform queue policy, from workspace tooling, or
-from a plain `kubectl create namespace` — has none of Helm's ownership metadata,
-so a chart that rendered it would fail install with:
-
-```
-Error: Unable to continue with install: Namespace "<name>" exists and cannot be
-imported into the current release: invalid ownership metadata; label validation
-error: missing key "app.kubernetes.io/managed-by": must be set to "Helm" ...
-```
-
-The chart therefore renders a Namespace only when it is absent or already
-carries *this* release's ownership metadata, and skips one owned by anything
-else. Install and upgrade both succeed against a cluster where the namespace
-already exists; `namespaces.create: false` remains available for GitOps overlays
-that own the whole set.
-
-A skipped namespace keeps whatever labels it has. This chart does not reconcile
-its Pod Security Standards labels, because it does not own it. To hand one over
-deliberately, stamp the three keys Helm checks and upgrade — the next render
-adopts it and starts reconciling those labels:
-
-```bash
-kubectl label namespace <name> app.kubernetes.io/managed-by=Helm --overwrite
-kubectl annotate namespace <name> \
-  meta.helm.sh/release-name=<release> \
-  meta.helm.sh/release-namespace=<release-namespace> --overwrite
-```
-
-A namespace created by this chart under a *former* release name counts as owned
-by something else, so it is skipped after a release rename. Adopt it with the
-same command, or keep the release name (see above).
-
-`lifecycleRecorder.targetNamespace` is never created here. It is the observed
-workload namespace, owned by `tau-core-controller` (from a `TauWorkspace`) or by
-platform queue policy. Enabling the recorder against a namespace that does
-not exist fails with a message naming the value and those owners, instead of
-surfacing later as `namespaces "<name>" not found` on the recorder's Role.
+`lifecycleRecorder.targetNamespace` is never created here. It is the observed workload namespace, owned by `tau-core-controller` through a `TauWorkspace` or by external queue policy. Enabling the recorder against a namespace that does not exist fails with a message naming the value and those owners, instead of surfacing later as `namespaces "<name>" not found` on the recorder's Role.
 
 ### Upgrading existing releases
+
+Releases created before namespace unification may have first-party services and Tau system objects in different legacy namespaces. Moving release-owned Deployments, Services, RBAC, and identities recreates namespaced resources and can cause downtime. Helm does not move `TauWorkspace`, `TauQuotaRequest`, PVC, or Workload Identity state. Back up and migrate those objects explicitly before removing any legacy namespace.
 
 The chart package and directory are now `taugrid-core`, but existing clusters
 must keep their current Helm release name during this first rename step. For
@@ -154,28 +117,16 @@ image. The former standalone Stellar GitOps application was retired; manually
 managed `taugrid-core` releases must still keep that release name when upgrading
 to this chart path. The ADO pipeline also
 intentionally keeps its externally registered filename
-`the release pipeline`. This chart now renders `tau-*` object
-names in the `tau` namespace for both the portal and Stellar. It does not adopt
-the legacy `tau-*` Services and PVCs still running on the test clusters: those
-were installed by superseded chart generations and need a separate
-decommission. Enabling Stellar here requires explicitly named existing
-platform-managed claims; it neither adopts the old volumes nor provisions new
-ones. Standard Helm chart
-identity labels (`app.kubernetes.io/name` and `helm.sh/chart`) follow the new
-package name and version.
+`the release pipeline`. All namespaced resources now follow the Helm release namespace. The chart does not adopt Services or PVCs installed by superseded releases in other namespaces; decommission or migrate those resources separately. Enabling Stellar requires explicitly named existing platform-managed claims; it neither adopts old volumes nor provisions new ones. Standard Helm chart identity labels (`app.kubernetes.io/name` and `helm.sh/chart`) follow the package name and version.
 
-Standalone Stellar is disabled in both generic and test-cluster defaults because
-the hosted experience now runs through Tau Portal. The retained values are an
-explicit compatibility/debug path in the `tau` namespace; keep that namespace
-distinct from the `ray` workload namespace used for researcher RayJobs, Kueue
-LocalQueues, and the `blob-training` `/data` PVC. To render the deprecated
-standalone path, opt in explicitly. The chart defaults to the TauGrid Portal
-MCR release tag matching the chart version:
+Standalone Stellar is disabled in both generic and test-cluster defaults because the hosted experience now runs through Tau Portal. The retained values are an explicit compatibility/debug path in the Helm release namespace; researcher RayJobs, Kueue LocalQueues, and workload PVCs remain in TauWorkspace target namespaces. To render the deprecated standalone path, opt in explicitly. The chart defaults to the TauGrid Portal MCR release tag matching the chart version:
 
 ```bash
 # Keep the existing taugrid-core release name for this test-cluster upgrade.
 helm upgrade --install taugrid-core ./taugrid-core \
   --kube-context my-cluster \
+  --namespace tau-system \
+  --create-namespace \
   -f values-test-clusters.yaml \
   --set stellar.enabled=true \
   --set stellar.kusto.queryCommand=/usr/local/bin/query-kusto \
@@ -233,8 +184,8 @@ claim.
 ## Verify
 
 ```bash
-kubectl --context my-cluster -n tau rollout status deployment/tau-stellar
-kubectl --context my-cluster -n tau get svc tau-stellar
+kubectl --context my-cluster -n tau-system rollout status deployment/tau-stellar
+kubectl --context my-cluster -n tau-system get svc tau-stellar
 ```
 
 ## Tau run lifecycle recorder
@@ -314,11 +265,7 @@ helm upgrade --install taugrid-core ./taugrid-core \
   --set portal.kusto.database=Metrics
 ```
 
-The portal serves in the `tau` namespace behind a ClusterIP-only
-`svc/tau-portal`. Portal has no application-level login, so the chart rejects
-`LoadBalancer` and requires a platform-owned authenticated HTTPS proxy for
-researcher browser access. Each board degrades independently, so a partial
-install still serves the rest:
+For a direct standalone `taugrid-core` installation, Portal is disabled by default and, when enabled, runs in the Helm release namespace behind a ClusterIP-only `svc/tau-portal`. The TauGrid umbrella distribution additionally enables Portal with a dedicated ServiceAccount and read-only RBAC. Portal has no application-level login, so the chart rejects `LoadBalancer` and requires a platform-owned authenticated HTTPS proxy for researcher browser access. Each board degrades independently, so a partial install still serves the rest:
 
 - **Experiments / Cluster Health / Cost** read ADX/Kusto through the shared
   configuration. Set `portal.kusto.endpoint` for the native
@@ -404,6 +351,6 @@ separately when those panels are part of acceptance.
 ### Verify (portal, platform operator)
 
 ```bash
-kubectl --context my-cluster -n tau rollout status deployment/tau-portal
-kubectl --context my-cluster -n tau get svc tau-portal
+kubectl --context my-cluster -n <release-namespace> rollout status deployment/tau-portal
+kubectl --context my-cluster -n <release-namespace> get svc tau-portal
 ```

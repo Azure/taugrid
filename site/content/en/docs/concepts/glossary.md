@@ -61,7 +61,7 @@ file a repository holds.
 
 The Kubernetes custom resource (`tau.azure.com/v1alpha1`, kind
 `TauWorkspace`) that the Tau workspace controller reconciles in the
-`tau-platform` namespace. It is a **Kubernetes onboarding and policy intent
+`tau-system` namespace. It is a **Kubernetes onboarding and policy intent
 and status API**: its spec declares target namespace, Kueue queue, and defaults
 for workload identity, output root, and priority; its controller reconciles or
 verifies namespace/RBAC, Kueue LocalQueue accessibility, and workload-identity
@@ -78,12 +78,7 @@ operator and Azure/provider tooling outside TauWorkspace. See
 
 ## Workspace connection descriptor {#workspace-connection}
 
-The non-secret `tau/workspace.connection.yaml` file a platform operator
-hands to a repository once its TauWorkspace is [Ready](#status-condition).
-It names the exact cluster and workspace contract a project resolves
-against and must never contain a credential or kubeconfig. This file is
-client-side project configuration: it is not the TauWorkspace object, and
-writing it does not create or modify one.
+The non-secret `tau/workspace.connection.yaml` file a platform operator hands to a repository once its TauWorkspace is [Ready](#status-condition). It names the exact cluster, TauGrid system namespace, and workspace contract a project resolves against and must never contain a credential or kubeconfig. This file is client-side project configuration: it is not the TauWorkspace object, and writing it does not create or modify one. New descriptors always write `cluster.systemNamespace`, which is `tau-system` for a default installation. Descriptors created before that field existed remain compatible and resolve an omitted field to the legacy `tau-platform` namespace.
 
 Checking in the descriptor is explicit repository/platform preconfiguration.
 `tau run` discovers it automatically; `tau workspace connection inspect` is an

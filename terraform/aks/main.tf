@@ -161,7 +161,7 @@ resource "azurerm_federated_identity_credential" "portal" {
   resource_group_name = azurerm_resource_group.this.name
   parent_id           = azurerm_user_assigned_identity.portal[0].id
   issuer              = azurerm_kubernetes_cluster.this.oidc_issuer_url
-  subject             = "system:serviceaccount:tau:tau-portal"
+  subject             = "system:serviceaccount:tau-system:tau-portal"
   audience            = ["api://AzureADTokenExchange"]
 }
 
@@ -191,7 +191,7 @@ resource "azurerm_federated_identity_credential" "lifecycle_recorder" {
   resource_group_name = azurerm_resource_group.this.name
   parent_id           = azurerm_user_assigned_identity.lifecycle_recorder[0].id
   issuer              = azurerm_kubernetes_cluster.this.oidc_issuer_url
-  subject             = "system:serviceaccount:tau:tau-lifecycle-recorder"
+  subject             = "system:serviceaccount:tau-system:tau-lifecycle-recorder"
   audience            = ["api://AzureADTokenExchange"]
 }
 

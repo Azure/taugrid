@@ -28,6 +28,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect
+            # Keep the published controller-image compatibility alias until an
+            # aligned image release is available. The value is the unified
+            # system namespace selected by the Helm release.
             - --platform-namespace={{ include "tau-core-controller.namespace" . }}
           ports:
             - name: metrics

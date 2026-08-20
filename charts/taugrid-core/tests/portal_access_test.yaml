@@ -3,6 +3,8 @@ templates:
   - templates/portal.yaml
 tests:
   - it: pulls the portal from public MCR by default
+    release:
+      namespace: tau-system
     set:
       portal.enabled: true
     documentSelector:
@@ -10,8 +12,27 @@ tests:
       value: Deployment
     asserts:
       - equal:
+          path: metadata.namespace
+          value: tau-system
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: portal
+      - equal:
           path: spec.template.spec.containers[0].image
           value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.3.0
+
+  - it: follows the standalone Helm release namespace
+    release:
+      namespace: custom-system
+    set:
+      portal.enabled: true
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-system
 
   - it: keeps the default service cluster internal
     set:

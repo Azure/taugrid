@@ -95,6 +95,7 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 	if connection.Workspace != "sample" ||
 		connection.Namespace != "sample" ||
 		connection.Queue != "jobqueue" ||
+		connection.SystemNamespace != "tau-system" ||
 		connection.AuthorizationMode != AuthorizationModeClusterWide {
 		t.Fatalf("connection = %#v", connection)
 	}
@@ -123,8 +124,46 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 		state.ConfiguredAt != now ||
 		state.VerifiedAt != now ||
 		state.Provider != "azure" ||
+		state.SystemNamespace != "tau-system" ||
 		state.TenantID != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("persisted configuration/readiness state = %#v", state)
+	}
+}
+
+func TestManagerPersistsConfiguredSystemNamespace(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	descriptorPath := filepath.Join(root, DescriptorRelativePath)
+	raw, err := os.ReadFile(descriptorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.Replace(string(raw), "  systemNamespace: tau-system\n", "  systemNamespace: custom-system\n", 1))
+	if err := os.WriteFile(descriptorPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := Manager{
+		ConfigDir:   t.TempDir(),
+		Interactive: false,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+		}},
+	}
+	connection, err := manager.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.SystemNamespace != "custom-system" {
+		t.Fatalf("SystemNamespace = %q, want custom-system", connection.SystemNamespace)
+	}
+}
+
+func TestLegacyConnectionStateDefaultsSystemNamespace(t *testing.T) {
+	connection := (connectionState{}).active()
+	if connection.SystemNamespace != "tau-platform" {
+		t.Fatalf("SystemNamespace = %q, want tau-platform", connection.SystemNamespace)
 	}
 }
 

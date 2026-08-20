@@ -58,7 +58,7 @@ tau cluster install &&
 tau cluster validate nodes --min-healthy 1
 ```
 
-The commands should finish with every enabled installation check passing and one healthy GPU node. For chart values, previews, upgrades, and additional validation, see [TauGrid setup](../taugrid-setup/).
+The commands should finish with every enabled installation check passing, including `PASS Portal`, and one healthy GPU node. The default Portal Deployment, Service, ServiceAccount, and read-only Kubernetes RBAC are installed in `tau-system`. For chart values, previews, upgrades, and additional validation, see [TauGrid setup](../taugrid-setup/).
 
 ## Step 4: Workspace setup
 
@@ -69,7 +69,7 @@ tau workspace create --apply &&
 kubectl wait \
   --for=jsonpath='{.status.phase}'=Ready \
   workspace/taugrid-default \
-  --namespace tau-platform \
+  --namespace tau-system \
   --timeout=5m &&
 tau workspace check taugrid-default
 ```
@@ -134,13 +134,14 @@ The final status should report `Complete` / `Succeeded`. The logs should contain
 
 ## Step 6: View the job in the Portal
 
-Forward the Portal service to your workstation and open the job details page at [http://127.0.0.1:8080/portal/runs/taugrid-default/taugrid-quickstart-gpu](http://127.0.0.1:8080/portal/runs/taugrid-default/taugrid-quickstart-gpu).
+Confirm that the default Portal is ready, forward its ClusterIP Service to your workstation, and open the job details page at [http://127.0.0.1:8080/portal/runs/taugrid-default/taugrid-quickstart-gpu](http://127.0.0.1:8080/portal/runs/taugrid-default/taugrid-quickstart-gpu).
 
 ```bash
+kubectl --namespace tau-system rollout status deployment/tau-portal --timeout=5m &&
 kubectl --namespace tau-system port-forward service/tau-portal 8080:80
 ```
 
-The page should show the RayJob as `Complete`, with its quota released and compute reusable.
+The rollout command should report `deployment "tau-portal" successfully rolled out`. The port-forward process should report that it is forwarding `127.0.0.1:8080`, and the page should show the RayJob as `Complete`, with its quota released and compute reusable. This operator-only diagnostic validates the Kubernetes-backed run detail path; Kusto-backed boards, the computed Jobs board, and KueueViz require additional platform configuration.
 
 ![TauGrid Portal showing the completed GPU RayJob](../../../images/tau/TauGrid-Quickstart-Job-Status.png)
 

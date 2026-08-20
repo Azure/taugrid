@@ -187,7 +187,7 @@ func TestRunLifecycleExplicitWorkspaceResolvesItsTargetNamespace(t *testing.T) {
 		_ *cobra.Command,
 		kubeContext, namespace, name string,
 	) (tauworkspace.Workspace, error) {
-		if kubeContext != "workspace-context" || namespace != tauworkspace.PlatformNamespace || name != "research" {
+		if kubeContext != "workspace-context" || namespace != tauworkspace.SystemNamespace || name != "research" {
 			t.Fatalf("workspace lookup = context %q namespace %q name %q", kubeContext, namespace, name)
 		}
 		return workspace, nil

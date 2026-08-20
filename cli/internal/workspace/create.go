@@ -51,7 +51,7 @@ const (
 type CreateOptions struct {
 	Name                     string
 	Namespace                string
-	PlatformNamespace        string
+	SystemNamespace          string
 	Queue                    string
 	PrincipalProvider        string
 	PrincipalName            string
@@ -123,18 +123,18 @@ func (o CreateOptions) PrincipalWasDefaulted() bool {
 		defaultedPrincipalBindsNobody(resolved.PrincipalProvider, resolved.KubernetesSubjectKind, resolved.Name)
 }
 
-// ResolvedPlatformNamespace is the namespace the manifest is created in, after
+// ResolvedSystemNamespace is the namespace the manifest is created in, after
 // defaulting. User-facing messages must name this, not the raw flag.
-func (o CreateOptions) ResolvedPlatformNamespace() string {
-	return o.withDefaults().PlatformNamespace
+func (o CreateOptions) ResolvedSystemNamespace() string {
+	return o.withDefaults().SystemNamespace
 }
 
 func (o CreateOptions) withDefaults() CreateOptions {
 	if o.Namespace == "" {
 		o.Namespace = o.Name
 	}
-	if o.PlatformNamespace == "" {
-		o.PlatformNamespace = PlatformNamespace
+	if o.SystemNamespace == "" {
+		o.SystemNamespace = SystemNamespace
 	}
 	if o.Queue == "" {
 		o.Queue = DefaultWorkspaceQueue
@@ -175,7 +175,7 @@ func validateCreateOptions(options CreateOptions) error {
 	}{
 		{flag: "name", value: o.Name},
 		{flag: "--namespace", value: o.Namespace},
-		{flag: "--platform-namespace", value: o.PlatformNamespace},
+		{flag: "--system-namespace", value: o.SystemNamespace},
 		{flag: "--queue", value: o.Queue},
 	} {
 		if name.value == "" {
@@ -201,7 +201,7 @@ func validateCreateOptions(options CreateOptions) error {
 		value string
 	}{
 		{flag: "--namespace", value: o.Namespace},
-		{flag: "--platform-namespace", value: o.PlatformNamespace},
+		{flag: "--system-namespace", value: o.SystemNamespace},
 	} {
 		if errs := validation.IsDNS1123Label(namespace.value); len(errs) > 0 {
 			return fmt.Errorf("%s %q is not a valid Namespace name: %s", namespace.flag, namespace.value, strings.Join(errs, "; "))
@@ -264,7 +264,7 @@ func newWorkspaceForCreate(options CreateOptions) Workspace {
 		Kind:       KindWorkspace,
 		Metadata: ObjectMeta{
 			Name:      o.Name,
-			Namespace: o.PlatformNamespace,
+			Namespace: o.SystemNamespace,
 		},
 		Spec: WorkspaceSpec{
 			Authorization: &WorkspaceAuthorization{Mode: AuthorizationModeWorkspaceRBAC},
@@ -307,10 +307,10 @@ func PreflightCreation(ctx context.Context, runner AdoptRunner, options CreateOp
 	}
 	o := options.withDefaults()
 	raw, err := runner.Raw(ctx, []string{
-		"-n", o.PlatformNamespace, "get", "workspace.tau.azure.com", "-o", "json",
+		"-n", o.SystemNamespace, "get", "workspace.tau.azure.com", "-o", "json",
 	}, nil)
 	if err != nil {
-		return CreateReport{}, fmt.Errorf("list TauWorkspaces in %q: %w", o.PlatformNamespace, err)
+		return CreateReport{}, fmt.Errorf("list TauWorkspaces in %q: %w", o.SystemNamespace, err)
 	}
 	list, err := ParseList([]byte(raw))
 	if err != nil {
@@ -320,7 +320,7 @@ func PreflightCreation(ctx context.Context, runner AdoptRunner, options CreateOp
 		return CreateReport{}, fmt.Errorf(
 			"v0 supports one TauWorkspace, but %d already exist in %q; remove the extra objects before creating a workspace",
 			len(list.Items),
-			o.PlatformNamespace,
+			o.SystemNamespace,
 		)
 	}
 	report := CreateReport{}
@@ -388,7 +388,7 @@ func ApplyCreation(
 			current.ClusterQueueUID,
 		)
 	}
-	createArgs := []string{"-n", o.PlatformNamespace, "create", "-f", "-"}
+	createArgs := []string{"-n", o.SystemNamespace, "create", "-f", "-"}
 	if _, err := runner.Raw(ctx, append(append([]string(nil), createArgs...), "--dry-run=server"), manifest); err != nil {
 		return "", fmt.Errorf("server-side dry-run TauWorkspace creation: %w", err)
 	}

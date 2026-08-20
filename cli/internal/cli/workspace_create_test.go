@@ -37,7 +37,7 @@ func newWorkspaceCreateCLIRunner() *workspaceAdoptCLIRunner {
 		"get clusterqueue.kueue.x-k8s.io jobqueue -o json": `{
 			"metadata":{"name":"jobqueue","uid":"cq-uid"}
 		}`,
-		"-n tau-platform get workspace.tau.azure.com -o json": `{"items":[]}`,
+		"-n tau-system get workspace.tau.azure.com -o json": `{"items":[]}`,
 	}}
 }
 
@@ -50,7 +50,7 @@ func TestWorkspaceCreateIsWired(t *testing.T) {
 		t.Fatalf("workspace create command not wired: %#v", cmd)
 	}
 	for _, name := range []string{
-		"namespace", "platform-namespace", "queue", "principal-provider",
+		"namespace", "system-namespace", "platform-namespace", "queue", "principal-provider",
 		"principal-name", "subject-kind", "subject-name", "output-root",
 		"priority", "service-account", "workload-identity-client-id",
 		"context", "apply",
@@ -116,12 +116,12 @@ func TestWorkspaceCreateReportsAnInertSubject(t *testing.T) {
 // conflicting intent, so only an edit gets the operator to a real group.
 func TestWorkspaceCreateApplyNamesTheEditRemediation(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
-	createArgs := "-n tau-platform create -f -"
+	createArgs := "-n tau-system create -f -"
 	runner.responses[createArgs+" --dry-run=server"] = "created (server dry run)\n"
 	runner.responses[createArgs] = "created\n"
 
 	rendered := executeWorkspaceCreate(t, runner, "research", "--apply")
-	if !strings.Contains(rendered, "kubectl edit workspaces.tau.azure.com research -n tau-platform") {
+	if !strings.Contains(rendered, "kubectl edit workspaces.tau.azure.com research -n tau-system") {
 		t.Fatalf("apply did not name the working remediation:\n%s", rendered)
 	}
 }
@@ -150,16 +150,16 @@ func TestWorkspaceCreateStaysSilentWhenPrincipalIsNamed(t *testing.T) {
 	}
 }
 
-// An explicitly-empty --platform-namespace still resolves for the manifest, so
+// An explicitly-empty --system-namespace still resolves for the manifest, so
 // the notice has to resolve it too or it prints a command ending in a bare -n.
-func TestWorkspaceCreateNoticeResolvesTheDefaultPlatformNamespace(t *testing.T) {
+func TestWorkspaceCreateNoticeResolvesTheDefaultSystemNamespace(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
-	createArgs := "-n tau-platform create -f -"
+	createArgs := "-n tau-system create -f -"
 	runner.responses[createArgs+" --dry-run=server"] = "created (server dry run)\n"
 	runner.responses[createArgs] = "created\n"
 
-	rendered := executeWorkspaceCreate(t, runner, "research", "--platform-namespace", "", "--apply")
-	if !strings.Contains(rendered, "-n tau-platform\n") {
+	rendered := executeWorkspaceCreate(t, runner, "research", "--system-namespace", "", "--apply")
+	if !strings.Contains(rendered, "-n tau-system\n") {
 		t.Fatalf("notice printed an unrunnable namespace:\n%s", rendered)
 	}
 }
@@ -240,8 +240,8 @@ func TestWorkspaceCreateRefusesAnObjectIDShapedName(t *testing.T) {
 // refused as conflicting intent and only an edit reaches a real group.
 func TestWorkspaceCreatePreviewNamesTheEditWhenTheWorkspaceExists(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
-	runner.responses["-n tau-platform get workspace.tau.azure.com -o json"] = `{"items":[{
-		"metadata":{"name":"research","namespace":"tau-platform"},
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = `{"items":[{
+		"metadata":{"name":"research","namespace":"tau-system"},
 		"spec":{
 			"authorization":{"mode":"workspace-rbac"},
 			"principalRef":{"provider":"entra","name":"research"},
@@ -254,7 +254,7 @@ func TestWorkspaceCreatePreviewNamesTheEditWhenTheWorkspaceExists(t *testing.T) 
 	}]}`
 
 	rendered := executeWorkspaceCreate(t, runner, "research")
-	if !strings.Contains(rendered, "kubectl edit workspaces.tau.azure.com research -n tau-platform") {
+	if !strings.Contains(rendered, "kubectl edit workspaces.tau.azure.com research -n tau-system") {
 		t.Fatalf("preview of an existing workspace did not name the edit:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "rerun with --principal-name") {
@@ -264,7 +264,7 @@ func TestWorkspaceCreatePreviewNamesTheEditWhenTheWorkspaceExists(t *testing.T) 
 
 func TestWorkspaceCreateApplyCreatesOnlyTauWorkspace(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
-	createArgs := "-n tau-platform create -f -"
+	createArgs := "-n tau-system create -f -"
 	runner.responses[createArgs+" --dry-run=server"] = "workspace.example.com/research created (server dry run)\n"
 	runner.responses[createArgs] = "workspace.example.com/research created\n"
 
@@ -299,12 +299,56 @@ func TestWorkspaceCreateDefaultsTheWorkspaceName(t *testing.T) {
 		"--principal-name", "research-team",
 	)
 	for _, want := range []string{
-		"name: " + tauworkspace.DefaultWorkspaceName,
-		"namespace: " + tauworkspace.DefaultWorkspaceName,
+		"metadata:\n  name: " + tauworkspace.DefaultWorkspaceName + "\n  namespace: tau-system",
+		"target:\n    createNamespace: true\n    namespace: " + tauworkspace.DefaultWorkspaceName,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered manifest missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestWorkspaceCreateSupportsSeparateSystemAndWorkloadNamespaces(t *testing.T) {
+	runner := newWorkspaceCreateCLIRunner()
+	runner.responses["-n custom-system get workspace.tau.azure.com -o json"] = `{"items":[]}`
+	rendered := executeWorkspaceCreate(t, runner,
+		"research",
+		"--system-namespace", "custom-system",
+		"--namespace", "research-jobs",
+		"--principal-name", "researchers",
+	)
+	for _, want := range []string{
+		"metadata:\n  name: research\n  namespace: custom-system",
+		"target:\n    createNamespace: true\n    namespace: research-jobs",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered manifest missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestWorkspaceCreateSupportsDeprecatedPlatformNamespace(t *testing.T) {
+	runner := newWorkspaceCreateCLIRunner()
+	runner.responses["-n legacy-system get workspace.tau.azure.com -o json"] = `{"items":[]}`
+	rendered := executeWorkspaceCreate(t, runner,
+		"research",
+		"--platform-namespace", "legacy-system",
+		"--principal-name", "researchers",
+	)
+	if !strings.Contains(rendered, "namespace: legacy-system") {
+		t.Fatalf("deprecated --platform-namespace was not honoured:\n%s", rendered)
+	}
+}
+
+func TestWorkspaceCreateRejectsConflictingSystemNamespaceAliases(t *testing.T) {
+	err := executeWorkspaceCreateErr(t,
+		"research",
+		"--system-namespace", "tau-system",
+		"--platform-namespace", "legacy-system",
+		"--principal-name", "researchers",
+	)
+	if !strings.Contains(err.Error(), "conflicts with deprecated --platform-namespace") {
+		t.Fatalf("conflicting namespace aliases returned %v", err)
 	}
 }
 

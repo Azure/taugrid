@@ -13,11 +13,15 @@ import (
 )
 
 const (
-	APIGroup          = "tau.azure.com"
-	APIVersion        = APIGroup + "/v1alpha1"
-	KindWorkspace     = "TauWorkspace"
-	KindQuotaRequest  = "TauQuotaRequest"
-	PlatformNamespace = "tau-platform"
+	APIGroup         = "tau.azure.com"
+	APIVersion       = APIGroup + "/v1alpha1"
+	KindWorkspace    = "TauWorkspace"
+	KindQuotaRequest = "TauQuotaRequest"
+	SystemNamespace  = "tau-system"
+	// LegacySystemNamespace is used only when reading connection artifacts
+	// created before cluster.systemNamespace was part of their contract. New
+	// installs and newly generated descriptors always write SystemNamespace.
+	LegacySystemNamespace = "tau-platform"
 
 	AuthorizationModeWorkspaceRBAC = "workspace-rbac"
 	AuthorizationModeClusterWide   = "cluster-wide"
@@ -249,7 +253,7 @@ func Ready(w Workspace) bool {
 
 func NewQuotaRequest(name, namespace string, spec QuotaRequestSpec) QuotaRequest {
 	if namespace == "" {
-		namespace = PlatformNamespace
+		namespace = SystemNamespace
 	}
 	if spec.MutationMode == "" {
 		spec.MutationMode = "ReportOnly"

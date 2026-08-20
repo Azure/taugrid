@@ -13,14 +13,15 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["quotarequests"]
   variables:
-    - name: platformActor
+    - name: systemActor
       expression: >
+        "tau-system-admins" in request.userInfo.groups ||
         "tau-platform-admins" in request.userInfo.groups ||
         "system:masters" in request.userInfo.groups ||
         request.userInfo.username == "system:serviceaccount:argocd:argocd-application-controller"
   validations:
     - expression: >
-        variables.platformActor ||
+        variables.systemActor ||
         (
           (
             has(object.metadata.annotations) &&

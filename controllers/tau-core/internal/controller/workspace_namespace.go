@@ -24,7 +24,7 @@ func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 }
 
 func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, error) {
-	if reason := reservedNamespaceReason(targetNamespace, platformNamespace(r.PlatformNamespace)); reason != "" {
+	if reason := reservedNamespaceReason(targetNamespace, systemNamespace(r.SystemNamespace)); reason != "" {
 		return false, fmt.Errorf("refusing to manage namespace %q: %s", targetNamespace, reason)
 	}
 	var namespace corev1.Namespace
@@ -103,10 +103,10 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 // at the platform or a kube-system namespace would therefore overwrite the
 // Helm ownership metadata and drop the Kueue default-queue label of a
 // namespace TauGrid does not own.
-func reservedNamespaceReason(name, platformNamespace string) string {
+func reservedNamespaceReason(name, systemNamespace string) string {
 	switch {
-	case name == platformNamespace, name == tauv1alpha1.PlatformNamespace:
-		return "the Tau platform namespace is owned by the platform installer"
+	case name == systemNamespace, name == tauv1alpha1.SystemNamespace, name == tauv1alpha1.LegacySystemNamespace:
+		return "the Tau system namespace is owned by the platform installer"
 	case strings.HasPrefix(name, "kube-"):
 		return "kube-* namespaces are reserved by Kubernetes"
 	case name == metav1.NamespaceDefault:

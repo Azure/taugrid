@@ -5,7 +5,9 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corecontroller "github.com/Azure/taugrid/controllers/tau-core/internal/controller"
@@ -36,15 +38,23 @@ func main() {
 	var metricsAddr string
 	var probeAddr string
 	var enableLeaderElection bool
-	var platformNamespace string
+	var systemNamespace string
+	var legacyNamespace string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager")
-	flag.StringVar(&platformNamespace, "platform-namespace", tauv1alpha1.PlatformNamespace, "Namespace containing TauWorkspace and TauQuotaRequest objects")
+	flag.StringVar(&systemNamespace, "system-namespace", "", "Namespace containing TauWorkspace and TauQuotaRequest objects")
+	flag.StringVar(&legacyNamespace, "platform-namespace", "", "Deprecated alias for --system-namespace")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{})))
+	var err error
+	systemNamespace, err = resolveSystemNamespaceFlag(systemNamespace, legacyNamespace)
+	if err != nil {
+		setupLog.Error(err, "invalid namespace flags")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -65,16 +75,16 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&corecontroller.TauWorkspaceReconciler{
-		Client:            mgr.GetClient(),
-		APIReader:         mgr.GetAPIReader(),
-		PlatformNamespace: platformNamespace,
+		Client:          mgr.GetClient(),
+		APIReader:       mgr.GetAPIReader(),
+		SystemNamespace: systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TauWorkspace")
 		os.Exit(1)
 	}
 	if err := (&corecontroller.TauQuotaRequestReconciler{
-		Client:            mgr.GetClient(),
-		PlatformNamespace: platformNamespace,
+		Client:          mgr.GetClient(),
+		SystemNamespace: systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TauQuotaRequest")
 		os.Exit(1)
@@ -94,4 +104,19 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func resolveSystemNamespaceFlag(systemNamespace, legacyNamespace string) (string, error) {
+	systemNamespace = strings.TrimSpace(systemNamespace)
+	legacyNamespace = strings.TrimSpace(legacyNamespace)
+	if systemNamespace != "" && legacyNamespace != "" && systemNamespace != legacyNamespace {
+		return "", fmt.Errorf("--system-namespace %q conflicts with deprecated --platform-namespace %q", systemNamespace, legacyNamespace)
+	}
+	if systemNamespace != "" {
+		return systemNamespace, nil
+	}
+	if legacyNamespace != "" {
+		return legacyNamespace, nil
+	}
+	return tauv1alpha1.SystemNamespace, nil
 }

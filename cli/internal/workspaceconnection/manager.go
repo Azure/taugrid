@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/fileutil"
 )
 
@@ -57,6 +58,7 @@ type ActiveConnection struct {
 	ResourceID          string
 	AuthorizationMode   string
 	ContextName         string
+	SystemNamespace     string
 	KubeconfigPath      string
 	Namespace           string
 	Queue               string
@@ -81,6 +83,7 @@ type connectionState struct {
 	TenantID            string     `json:"tenant_id,omitempty"`
 	AuthorizationMode   string     `json:"authorization_mode"`
 	ContextName         string     `json:"context_name"`
+	SystemNamespace     string     `json:"system_namespace,omitempty"`
 	KubeconfigPath      string     `json:"kubeconfig_path"`
 	Namespace           string     `json:"namespace"`
 	Queue               string     `json:"queue"`
@@ -343,6 +346,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		TenantID:            discovery.Descriptor.Identity.TenantID,
 		AuthorizationMode:   discovery.Descriptor.Authorization.Mode,
 		ContextName:         firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName),
+		SystemNamespace:     discovery.Descriptor.ResolvedSystemNamespace(),
 		KubeconfigPath:      kubeconfigPath,
 		Namespace:           verification.Namespace,
 		Queue:               verification.Queue,
@@ -630,6 +634,10 @@ func (s *connectionState) upgrade(discovery Discovery) bool {
 		s.RepositoryRoot = discovery.RepositoryRoot
 		changed = true
 	}
+	if s.SystemNamespace != discovery.Descriptor.ResolvedSystemNamespace() {
+		s.SystemNamespace = discovery.Descriptor.ResolvedSystemNamespace()
+		changed = true
+	}
 	return changed
 }
 
@@ -649,6 +657,9 @@ func (s connectionState) configurationChanges(discovery Discovery) []string {
 	}
 	if s.ContextName != discovery.Descriptor.Cluster.ContextName {
 		changes = append(changes, fmt.Sprintf("AKS context %q -> %q", s.ContextName, discovery.Descriptor.Cluster.ContextName))
+	}
+	if s.SystemNamespace != discovery.Descriptor.ResolvedSystemNamespace() {
+		changes = append(changes, fmt.Sprintf("system namespace %q -> %q", s.SystemNamespace, discovery.Descriptor.ResolvedSystemNamespace()))
 	}
 	if s.Schema == connectionStateSchema && s.TenantID != discovery.Descriptor.Identity.TenantID {
 		changes = append(changes, fmt.Sprintf("tenant %q -> %q", s.TenantID, discovery.Descriptor.Identity.TenantID))
@@ -693,10 +704,14 @@ func (s connectionState) contractChanges(verification Verification) []string {
 
 func (s connectionState) active() ActiveConnection {
 	return ActiveConnection{
-		Workspace:           s.Workspace,
-		ResourceID:          s.ResourceID,
-		AuthorizationMode:   s.AuthorizationMode,
-		ContextName:         s.ContextName,
+		Workspace:         s.Workspace,
+		ResourceID:        s.ResourceID,
+		AuthorizationMode: s.AuthorizationMode,
+		ContextName:       s.ContextName,
+		// State created before system_namespace was persisted belongs to the
+		// legacy tau-platform contract. Newly written state always stores the
+		// descriptor's explicit system namespace.
+		SystemNamespace:     firstNonEmpty(s.SystemNamespace, tauworkspace.LegacySystemNamespace),
 		KubeconfigPath:      s.KubeconfigPath,
 		Namespace:           s.Namespace,
 		Queue:               s.Queue,

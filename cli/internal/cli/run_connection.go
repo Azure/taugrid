@@ -132,7 +132,7 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 		return resolvedContext, resolvedNamespace, restore, nil
 	}
 
-	workspaceStatus, err := fetch(cmd, resolvedContext, tauworkspace.PlatformNamespace, workspaceName)
+	workspaceStatus, err := fetch(cmd, resolvedContext, systemNamespaceFromCommand(cmd), workspaceName)
 	if err != nil {
 		restore()
 		return "", "", nil, err
@@ -447,7 +447,7 @@ func resolveRunLifecycleConnectionFromSource(
 // missing when the descriptor points somewhere else entirely.
 //
 // Unlike the run and data verbs it deliberately keeps the caller's namespace:
-// TauWorkspace and TauQuotaRequest live in the platform namespace, not in the
+// TauWorkspace and TauQuotaRequest live in the system namespace, not in the
 // workspace's workload namespace, so only the cluster context is taken from the
 // descriptor.
 func resolveWorkspaceControlPlaneConnection(

@@ -172,7 +172,7 @@ func unresolvedQueueError(resource, team string, labelled, teamFiltered int, rej
 		}
 		b.WriteString("\n  fix:   RBAC denials mean you are not bound to the workspace - ask the cluster admin to add you")
 		b.WriteString("\n         to its TauWorkspace subject. A missing LocalQueue means the workspace has not reconciled;")
-		b.WriteString("\n         check: kubectl get workspaces.tau.azure.com -n tau-platform")
+		b.WriteString("\n         check: tau workspace list")
 		if teamFiltered > 0 {
 			fmt.Fprintf(&b, "\n  note:  %d further namespace(s) were excluded by --team %q.", teamFiltered, team)
 		}

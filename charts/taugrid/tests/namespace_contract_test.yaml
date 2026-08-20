@@ -1,0 +1,20 @@
+suite: TauGrid system namespace contract
+templates:
+  - namespace-contract.yaml
+tests:
+  - it: accepts the release namespace inherited by gpu-monitoring
+    release:
+      namespace: custom-system
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rejects the deprecated gpu-monitoring namespace override
+    release:
+      namespace: custom-system
+    set:
+      gpu-monitoring:
+        namespace: other-system
+    asserts:
+      - failedTemplate:
+          errorMessage: gpu-monitoring.namespace is no longer supported; use --namespace to move every TauGrid system component together

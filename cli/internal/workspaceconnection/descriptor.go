@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/Azure/taugrid/cli/internal/repository"
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 )
 
 const (
@@ -39,9 +40,10 @@ var (
 )
 
 type ClusterDescriptor struct {
-	Provider    string `yaml:"provider" json:"provider"`
-	ResourceID  string `yaml:"resourceID" json:"resourceID"`
-	ContextName string `yaml:"contextName" json:"contextName"`
+	Provider        string `yaml:"provider" json:"provider"`
+	ResourceID      string `yaml:"resourceID" json:"resourceID"`
+	ContextName     string `yaml:"contextName" json:"contextName"`
+	SystemNamespace string `yaml:"systemNamespace,omitempty" json:"systemNamespace,omitempty"`
 }
 
 type IdentityDescriptor struct {
@@ -127,6 +129,11 @@ func (d Descriptor) Validate() error {
 	if strings.TrimSpace(d.Cluster.ContextName) == "" {
 		return fmt.Errorf("workspace connection cluster.contextName is required")
 	}
+	if namespace := strings.TrimSpace(d.Cluster.SystemNamespace); namespace != "" {
+		if problems := validation.IsDNS1123Label(namespace); len(problems) > 0 {
+			return fmt.Errorf("workspace connection cluster.systemNamespace %q is invalid: %s", namespace, strings.Join(problems, "; "))
+		}
+	}
 	if !uuidPattern.MatchString(strings.TrimSpace(d.Identity.TenantID)) {
 		return fmt.Errorf("workspace connection identity.tenantID must be a UUID")
 	}
@@ -159,6 +166,16 @@ func (d Descriptor) Validate() error {
 		return fmt.Errorf("workspace connection network.instructions is required for a private cluster")
 	}
 	return nil
+}
+
+func (d Descriptor) ResolvedSystemNamespace() string {
+	if namespace := strings.TrimSpace(d.Cluster.SystemNamespace); namespace != "" {
+		return namespace
+	}
+	// A v1 descriptor that omits this field predates namespace unification and
+	// points at a cluster whose TauWorkspace objects live in tau-platform. New
+	// descriptors always write the field explicitly, including tau-system.
+	return tauworkspace.LegacySystemNamespace
 }
 
 func CheckTauVersion(current, minimum string) error {

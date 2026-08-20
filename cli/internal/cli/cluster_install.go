@@ -98,6 +98,12 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			if err != nil {
 				return err
 			}
+			installationRunner := newInstallationCheckRunner(spec.KubeContext)
+			if releaseExists {
+				if err := ensureSystemNamespaceMigrationSafe(cmd.Context(), installationRunner, spec.Namespace); err != nil {
+					return err
+				}
+			}
 			if !releaseExists {
 				if err := runClusterInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallBootstrapArgs(spec)); err != nil {
 					return fmt.Errorf("install TauGrid control plane before queue policy: %w", err)
@@ -109,13 +115,13 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			disabled := disabledTauGridComponents(cmd, spec.KubeContext, spec.Release, spec.Namespace)
 			if err := runTauGridInstallationValidation(
 				cmd.Context(),
-				newInstallationCheckRunner(spec.KubeContext),
+				installationRunner,
 				installationcheck.Options{
-					Release:               spec.Release,
-					ControlPlaneNamespace: spec.Namespace,
-					Timeout:               validationTimeout,
-					PollInterval:          defaultInstallationValidationPollInterval,
-					DisabledComponents:    disabled,
+					Release:            spec.Release,
+					SystemNamespace:    spec.Namespace,
+					Timeout:            validationTimeout,
+					PollInterval:       defaultInstallationValidationPollInterval,
+					DisabledComponents: disabled,
 				},
 				cmd.OutOrStdout(),
 			); err != nil {
@@ -125,19 +131,19 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 TauGrid is installed and ready as Helm release %s in namespace %s.
 
 Next:
-  1. Create a workspace: tau workspace create --principal-name <external-group-or-team> --apply
-  2. Wait for: kubectl get workspaces.tau.azure.com -n tau-platform
+  1. Create a workspace: tau workspace create --system-namespace %s --principal-name <external-group-or-team> --apply
+  2. Wait for: kubectl get workspaces.tau.azure.com -n %s
   3. Before storage-backed runs, pre-provision a Bound PVC in the workspace namespace.
   4. Generate its repository with: tau workspace init-repo
   5. Give the repository to the researcher; their first command is: tau run smoke
-`, spec.Release, spec.Namespace)
+`, spec.Release, spec.Namespace, spec.Namespace, spec.Namespace)
 			return nil
 		},
 	}
 	flags := cmd.Flags()
 	flags.StringVar(&spec.KubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	flags.StringVar(&spec.Release, "release", spec.Release, "Helm release name")
-	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "namespace for Kueue and KubeRay control-plane workloads")
+	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "namespace for all TauGrid system workloads and TauWorkspace objects")
 	flags.StringVar(&spec.Chart, "chart", spec.Chart, "TauGrid chart reference or local chart path")
 	flags.StringVar(&spec.Version, "version", spec.Version, "TauGrid chart version")
 	flags.StringVar(&spec.Timeout, "timeout", spec.Timeout, "timeout for each Helm operation and the readiness wait")
@@ -183,9 +189,9 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Version:    %s
   Helm wait:  %s
   Rollback:   %s
-  Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring
-  Opt-in:     Portal, Stellar, lifecycle recorder, image prewarm
-  Validation: Kubernetes >=1.30 and all required control-plane resources ready
+  Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal
+  Opt-in:     Stellar, lifecycle recorder, image prewarm
+  Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
 
 `, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
 }
@@ -197,7 +203,7 @@ func runClusterInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.W
 func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace string) (bool, error) {
 	args := []string{
 		"list",
-		"--namespace", namespace,
+		"--all-namespaces",
 	}
 	// Helm 4 removed the `--all` aggregate flag from `helm list`; the individual
 	// state flags it expanded to are still accepted by both Helm 3 and Helm 4,
@@ -212,17 +218,38 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 		return false, fmt.Errorf("inspect existing TauGrid Helm release: %w", err)
 	}
 	var releases []struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &releases); err != nil {
 		return false, fmt.Errorf("decode Helm release list: %w", err)
 	}
+	var otherNamespaces []string
+	foundInTarget := false
 	for _, r := range releases {
-		if r.Name == release {
-			return true, nil
+		if r.Name != release {
+			continue
 		}
+		// Helm includes namespace in real list output. Treat an omitted field as
+		// the requested namespace for compatibility with older wrappers and test
+		// fixtures that returned only release names.
+		if r.Namespace == "" || r.Namespace == namespace {
+			foundInTarget = true
+			continue
+		}
+		otherNamespaces = append(otherNamespaces, r.Namespace)
 	}
-	return false, nil
+	if len(otherNamespaces) > 0 {
+		sort.Strings(otherNamespaces)
+		return false, fmt.Errorf(
+			"Helm release %q already exists in namespace %s; a Helm release namespace cannot be changed in place: rerun with --namespace %s, or migrate and uninstall the existing release before installing it in %s",
+			release,
+			strings.Join(otherNamespaces, ", "),
+			otherNamespaces[0],
+			namespace,
+		)
+	}
+	return foundInTarget, nil
 }
 
 func clusterInstallBootstrapArgs(spec clusterInstallSpec) []string {

@@ -2,8 +2,8 @@ TauGrid control-plane components are installed.
 
 Next:
   1. Create a workspace with an explicit external principal:
-     tau workspace create --queue {{ .Values.baselineQueue.name }} --principal-name <external-group-or-team> --apply
-  2. Wait for it to report Ready: kubectl get workspaces.tau.azure.com -n tau-platform
+     tau workspace create --system-namespace {{ .Release.Namespace }} --queue {{ .Values.baselineQueue.name }} --principal-name <external-group-or-team> --apply
+  2. Wait for it to report Ready: kubectl get workspaces.tau.azure.com -n {{ .Release.Namespace }}
   3. Before storage-backed runs, create and bind the named PVC in the workspace namespace.
   4. Generate a repository connection descriptor with `tau workspace init-repo`.
   5. Give the repository to the researcher; their first command is `tau run smoke`.

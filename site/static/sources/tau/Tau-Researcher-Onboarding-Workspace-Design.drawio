@@ -2,7 +2,7 @@
 Defines team workspace once" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=2;fontSize=13;align=center;verticalAlign=middle;spacing=8;fillColor=#e8f0fe;strokeColor=#5b7cfa;fontColor=#1f2937;" vertex="1" parent="1"><mxGeometry x="60" y="105" width="180" height="85" as="geometry" /></mxCell><mxCell id="principal" value="principalRef
 entra-group:sample-researchers
 (team identity, not per-user grants)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=2;fontSize=13;align=center;verticalAlign=middle;spacing=8;fillColor=#e8f0fe;strokeColor=#5b7cfa;fontColor=#1f2937;" vertex="1" parent="1"><mxGeometry x="280" y="95" width="210" height="105" as="geometry" /></mxCell><mxCell id="workspace-spec" value="TauWorkspace spec
-tau-platform/sample
+tau-system/sample
 principalRef + k8s subject
 target namespace=sample
 role + queue + defaults" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=2;fontSize=13;align=center;verticalAlign=middle;spacing=8;fillColor=#e6fffa;strokeColor=#0f766e;fontColor=#064e3b;" vertex="1" parent="1"><mxGeometry x="530" y="82" width="240" height="130" as="geometry" /></mxCell><mxCell id="platform-impl" value="Platform implementation

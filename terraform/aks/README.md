@@ -86,12 +86,10 @@ tau workspace create taugrid-default --apply
 tau run smoke
 ```
 
-Portal is installed as `tau-portal` in the `tau` namespace with a ClusterIP
-Service. Terraform does not expose it outside the cluster. For an operator
-diagnostic session:
+Portal is installed as `tau-portal` in the `tau-system` namespace with a ClusterIP Service. Terraform does not expose it outside the cluster. For an operator diagnostic session:
 
 ```bash
-kubectl -n tau port-forward service/tau-portal 18080:80
+kubectl -n tau-system port-forward service/tau-portal 18080:80
 ```
 
 An authenticated HTTPS proxy is required before giving researchers a browser

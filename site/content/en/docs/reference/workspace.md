@@ -6,7 +6,7 @@ description: Kubernetes workspace desired state and readiness
 
 {{< maturity status="alpha" reviewed="2026-07-16" >}}
 
-`TauWorkspace` is a platform-authored Kubernetes resource in `tau-platform`. It reconciles or verifies:
+`TauWorkspace` is a platform-authored Kubernetes resource in the TauGrid system namespace (`tau-system` by default). A custom `tau cluster install --namespace <name>` moves the controller and these objects together; administrative workspace commands use `--system-namespace <name>`, and repository descriptors persist the value as `cluster.systemNamespace`. It reconciles or verifies:
 
 - Target namespace and namespaced RBAC.
 - Kueue LocalQueue accessibility.
@@ -14,6 +14,8 @@ description: Kubernetes workspace desired state and readiness
 - Readiness and drift conditions.
 
 It does not provision Azure resources, create cluster-scoped quota policy, own project code, or verify the durable storage PVC.
+
+For `tau workspace create`, `--system-namespace` selects where the `TauWorkspace` object lives and defaults to the installed TauGrid system namespace; `--namespace` selects the researcher workload Namespace and defaults to the workspace name. These are intentionally separate because system components share one namespace while workload isolation remains workspace-scoped.
 
 Workspace status is intentionally agent-readable:
 

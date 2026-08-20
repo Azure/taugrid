@@ -59,15 +59,17 @@ ingested from a laptop or CI before any cluster exists.`,
 // in-cluster helper-pod-over-blob-training PVC; --registry az://acct/container
 // selects the no-cluster Azure-blob backend.
 type registryFlags struct {
-	registry    string
-	namespace   string
-	kubeContext string
-	restore     func()
+	registry        string
+	namespace       string
+	systemNamespace string
+	kubeContext     string
+	restore         func()
 }
 
 func (f *registryFlags) bind(cmd *cobra.Command, defaultRegistry string) {
 	cmd.Flags().StringVar(&f.registry, "registry", defaultRegistry, "registry backend: pvc | az://<account>/<container> | file://<dir>")
 	cmd.Flags().StringVarP(&f.namespace, "namespace", "n", "", "namespace for the pvc backend (default: from the connected workspace)")
+	cmd.Flags().StringVar(&f.systemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 	cmd.Flags().StringVar(&f.kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 
 	// The pvc backend reads the registry off the workload PVC, so it needs the
@@ -77,6 +79,9 @@ func (f *registryFlags) bind(cmd *cobra.Command, defaultRegistry string) {
 	// and lets the kubeconfig swap live for the whole command rather than being
 	// restored the moment the backend is constructed.
 	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
+		if !cmd.Flags().Changed("system-namespace") {
+			f.systemNamespace = systemNamespaceFromCommand(cmd)
+		}
 		if !f.usesPVCBackend() {
 			return nil
 		}

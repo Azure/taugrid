@@ -23,4 +23,4 @@ raw logs, profiles, and artifacts when a diagnosis depends on them.
 For the optional ADX-backed data plane, see
 [Prepare ADX/Kusto for TauGrid](../../tasks/platform/prepare-adx-kusto/). For
 Portal deployment and its available boards, see
-[Enable Portal](../../tasks/platform/enable-portal/).
+[Configure Portal](../../tasks/platform/enable-portal/).

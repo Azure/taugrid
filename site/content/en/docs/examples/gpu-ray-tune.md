@@ -286,7 +286,7 @@ tau cluster validate installation
 tau cluster validate nodes
 ```
 
-The required gates are `READY: 7/7 checks passed` and at least one healthy GPU
+The required gates are `READY: 8/8 checks passed` and at least one healthy GPU
 node.
 
 Create the workspace for the subject asserted by AKS:
@@ -302,7 +302,7 @@ tau workspace create taugrid-default \
 kubectl wait \
   --for=jsonpath='{.status.phase}'=Ready \
   workspace/taugrid-default \
-  -n tau-platform \
+  -n tau-system \
   --timeout=5m
 tau workspace check taugrid-default
 ```
@@ -423,7 +423,7 @@ kubectl delete rayjob tune-smoke \
 # If the optional smoke ran, delete its run with `tau run cancel <smoke-run>`.
 
 kubectl delete workspace taugrid-default \
-  -n tau-platform \
+  -n tau-system \
   --ignore-not-found
 
 # TauWorkspace cleanup intentionally retains its target namespace.

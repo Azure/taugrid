@@ -20,7 +20,6 @@ baselineQueue:
 taugrid-core:
   portal:
     enabled: true
-    namespace: tau
     workloadNamespace: ${workspace_namespace}
     source: kusto
     cluster: ${cluster_name}
@@ -49,7 +48,6 @@ taugrid-core:
 %{ if lifecycle_recorder_enabled }
   lifecycleRecorder:
     enabled: true
-    namespace: tau
     targetNamespace: ${workspace_namespace}
     cluster: ${cluster_name}
     kusto:

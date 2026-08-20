@@ -35,7 +35,7 @@ func (f *workspaceAdoptCLIRunner) Raw(_ context.Context, args []string, stdin []
 
 func newWorkspaceAdoptCLIRunner() *workspaceAdoptCLIRunner {
 	return &workspaceAdoptCLIRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com -o json": `{"items":[]}`,
+		"-n tau-system get workspace.tau.azure.com -o json": `{"items":[]}`,
 		"get namespace sample -o json": `{
 			"metadata":{"name":"sample","uid":"ns-uid","labels":{"kueue.x-k8s.io/default-local-queue":"jobqueue"}}
 		}`,
@@ -52,7 +52,7 @@ func newWorkspaceAdoptCLIRunner() *workspaceAdoptCLIRunner {
 		"get storageclass.storage.k8s.io azureblob-fuse-premium -o json": `{
 			"metadata":{"name":"azureblob-fuse-premium","uid":"storage-class-uid"}
 		}`,
-		"-n tau-platform get workspace.tau.azure.com sample --ignore-not-found -o json": "",
+		"-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json": "",
 	}}
 }
 
@@ -86,7 +86,7 @@ func TestWorkspaceAdoptIsWired(t *testing.T) {
 		t.Fatalf("workspace adopt command not wired: %#v", cmd)
 	}
 	for _, name := range []string{
-		"namespace", "queue", "platform-namespace", "context", "data-pvc",
+		"namespace", "queue", "system-namespace", "platform-namespace", "context", "data-pvc",
 		"namespace-uid", "queue-uid", "pvc-uid", "storage-class",
 		"cluster-queue", "output-root", "priority", "apply",
 	} {
@@ -122,7 +122,7 @@ func TestWorkspaceAdoptPreviewDoesNotMutate(t *testing.T) {
 
 func TestWorkspaceAdoptApplyOnlyTauWorkspace(t *testing.T) {
 	runner := newWorkspaceAdoptCLIRunner()
-	createArgs := "-n tau-platform create -f -"
+	createArgs := "-n tau-system create -f -"
 	runner.responses[createArgs+" --dry-run=server"] = "workspace.example.com/sample created (server dry run)\n"
 	runner.responses[createArgs] = "workspace.example.com/sample created\n"
 

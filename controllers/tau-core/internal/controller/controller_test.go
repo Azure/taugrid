@@ -401,7 +401,7 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 	// The first reconcile adds the finalizer, the second persists the primary
 	// marker, and the third creates access resources.
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -457,14 +457,14 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 		t.Fatalf("ClusterQueue reader subjects = %#v, want aurora-researchers group", clusterQueueBinding.Subjects)
 	}
 	var readerRole rbacv1.Role
-	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}, &readerRole); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace}, &readerRole); err != nil {
 		t.Fatalf("workspace reader role not reconciled: %v", err)
 	}
 	if len(readerRole.Rules) == 0 || len(readerRole.Rules[0].ResourceNames) != 1 || readerRole.Rules[0].ResourceNames[0] != "aurora" {
 		t.Fatalf("reader role rules = %#v, want resourceNames scoped to aurora", readerRole.Rules)
 	}
 	var readerBinding rbacv1.RoleBinding
-	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}, &readerBinding); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace}, &readerBinding); err != nil {
 		t.Fatalf("workspace reader rolebinding not reconciled: %v", err)
 	}
 	if len(readerBinding.Subjects) != 1 || readerBinding.Subjects[0].APIGroup != rbacv1.GroupName {
@@ -479,7 +479,7 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 	}
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
@@ -501,7 +501,7 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 	if result.RequeueAfter != readyRequeue {
 		t.Fatalf("no-op result = %#v, want %v drift-repair requeue once Ready", result, readyRequeue)
 	}
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace after no-op: %v", err)
 	}
 	if !reflect.DeepEqual(before, got.Status) {
@@ -519,8 +519,8 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 	workspace.Spec.Role = ""
 
 	staleBinding := testRoleBinding("aurora", defaultRoleName, "aurora")
-	staleReaderRole := testRole(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
-	staleReaderBinding := testRoleBinding(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
+	staleReaderRole := testRole(tauv1alpha1.SystemNamespace, "tau-workspace-reader-aurora", "aurora")
+	staleReaderBinding := testRoleBinding(tauv1alpha1.SystemNamespace, "tau-workspace-reader-aurora", "aurora")
 	staleClusterQueueBinding := testClusterRoleBinding(clusterQueueReaderBindingName("aurora"), "aurora")
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -535,7 +535,7 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("add finalizer: %v", err)
@@ -549,8 +549,8 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 
 	for _, obj := range []client.Object{
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: "aurora"}},
-		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}},
-		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace}},
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName("aurora")}},
 	} {
 		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); !apierrors.IsNotFound(err) {
@@ -563,7 +563,7 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 	}
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	rbacReady := findCondition(got.Status.Conditions, tauv1alpha1.ConditionRBACReady)
@@ -593,7 +593,7 @@ func TestWorkspaceClusterWideAuthorizationDoesNotDeleteForeignRBAC(t *testing.T)
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("add finalizer: %v", err)
@@ -609,7 +609,7 @@ func TestWorkspaceClusterWideAuthorizationDoesNotDeleteForeignRBAC(t *testing.T)
 		t.Fatalf("foreign RoleBinding was deleted: %v", err)
 	}
 	var gotWorkspace tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &gotWorkspace); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &gotWorkspace); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	rbacReady := findCondition(gotWorkspace.Status.Conditions, tauv1alpha1.ConditionRBACReady)
@@ -619,16 +619,16 @@ func TestWorkspaceClusterWideAuthorizationDoesNotDeleteForeignRBAC(t *testing.T)
 	}
 }
 
-func TestCleanupPlatformReaderRBACDoesNotDeleteForeignObject(t *testing.T) {
+func TestCleanupSystemReaderRBACDoesNotDeleteForeignObject(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	foreignRole := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreignRole).Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	err := reconciler.cleanupPlatformReaderRBAC(ctx, "aurora")
+	err := reconciler.cleanupSystemReaderRBAC(ctx, "aurora")
 	if err == nil || !strings.Contains(err.Error(), "refusing to delete") {
 		t.Fatalf("cleanup error = %v, want refusal to delete foreign reader Role", err)
 	}
@@ -726,7 +726,7 @@ func TestWorkspaceReconcileReportsNamespaceOwnedByAnotherWorkspace(t *testing.T)
 
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{
 		Name:      "aurora",
-		Namespace: tauv1alpha1.PlatformNamespace,
+		Namespace: tauv1alpha1.SystemNamespace,
 	}})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
@@ -758,7 +758,7 @@ func TestWorkspaceReconcileReportsNamespaceOwnedByAnotherWorkspace(t *testing.T)
 		t.Fatalf("foreign target received a LocalQueue, err=%v object=%#v", err, localQueue.Object)
 	}
 	var gotWorkspace tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &gotWorkspace); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &gotWorkspace); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if gotWorkspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded {
@@ -786,7 +786,7 @@ func TestWorkspaceNamespaceMutationFailureBlocksNamespacedResources(t *testing.T
 
 	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{
 		Name:      "aurora",
-		Namespace: tauv1alpha1.PlatformNamespace,
+		Namespace: tauv1alpha1.SystemNamespace,
 	}}); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -925,7 +925,7 @@ func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T)
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
 	var current tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &current); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &current); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	current.Spec.WorkloadIdentity.ServiceAccountName = "tau-workload-v2"
@@ -941,7 +941,7 @@ func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T)
 		t.Fatalf("renamed workload identity did not create new ServiceAccount: %v", err)
 	}
 
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &current); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &current); err != nil {
 		t.Fatalf("Get renamed workspace: %v", err)
 	}
 	current.Spec.WorkloadIdentity = nil
@@ -968,8 +968,8 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	targetRole := testRole("aurora", defaultRoleName, "aurora")
 	targetBinding := testRoleBinding("aurora", defaultRoleName, "aurora")
 	targetServiceAccount := testServiceAccount("aurora", "tau-workload", "aurora")
-	readerRole := testRole(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
-	readerBinding := testRoleBinding(tauv1alpha1.PlatformNamespace, "tau-workspace-reader-aurora", "aurora")
+	readerRole := testRole(tauv1alpha1.SystemNamespace, "tau-workspace-reader-aurora", "aurora")
+	readerBinding := testRoleBinding(tauv1alpha1.SystemNamespace, "tau-workspace-reader-aurora", "aurora")
 	clusterQueueBinding := testClusterRoleBinding(clusterQueueReaderBindingName("aurora"), "aurora")
 	localQueue := testLocalQueue("aurora", "aurora", "aurora")
 	localQueue.SetLabels(workspaceLabels("aurora"))
@@ -979,13 +979,13 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}); err != nil {
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}); err != nil {
 		t.Fatalf("Reconcile delete error = %v", err)
 	}
 	for _, key := range []client.ObjectKey{
 		{Name: defaultRoleName, Namespace: "aurora"},
 		{Name: "tau-workload", Namespace: "aurora"},
-		{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.PlatformNamespace},
+		{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace},
 	} {
 		if key.Name == "tau-workload" {
 			if err := c.Get(ctx, key, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
@@ -1015,7 +1015,8 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 
 func TestWorkspaceRefusesReservedTargetNamespace(t *testing.T) {
 	for _, reserved := range []string{
-		tauv1alpha1.PlatformNamespace,
+		tauv1alpha1.SystemNamespace,
+		tauv1alpha1.LegacySystemNamespace,
 		"kube-system",
 		"kube-public",
 		"kube-node-lease",
@@ -1026,7 +1027,7 @@ func TestWorkspaceRefusesReservedTargetNamespace(t *testing.T) {
 			scheme := testScheme(t)
 			workspace := testWorkspace("aurora")
 			workspace.Spec.Target.Namespace = reserved
-			// Helm owns tau-platform; kube-system carries cluster-critical
+			// Helm owns tau-system; kube-system carries cluster-critical
 			// metadata. Both must survive a workspace pointed at them.
 			namespace := testNamespace(reserved)
 			namespace.Labels = map[string]string{
@@ -1058,7 +1059,7 @@ func TestWorkspaceRefusesReservedTargetNamespace(t *testing.T) {
 			}
 
 			var updated tauv1alpha1.TauWorkspace
-			if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &updated); err != nil {
+			if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &updated); err != nil {
 				t.Fatalf("Get workspace: %v", err)
 			}
 			if updated.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded {
@@ -1076,8 +1077,8 @@ func TestWorkspaceRetargetDoesNotStripReservedNamespaceMetadata(t *testing.T) {
 	scheme := testScheme(t)
 	workspace := testWorkspace("aurora")
 	workspace.Spec.Target.Namespace = "aurora"
-	workspace.Status.Target.ResolvedNamespace = tauv1alpha1.PlatformNamespace
-	platform := testNamespace(tauv1alpha1.PlatformNamespace)
+	workspace.Status.Target.ResolvedNamespace = tauv1alpha1.SystemNamespace
+	platform := testNamespace(tauv1alpha1.SystemNamespace)
 	platform.Labels = map[string]string{
 		labelWorkspace:              "aurora",
 		labelManagedBy:              labelManagedByValue,
@@ -1094,11 +1095,11 @@ func TestWorkspaceRetargetDoesNotStripReservedNamespaceMetadata(t *testing.T) {
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
 	var got corev1.Namespace
-	if err := c.Get(ctx, client.ObjectKey{Name: tauv1alpha1.PlatformNamespace}, &got); err != nil {
-		t.Fatalf("Get platform namespace: %v", err)
+	if err := c.Get(ctx, client.ObjectKey{Name: tauv1alpha1.SystemNamespace}, &got); err != nil {
+		t.Fatalf("Get system namespace: %v", err)
 	}
 	if got.Labels[labelKueueDefaultLocalQueue] != "platform-queue" {
-		t.Fatalf("platform namespace lost its Kueue default queue label: %#v", got.Labels)
+		t.Fatalf("system namespace lost its Kueue default queue label: %#v", got.Labels)
 	}
 }
 
@@ -1116,7 +1117,7 @@ func TestWorkspaceReconcileReportsMissingQueue(t *testing.T) {
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded {
@@ -1154,7 +1155,7 @@ func TestWorkspaceReconcileCreatesWorkspaceLocalQueue(t *testing.T) {
 	}
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
@@ -1178,7 +1179,7 @@ func TestWorkspacePersistsPrimaryMarkerBeforeCreatingAccessResources(t *testing.
 	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{
 		Name:      "research",
-		Namespace: tauv1alpha1.PlatformNamespace,
+		Namespace: tauv1alpha1.SystemNamespace,
 	}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
@@ -1189,7 +1190,7 @@ func TestWorkspacePersistsPrimaryMarkerBeforeCreatingAccessResources(t *testing.
 	}
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "research", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "research", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Annotations[annotationV0Primary] != "true" {
@@ -1233,14 +1234,14 @@ func TestWorkspacePromotionWaitsForTerminatingPrimaryCleanup(t *testing.T) {
 		t.Fatalf("additional workspace activated before primary cleanup: %v", err)
 	}
 	var gotAdditional tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "alpha", Namespace: tauv1alpha1.PlatformNamespace}, &gotAdditional); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "alpha", Namespace: tauv1alpha1.SystemNamespace}, &gotAdditional); err != nil {
 		t.Fatalf("Get additional workspace: %v", err)
 	}
 	if gotAdditional.Annotations[annotationV0Primary] == "true" {
 		t.Fatal("additional workspace claimed primary before terminating primary cleanup")
 	}
 
-	primaryReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "zeta", Namespace: tauv1alpha1.PlatformNamespace}}
+	primaryReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "zeta", Namespace: tauv1alpha1.SystemNamespace}}
 	if _, err := reconciler.Reconcile(ctx, primaryReq); err != nil {
 		t.Fatalf("cleanup terminating primary: %v", err)
 	}
@@ -1248,7 +1249,7 @@ func TestWorkspacePromotionWaitsForTerminatingPrimaryCleanup(t *testing.T) {
 		t.Fatalf("terminating primary RoleBinding survived cleanup: %v", err)
 	}
 
-	additionalReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "alpha", Namespace: tauv1alpha1.PlatformNamespace}}
+	additionalReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "alpha", Namespace: tauv1alpha1.SystemNamespace}}
 	for i := 0; i < 2; i++ {
 		if _, err := reconciler.Reconcile(ctx, additionalReq); err != nil {
 			t.Fatalf("promote additional workspace iteration %d: %v", i, err)
@@ -1305,7 +1306,7 @@ func TestWorkspaceReconcileDegradesWhenBackingClusterQueueDisappears(t *testing.
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded {
@@ -1332,7 +1333,7 @@ func TestWorkspaceReconcileDoesNotRequireStorage(t *testing.T) {
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
@@ -1352,7 +1353,7 @@ func TestWorkspaceReconcileRequeuesWhileNotReady(t *testing.T) {
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 
 	var result ctrl.Result
 	for i := 0; i < 3; i++ {
@@ -1363,7 +1364,7 @@ func TestWorkspaceReconcileRequeuesWhileNotReady(t *testing.T) {
 	}
 
 	var got tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}, &got); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}, &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if got.Status.Phase == tauv1alpha1.WorkspacePhaseReady {
@@ -1505,7 +1506,7 @@ func (c *resourceMutationRecordingClient) Delete(ctx context.Context, obj client
 
 func reconcileWorkspace(t *testing.T, reconciler *TauWorkspaceReconciler, ctx context.Context, name string) {
 	t.Helper()
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: tauv1alpha1.SystemNamespace}}
 	for i := 0; i < 3; i++ {
 		if _, err := reconciler.Reconcile(ctx, req); err != nil {
 			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
@@ -1530,7 +1531,7 @@ func TestWorkspaceWithoutQueueResolvesTauClusterDefault(t *testing.T) {
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("add finalizer: %v", err)
@@ -1583,7 +1584,7 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 		Build()
 	recordingClient := &resourceMutationRecordingClient{Client: c}
 	reconciler := newTestWorkspaceReconciler(recordingClient)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("add finalizer: %v", err)
@@ -1617,7 +1618,7 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 func testWorkspace(name string) *tauv1alpha1.TauWorkspace {
 	return &tauv1alpha1.TauWorkspace{
 		TypeMeta:   metav1.TypeMeta{APIVersion: tauv1alpha1.GroupVersion.String(), Kind: tauv1alpha1.KindTauWorkspace},
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tauv1alpha1.PlatformNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tauv1alpha1.SystemNamespace},
 		Spec: tauv1alpha1.TauWorkspaceSpec{
 			PrincipalRef:      &tauv1alpha1.PrincipalRef{Provider: tauv1alpha1.PrincipalProviderEntra, Name: name + "-researchers"},
 			KubernetesSubject: &tauv1alpha1.KubernetesSubject{Kind: "Group", Name: name + "-researchers"},
@@ -1633,7 +1634,7 @@ func testWorkspace(name string) *tauv1alpha1.TauWorkspace {
 func testQuotaRequest(name string) *tauv1alpha1.TauQuotaRequest {
 	return &tauv1alpha1.TauQuotaRequest{
 		TypeMeta:   metav1.TypeMeta{APIVersion: tauv1alpha1.GroupVersion.String(), Kind: tauv1alpha1.KindTauQuotaRequest},
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tauv1alpha1.PlatformNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tauv1alpha1.SystemNamespace},
 		Spec: tauv1alpha1.TauQuotaRequestSpec{
 			Workspace:    "aurora",
 			Resource:     "h200",
@@ -1753,7 +1754,7 @@ func TestWorkspaceReclaimsNamespaceFromDeletedOwner(t *testing.T) {
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.PlatformNamespace}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
 
 	for i := 0; i < 3; i++ {
 		if _, err := reconciler.Reconcile(ctx, req); err != nil {

@@ -150,7 +150,6 @@ kuberay-operator:
 # The Tau control plane image is publicly available from MCR. The subchart
 # defaults to the release tag matching its chart version.
 tau-core-controller:
-  platformNamespace: tau-platform
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
@@ -160,25 +159,19 @@ tau-core-controller:
     # cluster-specific hardware without replacing that catalog.
     extraNodeLabelRules: []
 
-# TauGrid services are opt-in. Fresh installs start with only the workload
-# control plane; enabled first-party services use release-versioned MCR tags.
+# Portal is part of the default operator experience. The remaining first-party
+# services stay opt-in and all enabled services use release-versioned MCR tags.
 taugrid-core:
-  # A fresh cluster has no GitOps owner for these namespaces, so the chart
-  # creates them. Every taugrid-core component below is off by default, so this
-  # renders nothing until one is enabled. A namespace owned by someone else is
-  # skipped rather than adopted, so this stays safe on a cluster where another
-  # owner created it; GitOps overlays that own the whole set still set it to
-  # false. See the taugrid-core README, "Namespace ownership".
-  namespaces:
-    # Emits Namespace objects only for enabled services, so keeping ownership on
-    # is a no-op for the default control-plane-only install and makes opt-in
-    # services work on a genuinely fresh cluster.
-    create: true
   prewarm:
     enabled: false
   stellar:
     enabled: false
-  lifecycleRecorder:
-    enabled: false
   portal:
+    enabled: true
+    serviceAccount:
+      create: true
+      name: tau-portal
+    rbac:
+      create: true
+  lifecycleRecorder:
     enabled: false

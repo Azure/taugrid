@@ -26,6 +26,14 @@ tests:
           path: spec.validations[0].expression
           pattern: tau.azure.com/reviewed-by
         documentIndex: 0
+      - matchRegex:
+          path: spec.variables[0].expression
+          pattern: tau-system-admins
+        documentIndex: 0
+      - matchRegex:
+          path: spec.variables[0].expression
+          pattern: tau-platform-admins
+        documentIndex: 0
       - equal:
           path: spec.policyName
           value: tau-quota-approval-guard

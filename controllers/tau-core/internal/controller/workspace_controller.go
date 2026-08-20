@@ -28,8 +28,8 @@ const (
 
 type TauWorkspaceReconciler struct {
 	client.Client
-	APIReader         client.Reader
-	PlatformNamespace string
+	APIReader       client.Reader
+	SystemNamespace string
 }
 
 // +kubebuilder:rbac:groups=tau.azure.com,resources=workspaces,verbs=get;list;watch
@@ -52,8 +52,8 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Get(ctx, req.NamespacedName, &workspace); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if workspace.Namespace != platformNamespace(r.PlatformNamespace) {
-		logger.Info("ignoring workspace outside platform namespace", "platformNamespace", platformNamespace(r.PlatformNamespace))
+	if workspace.Namespace != systemNamespace(r.SystemNamespace) {
+		logger.Info("ignoring workspace outside system namespace", "systemNamespace", systemNamespace(r.SystemNamespace))
 		return ctrl.Result{}, nil
 	}
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {

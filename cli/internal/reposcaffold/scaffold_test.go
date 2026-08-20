@@ -137,6 +137,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 	for _, want := range []string{
 		"schema: tau.workspace.connection.v1",
 		"workspace: research-ws",
+		"systemNamespace: tau-system",
 		"mode: workspace-rbac",
 		"requiredRole: tau-researcher-v1",
 		"resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-ai",

@@ -192,7 +192,7 @@ everything in it, because researcher PVCs and results live there. Delete the
 namespace separately once you have confirmed nothing in it is still needed:
 
 ```bash
-kubectl --context <ctx> delete workspaces.tau.azure.com <name> -n tau-platform
+kubectl --context <ctx> delete workspaces.tau.azure.com <name> -n tau-system
 kubectl --context <ctx> delete namespace <target-namespace>
 ```
 

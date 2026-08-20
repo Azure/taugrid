@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: tau-platform
+  name: tau-system
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
     helm.sh/resource-policy: keep

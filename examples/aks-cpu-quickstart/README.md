@@ -328,7 +328,6 @@ curl --fail --silent --show-error --output /dev/null \
 
 tau cluster install \
   --context tau-cpu-quickstart \
-  --set taugrid-core.namespaces.create=true \
   --set taugrid-core.stellar.enabled=true \
   --set taugrid-core.stellar.source=local \
   --set taugrid-core.stellar.workspace=taugrid-default \
@@ -349,7 +348,7 @@ admin-installed quickstart. It is not a supported researcher endpoint or
 browser-signoff path.
 
 ```bash
-kubectl port-forward -n tau svc/tau-stellar 18080:80
+kubectl port-forward -n tau-system svc/tau-stellar 18080:80
 # then open http://localhost:18080/stellar
 ```
 
@@ -543,22 +542,12 @@ Both are reverse-proxied by the TauGrid Portal, which must run **in-cluster**
 (the proxy resolves targets via in-cluster DNS, so a local portal against
 port-forwards will not work).
 
-Enable the portal and KueueViz during install:
+Portal is enabled by default in `tau-system`. Enable KueueViz and point the Portal at this example's workspace during install:
 
 ```bash
-# The portal namespace is NOT created by the chart. Create it first,
-# or the install fails with `namespaces "tau" not found` (and, with
-# --atomic, silently rolls the whole release back).
-kubectl create namespace tau --context "$CLUSTER"
-
 tau cluster install --context "$CLUSTER" \
   --set kueue.enableKueueViz=true \
-  --set taugrid-core.portal.enabled=true \
-  --set taugrid-core.portal.source=kusto \
-  --set-string taugrid-core.portal.image.tag=<immutable-tag> \
-  --set taugrid-core.portal.serviceAccount.create=true \
-  --set taugrid-core.portal.rbac.create=true \
-  --set-string taugrid-core.portal.jobs.namespace=taugrid-default \
+  --set-string taugrid-core.portal.workloadNamespace=taugrid-default \
   --set-string taugrid-core.portal.kueueviz.namespace=tau-system \
   --set-string taugrid-core.portal.kueueviz.backendService=taugrid-kueue-kueueviz-backend \
   --set-string taugrid-core.portal.kueueviz.frontendService=taugrid-kueue-kueueviz-frontend \
@@ -566,28 +555,22 @@ tau cluster install --context "$CLUSTER" \
   --set-string kueue.kueueViz.backend.env[0].value=http://portal.kueueviz.local
 ```
 
-This setup requires the following overrides:
+This setup relies on the following contracts:
 
-* **Namespace `tau` must pre-exist.** Nothing in the chart creates it.
-* **`portal.rbac.create` and `portal.serviceAccount.create` both default to
-  `false`.** Without them the portal runs as `system:serviceaccount:tau:default`
-  and the Jobs / Ray / Nodes boards return `503` with an RBAC error
-  (`cannot list resource "services" at the cluster scope`). The chart's
-  `values.yaml` documents this; it is expected behaviour, not a failure.
-* **`portal.jobs.namespace` defaults to `ray`.** Set it to the target workspace
-  namespace (`taugrid-default` here). Otherwise, the Jobs board is empty.
+* **The umbrella distribution creates Portal in `tau-system` by default** with a dedicated ServiceAccount and read-only Kubernetes RBAC. The standalone `taugrid-core` child chart keeps its own explicit opt-in defaults.
+* **`portal.workloadNamespace` scopes the legacy Runs and Ray views** to `taugrid-default` here. The computed Jobs board is separate and remains disabled until the platform configures `portal.jobs.scopeMode` with reviewed scopes and policy.
 * **KueueViz Deployments land in the release namespace (`tau-system`)**, named
   `taugrid-kueue-kueueviz-{backend,frontend}`. The portal's kueueviz defaults
   point at `kueue-kueueviz-*` in `kueue-system`, so they must be overridden.
 * `portal.source=local|auto` requires a mounted store and the chart `fail`s
   without one. `source=kusto` runs store-less; Kusto-backed boards return 503
   while the Jobs / Ray / Kueue / Fleet boards serve normally.
-* The portal image tag must be pinned to an immutable tag or digest.
+* The umbrella chart pins the Portal image to its release-aligned tag. Override the tag or digest only when testing an explicitly published artifact.
 
 For an operator-only local diagnostic:
 
 ```bash
-kubectl port-forward svc/tau-portal -n tau --context "$CLUSTER" 8088:80
+kubectl port-forward svc/tau-portal -n tau-system --context "$CLUSTER" 8088:80
 ```
 
 Do not use this port-forward as researcher acceptance. Hosted browser access
@@ -655,7 +638,7 @@ mounts (`tau-stellar-expstore`); the pod stays `Pending` until one exists.
 Create the missing PVC with `kubectl`:
 
 ```bash
-kubectl apply -n tau -f - <<'EOF'
+kubectl apply -n tau-system -f - <<'EOF'
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -820,9 +803,9 @@ example lives in that one dedicated RG):
 tau run cancel tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quickstart --teardown-timeout 3m
 tau run cancel aks-cpu-quickstart-stellar-demo -n taugrid-default --context tau-cpu-quickstart --teardown-timeout 3m
 
-# The TauWorkspace object lives in the tau-platform namespace, not the workload
+# The TauWorkspace object lives in the tau-system namespace, not the workload
 # namespace it manages. `tau` has no `workspace delete` subcommand yet.
-kubectl delete workspace.tau.azure.com taugrid-default -n tau-platform
+kubectl delete workspace.tau.azure.com taugrid-default -n tau-system
 
 # --yes is required: uninstall refuses to run without it once TauWorkspace
 # objects have existed on the cluster. The first phase re-renders the deployed

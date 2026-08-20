@@ -51,6 +51,7 @@ type Options struct {
 	AzureTenantID       string
 	AKSResourceGroup    string
 	AKSCluster          string
+	SystemNamespace     string
 	ACRName             string
 	UpstreamRepo        string
 	UpstreamRef         string
@@ -88,6 +89,7 @@ type templateData struct {
 	AKSResourceGroup       string
 	AKSCluster             string
 	AKSKubeContext         string
+	SystemNamespace        string
 	ACRName                string
 	ACRLoginServer         string
 	UpstreamRepo           string
@@ -208,6 +210,10 @@ func normalizeOptions(opts Options) (Options, error) {
 	opts.AzureTenantID = strings.TrimSpace(opts.AzureTenantID)
 	opts.AKSResourceGroup = strings.TrimSpace(opts.AKSResourceGroup)
 	opts.AKSCluster = strings.TrimSpace(opts.AKSCluster)
+	opts.SystemNamespace = strings.TrimSpace(opts.SystemNamespace)
+	if opts.SystemNamespace == "" {
+		opts.SystemNamespace = tauworkspace.SystemNamespace
+	}
 	opts.ACRName = strings.TrimSpace(opts.ACRName)
 
 	switch opts.Template {
@@ -275,6 +281,7 @@ func buildTemplateData(opts Options) templateData {
 		AKSResourceGroup:       opts.AKSResourceGroup,
 		AKSCluster:             opts.AKSCluster,
 		AKSKubeContext:         opts.AKSCluster,
+		SystemNamespace:        opts.SystemNamespace,
 		ACRName:                opts.ACRName,
 		ACRLoginServer:         acrLogin,
 		UpstreamRepo:           opts.UpstreamRepo,

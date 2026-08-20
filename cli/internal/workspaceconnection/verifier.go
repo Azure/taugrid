@@ -25,7 +25,7 @@ type KubectlVerifier struct {
 func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kubeconfigPath string) (Verification, error) {
 	runner := v.runner(descriptor.Cluster.ContextName, kubeconfigPath)
 	raw, err := runner.Raw(ctx, []string{
-		"-n", tauworkspace.PlatformNamespace,
+		"-n", descriptor.ResolvedSystemNamespace(),
 		"get", "workspace.tau.azure.com", descriptor.Workspace,
 		"-o", "json",
 	}, nil)

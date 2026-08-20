@@ -2,7 +2,7 @@ apiVersion: tau.azure.com/v1alpha1
 kind: TauQuotaRequest
 metadata:
   name: aurora-h200-burst
-  namespace: tau-platform
+  namespace: tau-system
 spec:
   workspace: aurora
   resource: h200

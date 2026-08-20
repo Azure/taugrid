@@ -2,9 +2,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ray-default-dashboard
-  # Operator/control-plane dashboard ConfigMaps stay in tau; Ray workloads and
-  # workload-owned ConfigMaps live in the ray namespace.
-  namespace: tau
+  # Operator dashboard ConfigMaps live with the TauGrid system components;
+  # workload-owned ConfigMaps remain in TauWorkspace target namespaces.
+  namespace: tau-system
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
     grafana_dashboard: "1"

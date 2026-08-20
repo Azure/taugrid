@@ -302,9 +302,9 @@ func (h resumeCommandHooks) workspace(
 	kubeContext, name string,
 ) (tauworkspace.Workspace, error) {
 	if h.fetchWorkspace != nil {
-		return h.fetchWorkspace(cmd, kubeContext, tauworkspace.PlatformNamespace, name)
+		return h.fetchWorkspace(cmd, kubeContext, systemNamespaceFromCommand(cmd), name)
 	}
-	return fetchWorkspace(cmd, kubeContext, tauworkspace.PlatformNamespace, name)
+	return fetchWorkspace(cmd, kubeContext, systemNamespaceFromCommand(cmd), name)
 }
 
 func (h resumeCommandHooks) delete(

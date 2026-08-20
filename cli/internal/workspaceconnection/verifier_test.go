@@ -30,10 +30,10 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &verifierFakeRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com sample -o json": `{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
 		  "kind": "TauWorkspace",
-		  "metadata": {"name": "sample", "namespace": "tau-platform", "uid": "workspace-uid", "generation": 7},
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 7},
 		  "spec": {"authorization": {"mode": "cluster-wide"}, "queue": "jobqueue"},
 		  "status": {
 		    "phase": "Ready",
@@ -56,16 +56,46 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 	}
 }
 
+func TestKubectlVerifierUsesConfiguredSystemNamespace(t *testing.T) {
+	descriptor, err := Parse([]byte(validDescriptorYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.Cluster.SystemNamespace = "custom-system"
+	runner := &verifierFakeRunner{responses: map[string]string{
+		"-n custom-system get workspace.tau.azure.com sample -o json": `{
+		  "apiVersion": "tau.azure.com/v1alpha1",
+		  "kind": "TauWorkspace",
+		  "metadata": {"name": "sample", "namespace": "custom-system", "uid": "workspace-uid", "generation": 1},
+		  "spec": {"authorization": {"mode": "cluster-wide"}, "queue": "jobqueue"},
+		  "status": {
+		    "phase": "Ready",
+		    "observedGeneration": 1,
+		    "target": {"resolvedNamespace": "sample"},
+		    "queue": {"localQueue": "jobqueue"},
+		    "conditions": [{"type": "Ready", "status": "True", "observedGeneration": 1}]
+		  }
+		}`,
+		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name": "localqueue.kueue.x-k8s.io/jobqueue\n",
+		"auth can-i * * --all-namespaces":                          "yes\n",
+	}}
+
+	verifier := KubectlVerifier{NewRunner: func(_, _ string) rawRunner { return runner }}
+	if _, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig"); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
 func TestKubectlVerifierRejectsStaleReadyGeneration(t *testing.T) {
 	descriptor, err := Parse([]byte(validDescriptorYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner := &verifierFakeRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com sample -o json": `{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
 		  "kind": "TauWorkspace",
-		  "metadata": {"name": "sample", "namespace": "tau-platform", "uid": "workspace-uid", "generation": 8},
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 8},
 		  "spec": {"queue": "jobqueue"},
 		  "status": {
 		    "phase": "Ready",
@@ -94,7 +124,7 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 	descriptor.Authorization.Mode = AuthorizationModeWorkspaceRBAC
 	descriptor.Authorization.RequiredRole = "tau-researcher-v1"
 	runner := &verifierFakeRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com sample -o json": `{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
 		  "kind": "TauWorkspace",
 		  "metadata": {"name": "sample", "uid": "workspace-uid", "generation": 1},
@@ -169,7 +199,7 @@ func TestKubectlVerifierReportsMissingPermission(t *testing.T) {
 	descriptor.Authorization.Mode = AuthorizationModeWorkspaceRBAC
 	descriptor.Authorization.RequiredRole = "tau-researcher-v1"
 	runner := &verifierFakeRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com sample -o json": `{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
 		  "kind": "TauWorkspace",
 		  "metadata": {"name": "sample", "uid": "workspace-uid", "generation": 1},
@@ -201,7 +231,7 @@ func TestKubectlVerifierRejectsNonBroadClusterWideCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &verifierFakeRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com sample -o json": `{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
 		  "kind": "TauWorkspace",
 		  "metadata": {"name": "sample", "uid": "workspace-uid", "generation": 1},
@@ -231,7 +261,7 @@ func TestKubectlVerifierRejectsAuthorizationContractMismatch(t *testing.T) {
 	descriptor.Authorization.Mode = AuthorizationModeWorkspaceRBAC
 	descriptor.Authorization.RequiredRole = "tau-researcher-v1"
 	runner := &verifierFakeRunner{responses: map[string]string{
-		"-n tau-platform get workspace.tau.azure.com sample -o json": `{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
 		  "kind": "TauWorkspace",
 		  "metadata": {"name": "sample", "uid": "workspace-uid", "generation": 1},

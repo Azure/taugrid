@@ -104,4 +104,104 @@ assert_invalid "0.1.4-rc."
 assert_invalid "0.1.4+build."
 assert_invalid "0.1.4+build..1"
 
-echo "Semantic version comparison tests passed"
+render_namespaces() {
+  awk '
+    BEGIN { RS = "---"; FS = "\n" }
+    function clean(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if ((substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") ||
+          (substr(value, 1, 1) == "'\''" && substr(value, length(value), 1) == "'\''")) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      return value
+    }
+    {
+      kind = ""
+      name = ""
+      namespace = ""
+      in_metadata = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^kind: /) {
+          kind = clean(substr($i, 7))
+        } else if ($i == "metadata:") {
+          in_metadata = 1
+        } else if (in_metadata && $i ~ /^[^ ]/) {
+          in_metadata = 0
+        } else if (in_metadata && name == "" && $i ~ /^  name: /) {
+          name = clean(substr($i, 9))
+        } else if (in_metadata && $i ~ /^  namespace: /) {
+          namespace = clean(substr($i, 14))
+        }
+      }
+      if (namespace != "") {
+        print kind "\t" name "\t" namespace
+      }
+    }
+  ' "$1"
+}
+
+assert_namespaces() {
+  local manifest="$1"
+  shift
+  local allowed
+  local kind
+  local name
+  local namespace
+
+  while IFS=$'\t' read -r kind name namespace; do
+    for allowed in "$@"; do
+      [[ "$namespace" == "$allowed" ]] && continue 2
+    done
+    fail "$kind $name rendered in unexpected namespace $namespace"
+  done < <(render_namespaces "$manifest")
+}
+
+default_manifest="$TEST_ROOT/default-custom-namespace.yaml"
+helm template namespace-check "$TEST_CHART_DIR" \
+  --namespace custom-system \
+  --include-crds >"$default_manifest"
+assert_namespaces "$default_manifest" custom-system kube-system
+
+for deployment in \
+  namespace-check-kueue-controller-manager \
+  kuberay-operator \
+  tau-core-controller \
+  tau-portal; do
+  grep -Fq $'Deployment\t'"$deployment"$'\tcustom-system' < <(render_namespaces "$default_manifest") ||
+    fail "$deployment did not render in custom-system"
+done
+grep -Eq $'^DaemonSet\tgpu-monitoring-.*\tcustom-system$' < <(render_namespaces "$default_manifest") ||
+  fail "gpu-monitoring did not render in custom-system"
+
+namespace_error="$TEST_ROOT/gpu-monitoring-namespace-error"
+if helm template namespace-check "$TEST_CHART_DIR" \
+  --namespace custom-system \
+  --set gpu-monitoring.namespace=other-system >"$TEST_ROOT/invalid-namespace.yaml" 2>"$namespace_error"; then
+  fail "gpu-monitoring rendered outside the TauGrid release namespace"
+fi
+grep -Fq 'gpu-monitoring.namespace is no longer supported; use --namespace to move every TauGrid system component together' "$namespace_error" ||
+  fail "gpu-monitoring namespace refusal did not explain the single-namespace contract"
+
+optional_manifest="$TEST_ROOT/optional-custom-namespace.yaml"
+helm template namespace-check "$TEST_CHART_DIR" \
+  --namespace custom-system \
+  --set taugrid-core.prewarm.enabled=true \
+  --set taugrid-core.stellar.enabled=true \
+  --set taugrid-core.stellar.kusto.queryCommand=/bin/true \
+  --set taugrid-core.lifecycleRecorder.enabled=true \
+  --set taugrid-core.lifecycleRecorder.targetNamespace=workload-system \
+  --set taugrid-core.lifecycleRecorder.cluster=test-cluster \
+  --set taugrid-core.lifecycleRecorder.kusto.endpoint=https://example.kusto.windows.net \
+  --set taugrid-core.lifecycleRecorder.workloadIdentity.enabled=true \
+  --set taugrid-core.lifecycleRecorder.serviceAccount.create=true \
+  --set taugrid-core.lifecycleRecorder.serviceAccount.name=tau-lifecycle-recorder \
+  --set-string 'taugrid-core.lifecycleRecorder.serviceAccount.annotations.azure\.workload\.identity/client-id=test-client-id' \
+  --set taugrid-core.lifecycleRecorder.rbac.create=true >"$optional_manifest"
+assert_namespaces "$optional_manifest" custom-system kube-system workload-system
+
+for workload in baked-image-prewarm tau-stellar tau-lifecycle-recorder; do
+  grep -Eq $'^(DaemonSet|Deployment)\t'"$workload"$'\tcustom-system$' < <(render_namespaces "$optional_manifest") ||
+    fail "$workload did not render in custom-system"
+done
+
+echo "TauGrid chart script tests passed"

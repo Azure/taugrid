@@ -15,7 +15,7 @@ const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"
 
 func (r *TauWorkspaceReconciler) resolvePrimaryWorkspace(ctx context.Context) (string, error) {
 	var workspaces tauv1alpha1.TauWorkspaceList
-	if err := r.APIReader.List(ctx, &workspaces, client.InNamespace(platformNamespace(r.PlatformNamespace))); err != nil {
+	if err := r.APIReader.List(ctx, &workspaces, client.InNamespace(systemNamespace(r.SystemNamespace))); err != nil {
 		return "", err
 	}
 	var primary *tauv1alpha1.TauWorkspace
