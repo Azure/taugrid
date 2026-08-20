@@ -86,7 +86,7 @@ type ProfilePriorities struct {
 	WorkloadPriorityClassName string `json:"workloadPriorityClassName,omitempty" yaml:"workloadPriorityClassName,omitempty"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	PodPriorityClassName      string `json:"podPriorityClassName,omitempty" yaml:"podPriorityClassName,omitempty"`
+	PodPriorityClassName string `json:"podPriorityClassName,omitempty" yaml:"podPriorityClassName,omitempty"`
 	// DisableDefaultPriorities explicitly permits both priority class references
 	// to be absent.
 	DisableDefaultPriorities bool `json:"disableDefaultPriorities,omitempty" yaml:"disableDefaultPriorities,omitempty"`
