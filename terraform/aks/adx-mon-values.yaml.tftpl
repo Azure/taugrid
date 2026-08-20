@@ -7,3 +7,15 @@ adx:
 global:
   clusterName: ${cluster_name}
   region: ${location}
+
+collector:
+  prometheusScrape:
+    extraStaticTargets:
+      # AKS managed GPU nodes run DCGM exporter as a host systemd service.
+      # Restrict the target to the GPU pool so collectors on CPU nodes do not
+      # report a persistent connection failure for an endpoint they do not host.
+      - hostRegex: '^aks-${gpu_node_pool_name}-.*'
+        url: 'http://$(HOSTNAME):19400/metrics'
+        namespace: gpu-monitoring
+        pod: host-dcgm-exporter
+        container: dcgm-exporter

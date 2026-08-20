@@ -87,8 +87,8 @@ tau run smoke
 
 ADX observability is opt-in because it creates additional billable resources.
 Set `enable_adx = true` and a globally unique `adx_cluster_name` before the
-first apply. This installs adx-mon and DCGM exporter telemetry alongside
-TauGrid.
+first apply. This installs adx-mon and configures it to collect DCGM telemetry
+from the AKS managed GPU node host service alongside TauGrid.
 
 Portal lifecycle history is a second apply: its target namespace is created by
 the TauWorkspace. After creating the workspace above, add these values to the

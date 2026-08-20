@@ -62,6 +62,10 @@ autoscaling, because later autoscaled nodes are not normalized. Set it false
 only for a GPU SKU that does not require MIG normalization. Do not run a
 separate Helm installation for Kueue, KubeRay, or gpu-monitoring.
 
+When ADX is enabled, adx-mon collects DCGM metrics from the AKS managed GPU
+node host service at port `19400`. Terraform does not install a separate DCGM
+exporter Pod.
+
 After apply, use an operator kubeconfig and verify the environment:
 
 ```bash

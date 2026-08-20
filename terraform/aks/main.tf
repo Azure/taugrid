@@ -328,45 +328,33 @@ resource "local_file" "adx_mon_values" {
   filename        = "${local.generated_directory}/adx-mon-values.yaml"
   file_permission = "0600"
   content = templatefile("${path.module}/adx-mon-values.yaml.tftpl", {
-    adx_endpoint  = azurerm_kusto_cluster.this[0].uri
-    adx_client_id = azurerm_user_assigned_identity.adx_mon[0].client_id
-    cluster_name  = var.cluster_name
-    location      = var.location
-  })
-}
-
-resource "local_file" "dcgm_exporter_values" {
-  count           = var.enable_adx ? 1 : 0
-  filename        = "${local.generated_directory}/dcgm-exporter-values.yaml"
-  file_permission = "0600"
-  content = templatefile("${path.module}/dcgm-exporter-values.yaml.tftpl", {
+    adx_endpoint       = azurerm_kusto_cluster.this[0].uri
+    adx_client_id      = azurerm_user_assigned_identity.adx_mon[0].client_id
+    cluster_name       = var.cluster_name
+    location           = var.location
     gpu_node_pool_name = var.gpu_node_pool_name
   })
 }
 
-resource "terraform_data" "install_dcgm_exporter" {
+resource "terraform_data" "remove_legacy_dcgm_exporter" {
   count = var.enable_adx ? 1 : 0
 
   triggers_replace = [
     azurerm_kubernetes_cluster.this.id,
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
-    local_file.dcgm_exporter_values[0].content_sha256,
-    var.dcgm_exporter_chart_version,
     join(" ", var.command_interpreter),
   ]
 
+  # Earlier Terraform revisions installed this release. terraform_data does
+  # not remove external Helm state when its configuration is deleted, so clean
+  # it up explicitly before switching adx-mon to the AKS host DCGM endpoint.
   provisioner "local-exec" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm uninstall dcgm-exporter --namespace dcgm-exporter --ignore-not-found"
   }
-
-  depends_on = [
-    azurerm_kubernetes_cluster_node_pool.gpu,
-  ]
 }
 
 resource "terraform_data" "install_adx_mon" {
@@ -390,7 +378,7 @@ resource "terraform_data" "install_adx_mon" {
   }
 
   depends_on = [
-    terraform_data.install_dcgm_exporter,
+    terraform_data.remove_legacy_dcgm_exporter,
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,

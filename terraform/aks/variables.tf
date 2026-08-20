@@ -205,12 +205,6 @@ variable "adx_sku_capacity" {
   default     = 1
 }
 
-variable "dcgm_exporter_chart_version" {
-  description = "Pinned NVIDIA DCGM exporter Helm chart version used for GPU telemetry when ADX is enabled."
-  type        = string
-  default     = "4.8.3"
-}
-
 variable "tags" {
   description = "Tags applied to Azure resources."
   type        = map(string)
