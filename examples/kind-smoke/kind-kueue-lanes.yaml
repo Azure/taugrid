@@ -33,12 +33,23 @@ value: 1000
 description: Default Kueue priority for local Tau Kind smoke jobs.
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: kind-cpu
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+spec:
+  levels:
+    - nodeLabel: kubernetes.io/hostname
+---
+apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
   name: kind-cpu
   labels:
     tau.azure.com/managed-by: tau-kind-smoke
-spec: {}
+spec:
+  topologyName: kind-cpu
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue

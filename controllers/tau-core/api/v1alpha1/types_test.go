@@ -281,6 +281,17 @@ func TestTauClusterCRDContract(t *testing.T) {
 		len(profileProps["executionTarget"].Enum) != 2 {
 		t.Fatalf("workload profile executionTarget schema = %#v", profileProps["executionTarget"])
 	}
+	priorities := profileProps["priorities"]
+	for _, field := range []string{"workloadPriorityClassName", "podPriorityClassName"} {
+		priorityName := priorities.Properties[field]
+		if priorityName.MinLength == nil || *priorityName.MinLength != 1 ||
+			priorityName.MaxLength == nil || *priorityName.MaxLength != 253 {
+			t.Fatalf("workload profile priorities.%s length bounds = min %v max %v, want 1..253", field, priorityName.MinLength, priorityName.MaxLength)
+		}
+	}
+	if len(priorities.XValidations) != 1 || strings.Contains(priorities.XValidations[0].Rule, "size(") {
+		t.Fatalf("workload profile priorities validation must avoid unbounded CEL size cost: %#v", priorities.XValidations)
+	}
 
 	statusProps := version.Schema.OpenAPIV3Schema.Properties["status"].Properties
 	statusProfiles := statusProps["workloadProfiles"].Properties

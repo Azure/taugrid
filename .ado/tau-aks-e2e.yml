@@ -107,18 +107,11 @@ stages:
                           ado-build-id="${BUILD_ID}" \
                         --output none
 
-                      build_context="$(Agent.TempDirectory)/tau-core-image"
-                      mkdir -p "${build_context}"
-                      cp -R controllers/tau-core/. "${build_context}/"
-                      cp images/tau-core-controller/Dockerfile "${build_context}/Dockerfile"
-                      (
-                        cd "${build_context}"
-                        az acr build \
-                          --registry "${ACR_NAME}" \
-                          --image "tau-core-controller:${CONTROLLER_IMAGE_TAG}" \
-                          --file Dockerfile \
-                          .
-                      )
+                      az acr build \
+                        --registry "${ACR_NAME}" \
+                        --image "tau-core-controller:${CONTROLLER_IMAGE_TAG}" \
+                        --file images/tau-core-controller/Dockerfile \
+                        .
 
                       az aks create \
                         --resource-group "${RESOURCE_GROUP}" \

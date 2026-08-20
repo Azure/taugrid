@@ -18,7 +18,7 @@ compute:
   worker_memory_limit: 768Mi
 policy:
   namespace: ray
-  profile: kind-cpu
+  profile: kind-cpu-ray
   queue: kind-cpu
   lane: training
 experiment:

@@ -79,9 +79,13 @@ type ProfileApplicability struct {
 	Namespaces []string `json:"namespaces,omitempty" yaml:"namespaces,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="(has(self.disableDefaultPriorities) && self.disableDefaultPriorities) ? (!has(self.workloadPriorityClassName) && !has(self.podPriorityClassName)) : (has(self.workloadPriorityClassName) && size(self.workloadPriorityClassName) > 0 && has(self.podPriorityClassName) && size(self.podPriorityClassName) > 0)",message="priority class names are required unless default priorities are explicitly disabled"
+// +kubebuilder:validation:XValidation:rule="(has(self.disableDefaultPriorities) && self.disableDefaultPriorities) ? (!has(self.workloadPriorityClassName) && !has(self.podPriorityClassName)) : (has(self.workloadPriorityClassName) && has(self.podPriorityClassName))",message="priority class names are required unless default priorities are explicitly disabled"
 type ProfilePriorities struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	WorkloadPriorityClassName string `json:"workloadPriorityClassName,omitempty" yaml:"workloadPriorityClassName,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	PodPriorityClassName      string `json:"podPriorityClassName,omitempty" yaml:"podPriorityClassName,omitempty"`
 	// DisableDefaultPriorities explicitly permits both priority class references
 	// to be absent.

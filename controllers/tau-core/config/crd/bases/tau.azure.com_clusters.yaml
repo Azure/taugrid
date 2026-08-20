@@ -252,8 +252,12 @@ spec:
                             to be absent.
                           type: boolean
                         podPriorityClassName:
+                          maxLength: 253
+                          minLength: 1
                           type: string
                         workloadPriorityClassName:
+                          maxLength: 253
+                          minLength: 1
                           type: string
                       type: object
                       x-kubernetes-validations:
@@ -261,9 +265,7 @@ spec:
                           priorities are explicitly disabled
                         rule: '(has(self.disableDefaultPriorities) && self.disableDefaultPriorities)
                           ? (!has(self.workloadPriorityClassName) && !has(self.podPriorityClassName))
-                          : (has(self.workloadPriorityClassName) && size(self.workloadPriorityClassName)
-                          > 0 && has(self.podPriorityClassName) && size(self.podPriorityClassName)
-                          > 0)'
+                          : (has(self.workloadPriorityClassName) && has(self.podPriorityClassName))'
                     workerCount:
                       format: int32
                       minimum: 1
@@ -593,8 +595,12 @@ spec:
                                 to be absent.
                               type: boolean
                             podPriorityClassName:
+                              maxLength: 253
+                              minLength: 1
                               type: string
                             workloadPriorityClassName:
+                              maxLength: 253
+                              minLength: 1
                               type: string
                           type: object
                           x-kubernetes-validations:
@@ -602,9 +608,7 @@ spec:
                               priorities are explicitly disabled
                             rule: '(has(self.disableDefaultPriorities) && self.disableDefaultPriorities)
                               ? (!has(self.workloadPriorityClassName) && !has(self.podPriorityClassName))
-                              : (has(self.workloadPriorityClassName) && size(self.workloadPriorityClassName)
-                              > 0 && has(self.podPriorityClassName) && size(self.podPriorityClassName)
-                              > 0)'
+                              : (has(self.workloadPriorityClassName) && has(self.podPriorityClassName))'
                         resourceFlavors:
                           items:
                             type: string

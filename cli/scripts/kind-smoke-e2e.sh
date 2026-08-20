@@ -29,6 +29,13 @@ elif [[ "${KIND_EXPERIMENTAL_PROVIDER:-}" == "podman" ]]; then
 else
   CONTAINER_ENGINE="docker"
 fi
+CONTROLLER_IMAGE_REPOSITORY="${TAU_KIND_CONTROLLER_IMAGE_REPOSITORY:-tau-core-controller}"
+CONTROLLER_IMAGE_TAG="${TAU_KIND_CONTROLLER_IMAGE_TAG:-kind-e2e}"
+if [[ "${CONTAINER_ENGINE}" == "podman" && "${CONTROLLER_IMAGE_REPOSITORY}" != */* ]]; then
+  CONTROLLER_IMAGE_REPOSITORY="localhost/${CONTROLLER_IMAGE_REPOSITORY}"
+fi
+CONTROLLER_IMAGE="${CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_IMAGE_TAG}"
+CONTROLLER_IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 ENGINE_INFO_TIMEOUT_SECONDS="${TAU_KIND_ENGINE_INFO_TIMEOUT_SECONDS:-${TAU_KIND_DOCKER_INFO_TIMEOUT_SECONDS:-20}}"
 ENGINE_MIN_MEMORY_MIB="${TAU_KIND_ENGINE_MIN_MEMORY_MIB:-${TAU_KIND_DOCKER_MIN_MEMORY_MIB:-7680}}"
 ENGINE_RECOMMENDED_MEMORY_MIB="${TAU_KIND_ENGINE_RECOMMENDED_MEMORY_MIB:-${TAU_KIND_DOCKER_RECOMMENDED_MEMORY_MIB:-7800}}"
@@ -102,6 +109,44 @@ container_engine_preflight() {
   else
     echo "warning: could not determine ${CONTAINER_ENGINE} memory from ${CONTAINER_ENGINE} info; continuing" >&2
   fi
+}
+
+load_controller_image() {
+  if [[ "$CONTAINER_ENGINE" == "podman" ]]; then
+    local archive status
+    archive="$(mktemp "${TMPDIR:-/tmp}/tau-kind-controller.XXXXXX.tar")"
+    status=0
+    podman save --format docker-archive -o "$archive" "$CONTROLLER_IMAGE" || status=$?
+    if [[ "$status" -eq 0 ]]; then
+      KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive "$archive" --name "$CLUSTER_NAME" || status=$?
+    fi
+    rm -f "$archive"
+    return "$status"
+  fi
+
+  KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" \
+    kind load docker-image "$CONTROLLER_IMAGE" --name "$CLUSTER_NAME"
+}
+
+wait_for_taucluster_profiles() {
+  local deadline generation observed ready condition names
+  deadline=$((SECONDS + ${WAIT_TIMEOUT%s}))
+  while (( SECONDS < deadline )); do
+    generation="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get cluster.tau.azure.com cluster -o jsonpath='{.metadata.generation}' 2>/dev/null || true)"
+    observed="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get cluster.tau.azure.com cluster -o jsonpath='{.status.workloadProfiles.observedGeneration}' 2>/dev/null || true)"
+    ready="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get cluster.tau.azure.com cluster -o jsonpath='{.status.workloadProfiles.ready}' 2>/dev/null || true)"
+    condition="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get cluster.tau.azure.com cluster -o jsonpath='{.status.conditions[?(@.type=="WorkloadProfilesReady")].status}' 2>/dev/null || true)"
+    names="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get cluster.tau.azure.com cluster -o jsonpath='{.status.workloadProfiles.profiles[*].name}' 2>/dev/null || true)"
+    if [[ -n "$generation" && "$observed" == "$generation" && "$ready" == "2" && "$condition" == "True" &&
+      " $names " == *" kind-cpu-job "* && " $names " == *" kind-cpu-ray "* ]]; then
+      echo "TauCluster workload profiles are ready at generation ${generation}: ${names}"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "timed out waiting for current Kind workload profiles to become ready" >&2
+  kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get cluster.tau.azure.com cluster -o yaml >&2 || true
+  return 1
 }
 
 configure_kind_node_task_budget() {
@@ -360,6 +405,14 @@ if [[ "${TAU_KIND_SKIP_BUILD:-0}" != "1" ]]; then
   make -C "$TAU_DIR" build
 fi
 
+if [[ "${TAU_KIND_SKIP_CONTROLLER_BUILD:-0}" != "1" ]]; then
+  "$CONTAINER_ENGINE" build \
+    --file "$CONTROLLER_IMAGE_DOCKERFILE" \
+    --tag "$CONTROLLER_IMAGE" \
+    "$REPO_ROOT"
+  load_controller_image
+fi
+
 "$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
   "$REPO_ROOT/charts/taugrid"
 
@@ -370,8 +423,10 @@ fi
   --namespace "$TAUGRID_NAMESPACE" \
   --context "$KUBE_CONTEXT" \
   --timeout 5m \
-  --set components.tauCoreController.enabled=false \
-  --set components.taugridCore.enabled=false
+  --set components.taugridCore.enabled=false \
+  --set "tau-core-controller.image.repository=${CONTROLLER_IMAGE_REPOSITORY}" \
+  --set "tau-core-controller.image.tag=${CONTROLLER_IMAGE_TAG}" \
+  --set tau-core-controller.image.pullPolicy=Never
 
 kubectl --context "$KUBE_CONTEXT" wait \
   --for=condition=Established \
@@ -391,6 +446,10 @@ kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" rollout status \
 
 # This test-only lane is workload fixture data, not cluster installation state.
 kubectl --context "$KUBE_CONTEXT" apply -f "$EXAMPLE_DIR/kind-kueue-lanes.yaml"
+kubectl --context "$KUBE_CONTEXT" patch cluster.tau.azure.com cluster \
+  --type=merge \
+  --patch-file "$EXAMPLE_DIR/taucluster-profiles.yaml"
+wait_for_taucluster_profiles
 kubectl --context "$KUBE_CONTEXT" get \
   resourceflavors.kueue.x-k8s.io,clusterqueues.kueue.x-k8s.io,workloadpriorityclasses.kueue.x-k8s.io
 

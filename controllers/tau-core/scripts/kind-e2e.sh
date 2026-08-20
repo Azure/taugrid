@@ -352,7 +352,7 @@ kubectl apply -k "${APP_BASE_DIR}"
 "${CONTAINER_ENGINE}" build \
   --file "${IMAGE_DOCKERFILE}" \
   --tag "${LOCAL_IMAGE}" \
-  "${CONTROLLER_DIR}"
+  "${REPO_ROOT}"
 load_local_image
 
 # Overlay the Deployment with the locally-built image and

@@ -6,10 +6,12 @@ FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.6-1 AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-COPY go.mod go.sum ./
+WORKDIR /src/controllers/tau-core
+COPY controllers/tau-core/go.mod controllers/tau-core/go.sum ./
+COPY core/go.mod core/go.sum ../../core/
 RUN go mod download
-COPY . .
+COPY controllers/tau-core ./
+COPY core ../../core
 
 # CGO required for systemcrypto FIPS build; buildx sets TARGETOS/TARGETARCH per platform.
 ARG TARGETOS
