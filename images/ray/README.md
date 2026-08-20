@@ -72,9 +72,35 @@ make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.56.0 CUDA_VERSION=13.0
 # Run smoke tests (verifies Python, Ray, and wget versions)
 make test
 
-# Build multi-arch manifest and push to registry
+# Build multi-arch manifest and push to registry (emulates the non-native
+# platform with QEMU under the hood — see the native split below for CI)
 make docker-push
 ```
+
+### Native per-architecture builds (no QEMU)
+
+`docker-push` builds both platforms in a single `buildx build --platform
+linux/amd64,linux/arm64` invocation, which relies on QEMU emulation for
+whichever architecture isn't native to the host running the command. For CI
+running each architecture on its own native runner in parallel, use
+`docker-push-arch` + `docker-push-manifest` instead — no emulation, faster
+builds:
+
+```bash
+# On an amd64 runner: build + push the amd64 image natively
+make docker-push-arch ARCH=amd64 IMG=<registry>/ray:py3.12-ray2.56.0-cuda13.0
+
+# On an arm64 runner: build + push the arm64 image natively
+make docker-push-arch ARCH=arm64 IMG=<registry>/ray:py3.12-ray2.56.0-cuda13.0
+
+# On any runner, after both of the above succeed: combine into one multi-arch
+# manifest at the canonical tag (pure registry metadata op — no build)
+make docker-push-manifest IMG=<registry>/ray:py3.12-ray2.56.0-cuda13.0
+```
+
+`docker-push-arch` pushes to `$(IMG)-$(ARCH)` (e.g. `...:py3.12-ray2.56.0-cuda13.0-amd64`);
+`docker-push-manifest` reads those two arch-suffixed tags and publishes the
+combined manifest list at `$(IMG)` itself.
 
 ### Makefile Variables
 
@@ -83,8 +109,10 @@ make docker-push
 | `PYTHON_VERSION` | `3.12` | Python version for the base image |
 | `RAY_VERSION` | `2.56.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
-| `ACR_REGISTRY` | *(required for push)* | Backing ACR hostname for producer-side pushes; consumers use MCR |
-| `PLATFORMS` | `linux/amd64,linux/arm64` | Architectures for multi-arch build |
+| `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
+| `ACR_REGISTRY` | *(required for `docker-push`)* | Backing ACR hostname for producer-side multi-arch pushes; consumers use MCR |
+| `PLATFORMS` | `linux/amd64,linux/arm64` | Architectures for the `docker-push` multi-arch build |
+| `ARCH` | *(empty)* | Single architecture (`amd64` or `arm64`) for `docker-push-arch` |
 | `CACHE_REPO` | *(empty)* | Set to enable registry-based BuildKit cache |
 
 ### Image Tag Format
