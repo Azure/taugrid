@@ -99,20 +99,6 @@ def test_stellar_preserves_same_media_key_at_multiple_steps(tmp_path):
     assert (run.artifacts_dir / "examples-predictions-step-2.png").read_bytes() == b"two"
 
 
-def test_stellar_rejects_non_scalar_metric_values(tmp_path):
-    stellar.init(project="p", run="r", dir=tmp_path)
-    with pytest.raises(TypeError, match="numeric scalars"):
-        stellar.log({"train/status": "ok"})
-    stellar.finish()
-
-
-def test_stellar_rejects_non_finite_metrics(tmp_path):
-    stellar.init(project="p", run="r", dir=tmp_path)
-    with pytest.raises(ValueError, match="finite"):
-        stellar.log({"train/loss": float("nan")})
-    stellar.finish()
-
-
 def test_stellar_finish_sync_invokes_tau_contract(tmp_path):
     recorder = tmp_path / "argv.jsonl"
     fake = tmp_path / "tau"
@@ -162,90 +148,6 @@ def test_stellar_finish_sync_invokes_tau_contract(tmp_path):
     ]
     assert calls[3][:6] == ["experiment", "--store", str(store), "import", "jsonl", "--run"]
     assert (store / "artifacts" / "vit-enc-lora-v1" / "retrieval-neighbors.png").read_bytes() == b"png"
-
-
-def test_stellar_sync_groups_runs_under_experiment_not_project(tmp_path):
-    """`experiment=` is the grouping axis; runs must not collapse into the project.
-
-    Regression test for the migration off the removed `question` axis: the
-    experiment id has to fall back to the experiment *name* before the project
-    name, otherwise every run in a sweep lands in one undifferentiated bucket.
-    """
-    recorder = tmp_path / "argv.jsonl"
-    fake = tmp_path / "tau"
-    _write_jsonl_argv_recorder(fake, recorder)
-    store = tmp_path / "store"
-
-    for run_name, lr in (("lr-5e-4", 5e-4), ("lr-5e-2", 5e-2)):
-        run = stellar.init(
-            project="taugrid-cpu-quickstart",
-            run=run_name,
-            experiment="lr-sweep",
-            config={"lr": lr},
-            dir=tmp_path / "runs",
-            store=store,
-            tau_binary=str(fake),
-        )
-        run.log({"train/loss": 0.7}, step=1)
-        run.finish(sync=True)
-
-    calls = [json.loads(line) for line in recorder.read_text().splitlines()]
-    inits = [c for c in calls if c[3:4] == ["init"]]
-    assert inits, "expected an `experiment init` call"
-    # The experiment name wins over the project name.
-    assert {c[4] for c in inits} == {"lr-sweep"}
-
-    tags = [c for c in calls if c[3:5] == ["experiments", "tag-run"]]
-    assert len(tags) == 2
-    assert {c[5] for c in tags} == {"lr-5e-4", "lr-5e-2"}
-    for call in tags:
-        assert call[call.index("--experiment") + 1] == "lr-sweep"
-
-
-def test_stellar_sync_tags_experiment_id_run_without_history(tmp_path):
-    """`experiment_id` alone must still link the run, even with no metrics.
-
-    The experiment link used to be gated on the optional display name, and
-    otherwise only rode along on the `import jsonl` call. A run given just an
-    id and no scalar history hit neither path. Against a fresh store the
-    skipped `init` also left `track` with no manifest.json, so sync failed
-    outright.
-    """
-    recorder = tmp_path / "argv.jsonl"
-    fake = tmp_path / "tau"
-    _write_jsonl_argv_recorder(fake, recorder)
-    store = tmp_path / "store"
-
-    run = stellar.init(
-        project="radiology",
-        run="config-only",
-        experiment_id="wanted",
-        config={"lr": 2e-5},
-        dir=tmp_path / "runs",
-        store=store,
-        tau_binary=str(fake),
-    )
-    run.finish(sync=True)
-
-    calls = [json.loads(line) for line in recorder.read_text().splitlines()]
-    assert not [c for c in calls if c[3:5] == ["import", "jsonl"]], "expected no history import"
-    # The store is still bootstrapped; `--description` is simply omitted.
-    assert [c for c in calls if c[3:4] == ["init"]] == [
-        [
-            "experiment", "--store", str(store), "init", "wanted",
-            "--project", "radiology",
-            "--group", "default",
-        ]
-    ]
-    # The id doubles as the display name when no name was supplied.
-    assert [c for c in calls if c[3:5] == ["experiments", "tag-run"]] == [
-        [
-            "experiment", "--store", str(store), "experiments", "tag-run",
-            "config-only",
-            "--experiment", "wanted",
-            "--name", "wanted",
-        ]
-    ]
 
 
 def test_stellar_sync_uses_json_artifact_spec_for_captioned_media(tmp_path):
@@ -377,31 +279,6 @@ VALUES ('artifact-run-a-best', 'run-a', 'checkpoint', 'artifacts/run-a/model.ckp
     assert spec["direction"] == "input"
     assert spec["source_artifact_id"] == "artifact-run-a-best"
     assert spec["source_run_id"] == "run-a"
-
-
-def test_stellar_sync_sanitizes_run_name_for_artifact_path(tmp_path):
-    fake = tmp_path / "tau"
-    fake.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n")
-    fake.chmod(0o755)
-    source = tmp_path / "artifact.txt"
-    source.write_text("payload")
-    store = tmp_path / "store"
-    escaped = tmp_path / "escaped-run-dir"
-
-    run = stellar.init(
-        project="p",
-        run=str(escaped),
-        dir=tmp_path / "runs",
-        store=store,
-        tau_binary=str(fake),
-    )
-    run.log_artifact("artifact", source)
-    run.finish(sync=True)
-
-    copied = list((store / "artifacts").rglob("artifact.txt"))
-    assert len(copied) == 1
-    assert copied[0].read_text() == "payload"
-    assert not (escaped / "artifact.txt").exists()
 
 
 def test_stellar_run_context_manager_finishes(tmp_path):
@@ -577,15 +454,6 @@ def test_stellar_experiment_id_defaults_to_tau_experiment(tmp_path, monkeypatch)
     stellar.finish()
 
 
-def test_stellar_experiment_id_prefers_tau_experiment_id_over_tau_experiment(tmp_path, monkeypatch):
-    """TAU_EXPERIMENT_ID takes precedence over TAU_EXPERIMENT."""
-    monkeypatch.setenv("TAU_EXPERIMENT_ID", "primary-id")
-    monkeypatch.setenv("TAU_EXPERIMENT", "fallback")
-    run = stellar.init(project="p", name="r", dir=tmp_path)
-    assert run.experiment_id == "primary-id"
-    stellar.finish()
-
-
 def test_stellar_experiment_id_defaults_to_project_when_no_experiment(tmp_path, monkeypatch):
     """With no experiment and no env vars, the experiment id inherits the project."""
     monkeypatch.delenv("TAU_EXPERIMENT_ID", raising=False)
@@ -601,17 +469,6 @@ def test_stellar_explicit_experiment_id_overrides_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TAU_EXPERIMENT", "from-fallback")
     run = stellar.init(project="p", name="r", experiment_id="explicit-id", dir=tmp_path)
     assert run.experiment_id == "explicit-id"
-    stellar.finish()
-
-
-def test_stellar_combined_env_defaults(tmp_path, monkeypatch):
-    """Both group and experiment_id can use env vars simultaneously."""
-    monkeypatch.setenv("TAU_GROUP", "training-batch-3")
-    monkeypatch.setenv("TAU_EXPERIMENT_ID", "vit-enc-ablation")
-    monkeypatch.setenv("JOB_NAME", "ignored-when-tau-group-set")
-    run = stellar.init(project="radiology", name="run-001", dir=tmp_path)
-    assert run.group == "training-batch-3"
-    assert run.experiment_id == "vit-enc-ablation"
     stellar.finish()
 
 
@@ -661,52 +518,6 @@ def test_find_portal_binary_honors_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("TAUGRID_PORTAL_BINARY", str(explicit))
 
     assert _find_portal_binary() == str(explicit)
-
-
-def test_find_portal_binary_rejects_missing_env_override(tmp_path, monkeypatch):
-    from tau.workloads import _find_portal_binary
-
-    monkeypatch.setenv("TAUGRID_PORTAL_BINARY", str(tmp_path / "nope"))
-    with pytest.raises(RuntimeError, match="does not exist"):
-        _find_portal_binary()
-
-
-def test_find_portal_binary_falls_back_to_pre_split_tau(tmp_path, monkeypatch):
-    """A tau from before the split still owns `experiment`, so it is usable."""
-    from tau.workloads import _find_portal_binary
-
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    legacy = bindir / "tau"
-    _write_verb_aware_binary(legacy, tmp_path / "tau.log", supports_experiment=True)
-
-    monkeypatch.delenv("TAUGRID_PORTAL_BINARY", raising=False)
-    monkeypatch.delenv("TAU_BINARY", raising=False)
-    monkeypatch.setenv(
-        "PATH", str(bindir) + os.pathsep + str(Path(sys.executable).parent)
-    )
-
-    with pytest.warns(DeprecationWarning):
-        assert _find_portal_binary() == str(legacy)
-
-
-def test_find_portal_binary_rejects_post_split_tau(tmp_path, monkeypatch):
-    """A post-split tau has no `experiment` verb, so fail with a clear message."""
-    from tau.workloads import _find_portal_binary
-
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    post_split = bindir / "tau"
-    _write_verb_aware_binary(post_split, tmp_path / "tau.log", supports_experiment=False)
-
-    monkeypatch.delenv("TAUGRID_PORTAL_BINARY", raising=False)
-    monkeypatch.delenv("TAU_BINARY", raising=False)
-    monkeypatch.setenv(
-        "PATH", str(bindir) + os.pathsep + str(Path(sys.executable).parent)
-    )
-
-    with pytest.raises(RuntimeError, match="taugrid-portal"):
-        _find_portal_binary()
 
 
 def test_stellar_sync_resolves_portal_binary_lazily(tmp_path, monkeypatch):

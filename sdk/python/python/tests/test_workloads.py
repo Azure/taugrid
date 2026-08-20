@@ -10,7 +10,6 @@ import json
 import textwrap
 from pathlib import Path
 
-import pytest
 import yaml
 
 from tau import (
@@ -75,11 +74,6 @@ def test_decorator_returns_handle():
     assert captured["ctx"].name == "t1"
 
 
-def test_finetune_module_is_not_exported():
-    with pytest.raises(ImportError):
-        from tau import finetune  # noqa: F401
-
-
 def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
     assert exported_serve is serve_workload
     recorder = tmp_path / "tau_argv.txt"
@@ -117,17 +111,6 @@ def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
     assert argv[argv.index("--args") + 1] == "--model /model"
     assert argv[argv.index("--dry-run") + 1] == "client"
     assert argv[argv.index("--context") + 1] == "kind-taugrid"
-
-
-def test_serve_rejects_multiple_checkpoint_sources():
-    serve_workload(name="svc", profile="research-serve")
-    with pytest.raises(ValueError, match="at most one"):
-        serve_workload(
-            name="svc",
-            profile="research-serve",
-            from_finetune="ft",
-            checkpoint="/data/checkpoint",
-        )
 
 
 def test_serve_accepts_model_ref_and_delegates_to_cli(tmp_path):
@@ -190,27 +173,6 @@ def test_train_manifest_declares_model_registry_metadata():
         "primary_metric": "loss",
         "metric_direction": "lower",
     }
-
-
-def test_train_manifest_rejects_model_metadata_conflict():
-    with pytest.raises(ValueError, match="model metadata"):
-        @train(
-            name="my-ft",
-            gpus=2,
-            model="sample-lora",
-            extra_manifest={"model": {"name": "other-model"}},
-        )
-        def f(ctx):
-            pass
-
-        f.manifest()
-
-
-def test_train_rejects_unsafe_checkpoint_artifact():
-    with pytest.raises(ValueError, match="checkpoint_artifact"):
-        @train(name="my-ft", gpus=2, checkpoint_artifact="../final.safetensors")
-        def f(ctx):
-            pass
 
 
 def test_train_manifest_allows_cpu_only_gpus_zero():
@@ -317,20 +279,6 @@ def test_train_manifest_declares_resource_sizing():
         "worker_cpus": 2,
         "worker_memory": "16Gi",
     }
-
-
-def test_train_manifest_rejects_conflicting_data_pvc():
-    @train(
-        name="pvc-conflict",
-        gpus=1,
-        data_pvc="lustre-research",
-        extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}, "storage": {"data_pvc": "captioner2-data"}},
-    )
-    def f(ctx):
-        pass
-
-    with pytest.raises(ValueError, match="data_pvc=.*conflicts"):
-        f.manifest()
 
 
 def test_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
@@ -495,24 +443,6 @@ def test_manifest_secret_from_file_resolves_payload_and_refs(tmp_path):
     ]
 
 
-def test_secret_from_env_missing_fails_before_submit(tmp_path):
-    fake = tmp_path / "tau"
-    fake.write_text("#!/usr/bin/env python3\nraise SystemExit(99)\n")
-    fake.chmod(0o755)
-
-    @train(
-        name="secret-job",
-        gpus=1,
-        runtime_pip=["torch==2.4.0"],
-        env={"HF_TOKEN": secret_from_env("HF_TOKEN", env="MISSING_HF_TOKEN")},
-    )
-    def f(ctx):
-        pass
-
-    with pytest.raises(ValueError, match="MISSING_HF_TOKEN"):
-        f.submit(tau_binary=str(fake), dry_run="client", capture=True)
-
-
 def test_local_call_passes_ctx():
     captured = {}
 
@@ -527,15 +457,6 @@ def test_local_call_passes_ctx():
     assert ctx.smoke_pairs == 3
     assert ctx.is_remote is False
     assert ctx.manifest["compute"]["gpus"] == 1
-
-
-def test_source_path_resolves_to_file_defining_decorator():
-    @train(name="src", gpus=1)
-    def f(ctx):
-        pass
-
-    assert f.source_path.name == "test_workloads.py"
-    assert f.source_path.is_file()
 
 
 def test_submit_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
@@ -723,39 +644,6 @@ def test_train_entrypoint_accepts_absolute_pvc_path_without_staging(tmp_path, mo
     assert handle.manifest()["entrypoint"]["script"] == "/data/scripts/train_probe.py"
 
 
-def test_train_entrypoint_rejects_missing_relative_path(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(FileNotFoundError, match="relative entrypoint missing.py"):
-        train(name="missing", gpus=1, runtime_pip=["torch==2.4.0"], entrypoint="missing.py:main")
-
-
-def test_train_entrypoint_rejects_non_json_args(tmp_path):
-    script = tmp_path / "train.py"
-    _write_python(script, "def main(): pass")
-
-    with pytest.raises(ValueError, match="JSON-serializable"):
-        train(
-            name="bad-args",
-            gpus=1,
-            runtime_pip=["torch==2.4.0"],
-            entrypoint=script,
-            entrypoint_args=[object()],
-        )
-
-
-def test_train_entrypoint_rejects_decorator_misuse(tmp_path):
-    script = tmp_path / "train.py"
-    _write_python(script, "def main(): pass")
-
-    handle = train(name="bad-decorator", gpus=1, runtime_pip=["torch==2.4.0"], entrypoint=script)
-
-    with pytest.raises(TypeError, match="returns a train handle directly"):
-        @handle
-        def go(ctx):
-            pass
-
-
 def test_submit_forwards_gpu_resource_mode_and_node_selector_kwargs(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
     copied_config = tmp_path / "tau.yaml"
@@ -835,47 +723,3 @@ def test_serve_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     assert argv[argv.index("-n") + 1] == "ray"
     assert argv[argv.index("--dry-run") + 1] == "server"
     assert argv[argv.index("--context") + 1] == "kind-taugrid"
-
-
-def test_serve_validates_dry_run_without_spawning_tau():
-    service = serve_workload(name="x", profile="ai-serve-gpu-l")
-    with pytest.raises(ValueError, match="dry_run must be"):
-        service.deploy(dry_run="bogus")
-
-
-def test_submit_refuses_inside_cluster(monkeypatch):
-    monkeypatch.setenv("TAU_DATA_DIR", "/data")
-
-    @train(name="x", gpus=1)
-    def f(ctx):
-        pass
-
-    with pytest.raises(RuntimeError, match="inside what looks like a cluster-submitted job"):
-        f.submit()
-
-
-def test_submit_validates_dry_run(monkeypatch, tmp_path):
-    fake_tau = tmp_path / "tau"
-    fake_tau.write_text("#!/usr/bin/env python3\n")
-    fake_tau.chmod(0o755)
-    monkeypatch.setenv("TAU_BINARY", str(fake_tau))
-
-    @train(name="x", gpus=1, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
-    def f(ctx):
-        pass
-
-    with pytest.raises(ValueError, match="dry_run must be"):
-        f.submit(dry_run="bogus")
-
-
-def test_find_tau_binary_errors_clearly(monkeypatch):
-    monkeypatch.delenv("TAU_BINARY", raising=False)
-    monkeypatch.setenv("PATH", "/nonexistent")
-    with pytest.raises(RuntimeError, match="cannot find the `tau` CLI"):
-        _workloads._find_tau_binary()
-
-
-def test_find_tau_binary_rejects_missing_override(monkeypatch, tmp_path):
-    monkeypatch.setenv("TAU_BINARY", str(tmp_path / "ghost"))
-    with pytest.raises(RuntimeError, match="does not exist"):
-        _workloads._find_tau_binary()

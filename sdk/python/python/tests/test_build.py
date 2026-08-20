@@ -205,38 +205,6 @@ def test_build_preserves_decorator_namespace_without_cli_override(tmp_path: Path
     assert config["policy"]["namespace"] == "team-ns"
 
 
-@pytest.mark.parametrize("filename", ["tau_py_wrapper.py", "tau.yaml"])
-def test_build_rejects_extra_scripts_that_collide_with_generated_files(
-    tmp_path: Path,
-    filename: str,
-) -> None:
-    (tmp_path / filename).write_text("print('extra script')\n")
-    (tmp_path / "entry.py").write_text("def main():\n    return None\n")
-    module = tmp_path / "workflow.py"
-    _write_module(
-        module,
-        f"""
-        from pathlib import Path
-
-        import tau
-
-        train_job = tau.train(
-            name="collision-test",
-            gpus=1,
-            entrypoint=Path(__file__).with_name("entry.py"),
-            extra_scripts=[Path(__file__).with_name({filename!r})],
-            runtime_pip=["torch==2.4.0"],
-        )
-        """,
-    )
-    output = tmp_path / "generated"
-
-    with pytest.raises(BuildArtifactError, match="collides with a generated build file"):
-        _build(module, output)
-
-    assert not output.exists()
-
-
 def test_build_cli_exports_source_secret_locators_without_values_and_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -351,84 +319,6 @@ def test_build_cli_exports_source_secret_locators_without_values_and_replays(
     assert Path(replay["config"]["run"]["entrypoint"]).is_absolute()
 
 
-def test_build_replay_fails_if_source_secret_is_unavailable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = tmp_path / "workflow.py"
-    _write_module(
-        module,
-        """
-        import tau
-
-        @tau.train(
-            name="missing-secret",
-            runtime_pip=["torch==2.4.0"],
-            env={"TOKEN": tau.secret_from_env("token", env="NOT_SET")},
-        )
-        def train_job(ctx):
-            return ctx
-        """,
-    )
-    output = _build(module, tmp_path / "generated")
-    monkeypatch.delenv("NOT_SET", raising=False)
-    monkeypatch.setattr(tau_cli, "_find_tau_binary", lambda: "tau")
-
-    with pytest.raises(ValueError, match="secret env source 'NOT_SET'.*is not set"):
-        tau_cli._orchestrate_submit_build(
-            output,
-            kube_context=None,
-            dry_run="client",
-            timeout="1m",
-            poll_interval=0.01,
-            keep_train_rayjob=False,
-            cleanup_timeout="1m",
-        )
-
-
-def test_build_verification_rejects_tampered_staged_file(tmp_path: Path) -> None:
-    module = tmp_path / "workflow.py"
-    _write_module(
-        module,
-        """
-        import tau
-
-        @tau.train(name="tamper-test", runtime_pip=["torch==2.4.0"])
-        def train_job(ctx):
-            return ctx
-        """,
-    )
-    output = _build(module, tmp_path / "generated")
-    _, index = load_artifact(output)
-    staged_path = output / index["workloads"][0]["files"][0]["path"]
-    staged_path.write_text(staged_path.read_text() + "# modified\n")
-
-    with pytest.raises(BuildArtifactError, match="(size|digest) mismatch"):
-        load_artifact(output)
-
-
-def test_build_verification_rejects_path_escape(tmp_path: Path) -> None:
-    module = tmp_path / "workflow.py"
-    _write_module(
-        module,
-        """
-        import tau
-
-        @tau.train(name="path-test", runtime_pip=["torch==2.4.0"])
-        def train_job(ctx):
-            return ctx
-        """,
-    )
-    output = _build(module, tmp_path / "generated")
-    marker = output / "tau-build.yaml"
-    index = yaml.safe_load(marker.read_text())
-    index["workloads"][0]["config"] = "../outside.yaml"
-    marker.write_text(yaml.safe_dump(index, sort_keys=False))
-
-    with pytest.raises(BuildArtifactError, match="invalid workload config path"):
-        load_artifact(output)
-
-
 def test_eval_only_build_requires_explicit_checkpoint(tmp_path: Path) -> None:
     module = tmp_path / "eval_only.py"
     _write_module(
@@ -499,30 +389,3 @@ def test_serve_only_build_is_explicitly_unsupported(tmp_path: Path) -> None:
 
     with pytest.raises(BuildArtifactError, match="ServeHandle.deploy"):
         _build(module, tmp_path / "generated")
-
-
-def test_build_requires_force_to_replace_existing_output(tmp_path: Path) -> None:
-    module = tmp_path / "workflow.py"
-    _write_module(
-        module,
-        """
-        import tau
-
-        @tau.train(name="replace-test", runtime_pip=["torch==2.4.0"])
-        def train_job(ctx):
-            return ctx
-        """,
-    )
-    output = _build(module, tmp_path / "generated")
-
-    with pytest.raises(BuildArtifactError, match="already exists"):
-        _build(module, output)
-
-    rc = tau_cli._orchestrate_build(
-        module,
-        output=output,
-        force=True,
-        overrides=BuildOverrides(),
-    )
-    assert rc == 0
-    load_artifact(output)

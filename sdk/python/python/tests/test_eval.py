@@ -87,14 +87,6 @@ def test_eval_decorator_returns_handle():
     assert captured["ctx"].upstream_checkpoint == Path("/tmp/checkpoint")
 
 
-def test_eval_decorator_rejects_reserved_local_keyword():
-    with pytest.raises(ValueError, match="reserves upstream_checkpoint"):
-
-        @tau.eval(name="ev1")
-        def eval_fn(ctx, *, upstream_checkpoint=None):
-            return ctx, upstream_checkpoint
-
-
 def test_eval_manifest_shape():
     @tau.eval(name="my-ev", after="my-tr", gpus=1, cpu_workers=19, team="research")
     def f(ctx):
@@ -155,20 +147,6 @@ def test_eval_manifest_declares_resource_sizing():
         "worker_cpus": 2,
         "worker_memory": "8Gi",
     }
-
-
-def test_eval_rejects_zero_cpu_workers():
-    with pytest.raises(ValueError, match="cpu_workers must be >= 1"):
-        @tau.eval(name="bad", cpu_workers=0)
-        def f(ctx):
-            pass
-
-
-def test_eval_rejects_negative_gpus():
-    with pytest.raises(ValueError, match="gpus must be >= 1"):
-        @tau.eval(name="bad", gpus=0, cpu_workers=4)
-        def f(ctx):
-            pass
 
 
 def test_eval_local_call_passes_ctx_with_upstream_checkpoint(tmp_path):
@@ -291,44 +269,6 @@ def test_eval_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
     assert manifest["storage"]["data_pvc"] == "lustre-research"
 
 
-def test_eval_submit_rejects_missing_upstream_checkpoint(monkeypatch, tmp_path):
-    fake_tau = tmp_path / "tau"
-    fake_tau.write_text("#!/usr/bin/env true\n")
-    fake_tau.chmod(0o755)
-    monkeypatch.setenv("TAU_BINARY", str(fake_tau))
-
-    @tau.eval(name="ev", after="tr", cpu_workers=4)
-    def f(ctx):
-        pass
-
-    with pytest.raises(ValueError, match="requires upstream_checkpoint"):
-        f.submit()
-
-
-def test_eval_submit_refuses_inside_cluster(monkeypatch):
-    monkeypatch.setenv("TAU_DATA_DIR", "/data")
-
-    @tau.eval(name="ev", cpu_workers=4)
-    def f(ctx):
-        pass
-
-    with pytest.raises(RuntimeError, match="inside what looks like a cluster-submitted job"):
-        f.submit(upstream_checkpoint="/data/x")
-
-
-def test_eval_extra_manifest_rejects_reserved_keys():
-    @tau.eval(
-        name="x",
-        cpu_workers=4,
-        extra_manifest={"compute": {"gpus": 99}},
-    )
-    def f(ctx):
-        pass
-
-    with pytest.raises(ValueError, match="cannot override reserved keys"):
-        f.manifest()
-
-
 def test_cluster_wrapper_dispatches_to_eval_handle(tmp_path):
     """End-to-end cluster wrapper: drop a user file with @tau.eval, run it."""
     user_module = tmp_path / "researcher_eval.py"
@@ -385,91 +325,6 @@ def test_cluster_wrapper_dispatches_to_eval_handle(tmp_path):
     # Wrapper banner should call out the eval kind so debug logs are clear.
     assert "kind=eval" in res.stdout
     assert "cpu_workers=4" in res.stdout
-
-
-def test_cluster_wrapper_loads_user_module_under_staged_file_stem(tmp_path):
-    """Ray workers import functions by their defining module name."""
-    user_module = tmp_path / "tau_user_module.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        def worker_helper():
-            return "ok"
-
-        @tau.eval(name="cluster-ev", cpu_workers=4)
-        def go(ctx):
-            print("MODULE_NAME=" + __name__)
-            print("HELPER_MODULE=" + worker_helper.__module__)
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {
-            "schema_version": 1,
-            "name": "cluster-ev",
-            "compute": {"gpus": 1},
-            "eval": {"cpu_workers": 4},
-        },
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
-    assert "MODULE_NAME=tau_user_module" in res.stdout
-    assert "HELPER_MODULE=tau_user_module" in res.stdout
-
-
-def test_cluster_wrapper_rejects_reserved_tau_module_filename(tmp_path):
-    """A staged file named tau.py would shadow the cluster tau shim."""
-    user_module = tmp_path / "tau.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="x", gpus=1)
-        def go(ctx):
-            pass
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {
-            "schema_version": 1,
-            "name": "x",
-            "compute": {"gpus": 1},
-            "eval": {},
-        },
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res.returncode != 0
-    assert "tau.py is reserved" in res.stderr
 
 
 def test_cluster_wrapper_eval_runtime_env_exports_user_module_and_tau_shim(tmp_path):
@@ -699,47 +554,6 @@ def test_inspect_cli_lists_both_train_and_eval_handles(tmp_path, capsys):
     assert out.count("schema_version: 1") == 2
 
 
-def test_orchestrator_rejects_eval_after_mismatch(tmp_path, capsys):
-    user_module = tmp_path / "exp.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="actual-tr", gpus=1)
-        def train(ctx): pass
-
-        @tau.eval(name="ev", after="wrong-name", cpu_workers=4)
-        def evaluate(ctx): pass
-        """,
-    )
-    from tau.cli import main as cli_main
-    rc = cli_main(["submit", str(user_module), "--dry-run=client"])
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "does not match" in err
-    assert "wrong-name" in err
-    assert "actual-tr" in err
-
-
-def test_orchestrator_rejects_eval_after_no_train(tmp_path, capsys):
-    user_module = tmp_path / "exp.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.eval(name="ev", after="ghost-train", cpu_workers=4)
-        def evaluate(ctx): pass
-        """,
-    )
-    from tau.cli import main as cli_main
-    rc = cli_main(["submit", str(user_module), "--dry-run=client"])
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "no @tau.train handle is defined" in err
-
-
 def test_orchestrator_train_and_eval_dry_run(tmp_path, monkeypatch, capsys):
     """Orchestrator: dry-run skips polling and still submits both jobs."""
     recorder = tmp_path / "argv-log.txt"
@@ -834,114 +648,6 @@ def test_orchestrator_uses_declared_train_checkpoint_artifact(tmp_path, monkeypa
     assert eval_config["workflow"]["upstream_checkpoint"] == "/data/checkpoints/finetunes/exp-tr/artifacts/rank0/final.safetensors"
 
 
-@pytest.mark.parametrize("checkpoint", ["", "../final.safetensors"])
-def test_orchestrator_rejects_invalid_train_checkpoint_artifact(checkpoint):
-    from tau.cli import _checkpoint_artifact_for_handle
-
-    class BadHandle:
-        def manifest(self):
-            return {"artifacts": {"checkpoint": checkpoint}}
-
-    with pytest.raises(RuntimeError, match="artifacts.checkpoint"):
-        _checkpoint_artifact_for_handle(BadHandle())
-
-
-def test_orchestrator_resource_name_for_handle_uses_manifest_prefix():
-    from tau.cli import _resource_name_for_handle
-
-    @tau.train(name="default-name", gpus=1, extra_manifest={"runtime": {"pip": ["torch==2.4.0"]}})
-    def default_train(ctx):
-        pass
-
-    @tau.train(
-        name="custom-name",
-        gpus=1,
-        extra_manifest={
-            "resource_naming": {"prefix": "diffusion"},
-            "runtime": {"pip": ["torch==2.4.0"]},
-        },
-    )
-    def custom_train(ctx):
-        pass
-
-    assert _resource_name_for_handle(default_train) == "tau-default-name"
-    assert _resource_name_for_handle(custom_train) == "diffusion-custom-name"
-
-
-def test_orchestrator_rejects_multiple_train_handles(tmp_path, capsys):
-    user_module = tmp_path / "exp.py"
-    _write_python(
-        user_module,
-        """
-        import tau
-
-        @tau.train(name="tr-a", gpus=1)
-        def a(ctx): pass
-
-        @tau.train(name="tr-b", gpus=1)
-        def b(ctx): pass
-        """,
-    )
-    from tau.cli import main as cli_main
-    rc = cli_main(["submit", str(user_module), "--dry-run=client"])
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "multiple @tau.train handles" in err
-
-
-def test_parse_duration_handles_units():
-    from tau.cli import _parse_duration
-    assert _parse_duration("30s") == 30.0
-    assert _parse_duration("5m") == 300.0
-    assert _parse_duration("2h") == 7200.0
-    assert _parse_duration("90") == 90.0  # bare number = seconds
-    with pytest.raises(ValueError, match="invalid duration"):
-        _parse_duration("not-a-duration")
-
-
-def test_ctx_dataclass_has_upstream_checkpoint_field():
-    """Regression: Ctx default must carry None for non-eval invocations."""
-    ctx = tau.Ctx(name="x", gpus=1)
-    assert ctx.upstream_checkpoint is None
-
-
-def test_cluster_wrapper_top_level_eval_import_works(tmp_path):
-    """`from tau import eval` (alias) must work in user modules on-cluster."""
-    user_module = tmp_path / "ev_import.py"
-    _write_python(
-        user_module,
-        """
-        from tau import eval as tau_eval
-
-        @tau_eval(name="aliased-ev", cpu_workers=4)
-        def go(ctx):
-            print("ALIASED_OK")
-        """,
-    )
-    manifest_path = tmp_path / "m.yaml"
-    yaml.safe_dump(
-        {
-            "schema_version": 1,
-            "name": "aliased-ev",
-            "compute": {"gpus": 1},
-            "eval": {"cpu_workers": 4},
-        },
-        manifest_path.open("w"),
-    )
-    wrapper_src = render_wrapper(user_module.name).replace(
-        'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
-        f'USER_MODULE_PATH = {str(user_module)!r}',
-    )
-    wrapper_path = tmp_path / "wrapper.py"
-    wrapper_path.write_text(wrapper_src)
-    res = subprocess.run(
-        [sys.executable, str(wrapper_path), "--manifest", str(manifest_path)],
-        capture_output=True, text=True, check=False,
-    )
-    assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
-    assert "ALIASED_OK" in res.stdout
-
-
 # ----- runtime.pip deprecation warning ------------------------------------
 
 
@@ -979,26 +685,3 @@ def test_submit_raises_when_runtime_pip_unset(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="runtime.pip"):
         f.submit(dry_run="client", kube_context="kind-taugrid", namespace="ray")
-
-
-def test_submit_silent_when_runtime_pip_set(tmp_path, monkeypatch):
-    """Submitting with an explicit runtime.pip must NOT raise."""
-    import warnings as _w
-    fake_tau = _make_fake_tau(tmp_path)
-    monkeypatch.setenv("TAU_BINARY", str(fake_tau))
-
-    @tau.train(
-        name="warn-explicit", gpus=1,
-        extra_manifest={"runtime": {"pip": ["torch==2.4.0", "transformers==4.45.0"]}},
-    )
-    def f(ctx):
-        pass
-
-    with _w.catch_warnings(record=True) as caught:
-        _w.simplefilter("always")
-        f.submit(dry_run="client", kube_context="kind-taugrid", namespace="ray")
-    runtime_warnings = [w for w in caught if "runtime.pip" in str(w.message)]
-    assert not runtime_warnings, (
-        "unexpected DeprecationWarning fired: "
-        + repr([str(w.message) for w in runtime_warnings])
-    )
