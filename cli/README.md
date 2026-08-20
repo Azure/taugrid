@@ -247,8 +247,7 @@ compatibility route requires an explicit migration decision and release note.
 - `tau.yaml`, `tau/<target>.yaml`, `tau.projects.yaml`, and
   `tau/workspace.connection.yaml` are separate contracts. Do not merge project
   workload intent with platform connection policy.
-- `tau run --dry-run=client` is offline rendering. Server dry-run and live
-  submission may perform cluster reads and validation.
+- `tau run --dry-run=client` validates local descriptors and renders offline; live-only values remain visible placeholders. Server dry-run and submission activate the connection and may read the cluster.
 - Workloads default to namespace `ray` only after explicit config, workspace,
   preset, and context resolution.
 - Ray Train remains the default distributed training API. Tau owns

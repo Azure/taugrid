@@ -123,6 +123,23 @@ type Runtime struct {
 	Env        map[string]string `yaml:"env"`
 	EnvSecret  map[string]string `yaml:"env_secret"`
 	EnvKV      map[string]string `yaml:"env_kv"`
+	Security   Security          `yaml:"security"`
+}
+
+const SecurityModeRestricted = "restricted"
+
+// Security is the portable pod-security contract for direct workloads.
+type Security struct {
+	Mode string `yaml:"mode"`
+}
+
+func (s Security) Validate() error {
+	switch strings.TrimSpace(s.Mode) {
+	case "", SecurityModeRestricted:
+		return nil
+	default:
+		return fmt.Errorf("runtime.security.mode must be %q or omitted", SecurityModeRestricted)
+	}
 }
 
 const (
@@ -403,6 +420,9 @@ func (c Config) ValidateDirect() error {
 	if err := c.Runtime.ValidateReservedEnvKeys(c.Execution.AllowNCCLOverride); err != nil {
 		return err
 	}
+	if err := c.Runtime.Security.Validate(); err != nil {
+		return err
+	}
 	if err := ValidateLiteralEnvPayloads(c.Runtime.Env); err != nil {
 		return err
 	}
@@ -410,6 +430,12 @@ func (c Config) ValidateDirect() error {
 		return err
 	}
 	return c.Storage.Validate()
+}
+
+// Hash returns a stable hash of the validated config contract. Source payloads
+// have their own digest metadata; this hash identifies the complete run config.
+func (c Config) Hash() (string, error) {
+	return experiment.HashJSON(c)
 }
 
 // ValidateContainerWorkingDir enforces the path shape Kubernetes expects for a

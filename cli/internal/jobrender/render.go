@@ -35,6 +35,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/artifactindex"
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
+	"github.com/Azure/taugrid/cli/internal/podsecurity"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/cli/internal/storageprobe"
 	"github.com/Azure/taugrid/core/envspec"
@@ -172,6 +173,8 @@ type Options struct {
 	// output while preserving the dependency shape.
 	EnvSecrets    []envspec.Var
 	RedactSecrets bool
+	// SecurityMode applies the typed runtime.security contract.
+	SecurityMode string
 
 	// OutputDir, if set, advertises the durable result path on the pod via
 	// the TAU_OUTPUT_DIR env var. Setting this does not otherwise affect
@@ -916,6 +919,13 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		containers = append(containers, metricsoffload.BuildContainer(o.MetricsOffload, metricsOffloadMounts(storagePlan)))
 	}
 	pod["containers"] = containers
+	if o.SecurityMode == runconfig.SecurityModeRestricted {
+		if err := podsecurity.ApplyRestricted(pod, nil); err != nil {
+			return nil, err
+		}
+	} else if o.SecurityMode != "" {
+		return nil, fmt.Errorf("unsupported runtime security mode %q", o.SecurityMode)
+	}
 
 	// Job spec.
 	podLabels := map[string]any{}

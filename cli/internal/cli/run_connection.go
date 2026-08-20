@@ -196,6 +196,9 @@ func applyAutomaticRunConnection(
 	required bool,
 	ensurer runConnectionEnsurer,
 ) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
+	if options.dryRun == "client" {
+		return applyOfflineRunConnection(options, source)
+	}
 	if options.workspaceExplicit || options.kubeContextExplicit {
 		if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, descriptorFor(source)); err != nil {
 			return options, workspaceconnection.ActiveConnection{}, err
@@ -205,20 +208,8 @@ func applyAutomaticRunConnection(
 	if !source.Catalog && (options.workspace != "" || options.kubeContext != "") {
 		return options, workspaceconnection.ActiveConnection{}, nil
 	}
-	if source.Catalog &&
-		source.Discovery != nil &&
-		options.workspace != "" &&
-		options.workspace != source.Discovery.Descriptor.Workspace {
-		project := ""
-		if source.Project != "" {
-			project = fmt.Sprintf(" for project %q", source.Project)
-		}
-		return options, workspaceconnection.ActiveConnection{}, fmt.Errorf(
-			"run config policy.workspace %q conflicts with catalog connection workspace %q%s",
-			options.workspace,
-			source.Discovery.Descriptor.Workspace,
-			project,
-		)
+	if err := checkCatalogWorkspaceConflict(options, source, source.Discovery); err != nil {
+		return options, workspaceconnection.ActiveConnection{}, err
 	}
 	connection, err := ensureRunConnection(ctx, ensurer, source)
 	if err != nil {
@@ -230,6 +221,63 @@ func applyAutomaticRunConnection(
 	options.workspace = connection.Workspace
 	options.kubeContext = connection.ContextName
 	return options, connection, nil
+}
+
+func applyOfflineRunConnection(
+	options unresolvedRunOptions,
+	source runConnectionSource,
+) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
+	if options.workspaceExplicit || options.kubeContextExplicit {
+		if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, descriptorFor(source)); err != nil {
+			return options, workspaceconnection.ActiveConnection{}, err
+		}
+		return options, workspaceconnection.ActiveConnection{}, nil
+	}
+
+	discovery := source.Discovery
+	if discovery == nil && strings.TrimSpace(source.StartDir) != "" {
+		found, err := workspaceconnection.Discover(source.StartDir)
+		if err != nil {
+			if errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
+				return options, workspaceconnection.ActiveConnection{}, nil
+			}
+			return options, workspaceconnection.ActiveConnection{}, err
+		}
+		discovery = &found
+	}
+	if discovery == nil {
+		return options, workspaceconnection.ActiveConnection{}, nil
+	}
+	if err := checkCatalogWorkspaceConflict(options, source, discovery); err != nil {
+		return options, workspaceconnection.ActiveConnection{}, err
+	}
+	if options.workspace == "" {
+		options.workspace = discovery.Descriptor.Workspace
+	}
+	if options.kubeContext == "" {
+		options.kubeContext = discovery.Descriptor.Cluster.ContextName
+	}
+	return options, workspaceconnection.ActiveConnection{
+		Workspace:      discovery.Descriptor.Workspace,
+		ContextName:    discovery.Descriptor.Cluster.ContextName,
+		DescriptorPath: discovery.Path,
+	}, nil
+}
+
+func checkCatalogWorkspaceConflict(options unresolvedRunOptions, source runConnectionSource, discovery *workspaceconnection.Discovery) error {
+	if !source.Catalog || discovery == nil || options.workspace == "" || options.workspace == discovery.Descriptor.Workspace {
+		return nil
+	}
+	project := ""
+	if source.Project != "" {
+		project = fmt.Sprintf(" for project %q", source.Project)
+	}
+	return fmt.Errorf(
+		"run config policy.workspace %q conflicts with catalog connection workspace %q%s",
+		options.workspace,
+		discovery.Descriptor.Workspace,
+		project,
+	)
 }
 
 // descriptorFor resolves the workspace connection descriptor that governs this

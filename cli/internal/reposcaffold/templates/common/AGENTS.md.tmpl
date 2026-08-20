@@ -7,8 +7,10 @@ This repo is a Tau Python research workspace scaffold. Keep local research code 
 - `TauWorkspace` owns access, queue, namespace, and status; it does not own storage.
 - This repo owns Python source, local `uv` setup, image build context, Tau run configs, and experiment-specific data/PVC/secret references.
 - `tau/workspace.connection.yaml` is the non-secret platform handoff. Do **not** add `policy.workspace` to `tau/*.yaml`.
-- The current descriptor uses explicit `cluster-wide` authorization. Treat the workspace as submission defaults, not an access boundary.
-- The researcher path is `tau run smoke`, then `tau run train`.
+{{if .HasWorkspaceConnection}}- The descriptor requires `{{.AuthorizationMode}}` authorization and role `{{.RequiredRole}}`.
+{{else}}- This scaffold is not connected yet. The platform owner must add `tau/workspace.connection.yaml` before cluster runs.
+{{end}}
+- Build and push the project image, write the published tag or digest back with `scripts/configure.sh`, validate, then run.
 - Do not commit workspace-derived namespace, queue policy, kubeconfig, or identity credentials.
 - If named runs or descriptor discovery are unavailable, upgrade Tau rather than changing committed configs.
 
@@ -39,5 +41,6 @@ bash -n scripts/*.sh
 - Do not hardcode workspace policy into committed Tau configs.
 - Do not hardcode workspace-owned namespace or queue policy into committed Tau configs.
 - Keep smoke cheap, CPU-sized, public/synthetic, and free of private data.
+- Project images must run as a non-root user.
 - Put dataset paths, secret references, PVC names, image names, and experiment-specific values in run configs, `.env`, or README prompts, not in TauWorkspace.
 - Ask before changing the checked-in workspace descriptor, ACR, or image values.

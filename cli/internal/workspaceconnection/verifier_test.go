@@ -51,7 +51,7 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if got.Namespace != "sample" || got.Queue != "jobqueue" || got.WorkspaceUID != "workspace-uid" || got.WorkspaceRevision != "7" {
+	if got.Namespace != "sample" || got.Queue != "jobqueue" || got.ServiceAccount != "default" || got.WorkspaceUID != "workspace-uid" || got.WorkspaceRevision != "7" {
 		t.Fatalf("verification = %#v", got)
 	}
 }
@@ -131,7 +131,8 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 		  "spec": {
 		    "authorization": {"mode": "workspace-rbac"},
 		    "role": "tau-researcher-v1",
-		    "queue": "jobqueue"
+		    "queue": "jobqueue",
+		    "workloadIdentity": {"serviceAccountName": "workspace-sa"}
 		  },
 		  "status": {
 		    "phase": "Ready",
@@ -160,8 +161,12 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 	}}
 	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
 
-	if _, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig"); err != nil {
+	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+	if err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+	if got.ServiceAccount != "workspace-sa" {
+		t.Fatalf("service account = %q, want workspace-sa", got.ServiceAccount)
 	}
 	calls := strings.Join(runner.calls, "\n")
 	if strings.Contains(calls, "auth can-i * * --all-namespaces") {

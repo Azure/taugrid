@@ -128,7 +128,7 @@ Main field groups:
 | Group | Purpose |
 |---|---|
 | `name`, `engine`, `entrypoint` | Workload identity and execution mode; `script` aliases `entrypoint`, and the nested `run.*` block adds immutable Job source staging and Ray project-directory shipping |
-| `runtime` | Image, direct-Job container working directory, packages, and literal/secret/Key Vault environment; top-level `image` is a lowest-priority alias for `runtime.image` |
+| `runtime` | Image, direct-Job container working directory, packages, environment, and optional restricted pod security; top-level `image` is a lowest-priority alias for `runtime.image` |
 | `compute` | Worker, GPU, CPU, and memory intent |
 | `execution` | Launcher, node/process topology, launcher configs, and Ray Tune search settings |
 | `policy` | Explicit operator/accounting overrides |
@@ -154,3 +154,20 @@ For the full submit-to-evidence loop against a named target, see
 [first run](../../tasks/researcher/first-run/).
 
 The installed CLI is the final schema authority: use `tau run schema`.
+
+## Restricted pod security
+
+Set `runtime.security.mode: restricted` when the workload images can run as non-root:
+
+```yaml
+runtime:
+  image: <pinned-image>
+  security:
+    mode: restricted
+```
+
+Tau applies the Kubernetes Restricted Pod Security fields to the Job or RayJob pod and every generated main, sidecar, and init container. Missing container user and group IDs default to numeric `65532`; explicit nonzero IDs are preserved. Rendering fails if a profile requests root, privileged mode, privilege escalation, or added capabilities, and the image must support the selected non-root identity.
+
+## Config identity
+
+Tau records one hash of the validated direct config on submitted Jobs and RayJobs. The hash covers runtime, resources, environment, storage, and other run behavior, so resume can warn when the config changed. Script and packaged-source content use separate payload-digest annotations.

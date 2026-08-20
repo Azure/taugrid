@@ -32,12 +32,7 @@ tau run train --dry-run=client
 tau run train
 ```
 
-`--dry-run=client` does not submit the workload, so it is the safe way to catch
-a config mistake before it consumes queue capacity. It still performs workspace
-connection discovery and readiness verification so the rendered namespace,
-LocalQueue, and service account come from current pinned platform policy. Tau
-prints the submitted [run](../../concepts/glossary/#run) name; record it for the
-rest of this walkthrough.
+`--dry-run=client` validates the local descriptor and config without calling Azure, Kubernetes, or cached connection activation. Values that require live workspace policy, such as namespace, LocalQueue, and service account, appear as `<unresolved-...>` unless the config or flags set them explicitly. Use `--dry-run=server` to validate the rendered object against the API server, and use `tau run smoke` to verify workspace readiness and queue admission. Tau prints the submitted [run](../../concepts/glossary/#run) name; record it for the rest of this walkthrough.
 
 ```bash
 tau run status <run-name> --watch

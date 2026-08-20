@@ -43,11 +43,7 @@ adx_cluster_name    = "<globally-unique-adx-cluster-name>"
 
 ```
 
-By default, Terraform uses AKS local administrator credentials for its own
-installation commands and the generated operator command. To opt in to managed
-Entra AKS authentication, set `aks_admin_group_object_ids` to the administrator
-group object IDs. Keep `azure_rbac_enabled = false` when TauWorkspace
-Kubernetes RoleBindings should enforce workspace group access.
+Managed Entra authentication and local administrator accounts are enabled by default. Terraform uses a local administrator kubeconfig for installation commands. Set `aks_admin_group_object_ids` only when Entra groups also need cluster-admin access. Keep `azure_rbac_enabled = false` so TauWorkspace RoleBindings enforce workspace access.
 
 ```bash
 terraform apply

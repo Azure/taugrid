@@ -52,8 +52,10 @@ const workloadNamespaceHelp = "namespace containing the run workload (default: f
 // looks authoritative and is wrong. An angle-bracketed marker cannot be mistaken
 // for a queue or namespace that exists.
 const (
-	clientDryRunQueuePlaceholder     = "<unresolved-queue>"
-	clientDryRunNamespacePlaceholder = "<unresolved-namespace>"
+	clientDryRunQueuePlaceholder          = "<unresolved-queue>"
+	clientDryRunNamespacePlaceholder      = "<unresolved-namespace>"
+	clientDryRunWorkspacePlaceholder      = "<unresolved-workspace>"
+	clientDryRunServiceAccountPlaceholder = "<unresolved-service-account>"
 )
 
 // clientDryRunPlaceholderWarning names only the fields that were actually

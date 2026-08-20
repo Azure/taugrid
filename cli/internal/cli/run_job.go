@@ -215,6 +215,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		Env:                     env,
 		EnvSecrets:              envSecrets,
 		RedactSecrets:           o.dryRun == "client",
+		SecurityMode:            o.securityMode,
 		Profile:                 profileOptions,
 		NodeSelector:            nodeSelector,
 		ClearNodeSelector:       o.clearNodeSelector,
@@ -301,22 +302,26 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		}
 	}
 
-	capture, err := buildJobCaptureMetadata(
+	payloadKey, payloadDigest, err := directJobPayloadAnnotation(o.script, o.source)
+	if err != nil {
+		return err
+	}
+	if opts.Annotations == nil {
+		opts.Annotations = map[string]string{}
+	}
+	opts.Annotations[payloadKey] = payloadDigest
+	capture := buildJobCaptureMetadata(
 		ctx,
 		captureCommand,
 		request.Name,
 		ns,
 		o.image,
-		o.script,
 		pvcMount,
-		o.source,
 		p,
 		volumes,
 		volumeMounts,
+		o.configHash,
 	)
-	if err != nil {
-		return err
-	}
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	opts.Labels, opts.Annotations = experiment.MergeMetadata(opts.Labels, opts.Annotations, capture)
 	opts.Labels = workloadmeta.StampWorkspace(opts.Labels, o.workspace)
