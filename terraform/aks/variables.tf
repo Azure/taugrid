@@ -199,9 +199,14 @@ variable "workspace_namespace" {
 }
 
 variable "adx_cluster_name" {
-  description = "Globally unique Azure Data Explorer cluster name when enable_adx is true."
+  description = "Globally unique Azure Data Explorer cluster name when enable_adx is true. Use 4 to 22 lowercase letters or digits."
   type        = string
   default     = "guweterraformadx"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{4,22}$", var.adx_cluster_name))
+    error_message = "adx_cluster_name must contain 4 to 22 lowercase letters or digits."
+  }
 }
 
 variable "adx_sku_name" {
