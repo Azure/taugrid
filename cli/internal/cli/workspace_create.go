@@ -114,8 +114,8 @@ team that receives access to the workspace.`,
 	cmd.Flags().StringVar(&options.KubernetesSubjectName, "subject-name", "", "Kubernetes RBAC subject name (default --principal-name)")
 	cmd.Flags().StringVar(&options.OutputRoot, "output-root", "", "default durable result path (default /data/projects/NAME/runs)")
 	cmd.Flags().StringVar(&options.Priority, "priority", "normal", "default workload priority: default|priority|normal")
-	cmd.Flags().StringVar(&options.ServiceAccountName, "service-account", "", "optional workload ServiceAccount to reconcile")
-	cmd.Flags().StringVar(&options.WorkloadIdentityClientID, "workload-identity-client-id", "", "optional Azure workload identity client ID")
+	cmd.Flags().StringVar(&options.ServiceAccountName, "service-account", "", "workload ServiceAccount to reconcile (requires --workload-identity-client-id)")
+	cmd.Flags().StringVar(&options.WorkloadIdentityClientID, "workload-identity-client-id", "", "Azure workload identity client ID (requires --service-account)")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().BoolVar(&apply, "apply", false, "conditionally create the TauWorkspace after preflight and server dry-run")
 	return cmd

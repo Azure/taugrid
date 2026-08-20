@@ -106,17 +106,7 @@ generated repo includes a non-secret tau/workspace.connection.yaml descriptor.`,
 			fmt.Fprintf(out, "  cd %s\n", result.OutputDir)
 			fmt.Fprintln(out, "  cp .env.example .env && $EDITOR .env")
 			fmt.Fprintln(out, "  ./scripts/setup.sh")
-			if opts.Workspace != "" &&
-				opts.AzureSubscriptionID != "" &&
-				opts.AzureTenantID != "" &&
-				opts.AKSResourceGroup != "" &&
-				opts.AKSCluster != "" {
-				fmt.Fprintln(out, "  tau run smoke")
-				fmt.Fprintln(out, "  tau run train")
-			} else {
-				fmt.Fprintln(out, "  ask the platform owner to add tau/workspace.connection.yaml")
-				fmt.Fprintln(out, "  tau run validate --config tau/train.yaml")
-			}
+			fmt.Fprintln(out, "  follow README.md to publish the image, validate configs, and run")
 			fmt.Fprintln(out)
 			fmt.Fprintln(out, "note: workspace policy remains cluster-owned; do not commit policy.workspace to tau/*.yaml.")
 			return nil
@@ -205,7 +195,7 @@ func newWorkspaceStatusCmd(check bool) *cobra.Command {
 				return err
 			}
 			if output == "json" {
-				if err := writeJSON(cmd.OutOrStdout(), workspace); err != nil {
+				if err := writeJSON(cmd.OutOrStdout(), tauworkspace.CLIView(workspace)); err != nil {
 					return err
 				}
 			} else {
@@ -250,10 +240,7 @@ func newWorkspaceStatusCmd(check bool) *cobra.Command {
 // workspaceTargetNamespace returns the namespace the controller actually
 // resolved, falling back to the declared spec when status is not populated yet.
 func workspaceTargetNamespace(w tauworkspace.Workspace) string {
-	if ns := strings.TrimSpace(w.Status.Target.ResolvedNamespace); ns != "" {
-		return ns
-	}
-	return strings.TrimSpace(w.Spec.Target.Namespace)
+	return tauworkspace.ResolvedNamespace(w)
 }
 
 // reportWorkspaceDataPVC warns when the durable /data claim is missing or

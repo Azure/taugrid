@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/jsonutil"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
+	"github.com/Azure/taugrid/cli/internal/podsecurity"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/envspec"
@@ -117,6 +118,7 @@ type Options struct {
 	Env             map[string]string
 	EnvSecrets      []envspec.Var
 	RedactSecrets   bool
+	SecurityMode    string
 	DataPVC         string
 	Profile         profile.Profile
 	TopologyOptions topology.Options
@@ -552,10 +554,11 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		pod["serviceAccountName"] = o.ServiceAccountName
 	}
 	if isHead {
-		pod["initContainers"] = []any{
-			raylogoffload.PrepareInitContainer(image),
-			payloadInitContainer(image, encodedPayload, payloadDigest),
+		initContainers := []any{payloadInitContainer(image, encodedPayload, payloadDigest)}
+		if o.SecurityMode != runconfig.SecurityModeRestricted {
+			initContainers = append([]any{raylogoffload.PrepareInitContainer(image)}, initContainers...)
 		}
+		pod["initContainers"] = initContainers
 	} else if workerNeedsSourcePayload(o) {
 		// Project archives must exist on every node for file:// working_dir
 		// resolution. Tune's single-file contract likewise needs the staged
@@ -580,6 +583,14 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},
 			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
 		}
+	}
+	if o.SecurityMode == runconfig.SecurityModeRestricted {
+		group := int64(65532)
+		if err := podsecurity.ApplyRestricted(pod, &group); err != nil {
+			return nil, err
+		}
+	} else if o.SecurityMode != "" {
+		return nil, fmt.Errorf("unsupported runtime security mode %q", o.SecurityMode)
 	}
 	return pod, nil
 }

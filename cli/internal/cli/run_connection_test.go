@@ -54,6 +54,63 @@ func TestApplyAutomaticRunConnectionFillsWorkspaceAndContext(t *testing.T) {
 	}
 }
 
+func TestClientDryRunDiscoversDescriptorWithoutActivation(t *testing.T) {
+	root := t.TempDir()
+	descriptorPath := filepath.Join(root, "tau", "workspace.connection.yaml")
+	if err := os.MkdirAll(filepath.Dir(descriptorPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(descriptorPath, []byte(runRoutingDescriptor), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	options := defaultRunDispatchOptions()
+	options.dryRun = "client"
+	ensurer := &fakeRunConnectionEnsurer{err: errors.New("must not activate")}
+	got, connection, err := applyAutomaticRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{StartDir: root},
+		true,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 0 {
+		t.Fatalf("client dry-run activated the connection %d times", ensurer.calls)
+	}
+	if got.workspace != "sample" || got.kubeContext != "taugrid-flex" || connection.KubeconfigPath != "" {
+		t.Fatalf("options=%#v connection=%#v", got, connection)
+	}
+}
+
+func TestCatalogClientDryRunUsesParsedDescriptorWithoutActivation(t *testing.T) {
+	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := defaultRunDispatchOptions()
+	options.dryRun = "client"
+	ensurer := &fakeRunConnectionEnsurer{err: errors.New("must not activate")}
+	got, _, err := applyAutomaticRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{
+			Catalog:   true,
+			Project:   "alpha",
+			Discovery: &workspaceconnection.Discovery{Descriptor: descriptor},
+		},
+		true,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 0 || got.workspace != "sample" || got.kubeContext != "taugrid-flex" {
+		t.Fatalf("calls=%d options=%#v", ensurer.calls, got)
+	}
+}
+
 func TestApplyAutomaticRunConnectionPreservesExplicitPolicy(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.workspace = "explicit"

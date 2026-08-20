@@ -168,10 +168,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	warnings = append(warnings, resolveWarnings...)
 	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, o.dryRun)
 
-	capture, err := buildRayJobCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.script, o.workers, o.gpusPerWorker, dataPVC)
-	if err != nil {
-		return err
-	}
+	capture := buildRayJobCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.workers, o.gpusPerWorker, dataPVC, o.configHash)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
@@ -241,6 +238,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 			Env:                env,
 			EnvSecrets:         envSecrets,
 			RedactSecrets:      o.dryRun == "client",
+			SecurityMode:       o.securityMode,
 			DataPVC:            dataPVC,
 			Profile:            p,
 			TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),

@@ -78,6 +78,50 @@ func TestExecuteBuiltinSmokeUsesVerifiedWorkspaceConnection(t *testing.T) {
 	}
 }
 
+func TestExecuteBuiltinSmokeClientDryRunIsOffline(t *testing.T) {
+	ensurer := &fakeRunConnectionEnsurer{err: context.Canceled}
+	smoke := &fakeBuiltinSmokeRunner{result: onboarding.SmokeResult{
+		Phase: "DryRun", Manifest: []byte("kind: Job\n"),
+	}}
+	command := &cobra.Command{}
+	var out, stderr bytes.Buffer
+	command.SetOut(&out)
+	command.SetErr(&stderr)
+	command.SetContext(context.Background())
+
+	err := executeBuiltinSmoke(command, builtinSmokeCLIOptions{
+		DryRun:     "client",
+		Connection: runConnectionSource{StartDir: t.TempDir()},
+		ConnectionFactory: func(*cobra.Command) runConnectionEnsurer {
+			return ensurer
+		},
+		WorkspaceDiscoverer: func(*cobra.Command, string) (tauworkspace.Workspace, error) {
+			t.Fatal("client dry-run must not discover a live workspace")
+			return tauworkspace.Workspace{}, nil
+		},
+		WorkspaceFetcher: func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
+			t.Fatal("client dry-run must not fetch a live workspace")
+			return tauworkspace.Workspace{}, nil
+		},
+		SmokeRunner: smoke,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 0 {
+		t.Fatalf("client dry-run activated the connection %d times", ensurer.calls)
+	}
+	if smoke.options.Namespace != clientDryRunNamespacePlaceholder ||
+		smoke.options.Queue != clientDryRunQueuePlaceholder ||
+		smoke.options.Workspace != clientDryRunWorkspacePlaceholder ||
+		smoke.options.ServiceAccount != clientDryRunServiceAccountPlaceholder {
+		t.Fatalf("smoke options = %#v", smoke.options)
+	}
+	if out.String() != "kind: Job\n" || !bytes.Contains(stderr.Bytes(), []byte("does not contact the cluster")) {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), stderr.String())
+	}
+}
+
 // v0 clusters activate exactly one workspace, so `tau run smoke` with no
 // --workspace and no descriptor workspace must resolve it from the cluster
 // rather than refusing to run. This is the researcher-facing half of the

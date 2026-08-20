@@ -65,6 +65,8 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, agents, "experiment-specific data/PVC/secret references")
 	assertContains(t, agents, "only reference platform-provided claims")
 	assertContains(t, agents, "Do **not** add `policy.workspace`")
+	assertContains(t, agents, "requires `workspace-rbac` authorization and role `tau-researcher-v1`")
+	assertNotContains(t, agents, "`cluster-wide` authorization")
 	assertContains(t, agents, "Do not commit workspace-derived namespace, queue policy, kubeconfig, or identity credentials")
 	assertContains(t, agents, "Never commit `.env`, credentials, kubeconfigs, tokens")
 	assertContains(t, agents, "Keep smoke cheap, CPU-sized, public/synthetic")
@@ -84,13 +86,23 @@ func TestRenderPythonScaffold(t *testing.T) {
 	readme := readFile(t, filepath.Join(dir, "README.md"))
 	assertContains(t, readme, "This step is local-only")
 	assertContains(t, readme, "Generated from the standalone `tau-gen` workflow")
-	assertContains(t, readme, "docker build -f images/train.Dockerfile -t \"$IMAGE\" .")
+	assertContains(t, readme, "docker build -f images/train.Dockerfile -t \"$BUILD_IMAGE\" .")
+	assertContains(t, readme, "requires `workspace-rbac` authorization and role `tau-researcher-v1`")
+	assertNotContains(t, readme, "`cluster-wide` authorization")
 	assertContains(t, readme, "tau run smoke")
 	assertContains(t, readme, "tau run train")
 	assertContains(t, readme, "checked-in")
 	assertContains(t, readme, "direct Tau configs")
 	assertContains(t, readme, "Tau authoring strategy")
 	assertContains(t, readme, "You do not need")
+	assertInOrder(t, readme,
+		`docker build -f images/train.Dockerfile -t "$BUILD_IMAGE" .`,
+		`docker push "$BUILD_IMAGE"`,
+		`./scripts/configure.sh --image "$PUBLISHED_IMAGE"`,
+		`tau run validate --config tau/train.yaml`,
+		`tau run smoke`,
+		`tau run train`,
+	)
 	assertNotContains(t, readme, "--workspace")
 	assertNotContains(t, readme, "az aks get-credentials")
 	assertNotContains(t, readme, "git add .env")
@@ -98,7 +110,8 @@ func TestRenderPythonScaffold(t *testing.T) {
 	setup := readFile(t, filepath.Join(dir, "scripts/setup.sh"))
 	assertContains(t, setup, "uv sync --extra dev")
 	assertNotContains(t, setup, "uv sync --extra dev --extra tau")
-	assertContains(t, setup, "Next steps:")
+	assertContains(t, setup, "Next: follow README.md")
+	assertNotContains(t, setup, "tau run validate --config")
 	assertNotContains(t, readme, "Tau SDK setup")
 	setupAzure := readFile(t, filepath.Join(dir, "scripts/setup-azure.sh"))
 	assertContains(t, setupAzure, "Tau workspace authentication and AKS credentials are handled by tau run")
@@ -116,13 +129,15 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, dockerfile, "FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION}")
 	assertContains(t, dockerfile, "ln -sf /usr/bin/python3 /usr/local/bin/python")
 	assertContains(t, dockerfile, "python3 -m pip install --no-cache-dir uv")
+	assertContains(t, dockerfile, "USER 65532:65532")
 	assertNotContains(t, dockerfile, "FROM python:")
 
-	for _, rel := range []string{"tau/smoke.yaml", "tau/train.yaml"} {
+	for _, rel := range []string{"tau/smoke.yaml", "tau/train.yaml", "tau/train-gpu.yaml"} {
 		raw := readFile(t, filepath.Join(dir, filepath.FromSlash(rel)))
 		assertNotContains(t, raw, "policy.workspace")
 		assertNotContains(t, raw, "schema_version")
 		assertContains(t, raw, "disable_default_priorities: true")
+		assertContains(t, raw, "security:\n    mode: restricted")
 		if _, err := runconfig.Load(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("generated %s is not a valid run config: %v\n%s", rel, err, raw)
 		}
@@ -133,6 +148,13 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, readFile(t, filepath.Join(dir, "tau/train.yaml")), "name: my-experiment-train")
 	assertContains(t, readFile(t, filepath.Join(dir, "tau/train.yaml")), "gpus: 0")
 	assertNotContains(t, readFile(t, filepath.Join(dir, "tau/train.yaml")), "profile:")
+	trainConfig, err := runconfig.Load(filepath.Join(dir, "tau", "train.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trainConfig.Compute.CPURequest != "2" || trainConfig.Compute.MemoryRequest != "4Gi" || trainConfig.Compute.CPULimit != "4" || trainConfig.Compute.MemoryLimit != "8Gi" {
+		t.Fatalf("train resources = %#v", trainConfig.Compute)
+	}
 	connection := readFile(t, filepath.Join(dir, "tau/workspace.connection.yaml"))
 	for _, want := range []string{
 		"schema: tau.workspace.connection.v1",
@@ -160,6 +182,23 @@ func TestRenderPythonScaffold(t *testing.T) {
 		}
 		if info.Mode().Perm()&0o111 == 0 {
 			t.Fatalf("%s is not executable: %v", rel, info.Mode().Perm())
+		}
+	}
+}
+
+func TestUnconnectedScaffoldDoesNotClaimAuthorizationMode(t *testing.T) {
+	files, err := Preview(Options{Name: "unconnected", Image: "example.azurecr.io/unconnected:test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"README.md", "AGENTS.md"} {
+		for _, file := range files {
+			if file.Path != path {
+				continue
+			}
+			assertContains(t, file.Content, "not connected")
+			assertNotContains(t, file.Content, "`workspace-rbac` authorization")
+			assertNotContains(t, file.Content, "`cluster-wide` authorization")
 		}
 	}
 }
@@ -321,6 +360,14 @@ func TestConfigureScriptKeepsEnvInSync(t *testing.T) {
 			t.Fatalf(".env diverged from .env.example:\n%s", env)
 		}
 	})
+
+	t.Run("all targets receive the published image", func(t *testing.T) {
+		dir := renderForConfigure(t)
+		runConfigure(t, dir, newImage)
+		for _, rel := range []string{"tau/smoke.yaml", "tau/train.yaml", "tau/train-gpu.yaml"} {
+			assertContains(t, readFile(t, filepath.Join(dir, filepath.FromSlash(rel))), "image: "+newImage)
+		}
+	})
 }
 
 func TestMissingRequiredOptions(t *testing.T) {
@@ -369,6 +416,18 @@ func assertNotContains(t *testing.T, got, want string) {
 	t.Helper()
 	if strings.Contains(got, want) {
 		t.Fatalf("unexpected %q in:\n%s", want, got)
+	}
+}
+
+func assertInOrder(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	pos := 0
+	for _, want := range wants {
+		next := strings.Index(got[pos:], want)
+		if next < 0 {
+			t.Fatalf("missing %q after byte %d in:\n%s", want, pos, got)
+		}
+		pos += next + len(want)
 	}
 }
 

@@ -246,15 +246,8 @@ policy:
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("catalog target command: %v\nstderr:\n%s\nstdout:\n%s", err, stderr.String(), stdout.String())
 	}
-	if ensurer.calls != 1 || len(ensurer.discoveries) != 1 {
+	if ensurer.calls != 0 || len(ensurer.discoveries) != 0 {
 		t.Fatalf("connection calls=%d discoveries=%d", ensurer.calls, len(ensurer.discoveries))
-	}
-	wantConnection, err := filepath.EvalSymlinks(filepath.Join(root, "connections", "shared.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ensurer.discoveries[0].Path != wantConnection {
-		t.Fatalf("exact descriptor = %q, want %q", ensurer.discoveries[0].Path, wantConnection)
 	}
 	for _, want := range []string{"kind: Job", "name: beta-eval", "namespace: catalog-namespace"} {
 		if !strings.Contains(stdout.String(), want) {

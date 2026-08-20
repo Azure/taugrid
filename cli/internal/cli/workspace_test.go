@@ -85,11 +85,8 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 	if !strings.Contains(out.String(), "generated Tau Python repo") {
 		t.Fatalf("unexpected output:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "tau run smoke") {
-		t.Fatalf("smoke next step missing from output:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "tau run train") {
-		t.Fatalf("train next step missing from output:\n%s", out.String())
+	if !strings.Contains(out.String(), "follow README.md") {
+		t.Fatalf("README next step missing from output:\n%s", out.String())
 	}
 
 	env := readWorkspaceTestFile(t, filepath.Join(dir, ".env.example"))

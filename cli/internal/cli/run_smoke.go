@@ -65,6 +65,19 @@ func executeBuiltinSmoke(cmd *cobra.Command, cliOptions builtinSmokeCLIOptions) 
 		return err
 	}
 	defer restoreKubeconfig()
+	if resolved.dryRun == "client" {
+		unresolved := []string{"queue", "service account"}
+		if resolved.workspace == "" {
+			resolved.workspace = clientDryRunWorkspacePlaceholder
+			unresolved = append(unresolved, "workspace")
+		}
+		if resolved.namespace == "" {
+			resolved.namespace = clientDryRunNamespacePlaceholder
+			unresolved = append(unresolved, "namespace")
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), clientDryRunPlaceholderWarning(unresolved...))
+		return renderBuiltinSmoke(cmd, resolved, clientDryRunQueuePlaceholder, clientDryRunServiceAccountPlaceholder, cliOptions.SmokeRunner)
+	}
 
 	if resolved.workspace == "" {
 		// v0 has one workspace per cluster, so resolve it instead of asking
@@ -97,13 +110,16 @@ func executeBuiltinSmoke(cmd *cobra.Command, cliOptions builtinSmokeCLIOptions) 
 	if serviceAccount == "" && workspace.Spec.WorkloadIdentity != nil {
 		serviceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
 	}
-	smokeRunner := cliOptions.SmokeRunner
+	return renderBuiltinSmoke(cmd, resolved, resolved.queue, serviceAccount, cliOptions.SmokeRunner)
+}
+
+func renderBuiltinSmoke(cmd *cobra.Command, resolved unresolvedRunOptions, queue, serviceAccount string, smokeRunner builtinSmokeRunner) error {
 	if smokeRunner == nil {
 		smokeRunner = onboarding.NewSmokeRunner(resolved.kubeContext)
 	}
 	result, err := smokeRunner.Run(cmd.Context(), onboarding.SmokeOptions{
 		Namespace:      resolved.namespace,
-		Queue:          resolved.queue,
+		Queue:          queue,
 		ServiceAccount: serviceAccount,
 		Workspace:      resolved.workspace,
 		ResultScope:    resolved.workspaceResultScope,

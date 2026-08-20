@@ -685,10 +685,19 @@ func (s connectionState) contractChanges(verification Verification) []string {
 	if s.Queue != verification.Queue {
 		changes = append(changes, fmt.Sprintf("LocalQueue %q -> %q", s.Queue, verification.Queue))
 	}
-	if s.ServiceAccount != verification.ServiceAccount {
-		changes = append(changes, fmt.Sprintf("service account %q -> %q", s.ServiceAccount, verification.ServiceAccount))
+	storedServiceAccount := effectiveServiceAccount(s.ServiceAccount)
+	verifiedServiceAccount := effectiveServiceAccount(verification.ServiceAccount)
+	if storedServiceAccount != verifiedServiceAccount {
+		changes = append(changes, fmt.Sprintf("service account %q -> %q", storedServiceAccount, verifiedServiceAccount))
 	}
 	return changes
+}
+
+func effectiveServiceAccount(name string) string {
+	if name = strings.TrimSpace(name); name != "" {
+		return name
+	}
+	return "default"
 }
 
 func (s connectionState) active() ActiveConnection {

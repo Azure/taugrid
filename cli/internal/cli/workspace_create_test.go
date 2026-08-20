@@ -61,6 +61,19 @@ func TestWorkspaceCreateIsWired(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCreateWorkloadIdentityFlagHelpRequiresBothValues(t *testing.T) {
+	cmd := newWorkspaceCreateCmd()
+	for flag, required := range map[string]string{
+		"service-account":             "--workload-identity-client-id",
+		"workload-identity-client-id": "--service-account",
+	} {
+		usage := cmd.Flags().Lookup(flag).Usage
+		if !strings.Contains(usage, "requires "+required) {
+			t.Errorf("--%s help = %q, want required pair %s", flag, usage, required)
+		}
+	}
+}
+
 func TestWorkspaceCreatePreviewDoesNotMutate(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
 	out := executeWorkspaceCreate(t, runner, "research", "--principal-name", "researchers")

@@ -47,6 +47,50 @@ func decodeDocs(t *testing.T, data []byte) []map[string]any {
 	return docs
 }
 
+func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "restricted-ray",
+		Namespace:     "tau",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 0,
+		SecurityMode:  runconfig.SecurityModeRestricted,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rayJob := decodeDocs(t, out)[0]
+	cluster := rayJob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	workers := cluster["workerGroupSpecs"].([]any)
+	worker := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	for podName, pod := range map[string]map[string]any{"head": head, "worker": worker} {
+		podContext := pod["securityContext"].(map[string]any)
+		if podContext["runAsNonRoot"] != true || fmt.Sprint(podContext["fsGroup"]) != "65532" {
+			t.Fatalf("%s pod securityContext = %v", podName, podContext)
+		}
+		for _, field := range []string{"initContainers", "containers"} {
+			containers, _ := pod[field].([]any)
+			for _, raw := range containers {
+				context := raw.(map[string]any)["securityContext"].(map[string]any)
+				if context["runAsNonRoot"] != true || context["allowPrivilegeEscalation"] != false {
+					t.Fatalf("%s %s securityContext = %v", podName, field, context)
+				}
+				if fmt.Sprint(context["runAsUser"]) != "65532" || fmt.Sprint(context["runAsGroup"]) != "65532" {
+					t.Fatalf("%s %s numeric identity = %v", podName, field, context)
+				}
+			}
+		}
+	}
+	if names := containerNames(t, head["initContainers"].([]any)); strings.Contains(names, raylogoffload.PrepareInitName) {
+		t.Fatalf("restricted head kept root init container: %s", names)
+	}
+}
+
 func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	out, err := Render(Options{
 		Name:               "ray-smoke",

@@ -12,6 +12,7 @@ ARG UPSTREAM_ROOT={{.UpstreamRoot}}
 ENV PYTHONUNBUFFERED=1
 ENV PROJECT_ROOT=/workspace
 ENV UPSTREAM_ROOT=${UPSTREAM_ROOT}
+ENV HOME=/tmp
 
 RUN tdnf install -y bash ca-certificates git gcc gcc-c++ make && tdnf clean all
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
@@ -29,6 +30,9 @@ COPY pyproject.toml README.md .python-version ./
 COPY src ./src
 COPY scripts ./scripts
 
-RUN uv sync --no-dev
+RUN uv sync --no-dev \
+    && chown -R 65532:65532 /workspace "${UPSTREAM_ROOT}"
+
+USER 65532:65532
 
 CMD ["uv", "run", "python", "-m", "{{.Package}}.smoke"]

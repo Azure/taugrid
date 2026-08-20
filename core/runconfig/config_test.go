@@ -1087,6 +1087,41 @@ func TestNormalizeEngineCanonicalizesLegacyRayAlias(t *testing.T) {
 	}
 }
 
+func TestRuntimeSecurityModeValidation(t *testing.T) {
+	if err := (Security{Mode: SecurityModeRestricted}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Security{Mode: "privileged"}).Validate(); err == nil {
+		t.Fatal("expected unsupported security mode rejection")
+	}
+}
+
+func TestConfigHashCoversBehaviorFields(t *testing.T) {
+	base := Config{
+		Run:     Run{Engine: EngineJob, Entrypoint: "train.py"},
+		Runtime: Runtime{Image: "example.com/train:v1", Env: map[string]string{"EPOCHS": "1"}},
+		Compute: Compute{CPURequest: "1"},
+		Storage: Storage{Output: "/data/results"},
+	}
+	baseHash, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants := []Config{base, base, base}
+	variants[0].Compute.CPURequest = "2"
+	variants[1].Runtime.Env = map[string]string{"EPOCHS": "2"}
+	variants[2].Storage.Output = "/data/other"
+	for i, variant := range variants {
+		hash, err := variant.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hash == baseHash {
+			t.Fatalf("variant %d did not change config hash", i)
+		}
+	}
+}
+
 func TestValidateExecution(t *testing.T) {
 	tests := []struct {
 		name      string

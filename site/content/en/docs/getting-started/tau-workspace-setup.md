@@ -183,6 +183,7 @@ kubectl wait \
   --timeout=5m
 
 tau workspace status "$TAU_WORKSPACE"
+tau workspace status "$TAU_WORKSPACE" -o json
 tau workspace check "$TAU_WORKSPACE"
 ```
 
@@ -191,6 +192,7 @@ Expected:
 - `phase` is `Ready`;
 - `namespace` is the resolved workload Namespace;
 - `queue` and `clusterQ` are `jobqueue`;
+- `serviceAccount` and `.resolved.serviceAccount` are the configured workload identity ServiceAccount, or `default` when workload identity is not configured;
 - `RBACReady=True`;
 - `QueueReady=True`;
 - `DriftDetected` is not `True`; and
@@ -275,7 +277,7 @@ Expected:
 - the matching Role and RoleBinding `tau-workspace-reader-$TAU_WORKSPACE` exist in `tau-platform` for the same subject; and
 - all five shell assertions exit `0` without output.
 
-If no workload identity was configured, workloads that do not override `serviceAccountName` use the Namespace's Kubernetes `default` ServiceAccount. The current `tau workspace status` output does not print that implicit value.
+If no workload identity was configured, `tau workspace status` reports `default`, which is the Kubernetes ServiceAccount used by workloads that do not override `serviceAccountName`.
 
 If workload identity was configured, inspect the reconciled ServiceAccount:
 
@@ -503,7 +505,7 @@ scripts/
 
 If every researcher already receives a working kubeconfig through another process, you may omit all four Azure/AKS flags. `init-repo` still generates the Tau configs and project scaffold, but it does not create `tau/workspace.connection.yaml`; cluster-backed Tau commands then use the current kubeconfig, and you may pass `--workspace "$TAU_WORKSPACE"` when the workspace cannot be discovered. This manual kubeconfig path supports basic operation, but it is not the clean-machine repository bootstrap accepted in step 9.
 
-The image passed to `init-repo` is written into the generated target configs. Before handoff, build and push the generated project image, then pin the final tag or digest back into the configs:
+The image passed to `init-repo` is the build destination written into the generated targets. Before handoff, build and push the generated project image, then write its final immutable tag or digest back into all targets:
 
 ```bash
 cd "$TAU_REPO_NAME"
@@ -517,6 +519,8 @@ tau run validate --config tau/train.yaml
 ```
 
 Expected: both config validations exit `0`. A public base image that does not contain this generated repository is not a valid project image, even if the image itself can be pulled.
+
+The generated targets use `runtime.security.mode: restricted`, and the generated Dockerfile runs as UID/GID `65532`. A replacement project image must also support non-root execution.
 
 For a private AKS API, edit the descriptor before committing it so `network.privateCluster` is `true` and `network.instructions` tells the researcher how to connect to the required VPN or private network.
 

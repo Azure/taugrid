@@ -20,15 +20,12 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
+  local_account_disabled    = false
 
-  dynamic "azure_active_directory_role_based_access_control" {
-    for_each = length(var.aks_admin_group_object_ids) > 0 ? [true] : []
-
-    content {
-      azure_rbac_enabled     = var.azure_rbac_enabled
-      tenant_id              = coalesce(var.tenant_id, data.azurerm_client_config.current.tenant_id)
-      admin_group_object_ids = var.aks_admin_group_object_ids
-    }
+  azure_active_directory_role_based_access_control {
+    azure_rbac_enabled     = var.azure_rbac_enabled
+    tenant_id              = coalesce(var.tenant_id, data.azurerm_client_config.current.tenant_id)
+    admin_group_object_ids = var.aks_admin_group_object_ids
   }
 
   default_node_pool {

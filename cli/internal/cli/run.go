@@ -166,10 +166,8 @@ Common examples:
 			// legitimately have no TauWorkspace and ran fine before this, so a
 			// failure here warns and falls through to the pre-existing
 			// namespace handling rather than failing the run.
-			// Workspace discovery is skipped for --dry-run=client so a
-			// client-side render still works on a cluster without a
-			// TauWorkspace. This is not an offline path: the connection step
-			// above may already have contacted the cluster.
+			// Client dry-run is offline; live paths may discover the cluster's
+			// primary workspace.
 			if strings.TrimSpace(targetOptions.workspace) == "" && targetOptions.dryRun != "client" {
 				discovered, derr := discoverPrimaryWorkspace(cmd, targetOptions.kubeContext)
 				if derr != nil {
@@ -201,6 +199,10 @@ Common examples:
 			// went on to query.
 			if strings.TrimSpace(targetOptions.namespace) == "" {
 				targetOptions.namespace = strings.TrimSpace(connection.Namespace)
+			}
+			if targetOptions.dryRun == "client" && strings.TrimSpace(targetOptions.serviceAccountName) == "" {
+				targetOptions.serviceAccountName = clientDryRunServiceAccountPlaceholder
+				fmt.Fprintln(cmd.ErrOrStderr(), clientDryRunPlaceholderWarning("service account"))
 			}
 			if err := validateRunDispatchOptions(targetOptions); err != nil {
 				return err
