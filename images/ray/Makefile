@@ -60,11 +60,14 @@ docker-push:
 # at the canonical $(IMG) tag with docker-push-manifest below. Unlike
 # docker-push, this takes the fully-qualified destination tag via IMG (not
 # ACR_REGISTRY/PUSH_IMG), matching how docker-build/test already use IMG.
+docker-push-arch: CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_REPO):cache-$(ARCH) --cache-to type=registry$(comma)ref=$(CACHE_REPO):cache-$(ARCH)$(comma)mode=max)
 docker-push-arch:
 	@case "$(ARCH)" in \
 		amd64|arm64) ;; \
 		*) echo "ARCH must be amd64 or arm64 (got '$(ARCH)')" >&2; exit 1 ;; \
 	esac
+	@test "$(origin IMG)" = "command line" -o "$(origin IMG)" = "environment" || \
+		{ echo "IMG must be set explicitly (e.g. IMG=<registry>/ray:<tag>)" >&2; exit 1; }
 	docker buildx build \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		--build-arg RAY_VERSION=$(RAY_VERSION) \
@@ -80,6 +83,8 @@ docker-push-arch:
 # into one multi-arch manifest list at the canonical $(IMG) tag. Pure registry
 # metadata operation — no build, no emulation, can run on any runner/arch.
 docker-push-manifest:
+	@test "$(origin IMG)" = "command line" -o "$(origin IMG)" = "environment" || \
+		{ echo "IMG must be set explicitly (e.g. IMG=<registry>/ray:<tag>)" >&2; exit 1; }
 	docker buildx imagetools create \
 		--tag $(IMG) \
 		$(IMG)-amd64 \
