@@ -91,3 +91,6 @@ USER nonroot:nonroot
 
 # Ray GCS server, dashboard, client ports
 EXPOSE 6379 8265 10001
+
+ARG SOURCE_REVISION=dev
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
