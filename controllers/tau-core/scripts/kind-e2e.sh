@@ -665,7 +665,10 @@ kubectl auth can-i get configmaps -n "${TARGET_NAMESPACE}" --as=researcher@examp
 kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i create quotarequests.tau.azure.com -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get "clusterqueues.kueue.x-k8s.io/${WORKSPACE_NAME}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+kubectl auth can-i get "clusters.tau.azure.com/cluster" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 [[ "$(kubectl auth can-i list clusterqueues.kueue.x-k8s.io --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i list clusters.tau.azure.com --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i get clusters.tau.azure.com/other --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i list workspaces.tau.azure.com -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i update "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 # Cannot read another namespace's secrets: tau-researcher-v1 is bound via a

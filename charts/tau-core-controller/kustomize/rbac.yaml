@@ -40,6 +40,10 @@ rules:
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["clusterqueues"]
     verbs: ["get"]
+  - apiGroups: ["tau.azure.com"]
+    resources: ["clusters"]
+    resourceNames: ["cluster"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

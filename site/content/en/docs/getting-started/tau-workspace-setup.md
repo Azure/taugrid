@@ -275,7 +275,7 @@ Expected:
 - the Namespace is `Active` and has the Tau workspace, default LocalQueue, and Pod Security labels;
 - LocalQueue `jobqueue` points to ClusterQueue `jobqueue`;
 - RoleBinding `tau-researcher-v1` grants the exact researcher subject access in the workload Namespace;
-- ClusterRoleBinding `tau-clusterqueue-reader-$TAU_WORKSPACE` grants that subject read access to the backing ClusterQueue;
+- ClusterRoleBinding `tau-clusterqueue-reader-$TAU_WORKSPACE` grants that subject `get` access to ClusterQueues and to only the singleton `TauCluster/cluster`, which supplies authoritative workload profiles;
 - the matching Role and RoleBinding `tau-workspace-reader-$TAU_WORKSPACE` exist in `$TAU_SYSTEM_NAMESPACE` for the same subject; and
 - all five shell assertions exit `0` without output.
 
