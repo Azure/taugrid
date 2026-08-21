@@ -35,7 +35,7 @@ description: Default Kueue priority for local Tau Kind smoke jobs.
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: Topology
 metadata:
-  name: kind-cpu
+  name: kind-cpu-tas
   labels:
     tau.azure.com/managed-by: tau-kind-smoke
 spec:
@@ -51,7 +51,17 @@ metadata:
 spec:
   nodeLabels:
     kubernetes.io/os: linux
-  topologyName: kind-cpu
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: kind-cpu-tas
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+spec:
+  nodeLabels:
+    kubernetes.io/os: linux
+  topologyName: kind-cpu-tas
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
@@ -84,3 +94,35 @@ metadata:
     tau.azure.com/queue-role: local-smoke
 spec:
   clusterQueue: kind-cpu-cq
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: kind-cpu-tas-cq
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ray
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+    - coveredResources: ["cpu", "memory"]
+      flavors:
+        - name: kind-cpu-tas
+          resources:
+            - name: cpu
+              nominalQuota: "4"
+            - name: memory
+              nominalQuota: 12Gi
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: kind-cpu-tas
+  namespace: ray
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+    tau.azure.com/queue-role: local-smoke-tas
+spec:
+  clusterQueue: kind-cpu-tas-cq

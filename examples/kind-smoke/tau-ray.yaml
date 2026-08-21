@@ -19,7 +19,7 @@ compute:
 policy:
   namespace: ray
   profile: kind-cpu-ray
-  queue: kind-cpu
+  queue: kind-cpu-tas
   lane: training
 experiment:
   project: Tau Local

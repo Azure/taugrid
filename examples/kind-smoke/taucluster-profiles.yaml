@@ -30,7 +30,7 @@ spec:
       workerCount: 2
       mode: fixed
       placement: multi-node-nccl
-      defaultLocalQueue: kind-cpu
+      defaultLocalQueue: kind-cpu-tas
       executionTarget: singleCluster
       priorities:
         workloadPriorityClassName: taugrid-train-default

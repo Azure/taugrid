@@ -294,6 +294,69 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  name: resourceflavors.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: ResourceFlavor
+    listKind: ResourceFlavorList
+    plural: resourceflavors
+    singular: resourceflavor
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: topologies.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: Topology
+    listKind: TopologyList
+    plural: topologies
+    singular: topology
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workloadpriorityclasses.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: WorkloadPriorityClass
+    listKind: WorkloadPriorityClassList
+    plural: workloadpriorityclasses
+    singular: workloadpriorityclass
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
   name: workloads.kueue.x-k8s.io
 spec:
   group: kueue.x-k8s.io

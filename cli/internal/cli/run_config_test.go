@@ -373,7 +373,7 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 		"name: tau-kind-ray",
 		"namespace: ray",
 		"image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0",
-		"kueue.x-k8s.io/queue-name: kind-cpu",
+		"kueue.x-k8s.io/queue-name: kind-cpu-tas",
 		"kueue.x-k8s.io/priority-class: taugrid-default",
 		"priorityClassName: taugrid-default",
 		`num-gpus: "0"`,
