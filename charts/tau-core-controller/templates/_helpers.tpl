@@ -40,36 +40,3 @@ platform can run a pre-release build without editing templates.
 {{ fail "image.digest or image.tag must be set" }}
 {{- end -}}
 {{- end -}}
-
-{{- define "tau-core-controller.multiKueueBetaEnabled" -}}
-{{- $global := .Values.global | default dict -}}
-{{- $features := get $global "betaFeatures" | default list -}}
-{{- $acknowledgements := get $global "betaRiskAcknowledgements" | default list -}}
-{{- if and (has "multikueue" $features) (has "multikueue" $acknowledgements) -}}true{{- end -}}
-{{- end -}}
-
-{{- define "tau-core-controller.validateMultiKueueBetaGate" -}}
-{{- $global := .Values.global | default dict -}}
-{{- $features := get $global "betaFeatures" | default list -}}
-{{- $acknowledgements := get $global "betaRiskAcknowledgements" | default list -}}
-{{- $featureEnabled := has "multikueue" $features -}}
-{{- $riskAcknowledged := has "multikueue" $acknowledgements -}}
-{{- if ne $featureEnabled $riskAcknowledged -}}
-{{- fail "MultiKueue Beta requires both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]; enabling only one is not permitted" -}}
-{{- end -}}
-{{- $scan := deepCopy .Values -}}
-{{- $scanGlobal := deepCopy $global -}}
-{{- $_ := unset $scanGlobal "betaFeatures" -}}
-{{- $_ := unset $scanGlobal "betaRiskAcknowledgements" -}}
-{{- $_ := set $scan "global" $scanGlobal -}}
-{{- $scanTauCluster := deepCopy (.Values.tauCluster | default dict) -}}
-{{- $scanTauClusterFeatures := deepCopy (get $scanTauCluster "features" | default dict) -}}
-{{- if eq (lower (get $scanTauClusterFeatures "multiKueue" | default "")) "disabled" -}}
-{{- $_ := unset $scanTauClusterFeatures "multiKueue" -}}
-{{- end -}}
-{{- $_ := set $scanTauCluster "features" $scanTauClusterFeatures -}}
-{{- $_ := set $scan "tauCluster" $scanTauCluster -}}
-{{- if and (contains "multikueue" (lower (toJson $scan))) (not (and $featureEnabled $riskAcknowledged)) -}}
-{{- fail "MultiKueue configuration was supplied without the required Beta gate; set both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]" -}}
-{{- end -}}
-{{- end -}}

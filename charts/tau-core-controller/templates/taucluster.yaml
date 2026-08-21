@@ -13,8 +13,6 @@ spec:
   # label works for both AKS-managed and AKS Flex nodes.
   managementMode: {{ .Values.tauCluster.managementMode }}
   deletionPolicy: {{ .Values.tauCluster.deletionPolicy }}
-  features:
-{{- toYaml .Values.tauCluster.features | nindent 4 }}
   nodes:
     labelRules: {{- if $rules }}{{ toYaml $rules | nindent 6 }}{{- else }} []{{- end }}
   queues:

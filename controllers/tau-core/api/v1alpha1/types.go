@@ -29,9 +29,6 @@ const (
 	ClusterOwnershipAdopt    = "Adopt"
 	ClusterOwnershipManage   = "Manage"
 
-	TauClusterFeatureDisabled TauClusterFeatureStage = "Disabled"
-	TauClusterFeatureBeta     TauClusterFeatureStage = "Beta"
-
 	ClusterPhasePending  = "Pending"
 	ClusterPhaseReady    = "Ready"
 	ClusterPhaseDegraded = "Degraded"
@@ -81,14 +78,6 @@ const (
 
 	QuotaMutationModeReportOnly = "ReportOnly"
 )
-
-type TauClusterFeatureStage string
-
-type TauClusterFeaturesSpec struct {
-	// +kubebuilder:default=Disabled
-	// +kubebuilder:validation:Enum=Disabled;Beta
-	MultiKueue TauClusterFeatureStage `json:"multiKueue,omitempty"`
-}
 
 type TauClusterObjectReference struct {
 	// Name is the name of a cluster-scoped object.
@@ -166,8 +155,6 @@ type TauClusterSpec struct {
 	Queues TauClusterQueuesSpec `json:"queues,omitempty"`
 	// +kubebuilder:default={}
 	WorkspaceDefaults TauClusterWorkspaceDefaults `json:"workspaceDefaults,omitempty"`
-	// +kubebuilder:default={}
-	Features TauClusterFeaturesSpec `json:"features,omitempty"`
 	// WorkloadProfiles declares stable workload intent. Live quota, capacity,
 	// flavor selectors, and topology selectors are resolved into status instead.
 	// +listType=map

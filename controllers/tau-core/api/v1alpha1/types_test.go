@@ -65,7 +65,6 @@ func TestTauClusterRoundTrip(t *testing.T) {
 		Spec: TauClusterSpec{
 			ManagementMode: ClusterManagementModeObserve,
 			DeletionPolicy: ClusterDeletionPolicyRetain,
-			Features:       TauClusterFeaturesSpec{MultiKueue: TauClusterFeatureBeta},
 			Nodes: TauClusterNodesSpec{
 				Selector: map[string]string{"kubernetes.azure.com/agentpool": "gpu"},
 				LabelRules: []TauNodeLabelRule{{
@@ -87,7 +86,7 @@ func TestTauClusterRoundTrip(t *testing.T) {
 				Mode:              profile.ModeFixed,
 				Placement:         profile.PlacementIndependent,
 				DefaultLocalQueue: "jobqueue",
-				ExecutionTarget:   profile.ExecutionTargetMultiKueueBeta,
+				ExecutionTarget:   profile.ExecutionTargetMultiKueue,
 				Applicability: profile.ProfileApplicability{
 					Teams: []string{"research"}, Namespaces: []string{"ray"},
 				},
@@ -143,9 +142,8 @@ func TestTauClusterRoundTrip(t *testing.T) {
 	if got.Name != TauClusterSingletonName || got.Spec.ManagementMode != ClusterManagementModeObserve {
 		t.Fatalf("TauCluster identity/mode = %q/%q", got.Name, got.Spec.ManagementMode)
 	}
-	if got.Spec.Features.MultiKueue != TauClusterFeatureBeta ||
-		got.Spec.WorkloadProfiles[0].ExecutionTarget != profile.ExecutionTargetMultiKueueBeta {
-		t.Fatalf("TauCluster feature/profile execution contract = %#v", got.Spec)
+	if got.Spec.WorkloadProfiles[0].ExecutionTarget != profile.ExecutionTargetMultiKueue {
+		t.Fatalf("TauCluster profile execution contract = %#v", got.Spec)
 	}
 	if len(got.Spec.Queues.SharedLocalQueues) != 1 || got.Spec.Queues.SharedLocalQueues[0].Namespace != "ray" {
 		t.Fatalf("TauCluster queue references = %#v", got.Spec.Queues.SharedLocalQueues)
@@ -223,13 +221,16 @@ func TestTauClusterCRDContract(t *testing.T) {
 
 	version := cluster.Spec.Versions[0]
 	specProps := version.Schema.OpenAPIV3Schema.Properties["spec"].Properties
-	for _, field := range []string{"managementMode", "deletionPolicy", "nodes", "queues", "workspaceDefaults", "features", "workloadProfiles"} {
+	for _, field := range []string{"managementMode", "deletionPolicy", "nodes", "queues", "workspaceDefaults", "workloadProfiles"} {
 		if _, ok := specProps[field]; !ok {
 			t.Fatalf("TauCluster spec schema missing %q", field)
 		}
 	}
 	if _, ok := specProps["storage"]; ok {
 		t.Fatal("TauCluster spec must not expose storage ownership in v0.1")
+	}
+	if _, ok := specProps["features"]; ok {
+		t.Fatal("TauCluster spec must not expose feature stages")
 	}
 	if got := string(specProps["managementMode"].Default.Raw); got != `"Observe"` {
 		t.Fatalf("managementMode default = %s, want Observe", got)
@@ -250,14 +251,6 @@ func TestTauClusterCRDContract(t *testing.T) {
 	if got := string(workspaceDefaults["defaultQueue"].Default.Raw); got != `"jobqueue"` {
 		t.Fatalf("workspaceDefaults.defaultQueue default = %s, want jobqueue", got)
 	}
-	multiKueue := specProps["features"].Properties["multiKueue"]
-	if got := string(multiKueue.Default.Raw); got != `"Disabled"` {
-		t.Fatalf("features.multiKueue default = %s, want Disabled", got)
-	}
-	if len(multiKueue.Enum) != 2 {
-		t.Fatalf("features.multiKueue enum = %v, want Disabled and Beta", multiKueue.Enum)
-	}
-
 	profiles := specProps["workloadProfiles"]
 	if profiles.XListType == nil || *profiles.XListType != "map" ||
 		len(profiles.XListMapKeys) != 1 || profiles.XListMapKeys[0] != "name" {
@@ -267,6 +260,12 @@ func TestTauClusterCRDContract(t *testing.T) {
 	for _, field := range []string{"name", "description", "applicability", "gpusPerWorker", "workerCount", "mode", "placement", "defaultLocalQueue", "executionTarget", "priorities"} {
 		if _, ok := profileProps[field]; !ok {
 			t.Fatalf("TauCluster workload profile schema missing %q", field)
+		}
+		executionTargets := profileProps["executionTarget"].Enum
+		if len(executionTargets) != 2 ||
+			string(executionTargets[0].Raw) != `"singleCluster"` ||
+			string(executionTargets[1].Raw) != `"multiKueue"` {
+			t.Fatalf("executionTarget enum = %v, want singleCluster and multiKueue", executionTargets)
 		}
 	}
 	for _, field := range []string{"quota", "capacity", "resourceFlavor", "topologyName", "resourceSelector", "topologySelector"} {

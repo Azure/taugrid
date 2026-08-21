@@ -280,7 +280,7 @@ policy:
 	}
 }
 
-func TestResumeObservesExistingWorkloadBeforeReplacementProfileGate(t *testing.T) {
+func TestResumeObservesExistingWorkloadBeforeReplacementProfileApplicabilityFailure(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "tau.yaml")
 	writeRunRoutingFile(t, config, "name: resume-job\n")
 	command := &cobra.Command{}
@@ -314,7 +314,7 @@ func TestResumeObservesExistingWorkloadBeforeReplacementProfileGate(t *testing.T
 			},
 			resolveProfile: func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error) {
 				profileCalls++
-				return unresolvedRunOptions{}, fmt.Errorf("missing execution.beta_features/--acknowledge-beta-feature acknowledgement")
+				return unresolvedRunOptions{}, fmt.Errorf(`workload profile "research-profile" does not authorize namespace "ray"`)
 			},
 			deleteOld: func(context.Context, string, string, string, io.Writer) error {
 				deleteCalls++
@@ -322,8 +322,8 @@ func TestResumeObservesExistingWorkloadBeforeReplacementProfileGate(t *testing.T
 			},
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "execution.beta_features") {
-		t.Fatalf("profile gate error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), `does not authorize namespace "ray"`) {
+		t.Fatalf("profile applicability error = %v", err)
 	}
 	if fetchCalls != 1 || profileCalls != 1 || deleteCalls != 0 {
 		t.Fatalf("fetch=%d profile=%d delete=%d", fetchCalls, profileCalls, deleteCalls)

@@ -66,8 +66,8 @@ No capabilities are currently labeled Deprecated.
 A design document or partial implementation does not change a capability's
 feature stage.
 
-The `features.multiKueue: Beta` value is an opt-in feature-gate name; it does
-not promote MultiKueue beyond Alpha. Promotion still requires the environment
+MultiKueue's Alpha label describes the maturity of the constrained capability,
+not a per-submission rollout gate. Promotion still requires the environment
 matrix, E2E, security/authorization, credential lifecycle, enablement, drain,
 and rollback evidence listed in
 [multi-cluster execution](../../operations/multicluster/).

@@ -649,12 +649,15 @@ func TestBoardFiltersResolvedLocalQueue(t *testing.T) {
 	}
 }
 
-func TestBoardLabelsAuthoritativeMultiKueueRuntimeAsBeta(t *testing.T) {
+func TestBoardLabelsMultiKueueRuntimeFromManagedBy(t *testing.T) {
 	jobsJSON := []byte(`{"items":[
-		{"metadata":{"name":"managed","labels":{"` + workloadmeta.LabelJob + `":"managed"}},
+		{"metadata":{"name":"managed","labels":{"` + workloadmeta.LabelJob + `":"managed"},
+		 "annotations":{"` + workloadmeta.AnnotationWorkloadProfileName + `":"federated",
+		 "` + workloadmeta.AnnotationWorkloadProfileSetHash + `":"sha256:example",
+		 "` + workloadmeta.AnnotationTauClusterGeneration + `":"7"}},
 		 "spec":{"managedBy":"kueue.x-k8s.io/multikueue"}},
-		{"metadata":{"name":"annotated","labels":{"` + workloadmeta.LabelJob + `":"annotated"},
-		 "annotations":{"` + workloadmeta.AnnotationMultiKueueStage + `":"Beta"}}},
+		{"metadata":{"name":"profile-only","labels":{"` + workloadmeta.LabelJob + `":"profile-only"},
+		 "annotations":{"` + workloadmeta.AnnotationWorkloadProfileName + `":"federated"}}},
 		{"metadata":{"name":"queue-name-is-not-identity","labels":{"` + workloadmeta.LabelJob + `":"plain",
 		 "kueue.x-k8s.io/queue-name":"multikueue"}}}
 	]}`)
@@ -668,12 +671,12 @@ func TestBoardLabelsAuthoritativeMultiKueueRuntimeAsBeta(t *testing.T) {
 	for _, run := range snapshot.Runs {
 		byName[run.Name] = run
 	}
-	for _, name := range []string{"managed", "annotated"} {
-		if byName[name].ExecutionTarget != "multiKueueBeta" || byName[name].Stage != "Beta" {
-			t.Fatalf("%s run = %#v", name, byName[name])
-		}
+	if byName["managed"].ExecutionTarget != "multiKueue" {
+		t.Fatalf("managed run = %#v", byName["managed"])
 	}
-	if byName["queue-name-is-not-identity"].Stage != "" {
-		t.Fatalf("queue-name heuristic labelled run Beta: %#v", byName["queue-name-is-not-identity"])
+	for _, name := range []string{"profile-only", "queue-name-is-not-identity"} {
+		if byName[name].ExecutionTarget != "" {
+			t.Fatalf("%s run inferred MultiKueue without managedBy: %#v", name, byName[name])
+		}
 	}
 }

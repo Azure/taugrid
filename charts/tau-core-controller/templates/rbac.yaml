@@ -98,14 +98,12 @@ rules:
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["workloads"]
     verbs: ["get", "list", "watch"]
-  {{- if include "tau-core-controller.multiKueueBetaEnabled" . }}
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["admissionchecks"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["multikueueconfigs", "multikueueclusters"]
     verbs: ["get"]
-  {{- end }}
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]

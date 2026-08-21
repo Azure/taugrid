@@ -1,7 +1,3 @@
-global:
-  betaFeatures: []
-  betaRiskAcknowledgements: []
-
 # app.kubernetes.io/part-of for every rendered object. The TauGrid distribution
 # leaves this as taugrid; GitOps paths rendering the literal manifests under
 # kustomize/ should keep the same value.
@@ -28,11 +24,6 @@ resources:
 tauCluster:
   managementMode: Reconcile
   deletionPolicy: Retain
-  features:
-    # Operator authorization is independent of the install/runtime gate. Set
-    # Beta only after the acknowledged install path and manager prerequisites
-    # are ready.
-    multiKueue: Disabled
   # Tau owns these derived labels. AKS supplies node.kubernetes.io/instance-type;
   # the controller continuously reconciles the stable researcher class and the
   # platform series on matching current and future nodes. CPU-only clusters and
@@ -138,9 +129,8 @@ tauCluster:
   # manifests. Helm list replacement is intentional: platform owners can replace
   # the complete catalog with site-specific profiles using this value.
   #
-  # Keep MultiKueue profiles out of this default. A distribution that enables
-  # the separate MultiKueue install gate must append its non-global
-  # multiKueueBeta profile in the gated render path.
+  # Keep MultiKueue profiles out of this default. Operators append site-specific
+  # multiKueue profiles only after provisioning routing and credentials.
   workloadProfiles:
     - name: azure.research.training.l
       description: Shared GPU training on one GPU.

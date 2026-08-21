@@ -119,11 +119,9 @@ const (
 	AnnotationClusterQueue   = "tau.azure.com/cluster-queue"
 	AnnotationResourceFlavor = "tau.azure.com/resource-flavor"
 
-	AnnotationTauClusterGeneration       = "tau.azure.com/tau-cluster-generation"
-	AnnotationWorkloadProfileSetHash     = "tau.azure.com/workload-profile-set-hash"
-	AnnotationWorkloadProfileName        = "tau.azure.com/workload-profile"
-	AnnotationBetaFeatureAcknowledgement = "tau.azure.com/beta-feature-acknowledgement"
-	AnnotationMultiKueueStage            = "tau.azure.com/multikueue-stage"
+	AnnotationTauClusterGeneration   = "tau.azure.com/tau-cluster-generation"
+	AnnotationWorkloadProfileSetHash = "tau.azure.com/workload-profile-set-hash"
+	AnnotationWorkloadProfileName    = "tau.azure.com/workload-profile"
 
 	AnnotationPresetExplain      = "tau.azure.com/preset-explain"
 	AnnotationTopologyQueue      = "tau.azure.com/topology-local-queue"

@@ -40,15 +40,6 @@ func (r *TauClusterReconciler) multiKueueReadinessCondition(
 	ctx context.Context,
 	generation int64,
 ) (metav1.Condition, error) {
-	if !r.MultiKueueBetaRuntimeEnabled {
-		return condition(
-			tauv1alpha1.ConditionMultiKueueReady,
-			metav1.ConditionFalse,
-			"RuntimeDisabled",
-			"the Tau controller was installed without --beta-feature-gates=multikueue",
-			generation,
-		), nil
-	}
 	if r.MultiKueuePrerequisites == nil {
 		return condition(
 			tauv1alpha1.ConditionMultiKueueReady,

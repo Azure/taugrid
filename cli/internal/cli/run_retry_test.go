@@ -165,7 +165,7 @@ func TestRetryLoop_RetryableFailureThenSuccess(t *testing.T) {
 	}
 }
 
-func TestRetryLoop_PreparesReplacementBeforeDeletingFailedWorkload(t *testing.T) {
+func TestRetryLoop_RejectsNotReadyReplacementBeforeDeletingFailedWorkload(t *testing.T) {
 	var buf bytes.Buffer
 	opts := baseRetryOpts()
 	deleteCalls := 0
@@ -174,7 +174,7 @@ func TestRetryLoop_PreparesReplacementBeforeDeletingFailedWorkload(t *testing.T)
 			return preemptedSnapshot(), terminalFailed, nil
 		},
 		prepareResubmit: func(int, string) error {
-			return errors.New("current workload profile is unavailable")
+			return errors.New(`workload profile "research-profile" condition Ready is False`)
 		},
 		deleteWorkload: func() error {
 			deleteCalls++
@@ -183,7 +183,9 @@ func TestRetryLoop_PreparesReplacementBeforeDeletingFailedWorkload(t *testing.T)
 		sleep: func(time.Duration) error { return nil },
 	}
 	err := retryLoopWithHooks(&buf, opts, hooks)
-	if err == nil || !strings.Contains(err.Error(), "before deleting failed workload") {
+	if err == nil ||
+		!strings.Contains(err.Error(), "condition Ready is False") ||
+		!strings.Contains(err.Error(), "before deleting failed workload") {
 		t.Fatalf("prepare error = %v", err)
 	}
 	if deleteCalls != 0 {

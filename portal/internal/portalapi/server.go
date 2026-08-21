@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
-	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/expapi"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
@@ -529,7 +528,6 @@ type runningItem struct {
 	ExperimentPath     string `json:"experimentPath,omitempty"`
 	ExperimentTracking string `json:"experimentTracking"`
 	ExecutionTarget    string `json:"executionTarget,omitempty"`
-	Stage              string `json:"stage,omitempty"`
 }
 
 // portalBoards is the canonical board list surfaced by the shell. Experiments
@@ -745,7 +743,6 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 			ExperimentPath:     experimentPath,
 			ExperimentTracking: experimentTracking,
 			ExecutionTarget:    wl.ExecutionTarget,
-			Stage:              wl.Stage,
 		})
 	}
 }
@@ -1166,8 +1163,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0))
 }
 
-// annotateMultiKueueRuns adds observation-only Beta identity from authoritative
-// Kueue Workload placement/admission-check status. Read failures are ignored:
+// annotateMultiKueueRuns adds observation-only execution identity from
+// authoritative Kueue Workload placement status. Read failures are ignored:
 // live Job/RayJob rows remain visible and usable for status/log/cleanup.
 func (s *Server) annotateMultiKueueRuns(ctx context.Context, snapshot *runs.Snapshot, namespace string) {
 	if s.jobs.Reader == nil {
@@ -1177,31 +1174,30 @@ func (s *Server) annotateMultiKueueRuns(ctx context.Context, snapshot *runs.Snap
 	if err != nil {
 		return
 	}
-	betaRunIDs := map[string]struct{}{}
-	betaNames := map[string]struct{}{}
+	multiKueueRunIDs := map[string]struct{}{}
+	multiKueueNames := map[string]struct{}{}
 	for _, workload := range workloads {
-		if workload.Stage != "Beta" {
+		if workload.ExecutionTarget != "multiKueue" {
 			continue
 		}
 		if workload.RunID != "" {
-			betaRunIDs[workload.RunID] = struct{}{}
+			multiKueueRunIDs[workload.RunID] = struct{}{}
 			continue
 		}
 		if workload.Job != "" {
-			betaNames[workload.Job] = struct{}{}
+			multiKueueNames[workload.Job] = struct{}{}
 		}
 		for _, owner := range workload.Owners {
-			betaNames[owner] = struct{}{}
+			multiKueueNames[owner] = struct{}{}
 		}
 	}
 	for i := range snapshot.Runs {
-		_, matchedRunID := betaRunIDs[snapshot.Runs[i].RunID]
-		_, matchedName := betaNames[snapshot.Runs[i].Name]
+		_, matchedRunID := multiKueueRunIDs[snapshot.Runs[i].RunID]
+		_, matchedName := multiKueueNames[snapshot.Runs[i].Name]
 		if snapshot.Runs[i].RunID != "" && !matchedRunID || snapshot.Runs[i].RunID == "" && !matchedName {
 			continue
 		}
-		snapshot.Runs[i].ExecutionTarget = string(profile.ExecutionTargetMultiKueueBeta)
-		snapshot.Runs[i].Stage = "Beta"
+		snapshot.Runs[i].ExecutionTarget = "multiKueue"
 	}
 }
 

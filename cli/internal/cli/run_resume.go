@@ -33,13 +33,12 @@ func newRunResumeCmdWithDependencies(
 	hooks resumeCommandHooks,
 ) *cobra.Command {
 	var (
-		configPath   string
-		namespace    string
-		kubeContext  string
-		dryRun       string
-		from         string
-		force        bool
-		betaFeatures []string
+		configPath  string
+		namespace   string
+		kubeContext string
+		dryRun      string
+		from        string
+		force       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "resume <name> --config tau.yaml",
@@ -97,13 +96,6 @@ Examples:
 				return err
 			}
 			defer restore()
-			routing.TargetOptions.betaFeatures, err = mergeBetaFeatureAcknowledgements(
-				routing.TargetOptions.betaFeatures,
-				betaFeatures,
-			)
-			if err != nil {
-				return err
-			}
 			return runResumeCommand(
 				cmd,
 				name,
@@ -122,7 +114,6 @@ Examples:
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
 	cmd.Flags().StringVar(&from, "from", "", "checkpoint directory override (default: /data/checkpoints/finetunes/<name>)")
 	cmd.Flags().BoolVar(&force, "force", false, "resume even after OOM (use with resource increases)")
-	cmd.Flags().StringSliceVar(&betaFeatures, "acknowledge-beta-feature", nil, "acknowledge a Beta execution feature for the replacement workload (supported: multikueue; repeatable)")
 	return cmd
 }
 
@@ -445,8 +436,9 @@ func runResumeCommand(
 	}
 	applyResumeOverrides(&targetOptions, routing.Namespace, routing.KubeContext, dryRun)
 	// Status and failure inspection above remain available regardless of the
-	// current profile/Beta gate. Resolve the replacement profile only after
-	// observation, and always before deleting the failed workload.
+	// current profile readiness and applicability checks. Resolve the
+	// replacement profile only after observation, and always before deleting
+	// the failed workload.
 	productionExecution := hooks.executeTarget == nil && hooks.validateTarget == nil
 	if hooks.resolveProfile != nil || productionExecution {
 		targetOptions, err = hooks.profile(cmd.Context(), targetOptions)

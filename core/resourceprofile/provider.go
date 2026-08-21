@@ -130,7 +130,7 @@ func (p *Provider) Select(ctx context.Context, request SelectionRequest) (Select
 func (set ProfileSet) Select(request SelectionRequest) (Selection, error) {
 	name := normalizeName(request.Name)
 	if name == "" {
-		return selectUniqueSingleClusterProfile(set, request)
+		return selectUniqueProfile(set, request)
 	}
 	for _, candidate := range set.Profiles {
 		if candidate.Name != name {
@@ -172,12 +172,9 @@ func ValidateApplicability(resolved ResolvedWorkloadProfile, request SelectionRe
 	return authorizeProfile(resolved, request)
 }
 
-func selectUniqueSingleClusterProfile(set ProfileSet, request SelectionRequest) (Selection, error) {
+func selectUniqueProfile(set ProfileSet, request SelectionRequest) (Selection, error) {
 	var matches []ResolvedWorkloadProfile
 	for _, candidate := range set.Profiles {
-		if candidate.ExecutionTarget != ExecutionTargetSingleCluster {
-			continue
-		}
 		if err := requireProfileReady(candidate, set.Generation); err != nil {
 			continue
 		}
@@ -195,7 +192,7 @@ func selectUniqueSingleClusterProfile(set ProfileSet, request SelectionRequest) 
 	switch len(matches) {
 	case 0:
 		return Selection{}, fmt.Errorf(
-			"no ready singleCluster workload profile matches %s; set policy.profile explicitly (MultiKueue Beta profiles are never selected implicitly)",
+			"no ready workload profile matches %s; set policy.profile explicitly",
 			scope,
 		)
 	case 1:
@@ -211,7 +208,7 @@ func selectUniqueSingleClusterProfile(set ProfileSet, request SelectionRequest) 
 			names = append(names, candidate.Name)
 		}
 		return Selection{}, fmt.Errorf(
-			"multiple ready singleCluster workload profiles match %s: %s; set policy.profile explicitly",
+			"multiple ready workload profiles match %s: %s; set policy.profile explicitly",
 			scope,
 			formatAvailableProfiles(names),
 		)

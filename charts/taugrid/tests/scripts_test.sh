@@ -182,132 +182,31 @@ assert_namespaces() {
   done < <(render_namespaces "$manifest")
 }
 
-standalone_kueue_root="$TEST_ROOT/standalone-kueue"
-standalone_kueue_chart="$standalone_kueue_root/kueue"
-standalone_kueue_archive="$TEST_CHART_DIR/charts/kueue-0.18.2.tgz"
-[[ -f "$standalone_kueue_archive" ]] ||
-  fail "vendored Kueue chart is missing: $standalone_kueue_archive"
-mkdir -p "$standalone_kueue_root"
-tar -xzf "$standalone_kueue_archive" -C "$standalone_kueue_root"
-
-standalone_default="$TEST_ROOT/standalone-kueue-default.yaml"
-helm template standalone-kueue "$standalone_kueue_chart" \
-  --include-crds >"$standalone_default"
-grep -Fq -- '--feature-gates=MultiKueue=false' "$standalone_default" ||
-  fail "standalone Kueue default does not explicitly disable MultiKueue"
-if grep -Fq 'name: multikueueclusters.kueue.x-k8s.io' "$standalone_default"; then
-  fail "standalone Kueue default rendered MultiKueue CRDs"
-fi
-
-assert_standalone_kueue_failure() {
-  local expected="$1"
-  shift
-  local error_file="$TEST_ROOT/standalone-kueue-error"
-
-  if helm template standalone-kueue "$standalone_kueue_chart" "$@" \
-    >"$TEST_ROOT/standalone-kueue-invalid.yaml" 2>"$error_file"; then
-    fail "standalone Kueue MultiKueue bypass rendered successfully: $*"
-  fi
-  grep -Fq "$expected" "$error_file" ||
-    fail "standalone Kueue gate failure was not actionable: $*"
-}
-
-assert_standalone_kueue_failure \
-  'MultiKueue configuration was supplied without the required Beta gate' \
-  --set aksExtension.enableMultiKueue=true
-assert_standalone_kueue_failure \
-  'MultiKueue configuration was supplied without the required Beta gate' \
-  --set controllerManager.featureGates[0].name=MultiKueue \
-  --set controllerManager.featureGates[0].enabled=true
-
-standalone_approved="$TEST_ROOT/standalone-kueue-approved.yaml"
-helm template standalone-kueue "$standalone_kueue_chart" \
-  --include-crds \
-  --set-json 'global.betaFeatures=["multikueue"]' \
-  --set-json 'global.betaRiskAcknowledgements=["multikueue"]' >"$standalone_approved"
-grep -Fq -- '--feature-gates=MultiKueue=false' "$standalone_approved" ||
-  fail "standalone Kueue approvals without activation did not remain disabled"
-if grep -Fq 'name: multikueueclusters.kueue.x-k8s.io' "$standalone_approved"; then
-  fail "standalone Kueue approvals without activation rendered MultiKueue CRDs"
-fi
-
-standalone_enabled="$TEST_ROOT/standalone-kueue-enabled.yaml"
-helm template standalone-kueue "$standalone_kueue_chart" \
-  --include-crds \
-  --set-json 'global.betaFeatures=["multikueue"]' \
-  --set-json 'global.betaRiskAcknowledgements=["multikueue"]' \
-  --set aksExtension.enableMultiKueue=true >"$standalone_enabled"
-grep -Fq -- '--feature-gates=MultiKueue=true' "$standalone_enabled" ||
-  fail "fully acknowledged standalone Kueue activation remained disabled"
-grep -Fq 'name: multikueueclusters.kueue.x-k8s.io' "$standalone_enabled" ||
-  fail "fully acknowledged standalone Kueue activation omitted MultiKueue CRDs"
-
 default_manifest="$TEST_ROOT/default-custom-namespace.yaml"
 helm template namespace-check "$TEST_CHART_DIR" \
   --namespace custom-system \
   --include-crds >"$default_manifest"
 assert_namespaces "$default_manifest" custom-system kube-system
 
-for forbidden in \
-  'name: multikueueclusters.kueue.x-k8s.io' \
-  'name: multikueueconfigs.kueue.x-k8s.io' \
-  'manager-clusterprofiles-role' \
-  '      - multikueueclusters' \
-  '      - multikueueconfigs' \
-  '--feature-gates=MultiKueue=true' \
-  '--beta-feature-gates=multikueue'; do
-  if grep -Fq -- "$forbidden" "$default_manifest"; then
-    fail "default render contains gated MultiKueue surface: $forbidden"
-  fi
-done
-grep -Fq -- '--feature-gates=MultiKueue=false' "$default_manifest" ||
-  fail "default render does not explicitly disable the pinned Kueue MultiKueue controller"
-
-assert_multikueue_gate_failure() {
-  local expected="$1"
-  shift
-  local error_file="$TEST_ROOT/multikueue-gate-error"
-
-  if helm template gate-check "$TEST_CHART_DIR" "$@" >"$TEST_ROOT/invalid-multikueue.yaml" 2>"$error_file"; then
-    fail "MultiKueue gate bypass rendered successfully: $*"
-  fi
-  grep -Fq "$expected" "$error_file" ||
-    fail "MultiKueue gate failure did not explain the contract: $*"
-}
-
-assert_multikueue_gate_failure \
-  'MultiKueue Beta requires both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]' \
-  --set-json 'global.betaFeatures=["multikueue"]'
-assert_multikueue_gate_failure \
-  'MultiKueue Beta requires both global.betaFeatures=[multikueue] and global.betaRiskAcknowledgements=[multikueue]' \
-  --set-json 'global.betaRiskAcknowledgements=["multikueue"]'
-assert_multikueue_gate_failure \
-  'MultiKueue configuration was supplied without the required Beta gate' \
-  --set kueue.aksExtension.enableMultiKueue=true
-assert_multikueue_gate_failure \
-  'MultiKueue configuration was supplied without the required Beta gate' \
-  --set customQueues.beta.controllerName=kueue.x-k8s.io/multikueue
-
-multikueue_manifest="$TEST_ROOT/multikueue-beta.yaml"
-helm template gate-check "$TEST_CHART_DIR" \
-  --include-crds \
-  --values "$TEST_CHART_DIR/values-multikueue-beta.yaml" >"$multikueue_manifest"
 for required in \
   'name: multikueueclusters.kueue.x-k8s.io' \
   'name: multikueueconfigs.kueue.x-k8s.io' \
   'manager-clusterprofiles-role' \
+  'manager-secrets-role' \
   '      - multikueueclusters' \
   '      - multikueueconfigs' \
-  '--feature-gates=MultiKueue=true' \
-  '--beta-feature-gates=multikueue'; do
-  grep -Fq -- "$required" "$multikueue_manifest" ||
-    fail "acknowledged render is missing intended MultiKueue surface: $required"
+  '--feature-gates=MultiKueue=true'; do
+  grep -Fq -- "$required" "$default_manifest" ||
+    fail "default render is missing the MultiKueue capability: $required"
 done
-if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$multikueue_manifest"); then
-  fail "acknowledged render created MultiKueue routing objects implicitly"
+if grep -Fq -- '--beta-feature-gates=' "$default_manifest"; then
+  fail "default render still passes the removed controller Beta argument"
 fi
-if grep -Ei $'^Secret\t.*(multikueue|worker)' < <(render_objects "$multikueue_manifest"); then
-  fail "acknowledged render created worker credentials implicitly"
+if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$default_manifest"); then
+  fail "default render created operator-owned MultiKueue routing objects implicitly"
+fi
+if grep -Ei $'^Secret\t.*(multikueue|worker)' < <(render_objects "$default_manifest"); then
+  fail "default render created operator-owned worker credentials implicitly"
 fi
 
 for deployment in \

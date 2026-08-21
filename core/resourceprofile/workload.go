@@ -26,8 +26,8 @@ const (
 	PlacementSingleNodeNVLink = "single-node-nvlink"
 	PlacementMultiNodeNCCL    = "multi-node-nccl"
 
-	ExecutionTargetSingleCluster  ExecutionTarget = "singleCluster"
-	ExecutionTargetMultiKueueBeta ExecutionTarget = "multiKueueBeta"
+	ExecutionTargetSingleCluster ExecutionTarget = "singleCluster"
+	ExecutionTargetMultiKueue    ExecutionTarget = "multiKueue"
 
 	ConditionReady                = "Ready"
 	ConditionExecutionReady       = "ExecutionReady"
@@ -42,13 +42,12 @@ const (
 )
 
 // ExecutionTarget selects whether a profile executes on the submitting cluster
-// or through the explicitly gated MultiKueue Beta path.
+// or through MultiKueue.
 type ExecutionTarget string
 
 // WorkloadProfile is stable workload intent. It deliberately excludes observed
 // capacity, quota, flavor selectors, and topology selectors.
 // +kubebuilder:validation:XValidation:rule="self.workerCount == 1 || self.placement == 'multi-node-nccl'",message="workerCount greater than one requires placement=multi-node-nccl"
-// +kubebuilder:validation:XValidation:rule="self.executionTarget != 'multiKueueBeta' || (has(self.applicability) && has(self.applicability.teams) && size(self.applicability.teams) > 0 && has(self.applicability.namespaces) && size(self.applicability.namespaces) > 0)",message="multiKueueBeta requires non-empty team and namespace applicability allowlists"
 type WorkloadProfile struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
 	Name          string               `json:"name" yaml:"name"`
@@ -65,7 +64,7 @@ type WorkloadProfile struct {
 	// +kubebuilder:validation:MinLength=1
 	DefaultLocalQueue string `json:"defaultLocalQueue" yaml:"defaultLocalQueue"`
 	// +kubebuilder:default=singleCluster
-	// +kubebuilder:validation:Enum=singleCluster;multiKueueBeta
+	// +kubebuilder:validation:Enum=singleCluster;multiKueue
 	ExecutionTarget ExecutionTarget   `json:"executionTarget,omitempty" yaml:"executionTarget,omitempty"`
 	Priorities      ProfilePriorities `json:"priorities" yaml:"priorities"`
 }
@@ -160,8 +159,8 @@ func NormalizeWorkloadProfile(in WorkloadProfile) WorkloadProfile {
 	switch strings.ToLower(strings.TrimSpace(string(in.ExecutionTarget))) {
 	case "", strings.ToLower(string(ExecutionTargetSingleCluster)):
 		out.ExecutionTarget = ExecutionTargetSingleCluster
-	case strings.ToLower(string(ExecutionTargetMultiKueueBeta)):
-		out.ExecutionTarget = ExecutionTargetMultiKueueBeta
+	case strings.ToLower(string(ExecutionTargetMultiKueue)):
+		out.ExecutionTarget = ExecutionTargetMultiKueue
 	default:
 		out.ExecutionTarget = ExecutionTarget(strings.TrimSpace(string(in.ExecutionTarget)))
 	}
@@ -223,19 +222,12 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 		return err
 	}
 	switch p.ExecutionTarget {
-	case ExecutionTargetSingleCluster:
-	case ExecutionTargetMultiKueueBeta:
-		if len(p.Applicability.Teams) == 0 {
-			return errors.New("multiKueueBeta executionTarget requires a non-empty applicability.teams allowlist")
-		}
-		if len(p.Applicability.Namespaces) == 0 {
-			return errors.New("multiKueueBeta executionTarget requires a non-empty applicability.namespaces allowlist")
-		}
+	case ExecutionTargetSingleCluster, ExecutionTargetMultiKueue:
 	default:
 		return fmt.Errorf(
 			"executionTarget must be %q or %q, got %q",
 			ExecutionTargetSingleCluster,
-			ExecutionTargetMultiKueueBeta,
+			ExecutionTargetMultiKueue,
 			p.ExecutionTarget,
 		)
 	}

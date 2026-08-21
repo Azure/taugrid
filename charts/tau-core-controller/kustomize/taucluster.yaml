@@ -12,8 +12,6 @@ spec:
   # overlays can patch the rule list when they introduce another ResourceFlavor.
   managementMode: Reconcile
   deletionPolicy: Retain
-  features:
-    multiKueue: Disabled
   nodes:
     labelRules:
       - match:

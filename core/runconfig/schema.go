@@ -101,7 +101,7 @@ var fieldCatalog = map[string]FieldInfo{
 	"policy":                            {Status: statusSupported, Description: "Namespace, queue, topology, and priority placement settings."},
 	"policy.workspace":                  {Status: statusSupported, Description: "TauWorkspace name used to load platform-owned namespace, queue, priority, output-root, and scratch defaults."},
 	"policy.namespace":                  {Status: statusSupported, Description: "Target Kubernetes namespace."},
-	"policy.profile":                    {Status: statusSupported, Description: "TauCluster workload profile name. When omitted, Tau permits only one ready, applicable single-cluster profile and never selects a MultiKueue Beta profile implicitly."},
+	"policy.profile":                    {Status: statusSupported, Description: "TauCluster workload profile name. When omitted, Tau selects the unique ready, applicable profile and fails closed when selection is ambiguous."},
 	"policy.queue":                      {Status: statusSupported, Description: "Optional Kueue LocalQueue assertion. The selected workload profile is authoritative, so an explicit value must match its resolved queue."},
 	"policy.team":                       {Status: statusSupported, Description: "Explicit team scope used to authorize workload-profile applicability."},
 	"policy.lane":                       {Status: statusSupported, Description: "Explicit lane scope used to authorize workload-profile applicability."},
@@ -159,7 +159,6 @@ var fieldCatalog = map[string]FieldInfo{
 	"execution.max_concurrent_trials": {Status: statusSupported, Description: "Maximum number of Tune trials running at the same time. Limits GPU contention within the Ray cluster.", Default: "1"},
 	"execution.configs":               {Status: statusSupported, Description: "Extra launcher configuration. job+python: script CLI flags. job+torchrun: torchrun flags. ray+ray-train: Ray Train config (TAU_RAY_TRAIN_CONFIG_JSON). ray+ray-tune: search space."},
 	"execution.allow_nccl_override":   {Status: statusSupported, Description: "Opt-in bypass for NCCL_* reserved key validation. When true, NCCL_* keys in runtime.env are accepted. Other reserved keys remain blocked.", Default: "false"},
-	"execution.beta_features":         {Status: statusSupported, Description: "Explicit user acknowledgement for Beta execution features. Required when selecting a MultiKueue Beta workload profile.", Values: []string{"multikueue"}},
 
 	"resilience":                 {Status: statusSupported, Description: "Automatic retry on transient job failure (preemption, eviction)."},
 	"resilience.max_retries":     {Status: statusSupported, Description: "Maximum number of automatic retries on retryable failure. 0 disables retry.", Default: "0"},

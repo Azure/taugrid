@@ -305,13 +305,13 @@ func profileBoardReader() *fakeReader {
 	}
 }
 
-func TestBoardAttachesReadyStableAndBetaProfilesWithRevision(t *testing.T) {
+func TestBoardAttachesReadyProfilesWithAuthoritativeMetadata(t *testing.T) {
 	const generation = 17
 	reader := &fakeProfileReader{sets: []profile.ProfileSet{{
 		Generation: generation, ProfileSetHash: "sha256:full-profile-set-hash",
 		Profiles: []profile.ResolvedWorkloadProfile{
 			readyProfile("stable", profile.ExecutionTargetSingleCluster, generation, []string{"ray"}, []string{"research"}),
-			readyProfile("federated", profile.ExecutionTargetMultiKueueBeta, generation, []string{"ray"}, []string{"research"}),
+			readyProfile("federated", profile.ExecutionTargetMultiKueue, generation, []string{"ray"}, []string{"research"}),
 		},
 	}}}
 	snapshot, err := Board(context.Background(), profileBoardReader(), Options{
@@ -326,8 +326,9 @@ func TestBoardAttachesReadyStableAndBetaProfilesWithRevision(t *testing.T) {
 		!got.ReadOnly || got.SelectionEnabled || len(got.ReadyProfiles) != 2 {
 		t.Fatalf("profile availability = %#v", got)
 	}
-	if got.ReadyProfiles[0].Stage != "Beta" || got.ReadyProfiles[1].Stage != "Stable" {
-		t.Fatalf("profile stages = %#v", got.ReadyProfiles)
+	if got.ReadyProfiles[0].ExecutionTarget != profile.ExecutionTargetMultiKueue ||
+		got.ReadyProfiles[1].ExecutionTarget != profile.ExecutionTargetSingleCluster {
+		t.Fatalf("profile execution targets = %#v", got.ReadyProfiles)
 	}
 }
 

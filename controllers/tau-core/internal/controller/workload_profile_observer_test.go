@@ -151,7 +151,6 @@ func TestSingleClusterProfileRejectsOnlyExactMultiKueueController(t *testing.T) 
 			cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{
 				testWorkloadProfile("research", []string{"team-a"}),
 			})
-			cluster.Spec.Features.MultiKueue = tauv1alpha1.TauClusterFeatureBeta
 			dependencies := profileDependenciesWithAdmissionChecks(
 				"research",
 				"team-a",
@@ -162,7 +161,6 @@ func TestSingleClusterProfileRejectsOnlyExactMultiKueueController(t *testing.T) 
 					WithScheme(testScheme(t)).
 					WithObjects(dependencies...).
 					Build(),
-				MultiKueueBetaRuntimeEnabled: true,
 			}
 
 			state, err := reconciler.observeWorkloadProfiles(context.Background(), cluster)
@@ -233,10 +231,8 @@ func TestAdmissionCheckLookupFailuresFailClosed(t *testing.T) {
 			cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{
 				testWorkloadProfile("research", []string{"team-a"}),
 			})
-			cluster.Spec.Features.MultiKueue = tauv1alpha1.TauClusterFeatureBeta
 			state, err := (&TauClusterReconciler{
-				Client:                       observationClient,
-				MultiKueueBetaRuntimeEnabled: true,
+				Client: observationClient,
 			}).observeWorkloadProfiles(context.Background(), cluster)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("observeWorkloadProfiles() error = %v, wantErr %v", err, test.wantErr)
@@ -251,87 +247,7 @@ func TestAdmissionCheckLookupFailuresFailClosed(t *testing.T) {
 	}
 }
 
-func TestDisabledMultiKueueClassificationSkipsAdmissionCheckReads(t *testing.T) {
-	tests := []struct {
-		name           string
-		operatorStage  tauv1alpha1.TauClusterFeatureStage
-		runtimeEnabled bool
-		wantReason     string
-	}{
-		{name: "operator disabled", wantReason: "OperatorDisabled"},
-		{
-			name:           "runtime disabled",
-			operatorStage:  tauv1alpha1.TauClusterFeatureBeta,
-			runtimeEnabled: false,
-			wantReason:     "RuntimeDisabled",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
-			cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{
-				testWorkloadProfile("ordinary", []string{"team-a"}),
-				testMultiKueueBetaProfile("beta", "team-b"),
-			})
-			cluster.Spec.Features.MultiKueue = test.operatorStage
-			dependencies := append(
-				profileDependenciesWithAdmissionChecks(
-					"ordinary",
-					"team-a",
-					map[string]string{"ordinary-check": "example.com/ordinary"},
-				),
-				profileDependenciesWithAdmissionChecks(
-					"beta",
-					"team-b",
-					map[string]string{"multikueue": multiKueueAdmissionCheckController},
-				)...,
-			)
-			dependencies = uniqueProfileDependencies(dependencies)
-			baseClient := fake.NewClientBuilder().
-				WithScheme(testScheme(t)).
-				WithObjects(append([]client.Object{cluster}, dependencies...)...).
-				WithStatusSubresource(&tauv1alpha1.TauCluster{}).
-				Build()
-			observationClient := &admissionCheckReadErrorClient{Client: baseClient}
-			reconciler := &TauClusterReconciler{
-				Client:                       observationClient,
-				MultiKueueBetaRuntimeEnabled: test.runtimeEnabled,
-			}
-
-			if _, err := reconciler.Reconcile(ctx, ctrl.Request{
-				NamespacedName: types.NamespacedName{Name: cluster.Name},
-			}); err != nil {
-				t.Fatalf("Reconcile() error = %v", err)
-			}
-			if observationClient.reads != 0 {
-				t.Fatalf("AdmissionCheck reads = %d, want zero", observationClient.reads)
-			}
-			if err := baseClient.Get(ctx, client.ObjectKey{Name: cluster.Name}, cluster); err != nil {
-				t.Fatalf("Get TauCluster: %v", err)
-			}
-			resolvedByName := make(map[string]profile.ResolvedWorkloadProfile)
-			for _, resolved := range cluster.Status.WorkloadProfiles.Profiles {
-				resolvedByName[resolved.Name] = resolved
-			}
-			assertCondition(
-				t,
-				resolvedByName["ordinary"].Conditions,
-				profile.ConditionReady,
-				metav1.ConditionTrue,
-			)
-			execution := findCondition(
-				resolvedByName["beta"].Conditions,
-				profile.ConditionExecutionReady,
-			)
-			if execution == nil || execution.Status != metav1.ConditionFalse ||
-				execution.Reason != test.wantReason {
-				t.Fatalf("beta ExecutionReady = %#v, want reason %q", execution, test.wantReason)
-			}
-		})
-	}
-}
-
-func TestMultiKueueBetaExecutionReadiness(t *testing.T) {
+func TestMultiKueueExecutionReadiness(t *testing.T) {
 	tests := []struct {
 		name          string
 		mutateCluster func(*tauv1alpha1.TauCluster)
@@ -374,26 +290,26 @@ func TestMultiKueueBetaExecutionReadiness(t *testing.T) {
 			checks: map[string]string{"multikueue": multiKueueAdmissionCheckController},
 			mutateCluster: func(cluster *tauv1alpha1.TauCluster) {
 				cluster.Status.Conditions[0].Status = metav1.ConditionFalse
-				cluster.Status.Conditions[0].Reason = "OperatorDisabled"
-				cluster.Status.Conditions[0].Message = "operator feature gate is disabled"
+				cluster.Status.Conditions[0].Reason = "PrerequisitesNotReady"
+				cluster.Status.Conditions[0].Message = "manager prerequisites are not ready"
 			},
-			wantReason: "OperatorDisabled", wantMessage: "operator feature gate",
+			wantReason: "PrerequisitesNotReady", wantMessage: "manager prerequisites",
 		},
 		{
-			name:   "default queue rejected",
+			name:   "default queue allowed",
 			checks: map[string]string{"multikueue": multiKueueAdmissionCheckController},
 			mutateCluster: func(cluster *tauv1alpha1.TauCluster) {
 				cluster.Spec.WorkspaceDefaults.DefaultQueue = "research"
 			},
-			wantReason: "DefaultQueueNotAllowed", wantMessage: "workspaceDefaults.defaultQueue",
+			wantReady: true, wantReason: "Ready",
 		},
 		{
-			name:   "global team applicability rejected",
+			name:   "global team applicability allowed",
 			checks: map[string]string{"multikueue": multiKueueAdmissionCheckController},
 			mutateProfile: func(workloadProfile *profile.WorkloadProfile) {
 				workloadProfile.Applicability.Teams = nil
 			},
-			wantReason: "InvalidWorkloadProfile", wantMessage: "applicability.teams",
+			wantReady: true, wantReason: "Ready",
 		},
 		{
 			name:      "valid",
@@ -403,12 +319,11 @@ func TestMultiKueueBetaExecutionReadiness(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			workloadProfile := testMultiKueueBetaProfile("research", "team-a")
+			workloadProfile := testMultiKueueProfile("research", "team-a")
 			if test.mutateProfile != nil {
 				test.mutateProfile(&workloadProfile)
 			}
 			cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{workloadProfile})
-			cluster.Spec.Features.MultiKueue = tauv1alpha1.TauClusterFeatureBeta
 			cluster.Status.Conditions = []metav1.Condition{{
 				Type:               tauv1alpha1.ConditionMultiKueueReady,
 				Status:             metav1.ConditionTrue,
@@ -430,7 +345,6 @@ func TestMultiKueueBetaExecutionReadiness(t *testing.T) {
 					WithScheme(testScheme(t)).
 					WithObjects(dependencies...).
 					Build(),
-				MultiKueueBetaRuntimeEnabled: true,
 			}
 
 			state, err := reconciler.observeWorkloadProfiles(context.Background(), cluster)
@@ -439,9 +353,6 @@ func TestMultiKueueBetaExecutionReadiness(t *testing.T) {
 			}
 			resolved := state.status.Profiles[0]
 			execution := findCondition(resolved.Conditions, profile.ConditionExecutionReady)
-			if test.wantReason == "InvalidWorkloadProfile" {
-				execution = findCondition(resolved.Conditions, profile.ConditionReady)
-			}
 			if execution == nil || (execution.Status == metav1.ConditionTrue) != test.wantReady ||
 				execution.Reason != test.wantReason || !strings.Contains(execution.Message, test.wantMessage) {
 				t.Fatalf("execution condition = %#v", execution)
@@ -450,11 +361,10 @@ func TestMultiKueueBetaExecutionReadiness(t *testing.T) {
 	}
 }
 
-func TestMultiKueueBetaProfileRequiresItsReferencedWorkerToBeReady(t *testing.T) {
+func TestMultiKueueProfileRequiresItsReferencedWorkerToBeReady(t *testing.T) {
 	cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{
-		testMultiKueueBetaProfile("research", "team-a"),
+		testMultiKueueProfile("research", "team-a"),
 	})
-	cluster.Spec.Features.MultiKueue = tauv1alpha1.TauClusterFeatureBeta
 	cluster.Status.Conditions = []metav1.Condition{{
 		Type:               tauv1alpha1.ConditionMultiKueueReady,
 		Status:             metav1.ConditionTrue,
@@ -480,7 +390,6 @@ func TestMultiKueueBetaProfileRequiresItsReferencedWorkerToBeReady(t *testing.T)
 			WithScheme(testScheme(t)).
 			WithObjects(dependencies...).
 			Build(),
-		MultiKueueBetaRuntimeEnabled: true,
 	}
 
 	state, err := reconciler.observeWorkloadProfiles(context.Background(), cluster)
@@ -498,11 +407,10 @@ func TestMultiKueueBetaProfileRequiresItsReferencedWorkerToBeReady(t *testing.T)
 	}
 }
 
-func TestValidMultiKueueBetaProfileObservationDoesNotMutateResources(t *testing.T) {
+func TestValidMultiKueueProfileObservationDoesNotMutateResources(t *testing.T) {
 	ctx := context.Background()
-	workloadProfile := testMultiKueueBetaProfile("research", "team-a")
+	workloadProfile := testMultiKueueProfile("research", "team-a")
 	cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeReconcile, []profile.WorkloadProfile{workloadProfile})
-	cluster.Spec.Features.MultiKueue = tauv1alpha1.TauClusterFeatureBeta
 	cluster.Status.Conditions = []metav1.Condition{{
 		Type:               tauv1alpha1.ConditionMultiKueueReady,
 		Status:             metav1.ConditionTrue,
@@ -522,8 +430,7 @@ func TestValidMultiKueueBetaProfileObservationDoesNotMutateResources(t *testing.
 	recordingClient := &resourceMutationRecordingClient{Client: baseClient}
 
 	if _, err := (&TauClusterReconciler{
-		Client:                       recordingClient,
-		MultiKueueBetaRuntimeEnabled: true,
+		Client: recordingClient,
 		MultiKueuePrerequisites: &countingMultiKueuePrerequisiteReader{status: MultiKueuePrerequisiteStatus{
 			Ready:   true,
 			Message: "manager prerequisites are ready",
@@ -535,7 +442,7 @@ func TestValidMultiKueueBetaProfileObservationDoesNotMutateResources(t *testing.
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if len(recordingClient.mutations) != 0 {
-		t.Fatalf("MultiKueue Beta profile observation mutated resources: %v", recordingClient.mutations)
+		t.Fatalf("MultiKueue profile observation mutated resources: %v", recordingClient.mutations)
 	}
 }
 
@@ -881,9 +788,9 @@ func testWorkloadProfile(name string, namespaces []string) profile.WorkloadProfi
 	}
 }
 
-func testMultiKueueBetaProfile(name string, namespaces ...string) profile.WorkloadProfile {
+func testMultiKueueProfile(name string, namespaces ...string) profile.WorkloadProfile {
 	workloadProfile := testWorkloadProfile(name, namespaces)
-	workloadProfile.ExecutionTarget = profile.ExecutionTargetMultiKueueBeta
+	workloadProfile.ExecutionTarget = profile.ExecutionTargetMultiKueue
 	workloadProfile.Applicability.Teams = []string{"research"}
 	return workloadProfile
 }

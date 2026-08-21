@@ -68,6 +68,3 @@ tests:
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
-      - equal:
-          path: spec.features.multiKueue
-          value: Disabled

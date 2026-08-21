@@ -79,10 +79,9 @@ type Workload struct {
 	Experiment string `json:"experiment,omitempty"`
 	Group      string `json:"group,omitempty"`
 	Workspace  string `json:"workspace,omitempty"`
-	// ExecutionTarget/Stage are observation-only runtime identity. They never
-	// gate status access when the current capability/profile is unavailable.
+	// ExecutionTarget is observation-only runtime identity. It never gates
+	// status access when the current capability/profile is unavailable.
 	ExecutionTarget string `json:"executionTarget,omitempty"`
-	Stage           string `json:"stage,omitempty"`
 }
 
 // Running reports whether the workload is admitted and not yet finished — the
@@ -112,7 +111,7 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 	for _, it := range list.Items {
 		admitted, finished := admissionState(it.Status.Conditions)
 		labels := it.Metadata.Labels
-		executionTarget, stage := workloadExecutionTarget(it)
+		executionTarget := workloadExecutionTarget(it)
 		var owners []string
 		for _, ref := range it.Metadata.OwnerReferences {
 			if ref.Name != "" {
@@ -135,7 +134,6 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 			Group:           labels[workloadmeta.LabelStellarGroup],
 			Workspace:       labels[workloadmeta.LabelWorkspace],
 			ExecutionTarget: executionTarget,
-			Stage:           stage,
 		})
 	}
 
@@ -150,12 +148,11 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 	return out, nil
 }
 
-func workloadExecutionTarget(it workloadItem) (string, string) {
-	if strings.EqualFold(strings.TrimSpace(it.Metadata.Annotations[workloadmeta.AnnotationMultiKueueStage]), "beta") ||
-		it.Status.ClusterName != "" || len(it.Status.NominatedClusterNames) > 0 {
-		return "multiKueueBeta", "Beta"
+func workloadExecutionTarget(it workloadItem) string {
+	if it.Status.ClusterName != "" || len(it.Status.NominatedClusterNames) > 0 {
+		return "multiKueue"
 	}
-	return "", ""
+	return ""
 }
 
 // sortKey orders workloads by job name when present, falling back to the

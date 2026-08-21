@@ -23,7 +23,7 @@ import (
 
 func TestClusterProviderSelectsReadyApplicableProfile(t *testing.T) {
 	profile := readyProviderProfile("research-1gpu", 7)
-	profile.ExecutionTarget = ExecutionTargetMultiKueueBeta
+	profile.ExecutionTarget = ExecutionTargetMultiKueue
 	provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{profile}, nil))
 
 	got, err := provider.Select(context.Background(), SelectionRequest{
@@ -35,8 +35,8 @@ func TestClusterProviderSelectsReadyApplicableProfile(t *testing.T) {
 	if got.Generation != 7 || got.ProfileSetHash == "" || got.Source != ProfileSourceCluster {
 		t.Fatalf("selection revision = %#v", got)
 	}
-	if got.Profile.ExecutionTarget != ExecutionTargetMultiKueueBeta {
-		t.Fatalf("execution target = %q, want %q", got.Profile.ExecutionTarget, ExecutionTargetMultiKueueBeta)
+	if got.Profile.ExecutionTarget != ExecutionTargetMultiKueue {
+		t.Fatalf("execution target = %q, want %q", got.Profile.ExecutionTarget, ExecutionTargetMultiKueue)
 	}
 }
 
@@ -139,14 +139,14 @@ func TestClusterProviderRejectsUnreadySets(t *testing.T) {
 
 func TestClusterProviderAllowsReadyProfileWhenAggregateReadinessIsFalse(t *testing.T) {
 	ordinary := readyProviderProfile("ordinary", 7)
-	beta := readyProviderProfile("beta", 7)
-	beta.ExecutionTarget = ExecutionTargetMultiKueueBeta
-	beta.Conditions[0].Status = metav1.ConditionFalse
-	beta.Conditions[0].Reason = "OperatorDisabled"
+	multiKueue := readyProviderProfile("multi-kueue", 7)
+	multiKueue.ExecutionTarget = ExecutionTargetMultiKueue
+	multiKueue.Conditions[0].Status = metav1.ConditionFalse
+	multiKueue.Conditions[0].Reason = "Unavailable"
 	provider := NewClusterProvider(clusterClient(
 		t,
 		7,
-		[]ResolvedWorkloadProfile{ordinary, beta},
+		[]ResolvedWorkloadProfile{ordinary, multiKueue},
 		func(object *unstructured.Unstructured) {
 			conditions, _, _ := unstructured.NestedSlice(object.Object, "status", "conditions")
 			conditions[0].(map[string]any)["status"] = string(metav1.ConditionFalse)
@@ -160,9 +160,9 @@ func TestClusterProviderAllowsReadyProfileWhenAggregateReadinessIsFalse(t *testi
 		t.Fatalf("ready ordinary profile was blocked by aggregate readiness: %v", err)
 	}
 	if _, err := provider.Select(context.Background(), SelectionRequest{
-		Name: "beta", Namespace: "alpha", Team: "research", Lane: "training",
+		Name: "multi-kueue", Namespace: "alpha", Team: "research", Lane: "training",
 	}); err == nil || !strings.Contains(err.Error(), "condition Ready is False") {
-		t.Fatalf("unready Beta profile selection error = %v", err)
+		t.Fatalf("unready MultiKueue profile selection error = %v", err)
 	}
 }
 
@@ -263,30 +263,44 @@ func TestSnapshotProviderUsesSameSelectionShape(t *testing.T) {
 	}
 }
 
-func TestProviderImplicitSelectionRequiresUniqueReadySingleClusterMatch(t *testing.T) {
+func TestProviderImplicitSelectionRequiresUniqueReadyApplicableMatch(t *testing.T) {
 	normal := readyProviderProfile("normal", 7)
-	beta := readyProviderProfile("beta", 7)
-	beta.ExecutionTarget = ExecutionTargetMultiKueueBeta
+	multiKueue := readyProviderProfile("multi-kueue", 7)
+	multiKueue.ExecutionTarget = ExecutionTargetMultiKueue
 
-	t.Run("unique normal ignores beta", func(t *testing.T) {
-		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{beta, normal}, nil))
+	t.Run("single and MultiKueue matches are ambiguous", func(t *testing.T) {
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{multiKueue, normal}, nil))
+		_, err := provider.Select(context.Background(), SelectionRequest{
+			Namespace: "alpha", Team: "research", Lane: "training",
+		})
+		if err == nil || !strings.Contains(err.Error(), "multiple ready workload profiles") ||
+			!strings.Contains(err.Error(), "multi-kueue, normal") {
+			t.Fatalf("Select() error = %v", err)
+		}
+	})
+
+	t.Run("unique MultiKueue match is selected", func(t *testing.T) {
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{multiKueue}, nil))
 		got, err := provider.Select(context.Background(), SelectionRequest{
 			Namespace: "alpha", Team: "research", Lane: "training",
 		})
 		if err != nil {
 			t.Fatalf("Select() error = %v", err)
 		}
-		if got.Profile.Name != normal.Name || got.Profile.ExecutionTarget != ExecutionTargetSingleCluster {
+		if got.Profile.Name != multiKueue.Name || got.Profile.ExecutionTarget != ExecutionTargetMultiKueue {
 			t.Fatalf("implicit selection = %#v", got.Profile)
 		}
 	})
 
-	t.Run("beta only is no match", func(t *testing.T) {
-		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{beta}, nil))
+	t.Run("no ready applicable match uses neutral error", func(t *testing.T) {
+		unready := multiKueue
+		unready.Conditions[0].Status = metav1.ConditionFalse
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{unready}, nil))
 		_, err := provider.Select(context.Background(), SelectionRequest{
 			Namespace: "alpha", Team: "research", Lane: "training",
 		})
-		if err == nil || !strings.Contains(err.Error(), "never selected implicitly") {
+		if err == nil || !strings.Contains(err.Error(), "no ready workload profile matches") ||
+			strings.Contains(strings.ToLower(err.Error()), "beta") {
 			t.Fatalf("Select() error = %v", err)
 		}
 	})
@@ -297,7 +311,7 @@ func TestProviderImplicitSelectionRequiresUniqueReadySingleClusterMatch(t *testi
 		_, err := provider.Select(context.Background(), SelectionRequest{
 			Namespace: "alpha", Team: "research", Lane: "training",
 		})
-		if err == nil || !strings.Contains(err.Error(), "multiple ready singleCluster") ||
+		if err == nil || !strings.Contains(err.Error(), "multiple ready workload profiles") ||
 			!strings.Contains(err.Error(), "normal, other") {
 			t.Fatalf("Select() error = %v", err)
 		}

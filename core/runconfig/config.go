@@ -262,32 +262,6 @@ type Execution struct {
 	MaxConcurrentTrials *int           `yaml:"max_concurrent_trials"`
 	Configs             map[string]any `yaml:"configs"`
 	AllowNCCLOverride   bool           `yaml:"allow_nccl_override"`
-	BetaFeatures        []BetaFeature  `yaml:"beta_features"`
-}
-
-type BetaFeature string
-
-const BetaFeatureMultiKueue BetaFeature = "multikueue"
-
-// ValidateBetaFeatures rejects every acknowledgement Tau does not understand
-// and duplicate acknowledgements within one config/flag source.
-func ValidateBetaFeatures(features []BetaFeature) error {
-	seen := make(map[BetaFeature]struct{}, len(features))
-	for i, feature := range features {
-		if feature != BetaFeatureMultiKueue {
-			return fmt.Errorf(
-				"execution.beta_features[%d] %q is unsupported; supported values: %s",
-				i,
-				feature,
-				BetaFeatureMultiKueue,
-			)
-		}
-		if _, ok := seen[feature]; ok {
-			return fmt.Errorf("execution.beta_features contains duplicate value %q", feature)
-		}
-		seen[feature] = struct{}{}
-	}
-	return nil
 }
 
 type Resilience struct {
@@ -365,9 +339,6 @@ func parseWithDiagnostics(raw []byte, source string) (Config, []string, error) {
 			warnings = append(warnings, describeUnknownKey(key, source))
 		}
 		cfg := projection.config()
-		if err := ValidateBetaFeatures(cfg.Execution.BetaFeatures); err != nil {
-			return Config{}, nil, fmt.Errorf("validate %s: %w", source, err)
-		}
 		return cfg, warnings, nil
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
@@ -414,9 +385,6 @@ func (p managedConfigProjection) config() Config {
 }
 
 func (c Config) ValidateDirect() error {
-	if err := ValidateBetaFeatures(c.Execution.BetaFeatures); err != nil {
-		return err
-	}
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
 	}
@@ -788,9 +756,6 @@ func NormalizeEngine(engine string) (string, error) {
 // engine and that engine-specific constraints (nodes, processes_per_node,
 // clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
-	if err := ValidateBetaFeatures(c.Execution.BetaFeatures); err != nil {
-		return err
-	}
 	var err error
 	engine, err = NormalizeEngine(engine)
 	if err != nil {

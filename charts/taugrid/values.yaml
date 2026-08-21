@@ -1,7 +1,3 @@
-global:
-  betaFeatures: []
-  betaRiskAcknowledgements: []
-
 components:
   kueue:
     enabled: true
@@ -77,6 +73,10 @@ baselineQueue:
             nominalQuota: "1000"
 
 kueue:
+  # TauGrid installs the Kueue MultiKueue capability by default. Operators still
+  # own worker credentials, routing objects, and multi-cluster queue policy.
+  aksExtension:
+    enableMultiKueue: true
   controllerManager:
     manager:
       image:
@@ -158,8 +158,6 @@ tau-core-controller:
     repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
   tauCluster:
-    features:
-      multiKueue: Disabled
     # Inherits the controller chart's reviewed AKS GPU VM-size catalog, which
     # reconciles gpu-class and gpu-series labels from instance-type. Append
     # cluster-specific hardware without replacing that catalog.

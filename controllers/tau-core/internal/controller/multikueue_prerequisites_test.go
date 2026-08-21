@@ -17,50 +17,29 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestTauClusterReconcileMultiKueueGateOrder(t *testing.T) {
+func TestTauClusterReconcileMultiKueueReadiness(t *testing.T) {
 	tests := []struct {
-		name           string
-		operatorStage  tauv1alpha1.TauClusterFeatureStage
-		runtimeEnabled bool
-		prerequisite   MultiKueuePrerequisiteStatus
-		wantReason     string
-		wantStatus     metav1.ConditionStatus
-		wantCalls      int
+		name         string
+		prerequisite MultiKueuePrerequisiteStatus
+		wantReason   string
+		wantStatus   metav1.ConditionStatus
 	}{
 		{
-			name:       "operator disabled stops before runtime",
-			wantReason: "OperatorDisabled",
-			wantStatus: metav1.ConditionFalse,
-		},
-		{
-			name:           "runtime disabled stops before prerequisites",
-			operatorStage:  tauv1alpha1.TauClusterFeatureBeta,
-			runtimeEnabled: false,
-			wantReason:     "RuntimeDisabled",
-			wantStatus:     metav1.ConditionFalse,
-		},
-		{
-			name:           "prerequisites not ready",
-			operatorStage:  tauv1alpha1.TauClusterFeatureBeta,
-			runtimeEnabled: true,
+			name: "prerequisites not ready",
 			prerequisite: MultiKueuePrerequisiteStatus{
 				Message: "no active worker clusters",
 			},
 			wantReason: "PrerequisitesNotReady",
 			wantStatus: metav1.ConditionFalse,
-			wantCalls:  1,
 		},
 		{
-			name:           "all gates ready",
-			operatorStage:  tauv1alpha1.TauClusterFeatureBeta,
-			runtimeEnabled: true,
+			name: "prerequisites ready",
 			prerequisite: MultiKueuePrerequisiteStatus{
 				Ready:   true,
 				Message: "manager prerequisites are ready",
 			},
 			wantReason: "Ready",
 			wantStatus: metav1.ConditionTrue,
-			wantCalls:  1,
 		},
 	}
 
@@ -74,9 +53,6 @@ func TestTauClusterReconcileMultiKueueGateOrder(t *testing.T) {
 				},
 				Spec: tauv1alpha1.TauClusterSpec{
 					ManagementMode: tauv1alpha1.ClusterManagementModeObserve,
-					Features: tauv1alpha1.TauClusterFeaturesSpec{
-						MultiKueue: test.operatorStage,
-					},
 				},
 			}
 			baseClient := fake.NewClientBuilder().
@@ -86,17 +62,16 @@ func TestTauClusterReconcileMultiKueueGateOrder(t *testing.T) {
 				Build()
 			reader := &countingMultiKueuePrerequisiteReader{status: test.prerequisite}
 			reconciler := &TauClusterReconciler{
-				Client:                       baseClient,
-				MultiKueueBetaRuntimeEnabled: test.runtimeEnabled,
-				MultiKueuePrerequisites:      reader,
+				Client:                  baseClient,
+				MultiKueuePrerequisites: reader,
 			}
 			if _, err := reconciler.Reconcile(ctx, ctrl.Request{
 				NamespacedName: types.NamespacedName{Name: cluster.Name},
 			}); err != nil {
 				t.Fatalf("Reconcile() error = %v", err)
 			}
-			if reader.calls != test.wantCalls {
-				t.Fatalf("prerequisite calls = %d, want %d", reader.calls, test.wantCalls)
+			if reader.calls != 1 {
+				t.Fatalf("prerequisite calls = %d, want 1", reader.calls)
 			}
 
 			var got tauv1alpha1.TauCluster
@@ -111,6 +86,19 @@ func TestTauClusterReconcileMultiKueueGateOrder(t *testing.T) {
 				t.Fatalf("MultiKueueReady = %#v", condition)
 			}
 		})
+	}
+}
+
+func TestMultiKueueReadinessFailsClosedWithoutReader(t *testing.T) {
+	got, err := (&TauClusterReconciler{}).multiKueueReadinessCondition(context.Background(), 9)
+	if err != nil {
+		t.Fatalf("multiKueueReadinessCondition() error = %v", err)
+	}
+	if got.Status != metav1.ConditionFalse ||
+		got.Reason != "PrerequisitesNotReady" ||
+		got.ObservedGeneration != 9 ||
+		!strings.Contains(got.Message, "reader is not configured") {
+		t.Fatalf("MultiKueueReady = %#v", got)
 	}
 }
 

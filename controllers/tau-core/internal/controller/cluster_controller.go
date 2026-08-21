@@ -38,8 +38,7 @@ const (
 
 type TauClusterReconciler struct {
 	client.Client
-	MultiKueueBetaRuntimeEnabled bool
-	MultiKueuePrerequisites      MultiKueuePrerequisiteReader
+	MultiKueuePrerequisites MultiKueuePrerequisiteReader
 }
 
 type nodeReconcileState struct {
@@ -74,18 +73,7 @@ func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	)
 	if cluster.Name == tauv1alpha1.TauClusterSingletonName {
 		nodeState, nodeErr = r.reconcileNodeLabels(ctx, &cluster, mode == tauv1alpha1.ClusterManagementModeReconcile)
-		if cluster.Spec.Features.MultiKueue == "" ||
-			cluster.Spec.Features.MultiKueue == tauv1alpha1.TauClusterFeatureDisabled {
-			multiKueueCondition = condition(
-				tauv1alpha1.ConditionMultiKueueReady,
-				metav1.ConditionFalse,
-				"OperatorDisabled",
-				"TauCluster spec.features.multiKueue is Disabled",
-				cluster.Generation,
-			)
-		} else {
-			multiKueueCondition, multiKueueErr = r.multiKueueReadinessCondition(ctx, cluster.Generation)
-		}
+		multiKueueCondition, multiKueueErr = r.multiKueueReadinessCondition(ctx, cluster.Generation)
 		profileCluster := cluster.DeepCopy()
 		profileCluster.Status.Conditions = mergeConditions(
 			cluster.Status.Conditions,
@@ -460,9 +448,6 @@ func clusterSpecHash(spec tauv1alpha1.TauClusterSpec) string {
 func normalizeClusterSpec(spec tauv1alpha1.TauClusterSpec) tauv1alpha1.TauClusterSpec {
 	if spec.WorkspaceDefaults.DefaultQueue == "" {
 		spec.WorkspaceDefaults.DefaultQueue = "jobqueue"
-	}
-	if spec.Features.MultiKueue == "" {
-		spec.Features.MultiKueue = tauv1alpha1.TauClusterFeatureDisabled
 	}
 	return spec
 }

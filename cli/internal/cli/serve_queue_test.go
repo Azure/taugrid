@@ -119,8 +119,8 @@ func TestServeDeployDoesNotExposeQueueFlag(t *testing.T) {
 			t.Fatalf("serve deploy must derive %s from the platform profile/namespace contract", name)
 		}
 	}
-	if cmd.Flags().Lookup("acknowledge-beta-feature") == nil {
-		t.Fatal("serve deploy is missing --acknowledge-beta-feature")
+	if cmd.Flags().Lookup("acknowledge-beta-feature") != nil {
+		t.Fatal("serve deploy exposes removed --acknowledge-beta-feature")
 	}
 }
 

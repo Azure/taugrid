@@ -117,7 +117,6 @@
   .badge.kind { background: var(--accent-bg); color: var(--accent); border-color: transparent; }
   .badge.run { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
   .badge.queue { background: #fef4e6; color: var(--amber); border-color: transparent; }
-  .badge.beta { background: #f3e8ff; color: #7e22ce; border-color: #d8b4fe; }
   .badge.done { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
   .badge.fail { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
   .btn-primary {
@@ -439,7 +438,7 @@
   };
 
   // Portal is read-only: profiles are readiness information, not selectable
-  // submission options, so no Beta acknowledgement is requested here.
+  // submission options.
   function renderProfileReadiness(view, state) {
     state = state || {};
     view.append(el("h3", { style: "margin:22px 0 8px;font-size:15px;" }, "Workload profiles"));
@@ -461,12 +460,11 @@
     const table = el("table", { class: "jobs" });
     table.append(el("thead", {}, el("tr", {},
       el("th", {}, "Profile"), el("th", {}, "Execution target"),
-      el("th", {}, "Stage"), el("th", {}, "Placement"), el("th", {}, "Queue"))));
+      el("th", {}, "Placement"), el("th", {}, "Queue"))));
     const body = el("tbody");
     for (const p of profiles) {
       body.append(el("tr", {},
         el("td", {}, p.name || "—"), el("td", {}, p.executionTarget || "—"),
-        el("td", {}, p.stage === "Beta" ? el("span", { class: "badge beta" }, "Beta") : (p.stage || "Stable")),
         el("td", {}, p.placement || "—"), el("td", {}, p.defaultLocalQueue || "—")));
     }
     table.append(body);
@@ -686,7 +684,7 @@
         exp = el("span", { class: "muted" }, r.experimentTracking || "untracked");
       }
       tbody.append(el("tr", {},
-        el("td", {}, r.job || r.name || "—", r.stage === "Beta" ? el("span", { class: "badge beta", style: "margin-left:6px;" }, "Beta") : ""),
+        el("td", {}, r.job || r.name || "—"),
         el("td", {}, r.namespace || "—"),
         el("td", {}, r.queue || "—"), el("td", {}, r.clusterQueue || "—"),
         el("td", {}, exp)));
@@ -1221,7 +1219,6 @@
     }
 
     const kindBadge = r => el("span", { class: "badge kind" }, r.kind || "—");
-    const betaBadge = r => r.stage === "Beta" ? el("span", { class: "badge beta" }, "Beta") : "";
     const statusBadge = (r, cls, text) => el("span", { class: "badge " + cls }, text || r.status || "—");
     const tracking = r => {
       if (r.experimentPath) {
@@ -1254,7 +1251,7 @@
     const cardFor = (r, badgeCls, badgeText) => {
       const c = el("div", { class: "jobcard" });
       c.append(el("div", { class: "top" },
-        el("span", { class: "name" }, nameCell(r)), kindBadge(r), betaBadge(r), statusBadge(r, badgeCls, badgeText)));
+        el("span", { class: "name" }, nameCell(r)), kindBadge(r), statusBadge(r, badgeCls, badgeText)));
       c.append(el("div", { class: "meta" },
         el("span", {}, "age " + (r.age || "—")),
         el("span", {}, "Stellar: "), tracking(r)));
@@ -1283,7 +1280,7 @@
       for (const r of recent) {
         const failed = r.status === "Failed";
         tbody.append(el("tr", {},
-          el("td", {}, nameCell(r)), el("td", {}, kindBadge(r), betaBadge(r)),
+          el("td", {}, nameCell(r)), el("td", {}, kindBadge(r)),
           el("td", {}, statusBadge(r, failed ? "fail" : "done")),
           el("td", {}, tracking(r)),
           el("td", { class: "num" }, r.age || "—")));
@@ -1332,7 +1329,6 @@
     const meta = el("div", { class: "meta", style: "margin:10px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;" });
     meta.append(el("span", { class: "badge kind" }, snap.kind || "—"));
     meta.append(el("span", { class: "badge" }, snap.status || "—"));
-    if (snap.object && snap.object.stage === "Beta") meta.append(el("span", { class: "badge beta" }, "MultiKueue Beta"));
     if (snap.resourceRelease) {
       const release = snap.resourceRelease;
       const releaseClass = release.computeState === "reusable" ? "badge" : "badge warn";
@@ -1393,7 +1389,6 @@
         ["Ray cluster", o.rayClusterName],
         ["Ray job id", o.jobId],
         ["Execution target", o.executionTarget],
-        ["Stage", o.stage],
         ["Reason", o.reason],
         ["Message", o.message],
       ]));

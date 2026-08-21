@@ -5,8 +5,6 @@ metadata:
 spec:
   managementMode: Reconcile
   deletionPolicy: Retain
-  features:
-    multiKueue: Disabled
   nodes:
     labelRules:
       - match:

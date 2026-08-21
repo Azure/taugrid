@@ -38,7 +38,6 @@ func newRunCmdWithConnectionFactory(connectionFactory runConnectionEnsurerFactor
 		serviceAccountName string
 		projectName        string
 		systemNamespace    string
-		betaFeatures       []string
 	)
 
 	cmd := &cobra.Command{
@@ -65,9 +64,7 @@ Connected runs, including --dry-run=client, select a ready workload profile
 from the configured cluster's TauCluster. Offline rendering is explicit:
 policy.workload_profile_snapshot must name a TauWorkloadProfileSnapshot and is
 accepted only with --dry-run=client; Tau never falls back to an environment or
-embedded profile catalog. MultiKueue Beta profiles additionally require
-execution.beta_features: [multikueue] or
---acknowledge-beta-feature multikueue.
+embedded profile catalog.
 See: tau run explain-config
 
 Common examples:
@@ -151,11 +148,6 @@ Common examples:
 			targetOptions.kvTenantID = kvTenantID
 			targetOptions.kvClientID = kvClientID
 			targetOptions.serviceAccountName = serviceAccountName
-			targetOptions.betaFeatures, err = mergeBetaFeatureAcknowledgements(targetOptions.betaFeatures, betaFeatures)
-			if err != nil {
-				return err
-			}
-
 			if strings.TrimSpace(targetOptions.workloadProfileSnapshot) != "" {
 				targetOptions, err = resolveSnapshotRunWorkloadProfile(cmd.Context(), targetOptions)
 				if err != nil {
@@ -263,7 +255,6 @@ Common examples:
 	cmd.Flags().StringVar(&kvTenantID, "tenant-id", "", "Azure AD tenant ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&kvClientID, "workload-identity-client-id", "", "Managed identity client ID for Key Vault workload identity")
 	cmd.Flags().StringVar(&serviceAccountName, "service-account", "", "pod ServiceAccount for workload cloud identity (overrides the TauWorkspace default; authorization remains server-side)")
-	cmd.Flags().StringSliceVar(&betaFeatures, "acknowledge-beta-feature", nil, "acknowledge a Beta execution feature (supported: multikueue; repeatable)")
 	cmd.PersistentFlags().StringVar(&projectName, "project", "", "Tau project name from the repository's tau.projects.yaml")
 	cmd.PersistentFlags().StringVar(&systemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 

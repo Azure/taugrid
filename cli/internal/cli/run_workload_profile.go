@@ -11,15 +11,13 @@ import (
 	"strings"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
-	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 type selectedWorkloadProfile struct {
-	Selection        profile.Selection
-	Render           profile.Profile
-	ClusterQueue     string
-	BetaAcknowledged bool
+	Selection    profile.Selection
+	Render       profile.Profile
+	ClusterQueue string
 }
 
 func resolveSnapshotRunWorkloadProfile(ctx context.Context, o unresolvedRunOptions) (unresolvedRunOptions, error) {
@@ -87,9 +85,6 @@ func selectRunWorkloadProfile(
 	renderProfile, err := selection.Profile.RenderProfile(o.namespace, o.team, o.lane)
 	if err != nil {
 		return o, fmt.Errorf("convert workload profile %q for rendering: %w", selection.Profile.Name, err)
-	}
-	if err := requireMultiKueueAcknowledgement(selection, o.betaFeatures); err != nil {
-		return o, err
 	}
 	return applySelectedWorkloadProfile(o, selection, renderProfile)
 }
@@ -227,8 +222,6 @@ func applySelectedWorkloadProfile(
 		Selection:    selection,
 		Render:       renderProfile,
 		ClusterQueue: clusterQueue,
-		BetaAcknowledged: selection.Profile.ExecutionTarget != profile.ExecutionTargetMultiKueueBeta ||
-			hasBetaFeature(o.betaFeatures, runconfig.BetaFeatureMultiKueue),
 	}
 	return o, nil
 }
@@ -254,57 +247,6 @@ func profileCardinalityConflict(profileName, field string, explicit, selected in
 	)
 }
 
-func requireMultiKueueAcknowledgement(selection profile.Selection, features []runconfig.BetaFeature) error {
-	if selection.Profile.ExecutionTarget != profile.ExecutionTargetMultiKueueBeta {
-		return nil
-	}
-	if hasBetaFeature(features, runconfig.BetaFeatureMultiKueue) {
-		return nil
-	}
-	return fmt.Errorf(
-		"workload profile %q uses multiKueueBeta and requires explicit user acknowledgement: add execution.beta_features: [multikueue] or --acknowledge-beta-feature multikueue",
-		selection.Profile.Name,
-	)
-}
-
-func hasBetaFeature(features []runconfig.BetaFeature, want runconfig.BetaFeature) bool {
-	for _, feature := range features {
-		if feature == want {
-			return true
-		}
-	}
-	return false
-}
-
-func mergeBetaFeatureAcknowledgements(
-	configured []runconfig.BetaFeature,
-	overrides []string,
-) ([]runconfig.BetaFeature, error) {
-	if err := runconfig.ValidateBetaFeatures(configured); err != nil {
-		return nil, err
-	}
-	overrideFeatures := make([]runconfig.BetaFeature, len(overrides))
-	for i, override := range overrides {
-		overrideFeatures[i] = runconfig.BetaFeature(override)
-	}
-	if err := runconfig.ValidateBetaFeatures(overrideFeatures); err != nil {
-		return nil, fmt.Errorf("--acknowledge-beta-feature: %w", err)
-	}
-	merged := append([]runconfig.BetaFeature{}, configured...)
-	seen := make(map[runconfig.BetaFeature]struct{}, len(merged))
-	for _, feature := range merged {
-		seen[feature] = struct{}{}
-	}
-	for _, feature := range overrideFeatures {
-		if _, ok := seen[feature]; ok {
-			continue
-		}
-		seen[feature] = struct{}{}
-		merged = append(merged, feature)
-	}
-	return merged, nil
-}
-
 func stampSelectedWorkloadProfile(
 	labels map[string]string,
 	annotations map[string]string,
@@ -323,10 +265,6 @@ func stampSelectedWorkloadProfile(
 	annotations[workloadmeta.AnnotationTauClusterGeneration] = strconv.FormatInt(selected.Selection.Generation, 10)
 	annotations[workloadmeta.AnnotationWorkloadProfileSetHash] = selected.Selection.ProfileSetHash
 	annotations[workloadmeta.AnnotationWorkloadProfileName] = selected.Selection.Profile.Name
-	if selected.Selection.Profile.ExecutionTarget == profile.ExecutionTargetMultiKueueBeta {
-		annotations[workloadmeta.AnnotationBetaFeatureAcknowledgement] = string(runconfig.BetaFeatureMultiKueue)
-		annotations[workloadmeta.AnnotationMultiKueueStage] = "Beta"
-	}
 	return labels, annotations, nil
 }
 
@@ -337,13 +275,6 @@ func validateSelectedWorkloadProfileMode(selected *selectedWorkloadProfile, dryR
 	if selected.Selection.Source == profile.ProfileSourceSnapshot && dryRun != "client" {
 		return fmt.Errorf(
 			"policy.workload_profile_snapshot requires --dry-run=client; snapshots cannot be used for server dry-run or apply",
-		)
-	}
-	if selected.Selection.Profile.ExecutionTarget == profile.ExecutionTargetMultiKueueBeta &&
-		!selected.BetaAcknowledged {
-		return fmt.Errorf(
-			"workload profile %q uses multiKueueBeta and requires explicit user acknowledgement: add execution.beta_features: [multikueue] or --acknowledge-beta-feature multikueue",
-			selected.Selection.Profile.Name,
 		)
 	}
 	return nil

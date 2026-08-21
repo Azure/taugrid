@@ -214,7 +214,6 @@ type runExecutionInput struct {
 	configs                 map[string]any
 	smokePairs              int
 	upstreamCheckpoint      string
-	betaFeatures            []runconfig.BetaFeature
 }
 
 type runResilienceInput struct {

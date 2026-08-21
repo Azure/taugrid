@@ -5,33 +5,7 @@
   "properties": {
     "global": {
       "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "betaFeatures": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "enum": [
-              "multikueue"
-            ]
-          }
-        },
-        "betaRiskAcknowledgements": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "enum": [
-              "multikueue"
-            ]
-          }
-        }
-      },
-      "required": [
-        "betaFeatures",
-        "betaRiskAcknowledgements"
-      ]
+      "additionalProperties": true
     },
     "tauCluster": {
       "type": "object",
@@ -39,7 +13,6 @@
       "required": [
         "managementMode",
         "deletionPolicy",
-        "features",
         "queues",
         "workloadProfiles"
       ],
@@ -57,22 +30,6 @@
             "Retain",
             "DeleteManaged"
           ]
-        },
-        "features": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "multiKueue"
-          ],
-          "properties": {
-            "multiKueue": {
-              "type": "string",
-              "enum": [
-                "Disabled",
-                "Beta"
-              ]
-            }
-          }
         },
         "nodeLabelRules": {
           "type": "array",
@@ -136,7 +93,6 @@
     }
   },
   "required": [
-    "global",
     "partOf",
     "image",
     "tauCluster"
@@ -248,7 +204,7 @@
             "type": "string",
             "enum": [
               "singleCluster",
-              "multiKueueBeta"
+              "multiKueue"
             ]
           },
           "priorities": {

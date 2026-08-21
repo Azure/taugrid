@@ -64,18 +64,11 @@ func TestValidateWorkloadProfileCrossFields(t *testing.T) {
 		{"unknown mode", func(p *WorkloadProfile) { p.Mode = "spot" }, "mode"},
 		{"unknown placement", func(p *WorkloadProfile) { p.Placement = "same-rack" }, "placement"},
 		{"unknown execution target", func(p *WorkloadProfile) { p.ExecutionTarget = "multiCluster" }, "executionTarget"},
+		{"removed execution target", func(p *WorkloadProfile) { p.ExecutionTarget = "multiKueueBeta" }, "executionTarget"},
 		{"multi-worker placement", func(p *WorkloadProfile) { p.WorkerCount = 2 }, "multi-node-nccl"},
 		{"duplicate applicability", func(p *WorkloadProfile) { p.Applicability.Teams = []string{"research", "research"} }, "duplicate"},
 		{"missing priority", func(p *WorkloadProfile) { p.Priorities.PodPriorityClassName = "" }, "required unless"},
 		{"disabled with priority", func(p *WorkloadProfile) { p.Priorities.DisableDefaultPriorities = true }, "cannot be combined"},
-		{"beta without teams", func(p *WorkloadProfile) {
-			p.ExecutionTarget = ExecutionTargetMultiKueueBeta
-			p.Applicability.Teams = nil
-		}, "applicability.teams"},
-		{"beta without namespaces", func(p *WorkloadProfile) {
-			p.ExecutionTarget = ExecutionTargetMultiKueueBeta
-			p.Applicability.Namespaces = nil
-		}, "applicability.namespaces"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,6 +90,13 @@ func TestValidateWorkloadProfileCrossFields(t *testing.T) {
 	disabled.Priorities = ProfilePriorities{DisableDefaultPriorities: true}
 	if err := ValidateWorkloadProfile(disabled); err != nil {
 		t.Fatalf("explicitly disabled priorities should validate: %v", err)
+	}
+
+	multiKueue := valid
+	multiKueue.ExecutionTarget = ExecutionTargetMultiKueue
+	multiKueue.Applicability = ProfileApplicability{}
+	if err := ValidateWorkloadProfile(multiKueue); err != nil {
+		t.Fatalf("MultiKueue profile with global applicability should validate: %v", err)
 	}
 }
 
@@ -142,24 +142,24 @@ func TestProfileSetHashIsCanonicalAndOperationallyStable(t *testing.T) {
 	}
 
 	single := testResolvedProfile("execution-target")
-	beta := testResolvedProfile("execution-target")
-	beta.ExecutionTarget = ExecutionTargetMultiKueueBeta
+	multiKueue := testResolvedProfile("execution-target")
+	multiKueue.ExecutionTarget = ExecutionTargetMultiKueue
 	singleHash, err := ProfileSetHash([]ResolvedWorkloadProfile{single})
 	if err != nil {
 		t.Fatalf("single-cluster ProfileSetHash() error = %v", err)
 	}
-	betaHash, err := ProfileSetHash([]ResolvedWorkloadProfile{beta})
+	multiKueueHash, err := ProfileSetHash([]ResolvedWorkloadProfile{multiKueue})
 	if err != nil {
-		t.Fatalf("MultiKueue Beta ProfileSetHash() error = %v", err)
+		t.Fatalf("MultiKueue ProfileSetHash() error = %v", err)
 	}
-	if singleHash == betaHash {
+	if singleHash == multiKueueHash {
 		t.Fatal("hash did not change with executionTarget")
 	}
 }
 
 func TestProfileSetSnapshotRoundTripAndVersionRejection(t *testing.T) {
 	resolved := testResolvedProfile("research-1gpu")
-	resolved.ExecutionTarget = ExecutionTargetMultiKueueBeta
+	resolved.ExecutionTarget = ExecutionTargetMultiKueue
 	resolved.Conditions = []metav1.Condition{{
 		Type:               ConditionReady,
 		Status:             metav1.ConditionTrue,
@@ -182,7 +182,7 @@ func TestProfileSetSnapshotRoundTripAndVersionRejection(t *testing.T) {
 	if got.APIVersion != ProfileSnapshotAPIVersion || got.Kind != ProfileSnapshotKind || got.ProfileSetHash != snapshot.ProfileSetHash {
 		t.Fatalf("snapshot round trip = %#v", got)
 	}
-	if got.Profiles[0].ExecutionTarget != ExecutionTargetMultiKueueBeta {
+	if got.Profiles[0].ExecutionTarget != ExecutionTargetMultiKueue {
 		t.Fatalf("snapshot executionTarget = %q", got.Profiles[0].ExecutionTarget)
 	}
 

@@ -253,7 +253,7 @@ func TestListWorkloadsWithoutStellarIdentity(t *testing.T) {
 	}
 }
 
-func TestListWorkloadsLabelsMultiKueuePlacementBetaWithoutNameHeuristics(t *testing.T) {
+func TestListWorkloadsLabelsMultiKueuePlacementWithoutNameHeuristics(t *testing.T) {
 	const raw = `{"items":[
 		{"metadata":{"name":"selected","namespace":"ray"},"spec":{"queueName":"ordinary"},
 		 "status":{"clusterName":"worker-a"}},
@@ -269,12 +269,12 @@ func TestListWorkloadsLabelsMultiKueuePlacementBetaWithoutNameHeuristics(t *test
 	for _, workload := range got {
 		byName[workload.Name] = workload
 	}
-	if byName["selected"].ExecutionTarget != "multiKueueBeta" || byName["selected"].Stage != "Beta" {
+	if byName["selected"].ExecutionTarget != "multiKueue" {
 		t.Fatalf("selected workload = %#v", byName["selected"])
 	}
 	for _, name := range []string{"checked", "plain"} {
-		if byName[name].Stage != "" {
-			t.Fatalf("name heuristic labelled %s workload Beta: %#v", name, byName[name])
+		if byName[name].ExecutionTarget != "" {
+			t.Fatalf("name heuristic labelled %s workload MultiKueue: %#v", name, byName[name])
 		}
 	}
 }

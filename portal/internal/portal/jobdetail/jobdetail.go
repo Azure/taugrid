@@ -163,7 +163,6 @@ type ObjectDetail struct {
 	JobID               string `json:"jobId,omitempty"`
 	ManagedBy           string `json:"managedBy,omitempty"`
 	ExecutionTarget     string `json:"executionTarget,omitempty"`
-	Stage               string `json:"stage,omitempty"`
 	Reason              string `json:"reason,omitempty"`
 	Message             string `json:"message,omitempty"`
 }
@@ -445,7 +444,7 @@ func parseJob(data []byte) (resolved, bool) {
 		conds = append(conds, runs.StatusCondition{Type: c.Type, Status: c.Status})
 	}
 	reason, message := jobTerminalExplanation(o)
-	executionTarget, stage := objectExecutionTarget(o.Spec.ManagedBy, o.Metadata.Annotations)
+	executionTarget := objectExecutionTarget(o.Spec.ManagedBy)
 	return resolved{
 		kind:   "Job",
 		status: runs.JobStatus(conds, o.Status.Active, o.Status.Succeeded, o.Status.Failed),
@@ -461,7 +460,6 @@ func parseJob(data []byte) (resolved, bool) {
 			Annotations:     o.Metadata.Annotations,
 			ManagedBy:       o.Spec.ManagedBy,
 			ExecutionTarget: executionTarget,
-			Stage:           stage,
 		},
 		podSelectorKey:   workloadmeta.LabelJob,
 		podSelectorValue: o.Metadata.Name,
@@ -490,7 +488,7 @@ func parseRayJob(data []byte) (resolved, bool) {
 		return resolved{}, false
 	}
 	created := parseTime(o.Metadata.CreationTimestamp)
-	executionTarget, stage := objectExecutionTarget(o.Spec.ManagedBy, o.Metadata.Annotations)
+	executionTarget := objectExecutionTarget(o.Spec.ManagedBy)
 	return resolved{
 		kind:   "RayJob",
 		status: runs.RayJobStatus(o.Status.JobDeploymentStatus, o.Status.JobStatus),
@@ -507,7 +505,6 @@ func parseRayJob(data []byte) (resolved, bool) {
 			JobID:               o.Status.JobID,
 			ManagedBy:           o.Spec.ManagedBy,
 			ExecutionTarget:     executionTarget,
-			Stage:               stage,
 			Reason:              o.Status.Reason,
 			Message:             o.Status.Message,
 		},
@@ -517,12 +514,11 @@ func parseRayJob(data []byte) (resolved, bool) {
 	}, true
 }
 
-func objectExecutionTarget(managedBy string, annotations map[string]string) (string, string) {
-	if strings.TrimSpace(managedBy) == "kueue.x-k8s.io/multikueue" ||
-		strings.EqualFold(strings.TrimSpace(annotations[workloadmeta.AnnotationMultiKueueStage]), "beta") {
-		return "multiKueueBeta", "Beta"
+func objectExecutionTarget(managedBy string) string {
+	if strings.TrimSpace(managedBy) == "kueue.x-k8s.io/multikueue" {
+		return "multiKueue"
 	}
-	return "", ""
+	return ""
 }
 
 // filterWorkloads keeps only Workloads that belong to this job. Kueue copies the

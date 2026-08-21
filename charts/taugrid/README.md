@@ -21,20 +21,16 @@ helm upgrade --install taugrid \
 
 Use `tau cluster explain-values` to print the full field reference.
 
-## MultiKueue Beta gate
+## MultiKueue
 
-MultiKueue is disabled by default. Default rendering omits its CRDs, RBAC,
-runtime activation, worker resources, credentials, queues, and profiles. The
-reviewed `values-multikueue-beta.yaml` requires both
-`global.betaFeatures: [multikueue]` and
-`global.betaRiskAcknowledgements: [multikueue]`; partial approval or raw/custom
-MultiKueue values fail rendering.
-
-That file enables manager-side controllers and readiness observation only.
-Operators must provision credentials and worker/routing resources, then
-separately set `tau-core-controller.tauCluster.features.multiKueue=Beta`.
+The supported TauGrid install enables Kueue's MultiKueue capability by default,
+including its CRDs, controller feature gate, and prerequisite RBAC. It does not
+create operator-owned worker credentials, `MultiKueueCluster`,
+`MultiKueueConfig`, `AdmissionCheck`, queue routing, or `multiKueue` workload
+profiles. Operators provision those resources explicitly for their topology and
+tenant isolation policy.
 See [Multi-cluster execution](../../site/content/en/docs/operations/multicluster.md)
-for isolation, tenant authorization, workload acknowledgement, and rollback.
+for isolation, tenant authorization, and rollback.
 
 ## Components
 
@@ -77,13 +73,6 @@ Toggle individual sub-charts. All default to `true`.
 | `components.tauCoreController.enabled` | bool | `true` | Install the Tau core controller |
 | `components.taugridCore.enabled` | bool | `true` | Install the taugrid-core services chart |
 | `components.gpuMonitoring.enabled` | bool | *(unset)* | Install GPU node health monitoring. Unset by design — falls through to `components.tauCoreController.enabled` |
-
-### `global`
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `global.betaFeatures` | enum list | `[]` | Platform-approved Beta capabilities; currently only `multikueue` |
-| `global.betaRiskAcknowledgements` | enum list | `[]` | Independent risk acknowledgement required for each enabled Beta capability |
 
 ### `baselineQueue`
 

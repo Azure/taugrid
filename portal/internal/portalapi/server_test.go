@@ -451,11 +451,11 @@ func (s staticProfileReader) ProfileSet(context.Context) (profile.ProfileSet, er
 	return s.set, s.err
 }
 
-func TestJobsAndOverviewExposeReadOnlyProfileRevisionAndBeta(t *testing.T) {
+func TestJobsAndOverviewExposeReadOnlyProfileRevisionAndMetadata(t *testing.T) {
 	const generation = int64(23)
 	resolved := profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{
-			Name: "federated", ExecutionTarget: profile.ExecutionTargetMultiKueueBeta,
+			Name: "federated", ExecutionTarget: profile.ExecutionTargetMultiKueue,
 			Placement: profile.PlacementMultiNodeNCCL, DefaultLocalQueue: "jobqueue",
 			GPUsPerWorker: 8, WorkerCount: 2,
 			Applicability: profile.ProfileApplicability{Namespaces: []string{"ray"}, Teams: []string{"research"}},
@@ -481,7 +481,8 @@ func TestJobsAndOverviewExposeReadOnlyProfileRevisionAndBeta(t *testing.T) {
 		}
 		if body := rec.Body.String(); !strings.Contains(body, `"tauClusterGeneration":23`) ||
 			!strings.Contains(body, `"profileSetHash":"full-hash"`) ||
-			!strings.Contains(body, `"stage":"Beta"`) ||
+			!strings.Contains(body, `"executionTarget":"multiKueue"`) ||
+			strings.Contains(body, `"stage"`) ||
 			!strings.Contains(body, `"selectionEnabled":false`) {
 			t.Fatalf("%s missing profile contract: %s", path, body)
 		}
@@ -1230,25 +1231,25 @@ func TestRunsBoardServesSnapshot(t *testing.T) {
 	}
 }
 
-type betaPlacementReader struct{ stubJobsReader }
+type multiKueuePlacementReader struct{ stubJobsReader }
 
-func (*betaPlacementReader) ListJobs(context.Context, string) ([]byte, error) {
+func (*multiKueuePlacementReader) ListJobs(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[{"metadata":{"name":"train-job","labels":{"` + workloadmeta.LabelJob + `":"train"}}}]}`), nil
 }
 
-func (*betaPlacementReader) ListRayJobs(context.Context, string) ([]byte, error) {
+func (*multiKueuePlacementReader) ListRayJobs(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[]}`), nil
 }
 
-func (*betaPlacementReader) ListWorkloads(context.Context, string) ([]byte, error) {
+func (*multiKueuePlacementReader) ListWorkloads(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[{
 		"metadata":{"name":"job-train","ownerReferences":[{"name":"train-job"}]},
 		"status":{"clusterName":"worker-a"}
 	}]}`), nil
 }
 
-func TestRunsBoardLabelsBetaFromWorkloadPlacementWithoutGatingObservation(t *testing.T) {
-	reader := &betaPlacementReader{}
+func TestRunsBoardLabelsMultiKueueFromWorkloadPlacement(t *testing.T) {
+	reader := &multiKueuePlacementReader{}
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
 		Jobs:    JobsOptions{Reader: reader},
@@ -1259,19 +1260,19 @@ func TestRunsBoardLabelsBetaFromWorkloadPlacementWithoutGatingObservation(t *tes
 	}
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"executionTarget":"multiKueueBeta"`) ||
-		!strings.Contains(rec.Body.String(), `"stage":"Beta"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"executionTarget":"multiKueue"`) ||
+		strings.Contains(rec.Body.String(), `"stage"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-type betaRunIDReader struct{ stubJobsReader }
+type multiKueueRunIDReader struct{ stubJobsReader }
 
-func (*betaRunIDReader) ListWorkloads(context.Context, string) ([]byte, error) {
+func (*multiKueueRunIDReader) ListWorkloads(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[{
 		"metadata":{
 			"name":"job-train",
-			"labels":{"` + workloadmeta.LabelRunID + `":"beta-run"},
+			"labels":{"` + workloadmeta.LabelRunID + `":"multikueue-run"},
 			"ownerReferences":[{"name":"reused-name"}]
 		},
 		"status":{"clusterName":"worker-a"}
@@ -1279,19 +1280,18 @@ func (*betaRunIDReader) ListWorkloads(context.Context, string) ([]byte, error) {
 }
 
 func TestAnnotateMultiKueueRunsPrefersRunIDOverReusedName(t *testing.T) {
-	server := &Server{jobs: JobsOptions{Reader: &betaRunIDReader{}}}
+	server := &Server{jobs: JobsOptions{Reader: &multiKueueRunIDReader{}}}
 	snapshot := runs.Snapshot{Runs: []runs.Run{
 		{Name: "reused-name", RunID: "ordinary-run"},
-		{Name: "reused-name", RunID: "beta-run"},
+		{Name: "reused-name", RunID: "multikueue-run"},
 	}}
 
 	server.annotateMultiKueueRuns(context.Background(), &snapshot, "ray")
-	if snapshot.Runs[0].Stage != "" || snapshot.Runs[0].ExecutionTarget != "" {
+	if snapshot.Runs[0].ExecutionTarget != "" {
 		t.Fatalf("ordinary run with reused name was mislabeled: %#v", snapshot.Runs[0])
 	}
-	if snapshot.Runs[1].Stage != "Beta" ||
-		snapshot.Runs[1].ExecutionTarget != string(profile.ExecutionTargetMultiKueueBeta) {
-		t.Fatalf("Beta run was not labeled by run ID: %#v", snapshot.Runs[1])
+	if snapshot.Runs[1].ExecutionTarget != string(profile.ExecutionTargetMultiKueue) {
+		t.Fatalf("MultiKueue run was not labeled by run ID: %#v", snapshot.Runs[1])
 	}
 }
 
@@ -2355,7 +2355,7 @@ func TestPortalShellContainsWorkspaceScopeContract(t *testing.T) {
 		`host.replaceChildren(view);`,
 		`No local fallback was used.`,
 		`profile selection is not available in Portal`,
-		`MultiKueue Beta`,
+		`Execution target`,
 		`Existing workloads and queues remain observable`,
 	} {
 		if !strings.Contains(body, want) {

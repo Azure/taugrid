@@ -35,7 +35,7 @@ func TestRunConfigResolvesWorkloadProfileSnapshotRelativeToConfig(t *testing.T) 
 	}
 }
 
-func TestRunHelpDocumentsProfileSourceAndBetaAcknowledgement(t *testing.T) {
+func TestRunHelpDocumentsProfileSource(t *testing.T) {
 	cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer {
 		return &fakeRunConnectionEnsurer{}
 	})
@@ -45,14 +45,20 @@ func TestRunHelpDocumentsProfileSourceAndBetaAcknowledgement(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"policy.workload_profile_snapshot",
-		"--acknowledge-beta-feature",
-		"execution.beta_features",
-	} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Fatalf("run help missing %q:\n%s", want, stdout.String())
+	if !strings.Contains(stdout.String(), "policy.workload_profile_snapshot") {
+		t.Fatalf("run help missing profile snapshot contract:\n%s", stdout.String())
+	}
+	for _, removed := range []string{"--acknowledge-beta-feature", "execution.beta_features"} {
+		if strings.Contains(stdout.String(), removed) {
+			t.Fatalf("run help unexpectedly contains removed acknowledgement %q:\n%s", removed, stdout.String())
 		}
+	}
+	resumeCmd, _, err := cmd.Find([]string{"resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumeCmd.Flags().Lookup("acknowledge-beta-feature") != nil {
+		t.Fatal("run resume exposes removed --acknowledge-beta-feature")
 	}
 }
 
@@ -236,7 +242,7 @@ func TestSelectedProfilePreservesExplicitRuntimeAndStorageSettings(t *testing.T)
 	}
 }
 
-func TestRunSelectionAllowsOnlyUniqueImplicitNormalProfile(t *testing.T) {
+func TestRunSelectionAllowsUniqueImplicitProfiles(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.engine = runconfig.EngineJob
 	options.namespace = "alpha"
@@ -254,13 +260,17 @@ func TestRunSelectionAllowsOnlyUniqueImplicitNormalProfile(t *testing.T) {
 		t.Fatalf("implicit normal selection = %#v", got.selectedWorkloadProfile)
 	}
 
-	_, err = selectRunWorkloadProfile(
+	got, err = selectRunWorkloadProfile(
 		context.Background(),
 		options,
-		testRunProfileProvider(t, profile.ExecutionTargetMultiKueueBeta, 1, 1),
+		testRunProfileProvider(t, profile.ExecutionTargetMultiKueue, 1, 1),
 	)
-	if err == nil || !strings.Contains(err.Error(), "never selected implicitly") {
-		t.Fatalf("implicit beta error = %v", err)
+	if err != nil {
+		t.Fatalf("implicit multiKueue selection: %v", err)
+	}
+	if got.selectedWorkloadProfile == nil ||
+		got.selectedWorkloadProfile.Selection.Profile.ExecutionTarget != profile.ExecutionTargetMultiKueue {
+		t.Fatalf("implicit multiKueue selection = %#v", got.selectedWorkloadProfile)
 	}
 }
 
@@ -310,8 +320,9 @@ func TestProfileRefreshDistinguishesConfigAssertionsFromPriorRevisionValues(t *t
 	}
 }
 
-func TestMultiKueueAcknowledgementGateAppliesInEverySubmissionMode(t *testing.T) {
-	provider := testRunProfileProvider(t, profile.ExecutionTargetMultiKueueBeta, 1, 1)
+func TestMultiKueueProfileRunsInEverySubmissionMode(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 1, 1, 11)
+	provider := profile.NewClusterProvider(readyClusterProfileClientForProfiles(t, 11, resolved))
 	for _, dryRun := range []string{"client", "server", ""} {
 		t.Run("dry-run="+dryRun, func(t *testing.T) {
 			options := defaultRunDispatchOptions()
@@ -322,47 +333,27 @@ func TestMultiKueueAcknowledgementGateAppliesInEverySubmissionMode(t *testing.T)
 			options.lane = "training"
 			options.dryRun = dryRun
 
-			_, err := selectRunWorkloadProfile(context.Background(), options, provider)
-			if err == nil ||
-				!strings.Contains(err.Error(), "execution.beta_features") ||
-				!strings.Contains(err.Error(), "--acknowledge-beta-feature") {
-				t.Fatalf("missing acknowledgement error = %v", err)
-			}
-
-			options.betaFeatures = []runconfig.BetaFeature{runconfig.BetaFeatureMultiKueue}
 			selected, err := selectRunWorkloadProfile(context.Background(), options, provider)
 			if err != nil {
-				t.Fatalf("acknowledged selection: %v", err)
+				t.Fatalf("multiKueue selection: %v", err)
+			}
+			if err := validateSelectedWorkloadProfileMode(selected.selectedWorkloadProfile, dryRun); err != nil {
+				t.Fatalf("multiKueue mode validation: %v", err)
 			}
 			labels, annotations, err := stampSelectedWorkloadProfile(nil, nil, selected.selectedWorkloadProfile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if labels[workloadmeta.LabelProfile] != "research-profile" ||
-				annotations[workloadmeta.AnnotationBetaFeatureAcknowledgement] != "multikueue" ||
-				annotations[workloadmeta.AnnotationMultiKueueStage] != "Beta" {
-				t.Fatalf("beta metadata labels=%#v annotations=%#v", labels, annotations)
+			if labels[workloadmeta.LabelProfile] != "research-profile" {
+				t.Fatalf("profile labels=%#v", labels)
+			}
+			if len(annotations) != 3 ||
+				annotations[workloadmeta.AnnotationTauClusterGeneration] != "11" ||
+				annotations[workloadmeta.AnnotationWorkloadProfileName] != "research-profile" ||
+				annotations[workloadmeta.AnnotationWorkloadProfileSetHash] == "" {
+				t.Fatalf("profile annotations=%#v", annotations)
 			}
 		})
-	}
-}
-
-func TestBetaAcknowledgementOverrideIsAdditiveAndValidated(t *testing.T) {
-	got, err := mergeBetaFeatureAcknowledgements(nil, []string{"multikueue"})
-	if err != nil || len(got) != 1 || got[0] != runconfig.BetaFeatureMultiKueue {
-		t.Fatalf("merged acknowledgement = %#v, err=%v", got, err)
-	}
-	got, err = mergeBetaFeatureAcknowledgements(
-		[]runconfig.BetaFeature{runconfig.BetaFeatureMultiKueue},
-		[]string{"multikueue"},
-	)
-	if err != nil || len(got) != 1 {
-		t.Fatalf("additive duplicate across sources = %#v, err=%v", got, err)
-	}
-	for _, overrides := range [][]string{{"future"}, {"multikueue", "multikueue"}} {
-		if _, err := mergeBetaFeatureAcknowledgements(nil, overrides); err == nil {
-			t.Fatalf("overrides %#v unexpectedly validated", overrides)
-		}
 	}
 }
 
@@ -439,7 +430,7 @@ runtime:
 	})
 }
 
-func TestMultiKueueBetaAnnotationsReachRenderedJob(t *testing.T) {
+func TestMultiKueueProfileRevisionAnnotationsReachRenderedJob(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "train.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho train\n"), 0o755); err != nil {
@@ -453,35 +444,25 @@ func TestMultiKueueBetaAnnotationsReachRenderedJob(t *testing.T) {
 	options.team = "research"
 	options.lane = "training"
 	options.profileName = "research-profile"
-	options.betaFeatures = []runconfig.BetaFeature{runconfig.BetaFeatureMultiKueue}
 	options.dryRun = "client"
 	var err error
 	options, err = selectRunWorkloadProfile(
 		context.Background(),
 		options,
-		testRunProfileProvider(t, profile.ExecutionTargetMultiKueueBeta, 1, 1),
+		testRunProfileProvider(t, profile.ExecutionTargetMultiKueue, 1, 1),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := newRunJobRequest(options, "beta-job")
+	request, err := newRunJobRequest(options, "multikueue-job")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
 	if err := executeRunJob(context.Background(), &stdout, &stderr, &request, "tau run"); err != nil {
-		t.Fatalf("beta Job render: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("multiKueue Job render: %v\nstderr:\n%s", err, stderr.String())
 	}
-	for _, want := range []string{
-		workloadmeta.AnnotationBetaFeatureAcknowledgement,
-		"multikueue",
-		workloadmeta.AnnotationMultiKueueStage,
-		"Beta",
-	} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Fatalf("beta render missing %q:\n%s", want, stdout.String())
-		}
-	}
+	assertProfileRevisionMetadata(t, stdout.String(), options.selectedWorkloadProfile)
 }
 
 func assertProfileRevisionMetadata(t *testing.T, rendered string, selected *selectedWorkloadProfile) {

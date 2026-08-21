@@ -299,13 +299,13 @@ func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 	})
 }
 
-func TestServeDeployMultiKueueAcknowledgementAndRevisionMetadata(t *testing.T) {
-	beta := serveTestProfile("serve-beta", profile.ExecutionTargetMultiKueueBeta, "jobqueue", 1, 1, 23)
-	beta.Applicability = profile.ProfileApplicability{
+func TestServeDeployMultiKueueAndRevisionMetadata(t *testing.T) {
+	multiKueue := serveTestProfile("serve-multikueue", profile.ExecutionTargetMultiKueue, "jobqueue", 1, 1, 23)
+	multiKueue.Applicability = profile.ProfileApplicability{
 		Namespaces: []string{"alpha"}, Teams: []string{"research"}, Lanes: []string{"serving"},
 	}
 	base := []string{
-		"endpoint", "--profile", "serve-beta", "--image", "example.invalid/serve:v1",
+		"endpoint", "--profile", "serve-multikueue", "--image", "example.invalid/serve:v1",
 		"-n", "alpha",
 	}
 
@@ -314,22 +314,22 @@ func TestServeDeployMultiKueueAcknowledgementAndRevisionMetadata(t *testing.T) {
 		if name == "" {
 			name = "apply"
 		}
-		t.Run("missing-"+name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			args := serveArgs(base)
 			if dryRun != "" {
 				args = append(args, "--dry-run="+dryRun)
 			}
-			_, err := executeAuthoritativeServe(t, beta, args...)
-			if err == nil || !strings.Contains(err.Error(), "requires explicit user acknowledgement") {
-				t.Fatalf("missing acknowledgement error = %v", err)
+			_, err := executeAuthoritativeServe(t, multiKueue, args...)
+			if err != nil {
+				t.Fatalf("multiKueue serve %s: %v", name, err)
 			}
 		})
 	}
 
 	for _, kind := range []string{"deployment", "rayservice"} {
 		t.Run(kind+"-metadata", func(t *testing.T) {
-			args := serveArgs(base, "--kind="+kind, "--dry-run=client", "--acknowledge-beta-feature", "multikueue")
-			rendered, err := executeAuthoritativeServe(t, beta, args...)
+			args := serveArgs(base, "--kind="+kind, "--dry-run=client")
+			rendered, err := executeAuthoritativeServe(t, multiKueue, args...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,10 +345,8 @@ func TestServeDeployMultiKueueAcknowledgementAndRevisionMetadata(t *testing.T) {
 				podAnnotations = nestedStringMap(t, doc, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "annotations")
 			}
 			for key, value := range map[string]string{
-				workloadmeta.AnnotationTauClusterGeneration:       strconv.FormatInt(23, 10),
-				workloadmeta.AnnotationWorkloadProfileName:        "serve-beta",
-				workloadmeta.AnnotationBetaFeatureAcknowledgement: "multikueue",
-				workloadmeta.AnnotationMultiKueueStage:            "Beta",
+				workloadmeta.AnnotationTauClusterGeneration: strconv.FormatInt(23, 10),
+				workloadmeta.AnnotationWorkloadProfileName:  "serve-multikueue",
 			} {
 				if rootAnnotations[key] != value || podAnnotations[key] != value {
 					t.Fatalf("%s metadata root=%q pod=%q, want %q:\n%s", key, rootAnnotations[key], podAnnotations[key], value, rendered)

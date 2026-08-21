@@ -58,16 +58,6 @@ spec:
                 - Retain
                 - DeleteManaged
                 type: string
-              features:
-                default: {}
-                properties:
-                  multiKueue:
-                    default: Disabled
-                    enum:
-                    - Disabled
-                    - Beta
-                    type: string
-                type: object
               managementMode:
                 default: Observe
                 description: |-
@@ -221,10 +211,10 @@ spec:
                       default: singleCluster
                       description: |-
                         ExecutionTarget selects whether a profile executes on the submitting cluster
-                        or through the explicitly gated MultiKueue Beta path.
+                        or through MultiKueue.
                       enum:
                       - singleCluster
-                      - multiKueueBeta
+                      - multiKueue
                       type: string
                     gpusPerWorker:
                       format: int32
@@ -282,12 +272,6 @@ spec:
                   x-kubernetes-validations:
                   - message: workerCount greater than one requires placement=multi-node-nccl
                     rule: self.workerCount == 1 || self.placement == 'multi-node-nccl'
-                  - message: multiKueueBeta requires non-empty team and namespace
-                      applicability allowlists
-                    rule: self.executionTarget != 'multiKueueBeta' || (has(self.applicability)
-                      && has(self.applicability.teams) && size(self.applicability.teams)
-                      > 0 && has(self.applicability.namespaces) && size(self.applicability.namespaces)
-                      > 0)
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
@@ -538,10 +522,10 @@ spec:
                           default: singleCluster
                           description: |-
                             ExecutionTarget selects whether a profile executes on the submitting cluster
-                            or through the explicitly gated MultiKueue Beta path.
+                            or through MultiKueue.
                           enum:
                           - singleCluster
-                          - multiKueueBeta
+                          - multiKueue
                           type: string
                         gpusPerWorker:
                           format: int32
@@ -640,12 +624,6 @@ spec:
                       x-kubernetes-validations:
                       - message: workerCount greater than one requires placement=multi-node-nccl
                         rule: self.workerCount == 1 || self.placement == 'multi-node-nccl'
-                      - message: multiKueueBeta requires non-empty team and namespace
-                          applicability allowlists
-                        rule: self.executionTarget != 'multiKueueBeta' || (has(self.applicability)
-                          && has(self.applicability.teams) && size(self.applicability.teams)
-                          > 0 && has(self.applicability.namespaces) && size(self.applicability.namespaces)
-                          > 0)
                     type: array
                     x-kubernetes-list-map-keys:
                     - name

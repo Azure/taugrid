@@ -1,9 +1,5 @@
 # taugrid-core defaults. Override per cluster.
 
-global:
-  betaFeatures: []
-  betaRiskAcknowledgements: []
-
 # Optional Kueue ResourceFlavors. Most clusters manage these with their lane
 # manifests/GitOps, so the chart leaves generation off by default. A
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class

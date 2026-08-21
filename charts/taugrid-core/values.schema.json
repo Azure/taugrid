@@ -5,36 +5,7 @@
   "properties": {
     "global": {
       "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "betaFeatures": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "enum": [
-              "multikueue"
-            ]
-          }
-        },
-        "betaRiskAcknowledgements": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "enum": [
-              "multikueue"
-            ]
-          }
-        }
-      },
-      "required": [
-        "betaFeatures",
-        "betaRiskAcknowledgements"
-      ]
+      "additionalProperties": true
     }
-  },
-  "required": [
-    "global"
-  ]
+  }
 }

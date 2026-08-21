@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/kube"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
-	"github.com/Azure/taugrid/core/runconfig"
 )
 
 var newServeRunner = func(kubeContext string) kubeRawRunner {
@@ -69,7 +68,6 @@ func newServeDeployCmd() *cobra.Command {
 		rayVersion    string
 		argsStr       string
 		namespace     string
-		betaFeatures  []string
 		dryRun        string
 		kubeContext   string
 		kind          string // rayservice | deployment
@@ -184,10 +182,6 @@ Examples:
 			if err != nil {
 				return err
 			}
-			acknowledgements, err := mergeBetaFeatureAcknowledgements(nil, betaFeatures)
-			if err != nil {
-				return err
-			}
 			var explicitGPUs *int
 			if cmd.Flags().Changed("gpus") {
 				explicitGPUs = &gpus
@@ -201,7 +195,6 @@ Examples:
 				target.Queue,
 				target.ClusterQueue,
 				explicitGPUs,
-				acknowledgements,
 			)
 			if err != nil {
 				return err
@@ -394,7 +387,6 @@ Examples:
 	cmd.Flags().StringVar(&rayVersion, "ray-version", "", "Ray version (default: 2.40.0)")
 	cmd.Flags().StringVar(&argsStr, "args", "", "extra container args (space-separated; e.g. \"--model /ckpt --quantize awq\")")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
-	cmd.Flags().StringArrayVar(&betaFeatures, "acknowledge-beta-feature", nil, "acknowledge a Beta execution feature required by the selected profile (additive; supported: multikueue)")
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
 	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count per serving pod; defaults to the selected TauCluster workload profile and must match it when set")
 	cmd.Flags().IntVar(&minReplicas, "min-replicas", 1, "minimum replica count for autoscaling (requires --max-replicas)")
@@ -410,7 +402,6 @@ func selectServeWorkloadProfile(
 	provider *profile.Provider,
 	profileName, namespace, team, resolvedQueue, resolvedClusterQueue string,
 	explicitGPUs *int,
-	betaFeatures []runconfig.BetaFeature,
 ) (profile.Profile, *selectedWorkloadProfile, error) {
 	set, err := provider.ProfileSet(ctx)
 	if err != nil {
@@ -469,15 +460,10 @@ func selectServeWorkloadProfile(
 			selection.Profile.GPUsPerWorker,
 		)
 	}
-	if err := requireMultiKueueAcknowledgement(selection, betaFeatures); err != nil {
-		return profile.Profile{}, nil, err
-	}
 	selected := &selectedWorkloadProfile{
 		Selection:    selection,
 		Render:       renderProfile,
 		ClusterQueue: clusterQueue,
-		BetaAcknowledged: selection.Profile.ExecutionTarget != profile.ExecutionTargetMultiKueueBeta ||
-			hasBetaFeature(betaFeatures, runconfig.BetaFeatureMultiKueue),
 	}
 	return renderProfile, selected, nil
 }

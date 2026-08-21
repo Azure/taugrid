@@ -162,8 +162,6 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 	clusterQueueIssues := make([]string, 0)
 	flavorNames := make(map[string]struct{})
 	executionObservations := make([]clusterQueueExecutionObservation, 0, len(clusterQueueNames))
-	classifyAdmissionChecks := cluster.Spec.Features.MultiKueue == tauv1alpha1.TauClusterFeatureBeta &&
-		r.MultiKueueBetaRuntimeEnabled
 	for _, name := range sortedSet(clusterQueueNames) {
 		clusterQueue := newQueueObject(clusterQueueGVK)
 		if err := r.Get(ctx, client.ObjectKey{Name: name}, clusterQueue); err != nil {
@@ -181,7 +179,6 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 			ctx,
 			name,
 			clusterQueue,
-			classifyAdmissionChecks,
 		)
 		executionObservations = append(executionObservations, executionObservation)
 		observationErr = errors.Join(observationErr, err)
@@ -218,7 +215,6 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 		clusterQueueOK,
 		len(clusterQueueNames),
 		executionObservations,
-		classifyAdmissionChecks,
 		generation,
 	)
 	resolved.Conditions = append(resolved.Conditions, executionCondition)
@@ -360,7 +356,6 @@ func (r *TauClusterReconciler) observeClusterQueueExecution(
 	ctx context.Context,
 	clusterQueueName string,
 	clusterQueue *unstructured.Unstructured,
-	classifyAdmissionChecks bool,
 ) (clusterQueueExecutionObservation, error) {
 	observation := clusterQueueExecutionObservation{clusterQueue: clusterQueueName}
 	names, err := clusterQueueAdmissionCheckNames(clusterQueue)
@@ -373,9 +368,6 @@ func (r *TauClusterReconciler) observeClusterQueueExecution(
 		return observation, nil
 	}
 	observation.referencedAdmissionChecks = names
-	if !classifyAdmissionChecks {
-		return observation, nil
-	}
 
 	var observationErr error
 	for _, name := range names {
@@ -435,7 +427,6 @@ func workloadProfileExecutionCondition(
 	clusterQueuesReady bool,
 	referencedClusterQueues int,
 	observations []clusterQueueExecutionObservation,
-	classifyAdmissionChecks bool,
 	generation int64,
 ) metav1.Condition {
 	var lookupIssues []string
@@ -444,7 +435,7 @@ func workloadProfileExecutionCondition(
 		lookupIssues = append(lookupIssues, observation.issues...)
 		multiKueueChecks = append(multiKueueChecks, observation.multiKueueChecks...)
 	}
-	if workloadProfile.ExecutionTarget == profile.ExecutionTargetMultiKueueBeta {
+	if workloadProfile.ExecutionTarget == profile.ExecutionTargetMultiKueue {
 		if notReady := multiKueueCapabilityNotReadyCondition(cluster, generation); notReady != nil {
 			return *notReady
 		}
@@ -461,15 +452,6 @@ func workloadProfileExecutionCondition(
 	}
 
 	if workloadProfile.ExecutionTarget == profile.ExecutionTargetSingleCluster {
-		if !classifyAdmissionChecks {
-			return condition(
-				profile.ConditionExecutionReady,
-				metav1.ConditionTrue,
-				"Ready",
-				"ordinary profile dependencies are ready; MultiKueue classification is disabled",
-				generation,
-			)
-		}
 		if len(multiKueueChecks) > 0 {
 			sort.Strings(multiKueueChecks)
 			return condition(
@@ -477,7 +459,7 @@ func workloadProfileExecutionCondition(
 				metav1.ConditionFalse,
 				"UnexpectedMultiKueueAdmissionCheck",
 				fmt.Sprintf(
-					"singleCluster profile resolves to MultiKueue AdmissionCheck(s) %s; set executionTarget=multiKueueBeta and explicit team/namespace allowlists or remove the wiring",
+					"singleCluster profile resolves to MultiKueue AdmissionCheck(s) %s; set executionTarget=multiKueue or remove the wiring",
 					strings.Join(multiKueueChecks, ", "),
 				),
 				generation,
@@ -488,23 +470,6 @@ func workloadProfileExecutionCondition(
 			metav1.ConditionTrue,
 			"Ready",
 			"resolved ClusterQueues do not use MultiKueue",
-			generation,
-		)
-	}
-
-	defaultQueue := strings.TrimSpace(cluster.Spec.WorkspaceDefaults.DefaultQueue)
-	if defaultQueue == "" {
-		defaultQueue = "jobqueue"
-	}
-	if strings.EqualFold(defaultQueue, workloadProfile.DefaultLocalQueue) {
-		return condition(
-			profile.ConditionExecutionReady,
-			metav1.ConditionFalse,
-			"DefaultQueueNotAllowed",
-			fmt.Sprintf(
-				"multiKueueBeta profile queue %q must not be TauCluster workspaceDefaults.defaultQueue",
-				workloadProfile.DefaultLocalQueue,
-			),
 			generation,
 		)
 	}

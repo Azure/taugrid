@@ -254,7 +254,7 @@ func TestDetailManagerRayJobLeavesComputeReuseUnknown(t *testing.T) {
 	if !strings.Contains(release.Message, "Manager view only") {
 		t.Fatalf("ResourceRelease.Message = %q", release.Message)
 	}
-	if snap.Object.ExecutionTarget != "multiKueueBeta" || snap.Object.Stage != "Beta" {
+	if snap.Object.ExecutionTarget != "multiKueue" {
 		t.Fatalf("MultiKueue object identity = %+v", snap.Object)
 	}
 }

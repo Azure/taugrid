@@ -69,7 +69,6 @@ type ProfileAvailability struct {
 type ProfileSummary struct {
 	Name              string                  `json:"name"`
 	ExecutionTarget   profile.ExecutionTarget `json:"executionTarget"`
-	Stage             string                  `json:"stage"`
 	Placement         string                  `json:"placement"`
 	DefaultLocalQueue string                  `json:"defaultLocalQueue"`
 	GPUsPerWorker     int32                   `json:"gpusPerWorker"`
@@ -235,13 +234,9 @@ func ReadProfiles(ctx context.Context, reader ProfileReader, scopes []Scope, lan
 			!profileMatchesAnyScope(candidate, scopes, lane) {
 			continue
 		}
-		stage := "Stable"
-		if candidate.ExecutionTarget == profile.ExecutionTargetMultiKueueBeta {
-			stage = "Beta"
-		}
 		out.ReadyProfiles = append(out.ReadyProfiles, ProfileSummary{
 			Name: candidate.Name, ExecutionTarget: candidate.ExecutionTarget,
-			Stage: stage, Placement: candidate.Placement,
+			Placement:         candidate.Placement,
 			DefaultLocalQueue: candidate.DefaultLocalQueue,
 			GPUsPerWorker:     candidate.GPUsPerWorker, WorkerCount: candidate.WorkerCount,
 		})

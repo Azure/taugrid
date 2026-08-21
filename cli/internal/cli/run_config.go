@@ -297,7 +297,6 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 		}
 	}
 	o.allowNCCLOverride = c.Execution.AllowNCCLOverride
-	o.betaFeatures = append([]runconfig.BetaFeature{}, c.Execution.BetaFeatures...)
 
 	o.maxRetries = c.Resilience.MaxRetries
 	o.retryOn = append([]string{}, c.Resilience.RetryOn...)

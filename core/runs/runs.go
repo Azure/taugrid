@@ -98,7 +98,6 @@ type Run struct {
 	ExperimentTracking string    `json:"experimentTracking"`
 	ExperimentPath     string    `json:"experimentPath,omitempty"`
 	ExecutionTarget    string    `json:"executionTarget,omitempty"`
-	Stage              string    `json:"stage,omitempty"`
 }
 
 // Snapshot is the Jobs board payload: the Tau-managed workloads, newest first.
@@ -312,7 +311,7 @@ func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			}
 		}
 		created := parseTime(item.Metadata.CreationTimestamp)
-		executionTarget, stage := runtimeExecutionTarget(item.Spec.ManagedBy, item.Metadata.Annotations)
+		executionTarget := runtimeExecutionTarget(item.Spec.ManagedBy)
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "Job",
@@ -327,7 +326,6 @@ func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			Source:             source,
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
 			ExecutionTarget:    executionTarget,
-			Stage:              stage,
 		})
 	}
 	return out
@@ -353,7 +351,7 @@ func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			}
 		}
 		created := parseTime(item.Metadata.CreationTimestamp)
-		executionTarget, stage := runtimeExecutionTarget(item.Spec.ManagedBy, item.Metadata.Annotations)
+		executionTarget := runtimeExecutionTarget(item.Spec.ManagedBy)
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "RayJob",
@@ -368,19 +366,17 @@ func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 			Source:             source,
 			ExperimentTracking: experimentTracking(item.Metadata.Annotations),
 			ExecutionTarget:    executionTarget,
-			Stage:              stage,
 		})
 	}
 
 	return out
 }
 
-func runtimeExecutionTarget(managedBy string, annotations map[string]string) (string, string) {
-	if strings.TrimSpace(managedBy) == multiKueueManagedBy ||
-		strings.EqualFold(strings.TrimSpace(annotations[workloadmeta.AnnotationMultiKueueStage]), "beta") {
-		return "multiKueueBeta", "Beta"
+func runtimeExecutionTarget(managedBy string) string {
+	if strings.TrimSpace(managedBy) == multiKueueManagedBy {
+		return "multiKueue"
 	}
-	return "", ""
+	return ""
 }
 
 // hasTauLabel reports whether any label key is under the Tau prefix.

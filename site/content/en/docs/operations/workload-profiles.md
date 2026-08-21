@@ -90,34 +90,33 @@ accepted only with `--dry-run=client`; it cannot authorize server dry-run or
 apply. Treat snapshots as immutable review artifacts and re-export after a
 TauCluster revision.
 
-## MultiKueue gates and ownership
+## MultiKueue readiness and ownership
 
-The `multiKueueBeta` execution target is behind four ordered gates:
+The `multiKueue` execution target has one deterministic profile contract:
 
-1. the distribution's explicit MultiKueue install/runtime gate installs and
-   configures manager and worker dependencies;
-2. the platform owner sets `TauCluster.spec.features.multiKueue: Beta`, and the
-   controller reports the prerequisites ready;
-3. that gated render appends a non-default profile with
-   `executionTarget: multiKueueBeta`, a dedicated LocalQueue, and non-global
-   `applicability.teams` **and** `applicability.namespaces`; and
-4. the researcher acknowledges `multikueue` with
-   `execution.beta_features: [multikueue]` or
-   `--acknowledge-beta-feature multikueue`.
+1. the standard distribution installs MultiKueue controller support;
+2. `TauCluster.status.conditions[MultiKueueReady]` reports a current, active
+   AdmissionCheck, referenced MultiKueueConfig, and active worker;
+3. the catalog includes a ready profile with `executionTarget: multiKueue`, a
+   dedicated LocalQueue, and the ordinary team, namespace, and lane
+   applicability required by the operator; and
+4. profile selection resolves that profile explicitly through `policy.profile`
+   or implicitly as the unique ready, applicable profile.
 
-Failure at any gate must stop dispatch. A MultiKueue profile is never selected
-implicitly and must never be global or the default catalog entry. The supported
-boundary is Tau-rendered workloads whose kind and dependencies are configured
-on the manager and every eligible worker. Direct `kubectl apply`, hand-written
-Workloads, and objects mutated after Tau renders them are outside this contract.
+Failure of readiness or profile resolution stops dispatch. A MultiKueue profile
+uses the same fail-closed applicability and ambiguity rules as every other
+execution target. The supported boundary is Tau-rendered workloads whose kind
+and dependencies are configured on the manager and every eligible worker.
+Direct `kubectl apply`, hand-written Workloads, and objects mutated after Tau
+renders them are outside this contract.
 
 The platform owner owns worker credentials, least-privilege access,
 distribution and rotation, queue isolation, namespace and ServiceAccount
-parity, image pull identity, storage reachability, and revocation. A Beta-named
-feature gate does not make the overall MultiKueue capability Beta: it remains
-Alpha until release evidence covers an environment/version matrix,
-manager-to-worker E2E, negative authorization and credential tests, operational
-enablement, credential rotation/revocation, drain, and rollback.
+parity, image pull identity, storage reachability, and revocation. This
+constrained supported capability remains Alpha until release evidence covers
+an environment/version matrix, manager-to-worker E2E, negative authorization
+and credential tests, operational enablement, credential rotation/revocation,
+drain, and rollback.
 
 ## Drain and roll back
 
@@ -132,11 +131,11 @@ Before changing queue bindings, profile scope, or execution target:
 5. restore admission.
 
 Rollback by draining again, restoring the previous catalog, waiting for its new
-generation to become Ready, then disabling the four MultiKueue gates in reverse
-order and revoking unused worker credentials. Running pods do not migrate when
-a profile changes. Disabling any gate blocks new Tau submissions; it does not
-stop, clean up, or make it safe to abandon active remote workloads. Continue
-status, log, cancellation, and cleanup operations until every manager and worker
-object is terminal. Controller status is an observation, not a reservation:
-queues, credentials, storage, nodes, and capacity can change between readiness,
-render, admission, and scheduling.
+generation to become Ready, removing the MultiKueue profile and routing objects,
+then revoking unused worker credentials. Running pods do not migrate when a
+profile changes. Removing profile authorization blocks new Tau submissions; it
+does not stop, clean up, or make it safe to abandon active remote workloads.
+Continue status, log, cancellation, and cleanup operations until every manager
+and worker object is terminal. Controller status is an observation, not a
+reservation: queues, credentials, storage, nodes, and capacity can change
+between readiness, render, admission, and scheduling.

@@ -1,1 +1,0 @@
-{{- include "tau-core-controller.validateMultiKueueBetaGate" . -}}
