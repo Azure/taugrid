@@ -309,12 +309,6 @@ func LoadWithDiagnostics(path string) (Config, []string, error) {
 	return parseWithDiagnostics(raw, path)
 }
 
-// parse keeps the two-value shape for callers that only care about the config.
-func parse(raw []byte, source string) (Config, error) {
-	cfg, _, err := parseWithDiagnostics(raw, source)
-	return cfg, err
-}
-
 func parseWithDiagnostics(raw []byte, source string) (Config, []string, error) {
 	if err := rejectRemovedEvalFields(raw, source); err != nil {
 		return Config{}, nil, err

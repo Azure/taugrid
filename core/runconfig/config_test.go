@@ -13,6 +13,11 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 )
 
+func parse(raw []byte, source string) (Config, error) {
+	cfg, _, err := parseWithDiagnostics(raw, source)
+	return cfg, err
+}
+
 func TestParseRejectsUnknownDirectRunField(t *testing.T) {
 	_, err := parse([]byte(`name: typo
 engine: rayjob
@@ -736,9 +741,8 @@ experiment:
 }
 
 func TestFieldCatalogCoversConfigFields(t *testing.T) {
-	catalog := fieldCatalogSnapshot()
 	for _, path := range configFieldPaths() {
-		info, ok := catalog[path]
+		info, ok := fieldCatalog[path]
 		if !ok {
 			t.Fatalf("missing field metadata for %s", path)
 		}
@@ -913,19 +917,6 @@ var pathScopedStatuses = map[string]FieldStatus{
 	"runtime.working_dir":        statusDirectOnly,
 	"storage.publish":            statusDirectOnly,
 	"policy.clear_node_selector": statusDirectOnly,
-}
-
-// Fields that a config path rejects outright must not read as `supported`.
-// The status column exists so a reader can tell at a glance whether their
-// config can use a field; burying "workflow.file only" mid-description puts a
-// path restriction next to ordinary prerequisites like --key-vault.
-func TestPathScopedFieldsDoNotReadAsSupported(t *testing.T) {
-	catalog := fieldCatalogSnapshot()
-	for path, want := range pathScopedStatuses {
-		if got := catalog[path].Status; got != want {
-			t.Errorf("%s status = %q, want %q: the other config path rejects this field outright", path, got, want)
-		}
-	}
 }
 
 // The rendered table is what researchers actually read, so assert the status

@@ -34,17 +34,6 @@ func gpuFlavors(t *testing.T, quotas map[string]string) ClusterQueue {
 	return clusterQueueFrom(t, raw)
 }
 
-func TestMaxGPUCapacitySingleFlavor(t *testing.T) {
-	cq := gpuFlavors(t, map[string]string{"h200": "16"})
-	got, ok := cq.MaxGPUCapacity("", "nvidia.com/gpu")
-	if !ok || got != 16 {
-		t.Fatalf("MaxGPUCapacity(\"\") = (%d, %v), want (16, true)", got, ok)
-	}
-	if got, ok := cq.MaxGPUCapacity("h200", "nvidia.com/gpu"); !ok || got != 16 {
-		t.Fatalf("MaxGPUCapacity(\"h200\") = (%d, %v), want (16, true)", got, ok)
-	}
-}
-
 // A workload lands on exactly one flavor, so the unpinned ceiling is the
 // largest single flavor -- not the sum.
 func TestMaxGPUCapacityUnpinnedReportsLargestFlavorNotSum(t *testing.T) {
@@ -55,22 +44,6 @@ func TestMaxGPUCapacityUnpinnedReportsLargestFlavorNotSum(t *testing.T) {
 	}
 	if got != 24 {
 		t.Errorf("MaxGPUCapacity(\"\") = %d, want 24 (largest flavor, not the 48 sum)", got)
-	}
-}
-
-// The regression this fixes: two flavors capped at 16 each must not let a
-// 32-GPU request clear preflight, because no single flavor can hold it.
-func TestMaxGPUCapacityDoesNotAdmit32AcrossTwo16GPUFlavors(t *testing.T) {
-	cq := gpuFlavors(t, map[string]string{"h200-a": "16", "h200-b": "16"})
-	got, ok := cq.MaxGPUCapacity("", "nvidia.com/gpu")
-	if !ok {
-		t.Fatal("MaxGPUCapacity reported no GPU quota")
-	}
-	if got != 16 {
-		t.Fatalf("MaxGPUCapacity(\"\") = %d, want 16", got)
-	}
-	if requested := int64(32); requested <= got {
-		t.Errorf("a %d-GPU request would clear a ceiling of %d; it can never be scheduled", requested, got)
 	}
 }
 

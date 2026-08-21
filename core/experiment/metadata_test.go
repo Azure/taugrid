@@ -149,7 +149,7 @@ func TestStellarMetadataUsesNormalizedLabelsAndExactAnnotations(t *testing.T) {
 		annotations[AnnotationStellarGroup] != "Safe Stack/H200" {
 		t.Fatalf("annotations should preserve user-facing Stellar values: %+v", annotations)
 	}
-	if _, ok := annotations[annotationStellarExperimentTitle]; ok {
+	if _, ok := annotations[workloadmeta.AnnotationStellarExperimentTitle]; ok {
 		t.Fatalf("new workloads must not emit the retired experiment title annotation: %+v", annotations)
 	}
 	if annotations[AnnotationStellarTags] != `{"dataset":"fineweb","recipe":"api-surface","tau_workspace":"sample"}` {

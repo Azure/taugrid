@@ -204,16 +204,6 @@ func filterHistoryScope(rows []Run, scope HistoryScope) []Run {
 	return filtered
 }
 
-// aggregate folds the raw Jobs and RayJobs list JSON into a Snapshot: filter to
-// Tau-managed workloads, drop RayJob-owned Jobs (KubeRay internals), map each
-// to a status, and sort newest first. It is pure and deterministic given `now`
-// (used to format Age), and tolerant of empty or invalid JSON per source (a
-// source that fails to decode simply contributes no rows), so callers can pass
-// whatever their lister returned without a second guard.
-func aggregate(now time.Time, jobsJSON, rayJSON []byte) Snapshot {
-	return aggregateWithExternal(now, jobsJSON, rayJSON, false)
-}
-
 func aggregateWithExternal(now time.Time, jobsJSON, rayJSON []byte, includeExternal bool) Snapshot {
 	runs := make([]Run, 0)
 	runs = append(runs, parseJobs(now, jobsJSON, includeExternal)...)
@@ -233,12 +223,6 @@ type ownerRef struct {
 	Kind string `json:"kind"`
 }
 
-// jobCondition is the subset of a Job status condition the board reads.
-type jobCondition struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
-}
-
 // jobList is the subset of a batch/v1 Job list the board reads.
 type jobList struct {
 	Items []struct {
@@ -252,10 +236,10 @@ type jobList struct {
 			OwnerReferences   []ownerRef        `json:"ownerReferences"`
 		} `json:"metadata"`
 		Status struct {
-			Conditions []jobCondition `json:"conditions"`
-			Active     int            `json:"active"`
-			Succeeded  int            `json:"succeeded"`
-			Failed     int            `json:"failed"`
+			Conditions []StatusCondition `json:"conditions"`
+			Active     int               `json:"active"`
+			Succeeded  int               `json:"succeeded"`
+			Failed     int               `json:"failed"`
 		} `json:"status"`
 	} `json:"items"`
 }
@@ -306,7 +290,7 @@ func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "Job",
-			Status:             jobStatus(item.Status.Conditions, item.Status.Active, item.Status.Succeeded, item.Status.Failed),
+			Status:             JobStatus(item.Status.Conditions, item.Status.Active, item.Status.Succeeded, item.Status.Failed),
 			Created:            created,
 			Age:                FormatAge(now, created),
 			RunID:              runID(item.Metadata.Labels),
@@ -344,7 +328,7 @@ func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 		out = append(out, Run{
 			Name:               item.Metadata.Name,
 			Kind:               "RayJob",
-			Status:             rayJobStatus(item.Status.JobDeploymentStatus, item.Status.JobStatus),
+			Status:             RayJobStatus(item.Status.JobDeploymentStatus, item.Status.JobStatus),
 			Created:            created,
 			Age:                FormatAge(now, created),
 			RunID:              runID(item.Metadata.Labels),
@@ -424,23 +408,6 @@ func ownedByRayJob(refs []ownerRef) bool {
 	return false
 }
 
-// jobStatus maps a batch/v1 Job's conditions and counters to a display status.
-// A true terminal condition (Complete/Failed/Suspended) wins, with Failed
-// preferred; otherwise active pods mean Running, and nothing yet means Pending.
-// succeeded/failed are accepted for signature parity with the Job status block
-// (and future refinement) but the terminal conditions already cover them.
-func jobStatus(conditions []jobCondition, active, succeeded, failed int) string {
-	return JobStatus(toStatusConditions(conditions), active, succeeded, failed)
-}
-
-func toStatusConditions(conditions []jobCondition) []StatusCondition {
-	out := make([]StatusCondition, 0, len(conditions))
-	for _, c := range conditions {
-		out = append(out, StatusCondition{Type: c.Type, Status: c.Status})
-	}
-	return out
-}
-
 // StatusCondition is the minimal Job condition shape (type + status) the status
 // mappers read. Exported so callers outside the package (e.g. the Job detail
 // board) can reuse JobStatus without re-deriving the display mapping.
@@ -470,12 +437,6 @@ func JobStatus(conditions []StatusCondition, active, succeeded, failed int) stri
 		return "Running"
 	}
 	return "Pending"
-}
-
-// rayJobStatus maps a RayJob's deployment/job status to a display status,
-// preferring the deployment status and falling back to Pending.
-func rayJobStatus(deploymentStatus, jobStatus string) string {
-	return RayJobStatus(deploymentStatus, jobStatus)
 }
 
 // RayJobStatus maps a RayJob's deployment/job status to the same display status

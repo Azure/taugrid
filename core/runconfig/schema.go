@@ -169,14 +169,6 @@ var fieldCatalog = map[string]FieldInfo{
 	"resilience.backoff_max":     {Status: statusSupported, Description: "Maximum backoff duration between retries (Go duration string).", Default: "5m"},
 }
 
-func fieldCatalogSnapshot() map[string]FieldInfo {
-	out := make(map[string]FieldInfo, len(fieldCatalog))
-	for key, value := range fieldCatalog {
-		out[key] = value
-	}
-	return out
-}
-
 func configFieldPaths() []string {
 	var cfg Config
 	paths := fieldPaths(reflect.TypeOf(cfg), "")

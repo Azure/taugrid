@@ -37,6 +37,7 @@ const (
 	SharedDRAQueueName          = "jobqueue-dra"
 	sharedDRAClusterQueueName   = "tau-dra-cq"
 	ManagedGPUSeriesLabel       = "kueue.azure.com/gpu-series"
+	NodeLabelGPUClass           = workloadmeta.NodeLabelGPUClass
 	AKSNodePoolModeLabel        = "kubernetes.azure.com/mode"
 	AKSSystemNodePoolMode       = "system"
 	// GPUClassAny is explicit unconstrained hardware selection: it renders no
