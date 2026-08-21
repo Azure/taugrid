@@ -70,6 +70,17 @@ variable "gpu_node_pool_name" {
   default     = "gpu"
 }
 
+variable "gpu_stack_mode" {
+  description = "GPU software stack. self_managed installs the device plugin and DCGM exporter. aks_managed_preview uses the AKS Managed GPU Experience preview."
+  type        = string
+  default     = "self_managed"
+
+  validation {
+    condition     = contains(["self_managed", "aks_managed_preview"], var.gpu_stack_mode)
+    error_message = "gpu_stack_mode must be self_managed or aks_managed_preview."
+  }
+}
+
 variable "gpu_vm_size" {
   description = "GPU VM SKU. Standard_NC24ads_A100_v4 provides one A100 80 GB GPU and is the default cost-conscious GPU option."
   type        = string
@@ -153,7 +164,7 @@ variable "taugrid_version" {
 }
 
 variable "install_taugrid" {
-  description = "Install or upgrade TauGrid with tau cluster install after AKS and the NVIDIA device plugin are ready. Requires tau, helm, and kubectl on PATH."
+  description = "Install or upgrade TauGrid with tau cluster install after AKS and the selected GPU stack are ready. Requires tau, helm, and kubectl on PATH."
   type        = bool
   default     = true
 }
@@ -188,9 +199,14 @@ variable "workspace_namespace" {
 }
 
 variable "adx_cluster_name" {
-  description = "Globally unique Azure Data Explorer cluster name when enable_adx is true."
+  description = "Globally unique Azure Data Explorer cluster name when enable_adx is true. Use 4 to 22 lowercase letters or digits."
   type        = string
   default     = "guweterraformadx"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{4,22}$", var.adx_cluster_name))
+    error_message = "adx_cluster_name must contain 4 to 22 lowercase letters or digits."
+  }
 }
 
 variable "adx_sku_name" {
@@ -206,7 +222,7 @@ variable "adx_sku_capacity" {
 }
 
 variable "dcgm_exporter_chart_version" {
-  description = "Pinned NVIDIA DCGM exporter Helm chart version used for GPU telemetry when ADX is enabled."
+  description = "Pinned upstream NVIDIA DCGM exporter Helm chart version used when gpu_stack_mode is self_managed."
   type        = string
   default     = "4.8.3"
 }

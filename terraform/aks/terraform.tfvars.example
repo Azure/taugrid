@@ -24,6 +24,10 @@ gpu_flavor_name         = "taugrid-a100"
 gpu_class               = "a100-80gb"
 gpu_series              = "nc24ads-a100-v4"
 
+# The default self_managed mode installs the NVIDIA device plugin and upstream
+# NVIDIA DCGM exporter. aks_managed_preview uses AKS Managed GPU Experience.
+gpu_stack_mode = "self_managed"
+
 # The default A100 GPU pool is normalized from MIG mode before TauGrid installs.
 normalize_gpu_mig = true
 

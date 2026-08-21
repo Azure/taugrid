@@ -70,6 +70,13 @@ taugrid-core:
 %{ endif }
 
 gpu-monitoring:
+%{ if gpu_stack_mode == "self_managed" }
+  # The upstream DCGM exporter is a DaemonSet behind a Service whose traffic is
+  # local to the GPU node. The exporter profile avoids the AKS host dcgmi path.
+  dcgmHealth:
+    source: exporter
+    exporterUrl: http://dcgm-exporter.dcgm-exporter.svc:9400/metrics
+%{ endif }
   gpuSkus:
     ${gpu_monitoring_sku_name}:
       instanceTypes:
