@@ -3,6 +3,8 @@ engine: job
 entrypoint: train.sh
 compute:
   gpus: 0
+  cpu_request: 10m
+  memory_request: 32Mi
 runtime:
   image: bash:5.2
 policy:
