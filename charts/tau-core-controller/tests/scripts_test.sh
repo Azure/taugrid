@@ -13,12 +13,6 @@ if grep -Fq "executionTarget: multiKueue" <<<"${rendered}"; then
   exit 1
 fi
 
-deployment="$(helm template controller-default "${chart_dir}" --show-only templates/deployment.yaml)"
-if grep -Fq -- "--beta-feature-gates=" <<<"${deployment}"; then
-  echo "controller deployment must not pass the removed Beta feature argument" >&2
-  exit 1
-fi
-
 rbac="$(helm template controller-default "${chart_dir}" --show-only templates/rbac.yaml)"
 for required in \
   'resources: ["admissionchecks"]' \

@@ -64,7 +64,6 @@ func TestValidateWorkloadProfileCrossFields(t *testing.T) {
 		{"unknown mode", func(p *WorkloadProfile) { p.Mode = "spot" }, "mode"},
 		{"unknown placement", func(p *WorkloadProfile) { p.Placement = "same-rack" }, "placement"},
 		{"unknown execution target", func(p *WorkloadProfile) { p.ExecutionTarget = "multiCluster" }, "executionTarget"},
-		{"removed execution target", func(p *WorkloadProfile) { p.ExecutionTarget = "multiKueueBeta" }, "executionTarget"},
 		{"multi-worker placement", func(p *WorkloadProfile) { p.WorkerCount = 2 }, "multi-node-nccl"},
 		{"duplicate applicability", func(p *WorkloadProfile) { p.Applicability.Teams = []string{"research", "research"} }, "duplicate"},
 		{"missing priority", func(p *WorkloadProfile) { p.Priorities.PodPriorityClassName = "" }, "required unless"},

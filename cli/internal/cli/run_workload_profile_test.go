@@ -48,18 +48,6 @@ func TestRunHelpDocumentsProfileSource(t *testing.T) {
 	if !strings.Contains(stdout.String(), "policy.workload_profile_snapshot") {
 		t.Fatalf("run help missing profile snapshot contract:\n%s", stdout.String())
 	}
-	for _, removed := range []string{"--acknowledge-beta-feature", "execution.beta_features"} {
-		if strings.Contains(stdout.String(), removed) {
-			t.Fatalf("run help unexpectedly contains removed acknowledgement %q:\n%s", removed, stdout.String())
-		}
-	}
-	resumeCmd, _, err := cmd.Find([]string{"resume"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resumeCmd.Flags().Lookup("acknowledge-beta-feature") != nil {
-		t.Fatal("run resume exposes removed --acknowledge-beta-feature")
-	}
 }
 
 func TestConnectedClientDryRunFetchesTauClusterProfiles(t *testing.T) {

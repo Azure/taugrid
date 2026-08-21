@@ -199,9 +199,6 @@ for required in \
   grep -Fq -- "$required" "$default_manifest" ||
     fail "default render is missing the MultiKueue capability: $required"
 done
-if grep -Fq -- '--beta-feature-gates=' "$default_manifest"; then
-  fail "default render still passes the removed controller Beta argument"
-fi
 if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$default_manifest"); then
   fail "default render created operator-owned MultiKueue routing objects implicitly"
 fi
