@@ -885,7 +885,7 @@ if ! (
 fi
 for expected in \
   "name: project-train" \
-  "kueue.x-k8s.io/queue-name: <unresolved-queue>"; do
+  "kueue.x-k8s.io/queue-name: ${WORKSPACE_NAME}"; do
   if ! grep -qF "${expected}" "${tau_home}/verified-train.yaml"; then
     echo "client dry-run output is missing: ${expected}" >&2
     cat "${tau_home}/verified-train.yaml" >&2
