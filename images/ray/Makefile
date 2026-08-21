@@ -7,9 +7,6 @@ RAY_VERSION    ?= 2.56.0
 CUDA_VERSION   ?= 13.0
 GIT_SHA        ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 TAG            ?= py$(PYTHON_VERSION)-ray$(RAY_VERSION)-cuda$(CUDA_VERSION)-$(GIT_SHA)
-# Stamped into the image as the org.opencontainers.image.revision label.
-# Full SHA (not GIT_SHA's short form) so consumers can compare it directly
-# against `git rev-parse`/`git log --format=%H` output byte-for-byte.
 SOURCE_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo dev)
 
 IMG ?= mcr.microsoft.com/aks/ai-runtime/$(IMAGE):$(TAG)

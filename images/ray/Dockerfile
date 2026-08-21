@@ -92,11 +92,5 @@ USER nonroot:nonroot
 # Ray GCS server, dashboard, client ports
 EXPOSE 6379 8265 10001
 
-# Kept last so it only ever invalidates this cheap label layer, never the
-# expensive package-install layers above: SOURCE_REVISION changes on every
-# commit that touches images/ray/, including ones that don't change any RUN
-# instruction here (e.g. a README/versions.json update). Consumers (e.g. the
-# aks-ai-runtime publish pipeline) compare this against the current
-# images/ray/ commit to skip rebuilding an already-up-to-date image.
 ARG SOURCE_REVISION=dev
 LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
