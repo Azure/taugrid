@@ -55,9 +55,6 @@ tests:
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
-      - notEqual:
-          path: spec.workloadProfiles[0].executionTarget
-          value: multiKueue
 
   - it: replaces the catalog and appends a platform supplied mapping
     set:

@@ -506,31 +506,7 @@ func TestWorkloadProfileMissingDependenciesAreActionable(t *testing.T) {
 	}
 }
 
-func TestWorkloadProfileRejectsInactiveClusterQueue(t *testing.T) {
-	cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{testWorkloadProfile("research", []string{"team-a"})})
-	dependencies := validProfileDependencies("research", "team-a")
-	for _, object := range dependencies {
-		if objectKey(object) == "clusterqueue/research-cq" {
-			clusterQueue := object.(*unstructured.Unstructured)
-			clusterQueue.Object["status"] = map[string]any{"conditions": []any{map[string]any{
-				"type": "Active", "status": "False", "reason": "FlavorNotFound", "message": "a flavor is unavailable",
-			}}}
-		}
-	}
-	reconciler := &TauClusterReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(dependencies...).Build()}
-
-	state, err := reconciler.observeWorkloadProfiles(context.Background(), cluster)
-	if err != nil {
-		t.Fatalf("observeWorkloadProfiles() error = %v", err)
-	}
-	condition := findCondition(state.status.Profiles[0].Conditions, profile.ConditionClusterQueuesReady)
-	if condition == nil || condition.Status != metav1.ConditionFalse ||
-		!strings.Contains(condition.Message, "inactive: FlavorNotFound: a flavor is unavailable") {
-		t.Fatalf("ClusterQueuesReady = %#v", condition)
-	}
-}
-
-func TestWorkloadProfileRejectsClusterQueueWithoutActiveCondition(t *testing.T) {
+func TestWorkloadProfileRejectsClusterQueueWhenNotActive(t *testing.T) {
 	tests := []struct {
 		name        string
 		status      map[string]any
@@ -546,6 +522,13 @@ func TestWorkloadProfileRejectsClusterQueueWithoutActiveCondition(t *testing.T) 
 				"type": "PodsReady", "status": "True",
 			}}},
 			wantMessage: "Active condition is not reported",
+		},
+		{
+			name: "inactive",
+			status: map[string]any{"conditions": []any{map[string]any{
+				"type": "Active", "status": "False", "reason": "FlavorNotFound", "message": "a flavor is unavailable",
+			}}},
+			wantMessage: "inactive: FlavorNotFound: a flavor is unavailable",
 		},
 	}
 	for _, test := range tests {
