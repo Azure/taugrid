@@ -14,26 +14,10 @@ multi-file staging, or a stable managed one-train-to-one-eval contract. Serving
 uses a separately submitted `tau.serve(...)` handle. See the
 [Tau config resolution](https://github.com/Azure/taugrid/blob/main/site/content/en/docs/concepts/config-resolution.md).
 
-## First cluster job
+## Workspace connection
 
-{{if .HasWorkspaceConnection}}The platform connection is checked in at `tau/workspace.connection.yaml`. It
-contains no credential or kubeconfig.
-
-```bash
-tau run smoke
-tau run train
-```
-
-On first use, Tau confirms the destination, uses your Azure sign-in to obtain
-AKS cluster-user credentials, writes an isolated kubeconfig outside this
-repository, verifies the workspace and `cluster-wide` authorization mode, and
-submits a cheap CPU smoke through Kueue. Tau warns that this temporary mode can
-access the entire cluster; the workspace supplies defaults but is not an
-authorization boundary. You do not need a preconfigured kube context, a
-namespace, a queue name, or `--config`.
-{{else}}This scaffold is not bound to a Tau workspace yet. Ask the project/platform
-owner to add `tau/workspace.connection.yaml`; do not commit kubeconfigs,
-tokens, namespace names, or queue names.
+{{if .HasWorkspaceConnection}}The non-secret `tau/workspace.connection.yaml` requires `{{.AuthorizationMode}}` authorization and role `{{.RequiredRole}}`. On first use, Tau obtains AKS cluster-user credentials through your Azure sign-in, verifies that contract, and writes an isolated kubeconfig outside the repository. You do not need a preconfigured context, namespace, queue name, or `--config`.
+{{else}}This scaffold is not connected to a Tau workspace yet. Ask the platform owner to add `tau/workspace.connection.yaml`; do not commit kubeconfigs, tokens, namespace names, or queue names.
 {{end}}
 
 ## Local setup
@@ -42,30 +26,38 @@ This step is local-only: it does not log into Azure, change kube context, or sub
 
 ```bash
 cp .env.example .env
-$EDITOR .env
+${EDITOR:-vi} .env
 ./scripts/setup.sh
 uv run python -m {{.Package}}.smoke
 ```
 
-## Configure image and upstream values
+## Build, publish, and pin the runtime image
 
 ```bash
 source ./.env
-{{if .HasUpstream}}./scripts/configure.sh --image "$IMAGE" --repo "$UPSTREAM_REPO" --ref "$UPSTREAM_REF"
-{{else}}./scripts/configure.sh --image "$IMAGE"
+BUILD_IMAGE="$IMAGE" # must be a tag, not a digest
+docker build -f images/train.Dockerfile -t "$BUILD_IMAGE" .
+docker push "$BUILD_IMAGE"
+PUBLISHED_IMAGE="$BUILD_IMAGE" # optionally replace with the registry digest
+{{if .HasUpstream}}./scripts/configure.sh --image "$PUBLISHED_IMAGE" --repo "$UPSTREAM_REPO" --ref "$UPSTREAM_REF"
+{{else}}./scripts/configure.sh --image "$PUBLISHED_IMAGE"
 {{end}}
+tau run validate --config tau/smoke.yaml
+tau run validate --config tau/train.yaml
 ```
 
-This writes `.env`, `.env.example`, and `tau/*.yaml` together, so the value you
-configure is the value `scripts/doctor.sh` and the build steps read back.
+Set `IMAGE` to an immutable build tag. After pushing, `configure.sh` can pin either that tag or its registry digest into `.env`, `.env.example`, and all three `tau/*.yaml` targets. The generated Dockerfile runs as UID/GID `65532`; custom project images must also support non-root execution.
 
-## Build and push the runtime image
+## First cluster jobs
 
+{{if .HasWorkspaceConnection}}
 ```bash
-source ./.env
-docker build -f images/train.Dockerfile -t "$IMAGE" .
-docker push "$IMAGE"
+tau run smoke
+tau run --config tau/smoke.yaml
+tau run train
 ```
+{{else}}Add `tau/workspace.connection.yaml` before running a target.
+{{end}}
 
 ## Run on GPUs
 
@@ -94,13 +86,6 @@ Three things are platform-owned, so ask before assuming them:
 
 If a GPU pod stays `Pending`, it is almost always queue quota, a `gpu_class`
 that matches no node, or a missing PVC — not the config itself.
-
-## Validate project-specific configs
-
-```bash
-tau run validate --config tau/smoke.yaml
-tau run validate --config tau/train.yaml
-```
 
 `tau run smoke` is the reserved platform onboarding smoke. To run this
 repository's project-specific smoke config, use

@@ -566,6 +566,20 @@ func TestManagerMissingKubeconfigVerificationFailureLeavesStateUntouched(t *test
 	}
 }
 
+func TestContractChangesTreatsEmptyServiceAccountAsDefault(t *testing.T) {
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{Namespace: "sample", Queue: "jobqueue", ServiceAccount: "default"}
+	if changes := state.contractChanges(verification); len(changes) != 0 {
+		t.Fatalf("empty legacy ServiceAccount should match default: %v", changes)
+	}
+
+	verification.ServiceAccount = "workspace-sa"
+	changes := state.contractChanges(verification)
+	if len(changes) != 1 || !strings.Contains(changes[0], `service account "default" -> "workspace-sa"`) {
+		t.Fatalf("workspace ServiceAccount drift = %v", changes)
+	}
+}
+
 func TestManagerMigratesV1ConfirmationOnlyAfterLiveVerification(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()

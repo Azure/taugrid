@@ -522,6 +522,55 @@ func TestRender_RuntimeSecurityContextPropagatesToContainer(t *testing.T) {
 	}
 }
 
+func TestRenderRestrictedSecurityCoversGeneratedContainers(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:         "restricted-job",
+		Namespace:    "tau",
+		Command:      []string{"python", "train.py"},
+		SecurityMode: runconfig.SecurityModeRestricted,
+		ImageAssets: []runconfig.ImageAsset{{
+			Name:       "model",
+			Image:      "example.azurecr.io/model@sha256:" + strings.Repeat("a", 64),
+			SourcePath: "/model",
+			MountPath:  "/models/base",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	for _, field := range []string{"initContainers", "containers"} {
+		for _, raw := range pod[field].([]any) {
+			context := raw.(map[string]any)["securityContext"].(map[string]any)
+			if context["runAsNonRoot"] != true || context["allowPrivilegeEscalation"] != false {
+				t.Fatalf("%s securityContext = %v", field, context)
+			}
+			if fmt.Sprint(context["runAsUser"]) != "65532" || fmt.Sprint(context["runAsGroup"]) != "65532" {
+				t.Fatalf("%s numeric identity = %v", field, context)
+			}
+			if context["seccompProfile"].(map[string]any)["type"] != "RuntimeDefault" {
+				t.Fatalf("%s seccompProfile = %v", field, context["seccompProfile"])
+			}
+		}
+	}
+}
+
+func TestRenderRestrictedSecurityRejectsProfileCapabilities(t *testing.T) {
+	p := trainProfile()
+	p.Runtime.SecurityContext = map[string]any{
+		"capabilities": map[string]any{"add": []any{"SYS_ADMIN"}},
+	}
+	_, err := Render(p, Options{
+		Name:         "restricted-conflict",
+		Namespace:    "tau",
+		Command:      []string{"python", "train.py"},
+		SecurityMode: runconfig.SecurityModeRestricted,
+	})
+	if err == nil || !strings.Contains(err.Error(), "added capabilities") {
+		t.Fatalf("expected capability conflict, got %v", err)
+	}
+}
+
 // podTolerations returns the rendered pod tolerations as key|operator|value|effect
 // strings, which keeps the assertions below readable and order-independent.
 func podTolerations(t *testing.T, out []byte) []string {

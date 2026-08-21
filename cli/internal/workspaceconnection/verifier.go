@@ -36,11 +36,11 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	if err != nil {
 		return Verification{}, err
 	}
-	namespace := firstNonEmpty(workspace.Status.Target.ResolvedNamespace, workspace.Spec.Target.Namespace)
+	namespace := tauworkspace.ResolvedNamespace(workspace)
 	if namespace == "" {
 		return Verification{}, fmt.Errorf("TauWorkspace %q has no resolved target namespace", descriptor.Workspace)
 	}
-	queue := firstNonEmpty(workspace.Status.Queue.LocalQueue, workspace.Spec.Queue)
+	queue := tauworkspace.ResolvedLocalQueue(workspace)
 	if queue == "" {
 		return Verification{}, fmt.Errorf("TauWorkspace %q has no resolved LocalQueue", descriptor.Workspace)
 	}
@@ -74,10 +74,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			strings.TrimSpace(workspace.Spec.Role),
 		)
 	}
-	serviceAccount := ""
-	if workspace.Spec.WorkloadIdentity != nil {
-		serviceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
-	}
+	serviceAccount := tauworkspace.EffectiveServiceAccount(workspace)
 	if _, err := runner.Raw(ctx, []string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "name"}, nil); err != nil {
 		return Verification{}, fmt.Errorf("read workspace LocalQueue %s/%s: %w", namespace, queue, err)
 	}

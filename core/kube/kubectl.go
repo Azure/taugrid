@@ -145,7 +145,6 @@ func (r *Runner) ExecInteractive(ctx context.Context, extraArgs []string) error 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
 	return cmd.Run()
 }
 
@@ -157,7 +156,6 @@ func (r *Runner) run(ctx context.Context, args []string, stdin []byte) (string, 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {
 		return stdout.String(), fmt.Errorf("kubectl %v: %w: %s", args, err, stderr.String())
 	}

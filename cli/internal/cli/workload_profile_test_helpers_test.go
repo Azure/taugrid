@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -242,6 +243,16 @@ func runConfigProfileForTest(t *testing.T, configPath string) profile.ResolvedWo
 	if err != nil {
 		return resolvedWorkloadProfileForTest("test-profile", "jobqueue", 1, 1)
 	}
+	workloadConfig := cfg
+	if manifestFile := strings.TrimSpace(cfg.Workflow.File); manifestFile != "" {
+		if !filepath.IsAbs(manifestFile) {
+			manifestFile = filepath.Join(filepath.Dir(configPath), manifestFile)
+		}
+		if manifestConfig, loadErr := runconfig.Load(manifestFile); loadErr == nil {
+			workloadConfig.Compute = manifestConfig.Compute
+			workloadConfig.Execution = manifestConfig.Execution
+		}
+	}
 	name := strings.TrimSpace(cfg.Policy.Profile)
 	if name == "" {
 		name = "test-profile"
@@ -251,16 +262,16 @@ func runConfigProfileForTest(t *testing.T, configPath string) profile.ResolvedWo
 		queue = "jobqueue"
 	}
 	gpus := 1
-	if cfg.Compute.GPUs != nil {
-		gpus = *cfg.Compute.GPUs
-	} else if cfg.Compute.GPUsPerWorker != nil {
-		gpus = *cfg.Compute.GPUsPerWorker
+	if workloadConfig.Compute.GPUs != nil {
+		gpus = *workloadConfig.Compute.GPUs
+	} else if workloadConfig.Compute.GPUsPerWorker != nil {
+		gpus = *workloadConfig.Compute.GPUsPerWorker
 	}
 	workers := 1
-	if cfg.Compute.Workers != nil {
-		workers = *cfg.Compute.Workers
-	} else if cfg.Execution.Nodes != nil {
-		workers = *cfg.Execution.Nodes
+	if workloadConfig.Compute.Workers != nil {
+		workers = *workloadConfig.Compute.Workers
+	} else if workloadConfig.Execution.Nodes != nil {
+		workers = *workloadConfig.Execution.Nodes
 	}
 	namespace := strings.TrimSpace(cfg.Policy.Namespace)
 	if namespace == "" {

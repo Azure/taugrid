@@ -6,9 +6,9 @@ location            = "swedencentral"
 resource_group_name = "<resource-group-name>"
 cluster_name        = "<cluster-name>"
 
-# Advanced: providing a group enables managed Entra AKS authentication.
-# Keep Azure RBAC disabled so TauWorkspace Kubernetes RoleBindings grant
-# workspace access to Entra groups.
+# Managed Entra and local accounts are enabled by default.
+# Optionally grant an Entra group cluster-admin access.
+# Keep Azure RBAC disabled for TauWorkspace RBAC.
 # aks_admin_group_object_ids = ["<entra-admin-group-object-id>"]
 # azure_rbac_enabled          = false
 
@@ -23,6 +23,10 @@ gpu_monitoring_sku_name = "a100-pcie-1g"
 gpu_flavor_name         = "taugrid-a100"
 gpu_class               = "a100-80gb"
 gpu_series              = "nc24ads-a100-v4"
+
+# The default self_managed mode installs the NVIDIA device plugin and upstream
+# NVIDIA DCGM exporter. aks_managed_preview uses AKS Managed GPU Experience.
+gpu_stack_mode = "self_managed"
 
 # The default A100 GPU pool is normalized from MIG mode before TauGrid installs.
 normalize_gpu_mig = true

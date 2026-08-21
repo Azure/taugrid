@@ -33,7 +33,9 @@ The only artifact a researcher needs is `tau/workspace.connection.yaml`, a non-s
 Commit `tau/workspace.connection.yaml` at the repository root, alongside the target configs it governs (for example `tau/smoke.yaml`, `tau/train.yaml`). Two ways to produce it:
 
 - Author it directly from the table above.
-- Generate it with `tau workspace init-repo <name> --workspace <workspace> --azure-subscription-id <id> --azure-tenant-id <id> --aks-resource-group <group> --aks-cluster <cluster> --image <pinned-image>` — this also scaffolds the rest of the repository. The descriptor is generated only when `--workspace` and all four Azure connection fields are present; otherwise the generator prints a reminder that the platform owner still needs to add one.
+- Generate it with `tau workspace init-repo <name> --workspace <workspace> --azure-subscription-id <id> --azure-tenant-id <id> --aks-resource-group <group> --aks-cluster <cluster> --image <build-tag>` — this also scaffolds the rest of the repository. The descriptor is generated only when `--workspace` and all four Azure connection fields are present; otherwise the generator prints a reminder that the platform owner still needs to add one.
+
+The generated targets are ready only after the project image is built and pushed, its immutable tag or digest is written back with `scripts/configure.sh`, and config validation succeeds. Follow [Generate the repository handoff](../../getting-started/tau-workspace-setup/#8-generate-the-repository-handoff) for the exact commands.
 
 ## Optional descriptor-only inspection
 
@@ -56,7 +58,7 @@ tau run train --dry-run=client
 tau run smoke
 ```
 
-The checked-in descriptor is explicit repository/platform preconfiguration. The first command automatically obtains normal AKS user credentials, verifies the exact live workspace contract, pins local state, and proceeds; no initial consent prompt is required. The dry run proves the config resolves without submitting it; `tau run smoke` proves queue admission, scheduling, service-account selection, and pod execution with a bounded, non-root job. It does not mount the workspace PVC or test an external cloud identity or data service; those remain separate readiness checks.
+The first command validates the local descriptor and config without contacting Azure or Kubernetes; live-only values remain visible placeholders. `tau run smoke` activates the descriptor, obtains AKS user credentials, verifies and pins the workspace contract, then proves queue admission, scheduling, service-account selection, and pod execution with a bounded non-root job. It does not mount the workspace PVC or test an external cloud identity or data service; those remain separate readiness checks.
 
 ## What "handed off" means
 

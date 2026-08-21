@@ -13,8 +13,11 @@ ACR_REGISTRY ?=
 PUSH_IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 
 PLATFORMS ?= linux/amd64,linux/arm64
+# Single architecture for docker-push-arch (amd64 or arm64). Unused by the other
+# targets — docker-build/docker-push still build for the host arch / $(PLATFORMS).
+ARCH ?=
 
-.PHONY: all docker-build docker-push test clean
+.PHONY: all docker-build docker-push docker-push-arch docker-push-manifest test clean
 
 all: docker-build test docker-push
 
@@ -33,7 +36,9 @@ comma := ,
 CACHE_REPO ?=
 CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_REPO):cache --cache-to type=registry$(comma)ref=$(CACHE_REPO):cache$(comma)mode=max)
 
-# Build multi-arch manifest and push directly to registry
+# Build multi-arch manifest and push directly to registry. Requires an emulated
+# (QEMU) builder for whichever platform isn't native to the calling host — see
+# docker-push-arch/docker-push-manifest below for the native, no-emulation split.
 docker-push:
 	@test -n "$(ACR_REGISTRY)" || { echo "ACR_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	docker buildx build \
@@ -45,6 +50,36 @@ docker-push:
 		$(CACHE_ARGS) \
 		--push \
 		.
+
+# Natively build and push a SINGLE architecture (no QEMU emulation) — intended
+# for CI running each arch on its own native runner in parallel. Pushes to
+# "$(IMG)-$(ARCH)"; combine the two resulting tags into one multi-arch manifest
+# at the canonical $(IMG) tag with docker-push-manifest below. Unlike
+# docker-push, this takes the fully-qualified destination tag via IMG (not
+# ACR_REGISTRY/PUSH_IMG), matching how docker-build/test already use IMG.
+docker-push-arch:
+	@case "$(ARCH)" in \
+		amd64|arm64) ;; \
+		*) echo "ARCH must be amd64 or arm64 (got '$(ARCH)')" >&2; exit 1 ;; \
+	esac
+	docker buildx build \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg RAY_VERSION=$(RAY_VERSION) \
+		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
+		--platform linux/$(ARCH) \
+		--tag $(IMG)-$(ARCH) \
+		$(CACHE_ARGS) \
+		--push \
+		.
+
+# Stitch the per-arch images already pushed by docker-push-arch (amd64 + arm64)
+# into one multi-arch manifest list at the canonical $(IMG) tag. Pure registry
+# metadata operation — no build, no emulation, can run on any runner/arch.
+docker-push-manifest:
+	docker buildx imagetools create \
+		--tag $(IMG) \
+		$(IMG)-amd64 \
+		$(IMG)-arm64
 
 test:
 	@echo "=== Verifying Python version ==="

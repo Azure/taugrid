@@ -4,16 +4,16 @@
 package experiment
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -26,29 +26,28 @@ const (
 	labelStellarExperiment = workloadmeta.LabelStellarExperiment
 	labelStellarGroup      = workloadmeta.LabelStellarGroup
 
-	AnnotationCaptureVersion         = workloadmeta.AnnotationCaptureVersion
-	AnnotationNamespace              = workloadmeta.AnnotationNamespace
-	AnnotationTauCommand             = workloadmeta.AnnotationTauCommand
-	AnnotationImage                  = workloadmeta.AnnotationImage
-	AnnotationImageDigest            = workloadmeta.AnnotationImageDigest
-	AnnotationCodeSHA                = workloadmeta.AnnotationCodeSHA
-	AnnotationConfigHash             = workloadmeta.AnnotationConfigHash
-	AnnotationGPUCount               = workloadmeta.AnnotationGPUCount
-	AnnotationDRAClaim               = workloadmeta.AnnotationDRAClaim
-	AnnotationStorageMounts          = workloadmeta.AnnotationStorageMounts
-	AnnotationStellarProject         = workloadmeta.AnnotationStellarProject
-	annotationStellarExperimentTitle = workloadmeta.AnnotationStellarExperimentTitle
-	AnnotationStellarExperimentID    = workloadmeta.AnnotationStellarExperimentID
-	AnnotationStellarGroup           = workloadmeta.AnnotationStellarGroup
-	AnnotationStellarTags            = workloadmeta.AnnotationStellarTags
-	AnnotationExperimentSource       = workloadmeta.AnnotationExperimentSource
-	AnnotationWorkspaceID            = workloadmeta.AnnotationWorkspaceID
-	AnnotationResultScope            = workloadmeta.AnnotationResultScope
-	AnnotationResultPath             = workloadmeta.AnnotationResultPath
-	AnnotationResultPVC              = workloadmeta.AnnotationResultPVC
-	AnnotationArtifactURI            = workloadmeta.AnnotationArtifactURI
-	AnnotationCheckpointURI          = workloadmeta.AnnotationCheckpointURI
-	maxAnnotationValueBytes          = 8192
+	AnnotationCaptureVersion      = workloadmeta.AnnotationCaptureVersion
+	AnnotationNamespace           = workloadmeta.AnnotationNamespace
+	AnnotationTauCommand          = workloadmeta.AnnotationTauCommand
+	AnnotationImage               = workloadmeta.AnnotationImage
+	AnnotationImageDigest         = workloadmeta.AnnotationImageDigest
+	AnnotationCodeSHA             = workloadmeta.AnnotationCodeSHA
+	AnnotationConfigHash          = workloadmeta.AnnotationConfigHash
+	AnnotationGPUCount            = workloadmeta.AnnotationGPUCount
+	AnnotationDRAClaim            = workloadmeta.AnnotationDRAClaim
+	AnnotationStorageMounts       = workloadmeta.AnnotationStorageMounts
+	AnnotationStellarProject      = workloadmeta.AnnotationStellarProject
+	AnnotationStellarExperimentID = workloadmeta.AnnotationStellarExperimentID
+	AnnotationStellarGroup        = workloadmeta.AnnotationStellarGroup
+	AnnotationStellarTags         = workloadmeta.AnnotationStellarTags
+	AnnotationExperimentSource    = workloadmeta.AnnotationExperimentSource
+	AnnotationWorkspaceID         = workloadmeta.AnnotationWorkspaceID
+	AnnotationResultScope         = workloadmeta.AnnotationResultScope
+	AnnotationResultPath          = workloadmeta.AnnotationResultPath
+	AnnotationResultPVC           = workloadmeta.AnnotationResultPVC
+	AnnotationArtifactURI         = workloadmeta.AnnotationArtifactURI
+	AnnotationCheckpointURI       = workloadmeta.AnnotationCheckpointURI
+	maxAnnotationValueBytes       = 8192
 )
 
 const (
@@ -108,7 +107,7 @@ func (m Metadata) KubernetesMetadata() (map[string]string, map[string]string) {
 	addAnnotation(annotations, AnnotationCodeSHA, m.CodeSHA)
 	addAnnotation(annotations, AnnotationConfigHash, m.ConfigHash)
 	if m.GPUCount > 0 {
-		addAnnotation(annotations, AnnotationGPUCount, intString(m.GPUCount))
+		addAnnotation(annotations, AnnotationGPUCount, strconv.Itoa(m.GPUCount))
 	}
 	addAnnotation(annotations, AnnotationDRAClaim, m.DRAClaimTemplate)
 	if encoded := encodeStorageMounts(m.StorageMounts); encoded != "" {
@@ -137,8 +136,7 @@ func MergeMetadata(labels, annotations map[string]string, m Metadata) (map[strin
 }
 
 func HashBytes(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return fileutil.SHA256Hex(data)
 }
 
 func HashFile(path string) (string, error) {
@@ -325,8 +323,7 @@ func KubernetesLabelValue(value string) string {
 }
 
 func shortLabelHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])[:12]
+	return fileutil.SHA256Hex([]byte(value))[:12]
 }
 
 func addLabel(out map[string]string, key, value string) {
@@ -360,30 +357,10 @@ func mergeStringMaps(first, second map[string]string) map[string]string {
 	return out
 }
 
-func intString(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var digits [20]byte
-	i := len(digits)
-	for n > 0 {
-		i--
-		digits[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(digits[i:])
-}
-
 func validLabelValue(v string) bool {
-	for i, r := range v {
+	for _, r := range v {
 		if unicode.IsLower(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
 			continue
-		}
-		if unicode.IsUpper(r) {
-			return false
-		}
-		if i == 0 || i == len(v)-1 {
-			return false
 		}
 		return false
 	}

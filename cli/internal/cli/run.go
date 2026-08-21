@@ -156,11 +156,10 @@ Common examples:
 			} else {
 				connectionEnsurer := connectionFactory(cmd)
 				var connection workspaceconnection.ActiveConnection
-				targetOptions, connection, err = applyAutomaticRunConnection(
+				targetOptions, connection, err = applyLiveRunConnection(
 					cmd.Context(),
 					targetOptions,
 					resolution.Connection,
-					true,
 					connectionEnsurer,
 				)
 				if err != nil {
@@ -173,8 +172,9 @@ Common examples:
 				defer restoreKubeconfig()
 				effectiveSystemNamespace := systemNamespaceForConnection(cmd, connection)
 				// TauGrid v0 activates exactly one workspace per cluster, so a
-				// researcher should not have to name it. Discovery remains
-				// best-effort for clusters without a TauWorkspace.
+				// researcher should not have to name it. Connected profile
+				// resolution remains fail-closed; only workspace-name discovery
+				// is best-effort for clusters without a TauWorkspace.
 				if strings.TrimSpace(targetOptions.workspace) == "" && targetOptions.dryRun != "client" {
 					discovered, derr := discoverPrimaryWorkspace(cmd, targetOptions.kubeContext)
 					if derr != nil {
@@ -200,6 +200,13 @@ Common examples:
 				if err != nil {
 					return err
 				}
+			}
+			if targetOptions.dryRun == "client" && strings.TrimSpace(targetOptions.serviceAccountName) == "" {
+				targetOptions.serviceAccountName = clientDryRunServiceAccountPlaceholder
+				fmt.Fprintln(
+					cmd.ErrOrStderr(),
+					"client dry-run resolved the workload profile but leaves the service account as a placeholder; use --dry-run=server to resolve live submission defaults",
+				)
 			}
 			if err := validateRunDispatchOptions(targetOptions); err != nil {
 				return err

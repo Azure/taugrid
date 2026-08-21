@@ -7,6 +7,7 @@ FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION}
 
 ENV PYTHONUNBUFFERED=1
 ENV PROJECT_ROOT=/workspace
+ENV HOME=/tmp
 
 RUN tdnf install -y bash ca-certificates git && tdnf clean all
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
@@ -17,6 +18,9 @@ COPY pyproject.toml README.md .python-version ./
 COPY src ./src
 COPY scripts ./scripts
 
-RUN uv sync --no-dev
+RUN uv sync --no-dev \
+    && chown -R 65532:65532 /workspace
+
+USER 65532:65532
 
 CMD ["uv", "run", "python", "-m", "{{.Package}}.smoke"]

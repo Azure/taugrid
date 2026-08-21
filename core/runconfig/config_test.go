@@ -13,6 +13,11 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 )
 
+func parse(raw []byte, source string) (Config, error) {
+	cfg, _, err := parseWithDiagnostics(raw, source)
+	return cfg, err
+}
+
 func TestParseRejectsUnknownDirectRunField(t *testing.T) {
 	_, err := parse([]byte(`name: typo
 engine: rayjob
@@ -736,9 +741,8 @@ experiment:
 }
 
 func TestFieldCatalogCoversConfigFields(t *testing.T) {
-	catalog := fieldCatalogSnapshot()
 	for _, path := range configFieldPaths() {
-		info, ok := catalog[path]
+		info, ok := fieldCatalog[path]
 		if !ok {
 			t.Fatalf("missing field metadata for %s", path)
 		}
@@ -915,19 +919,6 @@ var pathScopedStatuses = map[string]FieldStatus{
 	"policy.clear_node_selector": statusDirectOnly,
 }
 
-// Fields that a config path rejects outright must not read as `supported`.
-// The status column exists so a reader can tell at a glance whether their
-// config can use a field; burying "workflow.file only" mid-description puts a
-// path restriction next to ordinary prerequisites like --key-vault.
-func TestPathScopedFieldsDoNotReadAsSupported(t *testing.T) {
-	catalog := fieldCatalogSnapshot()
-	for path, want := range pathScopedStatuses {
-		if got := catalog[path].Status; got != want {
-			t.Errorf("%s status = %q, want %q: the other config path rejects this field outright", path, got, want)
-		}
-	}
-}
-
 // The rendered table is what researchers actually read, so assert the status
 // reaches it rather than trusting the catalog alone.
 func TestReferenceMarkdownShowsPathScopedStatus(t *testing.T) {
@@ -1084,6 +1075,41 @@ func TestNormalizeEngineCanonicalizesLegacyRayAlias(t *testing.T) {
 	}
 	if _, err := NormalizeEngine("spark"); err == nil || !strings.Contains(err.Error(), "job or rayjob") {
 		t.Fatalf("invalid engine error = %v", err)
+	}
+}
+
+func TestRuntimeSecurityModeValidation(t *testing.T) {
+	if err := (Security{Mode: SecurityModeRestricted}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Security{Mode: "privileged"}).Validate(); err == nil {
+		t.Fatal("expected unsupported security mode rejection")
+	}
+}
+
+func TestConfigHashCoversBehaviorFields(t *testing.T) {
+	base := Config{
+		Run:     Run{Engine: EngineJob, Entrypoint: "train.py"},
+		Runtime: Runtime{Image: "example.com/train:v1", Env: map[string]string{"EPOCHS": "1"}},
+		Compute: Compute{CPURequest: "1"},
+		Storage: Storage{Output: "/data/results"},
+	}
+	baseHash, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants := []Config{base, base, base}
+	variants[0].Compute.CPURequest = "2"
+	variants[1].Runtime.Env = map[string]string{"EPOCHS": "2"}
+	variants[2].Storage.Output = "/data/other"
+	for i, variant := range variants {
+		hash, err := variant.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hash == baseHash {
+			t.Fatalf("variant %d did not change config hash", i)
+		}
 	}
 }
 

@@ -114,15 +114,15 @@ policy:
 			t.Fatalf("smoke ambiguity err=%v\nstderr:\n%s", result.err, result.stderr)
 		}
 	})
-	t.Run("stale configured connection refreshes for project smoke", func(t *testing.T) {
+	t.Run("project smoke client dry-run stays offline", func(t *testing.T) {
 		result := runTauRoutingSubprocess(t, root, "run", "smoke", "--project", "alpha", "--dry-run=client")
 		if result.err != nil {
-			t.Fatalf("stale project smoke: %v\nstderr:\n%s", result.err, result.stderr)
+			t.Fatalf("project smoke: %v\nstderr:\n%s", result.err, result.stderr)
 		}
 		if !strings.Contains(result.stdout, "kind: Job") ||
-			!strings.Contains(result.stdout, "namespace: catalog-namespace") ||
-			!strings.Contains(result.stdout, "kueue.x-k8s.io/queue-name: jobqueue") {
-			t.Fatalf("stale project smoke did not consume refreshed connection:\n%s", result.stdout)
+			!strings.Contains(result.stdout, "namespace: "+clientDryRunNamespacePlaceholder) ||
+			!strings.Contains(result.stdout, "kueue.x-k8s.io/queue-name: "+clientDryRunQueuePlaceholder) {
+			t.Fatalf("project smoke did not preserve offline placeholders:\n%s", result.stdout)
 		}
 	})
 	t.Run("explicit project smoke config", func(t *testing.T) {

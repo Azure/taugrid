@@ -23,6 +23,7 @@ type runRouting struct {
 	dryRun                 string
 	workspaceResultScope   string
 	submissionID           string
+	configHash             string
 	workspaceQueueResolved bool
 }
 
@@ -111,6 +112,7 @@ type runContainerRuntime struct {
 	image                 string
 	env                   []string
 	envSecrets            []string
+	securityMode          string
 	serviceAccountName    string
 	azureWorkloadIdentity bool
 }

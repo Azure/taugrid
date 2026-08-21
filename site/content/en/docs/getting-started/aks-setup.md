@@ -88,11 +88,7 @@ All paths must produce the same output contract; they differ in ownership and ch
 
 ### Terraform
 
-Use the repository's GPU-enabled AKS Terraform root when the environment should
-be reproducible outside an Azure-specific release system. It creates AKS with
-local administrator credentials by default, OIDC workload identity, a GPU node pool, and the
-optional ADX, adx-mon, and Portal integration. Then it installs the released
-TauGrid chart through `tau cluster install`.
+Use the repository's GPU-enabled AKS Terraform root when the environment should be reproducible outside an Azure-specific release system. It creates AKS with managed Entra authentication, local administrator accounts, OIDC workload identity, a GPU node pool, and optional ADX, adx-mon, and Portal integration. Then it installs the released TauGrid chart through `tau cluster install`.
 
 Clone the repository, create an untracked parameter file, and review before
 applying:
@@ -106,11 +102,7 @@ terraform plan -out tau-aks.tfplan
 terraform apply tau-aks.tfplan
 ```
 
-Set `subscription_id` and the GPU SKU and labels in `terraform.tfvars`. To use
-managed Entra AKS authentication, set the optional Entra administrator group
-inputs. For WSL, Linux, and macOS, set
-`command_interpreter = ["bash", "-c"]`. Set `enable_adx = true` only when the
-deployment should create the billable ADX data plane and install adx-mon.
+Set `subscription_id` and the GPU SKU and labels in `terraform.tfvars`. Add Entra administrator group object IDs only when those groups need cluster-admin access. For WSL, Linux, and macOS, set `command_interpreter = ["bash", "-c"]`. Set `enable_adx = true` only when the deployment should create the billable ADX data plane and install adx-mon.
 
 Use remote state with locking for shared environments. The tracked
 `.terraform.lock.hcl` pins provider versions and must remain committed; do not

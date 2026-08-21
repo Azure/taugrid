@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
+	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
@@ -80,6 +81,152 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("portal Ray + Stellar dry-run missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestDirectConfigHashTracksConfigNotScriptAlone(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "train.py")
+	if err := os.WriteFile(script, []byte("print('same script')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "tau.yaml")
+	write := func(cpu string) {
+		t.Helper()
+		raw := fmt.Sprintf(`name: hash-test
+engine: job
+entrypoint: train.py
+runtime:
+  image: busybox:1.36
+  env:
+    EPOCHS: "1"
+compute:
+  gpus: 0
+  cpu_request: %q
+policy:
+  queue: jobqueue
+  namespace: tests
+`, cpu)
+		if err := os.WriteFile(config, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	render := func() map[string]any {
+		t.Helper()
+		text := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+		var manifest map[string]any
+		if err := yaml.Unmarshal([]byte(text), &manifest); err != nil {
+			t.Fatal(err)
+		}
+		return manifest["metadata"].(map[string]any)["annotations"].(map[string]any)
+	}
+
+	write("1")
+	first := render()
+	write("2")
+	second := render()
+	wantScriptDigest, err := experiment.HashFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[workloadmeta.AnnotationScriptPayloadDigest] != wantScriptDigest {
+		t.Fatalf("script payload digest = %v, want %s", first[workloadmeta.AnnotationScriptPayloadDigest], wantScriptDigest)
+	}
+	if first[workloadmeta.AnnotationConfigHash] == second[workloadmeta.AnnotationConfigHash] {
+		t.Fatalf("config hash did not change: %v", first[workloadmeta.AnnotationConfigHash])
+	}
+	if first[workloadmeta.AnnotationScriptPayloadDigest] != second[workloadmeta.AnnotationScriptPayloadDigest] {
+		t.Fatalf("script payload digest changed with only config: first=%v second=%v", first, second)
+	}
+}
+
+func TestWorkflowFileConfigHashTracksWrapperAndManifest(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "tau.yaml")
+	manifestPath := filepath.Join(root, "manifest.yaml")
+	if err := os.WriteFile(filepath.Join(root, "train.py"), []byte("print('train')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeWrapper := func(image string) {
+		t.Helper()
+		raw := fmt.Sprintf(`schema_version: 1
+name: workflow-hash
+workflow:
+  file: manifest.yaml
+  main_script: train.py
+  workload_kind: rayjob
+runtime:
+  image: %s
+policy:
+  namespace: tests
+  queue: jobqueue
+  disable_default_priorities: true
+`, image)
+		if err := os.WriteFile(config, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManifest := func(gpus int) {
+		t.Helper()
+		raw := fmt.Sprintf(`schema_version: 1
+name: workflow-hash
+run:
+  entrypoint: train.py
+runtime:
+  pip:
+    - numpy
+compute:
+  gpus: %d
+`, gpus)
+		if err := os.WriteFile(manifestPath, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loadHash := func() string {
+		t.Helper()
+		_, options, _, _, err := readRunConfig(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return options.configHash
+	}
+
+	writeWrapper("example.com/train:v1")
+	writeManifest(0)
+	initial := loadHash()
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	var workload map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &workload); err != nil {
+		t.Fatal(err)
+	}
+	annotations := workload["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := fmt.Sprint(annotations[workloadmeta.AnnotationConfigHash]); got != initial {
+		t.Fatalf("submitted config hash = %q, loaded hash = %q", got, initial)
+	}
+
+	writeWrapper("example.com/train:v2")
+	if changed := loadHash(); changed == initial {
+		t.Fatal("wrapper change did not change config hash")
+	}
+	writeWrapper("example.com/train:v1")
+	writeManifest(1)
+	if changed := loadHash(); changed == initial {
+		t.Fatal("manifest change did not change config hash")
+	}
+}
+
+func TestManagedManifestConfigHashUsesRawInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tau.yaml")
+	raw := []byte("schema_version: 1\nname: managed-hash\nrun:\n  entrypoint: train.py\ncompute:\n  gpus: 0\n")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, options, _, _, err := readRunConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := experiment.HashBytes(raw); options.configHash != want {
+		t.Fatalf("managed config hash = %q, want %q", options.configHash, want)
 	}
 }
 
@@ -312,8 +459,8 @@ func TestGeneratedScaffoldJobResourcesDryRun(t *testing.T) {
 		{
 			name:     "train",
 			config:   "train.yaml",
-			requests: map[string]string{"cpu": "4", "memory": "16Gi"},
-			limits:   map[string]string{"cpu": "8", "memory": "32Gi"},
+			requests: map[string]string{"cpu": "2", "memory": "4Gi"},
+			limits:   map[string]string{"cpu": "4", "memory": "8Gi"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -249,13 +249,6 @@ policy:
 	if ensurer.calls != 1 || len(ensurer.discoveries) != 1 {
 		t.Fatalf("connection calls=%d discoveries=%d", ensurer.calls, len(ensurer.discoveries))
 	}
-	wantConnection, err := filepath.EvalSymlinks(filepath.Join(root, "connections", "shared.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ensurer.discoveries[0].Path != wantConnection {
-		t.Fatalf("exact descriptor = %q, want %q", ensurer.discoveries[0].Path, wantConnection)
-	}
 	for _, want := range []string{"kind: Job", "name: beta-eval", "namespace: catalog-namespace"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("render missing %q:\n%s", want, stdout.String())

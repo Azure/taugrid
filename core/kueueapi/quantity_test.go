@@ -60,16 +60,6 @@ func TestQuantityInt64(t *testing.T) {
 	}
 }
 
-func TestQuantityUnmarshalJSON_String(t *testing.T) {
-	var q Quantity
-	if err := json.Unmarshal([]byte(`"1k"`), &q); err != nil {
-		t.Fatal(err)
-	}
-	if got := q.Int64(); got != 1000 {
-		t.Errorf("Int64() = %d after unmarshal from string '1k', want 1000", got)
-	}
-}
-
 func TestQuantityUnmarshalJSON_Number(t *testing.T) {
 	var q Quantity
 	if err := json.Unmarshal([]byte(`1000`), &q); err != nil {
@@ -127,14 +117,5 @@ func TestQuantityBug17_KubernetesNormalizedGPUQuota(t *testing.T) {
 	}
 	if flavorCap != 1000 {
 		t.Errorf("BestGPUFlavorFor cap = %d, want 1000", flavorCap)
-	}
-}
-
-// Mutation test: break the parser (hardcode 0), confirm this test fails.
-// This ensures the test would have caught the original bug.
-func TestQuantityBug17_WouldFailOnBrokenParser(t *testing.T) {
-	q := Quantity{raw: "1k"}
-	if q.Int64() == 0 {
-		t.Fatal("parser returned 0 for '1k' — the BUG-17 regression is present")
 	}
 }

@@ -168,21 +168,21 @@ func RenderYAML(vars []Var, indent int) string {
 	if len(vars) == 0 {
 		return ""
 	}
-	spaces := makeSpaces(indent)
-	child := makeSpaces(indent + 2)
-	grandchild := makeSpaces(indent + 4)
-	greatGrandchild := makeSpaces(indent + 6)
+	spaces := strings.Repeat(" ", indent)
+	child := strings.Repeat(" ", indent+2)
+	grandchild := strings.Repeat(" ", indent+4)
+	greatGrandchild := strings.Repeat(" ", indent+6)
 	var out string
 	for _, v := range vars {
-		out += fmt.Sprintf("%s- name: %s\n", spaces, quote(v.Name))
+		out += fmt.Sprintf("%s- name: %s\n", spaces, strconv.Quote(v.Name))
 		if v.ValueFrom != nil && v.ValueFrom.SecretKeyRef != nil {
 			out += fmt.Sprintf("%svalueFrom:\n", child)
 			out += fmt.Sprintf("%ssecretKeyRef:\n", grandchild)
-			out += fmt.Sprintf("%sname: %s\n", greatGrandchild, quote(v.ValueFrom.SecretKeyRef.Name))
-			out += fmt.Sprintf("%skey: %s\n", greatGrandchild, quote(v.ValueFrom.SecretKeyRef.Key))
+			out += fmt.Sprintf("%sname: %s\n", greatGrandchild, strconv.Quote(v.ValueFrom.SecretKeyRef.Name))
+			out += fmt.Sprintf("%skey: %s\n", greatGrandchild, strconv.Quote(v.ValueFrom.SecretKeyRef.Key))
 			continue
 		}
-		out += fmt.Sprintf("%svalue: %s\n", child, quote(v.Value))
+		out += fmt.Sprintf("%svalue: %s\n", child, strconv.Quote(v.Value))
 	}
 	return out
 }
@@ -235,16 +235,4 @@ func ParseProfileEnv(raw any) ([]Var, error) {
 	default:
 		return nil, fmt.Errorf("runtime.env: expected mapping or list, got %T", raw)
 	}
-}
-
-func makeSpaces(n int) string {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = ' '
-	}
-	return string(b)
-}
-
-func quote(value string) string {
-	return strconv.Quote(value)
 }

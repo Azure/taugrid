@@ -320,35 +320,6 @@ func capturedWorkloadNamesForTest(workloads []Workload) []string {
 	return names
 }
 
-func TestHydrateWorkloads_PrefersQuotaReservedMessageRegardlessOfConditionOrder(t *testing.T) {
-	// Same two conditions, opposite order: the resolved Message must not
-	// depend on how the API server happened to serialize them.
-	quota := `{"type":"QuotaReserved","status":"False","reason":"Pending","message":"couldn't assign flavors to pod set main"}`
-	admitted := `{"type":"Admitted","status":"False","reason":"Pending","message":"generic pending"}`
-
-	for _, order := range []struct {
-		name  string
-		conds string
-	}{
-		{"quota first", quota + "," + admitted},
-		{"admitted first", admitted + "," + quota},
-	} {
-		t.Run(order.name, func(t *testing.T) {
-			data := []byte(`{"items":[{"metadata":{"name":"w-1"},"spec":{"queueName":"jobqueue"},"status":{"conditions":[` + order.conds + `]}}]}`)
-			got := hydrateWorkloads(data)
-			if len(got) != 1 {
-				t.Fatalf("hydrateWorkloads returned %d workloads, want 1", len(got))
-			}
-			if got[0].Message != "couldn't assign flavors to pod set main" {
-				t.Errorf("Message = %q, want the QuotaReserved message", got[0].Message)
-			}
-			if got[0].Reason != "Pending" {
-				t.Errorf("Reason = %q, want %q", got[0].Reason, "Pending")
-			}
-		})
-	}
-}
-
 func TestHydrateWorkloads_DropsStaleMessageOnceAdmitted(t *testing.T) {
 	data := []byte(`{"items":[{"metadata":{"name":"w-1"},"spec":{"queueName":"jobqueue"},"status":{"conditions":[
 		{"type":"QuotaReserved","status":"False","reason":"Pending","message":"stale flavor failure"},

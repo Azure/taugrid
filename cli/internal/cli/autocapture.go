@@ -12,19 +12,10 @@ import (
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-func buildJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, scriptPath, pvcMount string, source *runconfig.Source, p profile.Profile, volumes []jobrender.Volume, volumeMounts []jobrender.VolumeMount) (experiment.Metadata, error) {
-	var configHash string
-	if source != nil {
-		configHash = experiment.HashBytes([]byte(source.Image + "\n" + source.Path + "\n" + scriptPath))
-	} else {
-		var err error
-		configHash, err = experiment.HashFile(scriptPath)
-		if err != nil {
-			return experiment.Metadata{}, err
-		}
-	}
+func buildJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, pvcMount string, p profile.Profile, volumes []jobrender.Volume, volumeMounts []jobrender.VolumeMount, configHash string) experiment.Metadata {
 	metadata := experiment.Metadata{
 		RunID:         name,
 		Namespace:     namespace,
@@ -37,13 +28,16 @@ func buildJobCaptureMetadata(ctx context.Context, captureCommand, name, namespac
 		StorageMounts: jobStorageMounts(pvcMount, volumes, volumeMounts),
 	}
 	metadata.Stellar = runExperimentMetadataFromContext(ctx).StellarMetadata()
-	return metadata, nil
+	return metadata
 }
 
-func buildManagedWorkflowCaptureMetadata(ctx context.Context, captureCommand string, m *manifest.Manifest, raw []byte, namespace, workloadKind string) experiment.Metadata {
+func buildManagedWorkflowCaptureMetadata(ctx context.Context, captureCommand string, m *manifest.Manifest, raw []byte, namespace, workloadKind, configHash string) experiment.Metadata {
 	kind := workloadKind
 	if kind == "" {
 		kind = manifest.WorkloadKindJob
+	}
+	if configHash == "" {
+		configHash = experiment.HashBytes(raw)
 	}
 	metadata := experiment.Metadata{
 		RunID:            m.ResourceName(),
@@ -52,7 +46,7 @@ func buildManagedWorkflowCaptureMetadata(ctx context.Context, captureCommand str
 		TauCommand:       experiment.RedactCommandArgs(strings.Fields(captureCommand)),
 		Image:            m.RuntimeImage(),
 		CodeSHA:          experiment.GitHeadSHA("."),
-		ConfigHash:       experiment.HashBytes(raw),
+		ConfigHash:       configHash,
 		GPUCount:         m.Compute.GPUs,
 		DRAClaimTemplate: manifest.Claim(m.Compute.GPUs),
 		StorageMounts:    managedWorkflowStorageMounts(m.DataPVC()),
@@ -65,6 +59,15 @@ func addRunWorkspaceMetadata(metadata experiment.Metadata, workspaceID, resultSc
 	metadata.WorkspaceID = workspaceID
 	metadata.ResultScope = resultScope
 	return metadata
+}
+
+func directJobPayloadAnnotation(scriptPath string, source *runconfig.Source) (string, string, error) {
+	if source != nil {
+		identity := strings.Join([]string{source.Image, source.Path, scriptPath}, "\n")
+		return workloadmeta.AnnotationPayloadDigest, experiment.HashBytes([]byte(identity)), nil
+	}
+	digest, err := experiment.HashFile(scriptPath)
+	return workloadmeta.AnnotationScriptPayloadDigest, digest, err
 }
 
 func firstNonEmpty(values ...string) string {

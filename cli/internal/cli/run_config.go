@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/cli/internal/storage"
+	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
 )
 
@@ -124,7 +125,32 @@ func readRunConfig(path string) (runconfig.Config, unresolvedRunOptions, string,
 	if err != nil {
 		return runconfig.Config{}, unresolvedRunOptions{}, "", nil, err
 	}
+	opts.configHash, err = runConfigHash(cfg, path, opts.file)
+	if err != nil {
+		return runconfig.Config{}, unresolvedRunOptions{}, "", nil, fmt.Errorf("hash %s: %w", path, err)
+	}
 	return cfg, opts, firstNonEmpty(cfg.Run.Name, cfg.Name), warnings, nil
+}
+
+func runConfigHash(cfg runconfig.Config, path, manifestPath string) (string, error) {
+	if strings.TrimSpace(cfg.Workflow.File) != "" {
+		wrapperHash, err := cfg.Hash()
+		if err != nil {
+			return "", err
+		}
+		manifestHash, err := experiment.HashFile(manifestPath)
+		if err != nil {
+			return "", err
+		}
+		return experiment.HashJSON(struct {
+			Wrapper  string `json:"wrapper"`
+			Manifest string `json:"manifest"`
+		}{Wrapper: wrapperHash, Manifest: manifestHash})
+	}
+	if cfg.LooksLikeManagedWorkflow() {
+		return experiment.HashFile(path)
+	}
+	return cfg.Hash()
 }
 
 func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptions, error) {
@@ -236,6 +262,7 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	o.env = mapToKeyValueList(c.Runtime.Env)
 	o.envSecrets = mapToKeyValueList(c.Runtime.EnvSecret)
 	o.envKV = mapToKeyValueList(c.Runtime.EnvKV)
+	o.securityMode = strings.TrimSpace(c.Runtime.Security.Mode)
 
 	o.upstreamCheckpoint = c.Workflow.UpstreamCheckpoint
 	o.secretPayloadPath = configRelativePath(baseDir, c.Workflow.SecretPayload)
