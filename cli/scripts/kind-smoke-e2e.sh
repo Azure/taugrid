@@ -424,6 +424,7 @@ fi
   --context "$KUBE_CONTEXT" \
   --timeout 5m \
   --set components.taugridCore.enabled=false \
+  --set kuberay-operator.priorityClassName=system-cluster-critical \
   --set "tau-core-controller.image.repository=${CONTROLLER_IMAGE_REPOSITORY}" \
   --set "tau-core-controller.image.tag=${CONTROLLER_IMAGE_TAG}" \
   --set tau-core-controller.image.pullPolicy=Never
