@@ -16,10 +16,7 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/yaml"
 )
 
@@ -85,7 +82,7 @@ func newConnectedServeTestRoot(t *testing.T) *cobra.Command {
 		serveTestProfile("model-serve", profile.ExecutionTargetSingleCluster, "jobqueue", 1, 1, 17),
 		serveTestProfile("sample-project-stt-a100", profile.ExecutionTargetSingleCluster, "jobqueue", 1, 1, 17),
 	}
-	stubServeDependencies(t, &connectedServeTestRunner{}, serveTestClusterClient(t, 17, profiles, false))
+	stubServeDependencies(t, &connectedServeTestRunner{}, readyClusterProfileClientForProfiles(t, 17, false, profiles...))
 	return NewRoot()
 }
 
@@ -143,65 +140,10 @@ func serveTestProfile(
 	}
 }
 
-func serveTestClusterClient(
-	t *testing.T,
-	generation int64,
-	profiles []profile.ResolvedWorkloadProfile,
-	stale bool,
-) dynamic.Interface {
-	t.Helper()
-	hash, err := profile.ProfileSetHash(profiles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	observedGeneration := generation
-	if stale {
-		observedGeneration--
-	}
-	workloadProfiles, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&profile.ProfileSetStatus{
-		ObservedGeneration: observedGeneration,
-		Observed:           int32(len(profiles)),
-		Ready:              int32(len(profiles)),
-		ProfileSetHash:     hash,
-		Profiles:           profiles,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	conditions, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&struct {
-		Conditions []metav1.Condition `json:"conditions"`
-	}{Conditions: []metav1.Condition{{
-		Type:               profile.ConditionWorkloadProfilesReady,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: generation,
-		Reason:             "Ready",
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	object := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "tau.azure.com/v1alpha1",
-		"kind":       "TauCluster",
-		"metadata": map[string]any{
-			"name":       profile.TauClusterName,
-			"generation": generation,
-		},
-		"status": map[string]any{
-			"workloadProfiles": workloadProfiles,
-			"conditions":       conditions["conditions"],
-		},
-	}}
-	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
-	if _, err := client.Resource(profile.TauClusterGVR).Create(context.Background(), object, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	return client
-}
-
 func executeAuthoritativeServe(t *testing.T, p profile.ResolvedWorkloadProfile, args ...string) (string, error) {
 	t.Helper()
 	runner := &connectedServeTestRunner{namespace: "alpha", queue: "jobqueue"}
-	stubServeDependencies(t, runner, serveTestClusterClient(t, 23, []profile.ResolvedWorkloadProfile{p}, false))
+	stubServeDependencies(t, runner, readyClusterProfileClientForProfiles(t, 23, false, p))
 	cmd := NewRoot()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -265,7 +207,7 @@ func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 		stubServeDependencies(
 			t,
 			runner,
-			serveTestClusterClient(t, 23, []profile.ResolvedWorkloadProfile{ordinary}, false),
+			readyClusterProfileClientForProfiles(t, 23, false, ordinary),
 		)
 		cmd := NewRoot()
 		cmd.SetOut(&bytes.Buffer{})
@@ -289,7 +231,7 @@ func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 
 	t.Run("stale provider", func(t *testing.T) {
 		runner := &connectedServeTestRunner{namespace: "alpha", queue: "jobqueue"}
-		stubServeDependencies(t, runner, serveTestClusterClient(t, 23, []profile.ResolvedWorkloadProfile{ordinary}, true))
+		stubServeDependencies(t, runner, readyClusterProfileClientForProfiles(t, 23, true, ordinary))
 		cmd := NewRoot()
 		cmd.SetArgs(append([]string{"serve", "deploy"}, base...))
 		err := cmd.Execute()

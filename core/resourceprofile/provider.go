@@ -242,11 +242,12 @@ func decodeTauClusterProfileSet(object map[string]any) (ProfileSet, error) {
 			TauClusterName, status.ObservedGeneration, generation,
 		)
 	}
-	if err := requireCurrentCondition(
+	if err := requireCondition(
 		cluster.Status.Conditions,
 		ConditionWorkloadProfilesReady,
 		generation,
 		fmt.Sprintf("TauCluster %q workload profile set", TauClusterName),
+		false,
 	); err != nil {
 		return ProfileSet{}, err
 	}
@@ -338,10 +339,17 @@ func requireProfileReady(profile ResolvedWorkloadProfile, generation int64) erro
 		ConditionReady,
 		generation,
 		fmt.Sprintf("workload profile %q", profile.Name),
+		true,
 	)
 }
 
-func requireCondition(conditions []metav1.Condition, conditionType string, generation int64, subject string) error {
+func requireCondition(
+	conditions []metav1.Condition,
+	conditionType string,
+	generation int64,
+	subject string,
+	requireTrue bool,
+) error {
 	for _, condition := range conditions {
 		if condition.Type != conditionType {
 			continue
@@ -352,26 +360,10 @@ func requireCondition(conditions []metav1.Condition, conditionType string, gener
 				subject, conditionType, condition.ObservedGeneration, generation,
 			)
 		}
-		if condition.Status != metav1.ConditionTrue {
+		if requireTrue && condition.Status != metav1.ConditionTrue {
 			return fmt.Errorf(
 				"%s condition %s is %s at generation %d: %s: %s",
 				subject, conditionType, condition.Status, generation, condition.Reason, condition.Message,
-			)
-		}
-		return nil
-	}
-	return fmt.Errorf("%s is missing condition %s at generation %d", subject, conditionType, generation)
-}
-
-func requireCurrentCondition(conditions []metav1.Condition, conditionType string, generation int64, subject string) error {
-	for _, condition := range conditions {
-		if condition.Type != conditionType {
-			continue
-		}
-		if condition.ObservedGeneration != generation {
-			return fmt.Errorf(
-				"%s condition %s is stale: observedGeneration %d does not match generation %d",
-				subject, conditionType, condition.ObservedGeneration, generation,
 			)
 		}
 		return nil

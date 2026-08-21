@@ -310,7 +310,7 @@ func TestProfileRefreshDistinguishesConfigAssertionsFromPriorRevisionValues(t *t
 
 func TestMultiKueueProfileRunsInEverySubmissionMode(t *testing.T) {
 	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 1, 1, 11)
-	provider := profile.NewClusterProvider(readyClusterProfileClientForProfiles(t, 11, resolved))
+	provider := profile.NewClusterProvider(readyClusterProfileClientForProfiles(t, 11, false, resolved))
 	for _, dryRun := range []string{"client", "server", ""} {
 		t.Run("dry-run="+dryRun, func(t *testing.T) {
 			options := defaultRunDispatchOptions()

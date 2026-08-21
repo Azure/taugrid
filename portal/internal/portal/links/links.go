@@ -273,7 +273,6 @@ type workloadItem struct {
 		Namespace         string            `json:"namespace"`
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
-		Annotations       map[string]string `json:"annotations"`
 		OwnerReferences   []struct {
 			Name string `json:"name"`
 		} `json:"ownerReferences"`
@@ -288,9 +287,6 @@ type workloadItem struct {
 		Conditions            []conditionJSON `json:"conditions"`
 		ClusterName           string          `json:"clusterName"`
 		NominatedClusterNames []string        `json:"nominatedClusterNames"`
-		AdmissionChecks       []struct {
-			Name string `json:"name"`
-		} `json:"admissionChecks"`
 	} `json:"status"`
 }
 

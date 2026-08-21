@@ -158,7 +158,7 @@ func setAuthoritativeProfileCardinalityForTest(o *runDispatchOptions, gpus, work
 
 func installClusterProfileClientForTest(t *testing.T, profiles ...profile.ResolvedWorkloadProfile) {
 	t.Helper()
-	client := readyClusterProfileClientForProfiles(t, 7, profiles...)
+	client := readyClusterProfileClientForProfiles(t, 7, false, profiles...)
 	original := newClusterProfileClient
 	newClusterProfileClient = func(string) (dynamic.Interface, error) {
 		return client, nil
@@ -169,9 +169,11 @@ func installClusterProfileClientForTest(t *testing.T, profiles ...profile.Resolv
 func readyClusterProfileClientForProfiles(
 	t *testing.T,
 	generation int64,
+	stale bool,
 	profiles ...profile.ResolvedWorkloadProfile,
 ) dynamic.Interface {
 	t.Helper()
+	profiles = append([]profile.ResolvedWorkloadProfile(nil), profiles...)
 	for i := range profiles {
 		profiles[i].Conditions = []metav1.Condition{{
 			Type:               profile.ConditionReady,
@@ -185,8 +187,12 @@ func readyClusterProfileClientForProfiles(
 	if err != nil {
 		t.Fatal(err)
 	}
+	observedGeneration := generation
+	if stale {
+		observedGeneration--
+	}
 	status, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&profile.ProfileSetStatus{
-		ObservedGeneration: generation,
+		ObservedGeneration: observedGeneration,
 		Observed:           int32(len(profiles)),
 		Ready:              int32(len(profiles)),
 		ProfileSetHash:     hash,

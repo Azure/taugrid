@@ -13,10 +13,7 @@ import (
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/yaml"
 )
 
@@ -144,51 +141,5 @@ func readyClusterProfileClient(t *testing.T, generation int64, stale bool) dynam
 			Message:            "ready",
 		}},
 	}
-	hash, err := profile.ProfileSetHash([]profile.ResolvedWorkloadProfile{resolved})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observedGeneration := generation
-	if stale {
-		observedGeneration--
-	}
-	workloadProfiles, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&profile.ProfileSetStatus{
-		ObservedGeneration: observedGeneration,
-		Observed:           1,
-		Ready:              1,
-		ProfileSetHash:     hash,
-		Profiles:           []profile.ResolvedWorkloadProfile{resolved},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	conditionDoc, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&struct {
-		Conditions []metav1.Condition `json:"conditions"`
-	}{Conditions: []metav1.Condition{{
-		Type:               profile.ConditionWorkloadProfilesReady,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: generation,
-		Reason:             "WorkloadProfilesReady",
-		Message:            "ready",
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	object := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "tau.azure.com/v1alpha1",
-		"kind":       "TauCluster",
-		"metadata": map[string]any{
-			"name":       profile.TauClusterName,
-			"generation": generation,
-		},
-		"status": map[string]any{
-			"workloadProfiles": workloadProfiles,
-			"conditions":       conditionDoc["conditions"],
-		},
-	}}
-	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
-	if _, err := client.Resource(profile.TauClusterGVR).Create(context.Background(), object, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	return client
+	return readyClusterProfileClientForProfiles(t, generation, stale, resolved)
 }
