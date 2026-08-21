@@ -8,11 +8,11 @@ runtime:
 compute:
   workers: 2
   gpus_per_worker: 0
-  head_cpu_request: 20m
+  head_cpu_request: 5m
   head_memory_request: 512Mi
   head_cpu_limit: "1"
   head_memory_limit: 6Gi
-  worker_cpu_request: 50m
+  worker_cpu_request: 10m
   worker_memory_request: 256Mi
   worker_cpu_limit: "1"
   worker_memory_limit: 768Mi
