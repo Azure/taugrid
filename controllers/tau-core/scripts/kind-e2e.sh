@@ -500,6 +500,23 @@ spec:
     path: /var/local/tau-workspace-e2e-pv
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: h200
+spec:
+  levels:
+    - nodeLabel: kubernetes.io/hostname
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: h200
+spec:
+  nodeLabels:
+    kubernetes.io/os: linux
+  topologyName: h200
+---
+apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
   name: ${WORKSPACE_NAME}
@@ -516,8 +533,33 @@ spec:
             # actually scheduled against. No real GPU execution is claimed.
             - name: nvidia.com/gpu
               nominalQuota: 16
+status:
+  conditions:
+    - type: Active
+      status: "True"
 YAML
 kubectl apply -f "${SCRATCH_DIR}/manual-storage.yaml"
+
+cat >"${SCRATCH_DIR}/taucluster-profile-patch.yaml" <<YAML
+spec:
+  workloadProfiles:
+    - name: kind.workspace.cpu
+      description: Kind CPU workspace onboarding profile
+      applicability:
+        namespaces:
+          - ${TARGET_NAMESPACE}
+      gpusPerWorker: 0
+      workerCount: 1
+      mode: fixed
+      placement: independent
+      defaultLocalQueue: ${WORKSPACE_NAME}
+      executionTarget: singleCluster
+      priorities:
+        disableDefaultPriorities: true
+YAML
+kubectl patch cluster.tau.azure.com cluster \
+  --type=merge \
+  --patch-file "${SCRATCH_DIR}/taucluster-profile-patch.yaml"
 
 # ---------------------------------------------------------------------------
 # Native desired state: platform applies TauWorkspace directly.
@@ -639,6 +681,23 @@ if [[ "${phase}" != "Ready" ]]; then
   echo "workspace ${WORKSPACE_NAME} did not reach Ready (phase=${phase})" >&2
   kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o yaml >&2 || true
   kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  exit 1
+fi
+
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  profiles_ready="$(kubectl get clusters.tau.azure.com cluster \
+    -o jsonpath='{.status.conditions[?(@.type=="WorkloadProfilesReady")].status}' \
+    2>/dev/null || true)"
+  profile_name="$(kubectl get clusters.tau.azure.com cluster \
+    -o jsonpath='{.status.workloadProfiles.profiles[0].name}' \
+    2>/dev/null || true)"
+  [[ "${profiles_ready}" == "True" && "${profile_name}" == "kind.workspace.cpu" ]] && break
+  sleep 1
+done
+if [[ "${profiles_ready:-}" != "True" || "${profile_name:-}" != "kind.workspace.cpu" ]]; then
+  echo "Kind workspace profile did not become ready" >&2
+  kubectl get clusters.tau.azure.com cluster -o yaml >&2 || true
   exit 1
 fi
 
@@ -783,7 +842,7 @@ compute:
   cpu_limit: 250m
   memory_limit: 128Mi
 policy:
-  profile: rune-cpu-train
+  profile: kind.workspace.cpu
   disable_default_priorities: true
 YAML
 
