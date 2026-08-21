@@ -3,6 +3,8 @@ engine: job
 entrypoint: ../scripts/smoke.sh
 runtime:
   image: {{.Image}}
+  security:
+    mode: restricted
   env:
     PROJECT_PACKAGE: {{.Package}}
 {{if .HasUpstream}}    UPSTREAM_REPO: {{.UpstreamRepo}}

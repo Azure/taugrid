@@ -81,7 +81,7 @@ permissions are absent.
 
 | # | Layer | Primary command | Owner if it fails |
 |---|---|---|---|
-| 1 | Repository/connection resolution and cluster access | Optional offline `tau workspace connection inspect`; live `tau run smoke --dry-run=client` | Researcher (descriptor) or platform (access) |
+| 1 | Repository/connection resolution and cluster access | Offline `tau workspace connection inspect` or `tau run <target> --dry-run=client`; live `tau run smoke` | Researcher (descriptor) or platform (access) |
 | 2 | [TauWorkspace](../../concepts/glossary/#tauworkspace) readiness and handoff validity | `tau workspace status <name>` | Platform operator |
 | 3 | Client-side config validation and rendering | `tau run validate --config tau/train.yaml` | Researcher |
 | 4 | [Queue](../../concepts/glossary/#queue) admission and quota | `tau run status <run-name>` (Kueue admission phase) | Platform/queue owner |
@@ -193,9 +193,7 @@ without admission.
 [direct run config](../../concepts/glossary/#run-config-vs-manifest) parses,
 passes schema validation, and resolves to a renderable
 [Workload](../../concepts/glossary/#workload) (`Job` or `RayJob`). No cluster
-call is made by `tau run validate`. `tau run --dry-run=client` renders without
-submitting, but still performs workspace-connection verification against the
-cluster.
+call is made by `tau run validate`. `tau run --dry-run=client` also stays offline: it validates the local descriptor and renders live-only namespace, queue, and service-account values as visible placeholders. Use `--dry-run=server` for API-server validation or `tau run smoke` for workspace readiness and admission.
 
 **What failure means:** A schema or field error, an ambiguous
 [target](../../concepts/glossary/#target), or a manifest that looks like an

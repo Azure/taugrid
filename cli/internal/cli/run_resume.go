@@ -374,12 +374,7 @@ func runResumeCommand(
 		}
 	}
 
-	configHash, hashErr := experiment.HashFile(routing.ConfigPath)
-	if hashErr != nil {
-		fmt.Fprintf(w, "warning: cannot hash config file: %v\n", hashErr)
-	}
-
-	plan, err := resumePreflight(snap, name, configHash, from, force)
+	plan, err := resumePreflight(snap, name, targetOptions.configHash, from, force)
 	if err != nil {
 		return err
 	}

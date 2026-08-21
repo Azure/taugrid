@@ -6,9 +6,9 @@ location            = "swedencentral"
 resource_group_name = "<resource-group-name>"
 cluster_name        = "<cluster-name>"
 
-# Advanced: providing a group enables managed Entra AKS authentication.
-# Keep Azure RBAC disabled so TauWorkspace Kubernetes RoleBindings grant
-# workspace access to Entra groups.
+# Managed Entra and local accounts are enabled by default.
+# Optionally grant an Entra group cluster-admin access.
+# Keep Azure RBAC disabled for TauWorkspace RBAC.
 # aks_admin_group_object_ids = ["<entra-admin-group-object-id>"]
 # azure_rbac_enabled          = false
 

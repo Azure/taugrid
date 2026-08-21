@@ -3,6 +3,8 @@ engine: job
 entrypoint: ../scripts/train.sh
 runtime:
   image: {{.Image}}
+  security:
+    mode: restricted
   env:
     PROJECT_PACKAGE: {{.Package}}
     TRAIN_COMMAND: {{.TrainCommandYAML}}
@@ -11,10 +13,10 @@ runtime:
     UPSTREAM_ROOT: {{.UpstreamRoot}}
 {{end}}compute:
   gpus: 0
-  cpu_request: "4"
-  memory_request: 16Gi
-  cpu_limit: "8"
-  memory_limit: 32Gi
+  cpu_request: "2"
+  memory_request: 4Gi
+  cpu_limit: "4"
+  memory_limit: 8Gi
 policy:
   disable_default_priorities: true
 experiment:

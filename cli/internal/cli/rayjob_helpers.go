@@ -20,11 +20,7 @@ func rayJobRequestedGPUCount(workers, gpusPerWorker int) int {
 	return workers * gpusPerWorker
 }
 
-func buildRayJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image, scriptPath string, workers, gpusPerWorker int, dataPVC string) (experiment.Metadata, error) {
-	configHash, err := experiment.HashFile(scriptPath)
-	if err != nil {
-		return experiment.Metadata{}, err
-	}
+func buildRayJobCaptureMetadata(ctx context.Context, captureCommand, name, namespace, image string, workers, gpusPerWorker int, dataPVC, configHash string) experiment.Metadata {
 	if image == "" {
 		if gpusPerWorker > 0 {
 			image = rayjobrender.DefaultGPUImage
@@ -46,7 +42,7 @@ func buildRayJobCaptureMetadata(ctx context.Context, captureCommand, name, names
 		},
 	}
 	metadata.Stellar = runExperimentMetadataFromContext(ctx).StellarMetadata()
-	return metadata, nil
+	return metadata
 }
 
 func storageMountType(pvc string) string {

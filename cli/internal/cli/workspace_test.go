@@ -107,12 +107,17 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 	if !strings.Contains(out.String(), "generated Tau Python repo") {
 		t.Fatalf("unexpected output:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "tau run smoke") {
-		t.Fatalf("smoke next step missing from output:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "tau run train") {
-		t.Fatalf("train next step missing from output:\n%s", out.String())
-	}
+	assertWorkspaceOutputInOrder(t, out.String(),
+		`source ./.env`,
+		`docker build -f images/train.Dockerfile -t "$IMAGE" .`,
+		`docker push "$IMAGE"`,
+		`./scripts/configure.sh --image "$IMAGE"`,
+		`tau run validate --config tau/smoke.yaml`,
+		`tau run validate --config tau/train.yaml`,
+		`tau run smoke`,
+		`tau run --config tau/smoke.yaml`,
+		`tau run train`,
+	)
 
 	env := readWorkspaceTestFile(t, filepath.Join(dir, ".env.example"))
 	if strings.Contains(env, "TAU_WORKSPACE") || strings.Contains(env, "AKS_CLUSTER_NAME") {
@@ -179,6 +184,13 @@ func TestRepoGenInitGeneratesScaffold(t *testing.T) {
 	if !strings.Contains(out.String(), "generated Tau Python repo") {
 		t.Fatalf("unexpected output:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "tau run validate --config tau/train.yaml") ||
+		!strings.Contains(out.String(), "# Ask the platform owner to add tau/workspace.connection.yaml before cluster runs.") {
+		t.Fatalf("unconnected next steps missing from output:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "tau run smoke") || strings.Contains(out.String(), "tau run train") {
+		t.Fatalf("unconnected output included cluster runs:\n%s", out.String())
+	}
 	if _, err := os.Stat(filepath.Join(dir, "tau", "smoke.yaml")); err != nil {
 		t.Fatalf("expected smoke config: %v", err)
 	}
@@ -223,4 +235,16 @@ func readWorkspaceTestFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func assertWorkspaceOutputInOrder(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	start := 0
+	for _, want := range wants {
+		index := strings.Index(got[start:], want)
+		if index < 0 {
+			t.Fatalf("output missing %q in order:\n%s", want, got)
+		}
+		start += index + len(want)
+	}
 }

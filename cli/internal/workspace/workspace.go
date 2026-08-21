@@ -145,6 +145,17 @@ type WorkspaceList struct {
 	Items []Workspace `json:"items"`
 }
 
+type ResolvedWorkspaceValues struct {
+	Namespace      string `json:"namespace"`
+	LocalQueue     string `json:"localQueue"`
+	ServiceAccount string `json:"serviceAccount"`
+}
+
+type WorkspaceCLIView struct {
+	Workspace
+	Resolved ResolvedWorkspaceValues `json:"resolved"`
+}
+
 type QuotaRequestSpec struct {
 	Workspace    string `json:"workspace" yaml:"workspace"`
 	Resource     string `json:"resource" yaml:"resource"`
@@ -185,8 +196,9 @@ func RenderStatus(w Workspace) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Workspace: %s\n", dash(w.Metadata.Name))
 	fmt.Fprintf(&b, "  phase:      %s\n", dash(w.Status.Phase))
-	fmt.Fprintf(&b, "  namespace:  %s\n", dash(w.Status.Target.ResolvedNamespace))
-	fmt.Fprintf(&b, "  queue:      %s\n", dash(firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue)))
+	fmt.Fprintf(&b, "  namespace:  %s\n", dash(ResolvedNamespace(w)))
+	fmt.Fprintf(&b, "  queue:      %s\n", dash(ResolvedLocalQueue(w)))
+	fmt.Fprintf(&b, "  serviceAccount: %s\n", dash(EffectiveServiceAccount(w)))
 	if w.Status.Queue.ClusterQueue != "" {
 		fmt.Fprintf(&b, "  clusterQ:   %s\n", w.Status.Queue.ClusterQueue)
 	}
@@ -196,6 +208,34 @@ func RenderStatus(w Workspace) string {
 	renderConditions(&b, w.Status.Conditions)
 	renderQuota(&b, w.Status.Quota)
 	return b.String()
+}
+
+func CLIView(w Workspace) WorkspaceCLIView {
+	return WorkspaceCLIView{
+		Workspace: w,
+		Resolved: ResolvedWorkspaceValues{
+			Namespace:      ResolvedNamespace(w),
+			LocalQueue:     ResolvedLocalQueue(w),
+			ServiceAccount: EffectiveServiceAccount(w),
+		},
+	}
+}
+
+func ResolvedNamespace(w Workspace) string {
+	return firstNonEmpty(w.Status.Target.ResolvedNamespace, w.Spec.Target.Namespace)
+}
+
+func ResolvedLocalQueue(w Workspace) string {
+	return firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue)
+}
+
+func EffectiveServiceAccount(w Workspace) string {
+	if w.Spec.WorkloadIdentity != nil {
+		if name := strings.TrimSpace(w.Spec.WorkloadIdentity.ServiceAccountName); name != "" {
+			return name
+		}
+	}
+	return "default"
 }
 
 func RenderList(list WorkspaceList) string {
