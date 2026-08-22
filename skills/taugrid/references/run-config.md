@@ -234,7 +234,7 @@ these are supplied by workspace policy — set them explicitly only to override.
 | `gpu_class` | Hardware class: `any`, `a100-80gb`, `h100-95gb`, or `h200-141gb`. Specific classes match `tau.azure.com/gpu-class` exactly; legacy NVLink/standalone spellings are deprecated aliases. |
 | `topology` | Placement/interconnect: `independent`, `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers` |
 | `lane`, `mode`, `shape`, `team` | Admission and placement hints |
-| `topology_policy` | Kueue topology policy override |
+| `workload_profile_snapshot` | Explicit ready TauCluster profile snapshot for offline client dry-run only |
 | `node_selector` | Additional node selector labels |
 | `clear_node_selector` | Clear profile/topology selectors first. **`engine: job` native dispatch only** — managed workflow, eval, and RayJob dispatch cannot clear them. |
 | `profile` | Legacy profile name |

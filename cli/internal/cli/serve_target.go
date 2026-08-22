@@ -18,8 +18,10 @@ import (
 // without the other produces a queue name that does not exist in the namespace
 // it was paired with, which fails as silently as no queue at all.
 type serveTarget struct {
-	Namespace string
-	Queue     string
+	Namespace    string
+	Queue        string
+	ClusterQueue string
+	Team         string
 }
 
 // resolveServeTarget selects the namespace and its platform-managed default
@@ -30,21 +32,11 @@ type serveTarget struct {
 // verifies the LocalQueue exists, and checks that the current identity can
 // create the serving resource there.
 //
-// A client dry-run is contractually offline and must not contact a cluster, so
-// it substitutes visible placeholders instead of discovering. Callers get the
-// warning text to print; this function does no output of its own.
-func resolveServeTarget(ctx context.Context, r queueresolve.RawRunner, namespace, dryRun, workloadResource string) (serveTarget, string, error) {
+// Client and server dry-runs use this same connected resolution path as apply.
+// Serving cannot safely render a queue or authorization placeholder.
+func resolveServeTarget(ctx context.Context, r queueresolve.RawRunner, namespace, workloadResource string) (serveTarget, string, error) {
 	target := serveTarget{
 		Namespace: strings.TrimSpace(namespace),
-	}
-	if dryRun == "client" {
-		unresolved := []string{"queue"}
-		if target.Namespace == "" {
-			target.Namespace = clientDryRunNamespacePlaceholder
-			unresolved = append(unresolved, "namespace")
-		}
-		target.Queue = clientDryRunQueuePlaceholder
-		return target, clientDryRunPlaceholderWarning(unresolved...), nil
 	}
 	if r == nil {
 		return serveTarget{}, "", fmt.Errorf("resolve default Kueue LocalQueue: Kubernetes runner is required")
@@ -62,7 +54,12 @@ func resolveServeTarget(ctx context.Context, r queueresolve.RawRunner, namespace
 		}
 		return serveTarget{}, "", fmt.Errorf("resolve default Kueue LocalQueue: %w", err)
 	}
-	return serveTarget{Namespace: selected.Namespace, Queue: selected.QueueName}, "", nil
+	return serveTarget{
+		Namespace:    selected.Namespace,
+		Queue:        selected.QueueName,
+		ClusterQueue: selected.ClusterQueue,
+		Team:         selected.Team,
+	}, "", nil
 }
 
 func serveWorkloadResource(kind string) string {

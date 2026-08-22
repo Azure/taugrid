@@ -202,7 +202,10 @@ kubectl get events -n <namespace> --sort-by=.lastTimestamp
 
 If the tree shows only a **MultiKueue placement** phase and no local pod phases
 progress, the workload dispatched to a worker cluster — inspect it from the
-worker context before assuming it is stuck. (MultiKueue is experimental.)
+worker context before assuming it is stuck. Confirm that the selected
+`multiKueue` profile is Ready and that the current `TauCluster/cluster`
+`MultiKueueReady` condition still reports healthy AdmissionCheck, config, and
+worker prerequisites.
 
 ## 6. GPU/node/topology health
 

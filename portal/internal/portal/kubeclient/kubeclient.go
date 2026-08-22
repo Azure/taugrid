@@ -23,6 +23,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 )
 
 // Kueue resource versions. The repo's Kueue chart serves both v1beta1 and
@@ -82,7 +84,19 @@ func New(kubeconfig string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build dynamic client: %w", err)
 	}
-	return &Client{dyn: dyn}, nil
+	return NewForDynamic(dyn), nil
+}
+
+// NewForDynamic builds a Client around an existing dynamic client. It is the
+// test seam for direct Kubernetes reads, including the singleton TauCluster GET.
+func NewForDynamic(dyn dynamic.Interface) *Client {
+	return &Client{dyn: dyn}
+}
+
+// ProfileSet returns the current ready workload-profile revision from the
+// singleton TauCluster. The shared provider owns decoding and readiness checks.
+func (c *Client) ProfileSet(ctx context.Context) (profile.ProfileSet, error) {
+	return profile.NewClusterProvider(c.dyn).ProfileSet(ctx)
 }
 
 func restConfig(kubeconfig string) (*rest.Config, error) {

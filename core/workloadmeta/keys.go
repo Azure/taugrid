@@ -59,25 +59,22 @@ const (
 
 // Scheduling, queueing, and topology placement.
 const (
-	LabelTeam        = "tau.azure.com/team"
-	LabelLane        = "tau.azure.com/lane"
-	LabelShape       = "tau.azure.com/shape"
-	LabelTopology    = "tau.azure.com/topology"
-	LabelPreset      = "tau.azure.com/preset"
-	LabelGPUClass    = "tau.azure.com/gpu-class"
-	LabelPreemptible = "tau.azure.com/preemptible"
-	LabelReclaimable = "tau.azure.com/reclaimable"
-	LabelQueueRole   = "tau.azure.com/queue-role"
+	LabelTeam      = "tau.azure.com/team"
+	LabelLane      = "tau.azure.com/lane"
+	LabelShape     = "tau.azure.com/shape"
+	LabelTopology  = "tau.azure.com/topology"
+	LabelPreset    = "tau.azure.com/preset"
+	LabelGPUClass  = "tau.azure.com/gpu-class"
+	LabelQueueRole = "tau.azure.com/queue-role"
 
-	AnnotationClusterQueue          = "tau.azure.com/cluster-queue"
-	AnnotationResourceFlavor        = "tau.azure.com/resource-flavor"
-	AnnotationPodPriorityClass      = "tau.azure.com/pod-priority-class"
-	AnnotationWorkloadPriorityClass = "tau.azure.com/workload-priority-class"
-	AnnotationKueueTopology         = "tau.azure.com/kueue-topology"
+	AnnotationClusterQueue   = "tau.azure.com/cluster-queue"
+	AnnotationResourceFlavor = "tau.azure.com/resource-flavor"
 
-	AnnotationPresetDesc         = "tau.azure.com/preset-description"
+	AnnotationTauClusterGeneration   = "tau.azure.com/tau-cluster-generation"
+	AnnotationWorkloadProfileSetHash = "tau.azure.com/workload-profile-set-hash"
+	AnnotationWorkloadProfileName    = "tau.azure.com/workload-profile"
+
 	AnnotationPresetExplain      = "tau.azure.com/preset-explain"
-	AnnotationPolicySource       = "tau.azure.com/topology-policy-source"
 	AnnotationTopologyQueue      = "tau.azure.com/topology-local-queue"
 	AnnotationTopologyGPUFamily  = "tau.azure.com/topology-gpu-family"
 	AnnotationTopologyGPUProfile = "tau.azure.com/topology-gpu-profile"

@@ -287,7 +287,7 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
 
 `portal.jobs.scopeMode` is omitted from the rendered command by default, and
 Portal binaries default the board to `disabled`, so the board stays off until an
-operator sets a mode. Operator activation also requires a topology policy whose
+operator sets a mode. Operator activation also requires ready TauCluster workload profiles whose
 ClusterQueue binding matches each live LocalQueue; mismatches fail unavailable
 instead of showing zero quota.
 

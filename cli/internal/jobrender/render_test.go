@@ -1129,44 +1129,43 @@ func TestRender_ClearNodeSelectorPreservesGPUClassContract(t *testing.T) {
 	}
 }
 
-func TestRender_EmbeddedPresetTASContract(t *testing.T) {
+func TestRender_WorkloadProfilePlacementTASContract(t *testing.T) {
 	tests := []struct {
 		name       string
-		presetName string
+		placement  string
 		annotation string
 		value      string
 	}{
 		{
 			name:       "independent Job uses unconstrained TAS",
-			presetName: "azure.research.training.l",
+			placement:  profile.PlacementIndependent,
 			annotation: "kueue.x-k8s.io/podset-unconstrained-topology",
 			value:      "true",
 		},
 		{
 			name:       "large-memory Job requires one hostname",
-			presetName: "azure.research.large-memory.2x",
+			placement:  profile.PlacementSingleNodeNVLink,
 			annotation: "kueue.x-k8s.io/podset-required-topology",
 			value:      "kubernetes.io/hostname",
 		},
 		{
 			name:       "multi-node Job uses unconstrained TAS",
-			presetName: "azure.research.large-memory.2node",
+			placement:  profile.PlacementMultiNodeNCCL,
 			annotation: "kueue.x-k8s.io/podset-unconstrained-topology",
 			value:      "true",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resolved, err := runtopology.ResolvePreset("", tc.presetName)
-			if err != nil {
-				t.Fatalf("resolve preset: %v", err)
-			}
 			opts := Options{
 				Name:      "tas-contract",
 				Namespace: "taugrid-default",
 				Command:   []string{"true"},
 			}
-			ApplyTopologyOptions(&opts, resolved.Options)
+			ApplyTopologyOptions(&opts, runtopology.Options{
+				QueueName: "jobqueue",
+				Placement: tc.placement,
+			})
 
 			out, err := Render(trainProfile(), opts)
 			if err != nil {
@@ -1185,18 +1184,17 @@ func TestRender_EmbeddedPresetTASContract(t *testing.T) {
 	}
 }
 
-func TestRender_DRAConvertedPresetOmitsTASAnnotations(t *testing.T) {
-	resolved, err := runtopology.ResolvePreset("", "azure.research.training.l")
-	if err != nil {
-		t.Fatalf("resolve preset: %v", err)
-	}
-	resolved = runtopology.WithDRAQueue(resolved)
+func TestRender_DRAProfileOptionsOmitTASAnnotations(t *testing.T) {
 	opts := Options{
 		Name:      "dra-contract",
 		Namespace: "taugrid-default",
 		Command:   []string{"true"},
 	}
-	ApplyTopologyOptions(&opts, resolved.Options)
+	ApplyTopologyOptions(&opts, runtopology.Options{
+		QueueName:                       runtopology.SharedDRAQueueName,
+		Placement:                       profile.PlacementIndependent,
+		DisableKueueTopologyAnnotations: true,
+	})
 
 	out, err := Render(trainProfile(), opts)
 	if err != nil {

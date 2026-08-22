@@ -16,14 +16,14 @@ import (
 
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/kueueapi"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
 func newClusterValidateTopologyCmd() *cobra.Command {
 	var (
-		kubeContext  string
-		preset       string
-		clusterQueue string
+		kubeContext string
+		profileName string
 	)
 	cmd := &cobra.Command{
 		Use:   "topology",
@@ -36,33 +36,33 @@ For each GPU ResourceFlavor referenced by the ClusterQueue, this command checks:
   - GPU nodes have topology.kubernetes.io/zone populated
   - IB-capable SKUs (H200, A100) have Ready nodes
 
-ResourceFlavors without GPU capacity in the ClusterQueue contract are reported and skipped.
+ResourceFlavors without GPU capacity in the resolved ClusterQueue contract are
+reported and skipped.
 
-Use --preset to validate a single preset's full chain (Kueue objects + node match).
-Without --preset, validates all ResourceFlavors in the ClusterQueue.
+Use --profile to validate one ready TauCluster workload profile. Without it,
+Tau validates every ready profile in the current TauCluster profile-set revision.
 
 Examples:
   tau cluster validate topology
-  tau cluster validate topology --preset azure.research.training.l`,
+  tau cluster validate topology --profile research-training`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			r := kube.New(kubeContext)
-			cq := clusterQueue
-			if cq == "" {
-				cq = runtopology.SharedGPUClusterQueueName
+			client, err := newClusterProfileClient(kubeContext)
+			if err != nil {
+				return err
 			}
-
-			if preset != "" {
-				if clusterQueue != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "note: --cluster-queue is ignored when --preset is set\n")
-				}
-				return validatePresetTopology(cmd.Context(), cmd.OutOrStdout(), r, preset, r.Context)
-			}
-			return validateClusterTopology(cmd.Context(), cmd.OutOrStdout(), r, r.Context, cq)
+			return validateReadyWorkloadProfilesTopology(
+				cmd.Context(),
+				cmd.OutOrStdout(),
+				r,
+				profile.NewClusterProvider(client),
+				profileName,
+				r.Context,
+			)
 		},
 	}
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVar(&preset, "preset", "", "validate a single preset's full chain (Kueue objects + node match)")
-	cmd.Flags().StringVar(&clusterQueue, "cluster-queue", "", "ClusterQueue name (default: "+runtopology.SharedGPUClusterQueueName+")")
+	cmd.Flags().StringVar(&profileName, "profile", "", "validate one ready TauCluster workload profile (default: all ready profiles)")
 	return cmd
 }
 
@@ -128,23 +128,80 @@ func validateClusterTopology(ctx context.Context, w io.Writer, r validateNodesRu
 	return writeSummary(w, passed, warnings, errors)
 }
 
-func validatePresetTopology(ctx context.Context, w io.Writer, r validateNodesRunner, presetName, ctxName string) error {
-	resolved, err := runtopology.ResolvePreset("", presetName)
+func validateReadyWorkloadProfilesTopology(
+	ctx context.Context,
+	w io.Writer,
+	r validateNodesRunner,
+	provider *profile.Provider,
+	profileName, ctxName string,
+) error {
+	set, err := provider.ProfileSet(ctx)
 	if err != nil {
 		return err
 	}
-	p := resolved.Preset
+	var candidates []profile.ResolvedWorkloadProfile
+	for _, candidate := range set.Profiles {
+		if profileName == "" || candidate.Name == strings.TrimSpace(profileName) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	if len(candidates) == 0 {
+		_, err := provider.Select(ctx, profile.SelectionRequest{Name: profileName})
+		return err
+	}
+	for _, candidate := range candidates {
+		request := representativeProfileSelectionRequest(candidate)
+		selection, err := provider.Select(ctx, request)
+		if err != nil {
+			return err
+		}
+		if selection.Generation != set.Generation || selection.ProfileSetHash != set.ProfileSetHash {
+			return fmt.Errorf(
+				"TauCluster workload profile revision changed during topology validation (generation/hash %d/%s -> %d/%s); retry",
+				set.Generation,
+				set.ProfileSetHash,
+				selection.Generation,
+				selection.ProfileSetHash,
+			)
+		}
+		if err := validateResolvedWorkloadProfileTopology(ctx, w, r, selection, ctxName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+func representativeProfileSelectionRequest(candidate profile.ResolvedWorkloadProfile) profile.SelectionRequest {
+	first := func(values []string) string {
+		if len(values) == 0 {
+			return ""
+		}
+		return values[0]
+	}
+	return profile.SelectionRequest{
+		Name:      candidate.Name,
+		Namespace: first(candidate.Applicability.Namespaces),
+		Team:      first(candidate.Applicability.Teams),
+		Lane:      first(candidate.Applicability.Lanes),
+	}
+}
+
+func validateResolvedWorkloadProfileTopology(
+	ctx context.Context,
+	w io.Writer,
+	r validateNodesRunner,
+	selection profile.Selection,
+	ctxName string,
+) error {
+	p := selection.Profile
 	fmt.Fprintf(w, "cluster: %s\n", dash(ctxName))
-	fmt.Fprintf(w, "preset: %s\n", p.Name)
-	fmt.Fprintf(w, "source: %s\n\n", resolved.SourceFile)
+	fmt.Fprintf(w, "profile: %s\n", p.Name)
+	fmt.Fprintf(w, "taucluster generation: %d\n", selection.Generation)
+	fmt.Fprintf(w, "profile set hash: %s\n\n", selection.ProfileSetHash)
 
 	var passed, warnings, errors int
 	var results []topologyCheckResult
-	clusterQueueExists := p.ClusterQueue == ""
-
-	objChecks := presetObjectChecks(p)
-	for _, check := range objChecks {
+	for _, check := range workloadProfileObjectChecks(p) {
 		out, err := r.Raw(ctx, check.args, nil)
 		if err != nil || strings.TrimSpace(out) == "" {
 			detail := "not found"
@@ -154,54 +211,61 @@ func validatePresetTopology(ctx context.Context, w io.Writer, r validateNodesRun
 			results = append(results, topologyCheckResult{check.label, checkError, detail})
 		} else {
 			results = append(results, topologyCheckResult{check.label, checkOK, "exists"})
-			if check.label == "clusterqueue" {
-				clusterQueueExists = true
-			}
 		}
 	}
 
+	wantedFlavors := make(map[string]struct{}, len(p.ResourceFlavors))
+	for _, name := range p.ResourceFlavors {
+		wantedFlavors[name] = struct{}{}
+	}
+	foundFlavors := make(map[string]struct{}, len(wantedFlavors))
 	var contracts []topologyFlavorContract
-	if p.ClusterQueue == "" {
-		results = append(results, topologyCheckResult{"gpu-contract", checkError, "preset does not name a ClusterQueue"})
-	} else if clusterQueueExists {
-		cq, err := fetchClusterQueue(ctx, r, p.ClusterQueue)
+	for _, clusterQueue := range p.ClusterQueues {
+		cq, err := fetchClusterQueue(ctx, r, clusterQueue)
 		if err != nil {
-			results = append(results, topologyCheckResult{"gpu-contract", checkError, fmt.Sprintf("cannot fetch clusterqueue contract: %v", err)})
-		} else {
-			allContracts := clusterQueueFlavorContracts(cq)
-			if p.ResourceFlavor != "" {
-				contract, ok := findFlavorContract(allContracts, p.ResourceFlavor)
-				switch {
-				case !ok:
-					results = append(results, topologyCheckResult{"gpu-contract", checkError,
-						fmt.Sprintf("resourceflavor %s is not referenced by clusterqueue %s", p.ResourceFlavor, p.ClusterQueue)})
-				case len(contract.gpuResources) == 0:
-					results = append(results, topologyCheckResult{"gpu-contract", checkError,
-						fmt.Sprintf("resourceflavor %s has no GPU capacity in clusterqueue %s", p.ResourceFlavor, p.ClusterQueue)})
-				default:
-					contracts = append(contracts, contract)
-				}
-			} else {
-				for _, contract := range allContracts {
-					if len(contract.gpuResources) > 0 {
-						contracts = append(contracts, contract)
-					}
-				}
-				if len(contracts) == 0 {
-					results = append(results, topologyCheckResult{"gpu-contract", checkError,
-						fmt.Sprintf("clusterqueue %s has no ResourceFlavor with GPU capacity", p.ClusterQueue)})
-				}
+			results = append(results, topologyCheckResult{
+				"gpu-contract",
+				checkError,
+				fmt.Sprintf("cannot fetch clusterqueue %s contract: %v", clusterQueue, err),
+			})
+			continue
+		}
+		for _, contract := range clusterQueueFlavorContracts(cq) {
+			if _, wanted := wantedFlavors[contract.name]; !wanted {
+				continue
 			}
+			foundFlavors[contract.name] = struct{}{}
+			if len(contract.gpuResources) == 0 {
+				continue
+			}
+			contracts = append(contracts, contract)
 		}
 	}
+	for flavor := range wantedFlavors {
+		if _, found := foundFlavors[flavor]; !found {
+			results = append(results, topologyCheckResult{
+				"gpu-contract",
+				checkError,
+				fmt.Sprintf("resourceflavor %s is not referenced by resolved clusterqueues %s", flavor, strings.Join(p.ClusterQueues, ", ")),
+			})
+		}
+	}
+	if len(wantedFlavors) == 0 {
+		results = append(results, topologyCheckResult{"gpu-contract", checkError, "profile has no resolved ResourceFlavor"})
+	} else if p.GPUsPerWorker > 0 && len(contracts) == 0 {
+		results = append(results, topologyCheckResult{
+			"gpu-contract",
+			checkError,
+			"profile has no GPU-capable ResourceFlavor in its resolved ClusterQueues",
+		})
+	}
 
-	fmt.Fprintf(w, "preset %s:\n", p.Name)
+	fmt.Fprintf(w, "profile %s:\n", p.Name)
 	writeResults(w, results, &passed, &warnings, &errors)
 	for _, contract := range contracts {
 		fmt.Fprintf(w, "\nresourceflavor %s:\n", contract.name)
 		writeResults(w, validateFlavor(ctx, r, contract), &passed, &warnings, &errors)
 	}
-
 	return writeSummary(w, passed, warnings, errors)
 }
 
@@ -210,26 +274,27 @@ type objectCheck struct {
 	args  []string
 }
 
-func presetObjectChecks(p runtopology.Preset) []objectCheck {
-	ns := p.Namespace
-	if ns == "" {
-		ns = runtopology.DefaultLocalQueueNamespace
+func workloadProfileObjectChecks(p profile.ResolvedWorkloadProfile) []objectCheck {
+	var checks []objectCheck
+	for _, queue := range p.LocalQueues {
+		checks = append(checks, objectCheck{
+			"localqueue " + queue.Namespace + "/" + queue.Name,
+			[]string{"-n", queue.Namespace, "get", "localqueue.kueue.x-k8s.io", queue.Name, "-o", "name"},
+		})
 	}
-	checks := []objectCheck{
-		{"localqueue", []string{"-n", ns, "get", "localqueue.kueue.x-k8s.io", p.QueueName, "-o", "name"}},
+	for _, name := range p.ClusterQueues {
+		checks = append(checks, objectCheck{"clusterqueue " + name, []string{"get", "clusterqueue.kueue.x-k8s.io", name, "-o", "name"}})
 	}
-	if p.ClusterQueue != "" {
-		checks = append(checks, objectCheck{"clusterqueue", []string{"get", "clusterqueue.kueue.x-k8s.io", p.ClusterQueue, "-o", "name"}})
+	for _, name := range p.Topologies {
+		checks = append(checks, objectCheck{"topology " + name, []string{"get", "topology.kueue.x-k8s.io", name, "-o", "name"}})
 	}
-	if p.TopologyName != "" {
-		checks = append(checks, objectCheck{"topology", []string{"get", "topology.kueue.x-k8s.io", p.TopologyName, "-o", "name"}})
+	for _, name := range p.WorkloadPriorityClasses {
+		checks = append(checks, objectCheck{"workloadpriorityclass " + name, []string{"get", "workloadpriorityclass.kueue.x-k8s.io", name, "-o", "name"}})
 	}
-	if p.WorkloadPriorityClassName != "" {
-		checks = append(checks, objectCheck{"workloadpriorityclass", []string{"get", "workloadpriorityclass.kueue.x-k8s.io", p.WorkloadPriorityClassName, "-o", "name"}})
+	for _, name := range p.PodPriorityClasses {
+		checks = append(checks, objectCheck{"priorityclass " + name, []string{"get", "priorityclass.scheduling.k8s.io", name, "-o", "name"}})
 	}
-	if p.PodPriorityClassName != "" {
-		checks = append(checks, objectCheck{"priorityclass", []string{"get", "priorityclass.scheduling.k8s.io", p.PodPriorityClassName, "-o", "name"}})
-	}
+	sort.Slice(checks, func(i, j int) bool { return checks[i].label < checks[j].label })
 	return checks
 }
 
@@ -427,15 +492,6 @@ func quotaHasCapacity(nominal kueueapi.Quantity, borrowingLimit *kueueapi.Quanti
 	// In a cohort, an omitted borrowingLimit means unlimited borrowing. Without
 	// a cohort, Kueue requires borrowingLimit to be omitted and no borrowing is possible.
 	return hasCohort
-}
-
-func findFlavorContract(contracts []topologyFlavorContract, name string) (topologyFlavorContract, bool) {
-	for _, contract := range contracts {
-		if contract.name == name {
-			return contract, true
-		}
-	}
-	return topologyFlavorContract{}, false
 }
 
 type topologyResourceFlavorDoc struct {

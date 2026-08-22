@@ -12,7 +12,7 @@ import (
 	"github.com/Azure/taugrid/core/runconfig"
 )
 
-// topologyPolicyKnobs pairs each placement knob with the run config key that
+// placementPolicyKnobs pairs each placement knob with the run config key that
 // owns it. `tau run` is config-first: these knobs are read from the config's
 // policy block by configToDispatch, never from cobra flags.
 //
@@ -20,9 +20,7 @@ import (
 // second source of truth, and a flag that is registered but never read (which
 // is exactly what topologyFlags.addTo was) silently lies to anyone reading the
 // code or the help output.
-var topologyPolicyKnobs = map[string]string{
-	"preset":                     "policy.preset",
-	"topology-policy":            "policy.topology_policy",
+var placementPolicyKnobs = map[string]string{
 	"team":                       "policy.team",
 	"lane":                       "policy.lane",
 	"mode":                       "policy.mode",
@@ -54,7 +52,7 @@ func walkCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 // TestTopologyKnobsStayConfigFirst fails if a placement knob regains a cobra
 // flag on the run/serve subtree without the config-first contract being
 // revisited. It is scoped to run/serve because `tau cluster validate topology
-// --preset` and `tau run list --queue` are unrelated, legitimate flags.
+// --profile` and `tau run list --queue` are unrelated, legitimate flags.
 func TestTopologyKnobsStayConfigFirst(t *testing.T) {
 	root := NewRoot()
 	for _, subtree := range []string{"run", "serve"} {
@@ -69,7 +67,7 @@ func TestTopologyKnobsStayConfigFirst(t *testing.T) {
 			if path == "tau run list" {
 				return
 			}
-			for knob, configKey := range topologyPolicyKnobs {
+			for knob, configKey := range placementPolicyKnobs {
 				if cmd.Flags().Lookup(knob) != nil {
 					t.Errorf("%s registers --%s, but that knob is config-first (%s); "+
 						"either read the flag in configToDispatch or drop it", path, knob, configKey)
@@ -88,12 +86,11 @@ func TestTopologyKnobsStayConfigFirst(t *testing.T) {
 // This drives the real config -> dispatch -> topologyFlags chain so a dropped
 // mapping in configToDispatch fails here rather than in production.
 func TestTopologyKnobsAreReachableFromConfig(t *testing.T) {
+	disablePriorities := true
 	// Non-empty distinct values so a copy/paste slip in configToDispatch or
 	// runJobTopologyFlags shows up as a mismatch rather than passing.
 	cfg := runconfig.Config{
 		Policy: runconfig.Policy{
-			Preset:                   "azure.research.training.l",
-			TopologyPolicy:           "/tmp/policy.yaml",
 			Team:                     "research",
 			Lane:                     "training",
 			Mode:                     "fixed",
@@ -104,7 +101,7 @@ func TestTopologyKnobsAreReachableFromConfig(t *testing.T) {
 			PriorityTier:             "priority",
 			WorkloadPriorityClass:    "taugrid-priority",
 			PodPriorityClass:         "taugrid-priority",
-			DisableDefaultPriorities: true,
+			DisableDefaultPriorities: &disablePriorities,
 		},
 	}
 	dispatch, err := configToDispatch(cfg, "tau.yaml")
@@ -114,8 +111,6 @@ func TestTopologyKnobsAreReachableFromConfig(t *testing.T) {
 	flags := runJobTopologyFlags(dispatch)
 
 	carried := map[string]string{
-		"preset":                  flags.preset,
-		"topology-policy":         flags.policyPath,
 		"team":                    flags.team,
 		"lane":                    flags.lane,
 		"mode":                    flags.mode,
@@ -129,21 +124,17 @@ func TestTopologyKnobsAreReachableFromConfig(t *testing.T) {
 	}
 	for knob, got := range carried {
 		if got == "" {
-			t.Errorf("runJobTopologyFlags drops %q; %s cannot reach the renderer", knob, topologyPolicyKnobs[knob])
+			t.Errorf("runJobTopologyFlags drops %q; %s cannot reach the renderer", knob, placementPolicyKnobs[knob])
 		}
 	}
 	if !flags.disableDefaultPriorities {
 		t.Errorf("runJobTopologyFlags drops disable-default-priorities; %s cannot reach the renderer",
-			topologyPolicyKnobs["disable-default-priorities"])
+			placementPolicyKnobs["disable-default-priorities"])
 	}
 
 	// Every knob must also report as "changed" so applyWithChanged actually
-	// applies it instead of silently deferring to the preset.
-	for knob := range topologyPolicyKnobs {
-		if knob == "preset" || knob == "topology-policy" {
-			// Consumed by resolvePreset, not by the override table.
-			continue
-		}
+	// applies it instead of silently dropping config intent.
+	for knob := range placementPolicyKnobs {
 		if !runJobTopologyFieldSet(dispatch, knob) {
 			t.Errorf("runJobTopologyFieldSet(%q) = false for a config-set value; the override will never fire", knob)
 		}

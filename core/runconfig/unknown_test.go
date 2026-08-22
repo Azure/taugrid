@@ -92,7 +92,7 @@ compute:
 runtime:
   image: example.invalid/ray:latest
 policy:
-  preset: azure.research.training.l
+  profile: research-training
   node_selector:
     example.invalid/gpu-series: nd-h200-v5
 storage:

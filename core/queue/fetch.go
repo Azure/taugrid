@@ -62,9 +62,8 @@ func BuildSnapshot(namespace string, pol topology.Policy, localQueuesRaw, cluste
 	}
 
 	out := Snapshot{
-		Namespace:    namespace,
-		PolicySource: pol.SourceFile,
-		Groups:       make([]Group, 0, len(groups)),
+		Namespace: namespace,
+		Groups:    make([]Group, 0, len(groups)),
 	}
 	filter := normalizedFilter(opts)
 	for _, g := range groups {

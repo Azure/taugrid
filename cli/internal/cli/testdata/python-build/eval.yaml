@@ -7,7 +7,6 @@ eval:
   upstream: train-model
 name: eval-model
 policy:
-  gpu_class: any
   namespace: export-ns
 run:
   entrypoint: tau_py_wrapper.py

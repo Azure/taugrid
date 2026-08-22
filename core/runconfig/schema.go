@@ -103,18 +103,17 @@ var fieldCatalog = map[string]FieldInfo{
 	"policy":                            {Status: statusSupported, Description: "Namespace, queue, topology, and priority placement settings."},
 	"policy.workspace":                  {Status: statusSupported, Description: "TauWorkspace name used to load platform-owned namespace, queue, priority, output-root, and scratch defaults."},
 	"policy.namespace":                  {Status: statusSupported, Description: "Target Kubernetes namespace."},
-	"policy.preset":                     {Status: statusSupported, Description: "Azure managed compute preset (e.g. azure.research.training.{l,2x,4x,xl}); see `tau cluster validate topology`. When omitted, managed workflow configs infer a preset from policy.team, lane=training, and compute.gpus."},
-	"policy.profile":                    {Status: statusSupported, Description: "Legacy scheduling label. Direct Job resources are declared under compute."},
-	"policy.queue":                      {Status: statusSupported, Description: "Explicit Kueue LocalQueue name, or auto for live compatible-queue discovery. With presets, Tau infers policy.team from queue names like sample-training when policy.team is omitted."},
-	"policy.team":                       {Status: statusSupported, Description: "Tau team that owns the quota slice (e.g. research, experimental). Used by managed workflow preset inference; defaults to the TAU_TEAM environment variable."},
-	"policy.lane":                       {Status: statusSupported, Description: "Advanced/operator override: Tau lane.", Values: []string{"eval", "training", "large-memory", "elastic"}},
+	"policy.profile":                    {Status: statusSupported, Description: "TauCluster workload profile name. When omitted, Tau selects the unique ready, applicable profile and fails closed when selection is ambiguous."},
+	"policy.queue":                      {Status: statusSupported, Description: "Optional Kueue LocalQueue assertion. The selected workload profile is authoritative, so an explicit value must match its resolved queue."},
+	"policy.team":                       {Status: statusSupported, Description: "Explicit team scope used to authorize workload-profile applicability."},
+	"policy.lane":                       {Status: statusSupported, Description: "Explicit lane scope used to authorize workload-profile applicability."},
 	"policy.gpu_class":                  {Status: statusSupported, Description: "Hardware-only GPU class matched exactly through the ResourceFlavor/node label " + workloadmeta.LabelGPUClass + ".", Values: topology.SupportedGPUClasses(), DeprecatedValues: []string{"a100-nvlink-80gb", "h100-standalone-95gb", "h200-nvlink-141gb"}, Notes: "any is unconstrained and renders no class selector. Legacy *-nvlink-* and *-standalone-* spellings are deprecated aliases; express placement/interconnect with policy.topology."},
 	"policy.mode":                       {Status: statusSupported, Description: "Advanced/operator override: admission mode.", Values: []string{"fixed", "elastic"}},
 	"policy.topology":                   {Status: statusSupported, Description: "Explicit placement semantics. Connected GPU preflight requires this when every compatible queue flavor uses TopologyAwareScheduling; offline validation cannot infer live flavor capabilities.", Values: []string{"independent", "single-node-nvlink", "multi-node-nccl", "elastic-workers"}},
 	"policy.shape":                      {Status: statusSupported, Description: "Advanced/operator override: workload shape, e.g. 8xa100-80gb."},
 	"policy.priority":                   {Status: statusSupported, Description: "Alias for policy.priority_tier."},
 	"policy.priority_tier":              {Status: statusSupported, Description: "Advanced/operator override: Tau priority tier.", Values: []string{"default", "priority"}},
-	"policy.topology_policy":            {Status: statusSupported, Description: "Advanced/platform override: topology policy file. Defaults to TAU_TOPOLOGY_POLICY, then an in-tree policy, then the embedded Azure policy."},
+	"policy.workload_profile_snapshot":  {Status: statusSupported, Description: "Explicit TauWorkloadProfileSnapshot for offline client rendering. The path resolves relative to the config file, requires --dry-run=client, and never falls back to an environment or embedded catalog."},
 	"policy.workload_priority_class":    {Status: statusSupported, Description: "Advanced/operator override: Kueue WorkloadPriorityClass name for admission ordering."},
 	"policy.pod_priority_class":         {Status: statusSupported, Description: "Advanced/operator override: Kubernetes PriorityClass name for pod scheduling and preemption."},
 	"policy.node_selector":              {Status: statusSupported, Description: "Additional node selector labels."},
@@ -301,7 +300,7 @@ func schemaForType(t reflect.Type, path string) map[string]any {
 	if info, ok := fieldCatalog[path]; ok {
 		schema["description"] = info.Description
 		schema["x-tau-status"] = string(info.Status)
-		if len(info.Values) > 0 {
+		if len(info.Values) > 0 && t.Kind() != reflect.Slice {
 			if len(info.DeprecatedValues) == 0 {
 				schema["enum"] = info.Values
 			} else {

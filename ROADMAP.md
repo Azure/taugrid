@@ -55,11 +55,11 @@ SGLang, and TensorRT-LLM.
 
 ### Cross-cloud and heterogeneous execution
 
-Take MultiKueue past constrained preview: secure worker credentials, portable
-data, images, checkpoints, and artifacts, and routing that is not restricted to
-preselected workers or to one cloud. On the capacity side, one submission
-spanning CPU, GPU, and specialized nodes, with topology and preemption decided
-by policy.
+Extend deterministic MultiKueue profile dispatch beyond preconfigured workers:
+secure worker credentials, portable data, images, checkpoints, and artifacts,
+and routing that is not restricted to one cloud. On the capacity side, one
+submission spanning CPU, GPU, and specialized nodes, with topology and
+preemption decided by policy.
 
 ### Reinforcement learning and post-training
 

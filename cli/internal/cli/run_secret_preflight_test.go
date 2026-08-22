@@ -44,6 +44,7 @@ esac
 	options.script = writeRayScript(t, t.TempDir())
 	options.namespace = "tau-default"
 	options.envSecrets = []string{"CDS_KEY=missing-credentials:key"}
+	attachAuthoritativeProfileForTest(&options)
 	request, err := newRunRayJobRequest(options, "solar-irradiation")
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +78,7 @@ case "$*" in
     printf '%s\n' '{"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"tau-cq"}}'
     ;;
   *clusterqueue.kueue.x-k8s.io*)
-    printf '%s\n' '{"metadata":{"name":"tau-cq"},"spec":{"resourceGroups":[]}}'
+    printf '%s\n' '{"metadata":{"name":"tau-cq"},"spec":{"resourceGroups":[]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
     ;;
   *"create "*)
     printf '%s\n' 'rayjob.ray.io/tau-secret-preflight created (server dry run)'
@@ -162,6 +163,8 @@ runtime:
 	options.workloadKind = "rayjob"
 	options.namespace = "tau-default"
 	options.secretPayloadPath = payloadPath
+	attachAuthoritativeProfileForTest(&options)
+	setAuthoritativeProfileCardinalityForTest(&options, 0, 1)
 	request, err := newRunManagedWorkflowRequest(options)
 	if err != nil {
 		t.Fatal(err)

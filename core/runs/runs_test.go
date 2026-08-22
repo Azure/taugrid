@@ -621,7 +621,40 @@ func TestBoardFiltersResolvedLocalQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
+
 	if snap.Total != 1 || snap.Runs[0].Name != "alpha" || snap.Runs[0].Queue != "alpha-queue" {
 		t.Fatalf("queue-filtered snapshot = %+v", snap)
+	}
+}
+
+func TestBoardLabelsMultiKueueRuntimeFromManagedBy(t *testing.T) {
+	jobsJSON := []byte(`{"items":[
+		{"metadata":{"name":"managed","labels":{"` + workloadmeta.LabelJob + `":"managed"},
+		 "annotations":{"` + workloadmeta.AnnotationWorkloadProfileName + `":"federated",
+		 "` + workloadmeta.AnnotationWorkloadProfileSetHash + `":"sha256:example",
+		 "` + workloadmeta.AnnotationTauClusterGeneration + `":"7"}},
+		 "spec":{"managedBy":"kueue.x-k8s.io/multikueue"}},
+		{"metadata":{"name":"profile-only","labels":{"` + workloadmeta.LabelJob + `":"profile-only"},
+		 "annotations":{"` + workloadmeta.AnnotationWorkloadProfileName + `":"federated"}}},
+		{"metadata":{"name":"queue-name-is-not-identity","labels":{"` + workloadmeta.LabelJob + `":"plain",
+		 "kueue.x-k8s.io/queue-name":"multikueue"}}}
+	]}`)
+	snapshot, err := Board(context.Background(), fakeReader{
+		jobs: jobsJSON, ray: []byte(`{"items":[]}`),
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Run{}
+	for _, run := range snapshot.Runs {
+		byName[run.Name] = run
+	}
+	if byName["managed"].ExecutionTarget != "multiKueue" {
+		t.Fatalf("managed run = %#v", byName["managed"])
+	}
+	for _, name := range []string{"profile-only", "queue-name-is-not-identity"} {
+		if byName[name].ExecutionTarget != "" {
+			t.Fatalf("%s run inferred MultiKueue without managedBy: %#v", name, byName[name])
+		}
 	}
 }

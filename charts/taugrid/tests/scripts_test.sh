@@ -140,6 +140,32 @@ render_namespaces() {
   ' "$1"
 }
 
+render_objects() {
+  awk '
+    BEGIN { RS = "---"; FS = "\n" }
+    {
+      kind = ""
+      name = ""
+      in_metadata = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^kind: /) {
+          kind = substr($i, 7)
+        } else if ($i == "metadata:") {
+          in_metadata = 1
+        } else if (in_metadata && $i ~ /^[^ ]/) {
+          in_metadata = 0
+        } else if (in_metadata && name == "" && $i ~ /^  name: /) {
+          name = substr($i, 9)
+          gsub(/^['\''"]|['\''"]$/, "", name)
+        }
+      }
+      if (kind != "" && name != "") {
+        print kind "\t" name
+      }
+    }
+  ' "$1"
+}
+
 assert_namespaces() {
   local manifest="$1"
   shift
@@ -161,6 +187,24 @@ helm template namespace-check "$TEST_CHART_DIR" \
   --namespace custom-system \
   --include-crds >"$default_manifest"
 assert_namespaces "$default_manifest" custom-system kube-system
+
+for required in \
+  'name: multikueueclusters.kueue.x-k8s.io' \
+  'name: multikueueconfigs.kueue.x-k8s.io' \
+  'manager-clusterprofiles-role' \
+  'manager-secrets-role' \
+  '      - multikueueclusters' \
+  '      - multikueueconfigs' \
+  '--feature-gates=MultiKueue=true'; do
+  grep -Fq -- "$required" "$default_manifest" ||
+    fail "default render is missing the MultiKueue capability: $required"
+done
+if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$default_manifest"); then
+  fail "default render created operator-owned MultiKueue routing objects implicitly"
+fi
+if grep -Ei $'^Secret\t.*(multikueue|worker)' < <(render_objects "$default_manifest"); then
+  fail "default render created operator-owned worker credentials implicitly"
+fi
 
 for deployment in \
   namespace-check-kueue-controller-manager \

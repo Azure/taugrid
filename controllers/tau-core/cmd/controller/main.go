@@ -55,7 +55,6 @@ func main() {
 		setupLog.Error(err, "invalid namespace flags")
 		os.Exit(1)
 	}
-
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
@@ -68,8 +67,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	multiKueuePrerequisites := &corecontroller.KubernetesMultiKueuePrerequisites{
+		Reader: mgr.GetAPIReader(),
+	}
 	if err := (&corecontroller.TauClusterReconciler{
-		Client: mgr.GetClient(),
+		Client:                  mgr.GetClient(),
+		MultiKueuePrerequisites: multiKueuePrerequisites,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TauCluster")
 		os.Exit(1)

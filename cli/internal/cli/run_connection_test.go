@@ -84,6 +84,26 @@ func TestClientDryRunDiscoversDescriptorWithoutActivation(t *testing.T) {
 	}
 }
 
+func TestLiveClientDryRunActivatesConnection(t *testing.T) {
+	options := defaultRunDispatchOptions()
+	options.dryRun = "client"
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace: "sample", ContextName: "aks-flex", KubeconfigPath: "/tmp/tau-kubeconfig",
+	}}
+	got, connection, err := applyLiveRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{StartDir: "/repo"},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 1 || got.workspace != "sample" || got.kubeContext != "aks-flex" || connection.KubeconfigPath == "" {
+		t.Fatalf("calls=%d options=%#v connection=%#v", ensurer.calls, got, connection)
+	}
+}
+
 func TestCatalogClientDryRunUsesParsedDescriptorWithoutActivation(t *testing.T) {
 	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
 	if err != nil {

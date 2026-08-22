@@ -341,9 +341,6 @@ portal:
     # Trusted operator mode reads only these exact team/namespace/LocalQueue
     # scopes. LocalQueue name reuse never correlates teams or namespaces.
     operatorScopes: []
-    # Optional topology policy file for team/lane/gpu-class labels. Empty uses the
-    # image's embedded Azure policy.
-    policyPath: ""
   # Kueue (Live) board: when enabled, the portal reverse-proxies the upstream
   # KueueViz backend/frontend ClusterIP Services (enabled by the per-cluster
   # kueue overlay) same-origin under /api/portal/kueueviz/*. The portal rewrites
@@ -360,9 +357,10 @@ portal:
     # Create the ClusterRole + ClusterRoleBinding granting the portal's
     # ServiceAccount read access to core Services (Ray board discovery), core
     # Nodes (Cluster Nodes board), and Kueue LocalQueues/ClusterQueues/Workloads
-    # (Jobs board). Requires serviceAccount.create=true. Without it, the Jobs,
-    # Ray, and Cluster Nodes boards return 503 (the portal still serves the
-    # shell, Experiments, Cluster Health, and Cost).
+    # (Jobs board), plus get-only access to the singleton TauCluster workload
+    # profile status. Requires serviceAccount.create=true. Without it, the Jobs,
+    # Ray, Cluster Nodes, and profile readiness views degrade while the portal
+    # still serves the shell, Experiments, Cluster Health, and Cost.
     create: false
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.

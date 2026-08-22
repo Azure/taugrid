@@ -199,6 +199,25 @@ func applyAutomaticRunConnection(
 	if options.dryRun == "client" {
 		return applyOfflineRunConnection(options, source)
 	}
+	return applyActivatedRunConnection(ctx, options, source, required, ensurer)
+}
+
+func applyLiveRunConnection(
+	ctx context.Context,
+	options unresolvedRunOptions,
+	source runConnectionSource,
+	ensurer runConnectionEnsurer,
+) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
+	return applyActivatedRunConnection(ctx, options, source, true, ensurer)
+}
+
+func applyActivatedRunConnection(
+	ctx context.Context,
+	options unresolvedRunOptions,
+	source runConnectionSource,
+	required bool,
+	ensurer runConnectionEnsurer,
+) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
 	if options.workspaceExplicit || options.kubeContextExplicit {
 		if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, descriptorFor(source)); err != nil {
 			return options, workspaceconnection.ActiveConnection{}, err

@@ -8,7 +8,6 @@ compute:
 eval: {}
 name: train-model
 policy:
-  gpu_class: any
   namespace: export-ns
   queue: priority-queue
 run:

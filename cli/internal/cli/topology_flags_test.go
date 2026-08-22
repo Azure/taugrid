@@ -40,13 +40,6 @@ func fakeRawKey(args ...string) string {
 }
 
 func TestValidateRenderedQueueChecksEffectiveQueue(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{
-			Name:         "azure.research.eval.gpu",
-			ClusterQueue: "sample-cq",
-		},
-		Options: runtopology.Options{QueueName: "sample-eval"},
-	}
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
 			fakeRawKey("-n", "ray", "get", "localqueue.kueue.x-k8s.io", "sample-eval", "-o", "json"): `{"metadata":{"name":"sample-eval"},"spec":{"clusterQueue":"sample-cq"}}`,
@@ -62,7 +55,7 @@ metadata:
     kueue.x-k8s.io/queue-name: sample-eval
 `)
 
-	if err := validateRenderedQueue(context.Background(), runner, "ray", manifest, jobrender.Options{}, queueValidationPolicyFor(preset, false)); err != nil {
+	if err := validateRenderedQueue(context.Background(), runner, "ray", manifest, jobrender.Options{}, queueValidationPolicy{}); err != nil {
 		t.Fatalf("validateRenderedQueue should accept existing queue: %v", err)
 	}
 	wantCalls := [][]string{
@@ -75,10 +68,6 @@ metadata:
 }
 
 func TestValidateRenderedQueueFailsClearlyWhenMissing(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset:  runtopology.Preset{Name: "azure.research.eval.gpu"},
-		Options: runtopology.Options{QueueName: "research-eval"},
-	}
 	runner := &fakeRawRunner{
 		outputs: map[string]string{},
 		errors: map[string]error{
@@ -90,11 +79,11 @@ func TestValidateRenderedQueueFailsClearlyWhenMissing(t *testing.T) {
     kueue.x-k8s.io/queue-name: research-eval
 `)
 
-	err := validateRenderedQueue(context.Background(), runner, "ray", manifest, jobrender.Options{}, queueValidationPolicyFor(preset, false))
+	err := validateRenderedQueue(context.Background(), runner, "ray", manifest, jobrender.Options{}, queueValidationPolicy{})
 	if err == nil {
 		t.Fatal("expected missing LocalQueue to fail")
 	}
-	for _, want := range []string{"azure.research.eval.gpu", "LocalQueue \"research-eval\"", "namespace \"ray\"", "ask the platform owner to validate preset azure.research.eval.gpu"} {
+	for _, want := range []string{"LocalQueue \"research-eval\"", "namespace \"ray\"", "ask the platform owner"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing LocalQueue error missing %q: %v", want, err)
 		}
@@ -102,10 +91,6 @@ func TestValidateRenderedQueueFailsClearlyWhenMissing(t *testing.T) {
 }
 
 func TestValidateRenderedQueueNamesQueueOverrideWhenMissing(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset:  runtopology.Preset{Name: "azure.research.training.l"},
-		Options: runtopology.Options{QueueName: "research-training"},
-	}
 	runner := &fakeRawRunner{
 		outputs: map[string]string{},
 		errors: map[string]error{
@@ -117,17 +102,14 @@ func TestValidateRenderedQueueNamesQueueOverrideWhenMissing(t *testing.T) {
     kueue.x-k8s.io/queue-name: sample-training
 `)
 
-	err := validateRenderedQueue(context.Background(), runner, "ray", manifest, jobrender.Options{}, queueValidationPolicyFor(preset, false))
+	err := validateRenderedQueue(context.Background(), runner, "ray", manifest, jobrender.Options{}, queueValidationPolicy{})
 	if err == nil {
 		t.Fatal("expected missing override LocalQueue to fail")
 	}
-	for _, want := range []string{"--queue override", "LocalQueue \"sample-training\"", "azure.research.training.l"} {
+	for _, want := range []string{"LocalQueue \"sample-training\"", "namespace \"ray\""} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing override LocalQueue error missing %q: %v", want, err)
 		}
-	}
-	if strings.Contains(err.Error(), "targets LocalQueue") {
-		t.Fatalf("override error should not blame the preset target: %v", err)
 	}
 }
 
@@ -388,13 +370,6 @@ spec:
 }
 
 func TestValidateRenderedWorkspaceQueueChecksTASForJobAndRay(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{
-			Name:         "azure.research.training.l",
-			TopologyName: "default-node-topology",
-		},
-		Options: runtopology.Options{QueueName: "preset-queue"},
-	}
 	manifests := map[string]struct {
 		resourceName string
 		manifest     []byte
@@ -514,7 +489,7 @@ spec:
 					"workspace",
 					workloadCase.manifest,
 					opts,
-					queueValidationPolicyFor(preset, true),
+					queueValidationPolicy{TopologyName: "default-node-topology", CatalogTopologyContract: true},
 				)
 				if tc.wantErr {
 					if err == nil || !strings.Contains(err.Error(), `does not provide topology "default-node-topology"`) {
@@ -531,13 +506,6 @@ spec:
 }
 
 func TestValidateRenderedWorkspaceQueueUsesEffectiveJobAndRayNodeSelectors(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{
-			Name:         "azure.research.training.l",
-			TopologyName: "default-node-topology",
-		},
-		Options: runtopology.Options{QueueName: "preset-queue"},
-	}
 	manifests := map[string][]byte{
 		"managed-job": []byte(`apiVersion: batch/v1
 kind: Job
@@ -603,7 +571,7 @@ spec:
 				"workspace",
 				manifest,
 				opts,
-				queueValidationPolicyFor(preset, true),
+				queueValidationPolicy{TopologyName: "default-node-topology", CatalogTopologyContract: true},
 			)
 			if err == nil || !strings.Contains(err.Error(), "does not provide topology") {
 				t.Fatalf("expected effective selector conflict, got %v", err)
@@ -613,13 +581,6 @@ spec:
 }
 
 func TestValidateRenderedWorkspaceQueueCountsIndexedJobGPUDemand(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{
-			Name:         "azure.research.training.xl",
-			TopologyName: "default-node-topology",
-		},
-		Options: runtopology.Options{QueueName: "preset-queue"},
-	}
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
 			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "workspace-jobqueue", "-o", "json"): `{"metadata":{"name":"workspace-jobqueue"},"spec":{"clusterQueue":"workspace-cq"}}`,
@@ -655,41 +616,10 @@ spec:
 		"workspace",
 		manifest,
 		opts,
-		queueValidationPolicyFor(preset, true),
+		queueValidationPolicy{TopologyName: "default-node-topology", CatalogTopologyContract: true},
 	)
 	if err == nil || !strings.Contains(err.Error(), "workload requests 16") || !strings.Contains(err.Error(), "at most 8") {
 		t.Fatalf("expected indexed Job capacity failure, got %v", err)
-	}
-}
-
-func TestTopologyFlagsApplyToPreservesOverrideWarningOrder(t *testing.T) {
-	// Mirrors the production path: placement intent arrives from the config's
-	// policy block, and "changed" means the config set a non-empty value.
-	dispatch := runDispatchOptions{runPlacement: runPlacement{lane: "large-memory", queue: "sample-large-memory"}}
-	flags := runJobTopologyFlags(dispatch)
-	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{Name: "azure.research.training.l"},
-		Options: runtopology.Options{
-			Team:      "research",
-			Lane:      "training",
-			QueueName: "research-training",
-		},
-	}
-	var opts jobrender.Options
-	warnings, err := flags.applyWithChanged(&opts, preset, changed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.Team != "sample" {
-		t.Fatalf("team = %q, want sample", opts.Team)
-	}
-	want := []string{
-		`warning: --lane="large-memory" overrides preset azure.research.training.l value "training"`,
-		`warning: --queue="sample-large-memory" overrides preset azure.research.training.l queue "research-training"; inferred --team=sample so the Kueue LocalQueue and team intent stay consistent`,
-	}
-	if !reflect.DeepEqual(warnings, want) {
-		t.Fatalf("warnings = %#v, want %#v", warnings, want)
 	}
 }
 
@@ -697,7 +627,7 @@ func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
 	flags := topologyFlags{gpuClass: "a100-nvlink-80gb"}
 	var opts jobrender.Options
 
-	warnings, err := flags.applyWithChanged(&opts, nil, func(string) bool { return false })
+	warnings, err := flags.applyWithChanged(&opts, func(string) bool { return false })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,85 +638,6 @@ func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
 		!strings.Contains(warnings[0], `"a100-nvlink-80gb"`) ||
 		!strings.Contains(warnings[0], `"`+runtopology.GPUClassA10080GB+`"`) {
 		t.Fatalf("warnings=%#v", warnings)
-	}
-}
-
-func TestTopologyFlagsQueueOverrideDisablesPresetTASContract(t *testing.T) {
-	dispatch := runDispatchOptions{runPlacement: runPlacement{queue: "sample-training"}}
-	flags := runJobTopologyFlags(dispatch)
-	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{Name: "azure.research.training.l"},
-		Options: runtopology.Options{
-			QueueName: "jobqueue",
-		},
-		Annotations: map[string]string{
-			workloadmeta.AnnotationKueueTopology: "default-node-topology",
-		},
-	}
-	var opts jobrender.Options
-	if _, err := flags.applyWithChanged(&opts, preset, changed); err != nil {
-		t.Fatal(err)
-	}
-	if !opts.DisableKueueTopologyAnnotations {
-		t.Fatal("queue override retained preset TAS podset annotations")
-	}
-	if got := opts.Annotations[workloadmeta.AnnotationKueueTopology]; got != "" {
-		t.Fatalf("queue override retained preset topology metadata %q", got)
-	}
-}
-
-func TestTopologyFlagsMatchingQueuePreservesPresetTASContract(t *testing.T) {
-	dispatch := runDispatchOptions{runPlacement: runPlacement{queue: "jobqueue"}}
-	flags := runJobTopologyFlags(dispatch)
-	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{Name: "azure.research.training.l"},
-		Options: runtopology.Options{
-			QueueName: "jobqueue",
-		},
-		Annotations: map[string]string{
-			workloadmeta.AnnotationKueueTopology: "default-node-topology",
-		},
-	}
-	var opts jobrender.Options
-	if _, err := flags.applyWithChanged(&opts, preset, changed); err != nil {
-		t.Fatal(err)
-	}
-	if opts.DisableKueueTopologyAnnotations {
-		t.Fatal("matching preset queue disabled TAS podset annotations")
-	}
-	if got := opts.Annotations[workloadmeta.AnnotationKueueTopology]; got != "default-node-topology" {
-		t.Fatalf("matching preset queue topology metadata=%q", got)
-	}
-}
-
-func TestTopologyFlagsAutoQueuePreservesPresetTASContract(t *testing.T) {
-	dispatch := runDispatchOptions{runPlacement: runPlacement{queue: "auto"}}
-	flags := runJobTopologyFlags(dispatch)
-	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{Name: "azure.research.training.l"},
-		Options: runtopology.Options{
-			QueueName: "jobqueue",
-			Placement: "independent",
-		},
-		Annotations: map[string]string{
-			workloadmeta.AnnotationKueueTopology: "default-node-topology",
-		},
-	}
-	var opts jobrender.Options
-	if _, err := flags.applyWithChanged(&opts, preset, changed); err != nil {
-		t.Fatal(err)
-	}
-	if opts.QueueName != "auto" {
-		t.Fatalf("queue = %q, want auto sentinel", opts.QueueName)
-	}
-	if opts.DisableKueueTopologyAnnotations {
-		t.Fatal("auto queue disabled preset TAS annotations before discovery")
-	}
-	if got := opts.Annotations[workloadmeta.AnnotationKueueTopology]; got != "default-node-topology" {
-		t.Fatalf("auto queue removed preset topology metadata %q", got)
 	}
 }
 
@@ -941,25 +792,6 @@ func TestDRAQueueModeUsesParallelQueueUnlessExplicitlyOverridden(t *testing.T) {
 	configureGPUQueueModeWithChanged("dra", &opts, changed)
 	if opts.QueueName != "custom-dra" {
 		t.Fatalf("explicit queue was overwritten: %+v", opts)
-	}
-}
-
-func TestTopologyFlagsApplyManagedFlavorSelector(t *testing.T) {
-	dispatch := runDispatchOptions{}
-	flags := runJobTopologyFlags(dispatch)
-	changed := func(flag string) bool { return runJobTopologyFieldSet(dispatch, flag) }
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{
-			Name:           "azure.research.large-memory.2x",
-			ResourceFlavor: "nd-h200-v5-dra",
-		},
-	}
-	var opts jobrender.Options
-	if _, err := flags.applyWithChanged(&opts, preset, changed); err != nil {
-		t.Fatal(err)
-	}
-	if got := opts.NodeSelector[runtopology.ManagedGPUSeriesLabel]; got != "nd-h200-v5" {
-		t.Fatalf("managed series selector = %q, want nd-h200-v5", got)
 	}
 }
 

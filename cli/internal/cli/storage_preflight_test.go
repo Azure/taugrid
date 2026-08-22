@@ -47,7 +47,7 @@ func TestValidateFinetuneStorageNodeCompatibilityRejectsPinnedIncompatibleGPU(t 
 		workloadmeta.LabelGPUClass + `=a100-80gb`,
 		`flex-a100-scus-01000001`,
 		`driver is registered on non-matching node(s): aks-a10-38546571-vmss000000`,
-		`--node-selector/--gpu-class/--preset`,
+		`policy.profile or node selector`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error missing %q:\n%s", want, got)

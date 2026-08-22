@@ -285,6 +285,7 @@ type resumeCommandHooks struct {
 	validateTarget func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
 	deleteOld      func(context.Context, string, string, string, io.Writer) error
 	executeTarget  func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
+	resolveProfile func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error)
 }
 
 func (h resumeCommandHooks) fetch(
@@ -344,6 +345,19 @@ func (h resumeCommandHooks) validate(
 		return h.validateTarget(parent, target, captureCommand, experiment)
 	}
 	return executeRunTarget(parent, target, captureCommand, experiment)
+}
+
+func (h resumeCommandHooks) profile(
+	ctx context.Context,
+	options unresolvedRunOptions,
+) (unresolvedRunOptions, error) {
+	if h.resolveProfile != nil {
+		return h.resolveProfile(ctx, options)
+	}
+	if strings.TrimSpace(options.workloadProfileSnapshot) != "" {
+		return resolveSnapshotRunWorkloadProfile(ctx, options)
+	}
+	return resolveClusterRunWorkloadProfile(ctx, options)
 }
 
 func runResumeCommand(
@@ -416,6 +430,17 @@ func runResumeCommand(
 		return err
 	}
 	applyResumeOverrides(&targetOptions, routing.Namespace, routing.KubeContext, dryRun)
+	// Status and failure inspection above remain available regardless of the
+	// current profile readiness and applicability checks. Resolve the
+	// replacement profile only after observation, and always before deleting
+	// the failed workload.
+	productionExecution := hooks.executeTarget == nil && hooks.validateTarget == nil
+	if hooks.resolveProfile != nil || productionExecution {
+		targetOptions, err = hooks.profile(cmd.Context(), targetOptions)
+		if err != nil {
+			return fmt.Errorf("resolving current workload profile for replacement: %w", err)
+		}
+	}
 	if err := validateRunDispatchOptions(targetOptions); err != nil {
 		return err
 	}

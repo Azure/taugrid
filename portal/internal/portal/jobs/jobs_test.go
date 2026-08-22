@@ -6,12 +6,13 @@ package jobs
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Azure/taugrid/core/queue"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/workloadmeta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // fakeReader records the arguments it was called with and returns canned JSON,
@@ -47,35 +48,6 @@ func (f *fakeReader) ListWorkloads(_ context.Context, ns string) ([]byte, error)
 	return f.workloadJSON, f.workloadErr
 }
 
-// writeTestPolicy writes a minimal TopologyPolicy whose single preset maps the
-// queue/clusterQueue used by the fixtures below, and returns its path.
-func writeTestPolicy(t *testing.T) string {
-	t.Helper()
-	const policy = `apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata:
-  name: test-jobs
-spec:
-  description: "test policy for the portal jobs board"
-  presets:
-    azure.research.training.l:
-      team: research
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: research-training
-      clusterQueue: team-research-reserved-cq
-      namespace: ray
-`
-	path := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(path, []byte(policy), 0o600); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
-	return path
-}
-
 const (
 	fixtureLocalQueues = `{"items":[
       {"metadata":{"name":"research-training"},"spec":{"clusterQueue":"team-research-reserved-cq"},
@@ -107,8 +79,9 @@ func TestBoardFetchesThreeListsAndAggregates(t *testing.T) {
 		workloadJSON: []byte(fixtureWorkloads),
 	}
 	snap, err := Board(context.Background(), r, Options{
-		Scopes:     []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
-		PolicyPath: writeTestPolicy(t),
+		Scopes:   []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
+		Lane:     "training",
+		GPUClass: "h200",
 	})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
@@ -141,7 +114,7 @@ func TestBoardRejectsMissingScopes(t *testing.T) {
 		clusterJSON:  []byte(`{"items":[]}`),
 		workloadJSON: []byte(`{"items":[]}`),
 	}
-	if _, err := Board(context.Background(), r, Options{PolicyPath: writeTestPolicy(t)}); err == nil {
+	if _, err := Board(context.Background(), r, Options{}); err == nil {
 		t.Fatal("Board succeeded without an explicit scope")
 	}
 }
@@ -153,8 +126,7 @@ func TestBoardReadsOnlyConfiguredScope(t *testing.T) {
 		workloadJSON: []byte(`{"items":[]}`),
 	}
 	_, _ = Board(context.Background(), r, Options{
-		Scopes:     []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
-		PolicyPath: writeTestPolicy(t),
+		Scopes: []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
 	})
 	if len(r.localNS) != 1 || r.localNS[0] != "ray" || len(r.workloadNS) != 1 || r.workloadNS[0] != "ray" {
 		t.Fatalf("namespace not applied: local=%q workload=%q want ray", r.localNS, r.workloadNS)
@@ -168,15 +140,14 @@ func TestBoardRejectsScopeWithoutPolicyGroup(t *testing.T) {
 		workloadJSON: []byte(fixtureWorkloads),
 	}
 	_, err := Board(context.Background(), r, Options{
-		Scopes:     []Scope{{Team: "research", Namespace: "ray", Queue: "other-queue"}},
-		PolicyPath: writeTestPolicy(t),
+		Scopes: []Scope{{Team: "research", Namespace: "ray", Queue: "other-queue"}},
 	})
 	if err == nil {
 		t.Fatal("Board accepted a scope with no matching policy group")
 	}
 }
 
-func TestBoardRejectsPolicyAndLiveLocalQueueClusterQueueMismatch(t *testing.T) {
+func TestBoardUsesLiveLocalQueueClusterQueueWithoutPolicyFallback(t *testing.T) {
 	r := &fakeReader{
 		localJSON: []byte(`{"items":[
 			{"metadata":{"name":"research-training","namespace":"ray"},"spec":{"clusterQueue":"other-cq"}}
@@ -184,12 +155,14 @@ func TestBoardRejectsPolicyAndLiveLocalQueueClusterQueueMismatch(t *testing.T) {
 		clusterJSON:  []byte(fixtureClusterQueues),
 		workloadJSON: []byte(`{"items":[]}`),
 	}
-	_, err := Board(context.Background(), r, Options{
-		Scopes:     []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
-		PolicyPath: writeTestPolicy(t),
+	snapshot, err := Board(context.Background(), r, Options{
+		Scopes: []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
 	})
-	if err == nil {
-		t.Fatal("Board accepted a policy ClusterQueue that differs from the live LocalQueue binding")
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if len(snapshot.Groups) != 1 || snapshot.Groups[0].ClusterQueue != "other-cq" {
+		t.Fatalf("snapshot = %#v, want authoritative live binding", snapshot)
 	}
 }
 
@@ -200,8 +173,7 @@ func TestBoardRejectsMissingLiveLocalQueue(t *testing.T) {
 		workloadJSON: []byte(`{"items":[]}`),
 	}
 	_, err := Board(context.Background(), r, Options{
-		Scopes:     []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
-		PolicyPath: writeTestPolicy(t),
+		Scopes: []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
 	})
 	if err == nil {
 		t.Fatal("Board accepted a configured scope without a live LocalQueue")
@@ -219,8 +191,7 @@ func TestBoardPropagatesFetchError(t *testing.T) {
 		workloadErr: nil,
 	}
 	_, err := Board(context.Background(), r, Options{
-		Scopes:     []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
-		PolicyPath: writeTestPolicy(t),
+		Scopes: []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
 	})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("error = %v, want it to wrap %v", err, sentinel)
@@ -228,37 +199,6 @@ func TestBoardPropagatesFetchError(t *testing.T) {
 }
 
 func TestBoardCorrelatesSharedQueueNameByExplicitTeamAndNamespace(t *testing.T) {
-	const policy = `apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata:
-  name: teams
-spec:
-  presets:
-    team-a.train:
-      team: team-a
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: jobqueue
-      clusterQueue: shared-cq
-      resourceFlavor: gpu
-    team-b.train:
-      team: team-b
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: jobqueue
-      clusterQueue: shared-cq
-      resourceFlavor: gpu
-`
-	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(policyPath, []byte(policy), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	r := &fakeReader{
 		localByNS: map[string][]byte{
 			"team-a": []byte(`{"items":[{"metadata":{"name":"jobqueue","namespace":"team-a"},"spec":{"clusterQueue":"shared-cq"},"status":{"pendingWorkloads":2,"admittedWorkloads":1}}]}`),
@@ -275,7 +215,6 @@ spec:
 			{Team: "team-a", Namespace: "team-a", Queue: "jobqueue"},
 			{Team: "team-b", Namespace: "team-b", Queue: "jobqueue"},
 		},
-		PolicyPath: policyPath,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -292,7 +231,7 @@ spec:
 			t.Fatalf("group %d = %#v, want scope %#v", i, got, want)
 		}
 	}
-	summary := Summarize(snapshot)
+	summary := Summarize(snapshot.Snapshot)
 	if summary.Pending != 5 || summary.Admitted != 5 {
 		t.Fatalf("queue summary = %#v, want pending=5 admitted=5", summary)
 	}
@@ -321,5 +260,141 @@ func TestSummarizeDoesNotAddNamedFlavorsToAggregateClusterQueueQuota(t *testing.
 	}})
 	if summary.GPUUsed != 6 || summary.GPUHeadroom != 10 {
 		t.Fatalf("GPU summary = %#v, want aggregate ClusterQueue quota counted once", summary)
+	}
+}
+
+type fakeProfileReader struct {
+	sets  []profile.ProfileSet
+	errs  []error
+	calls int
+}
+
+func (f *fakeProfileReader) ProfileSet(context.Context) (profile.ProfileSet, error) {
+	index := f.calls
+	f.calls++
+	if index >= len(f.sets) {
+		index = len(f.sets) - 1
+	}
+	var err error
+	if index >= 0 && index < len(f.errs) {
+		err = f.errs[index]
+	}
+	if index < 0 {
+		return profile.ProfileSet{}, err
+	}
+	return f.sets[index], err
+}
+
+func readyProfile(name string, target profile.ExecutionTarget, generation int64, namespaces, teams []string) profile.ResolvedWorkloadProfile {
+	return profile.ResolvedWorkloadProfile{
+		WorkloadProfile: profile.WorkloadProfile{
+			Name: name, ExecutionTarget: target, Placement: profile.PlacementIndependent,
+			DefaultLocalQueue: "research-training", GPUsPerWorker: 1, WorkerCount: 1,
+			Applicability: profile.ProfileApplicability{Namespaces: namespaces, Teams: teams},
+		},
+		Conditions: []metav1.Condition{{
+			Type: profile.ConditionReady, Status: metav1.ConditionTrue, ObservedGeneration: generation,
+		}},
+	}
+}
+
+func profileBoardReader() *fakeReader {
+	return &fakeReader{
+		localJSON: []byte(fixtureLocalQueues), clusterJSON: []byte(fixtureClusterQueues),
+		workloadJSON: []byte(fixtureWorkloads),
+	}
+}
+
+func TestBoardAttachesReadyProfilesWithAuthoritativeMetadata(t *testing.T) {
+	const generation = 17
+	reader := &fakeProfileReader{sets: []profile.ProfileSet{{
+		Generation: generation, ProfileSetHash: "sha256:full-profile-set-hash",
+		Profiles: []profile.ResolvedWorkloadProfile{
+			readyProfile("stable", profile.ExecutionTargetSingleCluster, generation, []string{"ray"}, []string{"research"}),
+			readyProfile("federated", profile.ExecutionTargetMultiKueue, generation, []string{"ray"}, []string{"research"}),
+		},
+	}}}
+	snapshot, err := Board(context.Background(), profileBoardReader(), Options{
+		Scopes:   []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
+		Profiles: reader,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot.WorkloadProfiles
+	if !got.Available || got.Generation != generation || got.ProfileSetHash != "sha256:full-profile-set-hash" ||
+		!got.ReadOnly || got.SelectionEnabled || len(got.ReadyProfiles) != 2 {
+		t.Fatalf("profile availability = %#v", got)
+	}
+	if got.ReadyProfiles[0].ExecutionTarget != profile.ExecutionTargetMultiKueue ||
+		got.ReadyProfiles[1].ExecutionTarget != profile.ExecutionTargetSingleCluster {
+		t.Fatalf("profile execution targets = %#v", got.ReadyProfiles)
+	}
+}
+
+func TestBoardProfileFailuresAndUnreadyProfilesDoNotHideJobs(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		reader  *fakeProfileReader
+		wantErr string
+	}{
+		{"forbidden", &fakeProfileReader{sets: []profile.ProfileSet{{}}, errs: []error{errors.New("access to TauCluster \"cluster\" is forbidden")}}, "forbidden"},
+		{"stale", &fakeProfileReader{sets: []profile.ProfileSet{{}}, errs: []error{errors.New("workload profiles are stale")}}, "stale"},
+		{"unready set", &fakeProfileReader{sets: []profile.ProfileSet{{}}, errs: []error{errors.New("condition WorkloadProfilesReady is False")}}, "Ready is False"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot, err := Board(context.Background(), profileBoardReader(), Options{
+				Scopes:   []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
+				Profiles: tt.reader,
+			})
+			if err != nil {
+				t.Fatalf("Board lost existing jobs: %v", err)
+			}
+			if len(snapshot.Groups) != 1 || snapshot.Groups[0].Pending != 1 {
+				t.Fatalf("groups = %#v, want existing queue observation", snapshot.Groups)
+			}
+			if snapshot.WorkloadProfiles.Available || !strings.Contains(snapshot.WorkloadProfiles.Error, tt.wantErr) {
+				t.Fatalf("profile availability = %#v", snapshot.WorkloadProfiles)
+			}
+		})
+	}
+
+	unready := readyProfile("not-ready", profile.ExecutionTargetSingleCluster, 9, []string{"ray"}, []string{"research"})
+	unready.Conditions[0].Status = metav1.ConditionFalse
+	snapshot, err := Board(context.Background(), profileBoardReader(), Options{
+		Scopes: []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}},
+		Profiles: &fakeProfileReader{sets: []profile.ProfileSet{{
+			Generation: 9, ProfileSetHash: "hash", Profiles: []profile.ResolvedWorkloadProfile{unready},
+		}}},
+	})
+	if err != nil || len(snapshot.Groups) != 1 || len(snapshot.WorkloadProfiles.ReadyProfiles) != 0 {
+		t.Fatalf("unready profile handling = snapshot %#v, error %v", snapshot, err)
+	}
+}
+
+func TestReadProfilesFiltersApplicabilityByNamespaceAndTeam(t *testing.T) {
+	set := profile.ProfileSet{Generation: 4, ProfileSetHash: "hash", Profiles: []profile.ResolvedWorkloadProfile{
+		readyProfile("allowed", profile.ExecutionTargetSingleCluster, 4, []string{"ray"}, []string{"research"}),
+		readyProfile("wrong-namespace", profile.ExecutionTargetSingleCluster, 4, []string{"other"}, []string{"research"}),
+		readyProfile("wrong-team", profile.ExecutionTargetSingleCluster, 4, []string{"ray"}, []string{"other"}),
+	}}
+	got := ReadProfiles(context.Background(), &fakeProfileReader{sets: []profile.ProfileSet{set}},
+		[]Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}}, "")
+	if len(got.ReadyProfiles) != 1 || got.ReadyProfiles[0].Name != "allowed" {
+		t.Fatalf("ready profiles = %#v", got.ReadyProfiles)
+	}
+}
+
+func TestReadProfilesRefreshesOnConsecutiveRequests(t *testing.T) {
+	reader := &fakeProfileReader{sets: []profile.ProfileSet{
+		{Generation: 1, ProfileSetHash: "one"},
+		{Generation: 2, ProfileSetHash: "two"},
+	}}
+	scopes := []Scope{{Team: "research", Namespace: "ray", Queue: "research-training"}}
+	first := ReadProfiles(context.Background(), reader, scopes, "")
+	second := ReadProfiles(context.Background(), reader, scopes, "")
+	if reader.calls != 2 || first.Generation != 1 || second.Generation != 2 ||
+		first.ProfileSetHash != "one" || second.ProfileSetHash != "two" {
+		t.Fatalf("refresh calls=%d first=%#v second=%#v", reader.calls, first, second)
 	}
 }

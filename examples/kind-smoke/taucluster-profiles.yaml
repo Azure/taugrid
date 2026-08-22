@@ -1,0 +1,37 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+spec:
+  workloadProfiles:
+    - name: kind-cpu-job
+      description: Kind CPU Job smoke profile
+      applicability:
+        lanes:
+          - training
+        namespaces:
+          - ray
+      gpusPerWorker: 0
+      workerCount: 1
+      mode: fixed
+      placement: independent
+      defaultLocalQueue: kind-cpu
+      executionTarget: singleCluster
+      priorities:
+        workloadPriorityClassName: taugrid-train-default
+        podPriorityClassName: taugrid-train-default
+    - name: kind-cpu-ray
+      description: Kind CPU RayJob smoke profile
+      applicability:
+        lanes:
+          - training
+        namespaces:
+          - ray
+      gpusPerWorker: 0
+      workerCount: 2
+      mode: fixed
+      placement: multi-node-nccl
+      defaultLocalQueue: kind-cpu
+      executionTarget: singleCluster
+      priorities:
+        workloadPriorityClassName: taugrid-train-default
+        podPriorityClassName: taugrid-train-default

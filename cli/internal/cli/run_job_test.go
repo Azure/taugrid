@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/cli/internal/jobrender"
-	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -49,56 +48,18 @@ func TestResolveRunTargetUsesTypedJobExecutor(t *testing.T) {
 
 func TestResolveDirectJobGPUCountRejectsShapeConflict(t *testing.T) {
 	one := 1
-	if _, err := resolveDirectJobGPUCount(&one, "8x", nil); err == nil || !strings.Contains(err.Error(), "compute.gpus=1 conflicts") {
+	if _, err := resolveDirectJobGPUCount(&one, "8x"); err == nil || !strings.Contains(err.Error(), "compute.gpus=1 conflicts") {
 		t.Fatalf("expected explicit GPU and shape conflict, got %v", err)
 	}
 }
 
-func TestResolveDirectJobGPUCountUsesPresetShape(t *testing.T) {
-	got, err := resolveDirectJobGPUCount(nil, "1xgpu", nil)
+func TestResolveDirectJobGPUCountUsesPolicyShape(t *testing.T) {
+	got, err := resolveDirectJobGPUCount(nil, "1xgpu")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 1 {
-		t.Fatalf("preset/shape GPU count = %d, want 1", got)
-	}
-}
-
-func TestWorkspaceQueueValidationKeepsOnlyPresetTopologyContract(t *testing.T) {
-	preset := &runtopology.ResolvedPreset{
-		Preset: runtopology.Preset{
-			Namespace:      "preset-namespace",
-			ClusterQueue:   "preset-cq",
-			ResourceFlavor: "preset-flavor",
-			TopologyName:   "default-node-topology",
-		},
-		Options: runtopology.Options{
-			QueueName: "preset-queue",
-			Team:      "preset-team",
-			Lane:      "training",
-			GPUClass:  "h200",
-		},
-	}
-	got := queueValidationPolicyFor(preset, true)
-	if got.Preset != nil {
-		t.Fatal("workspace validation retained preset queue ownership")
-	}
-	if got.TopologyName != "default-node-topology" {
-		t.Fatalf("workspace validation policy = %+v", got)
-	}
-	if !got.CatalogTopologyContract {
-		t.Fatal("workspace validation did not retain the catalog topology contract")
-	}
-	if got := queueValidationPolicyFor(preset, false); got.Preset != preset {
-		t.Fatal("non-workspace preset validation must be preserved")
-	}
-	preset.Preset.ResourceFlavor = ""
-	if got := queueValidationPolicyFor(preset, true); !got.CatalogTopologyContract {
-		t.Fatalf("flavorless workspace TAS policy = %+v", got)
-	}
-	preset.Preset.TopologyName = ""
-	if got := queueValidationPolicyFor(preset, true); got.CatalogTopologyContract {
-		t.Fatalf("topology-free workspace preset retained capability flavor: %+v", got)
+		t.Fatalf("policy shape GPU count = %d, want 1", got)
 	}
 }
 
@@ -278,6 +239,7 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 		RunGroupID:   "fwe100",
 	}
 	o.dryRun = "client"
+	attachAuthoritativeProfileForTest(&o)
 	var stdout, stderr bytes.Buffer
 	ctx := withRunExperimentMetadata(context.Background(), o.experiment)
 	err := executeRunJob(ctx, &stdout, &stderr, &runJobRequest{
@@ -351,6 +313,7 @@ spec:
 	options.queue = "training-queue"
 	options.jobGPUs = &zeroGPUs
 	options.script = script
+	options.image = "busybox:1.36"
 	options.dryRun = "client"
 	options.namespace = "ray"
 	options.volumeSpecs = []string{"data=pvc:training-nfs"}
@@ -369,6 +332,7 @@ spec:
 	options.serviceAccountName = "tau-workload"
 	options.azureWorkloadIdentity = true
 	options.disableDefaultPriorities = true
+	attachAuthoritativeProfileForTest(&options)
 
 	target, err := resolveRunTarget(options, "typed-job")
 	if err != nil {
@@ -456,6 +420,7 @@ spec:
 	options.script = script
 	options.dryRun = "client"
 	options.profiler = "nsys"
+	attachAuthoritativeProfileForTest(&options)
 	target, err := resolveRunTarget(options, "profile-no-pvc")
 	if err != nil {
 		t.Fatal(err)
@@ -486,6 +451,8 @@ func TestExecuteRunTargetWritesBackResolvedNamespace(t *testing.T) {
 	options.dryRun = "client"
 	options.namespace = ""
 	options.disableDefaultPriorities = true
+	attachAuthoritativeProfileForTest(&options)
+	options.namespace = ""
 
 	target, err := resolveRunTarget(options, "ns-writeback")
 	if err != nil {
@@ -522,6 +489,7 @@ func TestExecuteRunTargetWritesBackResolvedNamespaceRayJob(t *testing.T) {
 	options.dryRun = "client"
 	options.namespace = "demo"
 	options.disableDefaultPriorities = true
+	attachAuthoritativeProfileForTest(&options)
 
 	target, err := resolveRunTarget(options, "ray-ns-writeback")
 	if err != nil {
@@ -656,13 +624,7 @@ func TestBuildRunJobProfileAnnotationsUsesOutputDir(t *testing.T) {
 	}
 }
 
-// TestExecuteRunJobClientDryRunWithoutQueue asserts that offline client
-// dry-run renders a complete Job even when no queue was supplied. Queue
-// resolution deliberately requires a live cluster (topology_flags.go), so a
-// client dry-run can never carry a resolved LocalQueue; failing the render
-// instead would make the documented "always follow validate with a client
-// dry-run" step impossible for engine=job.
-func TestExecuteRunJobClientDryRunWithoutQueue(t *testing.T) {
+func TestExecuteRunJobClientDryRunUsesAuthoritativeProfileRouting(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "train.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho train\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -673,8 +635,8 @@ func TestExecuteRunJobClientDryRunWithoutQueue(t *testing.T) {
 	o.image = "mcr.microsoft.com/azurelinux/base/python:3.12"
 	o.script = script
 	o.dryRun = "client"
-	// o.queue and o.namespace deliberately left empty: this is the
-	// config-only path, where both are resolved server-side at submit.
+	attachAuthoritativeProfileForTest(&o)
+	setAuthoritativeProfileCardinalityForTest(&o, 0, 1)
 
 	var stdout, stderr bytes.Buffer
 	err := executeRunJob(context.Background(), &stdout, &stderr, &runJobRequest{
@@ -682,7 +644,7 @@ func TestExecuteRunJobClientDryRunWithoutQueue(t *testing.T) {
 		Options: resolveRunJobOptions(o),
 	}, "tau run --config tau.yaml --dry-run client")
 	if err != nil {
-		t.Fatalf("client dry-run must render offline without a queue, got: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("client dry-run with an authoritative profile: %v\nstderr:\n%s", err, stderr.String())
 	}
 	rendered := stdout.String()
 	if !strings.Contains(rendered, "kind: Job") {
@@ -691,34 +653,21 @@ func TestExecuteRunJobClientDryRunWithoutQueue(t *testing.T) {
 	if !strings.Contains(rendered, "suspend: true") {
 		t.Fatalf("client dry-run lost the Kueue suspend contract:\n%s", rendered)
 	}
-	// The placeholder must be visibly a placeholder, not a plausible real
-	// queue name that a reader would mistake for the resolved value.
-	if !strings.Contains(rendered, clientDryRunQueuePlaceholder) {
-		t.Fatalf("client dry-run queue label is not marked as unresolved:\n%s", rendered)
+	if !strings.Contains(rendered, "kueue.x-k8s.io/queue-name: jobqueue") {
+		t.Fatalf("client dry-run did not use the authoritative profile queue:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, clientDryRunNamespacePlaceholder) {
-		t.Fatalf("client dry-run namespace is not marked as unresolved:\n%s", rendered)
+	if !strings.Contains(rendered, "namespace: test-workspace") {
+		t.Fatalf("client dry-run did not preserve the authorized namespace:\n%s", rendered)
 	}
-	// "default" is a real namespace on every cluster. Rendering it here would
-	// read as the resolved answer while being unrelated to where the workload
-	// actually lands.
-	if strings.Contains(rendered, "namespace: default") {
-		t.Fatalf("client dry-run rendered a plausible-but-wrong namespace:\n%s", rendered)
+	if strings.Contains(rendered, "unresolved") {
+		t.Fatalf("authoritative profile routing was replaced by a placeholder:\n%s", rendered)
 	}
-	if !strings.Contains(stderr.String(), "queue and namespace") || !strings.Contains(stderr.String(), "resolved at submit") {
-		t.Fatalf("client dry-run must warn that queue and namespace are unresolved, stderr:\n%s", stderr.String())
+	if strings.Contains(stderr.String(), "resolved at submit") {
+		t.Fatalf("authoritative profile routing was reported as unresolved:\n%s", stderr.String())
 	}
 }
 
-// TestExecuteRunJobServerDryRunStillRequiresQueue is the mutation guard for the
-// test above: the #1263 fail-closed protection against submitting a
-// permanently-suspended Job must survive on every non-client path. Only the
-// offline client path substitutes a visible placeholder.
-//
-// An explicit namespace is what keeps this offline — it makes
-// resolveAccessibleQueueNamespace return before any cluster call, so the render
-// is reached with the queue still empty.
-func TestExecuteRunJobServerDryRunStillRequiresQueue(t *testing.T) {
+func TestExecuteRunJobServerDryRunValidatesAuthoritativeQueue(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "train.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho train\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -730,7 +679,8 @@ func TestExecuteRunJobServerDryRunStillRequiresQueue(t *testing.T) {
 	o.script = script
 	o.dryRun = "server"
 	o.namespace = "team-ns"
-	// o.queue deliberately left empty.
+	attachAuthoritativeProfileForTest(&o)
+	setAuthoritativeProfileCardinalityForTest(&o, 0, 1)
 
 	var stdout, stderr bytes.Buffer
 	err := executeRunJob(context.Background(), &stdout, &stderr, &runJobRequest{
@@ -738,9 +688,9 @@ func TestExecuteRunJobServerDryRunStillRequiresQueue(t *testing.T) {
 		Options: resolveRunJobOptions(o),
 	}, "tau run --config tau.yaml --dry-run server")
 	if err == nil {
-		t.Fatalf("server dry-run must refuse to render a suspended Job with no queue; got:\n%s", stdout.String())
+		t.Fatalf("server dry-run must validate the authoritative queue; got:\n%s", stdout.String())
 	}
-	if !strings.Contains(err.Error(), "Kueue LocalQueue is required") {
+	if !strings.Contains(err.Error(), `LocalQueue "jobqueue"`) {
 		t.Fatalf("server dry-run failed for the wrong reason: %v", err)
 	}
 	if strings.Contains(stdout.String(), clientDryRunQueuePlaceholder) || strings.Contains(stdout.String(), clientDryRunNamespacePlaceholder) {
@@ -764,6 +714,8 @@ func TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn(t *testing.T) {
 	o.dryRun = "client"
 	o.namespace = "team-ns"
 	o.queue = "team-queue"
+	attachAuthoritativeProfileForTest(&o)
+	setAuthoritativeProfileCardinalityForTest(&o, 0, 1)
 
 	var stdout, stderr bytes.Buffer
 	if err := executeRunJob(context.Background(), &stdout, &stderr, &runJobRequest{

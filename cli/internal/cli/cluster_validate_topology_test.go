@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Azure/taugrid/core/kueueapi"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -465,7 +466,7 @@ func TestValidateFlavorDRAReportsResourceSliceAccessError(t *testing.T) {
 	}
 }
 
-func TestValidatePresetTopologyUsesClusterQueueGPUContracts(t *testing.T) {
+func TestValidateWorkloadProfileTopologyUsesResolvedClusterQueueGPUContracts(t *testing.T) {
 	gpu := makeNode("gpu-0", "1", true, "westus2-1")
 	gpu.Spec.Taints = []topologyTaintDoc{{Key: "sku", Value: "gpu", Effect: "NoSchedule"}}
 	runner := &fakeRawRunner{
@@ -482,15 +483,42 @@ func TestValidatePresetTopologyUsesClusterQueueGPUContracts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := validatePresetTopology(context.Background(), &buf, runner, "azure.research.training.l", "test"); err != nil {
-		t.Fatalf("preset validation failed: %v\n%s", err, buf.String())
+	selection := profile.Selection{
+		Generation:     7,
+		ProfileSetHash: strings.Repeat("a", 64),
+		Profile: profile.ResolvedWorkloadProfile{
+			WorkloadProfile: profile.WorkloadProfile{
+				Name:              "research-training",
+				GPUsPerWorker:     1,
+				WorkerCount:       1,
+				Mode:              profile.ModeFixed,
+				Placement:         profile.PlacementIndependent,
+				DefaultLocalQueue: "jobqueue",
+				ExecutionTarget:   profile.ExecutionTargetSingleCluster,
+				Priorities: profile.ProfilePriorities{
+					WorkloadPriorityClassName: "taugrid-default",
+					PodPriorityClassName:      "taugrid-default",
+				},
+			},
+			LocalQueues: []profile.ResolvedLocalQueue{{
+				Namespace: "taugrid-default", Name: "jobqueue", ClusterQueue: "tau-cq",
+			}},
+			ClusterQueues:           []string{"tau-cq"},
+			ResourceFlavors:         []string{"cpu", "generic-gpu"},
+			Topologies:              []string{"default-node-topology"},
+			WorkloadPriorityClasses: []string{"taugrid-default"},
+			PodPriorityClasses:      []string{"taugrid-default"},
+		},
+	}
+	if err := validateResolvedWorkloadProfileTopology(context.Background(), &buf, runner, selection, "test"); err != nil {
+		t.Fatalf("profile validation failed: %v\n%s", err, buf.String())
 	}
 	output := buf.String()
 	if !strings.Contains(output, "resourceflavor generic-gpu:") || strings.Contains(output, "resourceflavor cpu:") {
-		t.Fatalf("preset should validate only positive GPU contracts:\n%s", output)
+		t.Fatalf("profile should validate only resolved positive GPU contracts:\n%s", output)
 	}
 	if !strings.Contains(output, "summary: 8 passed, 0 warnings, 0 errors") {
-		t.Fatalf("unexpected preset summary:\n%s", output)
+		t.Fatalf("unexpected profile summary:\n%s", output)
 	}
 }
 
@@ -604,7 +632,7 @@ func TestValidateTopologyCLIHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--help failed: %v\n%s", err, out)
 	}
-	for _, want := range []string{"preset", "cluster-queue", "context", "ResourceFlavor"} {
+	for _, want := range []string{"profile", "context", "ResourceFlavor", "TauCluster"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q", want)
 		}

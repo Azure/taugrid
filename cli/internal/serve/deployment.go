@@ -131,6 +131,8 @@ type DeploymentOptions struct {
 	RuntimePip   []string
 	Ports        []int
 	VolumeMounts []VolumeMount
+	Labels       map[string]string
+	Annotations  map[string]string
 
 	InitContainers []Container
 	Sidecars       []Container
@@ -196,20 +198,24 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		return nil, errors.New("render Kueue-managed Deployment: Kueue LocalQueue is required")
 	}
 
-	deployLabels := map[string]any{
-		"app":                     o.Name,
-		workloadmeta.LabelService: o.Name,
-		workloadmeta.LabelProfile: p.Name,
-	}
-	podLabels := map[string]any{
-		"app":                     o.Name,
-		workloadmeta.LabelService: o.Name,
-	}
+	deployLabels := stringMapToAny(o.Labels)
+	deployLabels["app"] = o.Name
+	deployLabels[workloadmeta.LabelService] = o.Name
+	deployLabels[workloadmeta.LabelProfile] = p.Name
+	podLabels := stringMapToAny(o.Labels)
+	podLabels["app"] = o.Name
+	podLabels[workloadmeta.LabelService] = o.Name
+	podLabels[workloadmeta.LabelProfile] = p.Name
 	for k, v := range gpuLabels {
 		deployLabels[k] = v
 		podLabels[k] = v
 	}
-	podAnnotations := stringMapToAny(gpuAnnotations)
+	rootAnnotations := stringMapToAny(o.Annotations)
+	podAnnotations := stringMapToAny(o.Annotations)
+	for k, v := range gpuAnnotations {
+		rootAnnotations[k] = v
+		podAnnotations[k] = v
+	}
 	if kueueManaged {
 		deployLabels["kueue.x-k8s.io/queue-name"] = queueName
 		podLabels["kueue.x-k8s.io/queue-name"] = queueName
@@ -311,7 +317,7 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 			"name":        o.Name,
 			"namespace":   o.Namespace,
 			"labels":      deployLabels,
-			"annotations": stringMapToAny(gpuAnnotations),
+			"annotations": rootAnnotations,
 		},
 		"spec": deploySpec,
 	}
@@ -322,7 +328,7 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		meta := tmpl["metadata"].(map[string]any)
 		delete(meta, "annotations")
 	}
-	if len(gpuAnnotations) == 0 {
+	if len(rootAnnotations) == 0 {
 		delete(deployment["metadata"].(map[string]any), "annotations")
 	}
 

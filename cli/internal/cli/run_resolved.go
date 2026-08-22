@@ -74,7 +74,19 @@ type resolvedRunManagedWorkflowOptions struct {
 
 func cloneRunPlacement(o runPlacement) runPlacement {
 	o.nodeSelectors = slices.Clone(o.nodeSelectors)
+	o.explicitPolicyFields = cloneStringBoolMap(o.explicitPolicyFields)
 	return o
+}
+
+func cloneStringBoolMap(in map[string]bool) map[string]bool {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]bool, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func cloneRunContainerRuntime(o runContainerRuntime) runContainerRuntime {

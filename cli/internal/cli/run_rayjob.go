@@ -29,7 +29,7 @@ import (
 //
 // The script stays a normal Ray program: it imports ray.train, configures a
 // TorchTrainer/ScalingConfig, and calls fit(). Tau owns only the cluster
-// contract — RayJob rendering, Kueue queue/preset selection, storage, status
+// contract — RayJob rendering, TauCluster profile selection, storage, status
 // handoff, and kubectl submission.
 // maxProjectArchiveInputBytes bounds what run.working_dir may sweep up before
 // compression. The archive is embedded in the workload spec, so an accidental
@@ -110,40 +110,30 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 
 	topo := resolvedRunTopologyFlags(o.runPlacement)
 	topoChanged := func(flag string) bool { return resolvedRunTopologyFieldSet(o.runPlacement, flag) }
-	resolvedProfileName, preset, warnings, err := topo.resolvePreset(o.profileName)
-	if err != nil {
+	selected := o.selectedWorkloadProfile
+	if err := validateSelectedWorkloadProfileMode(selected, o.dryRun); err != nil {
 		return err
 	}
-	if preset != nil && !namespaceExplicit && preset.Preset.Namespace != "" {
-		namespace = preset.Preset.Namespace
-	}
-	if preset != nil && normalizedGPUResourceMode == manifest.GPUResourceModeDRA {
-		draPreset := runtopology.WithDRAQueue(*preset)
-		preset = &draPreset
-	}
+	warnings := []string{}
 	topologyHolder := jobrender.Options{}
-	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&topologyHolder, preset, topoChanged, o.workspaceQueueResolved)
+	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&topologyHolder, topoChanged, o.workspaceQueueResolved)
 	if err != nil {
 		return err
 	}
 	configureGPUQueueModeWithChanged(normalizedGPUResourceMode, &topologyHolder, topoChanged)
-	if o.workspaceQueueResolved {
-		makeWorkspaceQueueAuthoritative(&topologyHolder)
-	}
 	nodeSelector, err = mergeNodeSelectors(nodeSelector, topologyHolder.NodeSelector)
 	if err != nil {
 		return err
 	}
 	warnings = append(warnings, topoWarnings...)
 
-	gpuDemand := rayJobRequestedGPUCount(o.workers, o.gpusPerWorker)
-	p := resourceProfileForRender(resolvedProfileName, preset, topo.resourceProfileOptions(), gpuDemand)
+	p := selected.Render
 	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
 	var runner *kube.Runner
 	if o.dryRun != "client" {
 		runner = kube.New(kubeContext)
 	}
-	allowImplicitAuto := preset == nil && resolvedProfileName == ""
+	allowImplicitAuto := false
 	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &namespace, &topologyHolder, o.dryRun, "rayjobs.ray.io", allowImplicitAuto)
 	if err == nil && o.dryRun == "client" && strings.TrimSpace(namespace) == "" {
 		// Namespace resolution needs a live cluster, so an offline client
@@ -166,7 +156,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 		}
 	}
 	warnings = append(warnings, resolveWarnings...)
-	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, preset, allowImplicitAuto, o.dryRun)
+	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, allowImplicitAuto, o.dryRun)
 
 	capture := buildRayJobCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.workers, o.gpusPerWorker, dataPVC, o.configHash)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
@@ -213,6 +203,10 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 		}
 		annotations[experiment.AnnotationExperimentSource] = "stellar"
 		annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
+	}
+	labels, annotations, err = stampSelectedWorkloadProfile(labels, annotations, selected)
+	if err != nil {
+		return err
 	}
 
 	projectArchive, scriptName, err := buildResolvedProjectArchive(o)
@@ -296,7 +290,15 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
-		rendered, err = prepareGeneratedQueueTopology(ctx, runner, namespace, rendered, &topologyHolder, queueValidationPolicyFor(preset, o.workspaceQueueResolved), renderRayJob)
+		rendered, err = prepareGeneratedQueueTopology(
+			ctx,
+			runner,
+			namespace,
+			rendered,
+			&topologyHolder,
+			queueValidationPolicy{ClusterQueue: selected.ClusterQueue},
+			renderRayJob,
+		)
 		if err != nil {
 			return err
 		}
@@ -324,7 +326,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 		return err
 	}
 	if o.dryRun == "" {
-		fmt.Fprint(stdout, formatRayJobSubmitHandoff(name, namespace, kubeContext, preset))
+		fmt.Fprint(stdout, formatRayJobSubmitHandoff(name, namespace, kubeContext))
 	}
 	return nil
 }

@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,8 +15,12 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/kube"
-	runtopology "github.com/Azure/taugrid/core/topology"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 )
+
+var newServeRunner = func(kubeContext string) kubeRawRunner {
+	return kube.New(kubeContext)
+}
 
 // newServeCmd: north-star §1 / §5 — deploy a model endpoint as a
 // KubeRay RayService.
@@ -23,7 +28,7 @@ import (
 // V0 implementation:
 //   - deploy: real. Renders RayService CR with Kueue queue label, DRA
 //     claim, profile scheduling, and Serve v2 config. Reuses submit's
-//     --dry-run=client contract for offline inspection.
+//     --dry-run=client contract for connected, authoritative inspection.
 //   - status: real thin wrapper around `kubectl get rayservice`.
 //   - delete: real thin wrapper around `kubectl delete rayservice`.
 //   - scale:  stub. num_replicas live-edit on a RayService requires
@@ -137,7 +142,7 @@ Examples:
 			if kind != "rayservice" && kind != "deployment" {
 				return fmt.Errorf("--kind must be one of: rayservice, deployment")
 			}
-			if gpus < 0 {
+			if cmd.Flags().Changed("gpus") && gpus < 0 {
 				return fmt.Errorf("--gpus must be >= 0")
 			}
 			if maxReplicas < 0 {
@@ -164,22 +169,40 @@ Examples:
 				}
 			}
 
-			var runner *kube.Runner
-			if dryRun != "client" {
-				runner = kube.New(kubeContext)
-			}
-			target, warning, err := resolveServeTarget(
-				cmd.Context(), runner, namespace, dryRun, serveWorkloadResource(kind),
+			runner := newServeRunner(kubeContext)
+			target, _, err := resolveServeTarget(
+				cmd.Context(), runner, namespace, serveWorkloadResource(kind),
 			)
 			if err != nil {
 				return err
 			}
-			if warning != "" {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", warning)
-			}
 			ns := target.Namespace
 
-			p := resourceProfileForRender(profileName, nil, runtopology.Options{Lane: "serve", QueueName: target.Queue}, gpus)
+			client, err := newClusterProfileClient(kubeContext)
+			if err != nil {
+				return err
+			}
+			var explicitGPUs *int
+			if cmd.Flags().Changed("gpus") {
+				explicitGPUs = &gpus
+			}
+			p, selected, err := selectServeWorkloadProfile(
+				cmd.Context(),
+				profile.NewClusterProvider(client),
+				profileName,
+				ns,
+				target.Team,
+				target.Queue,
+				target.ClusterQueue,
+				explicitGPUs,
+			)
+			if err != nil {
+				return err
+			}
+			labels, annotations, err := stampSelectedWorkloadProfile(nil, nil, selected)
+			if err != nil {
+				return err
+			}
 			env, envErr := parseEnvKV(envKV)
 			if envErr != nil {
 				return envErr
@@ -271,6 +294,8 @@ Examples:
 					Volumes:      vols,
 					VolumeMounts: mounts,
 					Autoscaling:  autoscaling,
+					Labels:       labels,
+					Annotations:  annotations,
 				})
 			case "deployment":
 				inits, ierr := parseContainerSpecs(initSpecs, "--init")
@@ -301,6 +326,8 @@ Examples:
 					ServicePort:       servicePort,
 					ServiceTargetPort: serviceTarget,
 					Autoscaling:       autoscaling,
+					Labels:            labels,
+					Annotations:       annotations,
 				})
 			}
 			if err != nil {
@@ -331,7 +358,7 @@ Examples:
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&profileName, "profile", "", "profile name (required, e.g. model-serve)")
+	cmd.Flags().StringVar(&profileName, "profile", "", "ready TauCluster workload profile to authorize and render (required)")
 	cmd.Flags().StringVar(&kind, "kind", "rayservice", "serving kind: rayservice|deployment")
 	cmd.Flags().StringVar(&image, "image", "", "container image (overrides profile image)")
 	cmd.Flags().IntVar(&replicas, "replicas", 1, "override Ray Serve deployment replicas")
@@ -361,13 +388,106 @@ Examples:
 	cmd.Flags().StringVar(&argsStr, "args", "", "extra container args (space-separated; e.g. \"--model /ckpt --quantize awq\")")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
-	cmd.Flags().IntVar(&gpus, "gpus", 1, "GPU count per replica (0 for CPU-only serving)")
+	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count per serving pod; defaults to the selected TauCluster workload profile and must match it when set")
 	cmd.Flags().IntVar(&minReplicas, "min-replicas", 1, "minimum replica count for autoscaling (requires --max-replicas)")
 	cmd.Flags().IntVar(&maxReplicas, "max-replicas", 0, "maximum replica count; >0 enables autoscaling (mutually exclusive with --replicas)")
 	cmd.Flags().IntVar(&targetQPS, "target-qps", 0, "target QPS per replica for autoscaling (0 = CPU-utilization-only for deployment, default 5 for rayservice)")
 	cmd.Flags().IntVar(&scaleDownSec, "scale-down-delay", 300, "scale-down stabilization window in seconds")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	return cmd
+}
+
+func selectServeWorkloadProfile(
+	ctx context.Context,
+	provider *profile.Provider,
+	profileName, namespace, team, resolvedQueue, resolvedClusterQueue string,
+	explicitGPUs *int,
+) (profile.Profile, *selectedWorkloadProfile, error) {
+	set, err := provider.ProfileSet(ctx)
+	if err != nil {
+		return profile.Profile{}, nil, err
+	}
+	lane, err := serveProfileLane(set, profileName)
+	if err != nil {
+		return profile.Profile{}, nil, err
+	}
+	selection, err := set.Select(profile.SelectionRequest{
+		Name:      profileName,
+		Namespace: namespace,
+		Team:      team,
+		Lane:      lane,
+	})
+	if err != nil {
+		return profile.Profile{}, nil, err
+	}
+	if selection.Profile.WorkerCount != 1 {
+		return profile.Profile{}, nil, fmt.Errorf(
+			"authoritative workload profile %q has workerCount=%d, but serving supports exactly one profile worker per serving pod",
+			selection.Profile.Name,
+			selection.Profile.WorkerCount,
+		)
+	}
+	renderProfile, err := selection.Profile.RenderProfile(namespace, team, lane)
+	if err != nil {
+		return profile.Profile{}, nil, fmt.Errorf("convert workload profile %q for serving: %w", selection.Profile.Name, err)
+	}
+	if targetQueue := strings.TrimSpace(resolvedQueue); targetQueue != strings.TrimSpace(renderProfile.Queue) {
+		return profile.Profile{}, nil, fmt.Errorf(
+			"resolved platform LocalQueue %q conflicts with authoritative workload profile %q queue %q",
+			targetQueue,
+			selection.Profile.Name,
+			renderProfile.Queue,
+		)
+	}
+	clusterQueue, err := selection.Profile.ClusterQueueFor(namespace, renderProfile.Queue)
+	if err != nil {
+		return profile.Profile{}, nil, fmt.Errorf("resolve authoritative serving queue binding: %w", err)
+	}
+	if actual := strings.TrimSpace(resolvedClusterQueue); actual != clusterQueue {
+		return profile.Profile{}, nil, fmt.Errorf(
+			"resolved platform LocalQueue %q points to ClusterQueue %q, but authoritative workload profile %q expects %q",
+			renderProfile.Queue,
+			actual,
+			selection.Profile.Name,
+			clusterQueue,
+		)
+	}
+	if explicitGPUs != nil && *explicitGPUs != int(selection.Profile.GPUsPerWorker) {
+		return profile.Profile{}, nil, fmt.Errorf(
+			"--gpus=%d conflicts with authoritative workload profile %q gpusPerWorker=%d",
+			*explicitGPUs,
+			selection.Profile.Name,
+			selection.Profile.GPUsPerWorker,
+		)
+	}
+	selected := &selectedWorkloadProfile{
+		Selection:    selection,
+		Render:       renderProfile,
+		ClusterQueue: clusterQueue,
+	}
+	return renderProfile, selected, nil
+}
+
+func serveProfileLane(set profile.ProfileSet, profileName string) (string, error) {
+	name := strings.TrimSpace(profileName)
+	for _, candidate := range set.Profiles {
+		if candidate.Name != name {
+			continue
+		}
+		switch len(candidate.Applicability.Lanes) {
+		case 0:
+			return "", nil
+		case 1:
+			return candidate.Applicability.Lanes[0], nil
+		default:
+			return "", fmt.Errorf(
+				"workload profile %q authorizes multiple lanes (%s); serving requires a profile with exactly one lane",
+				candidate.Name,
+				strings.Join(candidate.Applicability.Lanes, ", "),
+			)
+		}
+	}
+	return "", fmt.Errorf("workload profile %q is unavailable", name)
 }
 
 type serveCheckpointRef struct {

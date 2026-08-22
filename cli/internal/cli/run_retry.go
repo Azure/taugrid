@@ -35,6 +35,7 @@ type retryLoopOptions struct {
 type retryHooks struct {
 	waitForTerminal func() (status.Snapshot, terminalState, error)
 	deleteWorkload  func() error
+	prepareResubmit func(attempt int, reason string) error
 	resubmit        func(attempt int, reason string) error
 	emitEvent       func(attempt int, reason string, message string) error
 	sleep           func(d time.Duration) error
@@ -49,6 +50,8 @@ func retryLoop(cmd *cobra.Command, opts retryLoopOptions) error {
 		return err
 	}
 	w := cmd.OutOrStdout()
+	var preparedTarget resolvedRunTarget
+	var preparedExperiment runExperimentMetadata
 
 	hooks := retryHooks{
 		waitForTerminal: func() (status.Snapshot, terminalState, error) {
@@ -57,7 +60,7 @@ func retryLoop(cmd *cobra.Command, opts retryLoopOptions) error {
 		deleteWorkload: func() error {
 			return deleteWorkloadAndWaitForManagerCleanup(cmd.Context(), r, opts.name, ns, w, opts.cleanup, newManagerCleanupHooks(r, ns, opts.name))
 		},
-		resubmit: func(attempt int, reason string) error {
+		prepareResubmit: func(attempt int, reason string) error {
 			checkpointDir := opts.checkpointPath
 			if checkpointDir == "" {
 				checkpointDir = storage.DurableFinetuneDir(opts.name)
@@ -67,15 +70,33 @@ func retryLoop(cmd *cobra.Command, opts retryLoopOptions) error {
 			retryDispatch.artifactPublicationID = ""
 			retryDispatch.submissionID = ""
 			retryDispatch.nameFromConfig = true
+			var err error
+			if strings.TrimSpace(retryDispatch.workloadProfileSnapshot) != "" {
+				retryDispatch, err = resolveSnapshotRunWorkloadProfile(cmd.Context(), retryDispatch)
+			} else {
+				retryDispatch, err = resolveClusterRunWorkloadProfile(cmd.Context(), retryDispatch)
+			}
+			if err != nil {
+				return fmt.Errorf("resolving current workload profile for retry: %w", err)
+			}
 			if err := validateRunDispatchOptions(retryDispatch); err != nil {
 				return fmt.Errorf("validating retry dispatch: %w", err)
 			}
-			target, err := resolveRunTarget(retryDispatch, opts.name)
+			preparedTarget, err = resolveRunTarget(retryDispatch, opts.name)
 			if err != nil {
 				return err
 			}
+			preparedExperiment = retryDispatch.experiment
+			return nil
+		},
+		resubmit: func(attempt int, _ string) error {
+			if preparedTarget == nil {
+				return fmt.Errorf("retry replacement workload was not prepared")
+			}
 			captureCommand := fmt.Sprintf("tau run --config %s (retry %d/%d)", opts.configPath, attempt, opts.maxRetries)
-			return executeRunTarget(cmd, target, captureCommand, retryDispatch.experiment)
+			err := executeRunTarget(cmd, preparedTarget, captureCommand, preparedExperiment)
+			preparedTarget = nil
+			return err
 		},
 		emitEvent: func(attempt int, reason string, message string) error {
 			return emitRetryEvent(cmd.Context(), r, ns, opts.name, attempt, reason, message)
@@ -152,6 +173,11 @@ func retryLoopWithHooks(w io.Writer, opts retryLoopOptions, hooks retryHooks) er
 			}
 		}
 
+		if hooks.prepareResubmit != nil {
+			if err := hooks.prepareResubmit(attempt, reason.String()); err != nil {
+				return fmt.Errorf("preparing retry %d/%d before deleting failed workload: %w", attempt, opts.maxRetries, err)
+			}
+		}
 		fmt.Fprintf(w, "deleting failed workload %s/%s...\n", ns, opts.name)
 		if err := hooks.deleteWorkload(); err != nil {
 			return fmt.Errorf("deleting workload for retry: %w", err)

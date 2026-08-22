@@ -21,6 +21,17 @@ helm upgrade --install taugrid \
 
 Use `tau cluster explain-values` to print the full field reference.
 
+## MultiKueue
+
+The supported TauGrid install enables Kueue's MultiKueue capability by default,
+including its CRDs, controller feature gate, and prerequisite RBAC. It does not
+create operator-owned worker credentials, `MultiKueueCluster`,
+`MultiKueueConfig`, `AdmissionCheck`, queue routing, or `multiKueue` workload
+profiles. Operators provision those resources explicitly for their topology and
+tenant isolation policy.
+See [Multi-cluster execution](../../site/content/en/docs/operations/multicluster.md)
+for isolation, tenant authorization, and rollback.
+
 ## Components
 
 | Component | Condition | What it provides |
@@ -94,7 +105,7 @@ flavors; do not retain the generic GPU flavor alongside them.
 When topology is enabled, only GPU flavors carry `topologyName` and the
 `kueue.x-k8s.io/podset-required-topology` resource-metadata annotation. Connected
 Tau submission copies that requirement to generated GPU pod templates when the
-workload has no explicit placement policy. Explicit topology policy remains
+workload has no explicit placement request. Explicit placement remains
 authoritative, and raw Kubernetes manifests are never rewritten. The CPU/memory
 flavor remains non-TAS so CPU-only workloads can be admitted.
 
@@ -214,6 +225,7 @@ for the complete reference.
 | `tau-core-controller.image.repository` | string | `mcr.microsoft.com/aks/ai-runtime/tau-core-controller` | Controller image |
 | `tau-core-controller.tauCluster.nodeLabelRules` | list | reviewed AKS GPU catalog | VM-size rules that reconcile GPU class and series labels |
 | `tau-core-controller.tauCluster.extraNodeLabelRules` | list | `[]` | Additional cluster-specific GPU label rules |
+| `tau-core-controller.tauCluster.workloadProfiles` | list | reviewed single-cluster catalog | Complete platform workload-profile catalog; Helm list overrides replace the defaults |
 
 The controller watches the standard `node.kubernetes.io/instance-type` label
 and continuously reconciles both label contracts on current and future nodes:

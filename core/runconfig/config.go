@@ -179,7 +179,6 @@ type Compute struct {
 type Policy struct {
 	Workspace                string            `yaml:"workspace"`
 	Namespace                string            `yaml:"namespace"`
-	Preset                   string            `yaml:"preset"`
 	Profile                  string            `yaml:"profile"`
 	Queue                    string            `yaml:"queue"`
 	Team                     string            `yaml:"team"`
@@ -190,12 +189,12 @@ type Policy struct {
 	Shape                    string            `yaml:"shape"`
 	Priority                 string            `yaml:"priority"`
 	PriorityTier             string            `yaml:"priority_tier"`
-	TopologyPolicy           string            `yaml:"topology_policy"`
+	WorkloadProfileSnapshot  string            `yaml:"workload_profile_snapshot"`
 	WorkloadPriorityClass    string            `yaml:"workload_priority_class"`
 	PodPriorityClass         string            `yaml:"pod_priority_class"`
 	NodeSelector             map[string]string `yaml:"node_selector"`
 	ClearNodeSelector        bool              `yaml:"clear_node_selector"`
-	DisableDefaultPriorities bool              `yaml:"disable_default_priorities"`
+	DisableDefaultPriorities *bool             `yaml:"disable_default_priorities"`
 }
 
 type Storage struct {
@@ -350,7 +349,8 @@ func parseWithDiagnostics(raw []byte, source string) (Config, []string, error) {
 		for _, key := range unknown {
 			warnings = append(warnings, describeUnknownKey(key, source))
 		}
-		return projection.config(), warnings, nil
+		cfg := projection.config()
+		return cfg, warnings, nil
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)

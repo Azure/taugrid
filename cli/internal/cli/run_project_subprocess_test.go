@@ -22,6 +22,10 @@ func TestTauRoutingHelperProcess(t *testing.T) {
 	if os.Getenv("TAU_ROUTING_HELPER") != "1" {
 		return
 	}
+	installClusterProfileClientForTest(
+		t,
+		resolvedWorkloadProfileForTest("test-routing", "jobqueue", 0, 1),
+	)
 	separator := -1
 	for index, arg := range os.Args {
 		if arg == "--" {
@@ -314,6 +318,8 @@ policy:
 			"run",
 			"--config",
 			filepath.Join(linkDir, "tau.yaml"),
+			"--context",
+			"operator-context",
 			"--dry-run=client",
 		)
 		if result.err != nil || !strings.Contains(result.stdout, "name: mixed-boundary") {
@@ -376,6 +382,8 @@ policy:
 			"run",
 			"--config",
 			filepath.Join(linkDir, "tau.yaml"),
+			"--context",
+			"operator-context",
 			"--dry-run=client",
 		)
 		if result.err != nil || !strings.Contains(result.stdout, "name: inverse-boundary") {

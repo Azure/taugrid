@@ -4,6 +4,7 @@
 package v1alpha1
 
 import (
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -32,14 +33,16 @@ const (
 	ClusterPhaseReady    = "Ready"
 	ClusterPhaseDegraded = "Degraded"
 
-	ConditionReady             = "Ready"
-	ConditionNodesReady        = "NodesReady"
-	ConditionQueuesReady       = "QueuesReady"
-	ConditionWorkspacesReady   = "WorkspacesReady"
-	ConditionObserveOnly       = "ObserveOnly"
-	ConditionOwnershipConflict = "OwnershipConflict"
-	ConditionReconcilePaused   = "ReconcilePaused"
-	ConditionDeletionBlocked   = "DeletionBlocked"
+	ConditionReady                 = "Ready"
+	ConditionNodesReady            = "NodesReady"
+	ConditionQueuesReady           = "QueuesReady"
+	ConditionWorkspacesReady       = "WorkspacesReady"
+	ConditionWorkloadProfilesReady = "WorkloadProfilesReady"
+	ConditionMultiKueueReady       = "MultiKueueReady"
+	ConditionObserveOnly           = "ObserveOnly"
+	ConditionOwnershipConflict     = "OwnershipConflict"
+	ConditionReconcilePaused       = "ReconcilePaused"
+	ConditionDeletionBlocked       = "DeletionBlocked"
 
 	PrincipalProviderEntra  = "entra"
 	PrincipalProviderGitHub = "github"
@@ -152,6 +155,11 @@ type TauClusterSpec struct {
 	Queues TauClusterQueuesSpec `json:"queues,omitempty"`
 	// +kubebuilder:default={}
 	WorkspaceDefaults TauClusterWorkspaceDefaults `json:"workspaceDefaults,omitempty"`
+	// WorkloadProfiles declares stable workload intent. Live quota, capacity,
+	// flavor selectors, and topology selectors are resolved into status instead.
+	// +listType=map
+	// +listMapKey=name
+	WorkloadProfiles []profile.WorkloadProfile `json:"workloadProfiles,omitempty"`
 }
 
 type TauClusterSectionStatus struct {
@@ -172,11 +180,12 @@ type TauManagedResourceStatus struct {
 
 type TauClusterStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Ready;Degraded
-	Phase              string                  `json:"phase,omitempty"`
-	ObservedGeneration int64                   `json:"observedGeneration,omitempty"`
-	DesiredStateHash   string                  `json:"desiredStateHash,omitempty"`
-	Nodes              TauClusterSectionStatus `json:"nodes,omitempty"`
-	Queues             TauClusterSectionStatus `json:"queues,omitempty"`
+	Phase              string                   `json:"phase,omitempty"`
+	ObservedGeneration int64                    `json:"observedGeneration,omitempty"`
+	DesiredStateHash   string                   `json:"desiredStateHash,omitempty"`
+	Nodes              TauClusterSectionStatus  `json:"nodes,omitempty"`
+	Queues             TauClusterSectionStatus  `json:"queues,omitempty"`
+	WorkloadProfiles   profile.ProfileSetStatus `json:"workloadProfiles,omitempty"`
 	// +listType=atomic
 	ManagedResources []TauManagedResourceStatus `json:"managedResources,omitempty"`
 	// +listType=map

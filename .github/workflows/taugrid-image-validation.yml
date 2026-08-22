@@ -62,7 +62,7 @@ jobs:
             dockerfile: images/taugrid-portal/Dockerfile
           - name: Tau core controller
             image: tau-core-controller
-            context: controllers/tau-core
+            context: .
             dockerfile: images/tau-core-controller/Dockerfile
     steps:
       - name: Check out repository

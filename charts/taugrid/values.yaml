@@ -73,6 +73,10 @@ baselineQueue:
             nominalQuota: "1000"
 
 kueue:
+  # TauGrid installs the Kueue MultiKueue capability by default. Operators still
+  # own worker credentials, routing objects, and multi-cluster queue policy.
+  aksExtension:
+    enableMultiKueue: true
   controllerManager:
     manager:
       image:

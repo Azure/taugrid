@@ -10,17 +10,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/queue"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/Azure/taugrid/portal/internal/expapi"
 	"github.com/Azure/taugrid/portal/internal/portal/jobs"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // newTestServer builds a portal server backed by a Kusto-source Stellar so the
@@ -411,82 +411,11 @@ func (stubJobsReader) ListWorkloads(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[]}`), nil
 }
 
-// writeEmbeddedPolicy writes a minimal TopologyPolicy so the jobs handler does
-// not depend on the repo's in-tree policy being reachable from the test CWD.
-func writeEmbeddedPolicy(t *testing.T) string {
-	t.Helper()
-	const policy = `apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata:
-  name: test-portal-jobs
-spec:
-  description: "portalapi jobs handler test policy"
-  presets:
-    azure.research.training.l:
-      team: research
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: jobqueue
-      clusterQueue: taugrid-cq
-      namespace: ray
-    alpha.training:
-      team: alpha
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: alpha-queue
-      clusterQueue: alpha-cq
-      namespace: team-alpha
-    beta.training:
-      team: beta
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: beta-queue
-      clusterQueue: beta-cq
-      namespace: team-beta
-    alpha.marker:
-      team: alpha
-      lane: eval
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: alpha-marker-queue
-      clusterQueue: alpha-marker-cq
-      namespace: team-alpha
-    beta.marker:
-      team: beta
-      lane: eval
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: beta-marker-queue
-      clusterQueue: beta-marker-cq
-      namespace: team-beta
-`
-	path := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(path, []byte(policy), 0o600); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
-
-	return path
-}
-
 func testOperatorJobs(t *testing.T, reader jobs.Reader) JobsOptions {
 	t.Helper()
 	return JobsOptions{
 		Reader: reader, ScopeMode: JobsScopeOperator,
 		OperatorScopes: []jobs.Scope{{Team: "research", Namespace: "ray", Queue: "jobqueue"}},
-		PolicyPath:     writeEmbeddedPolicy(t),
 	}
 }
 
@@ -510,6 +439,89 @@ func TestJobsBoardServesSnapshot(t *testing.T) {
 	}
 	if snap.Namespace != "ray" {
 		t.Fatalf("snapshot namespace = %q, want ray", snap.Namespace)
+	}
+}
+
+type staticProfileReader struct {
+	set profile.ProfileSet
+	err error
+}
+
+func (s staticProfileReader) ProfileSet(context.Context) (profile.ProfileSet, error) {
+	return s.set, s.err
+}
+
+func TestJobsAndOverviewExposeReadOnlyProfileRevisionAndMetadata(t *testing.T) {
+	const generation = int64(23)
+	resolved := profile.ResolvedWorkloadProfile{
+		WorkloadProfile: profile.WorkloadProfile{
+			Name: "federated", ExecutionTarget: profile.ExecutionTargetMultiKueue,
+			Placement: profile.PlacementMultiNodeNCCL, DefaultLocalQueue: "jobqueue",
+			GPUsPerWorker: 8, WorkerCount: 2,
+			Applicability: profile.ProfileApplicability{Namespaces: []string{"ray"}, Teams: []string{"research"}},
+		},
+		Conditions: []metav1.Condition{{
+			Type: profile.ConditionReady, Status: metav1.ConditionTrue, ObservedGeneration: generation,
+		}},
+	}
+
+	opts := testOperatorJobs(t, stubJobsReader{})
+	opts.Profiles = staticProfileReader{set: profile.ProfileSet{
+		Generation: generation, ProfileSetHash: "full-hash", Profiles: []profile.ResolvedWorkloadProfile{resolved},
+	}}
+	server, err := NewServer(Options{Stellar: expapi.Options{Source: "kusto"}, Jobs: opts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/portal/jobs", "/api/portal/overview"} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if body := rec.Body.String(); !strings.Contains(body, `"tauClusterGeneration":23`) ||
+			!strings.Contains(body, `"profileSetHash":"full-hash"`) ||
+			!strings.Contains(body, `"executionTarget":"multiKueue"`) ||
+			strings.Contains(body, `"stage"`) ||
+			!strings.Contains(body, `"selectionEnabled":false`) {
+			t.Fatalf("%s missing profile contract: %s", path, body)
+		}
+	}
+}
+
+type sequenceProfileReader struct {
+	generations []int64
+	calls       int
+}
+
+func (s *sequenceProfileReader) ProfileSet(context.Context) (profile.ProfileSet, error) {
+	index := s.calls
+	s.calls++
+	if index >= len(s.generations) {
+		index = len(s.generations) - 1
+	}
+	generation := s.generations[index]
+	return profile.ProfileSet{Generation: generation, ProfileSetHash: fmt.Sprintf("hash-%d", generation)}, nil
+}
+
+func TestJobsRefreshesTauClusterProfilesOnConsecutiveRequests(t *testing.T) {
+	profiles := &sequenceProfileReader{generations: []int64{30, 31}}
+	opts := testOperatorJobs(t, stubJobsReader{})
+	opts.Profiles = profiles
+	server, err := NewServer(Options{Stellar: expapi.Options{Source: "kusto"}, Jobs: opts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int64{30, 31} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/jobs", nil))
+		if rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), fmt.Sprintf(`"tauClusterGeneration":%d`, want)) {
+			t.Fatalf("request %d generation=%d status=%d body=%s", i+1, want, rec.Code, rec.Body.String())
+		}
+	}
+	if profiles.calls != 2 {
+		t.Fatalf("ProfileSet calls = %d, want one per request", profiles.calls)
 	}
 }
 
@@ -1219,6 +1231,70 @@ func TestRunsBoardServesSnapshot(t *testing.T) {
 	}
 }
 
+type multiKueuePlacementReader struct{ stubJobsReader }
+
+func (*multiKueuePlacementReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[{"metadata":{"name":"train-job","labels":{"` + workloadmeta.LabelJob + `":"train"}}}]}`), nil
+}
+
+func (*multiKueuePlacementReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*multiKueuePlacementReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[{
+		"metadata":{"name":"job-train","ownerReferences":[{"name":"train-job"}]},
+		"status":{"clusterName":"worker-a"}
+	}]}`), nil
+}
+
+func TestRunsBoardLabelsMultiKueueFromWorkloadPlacement(t *testing.T) {
+	reader := &multiKueuePlacementReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Jobs:    JobsOptions{Reader: reader},
+		Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"executionTarget":"multiKueue"`) ||
+		strings.Contains(rec.Body.String(), `"stage"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type multiKueueRunIDReader struct{ stubJobsReader }
+
+func (*multiKueueRunIDReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[{
+		"metadata":{
+			"name":"job-train",
+			"labels":{"` + workloadmeta.LabelRunID + `":"multikueue-run"},
+			"ownerReferences":[{"name":"reused-name"}]
+		},
+		"status":{"clusterName":"worker-a"}
+	}]}`), nil
+}
+
+func TestAnnotateMultiKueueRunsPrefersRunIDOverReusedName(t *testing.T) {
+	server := &Server{jobs: JobsOptions{Reader: &multiKueueRunIDReader{}}}
+	snapshot := runs.Snapshot{Runs: []runs.Run{
+		{Name: "reused-name", RunID: "ordinary-run"},
+		{Name: "reused-name", RunID: "multikueue-run"},
+	}}
+
+	server.annotateMultiKueueRuns(context.Background(), &snapshot, "ray")
+	if snapshot.Runs[0].ExecutionTarget != "" {
+		t.Fatalf("ordinary run with reused name was mislabeled: %#v", snapshot.Runs[0])
+	}
+	if snapshot.Runs[1].ExecutionTarget != string(profile.ExecutionTargetMultiKueue) {
+		t.Fatalf("MultiKueue run was not labeled by run ID: %#v", snapshot.Runs[1])
+	}
+}
+
 func TestRunsBoardUnavailableWithoutReader(t *testing.T) {
 	// newTestServer builds a server with no Runs.Reader → board disabled.
 	rec := httptest.NewRecorder()
@@ -1636,7 +1712,7 @@ func managedPortalServer(t *testing.T, cfg WorkspaceDirectoryConfig) (*Server, *
 	querier := &scopedPortalQuerier{}
 	server, err := NewServer(Options{
 		Stellar:            expapi.Options{Source: "kusto"},
-		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace, PolicyPath: writeEmbeddedPolicy(t)},
+		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace},
 		Cluster:            ClusterOptions{Querier: querier},
 		Cost:               CostOptions{Querier: querier},
 		Ray:                RayOptions{Reader: reader},
@@ -1975,7 +2051,7 @@ func adversarialPortalServer(t *testing.T) (*Server, *markerPortalReader, *marke
 	querier := &markerPortalQuerier{}
 	server, err := NewServer(Options{
 		Stellar:            expapi.Options{Source: "kusto"},
-		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace, PolicyPath: writeEmbeddedPolicy(t)},
+		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace},
 		Cluster:            ClusterOptions{Querier: querier},
 		Cost:               CostOptions{Querier: querier},
 		Ray:                RayOptions{Reader: reader},
@@ -2239,7 +2315,7 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	}
 	server, err := NewServer(Options{
 		Stellar:            expapi.Options{Source: "kusto"},
-		Jobs:               JobsOptions{Reader: runningJobsReader{}, PolicyPath: writeEmbeddedPolicy(t)},
+		Jobs:               JobsOptions{Reader: runningJobsReader{}},
 		WorkspaceDirectory: directory,
 	})
 	if err != nil {
@@ -2278,6 +2354,9 @@ func TestPortalShellContainsWorkspaceScopeContract(t *testing.T) {
 		`const view = el("div");`,
 		`host.replaceChildren(view);`,
 		`No local fallback was used.`,
+		`profile selection is not available in Portal`,
+		`Execution target`,
+		`Existing workloads and queues remain observable`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("portal shell missing workspace UI contract %q", want)

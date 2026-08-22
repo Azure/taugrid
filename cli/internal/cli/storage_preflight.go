@@ -128,7 +128,7 @@ func validateStorageNodeCompatibility(
 		return err
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("storage PVC compatibility: no Ready schedulable nodes match %s; adjust --node-selector/--gpu-class/--preset before submitting", formatNodeSelector(nodeSelector))
+		return fmt.Errorf("storage PVC compatibility: no Ready schedulable nodes match %s; select a compatible policy.profile or node selector before submitting", formatNodeSelector(nodeSelector))
 	}
 	csiDrivers, err := listCSINodeDrivers(ctx, r)
 	if err != nil {
@@ -282,7 +282,7 @@ func validateDriverOnSelectedNodes(ref storagePVCRef, driver string, nodes []sto
 	} else {
 		detail += "; driver is not registered on any node"
 	}
-	return fmt.Errorf("%s. Pick a PVC-compatible --node-selector/--gpu-class/--preset, install the CSI driver on the selected nodes, or choose a different data PVC", detail)
+	return fmt.Errorf("%s. Pick a PVC-compatible policy.profile or node selector, install the CSI driver on the selected nodes, or choose a different data PVC", detail)
 }
 
 func nodeReadyForScheduling(node storageNodeDoc) bool {

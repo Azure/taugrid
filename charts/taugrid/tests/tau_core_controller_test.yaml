@@ -62,3 +62,9 @@ tests:
       - equal:
           path: spec.queues.ownership
           value: External
+      - lengthEqual:
+          path: spec.workloadProfiles
+          count: 15
+      - equal:
+          path: spec.workloadProfiles[0].executionTarget
+          value: singleCluster

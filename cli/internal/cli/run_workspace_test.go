@@ -213,6 +213,12 @@ spec:
 			if err != nil {
 				t.Fatalf("applyWorkspaceDefaults: %v", err)
 			}
+			attachAuthoritativeProfileForTest(&got)
+			if tt.name == "job" {
+				setAuthoritativeProfileCardinalityForTest(&got, 0, 1)
+			} else {
+				setAuthoritativeProfileCardinalityForTest(&got, 1, 2)
+			}
 			target, err := resolveRunTarget(got, "identity-render")
 			if err != nil {
 				t.Fatalf("resolveRunTarget: %v", err)
@@ -294,28 +300,6 @@ func TestWorkspaceRunDispatchStampsJobAndRayJobAdmissionMetadata(t *testing.T) {
 	if err := os.WriteFile(script, []byte("print('ok')\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	policy := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(policy, []byte(`apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata: { name: workspace-queue-test }
-spec:
-  presets:
-    workspace.training:
-      team: research
-      lane: training
-      mode: fixed
-      placement: single-node-nvlink
-      shape: 1xgpu
-      gpuClass: any
-      queue: research-training
-      clusterQueue: taugrid-cq
-      resourceFlavor: nd-h200-v5
-      topologyName: default-node-topology
-      namespace: taugrid-default
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	tests := []struct {
 		engine       string
 		name         string
@@ -330,12 +314,12 @@ spec:
 			options := defaultRunDispatchOptions()
 			options.engine = tt.engine
 			options.script = script
+			options.image = "busybox:1.36"
 			options.dryRun = "client"
 			if tt.engine == "job" {
-				options.preset = "workspace.training"
-				options.topologyPolicy = policy
+				options.profileName = "workspace.training"
 			} else {
-				options.preset = "azure.research.training.l"
+				options.profileName = "azure.research.training.l"
 			}
 
 			workspace := readyWorkspace()
@@ -345,6 +329,7 @@ spec:
 			if err != nil {
 				t.Fatalf("applyWorkspaceDefaults: %v", err)
 			}
+			attachAuthoritativeProfileForTest(&options)
 			target, err := resolveRunTarget(options, tt.name)
 			if err != nil {
 				t.Fatalf("resolveRunTarget: %v", err)
@@ -392,26 +377,20 @@ spec:
 				rendered.Metadata.Annotations[experiment.AnnotationResultScope] != "/data/projects/sample/runs" {
 				t.Fatalf("workspace annotations = %#v", rendered.Metadata.Annotations)
 			}
-			if rendered.Metadata.Annotations[runtopology.AnnotationTopologyQueue] != "workspace-jobqueue" {
-				t.Fatalf("workspace queue annotation = %#v", rendered.Metadata.Annotations)
-			}
 			for _, stale := range []string{workloadmeta.AnnotationClusterQueue, workloadmeta.AnnotationResourceFlavor} {
 				if _, ok := rendered.Metadata.Annotations[stale]; ok {
 					t.Fatalf("workspace workload retained stale preset annotation %q: %#v", stale, rendered.Metadata.Annotations)
 				}
 			}
-			if _, ok := rendered.Metadata.Labels[workloadmeta.LabelTeam]; ok {
-				t.Fatalf("workspace workload retained stale preset team label: %#v", rendered.Metadata.Labels)
-			}
 			if tt.engine == "job" {
 				if strings.Count(out.String(), "nvidia.com/gpu: 1") != 2 {
-					t.Fatalf("workspace Job must request and limit one preset-inferred GPU:\n%s", out.String())
+					t.Fatalf("workspace Job must request and limit the profile GPU cardinality:\n%s", out.String())
 				}
 				if _, ok := rendered.Spec.Template.Spec.NodeSelector[runtopology.ManagedGPUSeriesLabel]; ok {
 					t.Fatalf("workspace Job retained preset flavor selector: %#v", rendered.Spec.Template.Spec.NodeSelector)
 				}
-				if v := rendered.Spec.Template.Metadata.Annotations["kueue.x-k8s.io/podset-required-topology"]; v != "kubernetes.io/hostname" {
-					t.Fatalf("workspace Job must preserve TAS topology annotation from preset, got %q; annotations: %#v", v, rendered.Spec.Template.Metadata.Annotations)
+				if v := rendered.Spec.Template.Metadata.Annotations["kueue.x-k8s.io/podset-unconstrained-topology"]; v != "true" {
+					t.Fatalf("workspace Job must preserve authoritative independent placement, got %q; annotations: %#v", v, rendered.Spec.Template.Metadata.Annotations)
 				}
 			} else if !strings.Contains(out.String(), `kueue.x-k8s.io/podset-unconstrained-topology: "true"`) {
 				t.Fatalf("workspace RayJob must preserve TAS topology annotation from preset:\n%s", out.String())

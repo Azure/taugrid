@@ -25,6 +25,7 @@ func runRayJobDryRun(t *testing.T, name string, mutate func(*runDispatchOptions)
 	options.engine = "rayjob"
 	options.dryRun = "client"
 	mutate(&options)
+	attachAuthoritativeProfileForTest(&options)
 
 	request, err := newRunRayJobRequest(options, name)
 	if err != nil {
@@ -50,7 +51,7 @@ func TestRayJobDispatchDryRunUsesPresetKueueLane(t *testing.T) {
 	script := writeRayScript(t, t.TempDir())
 	rendered := runRayJobDryRun(t, "ray-smoke", func(o *runDispatchOptions) {
 		o.script = script
-		o.preset = "azure.research.training.l"
+		o.profileName = "azure.research.training.l"
 		o.runtimePip = []string{"torch==2.4.0"}
 		o.workspace = "sample"
 		o.workspaceResultScope = "/data/projects/sample/runs"
@@ -78,7 +79,7 @@ func TestRayJobDispatchMIGProfileForcesMIGResourceEvenWithConflictingMode(t *tes
 	script := writeRayScript(t, t.TempDir())
 	rendered := runRayJobDryRun(t, "ray-mig", func(o *runDispatchOptions) {
 		o.script = script
-		o.preset = "azure.research.training.l"
+		o.profileName = "azure.research.training.l"
 		o.gpusPerWorker = 1
 		o.migProfile = "1g.18gb"
 		o.gpuResourceMode = "device-plugin"
@@ -91,66 +92,28 @@ func TestRayJobDispatchMIGProfileForcesMIGResourceEvenWithConflictingMode(t *tes
 	}
 }
 
-func TestRayJobDispatchUsesPresetNamespaceWhenNamespaceOmitted(t *testing.T) {
+func TestRayJobDispatchUsesProfileNamespace(t *testing.T) {
 	dir := t.TempDir()
 	script := writeRayScript(t, dir)
-	policy := filepath.Join(dir, "policy.yaml")
-	if err := os.WriteFile(policy, []byte(`apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata: { name: test-policy }
-spec:
-  presets:
-    test.training:
-      team: research
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 4xgpu
-      gpuClass: any
-      queue: research-training
-      clusterQueue: research-cq
-      namespace: preset-ns
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	rendered := runRayJobDryRun(t, "ray-ns", func(o *runDispatchOptions) {
 		o.script = script
-		o.preset = "test.training"
-		o.topologyPolicy = policy
+		o.profileName = "test.training"
+		o.namespace = "profile-ns"
 	})
-	if !strings.Contains(rendered, "namespace: preset-ns") {
-		t.Fatalf("dry-run should render preset namespace when no namespace is set:\n%s", rendered)
+	if !strings.Contains(rendered, "namespace: profile-ns") {
+		t.Fatalf("dry-run should render the authorized profile namespace:\n%s", rendered)
 	}
 }
 
 func TestExecuteRunTargetWritesBackResolvedRayJobNamespace(t *testing.T) {
 	dir := t.TempDir()
-	policy := filepath.Join(dir, "policy.yaml")
-	if err := os.WriteFile(policy, []byte(`apiVersion: tau.azure.com/v1alpha1
-kind: TopologyPolicy
-metadata: { name: test-policy }
-spec:
-  presets:
-    test.training:
-      team: research
-      lane: training
-      mode: fixed
-      placement: independent
-      shape: 1xgpu
-      gpuClass: any
-      queue: research-training
-      clusterQueue: research-cq
-      namespace: ray-retry-ns
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	options := defaultRunDispatchOptions()
 	options.engine = "rayjob"
 	options.script = writeRayScript(t, dir)
-	options.preset = "test.training"
-	options.topologyPolicy = policy
+	options.profileName = "test.training"
+	options.namespace = "ray-retry-ns"
 	options.dryRun = "client"
+	attachAuthoritativeProfileForTest(&options)
 
 	target, err := resolveRunTarget(options, "ray-retry")
 	if err != nil {
@@ -205,11 +168,7 @@ func TestRayJobRequestedGPUCountIncludesWorkerReplicas(t *testing.T) {
 	}
 }
 
-// TestExecuteRunRayClientDryRunWithoutNamespace mirrors the engine=job guard:
-// namespace and queue resolution both need a live cluster, so an offline
-// client dry-run must still render rather than demand values it is forbidden
-// to look up.
-func TestExecuteRunRayJobClientDryRunWithoutNamespace(t *testing.T) {
+func TestExecuteRunRayJobClientDryRunUsesAuthoritativeProfileRouting(t *testing.T) {
 	dir := t.TempDir()
 	script := writeRayScript(t, dir)
 	options := defaultRunDispatchOptions()
@@ -217,7 +176,8 @@ func TestExecuteRunRayJobClientDryRunWithoutNamespace(t *testing.T) {
 	options.dryRun = "client"
 	options.script = script
 	options.workers = 2
-	// options.namespace and options.queue deliberately left empty.
+	attachAuthoritativeProfileForTest(&options)
+	setAuthoritativeProfileCardinalityForTest(&options, 1, 2)
 
 	request, err := newRunRayJobRequest(options, "offline-ray")
 	if err != nil {
@@ -225,19 +185,20 @@ func TestExecuteRunRayJobClientDryRunWithoutNamespace(t *testing.T) {
 	}
 	var out, stderr bytes.Buffer
 	if err := executeRunRayJob(context.Background(), &out, &stderr, &request, "tau run --config tau.yaml"); err != nil {
-		t.Fatalf("client dry-run must render offline without a namespace, got: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("client dry-run with an authoritative profile: %v\nstderr:\n%s", err, stderr.String())
 	}
 	rendered := out.String()
 	if !strings.Contains(rendered, "kind: RayJob") {
 		t.Fatalf("client dry-run did not render a RayJob:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, clientDryRunNamespacePlaceholder) {
-		t.Fatalf("client dry-run namespace is not marked as unresolved:\n%s", rendered)
+	if !strings.Contains(rendered, "namespace: test-workspace") ||
+		!strings.Contains(rendered, "kueue.x-k8s.io/queue-name: jobqueue") {
+		t.Fatalf("client dry-run did not use authoritative profile routing:\n%s", rendered)
 	}
-	if strings.Contains(rendered, "namespace: default") {
-		t.Fatalf("client dry-run rendered a plausible-but-wrong namespace:\n%s", rendered)
+	if strings.Contains(rendered, "unresolved") {
+		t.Fatalf("authoritative profile routing was replaced by a placeholder:\n%s", rendered)
 	}
-	if !strings.Contains(stderr.String(), "resolved at submit") {
-		t.Fatalf("client dry-run must warn that namespace is unresolved, stderr:\n%s", stderr.String())
+	if strings.Contains(stderr.String(), "resolved at submit") {
+		t.Fatalf("authoritative profile routing was reported as unresolved:\n%s", stderr.String())
 	}
 }

@@ -16,6 +16,20 @@ tau cluster explain-values
 
 The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. `tau cluster install` defaults it to `tau-system`; `--namespace <name>` moves the Kueue, KubeRay, Tau controller, Portal, GPU monitoring, and other enabled first-party workloads together. The first-party charts follow their Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 
+## MultiKueue capability
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `kueue.aksExtension.enableMultiKueue` | bool | `true` | Install the pinned Kueue MultiKueue controller capability |
+
+The standard installation includes MultiKueue API/controller support and
+read-only prerequisite observation. It does not create worker credentials,
+AdmissionChecks, MultiKueueConfigs, MultiKueueClusters, dedicated queues, or
+profiles. `TauCluster.status.conditions[MultiKueueReady]` reports the health of
+those actual operator-owned prerequisites. See
+[Multi-cluster execution](../../operations/multicluster/) before publishing a
+MultiKueue profile.
+
 ## Components
 
 Toggle sub-charts with `components.<key>.enabled`:

@@ -106,3 +106,277 @@ spec:
           tau.azure.com/gpu-class: gb300-288gb
   queues:
     ownership: External
+  # BEGIN GENERATED WORKLOAD PROFILES
+  # Generated from charts/tau-core-controller/values.yaml; do not edit.
+  workloadProfiles:
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Shared GPU training on one GPU.
+      executionTarget: singleCluster
+      gpusPerWorker: 1
+      mode: fixed
+      name: azure.research.training.l
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Shared GPU training on two GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 2
+      mode: fixed
+      name: azure.research.training.2x
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Shared GPU training on four GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 4
+      mode: fixed
+      name: azure.research.training.4x
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Shared GPU training on eight GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 8
+      mode: fixed
+      name: azure.research.training.xl
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - eval
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Shared GPU evaluation on one GPU.
+      executionTarget: singleCluster
+      gpusPerWorker: 1
+      mode: fixed
+      name: azure.research.eval.gpu
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - elastic
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Shared checkpointable backfill on one GPU.
+      executionTarget: singleCluster
+      gpusPerWorker: 1
+      mode: elastic
+      name: azure.research.elastic.gpu
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - experimental
+      defaultLocalQueue: jobqueue
+      description: Experimental-team shared GPU training on one GPU.
+      executionTarget: singleCluster
+      gpusPerWorker: 1
+      mode: fixed
+      name: azure.experimental.training.l
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - experimental
+      defaultLocalQueue: jobqueue
+      description: Experimental-team shared GPU training on two GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 2
+      mode: fixed
+      name: azure.experimental.training.2x
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - training
+        namespaces:
+        - taugrid-default
+        teams:
+        - experimental
+      defaultLocalQueue: jobqueue
+      description: Experimental-team shared GPU training on four GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 4
+      mode: fixed
+      name: azure.experimental.training.4x
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - eval
+        namespaces:
+        - taugrid-default
+        teams:
+        - experimental
+      defaultLocalQueue: jobqueue
+      description: Experimental-team shared GPU evaluation on one GPU.
+      executionTarget: singleCluster
+      gpusPerWorker: 1
+      mode: fixed
+      name: azure.experimental.eval.gpu
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - elastic
+        namespaces:
+        - taugrid-default
+        teams:
+        - experimental
+      defaultLocalQueue: jobqueue
+      description: Experimental-team shared checkpointable backfill on one GPU.
+      executionTarget: singleCluster
+      gpusPerWorker: 1
+      mode: elastic
+      name: azure.experimental.elastic.gpu
+      placement: independent
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - large-memory
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Single-node NVLink workload on two GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 2
+      mode: fixed
+      name: azure.research.large-memory.2x
+      placement: single-node-nvlink
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - large-memory
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Single-node NVLink workload on four GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 4
+      mode: fixed
+      name: azure.research.large-memory.4x
+      placement: single-node-nvlink
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - large-memory
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Single-node NVLink workload on eight GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 8
+      mode: fixed
+      name: azure.research.large-memory.xl
+      placement: single-node-nvlink
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 1
+    - applicability:
+        lanes:
+        - large-memory
+        namespaces:
+        - taugrid-default
+        teams:
+        - research
+      defaultLocalQueue: jobqueue
+      description: Two-node distributed workload with eight GPUs per worker.
+      executionTarget: singleCluster
+      gpusPerWorker: 8
+      mode: fixed
+      name: azure.research.large-memory.2node
+      placement: multi-node-nccl
+      priorities:
+        podPriorityClassName: taugrid-default
+        workloadPriorityClassName: taugrid-default
+      workerCount: 2
+  # END GENERATED WORKLOAD PROFILES

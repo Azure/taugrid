@@ -18,6 +18,12 @@ cluster outside Tau, then use Helm-backed install and uninstall commands.
 Cluster-scoped desired state belongs to the TauGrid chart; workspace-specific
 state is reconciled from TauWorkspace resources by tau-core-controller.`,
 	}
-	cmd.AddCommand(newClusterInstallCmd(), newClusterUninstallCmd(), newClusterValidateCmd(), newClusterExplainValuesCmd())
+	cmd.AddCommand(
+		newClusterInstallCmd(),
+		newClusterUninstallCmd(),
+		newClusterValidateCmd(),
+		newClusterProfilesCmd(),
+		newClusterExplainValuesCmd(),
+	)
 	return cmd
 }

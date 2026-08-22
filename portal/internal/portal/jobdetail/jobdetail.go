@@ -162,6 +162,7 @@ type ObjectDetail struct {
 	RayClusterName      string `json:"rayClusterName,omitempty"`
 	JobID               string `json:"jobId,omitempty"`
 	ManagedBy           string `json:"managedBy,omitempty"`
+	ExecutionTarget     string `json:"executionTarget,omitempty"`
 	Reason              string `json:"reason,omitempty"`
 	Message             string `json:"message,omitempty"`
 }
@@ -396,7 +397,10 @@ type objectMeta struct {
 
 type jobObject struct {
 	Metadata objectMeta `json:"metadata"`
-	Status   struct {
+	Spec     struct {
+		ManagedBy string `json:"managedBy"`
+	} `json:"spec"`
+	Status struct {
 		Conditions []struct {
 			Type string `json:"type"`
 			// Reason and Message carry the Job's terminal explanation
@@ -440,6 +444,7 @@ func parseJob(data []byte) (resolved, bool) {
 		conds = append(conds, runs.StatusCondition{Type: c.Type, Status: c.Status})
 	}
 	reason, message := jobTerminalExplanation(o)
+	executionTarget := objectExecutionTarget(o.Spec.ManagedBy)
 	return resolved{
 		kind:   "Job",
 		status: runs.JobStatus(conds, o.Status.Active, o.Status.Succeeded, o.Status.Failed),
@@ -447,12 +452,14 @@ func parseJob(data []byte) (resolved, bool) {
 
 		experiment: experimentIdentity(o.Metadata.Annotations),
 		detail: ObjectDetail{
-			Created:     optionalTime(created),
-			Age:         runs.FormatAge(time.Now(), created),
-			Reason:      reason,
-			Message:     message,
-			Labels:      o.Metadata.Labels,
-			Annotations: o.Metadata.Annotations,
+			Created:         optionalTime(created),
+			Age:             runs.FormatAge(time.Now(), created),
+			Reason:          reason,
+			Message:         message,
+			Labels:          o.Metadata.Labels,
+			Annotations:     o.Metadata.Annotations,
+			ManagedBy:       o.Spec.ManagedBy,
+			ExecutionTarget: executionTarget,
 		},
 		podSelectorKey:   workloadmeta.LabelJob,
 		podSelectorValue: o.Metadata.Name,
@@ -481,6 +488,7 @@ func parseRayJob(data []byte) (resolved, bool) {
 		return resolved{}, false
 	}
 	created := parseTime(o.Metadata.CreationTimestamp)
+	executionTarget := objectExecutionTarget(o.Spec.ManagedBy)
 	return resolved{
 		kind:   "RayJob",
 		status: runs.RayJobStatus(o.Status.JobDeploymentStatus, o.Status.JobStatus),
@@ -496,6 +504,7 @@ func parseRayJob(data []byte) (resolved, bool) {
 			RayClusterName:      o.Status.RayClusterName,
 			JobID:               o.Status.JobID,
 			ManagedBy:           o.Spec.ManagedBy,
+			ExecutionTarget:     executionTarget,
 			Reason:              o.Status.Reason,
 			Message:             o.Status.Message,
 		},
@@ -503,6 +512,13 @@ func parseRayJob(data []byte) (resolved, bool) {
 		podSelectorKey:   rayClusterLabel,
 		podSelectorValue: o.Status.RayClusterName,
 	}, true
+}
+
+func objectExecutionTarget(managedBy string) string {
+	if strings.TrimSpace(managedBy) == "kueue.x-k8s.io/multikueue" {
+		return "multiKueue"
+	}
+	return ""
 }
 
 // filterWorkloads keeps only Workloads that belong to this job. Kueue copies the

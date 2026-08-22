@@ -186,8 +186,8 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	o.namespace = c.Policy.Namespace
 	o.workspace = c.Policy.Workspace
 	o.profileName = c.Policy.Profile
+	o.profileNameExplicit = strings.TrimSpace(c.Policy.Profile) != ""
 	o.queue = c.Policy.Queue
-	o.preset = c.Policy.Preset
 	o.team = c.Policy.Team
 	o.lane = c.Policy.Lane
 	o.gpuClass = c.Policy.GPUClass
@@ -195,12 +195,28 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	o.topology = c.Policy.Topology
 	o.shape = c.Policy.Shape
 	o.priorityTier = firstNonEmpty(c.Policy.PriorityTier, c.Policy.Priority)
-	o.topologyPolicy = c.Policy.TopologyPolicy
+	o.workloadProfileSnapshot = configRelativePath(baseDir, c.Policy.WorkloadProfileSnapshot)
 	o.workloadPriorityClass = c.Policy.WorkloadPriorityClass
 	o.podPriorityClass = c.Policy.PodPriorityClass
 	o.nodeSelectors = mapToKeyValueList(c.Policy.NodeSelector)
 	o.clearNodeSelector = c.Policy.ClearNodeSelector
-	o.disableDefaultPriorities = c.Policy.DisableDefaultPriorities
+	o.explicitPolicyFields = map[string]bool{
+		"queue":                      strings.TrimSpace(c.Policy.Queue) != "",
+		"mode":                       strings.TrimSpace(c.Policy.Mode) != "",
+		"topology":                   strings.TrimSpace(c.Policy.Topology) != "",
+		"workload_priority_class":    strings.TrimSpace(c.Policy.WorkloadPriorityClass) != "",
+		"pod_priority_class":         strings.TrimSpace(c.Policy.PodPriorityClass) != "",
+		"priority_tier":              strings.TrimSpace(firstNonEmpty(c.Policy.PriorityTier, c.Policy.Priority)) != "",
+		"shape":                      strings.TrimSpace(c.Policy.Shape) != "",
+		"gpu_class":                  strings.TrimSpace(c.Policy.GPUClass) != "",
+		"node_selector":              len(c.Policy.NodeSelector) > 0,
+		"clear_node_selector":        c.Policy.ClearNodeSelector,
+		"disable_default_priorities": c.Policy.DisableDefaultPriorities != nil,
+	}
+	if c.Policy.DisableDefaultPriorities != nil {
+		o.disableDefaultPriorities = *c.Policy.DisableDefaultPriorities
+		o.disablePrioritiesExplicit = true
+	}
 
 	o.dataPVC = c.Storage.DataPVC
 	o.resultPVC = c.Storage.ResultPVC
@@ -213,10 +229,12 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 
 	if c.Compute.Workers != nil {
 		o.workers = *c.Compute.Workers
+		o.workersExplicit = true
 	}
 	if c.Compute.GPUs != nil {
 		gpus := *c.Compute.GPUs
 		o.jobGPUs = &gpus
+		o.jobGPUsExplicit = true
 	}
 	if c.Compute.GPUsPerWorker != nil {
 		o.gpusPerWorker = *c.Compute.GPUsPerWorker
@@ -280,6 +298,7 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	}
 	if c.Execution.Nodes != nil {
 		o.nodes = *c.Execution.Nodes
+		o.nodesExplicit = true
 	}
 	o.tuneMetric = c.Execution.Metric
 	o.tuneMode = c.Execution.Mode
