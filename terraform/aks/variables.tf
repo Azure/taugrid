@@ -160,7 +160,7 @@ variable "normalize_gpu_mig" {
 variable "taugrid_version" {
   description = "Published TauGrid chart version passed to tau cluster install."
   type        = string
-  default     = "0.3.0"
+  default     = "0.3.1"
 }
 
 variable "install_taugrid" {

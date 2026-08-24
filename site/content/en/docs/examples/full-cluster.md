@@ -52,7 +52,7 @@ mode, restarts the GPU VM scale set, and waits for allocatable GPUs before
 running:
 
 ```bash
-tau cluster install --values generated/taugrid-values.yaml --version 0.3.0
+tau cluster install --values generated/taugrid-values.yaml --version 0.3.1
 ```
 
 Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience.
