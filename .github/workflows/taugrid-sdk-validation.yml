@@ -6,12 +6,14 @@ on:
       - main
     paths:
       - sdk/python/**
+      - cli/internal/cli/testdata/python-build/**
       - .github/workflows/taugrid-sdk-validation.yml
   push:
     branches:
       - main
     paths:
       - sdk/python/**
+      - cli/internal/cli/testdata/python-build/**
       - .github/workflows/taugrid-sdk-validation.yml
   schedule:
     - cron: "47 7 * * 1"
