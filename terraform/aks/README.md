@@ -11,7 +11,7 @@ supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
 
 ## Prerequisites
 
-- Terraform 1.6 or later
+- Terraform 1.9 or later
 - Azure credentials usable by the AzureRM provider
 - `tau`, `helm`, and `kubectl` on PATH
 - PowerShell 7 on Windows. Linux and macOS users can set
