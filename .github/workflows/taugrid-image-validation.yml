@@ -13,6 +13,7 @@ on:
       - images/tau-core-controller/**
       - images/taugrid-portal/**
       - portal/**
+      - scripts/ci/validate-image-build-contract.sh
       - .github/workflows/taugrid-image-validation.yml
   push:
     branches:
@@ -26,6 +27,7 @@ on:
       - images/tau-core-controller/**
       - images/taugrid-portal/**
       - portal/**
+      - scripts/ci/validate-image-build-contract.sh
       - .github/workflows/taugrid-image-validation.yml
   schedule:
     - cron: "0 9 * * *"
@@ -54,19 +56,28 @@ jobs:
         include:
           - name: Tau
             image: tau
+            make_directory: images/tau
             context: .
             dockerfile: images/tau/Dockerfile
           - name: TauGrid Portal
             image: taugrid-portal
+            make_directory: images/taugrid-portal
             context: .
             dockerfile: images/taugrid-portal/Dockerfile
           - name: Tau core controller
             image: tau-core-controller
+            make_directory: images/tau-core-controller
             context: .
             dockerfile: images/tau-core-controller/Dockerfile
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate image build contract
+        env:
+          IMAGE: ${{ matrix.image }}
+          MAKE_DIRECTORY: ${{ matrix.make_directory }}
+        run: scripts/ci/validate-image-build-contract.sh "$MAKE_DIRECTORY" "$IMAGE"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0

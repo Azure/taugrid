@@ -35,6 +35,60 @@ jobs:
       - name: Verify license headers
         run: python3 scripts/check-license-headers.py
 
+  release-detect:
+    name: Release / Detect preparation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.scope.outputs.enabled }}
+      version: ${{ steps.scope.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect release-preflight scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          enabled=false
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch)
+              enabled=true
+              ;;
+            pull_request | push)
+              changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+              if grep -Eq '^cli/releases/v[^/]+\.md$|^\.github/workflows/(release-tau|taugrid-validation)\.ya?ml$' \
+                <<<"$changed_files"; then
+                enabled=true
+              fi
+              ;;
+            schedule)
+              ;;
+            *)
+              echo "Unsupported validation event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          version="$(awk '$1 == "version:" { print $2; exit }' charts/taugrid/Chart.yaml)"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "charts/taugrid/Chart.yaml has invalid release version '$version'" >&2
+            exit 1
+          fi
+          if [[ "$enabled" == "true" && ! -s "cli/releases/v${version}.md" ]]; then
+            echo "cli/releases/v${version}.md is required for release preflight" >&2
+            exit 1
+          fi
+
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   go:
     name: Go / ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -146,6 +200,129 @@ jobs:
         with:
           fail-on-severity: high
 
+  release-installer:
+    name: Release / Installer
+    needs: release-detect
+    if: needs.release-detect.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Test release installer
+        run: |
+          shellcheck cli/scripts/install-tau.sh cli/scripts/test-install-tau.sh
+          make -C cli test-installer
+
+  release-build:
+    name: Release / Reproduce assets
+    needs: release-detect
+    if: needs.release-detect.outputs.enabled == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install wheel build frontend
+        run: python -m pip install --disable-pip-version-check build==1.5.0
+
+      - name: Build twice and compare
+        env:
+          VERSION: v${{ needs.release-detect.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          COMMIT="$(git rev-parse HEAD)"
+          DATE="$(git show -s --format=%cI HEAD)"
+          first="$RUNNER_TEMP/tau-release-a"
+          second="$RUNNER_TEMP/tau-release-b"
+          wheel_first_dir="$RUNNER_TEMP/tau-python-wheel-a"
+          wheel_second_dir="$RUNNER_TEMP/tau-python-wheel-b"
+
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          python -m build --wheel --outdir "$wheel_first_dir" ./sdk/python/python
+          python -m build --wheel --outdir "$wheel_second_dir" ./sdk/python/python
+
+          shopt -s nullglob
+          wheel_first=("$wheel_first_dir"/tau-*.whl)
+          wheel_second=("$wheel_second_dir"/tau-*.whl)
+          if (( ${#wheel_first[@]} != 1 || ${#wheel_second[@]} != 1 )); then
+            echo "expected exactly one Tau SDK wheel from each build" >&2
+            exit 1
+          fi
+          wheel_name="$(basename "${wheel_first[0]}")"
+          test "$(basename "${wheel_second[0]}")" = "$wheel_name"
+          cmp "${wheel_first[0]}" "${wheel_second[0]}"
+
+          make -C cli release-assets \
+            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$first" \
+            PYTHON_WHEEL="${wheel_first[0]}"
+          make -C cli release-assets \
+            VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" RELEASE_DIR="$second" \
+            PYTHON_WHEEL="${wheel_second[0]}"
+
+          expected=(
+            LICENSE
+            SHA256SUMS
+            install.sh
+            tau-darwin-amd64
+            tau-darwin-arm64
+            tau-gen-darwin-amd64
+            tau-gen-darwin-arm64
+            tau-gen-linux-amd64
+            tau-gen-linux-arm64
+            tau-linux-amd64
+            tau-linux-arm64
+            "$wheel_name"
+          )
+          printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
+          find "$first" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/actual-assets"
+          diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
+
+          diff -u "$first/SHA256SUMS" "$second/SHA256SUMS"
+          (cd "$first" && shasum -a 256 --check SHA256SUMS)
+          while read -r _ asset; do
+            cmp "$first/$asset" "$second/$asset"
+            case "$asset" in
+              tau-darwin-* | tau-linux-* | tau-gen-darwin-* | tau-gen-linux-*)
+                go version -m "$first/$asset"
+                ;;
+            esac
+          done < "$first/SHA256SUMS"
+
+          host_arch="$(go env GOHOSTARCH)"
+          test "$("$first/tau-darwin-$host_arch" version --short)" = "$VERSION"
+          "$first/tau-darwin-$host_arch" --help >/dev/null
+          "$first/tau-gen-darwin-$host_arch" --help >/dev/null
+
+      - name: Upload preflight assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tau-release-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/tau-release-a/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   required:
     name: Required
     if: always()
@@ -153,6 +330,9 @@ jobs:
       - dependency-review
       - go
       - license-headers
+      - release-build
+      - release-detect
+      - release-installer
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
@@ -160,7 +340,20 @@ jobs:
           DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
           GO_RESULT: ${{ needs.go.result }}
           LICENSE_HEADERS_RESULT: ${{ needs.license-headers.result }}
+          RELEASE_BUILD_RESULT: ${{ needs.release-build.result }}
+          RELEASE_DETECT_RESULT: ${{ needs.release-detect.result }}
+          RELEASE_INSTALLER_RESULT: ${{ needs.release-installer.result }}
+          RELEASE_PREFLIGHT_ENABLED: ${{ needs.release-detect.outputs.enabled }}
         run: |
+          set -euo pipefail
           test "${GO_RESULT}" = success
           test "${LICENSE_HEADERS_RESULT}" = success
           test "${DEPENDENCY_REVIEW_RESULT}" = success || test "${DEPENDENCY_REVIEW_RESULT}" = skipped
+          test "${RELEASE_DETECT_RESULT}" = success
+          if [[ "${RELEASE_PREFLIGHT_ENABLED}" == "true" ]]; then
+            test "${RELEASE_INSTALLER_RESULT}" = success
+            test "${RELEASE_BUILD_RESULT}" = success
+          else
+            test "${RELEASE_INSTALLER_RESULT}" = skipped
+            test "${RELEASE_BUILD_RESULT}" = skipped
+          fi
