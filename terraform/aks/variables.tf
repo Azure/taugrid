@@ -182,7 +182,7 @@ variable "enable_adx" {
 }
 
 variable "enable_lifecycle_recorder" {
-  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true and an existing workload namespace."
+  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true; Terraform bootstraps the configured workload namespace."
   type        = bool
   default     = false
 
@@ -193,9 +193,14 @@ variable "enable_lifecycle_recorder" {
 }
 
 variable "workspace_namespace" {
-  description = "Existing TauWorkspace namespace shown by Portal and observed by the lifecycle recorder."
+  description = "Target workload namespace shown by Portal and observed by the lifecycle recorder."
   type        = string
   default     = "taugrid-default"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.workspace_namespace)) && length(var.workspace_namespace) <= 63
+    error_message = "workspace_namespace must be a lowercase Kubernetes namespace name of at most 63 characters."
+  }
 }
 
 variable "adx_cluster_name" {

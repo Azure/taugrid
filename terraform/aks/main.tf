@@ -302,6 +302,29 @@ resource "terraform_data" "normalize_gpu_mig" {
   ]
 }
 
+resource "terraform_data" "bootstrap_lifecycle_namespace" {
+  count = var.enable_lifecycle_recorder ? 1 : 0
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    var.workspace_namespace,
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = local.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl create namespace '${var.workspace_namespace}' --dry-run=client -o yaml | kubectl apply -f -"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.gpu,
+  ]
+}
+
 resource "terraform_data" "install_taugrid" {
   count = var.install_taugrid ? 1 : 0
 
@@ -327,6 +350,7 @@ resource "terraform_data" "install_taugrid" {
     terraform_data.install_nvidia_device_plugin,
     terraform_data.install_dcgm_exporter,
     terraform_data.normalize_gpu_mig,
+    terraform_data.bootstrap_lifecycle_namespace,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
     terraform_data.install_adx_mon,
