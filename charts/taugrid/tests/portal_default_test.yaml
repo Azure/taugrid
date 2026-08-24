@@ -20,7 +20,7 @@ tests:
           value: tau-portal
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.3.0
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.3.1
       - notExists:
           path: spec.template.spec.nodeSelector
 

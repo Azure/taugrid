@@ -65,7 +65,7 @@ that goal are welcome.
 ```bash
 helm install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.3.0 \
+  --version 0.3.1 \
   --namespace tau-system \
   --create-namespace
 ```

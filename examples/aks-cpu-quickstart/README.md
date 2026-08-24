@@ -318,7 +318,7 @@ does not require ADX/Kusto:
 # NOTE: the chart takes a tag only. templates/stellar.yaml renders
 # "{{ .repository }}:{{ .tag }}" and has no digest support. Use the release tag
 # matching the taugrid-core chart and verify it resolves before installing.
-STELLAR_TAG="0.3.0"
+STELLAR_TAG="0.3.1"
 
 # Verify the public image before starting the rollout.
 curl --fail --silent --show-error --output /dev/null \
