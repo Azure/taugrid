@@ -198,8 +198,13 @@ variable "workspace_namespace" {
   default     = "taugrid-default"
 
   validation {
-    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.workspace_namespace)) && length(var.workspace_namespace) <= 63
-    error_message = "workspace_namespace must be a lowercase Kubernetes namespace name of at most 63 characters."
+    condition = (
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.workspace_namespace)) &&
+      length(var.workspace_namespace) <= 63 &&
+      !contains(["default", "tau-platform", "tau-system"], var.workspace_namespace) &&
+      !startswith(var.workspace_namespace, "kube-")
+    )
+    error_message = "workspace_namespace must be a lowercase Kubernetes namespace name of at most 63 characters and cannot be default, a Tau system namespace, or a kube-* namespace."
   }
 }
 
