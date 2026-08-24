@@ -8,7 +8,7 @@ aliases:
   - "/docs/tasks/platform/enable-lifecycle-recorder/"
 ---
 
-{{< maturity status="alpha" reviewed="2026-08-17" >}}
+{{< maturity status="alpha" reviewed="2026-08-26" >}}
 
 The lifecycle recorder is an optional, standalone ADX/Kusto producer; Portal
 is one optional consumer of its output. It runs one metadata-only `tau run history record` Deployment and
@@ -20,9 +20,14 @@ history, but the recorder is useful independently of Portal.
 
 Before enabling the recorder:
 
-1. Create the workload namespace yourself, usually by creating its
-   TauWorkspace first; the recorder chart intentionally expects
-   `targetNamespace` to already exist.
+1. For a manual Helm or `tau cluster install` workflow, create the workload
+   namespace first, usually by creating its TauWorkspace; the recorder chart
+   intentionally expects `targetNamespace` to already exist. The repository's
+   [full-cluster Terraform workflow](../../examples/full-cluster/) instead
+   bootstraps that namespace before installing TauGrid. It can apply a
+   configured `bootstrap_workspace` later in the same apply, or let a platform
+   owner create a TauWorkspace that adopts and reconciles the namespace after
+   the apply.
 2. [Prepare ADX/Kusto](../prepare-adx-kusto/), deploy adx-mon, and grant its
    identity the ADX database `Admin` role on `Metrics`. The TauGrid chart
    creates an adx-mon `ManagementCommand` for the lifecycle table, mapping, and
