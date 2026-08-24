@@ -21,3 +21,8 @@ Follow the first-class path in this order:
 4. Complete [Tau Workspace Setup](tau-workspace-setup/).
 5. Complete the [researcher quickstart](quickstart/).
 6. For GPU HPO, continue with the canonical [Ray Tune on AKS walkthrough](../examples/gpu-ray-tune/).
+
+For a self-service AKS evaluation environment, follow [Provision the platform
+baseline](../examples/full-cluster/). It provisions AKS, installs TauGrid,
+creates a workspace, and runs a smoke workload. Continue with the researcher
+quickstart after that baseline succeeds.

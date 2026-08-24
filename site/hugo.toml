@@ -51,7 +51,7 @@ disableKinds = ["taxonomy", "term"]
   github_branch = "main"
   githubbranch = "main"
   copyright = "Microsoft"
-  version = "v0.1.3"
+  version = "v0.3.1"
   version_menu = "Version"
   archived_version = false
   offlineSearch = true
@@ -60,7 +60,7 @@ disableKinds = ["taxonomy", "term"]
   prism_syntax_highlighting = false
 
   [[params.versions]]
-    version = "v0.1.3"
+    version = "v0.3.1"
     url = "https://azure.github.io/taugrid/"
   [[params.versions]]
     version = "main source"
