@@ -98,11 +98,13 @@ def test_build_is_byte_stable_and_records_final_train_eval_intent(
         )
         """,
     )
+    # Connected submission resolves placement from the authoritative
+    # TauCluster workload profile, so the cross-language golden must not carry
+    # the legacy policy.gpu_class selector.
     overrides = BuildOverrides(
         namespace="export-ns",
         data_pvc="durable-data",
         queue="priority-queue",
-        gpu_class="any",
         worker_cpu_request=12,
         worker_memory_limit="96Gi",
     )
@@ -146,7 +148,7 @@ def test_build_is_byte_stable_and_records_final_train_eval_intent(
     for config in (train_config, eval_config):
         assert config["policy"]["namespace"] == "export-ns"
         assert config["storage"]["data_pvc"] == "durable-data"
-        assert config["policy"]["gpu_class"] == "any"
+        assert "gpu_class" not in config["policy"]
         assert config["compute"]["worker_cpus"] == 12
         assert config["compute"]["worker_memory_limit"] == "96Gi"
         assert not Path(config["run"]["entrypoint"]).is_absolute()
