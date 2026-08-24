@@ -830,7 +830,7 @@
   async function renderClusterSection(view) {
     view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
       "Latest per-GPU health from GpuHealth() (Metrics ADX), via /api/portal/cluster. " +
-      "InfiniBand, NPD, and AlertRule signals are deferred (see internal/portalapi/README.md)."));
+      "Additional network and alert signals will be available in a future update."));
     // A drill-down from the Cost board (idle GPU → this node) arrives as
     // ?instance=; forward it to the API and show the active scope.
     const instance = new URLSearchParams(location.search).get("instance") || "";
@@ -982,7 +982,7 @@
     view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Cost"));
     view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
       "GPU-hours by namespace and idle GPUs, derived from GpuHealth() utilization, via /api/portal/cost. " +
-      "Per-user/team attribution and budgets are deferred (see internal/portalapi/README.md)."));
+      "Per-user/team attribution and budgets will be available in a future update."));
     let snap;
     try {
       snap = await fetchJSON("/api/portal/cost");
@@ -1167,9 +1167,8 @@
   // gated), and Recent (Complete/Failed terminal). The API (/api/portal/runs)
   // returns only name/kind/status/age — progress bars, ETA, loss/accuracy, queue
   // position, and priority in the mockup have no backend data source yet
-  // (internal/portalapi/README.md → deferred), so they are intentionally omitted
-  // rather than faked. "+ Submit new" is a visual placeholder; the portal is
-  // read-only and submission is a future increment.
+  // so they are intentionally omitted rather than faked. "+ Submit new" is a
+  // visual placeholder; the portal is read-only and submission is a future increment.
   async function renderRuns(view) {
     const head = el("div", { class: "page-head" });
     head.append(el("div", {},
@@ -1290,7 +1289,7 @@
     }
 
     view.append(el("p", { class: "note" },
-      "Progress, ETA, and training metrics are a future increment (see internal/portalapi/README.md)."));
+      "Progress, ETA, and training metrics will be available in a future update."));
   }
 
   // renderJobDetail is the per-job detail page (/portal/runs/<ns>/<name>). It
@@ -1533,7 +1532,7 @@
   // CPU/memory table from /api/portal/nodeutil. The node section is best-effort
   // and renders even when GPU telemetry is unavailable or empty (node-exporter
   // typically covers the whole fleet where DCGM does not). A per-team heatmap
-  // remains a deferred backend (see internal/portalapi/README.md).
+  // is not available yet.
   async function renderGpuUtilSection(view) {
     view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
       "Per-GPU utilization from GpuHealth() (via /api/portal/cluster), with per-node CPU/memory from node-exporter (via /api/portal/nodeutil) below."));
@@ -1560,7 +1559,7 @@
       "window: " + (snap.window || "—") + " · GPUs: " + gpus.length +
       " · cluster avg: " + n1(avg) + "% · idle (<5%): " + idle));
     view.append(el("p", { class: "note", style: "margin-top:4px;" },
-      "Heatmap and per-team breakdown are deferred (see internal/portalapi/README.md)."));
+      "Heatmap and per-team breakdown will be available in a future update."));
 
     const table = el("table", { class: "jobs" });
     table.append(el("thead", {}, el("tr", {},
@@ -1649,9 +1648,7 @@
     view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
       "adx-mon ingestion pipeline health — Collector, Ingestor, Alerter, and AlertRule status."));
     view.append(el("div", { class: "empty" },
-      "This board is not implemented yet. It requires a backend that reads the adx-mon " +
-      "Collector/Ingestor/Alerter/AlertRule CRDs, pod readiness, and ingestor WAL metrics — " +
-      "none of which the portal reads today. See internal/portalapi/README.md → Deferred backends."));
+      "This board is not available yet. It will be available in a future update."));
   }
 
   // renderExperiments embeds the mounted Stellar SPA in a same-origin iframe so
