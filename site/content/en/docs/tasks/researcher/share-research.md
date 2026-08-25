@@ -10,11 +10,21 @@ TauGrid clusters make it easy to share research results with your team.
 Researchers working from different machines can use the same cluster and
 workspace to view and compare the same runs, logs, and charts.
 
+## Access model used in this guide
+
+This guide describes the current interim admin-access workflow. The cluster
+owner gives each researcher their own cluster-admin kubeconfig. Each researcher
+keeps those credentials on their own machine and uses a separate port-forward
+to the shared Portal Service.
+
+This workflow does not use workspace-directory browser authentication. That
+mode requires an external sign-in proxy that is not part of the current setup.
+
 ## Before you start
 
 Both researchers need:
 
-- access to the same TauGrid cluster;
+- their own cluster-admin kubeconfig for the same TauGrid cluster;
 - access to the same workspace;
 - the same research project; and
 - the kubeconfig path, context, Portal namespace, and Portal Service name
@@ -73,8 +83,10 @@ the queue.
 
 ## Share a Portal view
 
-Each researcher starts a separate port-forward on their own machine. Use the
-kubeconfig, context, namespace, and Service name supplied by the cluster owner.
+Each researcher starts a separate port-forward on their own machine. This opens
+the current admin Portal view; it does not sign researchers in separately. Use
+the kubeconfig, context, namespace, and Service name supplied by the cluster
+owner.
 
 On Researcher 1's machine:
 
