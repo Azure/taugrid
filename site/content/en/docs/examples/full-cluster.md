@@ -121,8 +121,9 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.al
 ```
 
 The default path is an operator sandbox using local administrator credentials.
-It creates platform infrastructure only. Create a workspace later with an
-explicit Entra group object ID, then submit the built-in smoke run:
+It creates platform infrastructure only, so a platform owner provisions the
+researcher workspace with an explicit Entra group object ID before submitting
+the built-in smoke run:
 
 ```bash
 tau workspace create taugrid-default \
@@ -131,10 +132,10 @@ tau workspace create taugrid-default \
 tau run smoke
 ```
 
-For a one-apply Entra-backed workspace, set the following before the first
-`terraform apply`. Terraform applies a native `TauWorkspace` after `tau cluster
-install`; the controller reconciles the workload Namespace, `jobqueue`
-LocalQueue, and namespace-scoped researcher RBAC.
+To provision the Entra-backed workspace in the same apply, set the following
+before the first `terraform apply`. Terraform applies a native `TauWorkspace`
+after `tau cluster install`; the controller reconciles the workload Namespace,
+`jobqueue` LocalQueue, and namespace-scoped researcher RBAC.
 
 ```hcl
 workspace_namespace = "taugrid-default"
