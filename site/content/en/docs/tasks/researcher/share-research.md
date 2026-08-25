@@ -6,8 +6,7 @@ description: View the same runs, queue state, logs, and charts from two machines
 
 {{< maturity status="alpha" reviewed="2026-08-24" >}}
 
-TauGrid clusters make it easy to share research results with your team after
-the platform owner configures workspace access and an authenticated Portal.
+TauGrid clusters make it easy to share research results with your team.
 Researchers working from different machines can use the same cluster and
 workspace to view and compare the same runs, logs, and charts.
 
@@ -18,7 +17,8 @@ Both researchers need:
 - access to the same TauGrid cluster;
 - access to the same workspace;
 - the same research project; and
-- access to the authenticated Portal address supplied by the cluster owner.
+- the kubeconfig path, context, Portal namespace, and Portal Service name
+  supplied by the cluster owner.
 
 Do not send kubeconfig files, tokens, passwords, or secrets to each other.
 
@@ -73,26 +73,48 @@ the queue.
 
 ## Share a Portal view
 
-The cluster owner must provide a platform-managed HTTPS Portal address with
-sign-in enabled. Direct `kubectl port-forward` access is an operator diagnostic,
-not a researcher access path.
+Each researcher starts a separate port-forward on their own machine. Use the
+kubeconfig, context, namespace, and Service name supplied by the cluster owner.
 
-Each researcher opens the Portal address from their own machine and signs in
-with an account that has access to the workspace:
+On Researcher 1's machine:
 
-```text
-https://<portal-address>/portal
+```bash
+kubectl --kubeconfig <cluster-kubeconfig> \
+  --context <cluster-context> \
+  --namespace <portal-namespace> \
+  port-forward service/<portal-service> 8080:80
 ```
 
-Researcher 1 opens a run and sends its full browser link to Researcher 2. A
-Stellar link has this form:
+On Researcher 2's machine, run the same command with that machine's own
+cluster credentials:
 
-```text
-https://<portal-address>/stellar?target=<run-name>&project=<project>&workspace=<workspace>
+```bash
+kubectl --kubeconfig <cluster-kubeconfig> \
+  --context <cluster-context> \
+  --namespace <portal-namespace> \
+  port-forward service/<portal-service> 8080:80
 ```
 
-The Portal selects the data source configured for that workspace. Researchers
-do not need to add a `source` setting to the link.
+Keep each port-forward terminal open. Each researcher opens this address in a
+browser on their own machine:
+
+```text
+http://127.0.0.1:8080/portal
+```
+
+The addresses look the same, but each one uses the port-forward running on that
+researcher's machine. Both port-forwards connect to the same Portal Service in
+the cluster.
+
+Researcher 1 opens a run and sends its full Stellar link to Researcher 2. A
+shared link has this form:
+
+```text
+http://127.0.0.1:8080/stellar?target=<run-name>&project=<project>&workspace=<workspace>
+```
+
+Researcher 2 opens the link while their own port-forward is running. The Portal
+uses the data source configured for the workspace.
 
 Both researchers should check:
 
@@ -138,9 +160,10 @@ tau run logs tune-smoke
 The names `ray-tune-demo` and `shared-research` are sample names. A team can
 replace them with its own project and workspace names.
 
-Researcher 1 opens `tune-smoke` in the authenticated Portal and sends the full
-browser link to Researcher 2. Both researchers should see the same run name and
-state. Use the next example to publish metrics and compare charts in Stellar.
+Researcher 1 opens `tune-smoke` through their port-forward and sends the full
+browser link to Researcher 2. Researcher 2 opens it through their own
+port-forward. Both researchers should see the same run name and state. Use the
+next example to publish metrics and compare charts in Stellar.
 
 ## Example: compare several runs
 
@@ -152,8 +175,12 @@ them on one page.
 Before starting, ask the cluster owner to confirm that:
 
 - the workspace is Ready and has a writable `blob-training` PVC;
+- the workspace has GPU quota and allocatable GPU capacity;
 - the Portal has a Kusto query source for the workspace; and
 - you have the platform-supplied `taugrid-portal` image pinned by digest.
+
+Each run uses one GPU. One available GPU can run them one at a time; three
+available GPUs can run all three at the same time.
 
 Set the image and offloader working directory in the terminal that starts the
 runs:
@@ -163,12 +190,13 @@ export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
 ```
 
-Create three Tau config files from the example:
+Copy the example so `train.py` stays beside the Tau config files:
 
-```text
-tau/baseline.yaml
-tau/short-run.yaml
-tau/long-run.yaml
+```bash
+cp -R examples/portal-ray-stellar ray-metric-study
+cp ray-metric-study/tau.yaml ray-metric-study/baseline.yaml
+cp ray-metric-study/tau.yaml ray-metric-study/short-run.yaml
+cp ray-metric-study/tau.yaml ray-metric-study/long-run.yaml
 ```
 
 Keep the same project and experiment name in all three files:
@@ -183,11 +211,11 @@ Give each file its own run name, group, output folder, and step count:
 
 | Config | Run name | Group | Output folder | Steps |
 |---|---|---|---|---|
-| `tau/baseline.yaml` | `ray-baseline` | `baseline` | `/data/projects/shared-research/runs/ray-metric-study/baseline` | `20` |
-| `tau/short-run.yaml` | `ray-short-run` | `short-run` | `/data/projects/shared-research/runs/ray-metric-study/short-run` | `10` |
-| `tau/long-run.yaml` | `ray-long-run` | `long-run` | `/data/projects/shared-research/runs/ray-metric-study/long-run` | `40` |
+| `ray-metric-study/baseline.yaml` | `ray-baseline` | `baseline` | `/data/projects/shared-research/runs/ray-metric-study/baseline` | `20` |
+| `ray-metric-study/short-run.yaml` | `ray-short-run` | `short-run` | `/data/projects/shared-research/runs/ray-metric-study/short-run` | `10` |
+| `ray-metric-study/long-run.yaml` | `ray-long-run` | `long-run` | `/data/projects/shared-research/runs/ray-metric-study/long-run` | `40` |
 
-For example, the changing part of `tau/baseline.yaml` is:
+For example, the changing part of `ray-metric-study/baseline.yaml` is:
 
 ```yaml
 name: ray-baseline
@@ -218,9 +246,9 @@ the cluster owner.
 Researcher 1 starts the three runs:
 
 ```bash
-tau run --config tau/baseline.yaml
-tau run --config tau/short-run.yaml
-tau run --config tau/long-run.yaml
+tau run --config ray-metric-study/baseline.yaml
+tau run --config ray-metric-study/short-run.yaml
+tau run --config ray-metric-study/long-run.yaml
 ```
 
 Researcher 1 sends Researcher 2 the shared experiment name:
@@ -229,14 +257,14 @@ Researcher 1 sends Researcher 2 the shared experiment name:
 ray-metric-study
 ```
 
-Researcher 1 opens the experiment in the authenticated Portal and sends its full
-link to Researcher 2. The link has this form:
+Researcher 1 opens the experiment through their port-forward and sends its full
+link to Researcher 2:
 
 ```text
-https://<portal-address>/stellar?target=ray-metric-study&project=ray-tune-demo&workspace=shared-research
+http://127.0.0.1:8080/stellar?target=ray-metric-study&project=ray-tune-demo&workspace=shared-research
 ```
 
-Each researcher opens the link from their own machine and signs in. The
+Researcher 2 opens the link while their own port-forward is running. The
 experiment page should show all three runs together. Both researchers can
 compare the `loss` and `accuracy` charts for `baseline`, `short-run`, and
 `long-run`.
@@ -258,7 +286,7 @@ Check these items in order:
 1. Both researchers are using the same cluster.
 2. Both researchers are using the same workspace.
 3. Both researchers opened the same run name and project.
-4. Both researchers signed in to the authenticated Portal.
+4. Each researcher's port-forward is still running.
 5. Both browser pages were refreshed.
 
 If a chart is still missing, send the run name, project, workspace, and missing
