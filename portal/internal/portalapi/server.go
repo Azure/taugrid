@@ -792,7 +792,9 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	// Each gate names only its own remedy: one shared message would send an
 	// operator whose scope mode is already correct off to re-check it.
 	if jobsMode(s.jobs) == JobsScopeDisabled {
-		writeScopedError(w, http.StatusServiceUnavailable, scope, "jobs board unavailable: no Jobs scope mode is configured; set --jobs-scope-mode (Helm: portal.jobs.scopeMode) to workspace or operator")
+		writeScopedJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"reason": "jobs board setup is required; set --jobs-scope-mode (Helm: portal.jobs.scopeMode) to workspace or operator",
+		}, scope, "setup_required")
 		return
 	}
 	if s.jobs.Reader == nil {
