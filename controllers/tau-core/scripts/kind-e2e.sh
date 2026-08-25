@@ -127,6 +127,32 @@ load_local_image() {
     kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
 }
 
+build_local_image() {
+  local build_args=(
+    build
+    --file "${IMAGE_DOCKERFILE}"
+    --tag "${LOCAL_IMAGE}"
+  )
+  if [[ "${CONTAINER_ENGINE}" == "docker" ]]; then
+    # Docker's container-backed Buildx driver otherwise leaves the result only
+    # in its build cache, where `kind load docker-image` cannot inspect it.
+    build_args+=(--load)
+  fi
+  "${CONTAINER_ENGINE}" "${build_args[@]}" "${REPO_ROOT}"
+}
+
+run_with_tty() {
+  if script --version 2>/dev/null | grep -q 'util-linux'; then
+    local quoted_command
+    printf -v quoted_command '%q ' "$@"
+    script -q -e -c "${quoted_command}" /dev/null
+    return
+  fi
+
+  # BSD script accepts the command as trailing arguments rather than via -c.
+  script -q -e /dev/null "$@"
+}
+
 cleanup() {
   local status=$?
   if [[ "${DELETE_CLUSTER}" == "1" || ( -z "${DELETE_CLUSTER}" && "${CREATED_CLUSTER}" == "1" ) ]]; then
@@ -412,10 +438,7 @@ kubectl apply -k "${APP_BASE_DIR}"
 
 # --- Build and load the controller image locally; no external mutable
 # image is introduced, and no network access is required after this point.
-"${CONTAINER_ENGINE}" build \
-  --file "${IMAGE_DOCKERFILE}" \
-  --tag "${LOCAL_IMAGE}" \
-  "${REPO_ROOT}"
+build_local_image
 load_local_image
 
 # Overlay the Deployment with the locally-built image and
@@ -876,9 +899,10 @@ JSON
 # non-interactive path.
 if ! (
   cd "${tau_home}"
-  script -q -e -c \
-    "env HOME='${tau_home}/home' TAU_CONFIG_DIR='${tau_home}/tau-config' '${tau_home}/tau-bin' run train --dry-run=client" \
-    /dev/null
+  run_with_tty env \
+    HOME="${tau_home}/home" \
+    TAU_CONFIG_DIR="${tau_home}/tau-config" \
+    "${tau_home}/tau-bin" run train --dry-run=client
 ) >"${tau_home}/verified-train.yaml"; then
   cat "${tau_home}/verified-train.yaml" >&2
   exit 1
@@ -987,6 +1011,82 @@ fi
 if kubectl -n "${SYSTEM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1 ||
    kubectl -n "${SYSTEM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
   echo "cluster-wide authorization retained platform-reader RBAC" >&2
+  exit 1
+fi
+kubectl -n "${TARGET_NAMESPACE}" get serviceaccount tau-workload >/dev/null
+
+# Transition the same desired state back to subject-specific authorization and
+# prove the controller recreates every owned grant without broadening access.
+echo "== switching TauWorkspace back to workspace-rbac authorization =="
+kubectl -n "${SYSTEM_NAMESPACE}" patch "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+  --type=merge -p "{
+    \"spec\": {
+      \"authorization\": {\"mode\": \"workspace-rbac\"},
+      \"principalRef\": {\"provider\": \"entra\", \"name\": \"${WORKSPACE_GROUP}\"},
+      \"kubernetesSubject\": {\"kind\": \"Group\", \"name\": \"${WORKSPACE_GROUP}\"},
+      \"role\": \"tau-researcher-v1\"
+    }
+  }"
+
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  reason="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+    -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' 2>/dev/null || true)"
+  [[ "${reason}" == "RoleBindingReady" ]] && break
+  sleep 1
+done
+kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+  -o jsonpath='{.spec.authorization.mode}' | grep -qx workspace-rbac
+kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+  -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' | grep -qx RoleBindingReady
+
+echo "== re-verifying workspace-rbac permissions after authorization migration =="
+kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+kubectl auth can-i get "clusterqueues.kueue.x-k8s.io/${WORKSPACE_NAME}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+[[ "$(kubectl auth can-i get secrets -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i list clusterqueues.kueue.x-k8s.io --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+[[ "$(kubectl auth can-i create namespaces --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+
+echo "== verifying all workspace-rbac bindings were recreated =="
+kubectl -n "${TARGET_NAMESPACE}" get rolebinding tau-researcher-v1 \
+  -o jsonpath='{.roleRef.kind}{" "}{.roleRef.name}{" "}{.subjects[0].kind}{" "}{.subjects[0].apiGroup}{" "}{.subjects[0].name}{" "}{.metadata.labels.app\.kubernetes\.io/managed-by}{" "}{.metadata.labels.tau\.azure\.com/workspace}{"\n"}' |
+  grep -qx "ClusterRole tau-researcher-v1 Group rbac.authorization.k8s.io ${WORKSPACE_GROUP} tau-core-controller ${WORKSPACE_NAME}"
+kubectl -n "${SYSTEM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" \
+  -o jsonpath='{.rules[0].resourceNames[0]}{" "}{.metadata.labels.app\.kubernetes\.io/managed-by}{" "}{.metadata.labels.tau\.azure\.com/workspace}{"\n"}' |
+  grep -qx "${WORKSPACE_NAME} tau-core-controller ${WORKSPACE_NAME}"
+kubectl -n "${SYSTEM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" \
+  -o jsonpath='{.roleRef.kind}{" "}{.roleRef.name}{" "}{.subjects[0].kind}{" "}{.subjects[0].apiGroup}{" "}{.subjects[0].name}{" "}{.metadata.labels.app\.kubernetes\.io/managed-by}{" "}{.metadata.labels.tau\.azure\.com/workspace}{"\n"}' |
+  grep -qx "Role tau-workspace-reader-${WORKSPACE_NAME} Group rbac.authorization.k8s.io ${WORKSPACE_GROUP} tau-core-controller ${WORKSPACE_NAME}"
+kubectl get clusterrolebinding "tau-clusterqueue-reader-${WORKSPACE_NAME}" \
+  -o jsonpath='{.roleRef.kind}{" "}{.roleRef.name}{" "}{.subjects[0].kind}{" "}{.subjects[0].apiGroup}{" "}{.subjects[0].name}{" "}{.metadata.labels.app\.kubernetes\.io/managed-by}{" "}{.metadata.labels.tau\.azure\.com/workspace}{"\n"}' |
+  grep -qx "ClusterRole tau-clusterqueue-reader-v1 Group rbac.authorization.k8s.io ${WORKSPACE_GROUP} tau-core-controller ${WORKSPACE_NAME}"
+
+# Restore cluster-wide authorization so the existing finalizer assertions retain
+# their original precondition.
+echo "== returning TauWorkspace to cluster-wide existing authorization =="
+kubectl -n "${SYSTEM_NAMESPACE}" patch "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+  --type=json -p='[
+    {"op":"replace","path":"/spec/authorization/mode","value":"cluster-wide"},
+    {"op":"remove","path":"/spec/principalRef"},
+    {"op":"remove","path":"/spec/kubernetesSubject"},
+    {"op":"remove","path":"/spec/role"}
+  ]'
+
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  reason="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+    -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' 2>/dev/null || true)"
+  [[ "${reason}" == "ExistingClusterAuthorization" ]] && break
+  sleep 1
+done
+kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
+  -o jsonpath='{.status.conditions[?(@.type=="RBACReady")].reason}' | grep -qx ExistingClusterAuthorization
+if kubectl -n "${TARGET_NAMESPACE}" get rolebinding tau-researcher-v1 >/dev/null 2>&1 ||
+   kubectl -n "${SYSTEM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1 ||
+   kubectl -n "${SYSTEM_NAMESPACE}" get rolebinding "tau-workspace-reader-${WORKSPACE_NAME}" >/dev/null 2>&1 ||
+   kubectl get clusterrolebinding "tau-clusterqueue-reader-${WORKSPACE_NAME}" >/dev/null 2>&1; then
+  echo "return to cluster-wide authorization retained workspace-rbac grants" >&2
   exit 1
 fi
 kubectl -n "${TARGET_NAMESPACE}" get serviceaccount tau-workload >/dev/null

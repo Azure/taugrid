@@ -572,6 +572,136 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 	}
 }
 
+func TestWorkspaceAuthorizationTransitionsClusterWideToWorkspaceRBAC(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.PrincipalRef = nil
+	workspace.Spec.KubernetesSubject = nil
+	workspace.Spec.Role = ""
+	unrelatedBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "platform-managed",
+			Namespace: "aurora",
+			Labels:    map[string]string{"owner": "platform"},
+		},
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "platform-reader"},
+		Subjects: []rbacv1.Subject{{
+			Kind:     rbacv1.GroupKind,
+			APIGroup: rbacv1.GroupName,
+			Name:     "platform-operators",
+		}},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			workspace,
+			testLocalQueue("aurora", "aurora", "aurora-cq"),
+			unrelatedBinding,
+		).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
+
+	for _, step := range []string{"add finalizer", "persist primary marker", "reconcile cluster-wide workspace"} {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	for _, obj := range []client.Object{
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: "aurora"}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: workspaceReaderRBACName("aurora"), Namespace: tauv1alpha1.SystemNamespace}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: workspaceReaderRBACName("aurora"), Namespace: tauv1alpha1.SystemNamespace}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName("aurora")}},
+	} {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); !apierrors.IsNotFound(err) {
+			t.Fatalf("cluster-wide authorization unexpectedly has %T: %v", obj, err)
+		}
+	}
+
+	var transitioned tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, req.NamespacedName, &transitioned); err != nil {
+		t.Fatalf("Get cluster-wide workspace: %v", err)
+	}
+	transitioned.Generation++
+	transitioned.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeWorkspaceRBAC}
+	transitioned.Spec.PrincipalRef = &tauv1alpha1.PrincipalRef{
+		Provider: tauv1alpha1.PrincipalProviderEntra,
+		Name:     "aurora-researchers",
+	}
+	transitioned.Spec.KubernetesSubject = &tauv1alpha1.KubernetesSubject{
+		Kind: rbacv1.GroupKind,
+		Name: "aurora-researchers",
+	}
+	transitioned.Spec.Role = defaultRoleName
+	if err := c.Update(ctx, &transitioned); err != nil {
+		t.Fatalf("transition workspace to workspace-rbac: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile workspace-rbac transition: %v", err)
+	}
+
+	wantLabels := workspaceLabels("aurora")
+	wantSubject := []rbacv1.Subject{{
+		Kind:     rbacv1.GroupKind,
+		APIGroup: rbacv1.GroupName,
+		Name:     "aurora-researchers",
+	}}
+
+	var targetBinding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: "aurora"}, &targetBinding); err != nil {
+		t.Fatalf("target RoleBinding not reconciled: %v", err)
+	}
+	if !reflect.DeepEqual(targetBinding.Labels, wantLabels) ||
+		targetBinding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}) ||
+		!reflect.DeepEqual(targetBinding.Subjects, wantSubject) {
+		t.Fatalf("target RoleBinding = %#v, want owned Group binding", targetBinding)
+	}
+
+	readerName := workspaceReaderRBACName("aurora")
+	var readerRole rbacv1.Role
+	if err := c.Get(ctx, client.ObjectKey{Name: readerName, Namespace: tauv1alpha1.SystemNamespace}, &readerRole); err != nil {
+		t.Fatalf("system reader Role not reconciled: %v", err)
+	}
+	if !reflect.DeepEqual(readerRole.Labels, wantLabels) ||
+		len(readerRole.Rules) == 0 ||
+		!reflect.DeepEqual(readerRole.Rules[0].ResourceNames, []string{"aurora"}) {
+		t.Fatalf("system reader Role = %#v, want owned workspace-scoped Role", readerRole)
+	}
+
+	var readerBinding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKey{Name: readerName, Namespace: tauv1alpha1.SystemNamespace}, &readerBinding); err != nil {
+		t.Fatalf("system reader RoleBinding not reconciled: %v", err)
+	}
+	if !reflect.DeepEqual(readerBinding.Labels, wantLabels) ||
+		readerBinding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: readerName}) ||
+		!reflect.DeepEqual(readerBinding.Subjects, wantSubject) {
+		t.Fatalf("system reader RoleBinding = %#v, want owned Group binding", readerBinding)
+	}
+
+	var clusterQueueBinding rbacv1.ClusterRoleBinding
+	if err := c.Get(ctx, client.ObjectKey{Name: clusterQueueReaderBindingName("aurora")}, &clusterQueueBinding); err != nil {
+		t.Fatalf("ClusterQueue reader ClusterRoleBinding not reconciled: %v", err)
+	}
+	if !reflect.DeepEqual(clusterQueueBinding.Labels, wantLabels) ||
+		clusterQueueBinding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterQueueReaderRoleName}) ||
+		!reflect.DeepEqual(clusterQueueBinding.Subjects, wantSubject) {
+		t.Fatalf("ClusterQueue reader ClusterRoleBinding = %#v, want owned Group binding", clusterQueueBinding)
+	}
+
+	var gotUnrelated rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(unrelatedBinding), &gotUnrelated); err != nil {
+		t.Fatalf("unrelated RoleBinding was removed: %v", err)
+	}
+	if !reflect.DeepEqual(gotUnrelated.Labels, unrelatedBinding.Labels) ||
+		gotUnrelated.RoleRef != unrelatedBinding.RoleRef ||
+		!reflect.DeepEqual(gotUnrelated.Subjects, unrelatedBinding.Subjects) {
+		t.Fatalf("unrelated RoleBinding changed: %#v", gotUnrelated)
+	}
+}
+
 func TestWorkspaceClusterWideAuthorizationDoesNotDeleteForeignRBAC(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
