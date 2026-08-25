@@ -87,9 +87,7 @@ portal:
     create: true
   researcherPortForward:
     acknowledgeDedicatedNamespace: true
-    subjects:
-      - kind: Group
-        name: <existing-kubernetes-group>
+    group: <existing-kubernetes-group>
 ```
 
 `single-workspace` locks request workspace and namespace parameters, exposes
@@ -186,7 +184,7 @@ the researcher machines.
 Portal transport and workspace workload access have different owners and must be
 rolled back separately.
 
-1. Remove `portal.researcherPortForward.subjects` and Helm-upgrade or roll back
+1. Clear `portal.researcherPortForward.group` and Helm-upgrade or roll back
    the Portal release. Confirm researcher port-forward is denied.
 2. Restore the prior Portal values if reverting the fixed-scope profile.
 3. With the retained operator credential, restore cluster-wide workspace mode.

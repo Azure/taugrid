@@ -369,9 +369,9 @@ portal:
   # intended Portal workload before this is enabled.
   researcherPortForward:
     acknowledgeDedicatedNamespace: false
-    # Identity-provider-neutral Kubernetes RBAC subjects. Supported kinds are
-    # User and Group. Empty keeps researcher port-forward access disabled.
-    subjects: []
+    # Kubernetes group allowed to port-forward the Portal Service. On AKS, use
+    # the same Entra group object ID bound by the TauWorkspace. Empty disables it.
+    group: ""
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal

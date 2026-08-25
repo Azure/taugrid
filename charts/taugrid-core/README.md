@@ -336,9 +336,9 @@ Until that platform path exists, keep
 `portal.access.mode=cluster-internal` and leave `externalURL` empty. In that
 state there is intentionally no per-user browser signoff. By default,
 `kubectl port-forward` remains an operator diagnostic. A platform may opt into
-`portal.researcherPortForward.subjects` only with the single-workspace profile
-and a Portal-only release Namespace. That Role authenticates the Kubernetes
-tunnel, not the application; every authorized subject reaches the same view.
+`portal.researcherPortForward.group` only with the single-workspace profile and
+a Portal-only release Namespace. That Role authenticates the Kubernetes tunnel,
+not the application; every group member reaches the same view.
 Historical IP addresses are not an endpoint contract.
 
 Browser signoff uses only the declared URL:

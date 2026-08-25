@@ -73,7 +73,7 @@ The following are defaults of the TauGrid umbrella distribution used by `tau clu
 | `taugrid-core.portal.serviceAccount.create` | bool | `true` | Create the dedicated Portal ServiceAccount |
 | `taugrid-core.portal.serviceAccount.name` | string | `tau-portal` | Portal ServiceAccount name |
 | `taugrid-core.portal.rbac.create` | bool | `true` | Create cluster-wide read-only RBAC in operator view or workload-Namespace RBAC in single-workspace view |
-| `taugrid-core.portal.researcherPortForward.subjects` | list | `[]` | Optional Kubernetes User/Group subjects allowed to port-forward the Portal Service; requires single-workspace view and a dedicated release Namespace |
+| `taugrid-core.portal.researcherPortForward.group` | string | `""` | Optional Kubernetes group allowed to port-forward the Portal Service; use the TauWorkspace researcher group and a dedicated release Namespace |
 | `taugrid-core.portal.researcherPortForward.acknowledgeDedicatedNamespace` | bool | `false` | Explicitly acknowledge that churn-safe Pod discovery and port-forward access covers every Pod in the Portal Namespace |
 
 These defaults make the Portal shell, Runs and run-detail views, Cluster Nodes view, and live Ray discovery available to an operator through the ClusterIP Service. They do not configure Kusto-backed boards, the scoped computed Jobs board, KueueViz, an authenticated researcher endpoint, or a durable experiment store. See [Configure Portal](../../tasks/platform/enable-portal/) for those capability-specific requirements.

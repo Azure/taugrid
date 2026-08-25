@@ -23,7 +23,7 @@
 {{- end -}}
 {{- $rbac := default dict $portal.rbac -}}
 {{- $researcherPortForward := default dict $portal.researcherPortForward -}}
-{{- $researcherPortForwardSubjects := default list $researcherPortForward.subjects -}}
+{{- $researcherPortForwardGroup := trim (default "" $researcherPortForward.group) -}}
 {{- $researcherPortForwardAcknowledged := default false $researcherPortForward.acknowledgeDedicatedNamespace -}}
 {{- $serviceAccount := default dict $portal.serviceAccount -}}
 {{- $resourceName := default "tau-portal" $portal.resourceName -}}
@@ -109,20 +109,12 @@
 {{- fail "portal.viewProfile=single-workspace requires portal.serviceAccount.create=true" -}}
 {{- end -}}
 {{- end -}}
-{{- if gt (len $researcherPortForwardSubjects) 0 -}}
+{{- if $researcherPortForwardGroup -}}
 {{- if ne $viewProfile "single-workspace" -}}
-{{- fail "portal.researcherPortForward.subjects requires portal.viewProfile=single-workspace" -}}
+{{- fail "portal.researcherPortForward.group requires portal.viewProfile=single-workspace" -}}
 {{- end -}}
 {{- if not $researcherPortForwardAcknowledged -}}
-{{- fail "portal.researcherPortForward.subjects requires acknowledgeDedicatedNamespace=true" -}}
-{{- end -}}
-{{- range $index, $subject := $researcherPortForwardSubjects -}}
-{{- if not (has (default "" $subject.kind) (list "User" "Group")) -}}
-{{- fail (printf "portal.researcherPortForward.subjects[%d].kind must be User or Group" $index) -}}
-{{- end -}}
-{{- if not (trim (default "" $subject.name)) -}}
-{{- fail (printf "portal.researcherPortForward.subjects[%d].name is required" $index) -}}
-{{- end -}}
+{{- fail "portal.researcherPortForward.group requires acknowledgeDedicatedNamespace=true" -}}
 {{- end -}}
 {{- end -}}
 {{- $operatorScopeTeams := dict -}}
@@ -270,7 +262,7 @@ roleRef:
 ---
 {{- end }}
 {{- end }}
-{{- if gt (len $researcherPortForwardSubjects) 0 }}
+{{- if $researcherPortForwardGroup }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -300,11 +292,9 @@ metadata:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}
 subjects:
-{{- range $subject := $researcherPortForwardSubjects }}
-  - kind: {{ $subject.kind }}
+  - kind: Group
     apiGroup: rbac.authorization.k8s.io
-    name: {{ $subject.name | quote }}
-{{- end }}
+    name: {{ $researcherPortForwardGroup | quote }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

@@ -16,11 +16,7 @@ tests:
       portal.rbac.create: true
       portal.serviceAccount.create: true
       portal.researcherPortForward.acknowledgeDedicatedNamespace: true
-      portal.researcherPortForward.subjects:
-        - kind: Group
-          name: research-group
-        - kind: User
-          name: researcher@example.com
+      portal.researcherPortForward.group: research-group
     asserts:
       - hasDocuments:
           count: 7
@@ -72,12 +68,9 @@ tests:
             - kind: Group
               apiGroup: rbac.authorization.k8s.io
               name: research-group
-            - kind: User
-              apiGroup: rbac.authorization.k8s.io
-              name: researcher@example.com
         documentIndex: 3
 
-  - it: renders no transport grant when subjects are empty
+  - it: renders no transport grant when the group is empty
     set:
       portal.enabled: true
       portal.image.tag: test
@@ -96,12 +89,10 @@ tests:
       portal.enabled: true
       portal.image.tag: test
       portal.researcherPortForward.acknowledgeDedicatedNamespace: true
-      portal.researcherPortForward.subjects:
-        - kind: Group
-          name: research-group
+      portal.researcherPortForward.group: research-group
     asserts:
       - failedTemplate:
-          errorMessage: portal.researcherPortForward.subjects requires portal.viewProfile=single-workspace
+          errorMessage: portal.researcherPortForward.group requires portal.viewProfile=single-workspace
 
   - it: requires an explicit dedicated namespace acknowledgement
     set:
@@ -112,43 +103,7 @@ tests:
       portal.workloadNamespace: tau-default
       portal.rbac.create: true
       portal.serviceAccount.create: true
-      portal.researcherPortForward.subjects:
-        - kind: Group
-          name: research-group
+      portal.researcherPortForward.group: research-group
     asserts:
       - failedTemplate:
-          errorMessage: portal.researcherPortForward.subjects requires acknowledgeDedicatedNamespace=true
-
-  - it: rejects ServiceAccount transport subjects
-    set:
-      portal.enabled: true
-      portal.image.tag: test
-      portal.viewProfile: single-workspace
-      portal.workspace: default
-      portal.workloadNamespace: tau-default
-      portal.rbac.create: true
-      portal.serviceAccount.create: true
-      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
-      portal.researcherPortForward.subjects:
-        - kind: ServiceAccount
-          name: researcher
-    asserts:
-      - failedTemplate:
-          errorMessage: portal.researcherPortForward.subjects[0].kind must be User or Group
-
-  - it: requires a subject name
-    set:
-      portal.enabled: true
-      portal.image.tag: test
-      portal.viewProfile: single-workspace
-      portal.workspace: default
-      portal.workloadNamespace: tau-default
-      portal.rbac.create: true
-      portal.serviceAccount.create: true
-      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
-      portal.researcherPortForward.subjects:
-        - kind: Group
-          name: ""
-    asserts:
-      - failedTemplate:
-          errorMessage: portal.researcherPortForward.subjects[0].name is required
+          errorMessage: portal.researcherPortForward.group requires acknowledgeDedicatedNamespace=true
