@@ -7,6 +7,7 @@ description: Run, observe, recover, and compare experiments
 
 - Request workspace access and confirm you're ready to submit — see [Tau Workspace Setup](../../getting-started/tau-workspace-setup/)
 - [Run your first target](first-run/)
+- [Share research with a teammate](share-research/)
 - [Serve a trained model](serve-model/)
 - Inspect [run lifecycle concepts](../../concepts/lifecycle/)
 - Recover with [retry and resume](../../operations/recovery/)
