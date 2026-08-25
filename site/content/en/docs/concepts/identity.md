@@ -27,3 +27,10 @@ way. The [multiple-workspace lifecycle](../workspaces/#multiple-workspaces) is
 Alpha: v0 activates one workspace and blocks additional workspace objects until
 the active workspace is removed. Researcher isolation still requires its
 negative-access and production rollout gates.
+
+Kubernetes transport authorization is a third, narrower concern. An optional
+Portal port-forward Role can authorize a human to open a tunnel without giving
+the Portal application that person's identity. The Portal continues to read as
+its own ServiceAccount, and every authorized tunnel reaches the same view. See
+[single-workspace researcher access](../../tasks/platform/single-workspace-researcher-access/)
+for the dedicated-Namespace boundary and rollback lifecycle.

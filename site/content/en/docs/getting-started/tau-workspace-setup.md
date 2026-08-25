@@ -283,6 +283,12 @@ Expected:
 
 If no workload identity was configured, `tau workspace status` reports `default`, which is the Kubernetes ServiceAccount used by workloads that do not override `serviceAccountName`.
 
+For an existing single workspace that currently uses `cluster-wide`
+authorization, follow [Enable single-workspace researcher access](../../tasks/platform/single-workspace-researcher-access/)
+instead of creating another TauWorkspace. That migration keeps the same
+Namespace and queue, transitions the existing object to `workspace-rbac`, and
+retains an operator credential until every researcher machine passes.
+
 If workload identity was configured, inspect the reconciled ServiceAccount:
 
 ```bash

@@ -10,7 +10,7 @@ Portal is the unified, read-only browser entry point. `tau cluster install` enab
 
 ## Understand the default boundary
 
-The default distribution creates `deployment/tau-portal`, `service/tau-portal`, a dedicated ServiceAccount, and cluster-wide read-only Kubernetes RBAC. Portal remains ClusterIP-only and has no application-level login, so `kubectl port-forward` is an operator diagnostic rather than a researcher endpoint.
+The default distribution creates `deployment/tau-portal`, `service/tau-portal`, a dedicated ServiceAccount, and cluster-wide read-only Kubernetes RBAC. Portal remains ClusterIP-only and has no application-level login, so `kubectl port-forward` is an operator diagnostic by default. The opt-in [single-workspace researcher access](../single-workspace-researcher-access/) profile supports a narrower shared port-forward workflow only in a dedicated Portal Namespace; it still does not authenticate users to the application.
 
 | Capability | Default state | Additional requirement |
 |---|---|---|
@@ -82,6 +82,12 @@ kubectl -n "$TAU_SYSTEM_NAMESPACE" rollout status deploy/tau-portal --timeout=18
 
 `portal.jobs.scopeMode` is disabled by default. Configure workspace-directory or explicit operator scopes before enabling it, so the Jobs board cannot expose an unintended cross-workspace view. `workloadNamespace` scopes the legacy Runs and Ray views; it does not authorize the computed Jobs board.
 
+For a shared one-workspace view, use `portal.viewProfile=single-workspace`
+instead of assembling independent board flags. The profile requires fixed
+`portal.workspace` and `portal.workloadNamespace` values, disables broad
+cluster views before their readers run, and replaces the Portal ServiceAccount's
+cluster-wide Kubernetes binding with a Role in the workload Namespace.
+
 ## Add Kusto-backed boards to the same Portal block
 
 First [prepare ADX/Kusto](../prepare-adx-kusto/). Merge the following keys into the existing `taugrid-core.portal` map above; do not save it as a second values file and invoke `tau cluster install` with that file alone. A bare endpoint uses Portal's native `DefaultAzureCredential` path; `portal.kusto.queryCommand` is only an explicit adapter override and must exist in the image.
@@ -121,4 +127,4 @@ curl -fsS 'http://127.0.0.1:18080/api/portal/runs?workspace=<workspace-name>'
 
 The API must report `"historyState":"available"` after the lifecycle recorder has ingested records. `history-unavailable` normally means an ADX identity, network, schema, or release-template problem; it is not evidence that Portal is reading durable history.
 
-Portal Service is intentionally `ClusterIP`. Production access needs a platform-owned authenticated HTTPS proxy, DNS, certificate, and reviewed network path; `kubectl port-forward` is an operator diagnostic only.
+Portal Service is intentionally `ClusterIP`. Production per-user access needs a platform-owned authenticated HTTPS proxy, DNS, certificate, and reviewed network path. The dedicated-Namespace single-workspace profile is a shared operational view, not a substitute for that application-authenticated path.

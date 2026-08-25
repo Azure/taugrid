@@ -11,6 +11,7 @@ description: Prepare governed clusters and workspaces
 - [Prepare ADX/Kusto for TauGrid](prepare-adx-kusto/)
 - [Enable lifecycle recorder](enable-lifecycle-recorder/)
 - [Configure Portal](enable-portal/)
+- [Enable single-workspace researcher access](single-workspace-researcher-access/)
 - [Hand off a workspace](handoff/) with a reproducible, non-secret checklist
 - Review [identity and security boundaries](../../concepts/identity/)
 - Understand [queue and GPU placement](../../concepts/policy-and-placement/)
