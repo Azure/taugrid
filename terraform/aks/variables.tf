@@ -208,6 +208,25 @@ variable "workspace_namespace" {
   }
 }
 
+variable "bootstrap_workspace" {
+  description = "Optional single Entra-backed TauWorkspace to apply after TauGrid installation. Its workload namespace is workspace_namespace and its LocalQueue is jobqueue."
+  type = object({
+    name                  = string
+    entra_group_object_id = string
+  })
+  default  = null
+  nullable = true
+
+  validation {
+    condition = var.bootstrap_workspace == null || (
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.bootstrap_workspace.name)) &&
+      length(var.bootstrap_workspace.name) <= 63 &&
+      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.bootstrap_workspace.entra_group_object_id))
+    )
+    error_message = "bootstrap_workspace.name must be a lowercase Kubernetes name of at most 63 characters, and entra_group_object_id must be an Entra group object ID UUID."
+  }
+}
+
 variable "adx_cluster_name" {
   description = "Globally unique Azure Data Explorer cluster name when enable_adx is true. Use 4 to 22 lowercase letters or digits."
   type        = string

@@ -92,11 +92,14 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 }
 
 locals {
-  generated_directory = "${path.module}/generated"
-  kubeconfig_path     = "${local.generated_directory}/kubeconfig"
-  values_path         = "${local.generated_directory}/taugrid-values.yaml"
-  gpu_quota           = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
-  adx_databases       = toset(["Metrics", "Logs", "CostTracking", "Audit"])
+  generated_directory         = "${path.module}/generated"
+  kubeconfig_path             = "${local.generated_directory}/kubeconfig"
+  values_path                 = "${local.generated_directory}/taugrid-values.yaml"
+  gpu_quota                   = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
+  adx_databases               = toset(["Metrics", "Logs", "CostTracking", "Audit"])
+  bootstrap_workspace_enabled = var.bootstrap_workspace != null
+  bootstrap_workspace_name    = try(var.bootstrap_workspace.name, "")
+  bootstrap_workspace_group   = try(var.bootstrap_workspace.entra_group_object_id, "")
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
     gpu_monitoring_sku_name      = var.gpu_monitoring_sku_name
@@ -113,6 +116,8 @@ locals {
     adx_endpoint                 = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : ""
     portal_client_id             = var.enable_adx ? azurerm_user_assigned_identity.portal[0].client_id : ""
     cluster_name                 = var.cluster_name
+    bootstrap_workspace_enabled  = local.bootstrap_workspace_enabled
+    bootstrap_workspace_name     = local.bootstrap_workspace_name
   })
 }
 
@@ -354,6 +359,47 @@ resource "terraform_data" "install_taugrid" {
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
     terraform_data.install_adx_mon,
+  ]
+}
+
+resource "local_file" "bootstrap_workspace" {
+  count           = local.bootstrap_workspace_enabled ? 1 : 0
+  filename        = "${local.generated_directory}/bootstrap-workspace.yaml"
+  file_permission = "0600"
+  content = templatefile("${path.module}/bootstrap-workspace.yaml.tftpl", {
+    workspace_name        = local.bootstrap_workspace_name
+    workspace_namespace   = var.workspace_namespace
+    entra_group_object_id = local.bootstrap_workspace_group
+  })
+}
+
+resource "terraform_data" "bootstrap_workspace" {
+  count = local.bootstrap_workspace_enabled ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.install_taugrid
+      error_message = "bootstrap_workspace requires install_taugrid=true."
+    }
+  }
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster.this.id,
+    local_file.bootstrap_workspace[0].content_sha256,
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = local.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply --server-side --field-manager=taugrid-terraform -f '${local_file.bootstrap_workspace[0].filename}' && kubectl wait --for=jsonpath='{.status.phase}'=Ready 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --timeout=10m"
+  }
+
+  depends_on = [
+    terraform_data.install_taugrid,
   ]
 }
 

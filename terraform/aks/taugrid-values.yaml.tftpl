@@ -35,6 +35,17 @@ taugrid-core:
     access:
       mode: cluster-internal
       externalURL: ""
+%{ if bootstrap_workspace_enabled }
+    # Terraform declares exactly one operator-visible workspace scope. This
+    # keeps the computed Jobs board scoped even though the default Portal is
+    # an operator-only ClusterIP service.
+    jobs:
+      scopeMode: operator
+      operatorScopes:
+        - team: ${bootstrap_workspace_name}
+          namespace: ${workspace_namespace}
+          localQueue: jobqueue
+%{ endif }
 %{ if adx_enabled }
     kusto:
       endpoint: ${adx_endpoint}
