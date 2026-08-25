@@ -132,16 +132,8 @@ Kusto-backed boards require a separate ADX and workload identity configuration.
 
 ## Enable lifecycle history
 
-Lifecycle history is a second apply. The target namespace is created by the
-TauWorkspace, which itself requires the TauGrid installation from the first
-apply. First create a workspace:
-
-```bash
-tau workspace create taugrid-default --apply
-```
-
-Then add the following to the same local `terraform.tfvars` file and apply
-again:
+Set the following values before the initial `terraform apply`, or add them to
+an existing environment and apply again:
 
 ```hcl
 enable_lifecycle_recorder           = true
@@ -150,6 +142,10 @@ workspace_namespace                 = "taugrid-default"
 
 Terraform creates a least-privilege ADX ingestion identity, enables Portal run
 history, and asks adx-mon to create the `Metrics.TauExpRunLifecycle` schema.
+For a one-step installation, Terraform first creates the target workload
+namespace if needed so the TauGrid chart can install the lifecycle recorder.
+It does not create a TauWorkspace or add workload policy to that namespace;
+the TauWorkspace controller remains responsible for reconciling those settings.
 
 ## Destroy
 
