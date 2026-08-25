@@ -1,0 +1,208 @@
+suite: Portal single-workspace view
+templates:
+  - templates/portal.yaml
+tests:
+  - it: renders a fixed-scope deployment and namespaced backend reader
+    release:
+      namespace: tau-portal-sdk
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+      portal.serviceAccount.name: taugrid-portal-sdk
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: kind
+          value: Role
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: tau-default
+        documentIndex: 0
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - ""
+              resources:
+                - services
+                - pods
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - batch
+              resources:
+                - jobs
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - ray.io
+              resources:
+                - rayjobs
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - kueue.x-k8s.io
+              resources:
+                - workloads
+              verbs:
+                - get
+                - list
+                - watch
+        documentIndex: 0
+      - equal:
+          path: kind
+          value: RoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.namespace
+          value: tau-default
+        documentIndex: 1
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: taugrid-portal-sdk
+            namespace: tau-portal-sdk
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --view-profile
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: single-workspace
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: default
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: tau-default
+        documentIndex: 3
+
+  - it: preserves the operator profile by default
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRole
+        documentIndex: 0
+      - equal:
+          path: kind
+          value: ClusterRoleBinding
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: operator
+        documentIndex: 3
+
+  - it: rejects an unsupported view profile
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: public
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile must be operator or single-workspace
+
+  - it: requires a fixed workload namespace
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace requires portal.workloadNamespace; portal.jobs.namespace is not accepted for this profile
+
+  - it: requires chart-owned backend RBAC
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace requires portal.rbac.create=true
+
+  - it: requires a chart-owned ServiceAccount
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.rbac.create: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace requires portal.serviceAccount.create=true
+
+  - it: does not accept the deprecated Jobs namespace as fixed scope
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.jobs.namespace: tau-default
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace requires portal.workloadNamespace; portal.jobs.namespace is not accepted for this profile
+
+  - it: rejects workspace-directory mode
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.workspaceDirectory.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace does not support portal.workspaceDirectory
+
+  - it: rejects cluster-wide Jobs mode
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.jobs.scopeMode: operator
+      portal.jobs.operatorScopes:
+        - team: research
+          namespace: tau-default
+          localQueue: jobqueue
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace requires portal.jobs.scopeMode=disabled
+
+  - it: rejects KueueViz
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.kueueviz.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.viewProfile=single-workspace requires portal.kueueviz.enabled=false

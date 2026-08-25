@@ -1,0 +1,154 @@
+suite: Portal researcher port-forward RBAC
+templates:
+  - templates/portal.yaml
+tests:
+  - it: grants only the churn-safe namespace transport permissions
+    release:
+      namespace: tau-portal-sdk
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.resourceName: taugrid-portal-sdk
+      portal.serviceName: taugrid-portal-sdk
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
+      portal.researcherPortForward.subjects:
+        - kind: Group
+          name: research-group
+        - kind: User
+          name: researcher@example.com
+    asserts:
+      - hasDocuments:
+          count: 7
+      - equal:
+          path: kind
+          value: Role
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: taugrid-portal-sdk-researcher-port-forward
+        documentIndex: 2
+      - equal:
+          path: metadata.namespace
+          value: tau-portal-sdk
+        documentIndex: 2
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - ""
+              resources:
+                - services
+              resourceNames:
+                - taugrid-portal-sdk
+              verbs:
+                - get
+            - apiGroups:
+                - ""
+              resources:
+                - pods
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - pods/portforward
+              verbs:
+                - create
+        documentIndex: 2
+      - equal:
+          path: kind
+          value: RoleBinding
+        documentIndex: 3
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              apiGroup: rbac.authorization.k8s.io
+              name: research-group
+            - kind: User
+              apiGroup: rbac.authorization.k8s.io
+              name: researcher@example.com
+        documentIndex: 3
+
+  - it: renders no transport grant when subjects are empty
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: requires the single-workspace profile
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
+      portal.researcherPortForward.subjects:
+        - kind: Group
+          name: research-group
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.researcherPortForward.subjects requires portal.viewProfile=single-workspace
+
+  - it: requires an explicit dedicated namespace acknowledgement
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+      portal.researcherPortForward.subjects:
+        - kind: Group
+          name: research-group
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.researcherPortForward.subjects requires acknowledgeDedicatedNamespace=true
+
+  - it: rejects ServiceAccount transport subjects
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
+      portal.researcherPortForward.subjects:
+        - kind: ServiceAccount
+          name: researcher
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.researcherPortForward.subjects[0].kind must be User or Group
+
+  - it: requires a subject name
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.viewProfile: single-workspace
+      portal.workspace: default
+      portal.workloadNamespace: tau-default
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+      portal.researcherPortForward.acknowledgeDedicatedNamespace: true
+      portal.researcherPortForward.subjects:
+        - kind: Group
+          name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.researcherPortForward.subjects[0].name is required

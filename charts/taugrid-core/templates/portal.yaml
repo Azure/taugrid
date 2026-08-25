@@ -1,6 +1,7 @@
 {{- if .Values.portal.enabled }}
 {{- $portal := .Values.portal -}}
 {{- $systemNamespace := .Release.Namespace -}}
+{{- $viewProfile := lower (trim (default "operator" $portal.viewProfile)) -}}
 {{- $source := lower (default "kusto" $portal.source) -}}
 {{- $kusto := default dict $portal.kusto -}}
 {{- $runHistory := default dict $portal.runHistory -}}
@@ -21,6 +22,9 @@
 {{- $externalURLParts = urlParse $externalURL -}}
 {{- end -}}
 {{- $rbac := default dict $portal.rbac -}}
+{{- $researcherPortForward := default dict $portal.researcherPortForward -}}
+{{- $researcherPortForwardSubjects := default list $researcherPortForward.subjects -}}
+{{- $researcherPortForwardAcknowledged := default false $researcherPortForward.acknowledgeDedicatedNamespace -}}
 {{- $serviceAccount := default dict $portal.serviceAccount -}}
 {{- $resourceName := default "tau-portal" $portal.resourceName -}}
 {{- $serviceName := default $resourceName $portal.serviceName -}}
@@ -36,6 +40,9 @@
 {{- $hasVolumes := or $workspaceDirectoryEnabled (gt (len $extraVolumes) 0) -}}
 {{- if not (has $source (list "local" "auto" "kusto")) -}}
 {{- fail "portal.source must be local, auto, or kusto" -}}
+{{- end -}}
+{{- if not (has $viewProfile (list "operator" "single-workspace")) -}}
+{{- fail "portal.viewProfile must be operator or single-workspace" -}}
 {{- end -}}
 {{- if not (has $accessMode (list "cluster-internal" "authenticated-proxy")) -}}
 {{- fail "portal.access.mode must be cluster-internal or authenticated-proxy" -}}
@@ -75,6 +82,48 @@
 {{- end -}}
 {{- if and (eq $jobsScopeMode "disabled") (gt (len $jobsOperatorScopes) 0) -}}
 {{- fail "portal.jobs.operatorScopes requires portal.jobs.scopeMode=operator" -}}
+{{- end -}}
+{{- if eq $viewProfile "single-workspace" -}}
+{{- if not (trim (default "" $portal.workspace)) -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.workspace" -}}
+{{- end -}}
+{{- if not (trim (default "" $portal.workloadNamespace)) -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.workloadNamespace; portal.jobs.namespace is not accepted for this profile" -}}
+{{- end -}}
+{{- if $workspaceDirectoryEnabled -}}
+{{- fail "portal.viewProfile=single-workspace does not support portal.workspaceDirectory" -}}
+{{- end -}}
+{{- if ne $jobsScopeMode "disabled" -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.jobs.scopeMode=disabled" -}}
+{{- end -}}
+{{- if $kueueviz.enabled -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.kueueviz.enabled=false" -}}
+{{- end -}}
+{{- if ne $accessMode "cluster-internal" -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.access.mode=cluster-internal" -}}
+{{- end -}}
+{{- if not $rbac.create -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.rbac.create=true" -}}
+{{- end -}}
+{{- if not $serviceAccount.create -}}
+{{- fail "portal.viewProfile=single-workspace requires portal.serviceAccount.create=true" -}}
+{{- end -}}
+{{- end -}}
+{{- if gt (len $researcherPortForwardSubjects) 0 -}}
+{{- if ne $viewProfile "single-workspace" -}}
+{{- fail "portal.researcherPortForward.subjects requires portal.viewProfile=single-workspace" -}}
+{{- end -}}
+{{- if not $researcherPortForwardAcknowledged -}}
+{{- fail "portal.researcherPortForward.subjects requires acknowledgeDedicatedNamespace=true" -}}
+{{- end -}}
+{{- range $index, $subject := $researcherPortForwardSubjects -}}
+{{- if not (has (default "" $subject.kind) (list "User" "Group")) -}}
+{{- fail (printf "portal.researcherPortForward.subjects[%d].kind must be User or Group" $index) -}}
+{{- end -}}
+{{- if not (trim (default "" $subject.name)) -}}
+{{- fail (printf "portal.researcherPortForward.subjects[%d].name is required" $index) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- $operatorScopeTeams := dict -}}
 {{- range $index, $scope := $jobsOperatorScopes -}}
@@ -118,6 +167,47 @@ data:
 {{- if not $serviceAccount.create -}}
 {{- fail "portal.rbac.create=true requires portal.serviceAccount.create=true so the ClusterRoleBinding has a subject" -}}
 {{- end -}}
+{{- if eq $viewProfile "single-workspace" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $workloadNamespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ $workloadNamespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ $systemNamespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $serviceAccountName }}
+---
+{{- else }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -177,6 +267,48 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ $serviceAccountName }}
+---
+{{- end }}
+{{- end }}
+{{- if gt (len $researcherPortForwardSubjects) 0 }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $resourceName }}-researcher-port-forward
+  namespace: {{ $systemNamespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: [{{ $serviceName | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $resourceName }}-researcher-port-forward
+  namespace: {{ $systemNamespace }}
+  labels:
+    app: {{ $resourceName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+subjects:
+{{- range $subject := $researcherPortForwardSubjects }}
+  - kind: {{ $subject.kind }}
+    apiGroup: rbac.authorization.k8s.io
+    name: {{ $subject.name | quote }}
+{{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $resourceName }}-researcher-port-forward
 ---
 {{- end }}
 {{- if $serviceAccount.create }}
@@ -262,6 +394,8 @@ spec:
           args:
             - portal
             - serve
+            - --view-profile
+            - {{ $viewProfile | quote }}
             - --addr
             - "0.0.0.0:{{ $portal.service.targetPort }}"
             - --source

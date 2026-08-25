@@ -285,6 +285,13 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
   forbidden error and the rest of the portal still serves; 503 is reserved for a
   portal that could not build a Kubernetes client at all.
 
+`portal.viewProfile=operator` preserves that default administrative behavior.
+`portal.viewProfile=single-workspace` instead requires fixed
+`portal.workspace` and `portal.workloadNamespace` values, disables Jobs,
+Cluster Health, Cluster Nodes, Cost, Node Utilization, and KueueViz, and renders
+the Portal ServiceAccount reader as a Role in the workload Namespace. It is a
+shared server-side scope, not per-user application authorization.
+
 `portal.jobs.scopeMode` is omitted from the rendered command by default, and
 Portal binaries default the board to `disabled`, so the board stays off until an
 operator sets a mode. Operator activation also requires ready TauCluster workload profiles whose
@@ -292,7 +299,7 @@ ClusterQueue binding matches each live LocalQueue; mismatches fail unavailable
 instead of showing zero quota.
 
 With `portal.workspaceDirectory.enabled=false` (the default), `portal.workspace`
-(default `default`) scopes the embedded Stellar board. The legacy Ray/Runs
+(default `taugrid-default`) scopes the embedded Stellar board. The legacy Ray/Runs
 boards read cluster-wide unless `portal.workloadNamespace` is set; the
 deprecated `portal.jobs.namespace` remains an explicit compatibility fallback.
 It does not authorize the Jobs board. Viewer-authorized Jobs access requires
@@ -327,10 +334,12 @@ configurations; they do not provision or probe the external proxy.
 
 Until that platform path exists, keep
 `portal.access.mode=cluster-internal` and leave `externalURL` empty. In that
-state there is intentionally no supported researcher browser signoff.
-`kubectl port-forward` is an operator diagnostic only and must not be used as
-researcher acceptance evidence. Historical IP addresses are not an endpoint
-contract.
+state there is intentionally no per-user browser signoff. By default,
+`kubectl port-forward` remains an operator diagnostic. A platform may opt into
+`portal.researcherPortForward.subjects` only with the single-workspace profile
+and a Portal-only release Namespace. That Role authenticates the Kubernetes
+tunnel, not the application; every authorized subject reaches the same view.
+Historical IP addresses are not an endpoint contract.
 
 Browser signoff uses only the declared URL:
 

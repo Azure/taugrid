@@ -261,6 +261,10 @@ lifecycleRecorder:
 # and read-only RBAC. Kusto-backed boards still require a query source.
 portal:
   enabled: false
+  # operator preserves the existing cluster-wide administrative view.
+  # single-workspace is a shared, fixed-scope view for one workload namespace;
+  # it is not per-user application authorization.
+  viewProfile: operator
   # Control-plane/operator UI; runs with the rest of the TauGrid control plane
   # in the Helm release namespace. Researcher workloads, RayJobs, and Kueue
   # LocalQueues live in workspace namespaces, which the portal reads across via
@@ -354,14 +358,20 @@ portal:
     backendService: kueue-kueueviz-backend
     frontendService: kueue-kueueviz-frontend
   rbac:
-    # Create the ClusterRole + ClusterRoleBinding granting the portal's
-    # ServiceAccount read access to core Services (Ray board discovery), core
-    # Nodes (Cluster Nodes board), and Kueue LocalQueues/ClusterQueues/Workloads
-    # (Jobs board), plus get-only access to the singleton TauCluster workload
-    # profile status. Requires serviceAccount.create=true. Without it, the Jobs,
-    # Ray, Cluster Nodes, and profile readiness views degrade while the portal
-    # still serves the shell, Experiments, Cluster Health, and Cost.
+    # In operator view, create the existing cluster-wide reader. In
+    # single-workspace view, create only a workload-namespace Role/RoleBinding
+    # for Runs, job detail, and Ray.
     create: false
+  # Optional Kubernetes transport access for humans who already authenticate to
+  # the cluster. This grants no Portal login or per-user data authorization.
+  # kubectl resolves service port-forwarding by listing/watching Pods and then
+  # POSTing to pods/portforward, so the release namespace must contain only the
+  # intended Portal workload before this is enabled.
+  researcherPortForward:
+    acknowledgeDedicatedNamespace: false
+    # Identity-provider-neutral Kubernetes RBAC subjects. Supported kinds are
+    # User and Group. Empty keeps researcher port-forward access disabled.
+    subjects: []
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
