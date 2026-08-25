@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/portal/internal/portalapi"
 )
 
 func TestPortalRunHistoryIsExplicitlyEnabled(t *testing.T) {
@@ -53,6 +55,38 @@ func TestPortalJobsScopeDefaultsFailClosed(t *testing.T) {
 	}
 	if flag := serve.Flags().Lookup("policy"); flag != nil {
 		t.Fatalf("portal serve still exposes removed --policy flag: %#v", flag)
+	}
+	if got := serve.Flags().Lookup("view-profile").DefValue; got != string(portalapi.ViewProfileOperator) {
+		t.Fatalf("--view-profile default = %q, want %q", got, portalapi.ViewProfileOperator)
+	}
+}
+
+func TestPortalSingleWorkspaceViewRequiresFixedFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "workspace",
+			args: []string{"serve", "--view-profile", "single-workspace", "--namespace", "team-alpha"},
+			want: "non-empty Stellar workspace",
+		},
+		{
+			name: "namespace",
+			args: []string{"serve", "--view-profile", "single-workspace", "--workspace", "alpha"},
+			want: "non-empty namespace",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newPortalCmd()
+			tc.args = append(tc.args, "--kubeconfig", filepath.Join(t.TempDir(), "missing-kubeconfig"))
+			cmd.SetArgs(tc.args)
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("portal serve error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

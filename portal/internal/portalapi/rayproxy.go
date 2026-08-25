@@ -216,6 +216,11 @@ func (s *Server) handleRayProxy(w http.ResponseWriter, r *http.Request) {
 // prefix). It resolves the focused target from the ray_target cookie, validates
 // it, and proxies the request through with its original path unchanged.
 func (s *Server) handleRayAsset(w http.ResponseWriter, r *http.Request) {
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		if _, ok := s.localWorkspaceScope(w, r); !ok {
+			return
+		}
+	}
 	if s.ray.Reader == nil {
 		http.Error(w, "ray board unavailable: portal started without Kubernetes access", http.StatusServiceUnavailable)
 		return

@@ -90,13 +90,20 @@ type Options struct {
 // a real install never silently lands here.
 const DefaultWorkspace = "default"
 
-// defaultWorkspace resolves the server's workspace, preferring the current
-// option over the Kusto-only spelling it replaced.
-func defaultWorkspace(opts Options) string {
+// ConfiguredWorkspace returns the explicitly configured workspace, preferring
+// the current option over the Kusto-only spelling it replaced.
+func ConfiguredWorkspace(opts Options) string {
 	if workspace := strings.TrimSpace(opts.Workspace); workspace != "" {
 		return workspace
 	}
 	if workspace := strings.TrimSpace(opts.KustoWorkspace); workspace != "" {
+		return workspace
+	}
+	return ""
+}
+
+func defaultWorkspace(opts Options) string {
+	if workspace := ConfiguredWorkspace(opts); workspace != "" {
 		return workspace
 	}
 	return DefaultWorkspace

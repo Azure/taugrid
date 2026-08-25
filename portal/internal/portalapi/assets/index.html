@@ -183,7 +183,7 @@
   // Experiments Stellar embed). Paths map to the routes below; Fleet is one page
   // with in-page sub-tabs (Health | Utilization | Compute); Stellar embeds the
   // mounted Stellar SPA in a same-origin iframe.
-  const tabs = [
+  const operatorTabs = [
     { id: "platform", label: "Platform", items: [
       { title: "Overview", path: "/portal" },
       { title: "Fleet", path: "/portal/fleet" },
@@ -202,6 +202,21 @@
       { title: "Stellar", path: "/portal/experiments" },
     ]},
   ];
+  const singleWorkspaceTabs = [
+    { id: "workloads", label: "Workloads", items: [
+      { title: "Overview", path: "/portal" },
+      { title: "Jobs", path: "/portal/runs" },
+      { title: "Ray", path: "/portal/ray" },
+    ]},
+    { id: "experiments", label: "Experiments", items: [
+      { title: "Overview", path: "/portal" },
+      { title: "Stellar", path: "/portal/experiments" },
+    ]},
+  ];
+
+  function visibleTabs() {
+    return viewProfile === "single-workspace" ? singleWorkspaceTabs : operatorTabs;
+  }
 
   // The shared /portal Overview belongs to every tab; every other path is owned
   // by exactly one. tabForPath returns the owning tab id, or null for the shared
@@ -210,9 +225,11 @@
   // sub-tabs; they resolve to the platform tab so a deep-link keeps the right
   // sidebar active.
   function tabForPath(path) {
-    const platformExtra = ["/portal/fleet", "/portal/cluster", "/portal/gpu", "/portal/nodes", "/portal/kueueviz"];
+    const platformExtra = viewProfile === "single-workspace"
+      ? []
+      : ["/portal/fleet", "/portal/cluster", "/portal/gpu", "/portal/nodes", "/portal/kueueviz"];
     if (platformExtra.includes(path)) return "platform";
-    for (const t of tabs) {
+    for (const t of visibleTabs()) {
       for (const item of t.items) {
         if (item.path === "/portal") continue; // shared, skip
         if (item.path === path) return t.id;
@@ -228,7 +245,7 @@
     const owner = tabForPath(location.pathname);
     if (owner) return owner;
     const stored = localStorage.getItem("portalTab");
-    if (stored && tabs.some(t => t.id === stored)) return stored;
+    if (stored && visibleTabs().some(t => t.id === stored)) return stored;
     return "workloads";
   }
 
@@ -260,6 +277,7 @@
   let activeScope = null;
   let authorizedWorkspaces = [];
   let workspaceManaged = false;
+  let viewProfile = "operator";
 
   function currentWorkspace() {
     return new URLSearchParams(location.search).get("workspace") || "";
@@ -340,6 +358,7 @@
     authorizedWorkspaces = directory.workspaces || [];
     activeScope = directory.selected || null;
     workspaceManaged = directory.managed === true;
+    viewProfile = directory.viewProfile || "operator";
     if (workspaceManaged && activeScope && !requested) {
       history.replaceState({}, "", withWorkspace(location.pathname + location.search, activeScope.workspace));
     }
@@ -379,7 +398,7 @@
     const host = document.getElementById("tab-toggle");
     host.textContent = "";
     const active = currentTab();
-    for (const t of tabs) {
+    for (const t of visibleTabs()) {
       const b = el("button", { type: "button" }, t.label);
       if (t.id === active) b.className = "active";
       b.addEventListener("click", () => { if (t.id !== active) setTab(t.id); });
@@ -395,6 +414,7 @@
   function renderSidebar() {
     const sidebar = document.getElementById("sidebar");
     sidebar.textContent = "";
+    const tabs = visibleTabs();
     const tab = tabs.find(t => t.id === currentTab()) || tabs[0];
     const fleetPaths = ["/portal/fleet", "/portal/cluster", "/portal/gpu", "/portal/nodes"];
     const g = el("div", { class: "group" });
@@ -531,6 +551,18 @@
     );
     view.append(stats);
     renderRunning(view, data);
+  }
+
+  function renderOverviewSingleWorkspace(view) {
+    view.append(
+      el("h1", { style: "margin:0 0 6px;font-size:20px;" }, "Overview"),
+      el("p", { class: "muted", style: "margin:0;" }, "Your fixed workspace runtime and experiment views."));
+    const stats = el("div", { class: "stats" });
+    stats.append(
+      statCard({ href: "/portal/runs", label: "Jobs", value: "Open", sub: activeScope.namespace }),
+      statCard({ href: "/portal/ray", label: "Ray", value: "Open", sub: activeScope.namespace }),
+      statCard({ href: "/portal/experiments", label: "Experiments", value: "Open", sub: activeScope.workspace }));
+    view.append(stats);
   }
 
   // renderOverviewPlatform is the Platform landing page: fleet health & capacity
@@ -1741,6 +1773,13 @@
         return;
       }
       const path = location.pathname;
+      const broadPaths = ["/portal/jobs", "/portal/kueueviz", "/portal/fleet", "/portal/cluster",
+        "/portal/gpu", "/portal/nodes", "/portal/cost", "/portal/observability"];
+      if (viewProfile === "single-workspace" && broadPaths.includes(path)) {
+        view.append(el("div", { class: "empty warn" },
+          "This operator board is not available in the single-workspace view."));
+        return;
+      }
       if (path === "/portal/runs") {
         await renderRuns(view);
       } else if (path.startsWith("/portal/ray/history/")) {
@@ -1767,6 +1806,8 @@
         await renderRay(view);
       } else if (path === "/portal/observability") {
         renderObservability(view);
+      } else if (viewProfile === "single-workspace") {
+        renderOverviewSingleWorkspace(view);
       } else if (currentTab() === "platform") {
         await renderOverviewPlatform(view);
       } else if (currentTab() === "experiments") {

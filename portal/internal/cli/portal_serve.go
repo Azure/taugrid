@@ -55,6 +55,7 @@ func newPortalServeCmd(storePath *string) *cobra.Command {
 		historyTable   string
 		historyLimit   int
 		historyEnabled bool
+		viewProfile    = string(portalapi.ViewProfileOperator)
 
 		kueueVizEnabled         bool
 		kueueVizNamespace       = "kueue-system"
@@ -73,6 +74,7 @@ objects via client-go (in-cluster ServiceAccount, or --kubeconfig locally); if
 Kubernetes is unreachable the portal still serves every other board.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			singleWorkspaceView := strings.EqualFold(strings.TrimSpace(viewProfile), string(portalapi.ViewProfileSingleWorkspace))
 			if historyEnabled && strings.TrimSpace(opts.kustoQueryCommand) == "" && strings.TrimSpace(opts.kustoEndpoint) == "" {
 				return fmt.Errorf("--run-history-enabled requires --kusto-endpoint or --kusto-query-command")
 			}
@@ -99,13 +101,19 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			rayOpts, runsOpts := legacyKubernetesBoardOptions(namespace)
 			var nodesOpts portalapi.NodesOptions
 			if client, err := kubeclient.New(kubeconfig); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, and Runs boards disabled (no Kubernetes access): %v\n", err)
+				boards := "Jobs, Ray, Nodes, and Runs"
+				if singleWorkspaceView {
+					boards = "Ray and Runs"
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s boards disabled (no Kubernetes access): %v\n", boards, err)
 			} else {
-				jobsOpts.Reader = client
-				jobsOpts.Profiles = client
 				rayOpts.Reader = client
-				nodesOpts.Reader = client
 				runsOpts.Reader = client
+				if !singleWorkspaceView {
+					jobsOpts.Reader = client
+					jobsOpts.Profiles = client
+					nodesOpts.Reader = client
+				}
 			}
 			// The Kusto-backed boards (Cluster Health, Cost, Node Utilization)
 			// reuse Stellar's shell-out contract (--kusto-query-command). Without
@@ -114,6 +122,9 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			var clusterOpts portalapi.ClusterOptions
 			var costOpts portalapi.CostOptions
 			var nodeUtilOpts portalapi.NodeUtilOptions
+			clusterOpts.Cluster = clusterName
+			costOpts.Cluster = clusterName
+			nodeUtilOpts.Cluster = clusterName
 			// Kusto transport selection: an explicit --kusto-query-command keeps
 			// the Stellar shell-out adapter; otherwise a bare --kusto-endpoint
 			// selects the native azure-kusto-go SDK path (DefaultAzureCredential),
@@ -133,18 +144,17 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				}
 			}
 			if querier != nil {
-				clusterOpts.Querier = querier
-				clusterOpts.Cluster = clusterName
-				costOpts.Querier = querier
-				costOpts.Cluster = clusterName
-				nodeUtilOpts.Querier = querier
-				nodeUtilOpts.Cluster = clusterName
+				if !singleWorkspaceView {
+					clusterOpts.Querier = querier
+					costOpts.Querier = querier
+					nodeUtilOpts.Querier = querier
+				}
 				if historyEnabled {
 					runsOpts.History = runs.NewKustoHistoryReader(querier)
 				}
 				runsOpts.HistoryTable = historyTable
 				runsOpts.HistoryLimit = historyLimit
-			} else {
+			} else if !singleWorkspaceView {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Cluster Health, Cost, and Node Utilization boards disabled (set --kusto-endpoint, or --kusto-query-command for a custom adapter)")
 			}
 			// The Kueue (Live) board reverse-proxies the KueueViz dashboard's
@@ -159,6 +169,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				FrontendService: kueueVizFrontendService,
 			}
 			server, err := portalapi.NewServer(portalapi.Options{
+				ViewProfile:        portalapi.ViewProfile(viewProfile),
 				Stellar:            opts.toExpapiOptions(storePath),
 				Jobs:               jobsOpts,
 				Cluster:            clusterOpts,
@@ -188,6 +199,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	cmd.Flags().StringSliceVar(&operatorScopes, "jobs-operator-scope", nil, "trusted operator Jobs scope as team=namespace/localQueue (repeatable; operator mode only)")
 	cmd.Flags().StringVar(&clusterName, "cluster", "", "legacy/default cluster scope for Kusto-backed boards (required when durable run history is configured)")
 	cmd.Flags().StringVar(&directory, "workspace-directory", "", "metadata-only JSON workspace directory; enables trusted Entra identity headers and server-resolved workspace scope")
+	cmd.Flags().StringVar(&viewProfile, "view-profile", viewProfile, "Portal view profile: operator or single-workspace (the latter requires --workspace and --namespace)")
 	cmd.Flags().StringVar(&userHeader, "workspace-user-header", "", "trusted authenticated user header (default: X-MS-CLIENT-PRINCIPAL-NAME)")
 	cmd.Flags().StringVar(&groupsHeader, "workspace-groups-header", "", "trusted authenticated groups header (default: X-MS-CLIENT-PRINCIPAL-GROUPS; comma or semicolon separated)")
 	cmd.Flags().BoolVar(&historyEnabled, "run-history-enabled", false, "enable durable Kusto run history (requires a deployed lifecycle recorder)")

@@ -121,6 +121,314 @@ func TestOverviewListsBoards(t *testing.T) {
 	}
 }
 
+func TestDefaultViewProfilePreservesOperatorBehavior(t *testing.T) {
+	server := newTestServer(t)
+	if server.viewProfile != ViewProfileOperator {
+		t.Fatalf("view profile = %q, want %q", server.viewProfile, ViewProfileOperator)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workspaces?namespace=requested&cluster=cluster-b", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var directory workspaceDirectoryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &directory); err != nil {
+		t.Fatal(err)
+	}
+	if directory.ViewProfile != ViewProfileOperator {
+		t.Fatalf("response view profile = %q, want %q", directory.ViewProfile, ViewProfileOperator)
+	}
+	if directory.Selected == nil || directory.Selected.Namespace != "requested" || directory.Selected.Cluster != "cluster-b" {
+		t.Fatalf("default profile no longer accepts legacy scope overrides: %+v", directory.Selected)
+	}
+}
+
+func TestSingleWorkspaceProfileRequiresFixedScope(t *testing.T) {
+	tests := []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{
+			name: "workspace",
+			opts: Options{
+				ViewProfile: ViewProfileSingleWorkspace,
+				Stellar:     expapi.Options{Source: "kusto"},
+				Ray:         RayOptions{Namespace: "team-alpha"},
+				Runs:        RunsOptions{Namespace: "team-alpha"},
+			},
+			want: "non-empty Stellar workspace",
+		},
+		{
+			name: "namespace",
+			opts: Options{
+				ViewProfile: ViewProfileSingleWorkspace,
+				Stellar:     expapi.Options{Source: "kusto", Workspace: "alpha"},
+			},
+			want: "non-empty namespace",
+		},
+		{
+			name: "matching namespace",
+			opts: Options{
+				ViewProfile: ViewProfileSingleWorkspace,
+				Stellar:     expapi.Options{Source: "kusto", Workspace: "alpha"},
+				Ray:         RayOptions{Namespace: "team-alpha"},
+				Runs:        RunsOptions{Namespace: "team-beta"},
+			},
+			want: "same namespace",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := NewServer(tt.opts); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewServer error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+type countingJobsReader struct {
+	stubJobsReader
+	calls int
+}
+
+func (r *countingJobsReader) ListLocalQueues(ctx context.Context, namespace string) ([]byte, error) {
+	r.calls++
+	return r.stubJobsReader.ListLocalQueues(ctx, namespace)
+}
+
+func (r *countingJobsReader) ListClusterQueues(ctx context.Context) ([]byte, error) {
+	r.calls++
+	return r.stubJobsReader.ListClusterQueues(ctx)
+}
+
+func (r *countingJobsReader) ListWorkloads(ctx context.Context, namespace string) ([]byte, error) {
+	r.calls++
+	return r.stubJobsReader.ListWorkloads(ctx, namespace)
+}
+
+type countingNodesReader struct {
+	calls int
+}
+
+func (r *countingNodesReader) ListNodes(context.Context) ([]byte, error) {
+	r.calls++
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *countingNodesReader) ListDaemonSets(context.Context) ([]byte, error) {
+	r.calls++
+	return []byte(`{"items":[]}`), nil
+}
+
+type countingQuerier struct {
+	calls int
+}
+
+func (q *countingQuerier) Query(context.Context, string) ([]kustoquery.Row, error) {
+	q.calls++
+	return nil, nil
+}
+
+type fixedDetailReader struct {
+	namespaces []string
+}
+
+func (r *fixedDetailReader) record(namespace string) {
+	r.namespaces = append(r.namespaces, namespace)
+}
+
+func (r *fixedDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *fixedDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *fixedDetailReader) GetJob(_ context.Context, namespace, name string) ([]byte, error) {
+	r.record(namespace)
+	return []byte(fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q,"labels":{"%s":"run-1"}},"status":{"active":1}}`,
+		name, namespace, workloadmeta.LabelRunID)), nil
+}
+
+func (r *fixedDetailReader) GetRayJob(context.Context, string, string) ([]byte, error) {
+	return nil, errors.New("not found")
+}
+
+func (r *fixedDetailReader) ListPods(_ context.Context, namespace string) ([]byte, error) {
+	r.record(namespace)
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *fixedDetailReader) ListEvents(_ context.Context, namespace string) ([]byte, error) {
+	r.record(namespace)
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *fixedDetailReader) ListWorkloads(_ context.Context, namespace string) ([]byte, error) {
+	r.record(namespace)
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *fixedDetailReader) ListServices(_ context.Context, namespace string) ([]byte, error) {
+	r.record(namespace)
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestSingleWorkspaceProfileDoesNotCallOrAdvertiseBroadBoards(t *testing.T) {
+	jobsReader := &countingJobsReader{}
+	nodesReader := &countingNodesReader{}
+	querier := &countingQuerier{}
+	server, err := NewServer(Options{
+		ViewProfile: ViewProfileSingleWorkspace,
+		Stellar:     expapi.Options{Source: "kusto", Workspace: "alpha"},
+		Jobs:        JobsOptions{Reader: jobsReader},
+		Cluster:     ClusterOptions{Querier: querier, Cluster: "cluster-a"},
+		Cost:        CostOptions{Querier: querier, Cluster: "cluster-a"},
+		Ray:         RayOptions{Namespace: "team-alpha"},
+		Nodes:       NodesOptions{Reader: nodesReader},
+		Runs:        RunsOptions{Namespace: "team-alpha"},
+		NodeUtil:    NodeUtilOptions{Querier: querier, Cluster: "cluster-a"},
+		KueueViz:    KueueVizOptions{Enabled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		"/api/portal/jobs",
+		"/api/portal/cluster",
+		"/api/portal/cost",
+		"/api/portal/nodes",
+		"/api/portal/nodeutil",
+		"/api/portal/kueueviz/",
+	} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, body = %s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var overview overviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &overview); err != nil {
+		t.Fatal(err)
+	}
+	gotBoards := map[string]bool{}
+	for _, board := range overview.Boards {
+		gotBoards[board.ID] = true
+	}
+	for _, id := range []string{"overview", "experiments", "runs", "ray"} {
+		if !gotBoards[id] {
+			t.Fatalf("single-workspace overview missing %q: %+v", id, overview.Boards)
+		}
+	}
+	for _, id := range []string{"jobs", "cluster", "nodes", "cost", "kueueviz"} {
+		if gotBoards[id] {
+			t.Fatalf("single-workspace overview advertises broad board %q: %+v", id, overview.Boards)
+		}
+	}
+	if jobsReader.calls != 0 || nodesReader.calls != 0 || querier.calls != 0 {
+		t.Fatalf("broad data sources called: jobs=%d nodes=%d queries=%d", jobsReader.calls, nodesReader.calls, querier.calls)
+	}
+}
+
+func TestSingleWorkspaceProfileFixesRetainedBoardScope(t *testing.T) {
+	rayReader := &stubRayReader{}
+	runsReader := &stubRunsReader{}
+	server, err := NewServer(Options{
+		ViewProfile: ViewProfileSingleWorkspace,
+		Stellar:     expapi.Options{Source: "kusto", Workspace: "alpha"},
+		Cluster:     ClusterOptions{Cluster: "cluster-a"},
+		Ray:         RayOptions{Reader: rayReader, Namespace: "team-alpha"},
+		Runs:        RunsOptions{Reader: runsReader, Namespace: "team-alpha"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workspaces", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("workspaces status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var directory workspaceDirectoryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &directory); err != nil {
+		t.Fatal(err)
+	}
+	if directory.ViewProfile != ViewProfileSingleWorkspace || directory.Selected == nil ||
+		directory.Selected.WorkspaceID != "alpha" || directory.Selected.Namespace != "team-alpha" {
+		t.Fatalf("fixed workspace response = %+v", directory)
+	}
+
+	for _, path := range []string{
+		"/api/portal/workspaces?workspace=beta",
+		"/api/portal/ray?workspace=beta",
+		"/api/portal/runs?namespace=team-beta",
+		"/api/portal/ray?cluster=cluster-b",
+		"/portal?namespace=team-beta",
+		"/api/stellar/capabilities?workspace=beta",
+	} {
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, body = %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if rayReader.lastNS != "" || runsReader.lastNS != "" {
+		t.Fatalf("conflicting requests reached retained readers: ray=%q runs=%q", rayReader.lastNS, runsReader.lastNS)
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/ray?workspace=alpha&namespace=team-alpha&cluster=cluster-a", nil))
+	if rec.Code != http.StatusOK || rayReader.lastNS != "team-alpha" {
+		t.Fatalf("fixed Ray request = status %d namespace %q body %s", rec.Code, rayReader.lastNS, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs", nil))
+	if rec.Code != http.StatusOK || runsReader.lastNS != "team-alpha" {
+		t.Fatalf("fixed Runs request = status %d namespace %q body %s", rec.Code, runsReader.lastNS, rec.Body.String())
+	}
+}
+
+func TestSingleWorkspaceProfileRetainsFixedJobDetailWithoutBroadQuery(t *testing.T) {
+	reader := &fixedDetailReader{}
+	querier := &countingQuerier{}
+	server, err := NewServer(Options{
+		ViewProfile: ViewProfileSingleWorkspace,
+		Stellar:     expapi.Options{Source: "kusto", Workspace: "alpha"},
+		Cluster:     ClusterOptions{Querier: querier, Cluster: "cluster-a"},
+		Ray:         RayOptions{Namespace: "team-alpha"},
+		Runs:        RunsOptions{Reader: reader, Namespace: "team-alpha"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs/other/job-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("job detail status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	for _, namespace := range reader.namespaces {
+		if namespace != "team-alpha" {
+			t.Fatalf("job detail reader used namespace %q, want fixed namespace", namespace)
+		}
+	}
+	if querier.calls != 0 {
+		t.Fatalf("job detail called broad cluster querier %d times", querier.calls)
+	}
+}
+
 // runningJobsReader serves Kueue lists for the overview's running-now resolution.
 // The Workloads list carries one admitted tau workload (run-id + job labels),
 // one pending, and one finished; only the admitted one is "running".

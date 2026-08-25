@@ -48,9 +48,20 @@ const (
 	JobsScopeOperator  JobsScopeMode = "operator"
 )
 
+type ViewProfile string
+
+const (
+	ViewProfileOperator        ViewProfile = "operator"
+	ViewProfileSingleWorkspace ViewProfile = "single-workspace"
+)
+
 // Options configures a portal Server. The embedded Stellar server is built from
 // StellarOptions so the portal reuses Stellar's full flag surface verbatim.
 type Options struct {
+	// ViewProfile controls which Portal boards are exposed. Empty preserves the
+	// operator profile; single-workspace exposes only fixed-scope researcher
+	// surfaces.
+	ViewProfile ViewProfile
 	// Stellar carries the expapi options used to construct the mounted Stellar
 	// server (store path, source, Kusto adapter, limits). Required.
 	Stellar expapi.Options
@@ -186,6 +197,37 @@ type Server struct {
 	identity              IdentityOptions
 	legacyScope           WorkspaceScope
 	kueueViz              KueueVizOptions
+	viewProfile           ViewProfile
+}
+
+func normalizeViewProfile(opts Options) (ViewProfile, string, string, error) {
+	profile := ViewProfile(strings.ToLower(strings.TrimSpace(string(opts.ViewProfile))))
+	if profile == "" {
+		profile = ViewProfileOperator
+	}
+	switch profile {
+	case ViewProfileOperator:
+		return profile, "", "", nil
+	case ViewProfileSingleWorkspace:
+		if opts.WorkspaceDirectory != nil {
+			return "", "", "", fmt.Errorf("view profile %q does not accept a workspace directory", profile)
+		}
+		workspace := expapi.ConfiguredWorkspace(opts.Stellar)
+		if workspace == "" {
+			return "", "", "", fmt.Errorf("view profile %q requires a non-empty Stellar workspace", profile)
+		}
+		rayNamespace := strings.TrimSpace(opts.Ray.Namespace)
+		runsNamespace := strings.TrimSpace(opts.Runs.Namespace)
+		if rayNamespace == "" || runsNamespace == "" {
+			return "", "", "", fmt.Errorf("view profile %q requires a non-empty namespace for Ray and Runs", profile)
+		}
+		if rayNamespace != runsNamespace {
+			return "", "", "", fmt.Errorf("view profile %q requires Ray and Runs to use the same namespace", profile)
+		}
+		return profile, workspace, rayNamespace, nil
+	default:
+		return "", "", "", fmt.Errorf("invalid view profile %q", opts.ViewProfile)
+	}
 }
 
 func validateJobsOptions(opts JobsOptions, directory WorkspaceDirectory) error {
@@ -226,6 +268,10 @@ func jobsMode(opts JobsOptions) JobsScopeMode {
 // NewServer builds a portal Server, constructing and mounting the Stellar
 // server from the provided options.
 func NewServer(opts Options) (*Server, error) {
+	viewProfile, fixedWorkspace, fixedNamespace, err := normalizeViewProfile(opts)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateJobsOptions(opts.Jobs, opts.WorkspaceDirectory); err != nil {
 		return nil, err
 	}
@@ -251,6 +297,7 @@ func NewServer(opts Options) (*Server, error) {
 		workspaceDirectory:    opts.WorkspaceDirectory,
 		identity:              normalizeIdentityOptions(opts.Identity),
 		kueueViz:              opts.KueueViz,
+		viewProfile:           viewProfile,
 		legacyScope: WorkspaceScope{
 			WorkspaceID:       "default",
 			Name:              "Default",
@@ -261,6 +308,11 @@ func NewServer(opts Options) (*Server, error) {
 			ExperimentsURL:    "/stellar",
 			Availability:      workspaceAvailabilityAvailable,
 		},
+	}
+	if viewProfile == ViewProfileSingleWorkspace {
+		s.legacyScope.WorkspaceID = fixedWorkspace
+		s.legacyScope.Name = fixedWorkspace
+		s.legacyScope.Namespace = fixedNamespace
 	}
 	s.routes()
 	return s, nil
@@ -393,13 +445,23 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePortalShell serves the SPA entry document at /portal.
-func (s *Server) handlePortalShell(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handlePortalShell(w http.ResponseWriter, r *http.Request) {
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		if _, ok := s.localWorkspaceScope(w, r); !ok {
+			return
+		}
+	}
 	serveIndexHTML(w, http.StatusOK)
 }
 
 // handlePortalPath serves static frontend assets under /portal/, falling back to
 // the SPA index for client-side routes (e.g. /portal/cluster).
 func (s *Server) handlePortalPath(w http.ResponseWriter, r *http.Request) {
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		if _, ok := s.localWorkspaceScope(w, r); !ok {
+			return
+		}
+	}
 	name := strings.TrimPrefix(r.URL.Path, "/portal/")
 	if serveAsset(w, name) {
 		return
@@ -533,7 +595,15 @@ type runningItem struct {
 // portalBoards is the canonical board list surfaced by the shell. Experiments
 // links out to the mounted Stellar SPA for the MVP; the rest are portal-native
 // routes filled in by later increments.
-func portalBoards(scope WorkspaceScope) []boardLink {
+func portalBoards(scope WorkspaceScope, profile ViewProfile) []boardLink {
+	if profile == ViewProfileSingleWorkspace {
+		return []boardLink{
+			{ID: "overview", Title: "Overview", Path: "/portal"},
+			{ID: "experiments", Title: "Experiments", Path: "/portal/experiments"},
+			{ID: "runs", Title: "Jobs", Path: "/portal/runs"},
+			{ID: "ray", Title: "Ray", Path: "/portal/ray"},
+		}
+	}
 	workspaceID := ""
 	experimentsPath := "/stellar"
 	experimentsExternal := true
@@ -558,8 +628,8 @@ func portalBoards(scope WorkspaceScope) []boardLink {
 // KueueViz proxy is enabled so a portal without it does not advertise a 503
 // route.
 func (s *Server) boardsForScope(scope WorkspaceScope) []boardLink {
-	boards := portalBoards(scope)
-	if s.kueueViz.Enabled {
+	boards := portalBoards(scope, s.viewProfile)
+	if s.viewProfile != ViewProfileSingleWorkspace && s.kueueViz.Enabled {
 		workspaceID := ""
 		if scope.Managed {
 			workspaceID = scope.WorkspaceID
@@ -579,6 +649,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := overviewResponse{Boards: s.boardsForScope(scope), Running: []runningItem{}}
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		writeScopedJSON(w, http.StatusOK, resp, scope, "ready")
+		return
+	}
 	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
 	s.resolveCards(r.Context(), &resp, scope)
 	s.resolveRunning(r.Context(), &resp, scope)
@@ -789,6 +863,9 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectBroadBoard(w, scope, "jobs") {
+		return
+	}
 	// Each gate names only its own remedy: one shared message would send an
 	// operator whose scope mode is already correct off to re-check it.
 	if jobsMode(s.jobs) == JobsScopeDisabled {
@@ -842,6 +919,9 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectBroadBoard(w, scope, "cluster health") {
+		return
+	}
 	if s.cluster.Querier == nil {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "cluster board unavailable: portal started without a Kusto query command")
 		return
@@ -882,6 +962,9 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	}
 	scope, ok := s.localWorkspaceScope(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectBroadBoard(w, scope, "cost") {
 		return
 	}
 	if s.cost.Querier == nil {
@@ -948,13 +1031,13 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 	if namespace == "" {
 		namespace = s.ray.Namespace
 	}
-	if scope.Managed {
+	if scope.Managed || s.viewProfile == ViewProfileSingleWorkspace {
 		namespace = scope.Namespace
 	}
 	historyWorkspaceID := ""
 	historyCluster := scope.Cluster
 	historyNamespace := namespace
-	if scope.Managed {
+	if scope.Managed || s.viewProfile == ViewProfileSingleWorkspace {
 		historyWorkspaceID = scope.WorkspaceID
 	} else if s.runs.History != nil {
 		// Durable history is always bound to the cluster validated at startup,
@@ -1008,7 +1091,7 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: scope.Namespace,
 		LocalQueue: scope.LocalQueue, Kind: "RayJob", Limit: s.runs.HistoryLimit,
 	}
-	if scope.Managed {
+	if scope.Managed || s.viewProfile == ViewProfileSingleWorkspace {
 		historyScope.WorkspaceID = scope.WorkspaceID
 	} else {
 		historyScope.Cluster = s.legacyScope.Cluster
@@ -1047,6 +1130,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectBroadBoard(w, scope, "cluster nodes") {
+		return
+	}
 	if s.nodes.Reader == nil {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "nodes board unavailable: portal started without Kubernetes access")
 		return
@@ -1075,6 +1161,9 @@ func (s *Server) handleNodeUtil(w http.ResponseWriter, r *http.Request) {
 	}
 	scope, ok := s.localWorkspaceScope(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectBroadBoard(w, scope, "node utilization") {
 		return
 	}
 	if s.nodeUtil.Querier == nil {
@@ -1132,7 +1221,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	historyWorkspaceID := ""
 	historyCluster := scope.Cluster
 	historyNamespace := namespace
-	if scope.Managed {
+	if scope.Managed || s.viewProfile == ViewProfileSingleWorkspace {
 		historyWorkspaceID = scope.WorkspaceID
 	} else if s.runs.History != nil {
 		// Legacy live boards retain their request-level cluster override for
@@ -1159,7 +1248,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
-	s.annotateMultiKueueRuns(r.Context(), &snapshot, namespace)
+	if s.viewProfile != ViewProfileSingleWorkspace {
+		s.annotateMultiKueueRuns(r.Context(), &snapshot, namespace)
+	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0))
 }
 
@@ -1223,7 +1314,7 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/runs/{namespace}/{name}")
 		return
 	}
-	if scope.Managed {
+	if scope.Managed || s.viewProfile == ViewProfileSingleWorkspace {
 		ns = scope.Namespace
 	}
 	if s.runs.Reader == nil {
@@ -1235,7 +1326,11 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "job detail unavailable: reader does not support single-object reads")
 		return
 	}
-	snapshot, err := jobdetail.Detail(r.Context(), reader, s.cluster.Querier, jobdetail.Options{Namespace: ns, Name: name})
+	lifecycleQuerier := s.cluster.Querier
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		lifecycleQuerier = nil
+	}
+	snapshot, err := jobdetail.Detail(r.Context(), reader, lifecycleQuerier, jobdetail.Options{Namespace: ns, Name: name})
 	if err != nil {
 		if errors.Is(err, jobdetail.ErrNotFound) {
 			writeScopedError(w, http.StatusNotFound, scope, err.Error())
@@ -1245,6 +1340,14 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, "ready")
+}
+
+func (s *Server) rejectBroadBoard(w http.ResponseWriter, scope WorkspaceScope, board string) bool {
+	if s.viewProfile != ViewProfileSingleWorkspace {
+		return false
+	}
+	writeScopedError(w, http.StatusNotFound, scope, board+" board is not available in the single-workspace view profile")
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

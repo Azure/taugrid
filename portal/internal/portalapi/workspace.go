@@ -123,9 +123,10 @@ type staticWorkspaceDirectory struct {
 }
 
 type workspaceDirectoryResponse struct {
-	Workspaces []WorkspaceScope `json:"workspaces"`
-	Selected   *WorkspaceScope  `json:"selected,omitempty"`
-	Managed    bool             `json:"managed"`
+	Workspaces  []WorkspaceScope `json:"workspaces"`
+	Selected    *WorkspaceScope  `json:"selected,omitempty"`
+	Managed     bool             `json:"managed"`
+	ViewProfile ViewProfile      `json:"viewProfile"`
 }
 
 // LoadWorkspaceDirectory loads and validates a metadata-only JSON directory.
@@ -450,11 +451,25 @@ func (s *Server) resolveWorkspaceScope(r *http.Request) (WorkspaceScope, error) 
 		if scope.Availability == "" {
 			scope.Availability = workspaceAvailabilityAvailable
 		}
-		if values, ok := r.URL.Query()["namespace"]; ok && len(values) > 0 {
-			scope.Namespace = values[0]
-		}
-		if values, ok := r.URL.Query()["cluster"]; ok && len(values) > 0 {
-			scope.Cluster = values[0]
+		if s.viewProfile == ViewProfileSingleWorkspace {
+			for key, expected := range map[string]string{
+				"workspace": scope.WorkspaceID,
+				"namespace": scope.Namespace,
+				"cluster":   scope.Cluster,
+			} {
+				for _, value := range r.URL.Query()[key] {
+					if value != expected {
+						return WorkspaceScope{}, fmt.Errorf("%s query conflicts with fixed single-workspace scope", key)
+					}
+				}
+			}
+		} else {
+			if values, ok := r.URL.Query()["namespace"]; ok && len(values) > 0 {
+				scope.Namespace = values[0]
+			}
+			if values, ok := r.URL.Query()["cluster"]; ok && len(values) > 0 {
+				scope.Cluster = values[0]
+			}
 		}
 		return scope, nil
 	}
@@ -532,10 +547,14 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.workspaceDirectory == nil {
-		scope, _ := s.resolveWorkspaceScope(r)
+		scope, ok := s.localWorkspaceScope(w, r)
+		if !ok {
+			return
+		}
 		writeJSON(w, http.StatusOK, workspaceDirectoryResponse{
-			Workspaces: []WorkspaceScope{scope},
-			Selected:   &scope,
+			Workspaces:  []WorkspaceScope{scope},
+			Selected:    &scope,
+			ViewProfile: s.viewProfile,
 		})
 		return
 	}
@@ -550,7 +569,7 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scopes := s.workspaceDirectory.List(r.Context(), viewer)
-	resp := workspaceDirectoryResponse{Workspaces: scopes, Managed: true}
+	resp := workspaceDirectoryResponse{Workspaces: scopes, Managed: true, ViewProfile: s.viewProfile}
 	if requested := strings.TrimSpace(r.URL.Query().Get("workspace")); requested != "" {
 		scope, err := s.workspaceDirectory.Resolve(r.Context(), viewer, requested)
 		if err != nil {
@@ -565,7 +584,7 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
-	if s.workspaceDirectory == nil {
+	if s.workspaceDirectory == nil && s.viewProfile != ViewProfileSingleWorkspace {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -581,6 +600,10 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			default:
 				writeJSONError(w, http.StatusBadRequest, err.Error())
 			}
+			return
+		}
+		if s.viewProfile == ViewProfileSingleWorkspace {
+			next.ServeHTTP(w, r)
 			return
 		}
 		if scope.Availability == workspaceAvailabilityRedirect {

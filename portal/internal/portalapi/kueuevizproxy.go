@@ -211,6 +211,14 @@ func rewriteKueueVizHTML(resp *http.Response) error {
 // frontend Service (SPA + assets). It sets the kueueviz_target cookie so the
 // SPA's root-absolute asset fetches route back to the frontend Service.
 func (s *Server) handleKueueVizProxy(w http.ResponseWriter, r *http.Request) {
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		scope, ok := s.localWorkspaceScope(w, r)
+		if !ok {
+			return
+		}
+		s.rejectBroadBoard(w, scope, "kueue (live)")
+		return
+	}
 	if !s.kueueViz.Enabled {
 		http.Error(w, "kueue (live) board unavailable: portal started without --kueueviz", http.StatusServiceUnavailable)
 		return
@@ -297,6 +305,14 @@ func (s *Server) handleKueueVizEnvJS(w http.ResponseWriter, r *http.Request) {
 // kueueviz_target cookie is present. The upstream is config-fixed, so the cookie
 // only gates access to the board (no host is derived from the request).
 func (s *Server) handleKueueVizAsset(w http.ResponseWriter, r *http.Request) {
+	if s.viewProfile == ViewProfileSingleWorkspace {
+		scope, ok := s.localWorkspaceScope(w, r)
+		if !ok {
+			return
+		}
+		s.rejectBroadBoard(w, scope, "kueue (live)")
+		return
+	}
 	if !s.kueueViz.Enabled {
 		http.Error(w, "kueue (live) board unavailable: portal started without --kueueviz", http.StatusServiceUnavailable)
 		return
