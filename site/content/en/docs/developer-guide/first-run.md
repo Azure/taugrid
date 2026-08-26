@@ -102,6 +102,9 @@ run as static HTML by default; add `-o tui` for a terminal summary, or use
 `taugrid-portal experiment open <run-name>` to serve it and open your browser in
 one step.
 
+To compare the same run from two machines, continue with
+[Share research with a teammate](../share-research/).
+
 Keep namespace, queue, kubeconfig, and cloud credentials as workspace concerns
 rather than adding them to project config to work around platform readiness
 failures.

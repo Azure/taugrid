@@ -17,6 +17,7 @@ your platform team for a workspace connection.
 
 - Confirm your workspace connection with your platform team, then
   [run your first target](first-run/).
+- [Share research with a teammate](share-research/).
 - [Serve a trained model](serve-model/) once you have a run to promote.
 
 ## Concepts

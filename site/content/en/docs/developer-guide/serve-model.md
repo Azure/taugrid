@@ -1,6 +1,6 @@
 ---
 title: Serve a trained model
-weight: 2
+weight: 3
 description: Render, deploy, inspect, and remove an online endpoint
 aliases:
   - "/docs/tasks/researcher/serve-model/"
