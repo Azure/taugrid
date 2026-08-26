@@ -1,13 +1,32 @@
 # TauGrid AKS Terraform
 
-This Terraform root creates a GPU-enabled AKS environment and then invokes the
-repository's supported `tau cluster install` workflow. TauGrid owns Kueue,
-KubeRay, the Tau controller, GPU monitoring, the baseline queue, and Portal.
+This Terraform root creates an AKS environment and then invokes the
+repository's supported `tau cluster install` workflow. By default it includes
+a GPU node pool, GPU monitoring, and GPU Kueue admission. Set `enable_gpu =
+false` for a CPU-only environment; Kueue, KubeRay, the Tau controller, the
+CPU baseline queue, and Portal remain installed.
 
 The default GPU pool is one `Standard_NC24ads_A100_v4` node. It is billable and
 requires matching regional quota. Change `gpu_vm_size`, `gpu_count_per_node`,
 `gpu_monitoring_sku_name`, `gpu_class`, and `gpu_series` together for another
 supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
+
+## CPU-only deployment
+
+Set `enable_gpu = false` to omit the GPU node pool, NVIDIA device plugin, DCGM
+exporter, MIG normalization, GPU monitoring, and GPU queue flavor. ADX, Portal,
+and lifecycle recording remain controlled by their existing feature flags. The
+ADX installation keeps its general cluster and workload telemetry but does not
+enable GPU-specific collection.
+
+```hcl
+enable_gpu = false
+enable_adx = true # optional; unchanged from GPU deployments
+```
+
+Changing an existing managed environment from `enable_gpu = true` to `false`
+causes Terraform to delete its GPU node pool and uninstall the self-managed GPU
+components before applying the CPU-only TauGrid configuration.
 
 ## Prerequisites
 

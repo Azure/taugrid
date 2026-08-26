@@ -8,7 +8,7 @@ global:
   clusterName: ${cluster_name}
   region: ${location}
 
-%{ if gpu_stack_mode == "aks_managed_preview" }
+%{ if enable_gpu && gpu_stack_mode == "aks_managed_preview" }
 collector:
   prometheusScrape:
     extraStaticTargets:

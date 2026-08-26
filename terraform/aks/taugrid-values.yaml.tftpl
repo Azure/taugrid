@@ -1,6 +1,7 @@
 baselineQueue:
   gpu:
-    enabled: true
+    enabled: ${enable_gpu}
+%{ if enable_gpu }
     flavors:
       - name: ${gpu_flavor_name}
         nodeLabels:
@@ -16,6 +17,14 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "${gpu_quota}"
+%{ else }
+    coveredResources: []
+    flavors: []
+%{ endif }
+
+components:
+  gpuMonitoring:
+    enabled: ${enable_gpu}
 
 taugrid-core:
   portal:
@@ -80,6 +89,7 @@ taugrid-core:
 %{ endif }
 %{ endif }
 
+%{ if enable_gpu }
 gpu-monitoring:
 %{ if gpu_stack_mode == "self_managed" }
   # The upstream DCGM exporter is a DaemonSet behind a Service whose traffic is
@@ -93,3 +103,4 @@ gpu-monitoring:
       instanceTypes:
         - ${gpu_vm_size}
       num_gpus: ${gpu_count_per_node}
+%{ endif }

@@ -64,6 +64,12 @@ variable "system_vm_size" {
   default     = "Standard_D4ds_v6"
 }
 
+variable "enable_gpu" {
+  description = "Create the GPU node pool and install GPU admission and monitoring components. Set false for a CPU-only AKS environment."
+  type        = bool
+  default     = true
+}
+
 variable "gpu_node_pool_name" {
   description = "GPU user node pool name."
   type        = string

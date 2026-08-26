@@ -30,7 +30,7 @@ output "adx_cluster_name" {
 
 output "gpu_node_pool_name" {
   description = "GPU workload node pool."
-  value       = azurerm_kubernetes_cluster_node_pool.gpu.name
+  value       = var.enable_gpu ? azurerm_kubernetes_cluster_node_pool.gpu[0].name : null
 }
 
 output "gpu_quota" {

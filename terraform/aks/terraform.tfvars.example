@@ -15,7 +15,10 @@ cluster_name        = "<cluster-name>"
 # Use this interpreter on Linux, WSL, and macOS.
 command_interpreter = ["bash", "-c"]
 
-# The defaults below create one billable A100 GPU node.
+# GPU is enabled by default and creates one billable A100 GPU node. Set this to
+# false for a CPU-only AKS environment; GPU-specific settings below are ignored.
+enable_gpu = true
+
 gpu_vm_size             = "Standard_NC24ads_A100_v4"
 gpu_node_count          = 1
 gpu_count_per_node      = 1
