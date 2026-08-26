@@ -26,11 +26,12 @@ Complete these phases in order:
 | **AKS setup (Azure/provider)** | Azure platform operator | Managed-Entra/Azure-RBAC AKS is reachable through normal cluster-user credentials; the CPU system pool and GPU pool are `Ready`; the provider GPU driver and device plugin expose a usable device. |
 | **TauGrid setup** | Kubernetes/TauGrid platform operator | The checked-in TauGrid chart passes installation and node validation. |
 | **Workspace setup** | Kubernetes/TauGrid platform operator | A `TauWorkspace` for the actual researcher subject is `Ready`, and the repository connection descriptor is generated. |
-| **Researcher workflow** | Researcher | The repository-first dry-run, optional smoke, six-trial Tune run, logs, result grid, and terminal lifecycle gates all pass without a context, namespace, or queue override. |
+| **Researcher workflow** | Researcher | The repository-first dry-run, optional smoke, six-trial Tune run, logs, result grid, and terminal lifecycle gates all pass with context, namespace, and queue resolved automatically. |
 
-See [TauGrid setup](../../getting-started/taugrid-setup/)
-for the general provider/platform boundary. Tau does not provision AKS, Azure
-RBAC, the GPU driver, or the device plugin.
+See [Install TauGrid](../../platform-admin-guide/kubernetes/#3-install-taugrid)
+for the general provider/platform boundary. Azure platform operators provision
+AKS, Azure RBAC, the GPU driver, and the device plugin; TauGrid builds on top of
+them.
 
 ## 1. Record local state and choose the target
 
@@ -51,7 +52,7 @@ tau --help >/dev/null
 ```
 
 Persist `TAU_BIN_DIR` on `PATH` for later terminals. The
-[Tau installation guide](../../getting-started/install/) explains upgrades,
+[Tau CLI installation guide](../../platform-admin-guide/kubernetes/#1-install-the-tau-cli) explains upgrades,
 the recommended GitHub Release installation, and the optional Python SDK.
 
 Record the original local state and select the target:
@@ -108,9 +109,8 @@ az vm list-usage \
 
 Do not continue unless the SKU has no blocking restriction and the family has
 enough unused vCPU quota for the planned node count. Quota permits capacity
-requests but does not guarantee allocation. Allocation can still fail because
-regional, zonal, or
-subscription-specific capacity is exhausted.
+requests; actual allocation still depends on regional, zonal, or
+subscription-specific capacity, which can be exhausted.
 
 This workflow requires one `Standard_NV12ads_A10_v5` node, which exposes one
 8 GiB A10 partition. A100 shapes cost more and may require a different
@@ -159,8 +159,8 @@ az aks nodepool add \
 AKS owns reserved labels such as `accelerator`; do not set them yourself. The
 GPU node should receive `accelerator=nvidia` from AKS.
 
-Grant the researcher normal AKS cluster-user credential access if the platform
-has not already done so:
+Grant the researcher normal AKS cluster-user credential access unless the platform
+has already done so:
 
 ```bash
 AKS_ID="$(
@@ -229,7 +229,7 @@ kubectl get nodes -l "agentpool=$GPU_POOL" \
 If the platform selected an AKS mode that skips the host driver, use the
 corresponding supported Azure/NVIDIA GPU Operator path instead. Do not combine
 two driver managers. In either mode, `nvidia.com/gpu` must be nonzero before
-Tau submission.
+TauGrid submission.
 
 Verify that an ordinary pod can consume the resource and run `nvidia-smi`:
 
@@ -308,7 +308,7 @@ tau workspace check taugrid-default
 ```
 
 For a group handoff, use `--subject-kind Group` and the group value AKS places
-in the token claim. Do not use a display name that the cluster never asserts.
+in the token claim, since a display name never appears there.
 
 ## 6. Generate the research repository
 
@@ -341,7 +341,7 @@ The descriptor must contain `authorization.mode: workspace-rbac` and
 `requiredRole: tau-researcher-v1`. It contains no kubeconfig, token, or client
 secret.
 
-## 7. Run the six-trial sweep without `--context`
+## 7. Run the six-trial sweep using the resolved workspace connection
 
 The example defines three learning rates and two batch sizes:
 
@@ -351,8 +351,8 @@ The example defines three learning rates and two batch sizes:
 
 It permits two concurrent trials, but each trial needs one GPU. With the
 one-GPU pool above, Ray keeps the second trial pending and executes the sweep
-sequentially. Adding more GPUs can increase concurrency but is optional
-capacity, not a correctness requirement.
+sequentially. Adding more GPUs can increase concurrency; it is optional
+capacity rather than a correctness requirement.
 
 From the generated repository:
 
@@ -362,9 +362,9 @@ tau run smoke                  # optional platform-path probe
 tau run --config tau.yaml
 ```
 
-Do not pass `--context`, `--namespace`, or `--queue`. Tau resolves the cluster,
-workspace namespace, and LocalQueue from
-`tau/workspace.connection.yaml`.
+TauGrid resolves the cluster, workspace namespace, and LocalQueue automatically
+from `tau/workspace.connection.yaml`, so skip passing `--context`,
+`--namespace`, or `--queue`.
 
 Immediately capture the Ray Jobs application stream in one terminal:
 
@@ -380,7 +380,8 @@ tau run status tune-smoke --watch
 
 The generated Tune driver stages the researcher source on remote
 `TorchTrainer` workers and forwards arbitrary Ray Train metrics and checkpoint
-paths into the outer Tune result grid. It does not special-case `loss`.
+paths into the outer Tune result grid, treating `loss` the same as any other
+metric.
 
 ## 8. Require every success gate
 
@@ -404,12 +405,13 @@ kubectl get clusterqueue jobqueue \
 kubectl get clusterqueue jobqueue -o yaml
 ```
 
-KubeRay removes the RayCluster pods shortly after completion. Without central
-log offload, post-run local logs and `/home/nonroot/ray_results` disappear with
-the head pod. Keep `tau run logs -f` attached through completion, or configure
+KubeRay removes the RayCluster pods shortly after completion. Post-run local
+logs and `/home/nonroot/ray_results` persist only as long as the head pod
+unless central log offload is configured. Keep `tau run logs -f` attached through completion, or configure
 the platform's supported central log backend before the run. The checked-in
-example prints its result grid and best result to the application stream; it
-does not claim that the head-local result directory is durable.
+example prints its result grid and best result to the application stream,
+which is the durable record; the head-local result directory is ephemeral
+only.
 
 ## 9. Clean up and verify restoration
 

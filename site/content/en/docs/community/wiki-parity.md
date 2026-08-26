@@ -6,7 +6,7 @@ description: Governance for two separately maintained documentation surfaces
 
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
-The Tau documentation site and GitHub Wiki are both maintained as complete
+The TauGrid documentation site and GitHub Wiki are both maintained as complete
 surfaces. They are edited separately, so semantic parity is a human ownership
 responsibility rather than an automated synchronization claim.
 
@@ -29,5 +29,6 @@ When user-facing behavior or maturity changes:
 3. Review both as one documentation change.
 4. Refresh the parity manifest review date.
 
-The checks detect stale ownership and missing mappings. They do not prove that
-two independently edited pages say the same thing.
+The checks detect stale ownership and missing mappings; confirm that two
+independently edited pages say the same thing by reviewing both together, as
+in step 3 above.

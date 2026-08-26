@@ -22,4 +22,4 @@ Core principles:
 - Add tests at the owning layer.
 
 External contract changes need external evidence. A manifest or telemetry change
-is not proven solely by a utility unit test.
+needs evidence beyond a utility unit test.

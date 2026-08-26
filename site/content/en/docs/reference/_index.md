@@ -2,7 +2,8 @@
 title: Reference
 linkTitle: Reference
 weight: 5
-description: Exact Tau user and release contracts
+description: Exact TauGrid user and release contracts
+sidebar_root_for: self
 ---
 
 - [CLI reference](cli/)
@@ -10,6 +11,7 @@ description: Exact Tau user and release contracts
 - [Cluster install values](cluster-install-values/)
 - [TauWorkspace reference](workspace/)
 - [Release contract](releases/)
+- [Glossary](glossary/)
 
 The repository remains the versioned source of truth. These pages provide stable
 navigation and point to the detailed code-adjacent references.

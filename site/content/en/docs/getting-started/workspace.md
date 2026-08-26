@@ -1,12 +1,10 @@
 ---
-title: Tau Workspace Setup
-linkTitle: Tau Workspace Setup
-description: Compatibility page for the renamed Tau Workspace Setup guide
+title: Workspace setup
+description: Compatibility page for the consolidated Getting Started guide
 build:
   list: never
   render: always
 ---
 
-{{< maturity status="ga" reviewed="2026-08-18" >}}
-
-This guide has moved to [Tau Workspace Setup](../tau-workspace-setup/). Follow the renamed guide for the current administrator setup, repository handoff, and clean-researcher acceptance workflow.
+Workspace setup is now part of the single
+[Getting started on Kubernetes guide](../../platform-admin-guide/kubernetes/#4-create-a-workspace).

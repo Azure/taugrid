@@ -29,7 +29,7 @@ create operator-owned worker credentials, `MultiKueueCluster`,
 `MultiKueueConfig`, `AdmissionCheck`, queue routing, or `multiKueue` workload
 profiles. Operators provision those resources explicitly for their topology and
 tenant isolation policy.
-See [Multi-cluster execution](../../site/content/en/docs/operations/multicluster.md)
+See [Multi-cluster execution](../../site/content/en/docs/platform-admin-guide/multicluster.md)
 for isolation, tenant authorization, and rollback.
 
 ## Components
