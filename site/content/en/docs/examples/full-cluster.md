@@ -5,23 +5,24 @@ weight: 30
 description: Build AKS, GPU capacity, TauGrid, and Portal with the repository Terraform root.
 ---
 
-{{< maturity status="alpha" reviewed="2026-08-17" >}}
+{{< maturity status="alpha" reviewed="2026-08-26" >}}
 
 Use the repository's [`terraform/aks`](https://github.com/Azure/taugrid/tree/main/terraform/aks)
 root to create a GPU-enabled AKS environment. It provisions a system pool and
 a GPU pool, enables OIDC and Azure Workload Identity, and invokes the supported
 `tau cluster install` command.
 
-Do not separately install Kueue, KubeRay, the Tau controller, or GPU
-monitoring with Helm. `tau cluster install` installs the versioned TauGrid
-distribution that owns those components, the baseline Kueue queue, and Portal.
+`tau cluster install` installs the versioned TauGrid
+distribution that owns Kueue, KubeRay, the Tau controller, GPU monitoring, the
+baseline Kueue queue, and Portal; skip installing those components
+separately with Helm.
 
 ## Prerequisites
 
 - an Azure subscription that passes the
-  [AKS setup gate](../../getting-started/aks-setup/), has GPU quota for the
+  [AKS cluster prerequisites](../../platform-admin-guide/aks-setup/#prerequisites), has GPU quota for the
   selected region and SKU, and an approved Terraform identity;
-- Azure CLI, Terraform 1.6 or later, kubectl, Helm, and local Python
+- Azure CLI, Terraform 1.9 or later, kubectl, Helm, and local Python
   dependencies;
 - Azure credentials accepted by the AzureRM Terraform provider and permission
   to provision AKS, networking, storage, and identities; and
@@ -44,22 +45,32 @@ terraform init
 terraform apply -var="subscription_id=<your-subscription-id>"
 ```
 
-By default, Terraform uses `gpu_stack_mode = "self_managed"`: it installs the
-NVIDIA device plugin and the upstream NVIDIA DCGM exporter. It also creates a
-local ignored admin kubeconfig and values file under
-`terraform/aks/generated/`. For the default A100 pool, it then normalizes MIG
-mode, restarts the GPU VM scale set, and waits for allocatable GPUs before
-running:
+By default, Terraform uses `gpu_stack_mode = "self_managed"`: it installs a
+standalone NVIDIA device plugin plus the upstream NVIDIA DCGM exporter.
+NVIDIA GPU Operator remains a separate existing-cluster model, while the
+cluster platform retains ownership of the underlying NVIDIA driver. Terraform
+also creates a local ignored admin
+kubeconfig and values file under `terraform/aks/generated/`. For the default
+A100 pool, it then normalizes MIG mode, restarts the GPU VM scale set, and
+waits for allocatable GPUs before running:
 
 ```bash
 tau cluster install --values generated/taugrid-values.yaml --version 0.3.1
 ```
 
-Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience.
-This preview mode uses `EnableManagedGPUExperience=true` at GPU pool creation;
-AKS then owns the driver, device plugin, and DCGM exporter host service at port
-`19400`. Before applying, register the feature, wait for `Registered`, and
-refresh the AKS resource provider:
+In this mode, the generated values configure TauGrid GPU monitoring with
+`dcgmHealth.source: exporter` and
+`exporterUrl: http://dcgm-exporter.dcgm-exporter.svc:9400/metrics`, pointing
+at the standalone DCGM exporter's own Service rather than a host-local
+endpoint.
+
+Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience
+instead. This preview mode uses `EnableManagedGPUExperience=true` at GPU pool
+creation; AKS then owns the NVIDIA driver, device plugin, and a node-local
+DCGM exporter host service at port `19400`. TauGrid GPU monitoring uses
+`dcgmHealth.source: host-dcgmi` with the default
+`http://localhost:19400/metrics` in this mode. Before applying, register the
+feature, wait for `Registered`, and refresh the AKS resource provider:
 
 ```bash
 az feature register --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview
@@ -78,7 +89,20 @@ If the local installation step fails after AKS has been created, correct the
 local prerequisite and rerun `terraform apply`. Terraform replaces that step
 when its cluster, generated values, or TauGrid version changes.
 
-## Verify and create a workspace
+An existing cluster with an externally managed GPU Operator is a third,
+distinct operational model alongside Terraform's standalone and AKS-managed
+modes. GPU Operator owns the GPU software stack according to its own
+`ClusterPolicy`, and TauGrid consumes the Operator's DCGM
+exporter endpoint with `dcgmHealth.source: exporter` and an explicit
+non-loopback Service URL (commonly port `9400`). See the
+[GPU software stack models comparison](../../platform-admin-guide/aks-setup/#gpu-software-stack-models)
+and the GPU monitoring chart's
+[DCGM health sources](https://github.com/Azure/taugrid/blob/main/charts/gpu-monitoring/README.md#dcgm-health-sources)
+documentation. Regardless of which of these three models owns the stack,
+workload configs always request standard Kubernetes `nvidia.com/gpu`
+resources unchanged.
+
+## Verify and provision a workspace
 
 Fetch an operator kubeconfig:
 
@@ -97,30 +121,72 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.al
 ```
 
 The default path is an operator sandbox using local administrator credentials.
-Create the default workspace, then submit the built-in smoke run:
+It creates platform infrastructure only, so a platform owner provisions the
+researcher workspace with an explicit Entra group object ID before submitting
+the built-in smoke run:
 
 ```bash
-tau workspace create taugrid-default --apply
+tau workspace create taugrid-default \
+  --namespace taugrid-default \
+  --principal-name <entra-group-object-id> \
+  --apply
 tau run smoke
 ```
+
+To provision the Entra-backed workspace in the same apply, set the following
+before the first `terraform apply`. Terraform applies a native `TauWorkspace`
+after `tau cluster install`; the controller reconciles the workload Namespace,
+`jobqueue` LocalQueue, and namespace-scoped researcher RBAC.
+
+```hcl
+workspace_namespace = "taugrid-default"
+
+bootstrap_workspace = {
+  name                  = "taugrid-default"
+  entra_group_object_id = "<entra-group-object-id>"
+}
+```
+
+When bootstrap is enabled, Terraform configures Portal's computed Jobs board
+with an explicit operator scope limited to this workspace namespace and
+`jobqueue`. This is still an operator-only ClusterIP diagnostic path, not a
+researcher-facing authenticated Portal endpoint.
+
+On a retained cluster, removing `bootstrap_workspace` stops Terraform from
+applying the CR but intentionally does not delete an existing workspace or its
+workloads. Remove a workspace through the workspace administration workflow
+after reviewing the impact.
 
 ## Optional ADX and lifecycle history
 
 ADX observability is opt-in because it creates additional billable resources.
-Set `enable_adx = true` and a globally unique `adx_cluster_name` before the
-first apply. This installs adx-mon alongside TauGrid. In self-managed mode it
+Both ADX and lifecycle history can be enabled in the initial plan and apply:
+
+```hcl
+enable_adx                = true
+adx_cluster_name          = ""
+enable_lifecycle_recorder = true
+workspace_namespace       = "taugrid-default"
+```
+
+An empty `adx_cluster_name` generates a stable `taugrid<8-hex-characters>`
+candidate from the subscription, resource group, and AKS cluster names. Set an
+explicit globally unique name only if Azure reports that the candidate is in
+use. After apply, inspect the resolved name with
+`terraform output -raw adx_cluster_name`.
+
+Terraform installs adx-mon alongside TauGrid. In self-managed mode it
 discovers the upstream DCGM exporter Pod. TauGrid GPU monitoring uses that
 exporter's node-local Service in self-managed mode; in AKS managed preview mode
 it collects from the GPU node host service.
 
-Portal lifecycle history is a second apply: its target namespace is created by
-the TauWorkspace. After creating the workspace above, add these values to the
-same local `terraform.tfvars` file and run `terraform apply` again:
-
-```hcl
-enable_lifecycle_recorder = true
-workspace_namespace       = "taugrid-default"
-```
+When lifecycle history is enabled, Terraform creates `workspace_namespace`
+before installing TauGrid so the chart can render the recorder's namespace
+scoped RBAC in the same apply. If `bootstrap_workspace` is configured,
+Terraform applies the TauWorkspace after installing TauGrid. Otherwise, the
+`tau workspace create` command above adopts the bootstrapped namespace. Both
+paths let the controller reconcile its labels, LocalQueue, RBAC, and other
+workspace settings.
 
 For a real GPU workload, use
 [the A100 GPU quickstart](https://github.com/Azure/taugrid/tree/main/examples/aks-gpu-quickstart)
@@ -129,14 +195,14 @@ not only scheduling, and can incur additional GPU cost.
 
 ## Portal
 
-Terraform uses the TauGrid distribution default and installs Portal as `tau-portal` in the `tau-system` namespace. Its Service is ClusterIP-only and Terraform does not expose it outside the cluster. An operator can inspect it with:
+Terraform uses the TauGrid distribution default and installs Portal as `tau-portal` in the `tau-system` namespace. Its Service is ClusterIP-only, keeping it reachable only from inside the cluster network. An operator can inspect it with:
 
 ```bash
 kubectl port-forward service/tau-portal 18080:80 --namespace=tau-system
 ```
 
-This is an operator diagnostic path, not a researcher endpoint. Before giving
-researchers browser access, deploy a platform-owned authenticated HTTPS proxy.
+This is an operator diagnostic path; researcher access requires a
+platform-owned authenticated HTTPS proxy in front of Portal.
 The default Portal serves Kubernetes-backed boards. Experiment, cluster-health,
 and cost boards require separately configured ADX and Azure Workload Identity.
 

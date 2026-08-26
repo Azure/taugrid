@@ -8,10 +8,10 @@ description: Direct config-first workload intent
 
 This page documents the **direct run config**: the normal, hand-written
 `tau.yaml` that `tau run --config` reads to submit a workload. See
-[direct run config vs. managed workflow manifest](../../concepts/glossary/#run-config-vs-manifest)
+[direct run config vs. managed workflow manifest](../glossary/#run-config-vs-manifest)
 for how this differs from the SDK-generated, `schema_version: 1` manifest that
 `tau.train`/`tau.serve` render. Both can use a `tau.yaml` filename; inspect
-the schema, not the filename. Use the managed workflow shape only when Tau
+the schema, not the filename. Use the managed workflow shape only when TauGrid
 needs to own workflow semantics such as staged train/eval lineage.
 
 Normal research projects check in direct config:
@@ -34,12 +34,12 @@ storage:
 ```
 
 `storage.data_pvc` names an existing Bound PVC in the resolved workload
-namespace. Tau references and mounts that claim; it does not provision or own
-the PVC, StorageClass, CSI configuration, or backing storage. The platform
-owner chooses the backend and manages its lifecycle.
+namespace. TauGrid references and mounts that claim; the platform owner provisions
+and owns the PVC, StorageClass, CSI configuration, and backing storage,
+choosing the backend and managing its lifecycle.
 
-Direct batch Jobs can stage an immutable reference directory from another image
-without creating a ConfigMap:
+Direct batch Jobs can stage an immutable reference directory from another image,
+skipping ConfigMap creation:
 
 ```yaml
 engine: job
@@ -51,10 +51,10 @@ storage:
       mount_path: /opt/reference
 ```
 
-Tau renders each asset as a pinned init-container image that runs
+TauGrid renders each asset as a pinned init-container image that runs
 `/bin/cp -a` into an `emptyDir`, then mounts that volume read-only in the main
 container. Source images must provide `/bin/cp`. Names and paths are validated,
-Tau-reserved paths cannot be replaced, and mutable image tags are rejected.
+TauGrid-reserved paths cannot be replaced, and mutable image tags are rejected.
 `storage.image_assets` is intentionally limited to direct `engine: job`
 configs; managed workflows and RayJob configs reject it.
 
@@ -72,10 +72,10 @@ run:
     path: /workspace
 ```
 
-Tau copies `run.source.path` into an `emptyDir` with an init container, mounts
+TauGrid copies `run.source.path` into an `emptyDir` with an init container, mounts
 the per-pod working copy at `/tau/source`, and runs `entrypoint` relative to
-that directory. Source bytes never travel in environment variables or a
-ConfigMap. The source image must provide `/bin/sh`, `cp`, and `chmod`; mutable
+that directory, keeping source bytes out of environment variables and
+ConfigMaps entirely. The source image must provide `/bin/sh`, `cp`, and `chmod`; mutable
 tags, absolute entrypoints, RayJob dispatch, managed workflows, and combining
 `run.source` with `run.working_dir` are rejected before rendering. The init
 container normalizes working-copy permissions and sets the executable bit on
@@ -84,8 +84,8 @@ then reuse its digest in every run config. Kubernetes uses the workload's
 configured private-registry authentication; do not put registry credentials or
 signed download URLs in the config.
 
-Direct Jobs can set the main container's initial working directory without
-wrapping the entrypoint in shell-specific `cd` logic:
+Direct Jobs can set the main container's initial working directory directly,
+skipping shell-specific `cd` logic in the entrypoint:
 
 ```yaml
 engine: job
@@ -95,10 +95,11 @@ runtime:
   working_dir: /workspace/project
 ```
 
-`runtime.working_dir` must be a clean absolute path inside the image. Tau maps
-it directly to Kubernetes `container.workingDir`; it does not inspect the
-entrypoint, create the directory, or ship local files. It is Job-only and
-cannot be combined with `run.source`. Ray's `run.working_dir` remains a
+`runtime.working_dir` must be a clean absolute path inside the image. TauGrid
+passes it straight through as Kubernetes `container.workingDir`, relaying the
+configured path unparsed; the image owns creating that directory and
+providing its own local files. It is Job-only and cannot be combined with
+`run.source`. Ray's `run.working_dir` remains a
 different, host-relative field that packages a local project into Ray
 `runtime_env`.
 
@@ -115,11 +116,11 @@ printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 
 `run.ttl_seconds_after_finished` is an optional retention period from 1 through
 2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
-`spec.ttlSecondsAfterFinished`; omission keeps Tau's 28800-second default. The
-TTL does not start while any regular container is still running.
+`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default. The
+TTL starts only after every regular container has finished running.
 
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
-before workload creation. Tau's generated embedded-payload environment entries
+before workload creation. TauGrid's generated embedded-payload environment entries
 are also capped at 64 KiB. Use `run.source` or `storage.image_assets` for
 content instead of embedding archives in `runtime.env`.
 
@@ -134,15 +135,15 @@ Main field groups:
 | `policy` | Explicit operator/accounting overrides |
 | `storage` | Durable data, output, checkpoint, and extra mounts |
 | `metrics` | Published JSONL metric paths and the opt-in offload sidecar |
-| `resilience` | Automatic retry filters, backoff, and checkpoint path — see [recovery](../../operations/recovery/) |
+| `resilience` | Automatic retry filters, backoff, and checkpoint path; see [recovery](../../platform-admin-guide/recovery/) |
 | `profiler` | Bounded rank-scoped profiling |
 | `experiment` | Project, experiment name, and group |
 | `workflow` | Delegation to an SDK-generated managed workflow manifest |
 
 Validate the installed contract. `--config` always names an explicit file;
 `tau run` itself instead takes an optional positional `TARGET` (for example
-`tau run train`) that resolves `tau/train.yaml` — the two are not
-interchangeable, so keep validating against an explicit path:
+`tau run train`) that resolves `tau/train.yaml`; the two serve different
+purposes, so keep validating against an explicit path:
 
 ```bash
 tau run validate --config tau.yaml
@@ -151,7 +152,7 @@ tau run explain-config
 ```
 
 For the full submit-to-evidence loop against a named target, see
-[first run](../../tasks/researcher/first-run/).
+[first run](../../developer-guide/first-run/).
 
 The installed CLI is the final schema authority: use `tau run schema`.
 
@@ -166,8 +167,8 @@ runtime:
     mode: restricted
 ```
 
-Tau applies the Kubernetes Restricted Pod Security fields to the Job or RayJob pod and every generated main, sidecar, and init container. Missing container user and group IDs default to numeric `65532`; explicit nonzero IDs are preserved. Rendering fails if a profile requests root, privileged mode, privilege escalation, or added capabilities, and the image must support the selected non-root identity.
+TauGrid applies the Kubernetes Restricted Pod Security fields to the Job or RayJob pod and every generated main, sidecar, and init container. Missing container user and group IDs default to numeric `65532`; explicit nonzero IDs are preserved. Rendering fails if a profile requests root, privileged mode, privilege escalation, or added capabilities, and the image must support the selected non-root identity.
 
 ## Config identity
 
-Tau records one hash of the validated direct config on submitted Jobs and RayJobs. The hash covers runtime, resources, environment, storage, and other run behavior, so resume can warn when the config changed. Script and packaged-source content use separate payload-digest annotations.
+TauGrid records one hash of the validated direct config on submitted Jobs and RayJobs. The hash covers runtime, resources, environment, storage, and other run behavior, so resume can warn when the config changed. Script and packaged-source content use separate payload-digest annotations.

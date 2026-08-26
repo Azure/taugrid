@@ -206,7 +206,7 @@ tau python doctor -n ray
 ```
 
 Pinned installs and troubleshooting:
-[`../../../site/content/en/docs/getting-started/install.md`](../../../site/content/en/docs/getting-started/install.md).
+[Getting started](../../../site/content/en/docs/platform-admin-guide/kubernetes.md#1-install-the-tau-cli).
 
 Public API: `tau.train`, `tau.eval`, `tau.serve`, `tau.config`,
 `tau.secret_from_env`, `tau.secret_from_file`, `tau.secret_ref`,

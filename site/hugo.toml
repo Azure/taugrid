@@ -11,17 +11,25 @@ disableKinds = ["taxonomy", "term"]
 
 [menu]
   [[menu.main]]
+    name = "Getting started"
+    weight = 10
+    pageRef = "/docs/getting-started"
+  [[menu.main]]
     name = "Examples"
     weight = 30
     pageRef = "/docs/examples"
   [[menu.main]]
+    name = "Developer guide"
+    weight = 15
+    pageRef = "/docs/developer-guide"
+  [[menu.main]]
+    name = "Platform admin guide"
+    weight = 20
+    pageRef = "/docs/platform-admin-guide"
+  [[menu.main]]
     name = "Visuals"
     weight = 40
-    pageRef = "/docs/overview/visual-curriculum"
-  [[menu.main]]
-    name = "GitHub Wiki"
-    weight = 90
-    url = "https://github.com/Azure/taugrid/wiki"
+    pageRef = "/docs/overview"
   [[menu.main]]
     name = "GitHub"
     weight = 100
@@ -70,6 +78,7 @@ disableKinds = ["taxonomy", "term"]
     navbar_logo = false
     sidebar_menu_compact = true
     sidebar_search_disable = false
+    sidebar_root_enabled = true
     breadcrumb_disable = false
     sidebar_menu_foldable = true
     footer_about_enable = false

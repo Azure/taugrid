@@ -22,14 +22,14 @@ reviewed = "2026-07-16"
 
 [[pairs]]
 id = "day-two"
-site = "content/en/docs/tasks/researcher/_index.md"
+site = "content/en/docs/developer-guide/_index.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Day-2-Workflows"
 owner = "taugrid"
 reviewed = "2026-07-16"
 
 [[pairs]]
 id = "operations"
-site = "content/en/docs/operations/_index.md"
+site = "content/en/docs/platform-admin-guide/_index.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Operations-and-Multi-Cluster"
 owner = "taugrid"
 reviewed = "2026-07-16"
@@ -51,7 +51,7 @@ reviewed = "2026-07-16"
 
 [[site_only]]
 id = "canonical-glossary"
-site = "content/en/docs/concepts/glossary.md"
+site = "content/en/docs/reference/glossary.md"
 owner = "taugrid"
 reason = "Versioned source-adjacent terminology; wiki concepts remain grouped under the overview and workspace parity pairs."
 reviewed = "2026-07-16"

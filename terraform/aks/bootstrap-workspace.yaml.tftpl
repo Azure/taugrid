@@ -1,0 +1,22 @@
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: ${workspace_name}
+  namespace: tau-system
+spec:
+  authorization:
+    mode: workspace-rbac
+  principalRef:
+    provider: entra
+    name: ${entra_group_object_id}
+  kubernetesSubject:
+    kind: Group
+    name: ${entra_group_object_id}
+  role: tau-researcher-v1
+  target:
+    namespace: ${workspace_namespace}
+    createNamespace: true
+  queue: jobqueue
+  defaults:
+    outputRoot: /data/projects/${workspace_name}/runs
+    priority: normal

@@ -1,12 +1,17 @@
 ---
 title: Community
 linkTitle: Community
-weight: 7
-description: Contribute to and release Tau
+weight: 6
+description: Contribute to and release TauGrid
+sidebar_root_for: self
+aliases:
+  - "/docs/tasks/contributor/"
 ---
 
 - [Contributing](contributing/)
-- [Releasing Tau](releasing/)
+- [Make a compatible change](change/)
+- [Run the Kind smoke test](kind-smoke-test/)
+- [Releasing TauGrid](releasing/)
 - [Roadmap](https://github.com/Azure/taugrid/blob/main/ROADMAP.md)
 - [Site and wiki parity](wiki-parity/)
 - [GitHub repository](https://github.com/Azure/taugrid)

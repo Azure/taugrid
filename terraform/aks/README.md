@@ -67,16 +67,35 @@ subscription_id     = "<subscription-id>"
 resource_group_name = "<resource-group-name>"
 cluster_name        = "<cluster-name>"
 
-# Optional ADX, adx-mon, and Portal Kusto integration.
-enable_adx          = true
-adx_cluster_name    = "<globally-unique-adx-cluster-name>"
+# The tracked quickstart enables the complete ADX-backed observability path.
+enable_adx                = true
+enable_lifecycle_recorder = true
+workspace_namespace       = "taugrid-default"
+adx_cluster_name          = ""
 
 ```
 
+The variable defaults remain opt-in so an invocation without a reviewed
+variable file cannot create billable ADX resources or remote telemetry. The
+tracked `terraform.tfvars.example` deliberately enables ADX and lifecycle
+recording for this full-cluster quickstart. Set both feature flags to `false`
+for a Kubernetes-only Portal deployment.
+
+An empty `adx_cluster_name` generates a stable globally-scoped candidate with
+the form `taugrid<8-hex-characters>`. The suffix is derived from the
+subscription, resource group, and AKS cluster names, so repeated plans do not
+change it and the value is known before apply. Override it only if Azure reports
+that candidate is already in use. The resolved value is available through
+`terraform output -raw adx_cluster_name`.
+
 Managed Entra authentication and local administrator accounts are enabled by default. Terraform uses a local administrator kubeconfig for installation commands. Set `aks_admin_group_object_ids` only when Entra groups also need cluster-admin access. Keep `azure_rbac_enabled = false` so TauWorkspace RoleBindings enforce workspace access.
 
+Review and apply one saved plan:
+
 ```bash
-terraform apply
+terraform plan -out taugrid.tfplan
+terraform show -no-color taugrid.tfplan
+terraform apply taugrid.tfplan
 ```
 
 Terraform writes an ignored local admin kubeconfig and generated chart values
@@ -96,6 +115,17 @@ traffic. When ADX is enabled, adx-mon discovers that exporter by Pod annotation.
 In `aks_managed_preview` mode, adx-mon collects metrics from the AKS GPU node
 host service at port `19400`.
 
+When lifecycle recording is enabled, Terraform also bootstraps the empty
+`workspace_namespace` before installing TauGrid. This satisfies the lifecycle
+recorder's namespace prerequisite without claiming the TauWorkspace contract.
+When `bootstrap_workspace` is configured, Terraform applies the TauWorkspace
+after installing TauGrid; otherwise, a later `tau workspace create` command
+adopts that namespace. Either path reconciles the workspace labels, Pod
+Security Admission labels, output scope, LocalQueue, RBAC, and optional
+workload ServiceAccount. Use the exact same namespace in both places. Reserved
+namespaces such as `default`, `tau-system`, `tau-platform`, and `kube-*` are
+rejected.
+
 After apply, use an operator kubeconfig and verify the environment:
 
 ```bash
@@ -112,11 +142,21 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.al
 ```
 
 The default path is an operator sandbox, not an Entra researcher handoff.
-Create the workspace as the local administrator, then run the standard smoke
-test:
+Create the workspace as the local administrator against the namespace that
+Terraform bootstrapped, wait for the complete Workspace contract, then run the
+standard smoke test:
 
 ```bash
-tau workspace create taugrid-default --apply
+tau workspace create taugrid-default \
+  --namespace taugrid-default \
+  --system-namespace tau-system \
+  --principal-name <entra-group-object-id> \
+  --apply
+kubectl -n tau-system wait \
+  --for=jsonpath='{.status.phase}'=Ready \
+  workspace/taugrid-default \
+  --timeout=5m
+tau workspace check taugrid-default
 tau run smoke
 ```
 
@@ -127,25 +167,55 @@ kubectl -n tau-system port-forward service/tau-portal 18080:80
 ```
 
 An authenticated HTTPS proxy is required before giving researchers a browser
-URL. The default Portal deployment exposes Kubernetes-backed boards. Its
-Kusto-backed boards require a separate ADX and workload identity configuration.
+URL. With the tracked ADX settings, Portal uses its query identity for the
+Kusto-backed boards, the lifecycle recorder writes through its separate
+`Metrics.Ingestor` identity, and adx-mon manages the
+`Metrics.TauExpRunLifecycle` schema. Verify that path after Workspace readiness:
 
-## Enable lifecycle history
-
-Set the following values before the initial `terraform apply`, or add them to
-an existing environment and apply again:
-
-```hcl
-enable_lifecycle_recorder           = true
-workspace_namespace                 = "taugrid-default"
+```bash
+kubectl -n tau-system rollout status \
+  deployment/tau-lifecycle-recorder \
+  --timeout=25m
+kubectl -n adx-mon describe managementcommand taugrid-lifecycle-schema
+kubectl -n tau-system logs deployment/tau-lifecycle-recorder --tail=100
 ```
 
 Terraform creates a least-privilege ADX ingestion identity, enables Portal run
 history, and asks adx-mon to create the `Metrics.TauExpRunLifecycle` schema.
 For a one-step installation, Terraform first creates the target workload
 namespace if needed so the TauGrid chart can install the lifecycle recorder.
-It does not create a TauWorkspace or add workload policy to that namespace;
-the TauWorkspace controller remains responsible for reconciling those settings.
+It does not create a TauWorkspace or add workload policy to that namespace
+unless `bootstrap_workspace` is configured.
+
+## Optional workspace bootstrap
+
+Set `bootstrap_workspace` to create TauGrid's single v0 Entra-backed
+workspace as part of the same apply. The Entra group object ID is used both as
+the external principal reference and the Kubernetes Group subject. The
+TauWorkspace controller creates or reconciles the workload Namespace, its
+`jobqueue` LocalQueue, and namespace-scoped researcher RBAC.
+
+```hcl
+workspace_namespace = "taugrid-default"
+
+bootstrap_workspace = {
+  name                  = "taugrid-default"
+  entra_group_object_id = "00000000-0000-0000-0000-000000000000"
+}
+```
+
+Terraform applies the native TauWorkspace CR after `tau cluster install` and
+waits for it to become Ready. It also enables Portal's restricted operator
+Jobs scope for only this workspace namespace and `jobqueue`. The Portal
+Service remains ClusterIP-only; this does not create a researcher browser
+endpoint or replace the required authenticated HTTPS proxy.
+
+Leave `bootstrap_workspace` unset for a platform-only installation. A platform
+owner can then create the workspace later with `tau workspace create` or a
+reviewed TauWorkspace manifest. Removing `bootstrap_workspace` from a retained
+cluster stops Terraform from applying the CR but intentionally does not delete
+an existing workspace or its workloads; remove it through the workspace
+administration workflow after reviewing the impact.
 
 ## Destroy
 

@@ -1,12 +1,12 @@
 ---
-title: Releasing Tau
+title: Releasing TauGrid
 weight: 2
 description: Human-authorized and reproducible release publication
 ---
 
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
-Tau release preparation updates:
+TauGrid release preparation updates:
 
 - SDK version.
 - Installation documentation.

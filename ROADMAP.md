@@ -3,9 +3,8 @@
 Where TauGrid is going.
 
 This file describes direction. It is not a release plan, it carries no dates,
-and no item creates a support commitment. For what you can depend on today,
-read [Capability maturity](https://azure.github.io/taugrid/docs/overview/capability-maturity/),
-which records the Alpha, Beta, GA, and Deprecated stage of every capability.
+and no item creates a support commitment. Current behavior and supported
+configuration are documented in the user guides and reference.
 
 **Next** is the accepted next wave of work. **Exploring** is under
 consideration, with no commitment that it will be built. Items are in rough

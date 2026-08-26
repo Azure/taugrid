@@ -880,7 +880,7 @@ func TestConfiguredJobsModesAllowMissingKubernetesReader(t *testing.T) {
 			name:       "disabled",
 			opts:       JobsOptions{ScopeMode: JobsScopeDisabled},
 			request:    httptest.NewRequest(http.MethodGet, "/api/portal/jobs", nil),
-			wantReason: "portal.jobs.scopeMode",
+			wantReason: "jobs board setup is required",
 			notReason:  "without Kubernetes access",
 		},
 		{
@@ -934,6 +934,9 @@ func TestConfiguredJobsModesAllowMissingKubernetesReader(t *testing.T) {
 			}
 			if strings.Contains(body, tc.notReason) {
 				t.Fatalf("jobs body = %s; must not name the other cause %q", body, tc.notReason)
+			}
+			if tc.name == "disabled" && !strings.Contains(body, `"state":"setup_required"`) {
+				t.Fatalf("disabled Jobs body must identify setup state: %s", body)
 			}
 		})
 	}
@@ -2659,6 +2662,9 @@ func TestPortalShellContainsWorkspaceScopeContract(t *testing.T) {
 		`if (requested !== currentWorkspace()) return false;`,
 		`if (data.scope && requested === currentWorkspace())`,
 		`fetchJSON(withWorkspace("/api/stellar/experiments"))`,
+		`e.state === "setup_required"`,
+		`Jobs board setup required`,
+		`Portal is running normally.`,
 		`const view = el("div");`,
 		`host.replaceChildren(view);`,
 		`No local fallback was used.`,

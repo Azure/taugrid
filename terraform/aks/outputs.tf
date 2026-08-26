@@ -23,6 +23,11 @@ output "adx_endpoint" {
   value       = var.enable_adx ? azurerm_kusto_cluster.this[0].uri : null
 }
 
+output "adx_cluster_name" {
+  description = "Generated or explicitly configured Azure Data Explorer cluster name when enable_adx is true."
+  value       = var.enable_adx ? local.adx_cluster_name : null
+}
+
 output "gpu_node_pool_name" {
   description = "GPU workload node pool."
   value       = azurerm_kubernetes_cluster_node_pool.gpu.name

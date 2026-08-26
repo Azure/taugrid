@@ -381,8 +381,16 @@
       // Scoped error envelopes carry a "reason" naming the cause and its
       // remedy; anything else (plain text, proxy HTML) shows as-is.
       let detail = raw;
-      try { detail = JSON.parse(raw).reason || raw; } catch (e) { /* not JSON */ }
-      throw new Error(res.status + " " + detail);
+      let state = "";
+      try {
+        const body = JSON.parse(raw);
+        detail = body.reason || raw;
+        state = body.state || "";
+      } catch (e) { /* not JSON */ }
+      const error = new Error(res.status + " " + detail);
+      error.status = res.status;
+      error.state = state;
+      throw error;
     }
     const data = await res.json();
     if (data.scope && requested === currentWorkspace()) {
@@ -775,6 +783,15 @@
     try {
       snap = await fetchJSON("/api/portal/jobs");
     } catch (e) {
+      if (e.status === 503 && e.state === "setup_required") {
+        view.append(el("div", { class: "empty" },
+          el("strong", {}, "Jobs board setup required"),
+          el("p", { style: "margin:8px 0 0;" },
+            "Portal is running normally. Configure an authorized workspace scope or explicit operator scopes before enabling this computed board."),
+          el("p", { class: "note", style: "margin:8px 0 0;" },
+            "Helm: portal.jobs.scopeMode=workspace or operator.")));
+        return;
+      }
       view.append(el("div", { class: "empty warn" },
         "Jobs board unavailable: " + e.message));
       return;
