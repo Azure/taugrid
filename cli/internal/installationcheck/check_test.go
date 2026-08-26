@@ -338,6 +338,41 @@ func TestWaitTimeoutCancelsBlockedKubectlCall(t *testing.T) {
 	}
 }
 
+func TestCheckBoundsIndividualKubectlCall(t *testing.T) {
+	opts := testOptions()
+	opts.QueryTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	report := Check(context.Background(), blockingRunner{}, opts)
+	if time.Since(started) > time.Second {
+		t.Fatalf("Check did not bound stalled kubectl calls")
+	}
+	if report.Ready() {
+		t.Fatalf("blocked kubectl calls unexpectedly produced a ready report:\n%s", report.Summary())
+	}
+	if !strings.Contains(report.Summary(), "timed out after 20ms") {
+		t.Fatalf("report did not surface the per-query timeout:\n%s", report.Summary())
+	}
+}
+
+func TestWaitRetriesTransientQueryTimeout(t *testing.T) {
+	opts := testOptions()
+	opts.Timeout = time.Second
+	opts.QueryTimeout = 10 * time.Millisecond
+	runner := &transientTimeoutRunner{fakeRunner: readyRunner()}
+
+	report, err := Wait(context.Background(), runner, opts)
+	if err != nil {
+		t.Fatalf("Wait errored after a transient query timeout: %v", err)
+	}
+	if !report.Ready() {
+		t.Fatalf("Wait did not retry to a ready report:\n%s", report.Summary())
+	}
+	if runner.clusterQueueCalls != 2 {
+		t.Fatalf("ClusterQueue calls = %d, want 2", runner.clusterQueueCalls)
+	}
+}
+
 func TestNumericVersionPartAcceptsKubernetesMinorSuffix(t *testing.T) {
 	got, err := numericVersionPart("30+")
 	if err != nil || got != 30 {
@@ -350,6 +385,22 @@ type blockingRunner struct{}
 func (blockingRunner) Raw(ctx context.Context, _ []string, _ []byte) (string, error) {
 	<-ctx.Done()
 	return "", ctx.Err()
+}
+
+type transientTimeoutRunner struct {
+	fakeRunner
+	clusterQueueCalls int
+}
+
+func (r *transientTimeoutRunner) Raw(ctx context.Context, args []string, stdin []byte) (string, error) {
+	if strings.Join(args, " ") == "get clusterqueues --selector app.kubernetes.io/instance=taugrid,app.kubernetes.io/part-of=taugrid --output=json" {
+		r.clusterQueueCalls++
+		if r.clusterQueueCalls == 1 {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+	}
+	return r.fakeRunner.Raw(ctx, args, stdin)
 }
 
 func testOptions() Options {
