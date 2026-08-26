@@ -2,7 +2,7 @@
 <!-- Copyright (c) Microsoft Corporation.
      Licensed under the MIT License. -->
 
-{{ $animationVersion := "20260825-2x-no-led" }}
+{{ $animationVersion := "20260825-2x-sync" }}
 <div class="tau-home">
   <section class="tau-hero">
     <div class="tau-hero__inner">
@@ -63,8 +63,8 @@
   <section class="tau-section tau-section--soft" aria-labelledby="stack">
     <div class="tau-section__inner">
       <div class="tau-section__heading">
-        <h2 id="stack">The components, brought together</h2>
-        <p>TauGrid integrates these pieces without hiding them: each keeps its own responsibility and stays inspectable.</p>
+        <h2 id="stack">From submission to running on healthy GPUs</h2>
+        <p>A workload submitted with <code>tau run</code> enters a shared Kueue ClusterQueue, receives quota, and is placed by Kubernetes on healthy GPUs. Queue state, placement, and live training evidence stay visible along the way.</p>
       </div>
       <figure class="tau-motion-panel">
         <div class="tau-motion-panel__viewport">
