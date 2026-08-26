@@ -151,6 +151,11 @@ with an explicit operator scope limited to this workspace namespace and
 `jobqueue`. This is still an operator-only ClusterIP diagnostic path, not a
 researcher-facing authenticated Portal endpoint.
 
+On a retained cluster, removing `bootstrap_workspace` stops Terraform from
+applying the CR but intentionally does not delete an existing workspace or its
+workloads. Remove a workspace through the workspace administration workflow
+after reviewing the impact.
+
 ## Optional ADX and lifecycle history
 
 ADX observability is opt-in because it creates additional billable resources.

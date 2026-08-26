@@ -172,7 +172,10 @@ endpoint or replace the required authenticated HTTPS proxy.
 
 Leave `bootstrap_workspace` unset for a platform-only installation. A platform
 owner can then create the workspace later with `tau workspace create` or a
-reviewed TauWorkspace manifest.
+reviewed TauWorkspace manifest. Removing `bootstrap_workspace` from a retained
+cluster stops Terraform from applying the CR but intentionally does not delete
+an existing workspace or its workloads; remove it through the workspace
+administration workflow after reviewing the impact.
 
 ## Destroy
 
