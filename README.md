@@ -90,7 +90,7 @@ command -v tau
 tau version --short
 ```
 
-See the [installation guide](site/content/en/docs/getting-started/install.md)
+See the [installation guide](site/content/en/docs/platform-admin-guide/kubernetes.md#1-install-the-tau-cli)
 for PATH persistence, pinned versions, the Python SDK wheel, upgrades, and the
 advanced source installation.
 
@@ -146,8 +146,7 @@ Full documentation is available at [https://azure.github.io/taugrid](https://azu
 ## Roadmap
 
 [ROADMAP.md](ROADMAP.md) describes where the project is going and what is
-deliberately out of scope. For the stage of each capability today, see
-[Capability maturity](https://azure.github.io/taugrid/docs/overview/capability-maturity/).
+deliberately out of scope.
 
 ## Telemetry
 

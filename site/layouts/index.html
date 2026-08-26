@@ -2,6 +2,7 @@
 <!-- Copyright (c) Microsoft Corporation.
      Licensed under the MIT License. -->
 
+{{ $animationVersion := "20260825-tau-run" }}
 <div class="tau-home">
   <section class="tau-hero">
     <div class="tau-hero__inner">
@@ -16,15 +17,14 @@
       <p class="tau-hero__lead">
         TauGrid brings the <code>tau</code> CLI, Kueue queueing, KubeRay
         orchestration, GPU-node health monitoring, and observability into one
-        stack — spanning data preparation, distributed training, fine-tuning,
+        stack, spanning data preparation, distributed training, fine-tuning,
         and inference. Platform teams get an integrated foundation; researchers
         focus on their code, not Kubernetes plumbing.
       </p>
       <div class="tau-actions" aria-label="Primary actions">
-        <a class="tau-button tau-button--primary" href="{{ "docs/getting-started/quickstart/" | relURL }}">Run the quickstart</a>
-        <a class="tau-button" href="{{ "docs/getting-started/" | relURL }}">Deploy the stack</a>
+        <a class="tau-button tau-button--primary" href="{{ "docs/platform-admin-guide/kubernetes/" | relURL }}">Install TauGrid</a>
+        <a class="tau-button" href="{{ "docs/getting-started/" | relURL }}">Understand TauGrid</a>
         <a class="tau-button" href="{{ "docs/examples/" | relURL }}">Explore examples</a>
-        <a class="tau-button" href="{{ "docs/overview/visual-curriculum/" | relURL }}">Browse visual guide</a>
       </div>
     </div>
   </section>
@@ -36,25 +36,25 @@
         <p>Task-oriented paths keep platform bootstrap separate from researcher day-to-day workflows.</p>
       </div>
       <div class="tau-grid">
-        <a class="tau-card" href="{{ "docs/tasks/platform/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/platform-admin-guide/" | relURL }}">
           <h3>Platform engineers stand up and govern the stack</h3>
           <p>Deploy Kueue, KubeRay, GPU monitoring, and observability, then provide identity, queue, and storage policy.</p>
-          <span class="tau-card__link">Platform tasks →</span>
+          <span class="tau-card__link">Platform admin guide →</span>
         </a>
-        <a class="tau-card" href="{{ "docs/tasks/researcher/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/developer-guide/" | relURL }}">
           <h3>Researchers run and compare experiments</h3>
           <p>Connect a repository, submit a smoke test or training run, inspect progress, and preserve results.</p>
-          <span class="tau-card__link">Researcher tasks →</span>
+          <span class="tau-card__link">Developer guide →</span>
         </a>
-        <a class="tau-card" href="{{ "docs/tasks/operator/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/platform-admin-guide/troubleshoot/" | relURL }}">
           <h3>Operators find the first blocked layer</h3>
           <p>Separate config resolution, Kueue admission, scheduling, GPU health, and model progress.</p>
-          <span class="tau-card__link">Operations tasks →</span>
+          <span class="tau-card__link">Troubleshoot a run →</span>
         </a>
-        <a class="tau-card" href="{{ "docs/tasks/contributor/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/community/change/" | relURL }}">
           <h3>Contributors extend portable capabilities</h3>
           <p>Choose the owning package, preserve compatibility, and prove the external contract.</p>
-          <span class="tau-card__link">Contributor tasks →</span>
+          <span class="tau-card__link">Make a compatible change →</span>
         </a>
       </div>
     </div>
@@ -64,15 +64,26 @@
     <div class="tau-section__inner">
       <div class="tau-section__heading">
         <h2 id="stack">The components, brought together</h2>
-        <p>TauGrid integrates these pieces without hiding them — each keeps its own responsibility and stays inspectable.</p>
+        <p>TauGrid integrates these pieces without hiding them: each keeps its own responsibility and stays inspectable.</p>
       </div>
-      <div class="tau-flow" role="list" aria-label="TauGrid components">
-        <div class="tau-flow__node" role="listitem"><strong>tau CLI</strong><span>Resolve, submit, observe</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>Kueue</strong><span>Queueing and admission</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>KubeRay</strong><span>Ray orchestration</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>GPU health</strong><span>Node-level monitoring</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>Observability</strong><span>Metrics and evidence</span></div>
-      </div>
+      <figure class="tau-motion-panel">
+        <div class="tau-motion-panel__viewport">
+          <img
+            src="{{ "images/home/taugrid-control-room-poster.png" | relURL }}?v={{ $animationVersion }}"
+            data-poster-src="{{ "images/home/taugrid-control-room-poster.png" | relURL }}?v={{ $animationVersion }}"
+            data-animation-src="{{ "images/home/taugrid-control-room.gif" | relURL }}?v={{ $animationVersion }}"
+            alt="An animated TauGrid control room showing jobs from three workspaces sharing a Kueue ClusterQueue while the front job receives GPU quota and Kubernetes places it on two available healthy GPUs."
+            width="960"
+            height="540"
+            loading="lazy"
+            decoding="async"
+          >
+        </div>
+        <figcaption>
+          <strong>One shared queue across workspaces</strong>
+          <span>Watch jobs enter the ClusterQueue, receive best-effort FIFO admission, and start on healthy GPU capacity.</span>
+        </figcaption>
+      </figure>
     </div>
   </section>
 
@@ -82,12 +93,24 @@
         <h2 id="lifecycle">Across the GPU workload lifecycle</h2>
         <p>The same stack carries a workload from raw data through to a running endpoint.</p>
       </div>
-      <div class="tau-flow" role="list" aria-label="Workload lifecycle">
-        <div class="tau-flow__node" role="listitem"><strong>Data preparation</strong><span>Curated datasets</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>Distributed training</strong><span>Multi-node Ray and Jobs</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>Fine-tuning</strong><span>Checkpoints and evaluation</span></div>
-        <div class="tau-flow__node" role="listitem"><strong>Inference</strong><span>Serving endpoints</span></div>
-      </div>
+      <figure class="tau-motion-panel">
+        <div class="tau-motion-panel__viewport">
+          <img
+            src="{{ "images/home/taugrid-workload-lifecycle-poster.png" | relURL }}?v={{ $animationVersion }}"
+            data-poster-src="{{ "images/home/taugrid-workload-lifecycle-poster.png" | relURL }}?v={{ $animationVersion }}"
+            data-animation-src="{{ "images/home/taugrid-workload-lifecycle.gif" | relURL }}?v={{ $animationVersion }}"
+            alt="An animated TauGrid pipeline carrying a model workload through data preparation, distributed training, fine-tuning, and a ready inference endpoint."
+            width="960"
+            height="540"
+            loading="lazy"
+            decoding="async"
+          >
+        </div>
+        <figcaption>
+          <strong>One workload, one continuous record</strong>
+          <span>Move from prepared data to a serving endpoint while TauGrid preserves workload evidence.</span>
+        </figcaption>
+      </figure>
     </div>
   </section>
 
@@ -98,15 +121,15 @@
         <p>TauGrid standardizes the repeated infrastructure plumbing while leaving cloud provisioning, scheduling, and model code with their rightful owners.</p>
       </div>
       <div class="tau-grid tau-grid--three">
-        <a class="tau-card" href="{{ "docs/overview/architecture/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/getting-started/architecture/" | relURL }}">
           <h3>An integrated foundation with batteries included</h3>
           <p>Kueue, KubeRay, GPU-node health, and observability ship and upgrade together, not as pieces you wire up yourself.</p>
         </a>
-        <a class="tau-card" href="{{ "docs/concepts/config-resolution/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/developer-guide/concepts/config-resolution/" | relURL }}">
           <h3>Repository-first, policy-aware runs</h3>
           <p>Check in workload config, validate and render it, and submit through upstream Kueue and Kubernetes.</p>
         </a>
-        <a class="tau-card" href="{{ "docs/concepts/evidence/" | relURL }}">
+        <a class="tau-card" href="{{ "docs/developer-guide/concepts/evidence/" | relURL }}">
           <h3>Local-first, durable experiment evidence</h3>
           <p>Preserve experiment records, checkpoints, and artifacts locally, and export scalar metrics when useful.</p>
         </a>
@@ -118,14 +141,64 @@
     <div class="tau-section__inner">
       <div class="tau-section__heading">
         <h2 id="community">Built in the open</h2>
-        <p>TauGrid is MIT-licensed and developed in the open on GitHub. Capability labels follow Alpha, Beta, GA, and Deprecated feature stages. Planned work is labeled separately.</p>
+        <p>TauGrid is MIT-licensed and developed in the open on GitHub.</p>
       </div>
       <div class="tau-actions">
         <a class="tau-button tau-button--primary" href="{{ .Site.Params.github_repo }}">View on GitHub</a>
         <a class="tau-button" href="{{ "docs/community/contributing/" | relURL }}">Contribute</a>
-        <a class="tau-button" href="{{ "docs/overview/capability-maturity/" | relURL }}">Review capability maturity</a>
       </div>
     </div>
   </section>
 </div>
+<script>
+  (() => {
+    const images = [...document.querySelectorAll("[data-animation-src]")];
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    const showPoster = (image) => {
+      const posterSource = image.dataset.posterSrc;
+      image.dataset.currentSource = posterSource;
+      image.src = posterSource;
+    };
+
+    const refresh = (image) => {
+      const animate =
+        !reducedMotion.matches &&
+        !document.hidden &&
+        image.dataset.inView === "true";
+      const nextSource = animate
+        ? image.dataset.animationSrc
+        : image.dataset.posterSrc;
+
+      if (image.dataset.currentSource !== nextSource) {
+        image.src = nextSource;
+        image.dataset.currentSource = nextSource;
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          entry.target.dataset.inView = String(entry.isIntersecting);
+          refresh(entry.target);
+        }
+      },
+      { rootMargin: "120px 0px" }
+    );
+
+    for (const image of images) {
+      image.dataset.inView = "false";
+      image.dataset.currentSource = image.dataset.posterSrc;
+      image.addEventListener("error", () => {
+        if (image.dataset.currentSource === image.dataset.animationSrc) {
+          showPoster(image);
+        }
+      });
+      observer.observe(image);
+    }
+
+    reducedMotion.addEventListener("change", () => images.forEach(refresh));
+    document.addEventListener("visibilitychange", () => images.forEach(refresh));
+  })();
+</script>
 {{ end }}

@@ -12,7 +12,7 @@ only to keep existing scripts working; do not document them, add features throug
 them, or make new subprocess callers depend on them. The legacy root
 `tau submit` has been removed: config-driven Job execution is owned directly by
 `tau run`. Use the
-[public object model](https://github.com/Azure/taugrid/blob/main/site/content/en/docs/concepts/object-model.md)
+[public object model](https://github.com/Azure/taugrid/blob/main/site/content/en/docs/developer-guide/concepts/object-model.md)
 when changing command docs or wiring.
 
 ## Start with the contract
@@ -26,7 +26,7 @@ Every change should name the user path before naming files:
 5. Which outputs are stable contracts versus internal implementation details?
 
 For direct-config versus decorator ownership, stability, and migration, start
-from the [config-resolution guide](https://github.com/Azure/taugrid/blob/main/site/content/en/docs/concepts/config-resolution.md).
+from the [config-resolution guide](https://github.com/Azure/taugrid/blob/main/site/content/en/docs/developer-guide/concepts/config-resolution.md).
 Keep Python focused on authoring and local workflows while Go owns Kubernetes
 execution and lifecycle behavior.
 

@@ -266,7 +266,7 @@ their flag, schema, profiler, telemetry, or artifact reference material.
 
 | Need | Source of truth |
 | --- | --- |
-| Install or upgrade Tau | [`../site/content/en/docs/getting-started/install.md`](../site/content/en/docs/getting-started/install.md) and [`releases/v0.1.3.md`](releases/v0.1.3.md) |
+| Install or upgrade Tau | [Getting started](../site/content/en/docs/platform-admin-guide/kubernetes.md#1-install-the-tau-cli) and [`releases/v0.1.3.md`](releases/v0.1.3.md) |
 | Project/workspace ownership and onboarding levels | [`../../docs/tau/tau-project-onboarding.md`](../../docs/tau/tau-project-onboarding.md) |
 | Direct config versus Python decorators | [`../../docs/tau/tau-authoring-strategy.md`](../../docs/tau/tau-authoring-strategy.md) |
 | Direct `tau run` config schema | [`../../docs/tau/tau-run-config.md`](../../docs/tau/tau-run-config.md) |

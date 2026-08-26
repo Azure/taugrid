@@ -7,11 +7,11 @@ description: Observe Kueue admission and quota behavior with raw RayJobs and no 
 
 {{< maturity status="alpha" reviewed="2026-07-16" >}}
 
-Use this example when you want to understand the scheduling layer beneath Tau
-without waiting for GPU capacity. It submits raw RayJobs to Kueue and makes
+Use this example when you want to understand the scheduling layer beneath TauGrid
+using only the CPU capacity you already have. It submits raw RayJobs to Kueue and makes
 admission, pending work, and team borrowing visible.
 
-This is a **platform mechanics example**, not a Tau researcher workflow.
+This is a **platform mechanics example** that demonstrates Kueue/Ray scheduling directly, distinct from the TauGrid researcher workflow.
 
 ## Prerequisites
 
@@ -42,14 +42,14 @@ The demo includes a shared-context safety guard. Do not bypass it with
 `--allow-shared-context` unless the target cluster is intentionally approved for
 these resources.
 
-## What to carry back to Tau
+## What to carry back to TauGrid
 
-Tau adds reviewed configuration, workspace policy, queue resolution, and
+TauGrid adds reviewed configuration, workspace policy, queue resolution, and
 lifecycle commands on top of the objects shown here. Use this example to
-understand why a Tau run can be submitted but still wait for admission.
+understand why a TauGrid run can be submitted but still wait for admission.
 
-Continue with [queue, quota, and GPU placement](../../concepts/policy-and-placement/)
-or the [operator troubleshooting path](../../tasks/operator/troubleshoot/).
+Continue with [queue, quota, and GPU placement](../../platform-admin-guide/policy-and-placement/)
+or the [operator troubleshooting path](../../platform-admin-guide/troubleshoot/).
 
 See the
 [complete example README](https://github.com/Azure/taugrid-examples/tree/main/aks-blog/kueue-ray-cpu)

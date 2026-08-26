@@ -22,6 +22,7 @@ class DocumentAudit(HTMLParser):
         self.ids: set[str] = set()
         self.main_count = 0
         self.html_has_lang = False
+        self.is_redirect_stub = False
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -31,6 +32,12 @@ class DocumentAudit(HTMLParser):
             self.html_has_lang = bool(values.get("lang"))
         elif tag == "main":
             self.main_count += 1
+        elif tag == "meta" and (values.get("http-equiv") or "").lower() == "refresh":
+            # Hugo's built-in alias template emits a bare <head>-only
+            # redirect stub (no body, no landmarks) so old public URLs keep
+            # working. It is never rendered as a page a reader lands on, so
+            # the content-structure checks below do not apply to it.
+            self.is_redirect_stub = True
         elif tag == "img" and "alt" not in values:
             self.failures.append("image is missing an alt attribute")
         elif re.fullmatch(r"h[1-6]", tag):
@@ -45,6 +52,8 @@ class DocumentAudit(HTMLParser):
     def finish(self) -> list[str]:
         if not self.html_has_lang:
             self.failures.append("html element is missing a language")
+        if self.is_redirect_stub:
+            return self.failures
         if self.main_count != 1:
             self.failures.append(f"expected one main landmark, found {self.main_count}")
         if not self.heading_levels or self.heading_levels[0] != 1:
