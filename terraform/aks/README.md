@@ -144,8 +144,38 @@ Terraform creates a least-privilege ADX ingestion identity, enables Portal run
 history, and asks adx-mon to create the `Metrics.TauExpRunLifecycle` schema.
 For a one-step installation, Terraform first creates the target workload
 namespace if needed so the TauGrid chart can install the lifecycle recorder.
-It does not create a TauWorkspace or add workload policy to that namespace;
-the TauWorkspace controller remains responsible for reconciling those settings.
+It does not create a TauWorkspace or add workload policy to that namespace
+unless `bootstrap_workspace` is configured.
+
+## Optional workspace bootstrap
+
+Set `bootstrap_workspace` to create TauGrid's single v0 Entra-backed
+workspace as part of the same apply. The Entra group object ID is used both as
+the external principal reference and the Kubernetes Group subject. The
+TauWorkspace controller creates or reconciles the workload Namespace, its
+`jobqueue` LocalQueue, and namespace-scoped researcher RBAC.
+
+```hcl
+workspace_namespace = "taugrid-default"
+
+bootstrap_workspace = {
+  name                  = "taugrid-default"
+  entra_group_object_id = "00000000-0000-0000-0000-000000000000"
+}
+```
+
+Terraform applies the native TauWorkspace CR after `tau cluster install` and
+waits for it to become Ready. It also enables Portal's restricted operator
+Jobs scope for only this workspace namespace and `jobqueue`. The Portal
+Service remains ClusterIP-only; this does not create a researcher browser
+endpoint or replace the required authenticated HTTPS proxy.
+
+Leave `bootstrap_workspace` unset for a platform-only installation. A platform
+owner can then create the workspace later with `tau workspace create` or a
+reviewed TauWorkspace manifest. Removing `bootstrap_workspace` from a retained
+cluster stops Terraform from applying the CR but intentionally does not delete
+an existing workspace or its workloads; remove it through the workspace
+administration workflow after reviewing the impact.
 
 ## Destroy
 

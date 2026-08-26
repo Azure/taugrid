@@ -102,7 +102,7 @@ documentation. Regardless of which of these three models owns the stack,
 workload configs always request standard Kubernetes `nvidia.com/gpu`
 resources unchanged.
 
-## Verify and create a workspace
+## Verify and provision a workspace
 
 Fetch an operator kubeconfig:
 
@@ -121,12 +121,40 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.al
 ```
 
 The default path is an operator sandbox using local administrator credentials.
-Create the default workspace, then submit the built-in smoke run:
+It creates platform infrastructure only, so a platform owner provisions the
+researcher workspace with an explicit Entra group object ID before submitting
+the built-in smoke run:
 
 ```bash
-tau workspace create taugrid-default --apply
+tau workspace create taugrid-default \
+  --principal-name <entra-group-object-id> \
+  --apply
 tau run smoke
 ```
+
+To provision the Entra-backed workspace in the same apply, set the following
+before the first `terraform apply`. Terraform applies a native `TauWorkspace`
+after `tau cluster install`; the controller reconciles the workload Namespace,
+`jobqueue` LocalQueue, and namespace-scoped researcher RBAC.
+
+```hcl
+workspace_namespace = "taugrid-default"
+
+bootstrap_workspace = {
+  name                  = "taugrid-default"
+  entra_group_object_id = "<entra-group-object-id>"
+}
+```
+
+When bootstrap is enabled, Terraform configures Portal's computed Jobs board
+with an explicit operator scope limited to this workspace namespace and
+`jobqueue`. This is still an operator-only ClusterIP diagnostic path, not a
+researcher-facing authenticated Portal endpoint.
+
+On a retained cluster, removing `bootstrap_workspace` stops Terraform from
+applying the CR but intentionally does not delete an existing workspace or its
+workloads. Remove a workspace through the workspace administration workflow
+after reviewing the impact.
 
 ## Optional ADX and lifecycle history
 
@@ -137,9 +165,8 @@ discovers the upstream DCGM exporter Pod. TauGrid GPU monitoring uses that
 exporter's node-local Service in self-managed mode; in AKS managed preview mode
 it collects from the GPU node host service.
 
-Portal lifecycle history is a second apply: its target namespace is created by
-the TauWorkspace. After creating the workspace above, add these values to the
-same local `terraform.tfvars` file and run `terraform apply` again:
+Portal lifecycle history is opt-in. Set these values before the initial
+`terraform apply`, or add them to an existing environment and apply again:
 
 ```hcl
 enable_lifecycle_recorder = true
