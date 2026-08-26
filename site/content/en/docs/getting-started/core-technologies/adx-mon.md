@@ -28,7 +28,7 @@ to:
 adx-mon moves data into ADX. The TauGrid Portal and Stellar query ADX through
 their own read identities.
 
-TauGrid also saves experiment evidence close to each run. That local evidence
+TauGrid also saves experiment evidence alongside each run's output files. That local evidence
 supports retrieval and comparison, while the optional ADX copy supports
 platform-wide analysis.
 

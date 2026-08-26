@@ -7,7 +7,7 @@ description: Contributor expectations and validation depth
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Start with the repository
-[`AGENTS.md`](https://github.com/Azure/taugrid/blob/main/cli/AGENTS.md)
+[`AGENTS.md`](https://github.com/Azure/taugrid/blob/main/AGENTS.md)
 and
 [`SDK_GUIDE.md`](https://github.com/Azure/taugrid/blob/main/cli/SDK_GUIDE.md).
 

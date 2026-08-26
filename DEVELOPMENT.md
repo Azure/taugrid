@@ -12,13 +12,12 @@ The public repository is organized by ownership and release boundary:
 | `core/` | Shared library linked by the CLI and the portal |
 | `portal/` | Stellar experiment tracking and the observability portal |
 | `sdk/python/` | Python authoring SDK |
-| `controllers/` | Workspace and Ray dashboard controllers |
+| `controllers/` | Workspace, cluster, and quota controllers |
 | `monitoring/` | GPU health and metrics components |
 | `charts/` | Public Helm charts |
 | `images/` | Reproducible container image definitions |
 | `cluster-overlays/` | Optional, cluster-specific Kubernetes configuration overlays for queues, storage, topology, and dashboards; not installed by the Helm charts |
 | `examples/` | Runnable training, fine-tuning, inference, and local examples |
-| `docs/` | Architecture and contributor documentation |
 | `site/` | Hugo/Docsy documentation site |
 | `tests/e2e/` | Portable cross-component and anonymous-install tests |
 
@@ -79,7 +78,7 @@ never edit generated CRDs manually.
 Use an isolated environment:
 
 ```bash
-cd sdk/python
+cd sdk/python/python
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip

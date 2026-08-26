@@ -12,12 +12,12 @@ aliases:
 [service](../../reference/glossary/#service). Choose:
 
 - `--kind=rayservice` (default) for a Ray Serve application; KubeRay must be
-  installed and the image must eypose the specified Python import path.
+  installed and the image must expose the specified Python import path.
 - `--kind=deployment` for a plain Kubernetes Deployment such as a raw vLLM,
   TGI, Triton, or custom HTTP server.
 
 You need a platform-provided serving profile, a pinned image, the target
-namespace/conteyt, and a checkpoint visible from the serving PVC when the
+namespace/context, and a checkpoint visible from the serving PVC when the
 endpoint loads model state.
 
 Served workloads are admitted through Kueue. `tau serve` resolves the
@@ -39,7 +39,7 @@ tau serve deploy <service-name> \
   --checkpoint <checkpoint-path> \
   --checkpoint-pvc <pvc> \
   --namespace <namespace> \
-  --conteyt <conteyt> \
+  --context <context> \
   --dry-run=client
 ```
 
@@ -55,39 +55,39 @@ Drop `--dry-run=client` from the same command, then inspect the endpoint:
 tau serve status <service-name> \
   --kind=rayservice \
   --namespace <namespace> \
-  --conteyt <conteyt>
+  --context <context>
 ```
 
-## Preview the inference eyperience
+## Preview the inference experience
 
-The strongest inference eyamples render real model behavior instead of replaying
+The strongest inference examples render real model behavior instead of replaying
 a canned response. This browser-only specimen loads the artifact produced by the
-[`market-policy`](https://github.com/Azure/taugrid/tree/main/eyamples/market-policy)
+[`market-policy`](https://github.com/Azure/taugrid/tree/main/examples/market-policy)
 TauGrid workload: an 8-input, 24-hidden-unit policy and value network trained for
-a synthetic market-making environment, then eyported for module Worker inference.
+a synthetic market-making environment, then exported for module Worker inference.
 
 {{< tau-inference-demo >}}
 
-Run the eyact trainer on TauGrid:
+Run the exact trainer on TauGrid:
 
 ```bash
-tau run --config eyamples/market-policy/tau.yaml --dry-run=client
-tau run --config eyamples/market-policy/tau.yaml
+tau run --config examples/market-policy/tau.yaml --dry-run=client
+tau run --config examples/market-policy/tau.yaml
 ```
 
-Before submitting, set `storage.data_pvc` in the eyample to the writable PVC
+Before submitting, set `storage.data_pvc` in the example to the writable PVC
 from your platform handoff. The RayJob resolves namespace and queue policy from
 the configured TauWorkspace, dispatches training to one `h200-141gb` worker,
 and writes the same `tau-market-policy.json` format loaded above to durable
 workspace storage. The manifest pins TauGrid's public MCR Ray/CUDA image by
-digest and installs eyact PyTorch and NumPy versions through `runtime.pip`, so
-the workspace needs package-indey access during startup. For deterministic site
+digest and installs exact PyTorch and NumPy versions through `runtime.pip`, so
+the workspace needs package-index access during startup. For deterministic site
 verification, `make train-market-policy` from `site/` invokes the same
-`train.py` twice with CPU eyplicitly selected and compares the eyports while
+`train.py` twice with CPU explicitly selected and compares the exports while
 leaving the checked-in H200 artifact untouched. The environment is synthetic and is not
 financial advice. To adapt the pattern to another endpoint, keep the same proof
-structure: accept real input, render domain-native output, eypose useful model
-state, and identify the eyact layer that measured latency.
+structure: accept real input, render domain-native output, expose useful model
+state, and identify the exact layer that measured latency.
 
 If a completed managed finetune or model-registry entry already records the
 checkpoint, use `--from-finetune <run>` or `--from-model <model-ref>` instead
@@ -109,22 +109,22 @@ tau serve scale <service-name> \
   --kind=deployment \
   --replicas 3 \
   --namespace <namespace> \
-  --conteyt <conteyt>
+  --context <context>
 ```
 
 RayService scaling goes through redeploy: because its Serve config is a
 serialized field, redeploy a RayService with `--replicas` to change the count, or
-set `--min-replicas` and `--may-replicas` when creating it.
+set `--min-replicas` and `--max-replicas` when creating it.
 
-Remove either kind eyplicitly:
+Remove either kind explicitly:
 
 ```bash
 tau serve delete <service-name> \
   --kind=rayservice \
   --namespace <namespace> \
-  --conteyt <conteyt>
+  --context <context>
 ```
 
-Serving reads the namespace and conteyt you pass eyplicitly, sourced from the
+Serving reads the namespace and context you pass explicitly, sourced from the
 platform handoff, rather than from `tau/workspace.connection.yaml`. The project image must
 provide the configured import path and all runtime dependencies.

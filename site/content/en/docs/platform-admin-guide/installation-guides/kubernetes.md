@@ -214,10 +214,9 @@ scheduling, ServiceAccount selection, and container execution:
 tau run smoke --context "$TAU_CONTEXT"
 ```
 
-A successful run exits with status `Succeeded`, validating workspace
-discovery, queue admission, scheduling, and container execution. Validate a
-project image, GPU, persistent volume, or external cloud service with your
-first real project workload.
+A successful run exits with status `Succeeded`. Validate a project image,
+GPU, persistent volume, or external cloud service with your first real project
+workload.
 
 For a larger provider-neutral CPU workload, clone the repository and run the
 [distributed CPU Ray example](https://github.com/Azure/taugrid/tree/main/examples/cpu-multi-interest-ray):

@@ -31,7 +31,7 @@ or application failure.
 
 The default TauGrid queue uses Kueue `BestEffortFIFO`. Older eligible work
 usually proceeds first, while priority and quota rules can change the order.
-Platform owners can replace the baseline with deliberate team quotas and GPU
+Platform owners can replace the baseline with explicit per-team quotas and GPU
 flavors.
 
 See [Queue, quota, topology, and GPU placement](../../../platform-admin-guide/policy-and-placement/)

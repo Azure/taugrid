@@ -8,7 +8,6 @@ aliases:
 
 {{< maturity status="alpha" reviewed="2026-08-24" >}}
 
-TauGrid clusters make it easy to share research results with your team.
 Researchers working from different machines can use the same cluster and
 workspace to view and compare the same runs, logs, and charts.
 

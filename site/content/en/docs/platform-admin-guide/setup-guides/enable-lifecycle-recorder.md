@@ -81,7 +81,6 @@ production workaround.
 taugrid-core:
   lifecycleRecorder:
     enabled: true
-    namespace: <system-namespace>
     targetNamespace: <workspace-namespace>
     cluster: <aks-name>
     workspaceId: <workspace-name>
