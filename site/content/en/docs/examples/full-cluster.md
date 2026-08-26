@@ -12,14 +12,15 @@ root to create a GPU-enabled AKS environment. It provisions a system pool and
 a GPU pool, enables OIDC and Azure Workload Identity, and invokes the supported
 `tau cluster install` command.
 
-Do not separately install Kueue, KubeRay, the Tau controller, or GPU
-monitoring with Helm. `tau cluster install` installs the versioned TauGrid
-distribution that owns those components, the baseline Kueue queue, and Portal.
+`tau cluster install` installs the versioned TauGrid
+distribution that owns Kueue, KubeRay, the Tau controller, GPU monitoring, the
+baseline Kueue queue, and Portal; skip installing those components
+separately with Helm.
 
 ## Prerequisites
 
 - an Azure subscription that passes the
-  [AKS setup gate](../../getting-started/aks-setup/), has GPU quota for the
+  [AKS cluster prerequisites](../../platform-admin-guide/aks-setup/#prerequisites), has GPU quota for the
   selected region and SKU, and an approved Terraform identity;
 - Azure CLI, Terraform 1.6 or later, kubectl, Helm, and local Python
   dependencies;
@@ -44,22 +45,32 @@ terraform init
 terraform apply -var="subscription_id=<your-subscription-id>"
 ```
 
-By default, Terraform uses `gpu_stack_mode = "self_managed"`: it installs the
-NVIDIA device plugin and the upstream NVIDIA DCGM exporter. It also creates a
-local ignored admin kubeconfig and values file under
-`terraform/aks/generated/`. For the default A100 pool, it then normalizes MIG
-mode, restarts the GPU VM scale set, and waits for allocatable GPUs before
-running:
+By default, Terraform uses `gpu_stack_mode = "self_managed"`: it installs a
+standalone NVIDIA device plugin plus the upstream NVIDIA DCGM exporter.
+NVIDIA GPU Operator remains a separate existing-cluster model, while the
+cluster platform retains ownership of the underlying NVIDIA driver. Terraform
+also creates a local ignored admin
+kubeconfig and values file under `terraform/aks/generated/`. For the default
+A100 pool, it then normalizes MIG mode, restarts the GPU VM scale set, and
+waits for allocatable GPUs before running:
 
 ```bash
 tau cluster install --values generated/taugrid-values.yaml --version 0.3.1
 ```
 
-Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience.
-This preview mode uses `EnableManagedGPUExperience=true` at GPU pool creation;
-AKS then owns the driver, device plugin, and DCGM exporter host service at port
-`19400`. Before applying, register the feature, wait for `Registered`, and
-refresh the AKS resource provider:
+In this mode, the generated values configure TauGrid GPU monitoring with
+`dcgmHealth.source: exporter` and
+`exporterUrl: http://dcgm-exporter.dcgm-exporter.svc:9400/metrics`, pointing
+at the standalone DCGM exporter's own Service rather than a host-local
+endpoint.
+
+Set `gpu_stack_mode = "aks_managed_preview"` to use AKS Managed GPU Experience
+instead. This preview mode uses `EnableManagedGPUExperience=true` at GPU pool
+creation; AKS then owns the NVIDIA driver, device plugin, and a node-local
+DCGM exporter host service at port `19400`. TauGrid GPU monitoring uses
+`dcgmHealth.source: host-dcgmi` with the default
+`http://localhost:19400/metrics` in this mode. Before applying, register the
+feature, wait for `Registered`, and refresh the AKS resource provider:
 
 ```bash
 az feature register --namespace Microsoft.ContainerService --name ManagedGPUExperiencePreview
@@ -77,6 +88,19 @@ feature generally available.
 If the local installation step fails after AKS has been created, correct the
 local prerequisite and rerun `terraform apply`. Terraform replaces that step
 when its cluster, generated values, or TauGrid version changes.
+
+An existing cluster with an externally managed GPU Operator is a third,
+distinct operational model alongside Terraform's standalone and AKS-managed
+modes. GPU Operator owns the GPU software stack according to its own
+`ClusterPolicy`, and TauGrid consumes the Operator's DCGM
+exporter endpoint with `dcgmHealth.source: exporter` and an explicit
+non-loopback Service URL (commonly port `9400`). See the
+[GPU software stack models comparison](../../platform-admin-guide/aks-setup/#gpu-software-stack-models)
+and the GPU monitoring chart's
+[DCGM health sources](https://github.com/Azure/taugrid/blob/main/charts/gpu-monitoring/README.md#dcgm-health-sources)
+documentation. Regardless of which of these three models owns the stack,
+workload configs always request standard Kubernetes `nvidia.com/gpu`
+resources unchanged.
 
 ## Verify and create a workspace
 
@@ -129,14 +153,14 @@ not only scheduling, and can incur additional GPU cost.
 
 ## Portal
 
-Terraform uses the TauGrid distribution default and installs Portal as `tau-portal` in the `tau-system` namespace. Its Service is ClusterIP-only and Terraform does not expose it outside the cluster. An operator can inspect it with:
+Terraform uses the TauGrid distribution default and installs Portal as `tau-portal` in the `tau-system` namespace. Its Service is ClusterIP-only, keeping it reachable only from inside the cluster network. An operator can inspect it with:
 
 ```bash
 kubectl port-forward service/tau-portal 18080:80 --namespace=tau-system
 ```
 
-This is an operator diagnostic path, not a researcher endpoint. Before giving
-researchers browser access, deploy a platform-owned authenticated HTTPS proxy.
+This is an operator diagnostic path; researcher access requires a
+platform-owned authenticated HTTPS proxy in front of Portal.
 The default Portal serves Kubernetes-backed boards. Experiment, cluster-health,
 and cost boards require separately configured ADX and Azure Workload Identity.
 

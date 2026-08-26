@@ -52,7 +52,7 @@ Entra, grant the intended identity access to normal AKS cluster-user
 credentials, and make the API reachable from the researcher. Kubernetes/
 TauGrid setup must bind that real subject in a Ready workspace and hand over a
 matching connection descriptor. The researcher then follows the
-[researcher quickstart](../../site/content/en/docs/getting-started/quickstart.md)
+[first workload guide](../../site/content/en/docs/platform-admin-guide/kubernetes.md#5-run-the-smoke-workload)
 without an operator context override.
 
 This quickstart does not duplicate the training script. It reuses

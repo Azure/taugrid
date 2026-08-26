@@ -21,9 +21,11 @@ resourceFlavors:
 # cli/internal/rayjobrender/render.go.
 #
 # The selector is AKS's own GPU node label, matching charts/gpu-monitoring.
-# nvidia.com/gpu.present comes from the NVIDIA GPU Operator, so it is absent on
-# AKS managed GPU clusters. Karpenter nodes get neither label from AKS —
-# override nodeSelector to whatever that provisioner stamps.
+# nvidia.com/gpu.present comes from the NVIDIA GPU Operator, so it is absent
+# whenever GPU Operator is not installed — including this repository's
+# Terraform self_managed default and the AKS Managed GPU Experience preview.
+# Karpenter nodes get neither label from AKS — override nodeSelector to
+# whatever that provisioner stamps.
 prewarm:
   enabled: true
   nodeSelector:

@@ -2,19 +2,16 @@
 title: Documentation
 linkTitle: Documentation
 weight: 10
-menu:
-  main:
-    weight: 10
 ---
 
-Tau documentation is organized by reader intent:
+TauGrid documentation is organized by reader intent:
 
-- **[Overview](overview/):** understand Tau, its boundaries, architecture, and maturity.
-- **[Getting started](getting-started/):** install Tau and complete a first workflow.
-- **[Concepts](concepts/):** learn the stable objects and lifecycle behind the commands.
-- **[Tasks](tasks/):** follow researcher, platform, operator, or contributor workflows.
+- **[Getting started](getting-started/):** understand TauGrid's purpose, design
+  principles, and architecture.
+- **[Developer guide](developer-guide/):** run, observe, recover, and compare experiments from an existing TauGrid workspace.
+- **[Platform admin guide](platform-admin-guide/):** install TauGrid on Kubernetes or AKS, provision workspaces, and operate clusters.
+- **[Examples](examples/):** runnable TauGrid, Kueue, Ray, and AKS patterns.
 - **[Reference](reference/):** inspect exact CLI, configuration, workspace, and release contracts.
-- **[Operations](operations/):** troubleshoot lifecycle layers and operate shared infrastructure.
 - **[Community](community/):** contribute, validate changes, and understand releases.
 
 The [GitHub Wiki](https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview)

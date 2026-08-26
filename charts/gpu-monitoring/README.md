@@ -253,6 +253,22 @@ is no per-profile opt-out.
 | `host-dcgmi` (default) | Yes: init/warm/liveness-repair, `dcgmi health -c` | Yes | AKS's managed host DCGM engine |
 | `exporter` | No | Yes | GKE/EKS/GPU Operator DCGM exporter pods (a Service or node-local endpoint) |
 
+This chart is agnostic to how the scraped DCGM engine got onto the node, but
+the three GPU stack models this repository documents map to `source` as
+follows: the `terraform/aks` root defaults to `gpu_stack_mode =
+"self_managed"`, which installs a standalone NVIDIA device plugin plus the
+upstream DCGM exporter and configures `source: exporter` against that
+exporter's own Service; NVIDIA GPU Operator remains a separate existing-cluster
+model. Setting `gpu_stack_mode =
+"aks_managed_preview"` instead uses the AKS Managed GPU Experience, which owns
+the driver, device plugin, and a node-local DCGM exporter and matches this
+chart's own `source: host-dcgmi` default; and an existing cluster with an
+externally managed NVIDIA GPU Operator is a third, separate model — GPU
+Operator owns the stack per its own `ClusterPolicy`, and this chart consumes
+its DCGM exporter with `source: exporter` and an explicit non-loopback Service
+URL, commonly port `9400`. See the AKS getting-started guide's GPU software
+stack models comparison for the full picture across all three.
+
 `exporterUrl` must be a nonempty, absolute, entirely lowercase `http://` or
 `https://` URL with no whitespace, backslashes, userinfo credentials, query
 string, or fragment. Authentication belongs in the exporter deployment rather
