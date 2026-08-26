@@ -11,7 +11,7 @@ aliases:
 Prerequisites:
 
 - The Tau CLI is installed.
-- The repository contains a workspace connection and a checked-in
+- The repository contains a [workspace connection](../../reference/glossary/#workspace-connection) and a checked-in
   [target](../../reference/glossary/#target) (`tau/train.yaml`, `tau/smoke.yaml`,
   and so on).
 - The platform workspace reports Ready.
