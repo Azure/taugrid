@@ -37,10 +37,13 @@ gpu_min_count            = 1
 gpu_max_count            = 1
 
 # ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
-enable_adx       = true
-adx_cluster_name = "<globally-unique-adx-cluster-name>"
+enable_adx = true
+# Empty generates a stable name shaped like taugrid1a2b3c4d. Set an explicit
+# globally unique 4-22 character lowercase alphanumeric name only when needed.
+adx_cluster_name = ""
 
-# Keep this false for the first apply. Enable it only after the
-# taugrid-default TauWorkspace has been created, then apply again.
-workspace_namespace        = "taugrid-default"
-enable_lifecycle_recorder = false
+# Terraform bootstraps this target namespace before the TauGrid install so ADX,
+# lifecycle recording, and Portal run history can be enabled in one apply.
+# After apply, create the TauWorkspace against this same namespace.
+enable_lifecycle_recorder = true
+workspace_namespace       = "taugrid-default"

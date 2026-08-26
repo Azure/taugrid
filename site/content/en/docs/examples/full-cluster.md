@@ -5,7 +5,7 @@ weight: 30
 description: Build AKS, GPU capacity, TauGrid, and Portal with the repository Terraform root.
 ---
 
-{{< maturity status="alpha" reviewed="2026-08-17" >}}
+{{< maturity status="alpha" reviewed="2026-08-26" >}}
 
 Use the repository's [`terraform/aks`](https://github.com/Azure/taugrid/tree/main/terraform/aks)
 root to create a GPU-enabled AKS environment. It provisions a system pool and
@@ -22,7 +22,7 @@ separately with Helm.
 - an Azure subscription that passes the
   [AKS cluster prerequisites](../../platform-admin-guide/aks-setup/#prerequisites), has GPU quota for the
   selected region and SKU, and an approved Terraform identity;
-- Azure CLI, Terraform 1.6 or later, kubectl, Helm, and local Python
+- Azure CLI, Terraform 1.9 or later, kubectl, Helm, and local Python
   dependencies;
 - Azure credentials accepted by the AzureRM Terraform provider and permission
   to provision AKS, networking, storage, and identities; and
@@ -127,6 +127,7 @@ the built-in smoke run:
 
 ```bash
 tau workspace create taugrid-default \
+  --namespace taugrid-default \
   --principal-name <entra-group-object-id> \
   --apply
 tau run smoke
@@ -159,19 +160,33 @@ after reviewing the impact.
 ## Optional ADX and lifecycle history
 
 ADX observability is opt-in because it creates additional billable resources.
-Set `enable_adx = true` and a globally unique `adx_cluster_name` before the
-first apply. This installs adx-mon alongside TauGrid. In self-managed mode it
+Both ADX and lifecycle history can be enabled in the initial plan and apply:
+
+```hcl
+enable_adx                = true
+adx_cluster_name          = ""
+enable_lifecycle_recorder = true
+workspace_namespace       = "taugrid-default"
+```
+
+An empty `adx_cluster_name` generates a stable `taugrid<8-hex-characters>`
+candidate from the subscription, resource group, and AKS cluster names. Set an
+explicit globally unique name only if Azure reports that the candidate is in
+use. After apply, inspect the resolved name with
+`terraform output -raw adx_cluster_name`.
+
+Terraform installs adx-mon alongside TauGrid. In self-managed mode it
 discovers the upstream DCGM exporter Pod. TauGrid GPU monitoring uses that
 exporter's node-local Service in self-managed mode; in AKS managed preview mode
 it collects from the GPU node host service.
 
-Portal lifecycle history is opt-in. Set these values before the initial
-`terraform apply`, or add them to an existing environment and apply again:
-
-```hcl
-enable_lifecycle_recorder = true
-workspace_namespace       = "taugrid-default"
-```
+When lifecycle history is enabled, Terraform creates `workspace_namespace`
+before installing TauGrid so the chart can render the recorder's namespace
+scoped RBAC in the same apply. If `bootstrap_workspace` is configured,
+Terraform applies the TauWorkspace after installing TauGrid. Otherwise, the
+`tau workspace create` command above adopts the bootstrapped namespace. Both
+paths let the controller reconcile its labels, LocalQueue, RBAC, and other
+workspace settings.
 
 For a real GPU workload, use
 [the A100 GPU quickstart](https://github.com/Azure/taugrid/tree/main/examples/aks-gpu-quickstart)

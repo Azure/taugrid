@@ -182,7 +182,7 @@ variable "enable_adx" {
 }
 
 variable "enable_lifecycle_recorder" {
-  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true; Terraform bootstraps the configured workload namespace."
+  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true; Terraform bootstraps workspace_namespace before installing TauGrid."
   type        = bool
   default     = false
 
@@ -193,18 +193,19 @@ variable "enable_lifecycle_recorder" {
 }
 
 variable "workspace_namespace" {
-  description = "Target workload namespace shown by Portal and observed by the lifecycle recorder."
+  description = "TauWorkspace target namespace shown by Portal and observed by the lifecycle recorder. Terraform bootstraps it when lifecycle recording is enabled; bootstrap_workspace or a later tau workspace create reconciles its workload policy."
   type        = string
   default     = "taugrid-default"
 
   validation {
     condition = (
-      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.workspace_namespace)) &&
+      var.workspace_namespace != "" &&
       length(var.workspace_namespace) <= 63 &&
-      !contains(["default", "tau-platform", "tau-system"], var.workspace_namespace) &&
+      can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.workspace_namespace)) &&
+      !contains(["default", "tau-system", "tau-platform"], var.workspace_namespace) &&
       !startswith(var.workspace_namespace, "kube-")
     )
-    error_message = "workspace_namespace must be a lowercase Kubernetes namespace name of at most 63 characters and cannot be default, a Tau system namespace, or a kube-* namespace."
+    error_message = "workspace_namespace must be a DNS-1123 label of at most 63 characters and must not be default, tau-system, tau-platform, or start with kube-."
   }
 }
 
@@ -229,13 +230,13 @@ variable "bootstrap_workspace" {
 }
 
 variable "adx_cluster_name" {
-  description = "Globally unique Azure Data Explorer cluster name when enable_adx is true. Use 4 to 22 lowercase letters or digits."
+  description = "Optional globally unique Azure Data Explorer cluster name when enable_adx is true. Empty generates a stable taugrid-prefixed name from the subscription, resource group, and AKS cluster. Explicit names must use 4 to 22 lowercase letters or digits."
   type        = string
-  default     = "guweterraformadx"
+  default     = ""
 
   validation {
-    condition     = can(regex("^[a-z0-9]{4,22}$", var.adx_cluster_name))
-    error_message = "adx_cluster_name must contain 4 to 22 lowercase letters or digits."
+    condition     = var.adx_cluster_name == "" || can(regex("^[a-z0-9]{4,22}$", var.adx_cluster_name))
+    error_message = "adx_cluster_name must be empty for automatic generation or contain 4 to 22 lowercase letters or digits."
   }
 }
 
