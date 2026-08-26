@@ -33,6 +33,7 @@ tests:
               resources:
                 - services
                 - pods
+                - events
               verbs:
                 - get
                 - list

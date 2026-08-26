@@ -170,7 +170,7 @@ metadata:
     {{- include "taugrid-core.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["services", "pods"]
+    resources: ["services", "pods", "events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]

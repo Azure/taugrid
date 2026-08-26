@@ -167,6 +167,38 @@ func TestWorkspaceAwareStellarBlocksUnscopedManagedRoutes(t *testing.T) {
 	}
 }
 
+func TestSingleWorkspaceStellarBlocksUnscopedArtifactRoutes(t *testing.T) {
+	server := &Server{
+		viewProfile: ViewProfileSingleWorkspace,
+		legacyScope: WorkspaceScope{
+			WorkspaceID:  "alpha",
+			Name:         "alpha",
+			Namespace:    "team-alpha",
+			Source:       "local",
+			Availability: workspaceAvailabilityAvailable,
+			Managed:      true,
+		},
+	}
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+	for _, path := range []string{
+		"/api/stellar/artifacts?run=other-workspace&source=local",
+		"/api/stellar/artifact?target=other-workspace&artifact=secret&source=local",
+	} {
+		rec := httptest.NewRecorder()
+		server.workspaceAwareStellar(next).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s status = %d, body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if called {
+		t.Fatal("unscoped artifact route reached Stellar")
+	}
+}
+
 func TestWorkspaceExperimentRedirectPreservesAPIRouteAndQuery(t *testing.T) {
 	target, err := url.Parse("https://stellar.example/stellar?source=kusto")
 	if err != nil {

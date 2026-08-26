@@ -603,7 +603,13 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			return
 		}
 		if s.viewProfile == ViewProfileSingleWorkspace {
-			next.ServeHTTP(w, r)
+			if !managedStellarRouteAllowed(r) {
+				writeScopedJSON(w, http.StatusForbidden, map[string]string{
+					"reason": "this Stellar route is not workspace-scoped in single-workspace Portal mode",
+				}, scope, "forbidden")
+				return
+			}
+			next.ServeHTTP(w, workspaceScopedRequest(r, nil, scope.WorkspaceID, scope.Source))
 			return
 		}
 		if scope.Availability == workspaceAvailabilityRedirect {
