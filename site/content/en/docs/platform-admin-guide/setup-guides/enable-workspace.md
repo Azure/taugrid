@@ -43,6 +43,9 @@ queue access, and Kubernetes permissions in the expected state.
    kubectl apply -f workspace.yaml
    ```
 
+   See the [example TauWorkspace CR](https://github.com/Azure/taugrid/blob/main/controllers/tau-core/config/samples/tau.azure.com_v1alpha1_tauworkspace.yaml)
+   for the expected fields and structure.
+
    For GitOps, commit the same Kubernetes object to the repository managed by
    your deployment system.
 
