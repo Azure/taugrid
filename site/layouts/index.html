@@ -117,21 +117,21 @@
   <section class="tau-section tau-section--soft" aria-labelledby="capabilities">
     <div class="tau-section__inner">
       <div class="tau-section__heading">
-        <h2 id="capabilities">Useful without hiding ownership</h2>
-        <p>TauGrid standardizes the repeated infrastructure plumbing while leaving cloud provisioning, scheduling, and model code with their rightful owners.</p>
+        <h2 id="capabilities">What TauGrid handles, and what your teams still own</h2>
+        <p>TauGrid packages the components needed to admit, run, and observe GPU workloads. Platform teams still operate clusters and capacity; researchers still own workload configuration and model code.</p>
       </div>
       <div class="tau-grid tau-grid--three">
         <a class="tau-card" href="{{ "docs/getting-started/architecture/" | relURL }}">
-          <h3>An integrated foundation with batteries included</h3>
-          <p>Kueue, KubeRay, GPU-node health, and observability ship and upgrade together, not as pieces you wire up yourself.</p>
+          <h3>Deploy the GPU workload stack together</h3>
+          <p>Install and upgrade Kueue, KubeRay, GPU health monitoring, and observability as one stack instead of maintaining the integration glue yourself.</p>
         </a>
         <a class="tau-card" href="{{ "docs/developer-guide/concepts/config-resolution/" | relURL }}">
-          <h3>Repository-first, policy-aware runs</h3>
-          <p>Check in workload config, validate and render it, and submit through upstream Kueue and Kubernetes.</p>
+          <h3>Keep workload configuration with the code</h3>
+          <p>Check run settings into the repository, resolve and validate them locally, then submit the rendered workload to Kueue and Kubernetes.</p>
         </a>
         <a class="tau-card" href="{{ "docs/developer-guide/concepts/evidence/" | relURL }}">
-          <h3>Local-first, durable experiment evidence</h3>
-          <p>Preserve experiment records, checkpoints, and artifacts locally, and export scalar metrics when useful.</p>
+          <h3>Capture evidence where the run happens</h3>
+          <p>Record experiments, checkpoints, and artifacts locally by default, with optional scalar metric export to ADX.</p>
         </a>
       </div>
     </div>
