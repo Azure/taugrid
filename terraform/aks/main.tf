@@ -51,6 +51,7 @@ resource "azurerm_kubernetes_cluster" "this" {
 }
 
 resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
+  count                 = var.enable_gpu ? 1 : 0
   name                  = var.gpu_node_pool_name
   kubernetes_cluster_id = azurerm_kubernetes_cluster.this.id
   vm_size               = var.gpu_vm_size
@@ -95,7 +96,7 @@ locals {
   generated_directory         = "${path.module}/generated"
   kubeconfig_path             = "${local.generated_directory}/kubeconfig"
   values_path                 = "${local.generated_directory}/taugrid-values.yaml"
-  gpu_quota                   = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
+  gpu_quota                   = var.enable_gpu ? (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node : 0
   adx_databases               = toset(["Metrics", "Logs", "CostTracking", "Audit"])
   adx_cluster_name            = var.adx_cluster_name != "" ? var.adx_cluster_name : "taugrid${substr(sha256(join(":", [var.subscription_id, var.resource_group_name, var.cluster_name])), 0, 8)}"
   bootstrap_workspace_enabled = var.bootstrap_workspace != null
@@ -109,6 +110,7 @@ locals {
     gpu_series                   = var.gpu_series
     gpu_vm_size                  = var.gpu_vm_size
     gpu_count_per_node           = var.gpu_count_per_node
+    enable_gpu                   = var.enable_gpu
     gpu_stack_mode               = var.gpu_stack_mode
     adx_enabled                  = var.enable_adx
     lifecycle_recorder_enabled   = var.enable_lifecycle_recorder
@@ -251,7 +253,7 @@ resource "local_file" "taugrid_values" {
 }
 
 resource "local_file" "mig_normalizer" {
-  count           = var.normalize_gpu_mig ? 1 : 0
+  count           = var.enable_gpu && var.normalize_gpu_mig ? 1 : 0
   filename        = "${local.generated_directory}/mig-normalizer.yaml"
   file_permission = "0600"
   content = templatefile("${path.module}/mig-normalizer.yaml.tftpl", {
@@ -260,10 +262,18 @@ resource "local_file" "mig_normalizer" {
 }
 
 resource "terraform_data" "install_nvidia_device_plugin" {
-  count = var.gpu_stack_mode == "self_managed" ? 1 : 0
+  count = var.enable_gpu && var.gpu_stack_mode == "self_managed" ? 1 : 0
+
+  input = {
+    subscription_id     = var.subscription_id
+    resource_group_name = azurerm_resource_group.this.name
+    cluster_name        = azurerm_kubernetes_cluster.this.name
+    command_interpreter = var.command_interpreter
+    kubeconfig_path     = local.kubeconfig_path
+  }
 
   triggers_replace = [
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    azurerm_kubernetes_cluster_node_pool.gpu[0].id,
     filesha256("${path.module}/nvidia-device-plugin.yaml"),
     join(" ", var.command_interpreter),
   ]
@@ -277,16 +287,26 @@ resource "terraform_data" "install_nvidia_device_plugin" {
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && kubectl rollout status daemonset/nvidia-device-plugin-daemonset --namespace kube-system --timeout=10m"
   }
 
+  provisioner "local-exec" {
+    when        = destroy
+    working_dir = path.module
+    interpreter = self.input.command_interpreter
+    environment = {
+      KUBECONFIG = self.input.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${self.input.subscription_id}' --resource-group '${self.input.resource_group_name}' --name '${self.input.cluster_name}' --file '${self.input.kubeconfig_path}' --overwrite-existing && kubectl delete -f nvidia-device-plugin.yaml --ignore-not-found"
+  }
+
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
   ]
 }
 
 resource "terraform_data" "normalize_gpu_mig" {
-  count = var.normalize_gpu_mig ? 1 : 0
+  count = var.enable_gpu && var.normalize_gpu_mig ? 1 : 0
 
   triggers_replace = [
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    azurerm_kubernetes_cluster_node_pool.gpu[0].id,
     local_file.mig_normalizer[0].content_sha256,
     var.gpu_count_per_node,
     join(" ", var.command_interpreter),
@@ -312,7 +332,7 @@ resource "terraform_data" "bootstrap_lifecycle_namespace" {
   count = var.enable_lifecycle_recorder ? 1 : 0
 
   triggers_replace = [
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    azurerm_kubernetes_cluster.this.id,
     var.workspace_namespace,
     join(" ", var.command_interpreter),
   ]
@@ -335,7 +355,7 @@ resource "terraform_data" "install_taugrid" {
   count = var.install_taugrid ? 1 : 0
 
   triggers_replace = [
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    azurerm_kubernetes_cluster.this.id,
     local_file.taugrid_values.content_sha256,
     var.taugrid_version,
     join(" ", var.command_interpreter),
@@ -414,12 +434,13 @@ resource "local_file" "adx_mon_values" {
     cluster_name       = var.cluster_name
     location           = var.location
     gpu_node_pool_name = var.gpu_node_pool_name
+    enable_gpu         = var.enable_gpu
     gpu_stack_mode     = var.gpu_stack_mode
   })
 }
 
 resource "local_file" "dcgm_exporter_values" {
-  count           = var.gpu_stack_mode == "self_managed" ? 1 : 0
+  count           = var.enable_gpu && var.gpu_stack_mode == "self_managed" ? 1 : 0
   filename        = "${local.generated_directory}/dcgm-exporter-values.yaml"
   file_permission = "0600"
   content = templatefile("${path.module}/dcgm-exporter-values.yaml.tftpl", {
@@ -428,11 +449,19 @@ resource "local_file" "dcgm_exporter_values" {
 }
 
 resource "terraform_data" "install_dcgm_exporter" {
-  count = var.gpu_stack_mode == "self_managed" ? 1 : 0
+  count = var.enable_gpu && var.gpu_stack_mode == "self_managed" ? 1 : 0
+
+  input = {
+    subscription_id     = var.subscription_id
+    resource_group_name = azurerm_resource_group.this.name
+    cluster_name        = azurerm_kubernetes_cluster.this.name
+    command_interpreter = var.command_interpreter
+    kubeconfig_path     = local.kubeconfig_path
+  }
 
   triggers_replace = [
     azurerm_kubernetes_cluster.this.id,
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    azurerm_kubernetes_cluster_node_pool.gpu[0].id,
     local_file.dcgm_exporter_values[0].content_sha256,
     var.dcgm_exporter_chart_version,
     join(" ", var.command_interpreter),
@@ -447,6 +476,16 @@ resource "terraform_data" "install_dcgm_exporter" {
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
   }
 
+  provisioner "local-exec" {
+    when        = destroy
+    working_dir = path.module
+    interpreter = self.input.command_interpreter
+    environment = {
+      KUBECONFIG = self.input.kubeconfig_path
+    }
+    command = "az aks get-credentials --admin --subscription '${self.input.subscription_id}' --resource-group '${self.input.resource_group_name}' --name '${self.input.cluster_name}' --file '${self.input.kubeconfig_path}' --overwrite-existing && helm uninstall dcgm-exporter --namespace dcgm-exporter --ignore-not-found"
+  }
+
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
   ]
@@ -457,7 +496,6 @@ resource "terraform_data" "install_adx_mon" {
 
   triggers_replace = [
     azurerm_kubernetes_cluster.this.id,
-    azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.adx_mon_values[0].content_sha256,
     azurerm_kusto_database_principal_assignment.adx_mon,
     join(" ", var.command_interpreter),
@@ -469,7 +507,7 @@ resource "terraform_data" "install_adx_mon" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace${var.enable_gpu ? " --values ../../charts/adx-mon/values-ai-runtime.yaml" : ""} --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
   }
 
   depends_on = [
