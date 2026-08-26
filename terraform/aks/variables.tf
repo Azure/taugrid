@@ -218,10 +218,11 @@ variable "bootstrap_workspace" {
   nullable = true
 
   validation {
-    condition = var.bootstrap_workspace == null || (
+    condition = var.bootstrap_workspace == null || try(
       can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.bootstrap_workspace.name)) &&
       length(var.bootstrap_workspace.name) <= 63 &&
-      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.bootstrap_workspace.entra_group_object_id))
+      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.bootstrap_workspace.entra_group_object_id)),
+      false,
     )
     error_message = "bootstrap_workspace.name must be a lowercase Kubernetes name of at most 63 characters, and entra_group_object_id must be an Entra group object ID UUID."
   }

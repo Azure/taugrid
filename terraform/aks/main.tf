@@ -395,7 +395,7 @@ resource "terraform_data" "bootstrap_workspace" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply --server-side --field-manager=taugrid-terraform -f '${local_file.bootstrap_workspace[0].filename}' && kubectl wait --for=jsonpath='{.status.phase}'=Ready 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --timeout=10m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply --server-side --field-manager=taugrid-terraform -f '${local_file.bootstrap_workspace[0].filename}' && $workspace_generation=$(kubectl get 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --output=jsonpath='{.metadata.generation}') && kubectl wait --for=jsonpath='{.status.observedGeneration}'=\"$workspace_generation\" 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --timeout=10m && kubectl wait --for=jsonpath='{.status.phase}'=Ready 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --timeout=10m"
   }
 
   depends_on = [
