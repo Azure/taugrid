@@ -43,6 +43,9 @@ queue access, and Kubernetes permissions in the expected state.
    kubectl apply -f workspace.yaml
    ```
 
+   See the [example TauWorkspace CR](https://github.com/Azure/taugrid/blob/main/controllers/tau-core/config/samples/tau.azure.com_v1alpha1_tauworkspace.yaml)
+   for the expected fields and structure.
+
    For GitOps, commit the same Kubernetes object to the repository managed by
    your deployment system.
 
@@ -58,6 +61,22 @@ queue access, and Kubernetes permissions in the expected state.
 6. Create `tau/workspace.connection.yaml` and run the smoke test in the
    [handoff checklist](../handoff/). This file contains workspace details and
    can be safely committed to the research repository.
+
+   `tau workspace init` generates the connection file as part of a new repo
+   scaffold when the cluster flags are provided:
+
+   ```bash
+   tau workspace init <name> \
+     --workspace <workspace> \
+     --azure-subscription-id <subscription-id> \
+     --azure-tenant-id <tenant-id> \
+     --aks-resource-group <resource-group> \
+     --aks-cluster <cluster-name>
+   ```
+
+   For an existing repository, create the file manually using the
+   [template](https://github.com/Azure/taugrid/blob/main/cli/internal/reposcaffold/templates/common/workspace.connection.yaml.tmpl)
+   as a reference.
 
 After these checks pass, send the researcher the repository URL and access
 instructions. TauWorkspace works with Kubernetes clusters across providers.
