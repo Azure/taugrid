@@ -12,7 +12,7 @@ spec:
   body: |
     // Container metrics view: CPU and memory usage by namespace, pod, container.
     // Uses container/pod metrics from kubelet cAdvisor or kube-state-metrics.
-    .create-or-alter function ContainerMetrics () {
+    .create-or-alter function with (skipvalidation = 'true') ContainerMetrics () {
       let cpu_usage = ContainerCpuUsageSecondsTotal
       | extend namespace = tostring(Labels.namespace),
                pod = tostring(Labels.pod),

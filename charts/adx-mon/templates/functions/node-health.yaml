@@ -12,7 +12,7 @@ spec:
   body: |
     // Node health view: CPU, memory, disk utilization per node.
     // Uses node-exporter metrics stored in the Metrics database.
-    .create-or-alter function NodeHealth () {
+    .create-or-alter function with (skipvalidation = 'true') NodeHealth () {
       let cpu_seconds = NodeCpuSecondsTotal
       | where tostring(Labels.mode) == "idle"
       | extend instance = tostring(Labels.instance),

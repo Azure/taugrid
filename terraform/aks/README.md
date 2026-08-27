@@ -78,7 +78,12 @@ adx_cluster_name          = ""
 The variable defaults remain opt-in so an invocation without a reviewed
 variable file cannot create billable ADX resources or remote telemetry. The
 tracked `terraform.tfvars.example` deliberately enables ADX and lifecycle
-recording for this full-cluster quickstart. Set both feature flags to `false`
+recording for the complete observability path. Function definitions use Kusto
+`skipvalidation` so a first install can create them while adx-mon creates their
+dependent tables asynchronously. This avoids treating a transient schema-order
+race as a failed chart installation.
+Set
+both feature flags to `false`
 for a Kubernetes-only Portal deployment.
 
 An empty `adx_cluster_name` generates a stable globally-scoped candidate with

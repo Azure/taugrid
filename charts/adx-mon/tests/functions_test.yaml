@@ -30,6 +30,9 @@ tests:
           pattern: "GpuHealth"
       - matchRegex:
           path: spec.body
+          pattern: "skipvalidation = 'true'"
+      - matchRegex:
+          path: spec.body
           pattern: "Labels.Hostname"
       - matchRegex:
           path: spec.body

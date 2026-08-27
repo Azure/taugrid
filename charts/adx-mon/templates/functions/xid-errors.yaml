@@ -12,7 +12,7 @@ spec:
   body: |
     // GPU XID error view: extracts NVIDIA XID errors from kernel dmesg logs.
     // XID errors indicate GPU hardware faults (e.g., XID 48 = DBE, XID 74 = NVLink).
-    .create-or-alter function XidErrors () {
+    .create-or-alter function with (skipvalidation = 'true') XidErrors () {
       KernelLogs
       | where Body has "NVRM: Xid"
       | extend node = tostring(Resource["k8s.node.name"]),

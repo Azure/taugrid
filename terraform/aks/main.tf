@@ -455,6 +455,13 @@ resource "terraform_data" "install_dcgm_exporter" {
 resource "terraform_data" "install_adx_mon" {
   count = var.enable_adx ? 1 : 0
 
+  # Issue #190: Helm --wait confirms only Kubernetes workload readiness. When
+  # adx-mon publishes a documented ManagementCommand terminal condition, add a
+  # waiter that requires the command's observedGeneration to match its metadata
+  # generation and its success condition to be True, while failing immediately
+  # on the documented terminal failure condition. Make install_taugrid depend
+  # on that waiter so schema consumers cannot start before bootstrap completes.
+
   triggers_replace = [
     azurerm_kubernetes_cluster.this.id,
     azurerm_kubernetes_cluster_node_pool.gpu.id,

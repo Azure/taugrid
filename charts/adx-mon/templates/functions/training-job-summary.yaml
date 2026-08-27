@@ -15,7 +15,7 @@ spec:
     // NOTE: gpu_requests_per_pod is pod-scoped (not job-scoped). Resolving
     // pod-to-job ownership requires a join through KubePodOwner; prefer doing
     // that in dashboard queries (WI-17) rather than in this materialized view.
-    .create-or-alter function TrainingJobSummary () {
+    .create-or-alter function with (skipvalidation = 'true') TrainingJobSummary () {
       let job_complete = KubeJobComplete
       | where Value == 1
       | extend cluster=tostring(column_ifexists("Cluster", "")),

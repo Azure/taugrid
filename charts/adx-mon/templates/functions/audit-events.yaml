@@ -21,7 +21,7 @@ spec:
     // Ingestion mapping: KubeAuditLogs_mapping — maps the full Event Hub message
     // ({"records": [...]}) into the RawData column via path "$".
     // Each row's RawData contains one Event Hub message envelope.
-    .create-or-alter function AuditEvents () {
+    .create-or-alter function with (skipvalidation = 'true') AuditEvents () {
       KubeAuditLogs
       | mv-expand record = RawData.records
       | extend log = parse_json(tostring(record.properties.log))
