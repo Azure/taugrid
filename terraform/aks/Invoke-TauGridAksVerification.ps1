@@ -296,6 +296,16 @@ runtime:
             $resourceUID
         } "smoke RayJob creation" $deadline
         Wait-ForCondition {
+            $rayJob = kubectl -n $WorkspaceNamespace get rayjob $smokeName --output=json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read smoke RayJob '$smokeName' status." }
+            $jobStatus = "$($rayJob.status.jobStatus)"
+            $deploymentStatus = "$($rayJob.status.jobDeploymentStatus)"
+            if ($jobStatus -in @("FAILED", "CANCELED") -or $deploymentStatus -eq "Failed") {
+                throw [TerminalWaitError]::new("Smoke RayJob '$smokeName' reached a terminal failure (jobStatus='$jobStatus', jobDeploymentStatus='$deploymentStatus').")
+            }
+            $jobStatus -eq "SUCCEEDED"
+        } "smoke RayJob completion" $deadline
+        Wait-ForCondition {
             Ensure-PortalPortForward -PortForward ([ref] $portForward) -Attempt ([ref] $portForwardAttempt) -Diagnostics $portForwardDiagnostics -GeneratedPath $generated -RunIdentifier $run
             $history = Invoke-RestMethod -Uri "$($portForward.BaseUri)/api/portal/ray/history/$smokeResourceUID?workspace=$BootstrapWorkspaceName" -TimeoutSec 30
             $history.state -eq "ready" -and @($history.events | Where-Object { $_.resourceUid -eq $smokeResourceUID }).Count -ge 1

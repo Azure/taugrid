@@ -24,7 +24,7 @@ import (
 
 var (
 	rayJobsGVR   = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayjobs"}
-	workloadsGVR = schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta1", Resource: "workloads"}
+	workloadsGVR = schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads"}
 )
 
 type KubernetesSource struct {
