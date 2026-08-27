@@ -230,7 +230,7 @@ variable "bootstrap_workspace" {
 }
 
 variable "adx_cluster_name" {
-  description = "Optional globally unique Azure Data Explorer cluster name when enable_adx is true. Empty generates a stable taugrid-prefixed name from the subscription, resource group, and AKS cluster. Explicit names must use 4 to 22 lowercase letters or digits."
+  description = "Optional globally unique Azure Data Explorer cluster name when enable_adx is true. Empty generates a stable 20-character taugrid-prefixed name from the subscription, resource group, and AKS cluster. Terraform preserves an existing cluster name; changing it requires an explicit migration. Explicit names must use 4 to 22 lowercase letters or digits."
   type        = string
   default     = ""
 

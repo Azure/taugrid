@@ -24,8 +24,8 @@ output "adx_endpoint" {
 }
 
 output "adx_cluster_name" {
-  description = "Generated or explicitly configured Azure Data Explorer cluster name when enable_adx is true."
-  value       = var.enable_adx ? local.adx_cluster_name : null
+  description = "Deployed Azure Data Explorer cluster name when enable_adx is true."
+  value       = var.enable_adx ? azurerm_kusto_cluster.this[0].name : null
 }
 
 output "gpu_node_pool_name" {

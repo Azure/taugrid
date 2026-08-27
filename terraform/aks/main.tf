@@ -97,7 +97,7 @@ locals {
   values_path                       = "${local.generated_directory}/taugrid-values.yaml"
   gpu_quota                         = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
   adx_databases                     = toset(["Metrics", "Logs", "CostTracking", "Audit"])
-  adx_cluster_name                  = var.adx_cluster_name != "" ? var.adx_cluster_name : "taugrid${substr(sha256(join(":", [var.subscription_id, var.resource_group_name, var.cluster_name])), 0, 8)}"
+  adx_cluster_name                  = var.adx_cluster_name != "" ? var.adx_cluster_name : "taugrid${substr(sha256(join(":", [var.subscription_id, var.resource_group_name, var.cluster_name])), 0, 13)}"
   bootstrap_workspace_enabled       = var.bootstrap_workspace != null
   bootstrap_workspace_name          = try(var.bootstrap_workspace.name, "")
   bootstrap_workspace_group         = try(var.bootstrap_workspace.entra_group_object_id, "")
@@ -134,6 +134,10 @@ resource "azurerm_kusto_cluster" "this" {
   sku {
     name     = var.adx_sku_name
     capacity = var.adx_sku_capacity
+  }
+
+  lifecycle {
+    ignore_changes = [name]
   }
 
   tags = var.tags
