@@ -50,7 +50,7 @@ TauGrid is built on open Kubernetes-native components:
 
 ### Prerequisites
 
-- A Kubernetes cluster (1.28+) with GPU nodes
+- A Kubernetes cluster (1.30+) with GPU nodes
 - `kubectl` configured for your cluster
 - Helm 3.0 or later
 
@@ -90,7 +90,7 @@ command -v tau
 tau version --short
 ```
 
-See the [installation guide](site/content/en/docs/platform-admin-guide/kubernetes.md#1-install-the-tau-cli)
+See the [installation guide](site/content/en/docs/platform-admin-guide/installation-guides/kubernetes.md#1-install-the-tau-cli)
 for PATH persistence, pinned versions, the Python SDK wheel, upgrades, and the
 advanced source installation.
 
@@ -100,15 +100,22 @@ available.
 
 ### Submit Your First Workload
 
+Create a minimal `tau.yaml`:
+
+```yaml
+name: hello-gpu
+image: mcr.microsoft.com/aks/ai-runtime/tau:0.3.1
+command: ["python", "train.py"]
+resources:
+  gpu: 4
+```
+
+Then submit, check status, and stream logs:
+
 ```bash
-# Submit a training job
-tau run --queue default --gpu 4 -- python train.py
-
-# Check status
-tau status
-
-# Stream logs
-tau logs <job-name>
+tau run --config tau.yaml
+tau run status hello-gpu
+tau run logs hello-gpu
 ```
 
 Browse the [runnable examples](examples/) for checked-in configurations and

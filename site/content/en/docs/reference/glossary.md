@@ -64,8 +64,7 @@ file a repository holds.
 
 The Kubernetes custom resource (`tau.azure.com/v1alpha1`, kind
 `TauWorkspace`) that the Tau workspace controller reconciles in the
-`tau-system` namespace. It is a **Kubernetes onboarding and policy intent
-and status API**: its spec declares target namespace, Kueue queue, and defaults
+`tau-system` namespace. It is a **Kubernetes API for onboarding, policy intent, and status**: its spec declares target namespace, Kueue queue, and defaults
 for workload identity, output root, and priority; its controller reconciles or
 verifies namespace/RBAC, Kueue LocalQueue accessibility, and workload-identity
 ServiceAccount configuration, then reports

@@ -28,8 +28,9 @@ authorization contract described in the
 
 A cluster can contain multiple `TauWorkspace` objects, but only one is active.
 The controller marks additional workspaces `Degraded` with reason
-`AdditionalWorkspaceBlocked` and leaves their namespace, LocalQueue, and
-researcher RoleBinding unreconciled until promotion.
+`AdditionalWorkspaceBlocked` and removes their LocalQueue, researcher
+RoleBinding, and ServiceAccount, leaving the namespace without workspace
+metadata until promotion.
 
 After the active workspace is deleted and its owned resources are cleaned up,
 the controller can promote a remaining workspace. This Alpha lifecycle supports

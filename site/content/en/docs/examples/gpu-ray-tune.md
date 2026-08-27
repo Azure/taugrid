@@ -250,7 +250,7 @@ spec:
       effect: NoSchedule
   containers:
     - name: probe
-      image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0
+      image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
       command: ["/bin/sh", "-c"]
       args:
         - nvidia-smi -L && nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
@@ -320,7 +320,7 @@ RESEARCH_REPO="$WORK_DIR/ray-tune-research"
 
 tau workspace init-repo ray-tune-research \
   --output "$RESEARCH_REPO" \
-  --image mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0-cuda13.0 \
+  --image mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0 \
   --workspace taugrid-default \
   --azure-subscription-id "$TARGET_SUBSCRIPTION_ID" \
   --azure-tenant-id "$TENANT_ID" \

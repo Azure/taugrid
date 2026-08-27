@@ -111,8 +111,9 @@ kubectl -n <adx-mon-namespace> get managementcommand \
 ```
 
 Wait for a successful status. adx-mon v0.3.0 reconciles commands every 10
-minutes, and the recorder's readiness gate waits up to 25 minutes rather than
-starting before the schema exists. Set
+minutes. The recorder starts immediately and retries ingestion until the
+schema is available; use `kubectl rollout status deploy/tau-lifecycle-recorder
+--timeout=25m` to wait for it to become Ready. Set
 `lifecycleRecorder.schemaManagement.enabled=false` only when an existing
 platform-owned automation already manages the identical lifecycle contract.
 

@@ -39,7 +39,9 @@ validate an already-onboarded cluster:
 | `uninstall` | Drain the release-owned queue policy while Kueue still runs, then run `helm uninstall` for the TauGrid release (requires `--yes`) |
 | `validate installation` | Re-run the read-only TauGrid control-plane readiness report |
 | `validate nodes` | Run privileged GPU health probes (nvidia-smi, NVLink, IB, ECC) across nodes |
-| `validate topology` | Check ResourceFlavor, node label, and IB readiness against a Kueue ClusterQueue or [topology](../glossary/#topology) preset |
+| `validate topology` | Check ResourceFlavor, node label, and IB readiness against ready TauCluster workload profiles |
+| `profiles` | Inspect ready TauCluster workload profiles (subcommand: `export`) |
+| `explain-values` | Print the TauGrid install values reference (human-readable Markdown) |
 
 `validate installation`, `validate nodes`, and `validate topology` are
 platform/operator diagnostics: run them against a cluster you administer, not
@@ -166,7 +168,7 @@ resolve durable inputs:
 
 | Subcommand group | Purpose |
 |---|---|
-| `dataset list\|show\|ref\|alias\|verify\|register\|rm` | The curated dataset registry |
+| `dataset list\|show\|ref\|alias\|verify\|register\|rm\|ingest\|status` | The curated dataset registry |
 | `model list\|show\|best\|alias set\|alias get\|index rebuild` | Durable model checkpoints and aliases |
 
 ## `taugrid-portal experiment`
@@ -194,10 +196,9 @@ experiment`; only the binary name differs.
 `taugrid-portal experiment` and the hidden compatibility alias `exp` share the
 same command tree, so `--help` also surfaces `offload`, `kusto`, `autocapture`,
 `capture`, `sql`, `export`, and `observe`, plus a nested `experiments
-search|tag-run` group. Those are platform and agent-internal tooling (metrics
-sidecar offload, query-builder internals) reserved for platform and
-automation workflows; this reference documents the everyday researcher loop
-only.
+search|tag-run` group. Those are platform-internal and automation tools (metrics sidecar offload,
+query-builder internals); this reference covers only the researcher-facing
+commands.
 
 Use built-in help for the exact installed release:
 

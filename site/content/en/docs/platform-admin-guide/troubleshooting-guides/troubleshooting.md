@@ -15,7 +15,7 @@ This is the canonical diagnose-first path for a stuck or failed
 stop at the first incomplete layer. Each layer names its own
 [TauGrid](../../reference/glossary/#tau) command first; use raw `kubectl` only
 for the deep, operator-only inspection each layer calls out, never as a
-substitute for the command.
+substitute for the TauGrid command.
 
 Start every investigation the same way:
 
@@ -310,7 +310,7 @@ nodes, and whether the live cluster topology still matches the
 
 ```bash
 tau cluster validate nodes --gpu-class <class> --min-healthy <N>
-tau cluster validate topology --preset <preset-name>
+tau cluster validate topology --profile <profile-name>
 ```
 
 `cluster validate nodes` accepts `--context`, `--gpu-class`, `--selector`
@@ -319,11 +319,9 @@ are healthy), and `--timeout` (default `2m`, per-pod). It runs privileged
 validation pods on the selected GPU nodes and checks `nvidia-smi`, NVLink, IB,
 and ECC health.
 
-`cluster validate topology` accepts `--context`, `--preset` (validate one
-preset's full chain: LocalQueue, ClusterQueue, topology, priority classes, and
-`ResourceFlavor` node match), and `--cluster-queue` (default `tau-cq`,
-validate all `ResourceFlavor`s referenced by a `ClusterQueue` when `--preset`
-is omitted).
+`cluster validate topology` accepts `--context` and `--profile` (validate one
+ready TauCluster workload profile; when omitted, validates every ready profile
+in the current TauCluster profile-set revision).
 
 **What success proves:** The nodes backing the workload pass hardware health
 checks, and/or the preset's full Kueue-facing chain has matching, `Ready`

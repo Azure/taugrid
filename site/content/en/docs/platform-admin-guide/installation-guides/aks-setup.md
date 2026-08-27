@@ -31,7 +31,7 @@ Kubernetes cluster of any kind, go straight back to
 
 | Path | Use it when | Creates billable resources |
 | --- | --- | --- |
-| [Guided CPU quickstart](#1-guided-cpu-quickstart-recommended-for-evaluation) | You want a hand-held, disposable, end-to-end evaluation with scripted cleanup, using only CPU quota | Yes |
+| [Guided CPU quickstart](#1-guided-cpu-quickstart-recommended-for-evaluation) | You want a guided, disposable, end-to-end evaluation with scripted cleanup, using only CPU quota | Yes |
 | [GPU Terraform root](#2-reproducible-gpu-capable-terraform) | You want reviewable, reproducible AKS infrastructure with GPU node pools that your platform team can adapt and own long-term | Yes |
 | [Existing AKS cluster](#3-an-existing-aks-cluster) | Your platform team already runs an AKS cluster that meets the prerequisites | Only if you scale it |
 

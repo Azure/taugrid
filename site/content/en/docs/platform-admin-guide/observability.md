@@ -20,8 +20,10 @@ Use each evidence plane for its intended scope:
 | adx-mon and ADX/Kusto | Optional hosted scalar and fleet analysis |
 | Dashboards and alerts | Consumer views over telemetry |
 
-Scheduled, Running, and useful model progress are different claims. Preserve
-raw logs, profiles, and artifacts when a diagnosis depends on them.
+A workload reaching Scheduled or Running status does not prove the model is
+making useful progress. Treat each as a separate claim and verify
+independently. Preserve raw logs, profiles, and artifacts when a diagnosis
+depends on them.
 
 ## Metrics-store methodology
 
