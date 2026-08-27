@@ -92,15 +92,17 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 }
 
 locals {
-  generated_directory         = "${path.module}/generated"
-  kubeconfig_path             = "${local.generated_directory}/kubeconfig"
-  values_path                 = "${local.generated_directory}/taugrid-values.yaml"
-  gpu_quota                   = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
-  adx_databases               = toset(["Metrics", "Logs", "CostTracking", "Audit"])
-  adx_cluster_name            = var.adx_cluster_name != "" ? var.adx_cluster_name : "taugrid${substr(sha256(join(":", [var.subscription_id, var.resource_group_name, var.cluster_name])), 0, 8)}"
-  bootstrap_workspace_enabled = var.bootstrap_workspace != null
-  bootstrap_workspace_name    = try(var.bootstrap_workspace.name, "")
-  bootstrap_workspace_group   = try(var.bootstrap_workspace.entra_group_object_id, "")
+  generated_directory               = "${path.module}/generated"
+  kubeconfig_path                   = "${local.generated_directory}/kubeconfig"
+  values_path                       = "${local.generated_directory}/taugrid-values.yaml"
+  gpu_quota                         = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
+  adx_databases                     = toset(["Metrics", "Logs", "CostTracking", "Audit"])
+  adx_cluster_name                  = var.adx_cluster_name != "" ? var.adx_cluster_name : "taugrid${substr(sha256(join(":", [var.subscription_id, var.resource_group_name, var.cluster_name])), 0, 8)}"
+  bootstrap_workspace_enabled       = var.bootstrap_workspace != null
+  bootstrap_workspace_name          = try(var.bootstrap_workspace.name, "")
+  bootstrap_workspace_group         = try(var.bootstrap_workspace.entra_group_object_id, "")
+  command_interpreter_is_powershell = can(regex("(?i)(pwsh|powershell)(\\.exe)?$", try(var.command_interpreter[0], "")))
+  bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local_file.bootstrap_workspace[0].filename}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local_file.bootstrap_workspace[0].filename}' '${local.bootstrap_workspace_name}'"
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
     gpu_monitoring_sku_name      = var.gpu_monitoring_sku_name
@@ -396,7 +398,7 @@ resource "terraform_data" "bootstrap_workspace" {
     environment = {
       KUBECONFIG = local.kubeconfig_path
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply --server-side --field-manager=taugrid-terraform -f '${local_file.bootstrap_workspace[0].filename}' && $workspace_generation=$(kubectl get 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --output=jsonpath='{.metadata.generation}') && kubectl wait --for=jsonpath='{.status.observedGeneration}'=\"$workspace_generation\" 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --timeout=10m && kubectl wait --for=jsonpath='{.status.phase}'=Ready 'workspace.tau.azure.com/${local.bootstrap_workspace_name}' --namespace tau-system --timeout=10m"
+    command = local.bootstrap_workspace_command
   }
 
   depends_on = [
