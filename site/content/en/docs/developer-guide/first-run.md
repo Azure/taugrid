@@ -11,8 +11,10 @@ aliases:
 Prerequisites:
 
 - The Tau CLI is installed.
-- The repository contains a workspace connection and a checked-in
-  [target](../../reference/glossary/#target), such as `tau/train.yaml`.
+- The repository contains a
+  [workspace connection](../../reference/glossary/#workspace-connection) and a
+  checked-in [target](../../reference/glossary/#target), such as
+  `tau/train.yaml`.
 - The platform workspace reports Ready.
 
 `tau run` is the config-first entry point. Its optional positional `TARGET`
