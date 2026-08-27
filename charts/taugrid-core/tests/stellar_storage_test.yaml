@@ -27,7 +27,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.3.1
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.3.2
         documentIndex: 0
       - isNull:
           path: spec.template.spec.volumes

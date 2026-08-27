@@ -65,7 +65,7 @@ that goal are welcome.
 ```bash
 helm install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.3.1 \
+  --version 0.3.2 \
   --namespace tau-system \
   --create-namespace
 ```
@@ -104,7 +104,7 @@ Create a minimal `tau.yaml`:
 
 ```yaml
 name: hello-gpu
-image: mcr.microsoft.com/aks/ai-runtime/tau:0.3.1
+image: mcr.microsoft.com/aks/ai-runtime/tau:0.3.2
 command: ["python", "train.py"]
 resources:
   gpu: 4
