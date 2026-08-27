@@ -13,8 +13,11 @@ supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
 
 - Terraform 1.9 or later
 - Azure credentials usable by the AzureRM provider
-- `tau`, `helm`, and `kubectl` on PATH
-- PowerShell 7 on Windows. Linux and macOS users can set
+- `tau`, `helm`, and `kubectl` on PATH. Install the matching released `tau`
+  binary for Linux or macOS with the release installer; on Windows provide a
+  PATH entry or pass the executable path to the verification script.
+- PowerShell 7 for the optional deployment-verification entry point. It is supported on Windows,
+  Linux, and macOS. Terraform local-exec can instead use
   `command_interpreter = ["bash", "-c"]`.
 
 ## GPU stack modes
@@ -48,6 +51,41 @@ When AzureRM exposes the managed GPU profile, replace that conditional tag in
 registration until AKS makes the feature generally available.
 
 ## Deploy
+
+For a maintainer-only, disposable, ADX-backed Portal deployment verification on
+any supported host OS:
+
+```powershell
+pwsh -File terraform/aks/Invoke-TauGridAksVerification.ps1
+```
+
+This integration verification creates billable Azure resources and requires a
+subscription with sufficient regional quota. It is not part of the normal
+offline or CI test suite.
+
+The script resolves `tau` for the active OS. Pass `-TauCommand` with an
+absolute path when it is not on PATH; paths containing spaces are supported.
+It accepts the ADX SKU and capacity, plus the GPU VM SKU and its matching
+monitoring, class, and series metadata. The script queries the Azure Resource
+Manager ADX SKU catalog as an early validation; Azure service-side creation
+remains authoritative. If the AzureRM provider loses state during a long ADX
+create, the script waits for the one cluster in its isolated resource group,
+imports it, and resumes the apply. It writes tfvars, state, plan, and
+Terraform data beneath `terraform/aks/generated/` and never reads a local
+`terraform.tfvars` file. Its state is isolated with Terraform's local
+state-file flags and `init -backend=false`; it does not select a backend for
+normal Terraform deployments.
+
+By default the script validates the platform and that Portal reads GPU
+telemetry from ADX. To also create an Entra-backed workspace, run a smoke job,
+and validate Portal lifecycle history from ADX, explicitly enable that path and
+provide a group object ID from the active Entra tenant:
+
+```powershell
+pwsh -File terraform/aks/Invoke-TauGridAksVerification.ps1 `
+  -EnableBootstrapWorkspace `
+  -BootstrapWorkspaceEntraGroupObjectId "<entra-group-object-id>"
+```
 
 ```bash
 cd terraform/aks
