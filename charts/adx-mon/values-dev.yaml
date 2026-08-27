@@ -30,7 +30,7 @@ alerter:
     tag: latest
 
 # NOTE: kube-state-metrics image is not overridden here.
-# values.yaml already defaults to mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics:v2.19.1.
+# values.yaml already defaults to mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics:v2.20.0.
 
 global:
   imagePullPolicy: Always

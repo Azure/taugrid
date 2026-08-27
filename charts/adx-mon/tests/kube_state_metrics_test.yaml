@@ -80,7 +80,7 @@ tests:
           of: Deployment
       - matchRegex:
           path: spec.template.spec.containers[0].image
-          pattern: "mcr\\.microsoft\\.com/oss/v2/kubernetes/kube-state-metrics:v2\\.19\\.1"
+          pattern: "mcr\\.microsoft\\.com/oss/v2/kubernetes/kube-state-metrics:v2\\.20\\.0"
 
   - it: KSM image can be overridden (e.g. to a custom ACR tag)
     template: charts/kube-state-metrics/templates/deployment.yaml
@@ -89,11 +89,11 @@ tests:
         image:
           registry: myacr.azurecr.io
           repository: mirror/kube-state-metrics
-          tag: v2.19.1-1
+          tag: v2.20.0-1
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].image
-          pattern: "myacr\\.azurecr\\.io/mirror/kube-state-metrics:v2\\.19\\.1-1"
+          pattern: "myacr\\.azurecr\\.io/mirror/kube-state-metrics:v2\\.20\\.0-1"
 
   - it: KSM Deployment mounts CRS config volume
     template: charts/kube-state-metrics/templates/deployment.yaml

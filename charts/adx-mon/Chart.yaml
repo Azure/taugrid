@@ -2,7 +2,7 @@ apiVersion: v2
 name: adx-mon
 description: Azure Data Explorer Monitor - observability pipeline for GPU-enabled Kubernetes
 type: application
-version: 0.3.5
+version: 0.3.6
 appVersion: "v0.3.0"
 kubeVersion: ">=1.28.0"
 maintainers:
@@ -17,6 +17,6 @@ keywords:
   - gpu
 dependencies:
   - name: kube-state-metrics
-    version: "8.3.0"
+    version: "8.4.0"
     repository: https://prometheus-community.github.io/helm-charts
     condition: kube-state-metrics.enabled
