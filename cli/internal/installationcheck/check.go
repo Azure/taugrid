@@ -20,6 +20,8 @@ const (
 	minimumKubernetesMajor = 1
 	minimumKubernetesMinor = 30
 
+	defaultReadinessQueryTimeout = 30 * time.Second
+
 	tauControllerName = "tau-core-controller"
 	tauClusterName    = "cluster"
 	quotaGuardName    = "tau-quota-approval-guard"
@@ -36,6 +38,10 @@ type Options struct {
 	SystemNamespace string
 	Timeout         time.Duration
 	PollInterval    time.Duration
+	// QueryTimeout bounds one kubectl call. Zero uses the default timeout.
+	// This prevents a stalled API request from consuming the full readiness
+	// timeout and lets the next polling interval retry it.
+	QueryTimeout time.Duration
 	// DisabledComponents names chart components the release turned off. They
 	// are reported as skipped instead of failing. The zero value validates
 	// every component.
@@ -222,12 +228,16 @@ func validateOptions(opts Options) error {
 	if opts.PollInterval <= 0 {
 		return errors.New("poll interval must be greater than zero")
 	}
+	if opts.QueryTimeout < 0 {
+		return errors.New("query timeout must not be negative")
+	}
 	return nil
 }
 
 // Check evaluates every required readiness surface once without mutating the
 // cluster. Components the release disabled are reported as skipped.
 func Check(ctx context.Context, runner Runner, opts Options) Report {
+	runner = boundedRunner{runner: runner, timeout: readinessQueryTimeout(opts)}
 	results := make([]Result, 0, 8)
 
 	results = append(results, checkKubernetesVersion(ctx, runner))
@@ -271,6 +281,34 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 		results = append(results, checkQuotaGuard(ctx, runner))
 	}
 	return Report{Results: results}
+}
+
+func readinessQueryTimeout(opts Options) time.Duration {
+	if opts.QueryTimeout > 0 {
+		return opts.QueryTimeout
+	}
+	return defaultReadinessQueryTimeout
+}
+
+type boundedRunner struct {
+	runner  Runner
+	timeout time.Duration
+}
+
+func (r boundedRunner) Raw(ctx context.Context, args []string, stdin []byte) (string, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	output, err := r.runner.Raw(queryCtx, args, stdin)
+	if ctx.Err() != nil || queryCtx.Err() == nil {
+		return output, err
+	}
+	return output, fmt.Errorf(
+		"kubectl %q timed out after %s: %w",
+		strings.Join(args, " "),
+		r.timeout,
+		queryCtx.Err(),
+	)
 }
 
 type versionDoc struct {
