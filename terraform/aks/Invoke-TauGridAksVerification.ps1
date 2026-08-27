@@ -272,8 +272,14 @@ run:
 compute:
   workers: 1
   gpus_per_worker: 1
-  cpus: 1
-  memory: 2Gi
+  head_cpu_request: "1"
+  head_memory_request: "2Gi"
+  head_cpu_limit: "1"
+  head_memory_limit: "2Gi"
+  worker_cpu_request: "1"
+  worker_memory_request: "2Gi"
+  worker_cpu_limit: "1"
+  worker_memory_limit: "2Gi"
 runtime:
   image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 "@
