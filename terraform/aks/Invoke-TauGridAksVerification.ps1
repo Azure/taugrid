@@ -280,6 +280,10 @@ compute:
   worker_memory_request: "2Gi"
   worker_cpu_limit: "1"
   worker_memory_limit: "2Gi"
+policy:
+  profile: azure.research.training.l
+  team: research
+  lane: training
 runtime:
   image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 "@
