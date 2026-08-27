@@ -5,6 +5,7 @@ package workspaceconnection
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -140,6 +141,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	stateMatches := stateConfigured && !kubeconfigMissing
 	var sourceKubeconfig []byte
 	var sourceFingerprint string
+	sourceKubeconfigChanged := false
 	sourceTargetChanged := false
 	if hasState &&
 		state.AccessMethod == AccessMethodKubeconfig &&
@@ -152,17 +154,16 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		if sourceTargetChanged {
 			stateMatches = false
 			kubeconfigMissing = false
+		} else if stateMatches {
+			installedKubeconfig, err := os.ReadFile(state.KubeconfigPath)
+			if err != nil {
+				return ActiveConnection{}, fmt.Errorf("read isolated Tau kubeconfig: %w", err)
+			}
+			sourceKubeconfigChanged = !bytes.Equal(installedKubeconfig, sourceKubeconfig)
 		}
 	}
-	if stateMatches {
-		if m.stateFresh(state) {
-			if len(sourceKubeconfig) > 0 {
-				if err := fileutil.WriteFileAtomic(state.KubeconfigPath, sourceKubeconfig, 0o600); err != nil {
-					return ActiveConnection{}, fmt.Errorf("refresh isolated Tau kubeconfig: %w", err)
-				}
-			}
-			return state.active(), nil
-		}
+	if stateMatches && m.stateFresh(state) && !sourceKubeconfigChanged {
+		return state.active(), nil
 	}
 	if stateMatches {
 		if m.Verifier == nil {

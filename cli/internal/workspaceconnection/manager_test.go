@@ -227,10 +227,28 @@ func TestManagerRefreshesKubeconfigCredentialsAndRejectsTargetDrift(t *testing.T
 	}
 
 	credentials.raw = testKubeconfig("https://first.example", "token-two")
+	verifier.err = errors.New("authorization denied")
+	if _, err := manager.Ensure(context.Background(), root); err == nil ||
+		!strings.Contains(err.Error(), "authorization denied") {
+		t.Fatalf("unverified same-target credential refresh error = %v", err)
+	}
+	if credentials.calls != 2 || verifier.calls != 2 {
+		t.Fatalf("rejected same-target refresh credentials=%d verifier=%d", credentials.calls, verifier.calls)
+	}
+	unchanged, err := os.ReadFile(first.KubeconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(unchanged, []byte("token-one")) ||
+		bytes.Contains(unchanged, []byte("token-two")) {
+		t.Fatalf("unverified credentials replaced isolated kubeconfig:\n%s", unchanged)
+	}
+
+	verifier.err = nil
 	if _, err := manager.Ensure(context.Background(), root); err != nil {
 		t.Fatalf("refresh same-target credentials: %v", err)
 	}
-	if credentials.calls != 2 || verifier.calls != 1 {
+	if credentials.calls != 3 || verifier.calls != 3 {
 		t.Fatalf("same-target refresh credentials=%d verifier=%d", credentials.calls, verifier.calls)
 	}
 	refreshed, err := os.ReadFile(first.KubeconfigPath)
@@ -248,10 +266,10 @@ func TestManagerRefreshesKubeconfigCredentialsAndRejectsTargetDrift(t *testing.T
 		strings.Contains(err.Error(), "stored configuration is incomplete") {
 		t.Fatalf("target drift error = %v", err)
 	}
-	if verifier.calls != 1 {
+	if verifier.calls != 3 {
 		t.Fatalf("target drift verified before review: %d calls", verifier.calls)
 	}
-	unchanged, err := os.ReadFile(first.KubeconfigPath)
+	unchanged, err = os.ReadFile(first.KubeconfigPath)
 	if err != nil {
 		t.Fatal(err)
 	}
