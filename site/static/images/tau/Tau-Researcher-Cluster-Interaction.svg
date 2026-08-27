@@ -58,7 +58,7 @@
     <circle cx="398" cy="289" r="18" fill="#0078D4"/><text x="398" y="293" text-anchor="middle" class="badge">DEV</text>
     <text x="426" y="283" class="stage" fill="#0078D4">2 · AUTHOR + CHECK</text>
     <text x="392" y="315" class="box-title">Edit code and run intent</text>
-    <text x="392" y="339" class="cmd">tau workspace connection inspect</text>
+    <text x="392" y="339" class="cmd">tau run validate --config ...</text>
     <text x="392" y="360" class="cmd">tau run train --dry-run=client</text>
     <text x="392" y="382" class="body">Verify image, GPU count, /data, queue</text>
   </g>
@@ -68,8 +68,8 @@
     <circle cx="698" cy="289" r="18" fill="#0078D4"/><text x="698" y="293" text-anchor="middle" class="badge">CLI</text>
     <text x="726" y="283" class="stage" fill="#0078D4">3 · SUBMIT</text>
     <text x="692" y="315" class="box-title">Use the small Tau surface</text>
-    <text x="692" y="340" class="cmd">tau run smoke</text>
-    <text x="692" y="361" class="cmd">tau run train</text>
+    <text x="692" y="340" class="cmd">tau run train</text>
+    <text x="692" y="361" class="cmd">tau run status &lt;run&gt;</text>
     <text x="692" y="382" class="body">No workspace, context, queue, or YAML flags</text>
   </g>
 

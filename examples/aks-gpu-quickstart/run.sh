@@ -338,13 +338,10 @@ for _ in $(seq 1 30); do
 done
 run tau workspace status "$WORKSPACE" --context "$CLUSTER"
 
-step "5. Connectivity smoke test"
-run tau run smoke --context "$CLUSTER"
-
-step "6. Submit the A100 PyTorch workload"
+step "5. Submit the A100 PyTorch workload"
 run tau run --config "$CONFIG" --context "$CLUSTER"
 
-step "7. Observe it"
+step "6. Observe it"
 run tau run status "$RUN_NAME" -n "$NAMESPACE" --context "$CLUSTER"
 cat <<TXT
 

@@ -500,7 +500,7 @@ func (p *Project) loadTargets(
 			continue
 		}
 		target := strings.TrimSuffix(entry.Name(), extension)
-		if target == "" || target == "smoke" || entry.Name() == filepath.Base(workspaceconnection.DescriptorRelativePath) {
+		if target == "" || entry.Name() == filepath.Base(workspaceconnection.DescriptorRelativePath) {
 			continue
 		}
 		candidate := filepath.Join(tauDir, entry.Name())

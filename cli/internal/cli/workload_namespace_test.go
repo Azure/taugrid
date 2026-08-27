@@ -12,7 +12,7 @@ import (
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 )
 
-func withWorkloadNamespaceDiscoverer(t *testing.T, fn smokeWorkspaceDiscoverer) {
+func withWorkloadNamespaceDiscoverer(t *testing.T, fn workspaceDiscoverer) {
 	t.Helper()
 	previous := workloadNamespaceDiscoverer
 	workloadNamespaceDiscoverer = fn

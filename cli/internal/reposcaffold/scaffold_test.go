@@ -90,7 +90,6 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, readme, "docker build -f images/train.Dockerfile -t \"$BUILD_IMAGE\" .")
 	assertContains(t, readme, "requires `workspace-rbac` authorization and role `tau-researcher-v1`")
 	assertNotContains(t, readme, "`cluster-wide` authorization")
-	assertContains(t, readme, "tau run smoke")
 	assertContains(t, readme, "tau run train")
 	assertContains(t, readme, "checked-in")
 	assertContains(t, readme, "direct Tau configs")
@@ -101,7 +100,6 @@ func TestRenderPythonScaffold(t *testing.T) {
 		`docker push "$BUILD_IMAGE"`,
 		`./scripts/configure.sh --image "$PUBLISHED_IMAGE"`,
 		`tau run validate --config tau/train.yaml`,
-		`tau run smoke`,
 		`tau run train`,
 	)
 	assertNotContains(t, readme, "--workspace")
@@ -116,10 +114,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 		`docker build -f images/train.Dockerfile -t "$IMAGE" .`,
 		`docker push "$IMAGE"`,
 		`./scripts/configure.sh --image "$IMAGE"`,
-		`tau run validate --config tau/smoke.yaml`,
 		`tau run validate --config tau/train.yaml`,
-		`tau run smoke`,
-		`tau run --config tau/smoke.yaml`,
 		`tau run train`,
 	)
 	assertNotContains(t, readme, "Tau SDK setup")
@@ -174,6 +169,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 		"requiredRole: tau-researcher-v1",
 		"resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-ai",
 		"tenantID: 11111111-1111-1111-1111-111111111111",
+		"method: aks",
 	} {
 		assertContains(t, connection, want)
 	}
@@ -216,10 +212,68 @@ func TestUnconnectedScaffoldDoesNotClaimAuthorizationMode(t *testing.T) {
 		if file.Path != "scripts/setup.sh" {
 			continue
 		}
-		assertContains(t, file.Content, "tau run validate --config tau/smoke.yaml")
+		assertContains(t, file.Content, "tau run validate --config tau/train.yaml")
 		assertContains(t, file.Content, "# Ask the platform owner to add tau/workspace.connection.yaml before cluster runs.")
-		assertNotContains(t, file.Content, "tau run smoke")
 		assertNotContains(t, file.Content, "follow README.md")
+	}
+}
+
+func TestProviderNeutralWorkspaceConnectionScaffold(t *testing.T) {
+	files, err := Preview(Options{
+		Name:        "portable",
+		Image:       "registry.example/portable:test",
+		Workspace:   "research",
+		KubeContext: "research #1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connection string
+	for _, file := range files {
+		if file.Path == "tau/workspace.connection.yaml" {
+			connection = file.Content
+			break
+		}
+	}
+	if connection == "" {
+		t.Fatal("provider-neutral scaffold omitted workspace connection")
+	}
+	for _, want := range []string{
+		"schema: tau.workspace.connection.v1",
+		`contextName: "research #1"`,
+		"method: kubeconfig",
+	} {
+		assertContains(t, connection, want)
+	}
+	assertNotContains(t, connection, "resourceID:")
+	assertNotContains(t, connection, "tenantID:")
+	descriptor, err := workspaceconnection.Parse([]byte(connection))
+	if err != nil {
+		t.Fatalf("generated provider-neutral connection is invalid: %v\n%s", err, connection)
+	}
+	if descriptor.Cluster.ContextName != "research #1" {
+		t.Fatalf("generated context = %q, want quoted kubeconfig name", descriptor.Cluster.ContextName)
+	}
+}
+
+func TestWorkspaceConnectionScaffoldRejectsPartialAccessConfiguration(t *testing.T) {
+	_, err := Preview(Options{
+		Name:                "partial",
+		Image:               "registry.example/partial:test",
+		Workspace:           "research",
+		AzureSubscriptionID: "00000000-0000-0000-0000-000000000000",
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be provided together") {
+		t.Fatalf("Preview() error = %v, want partial AKS flags rejection", err)
+	}
+
+	_, err = Preview(Options{
+		Name:        "missing-workspace",
+		Image:       "registry.example/missing:test",
+		KubeContext: "research-cluster",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--workspace is required") {
+		t.Fatalf("Preview() error = %v, want workspace requirement", err)
 	}
 }
 

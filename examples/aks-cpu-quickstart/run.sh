@@ -145,15 +145,11 @@ for _ in $(seq 1 30); do
 done
 run tau workspace status "$WORKSPACE" --context "$CLUSTER"
 
-step "4. Connectivity smoke test"
-# No --workspace: tau resolves the cluster's single workspace itself.
-run tau run smoke --context "$CLUSTER"
-
-step "5. Submit the real PyTorch workload"
+step "4. Submit the PyTorch workload"
 # Also no --workspace. A researcher never names it.
 run tau run --config "$CONFIG" --context "$CLUSTER"
 
-step "6. Observe it"
+step "5. Observe it"
 run tau run status "$RUN_NAME" -n "$NAMESPACE" --context "$CLUSTER"
 echo
 echo "Follow the training logs with:"

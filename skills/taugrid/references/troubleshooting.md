@@ -31,7 +31,7 @@ replacements for it.
 
 | # | Layer | Primary command | Owner if it fails |
 |---|---|---|---|
-| 1 | Repo/connection resolution and cluster access | `tau workspace connection inspect` | Researcher (descriptor) / platform (access) |
+| 1 | Repo/connection resolution and cluster access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) / platform (access) |
 | 2 | TauWorkspace readiness and handoff validity | `tau workspace status <name>` | Platform operator |
 | 3 | Client-side config validation and rendering | `tau run validate --config <path>` | Researcher |
 | 4 | Kueue admission and quota | `tau run status <run>` (admission phase) | Platform/queue owner |
@@ -40,8 +40,8 @@ replacements for it.
 | 7 | Runtime progress and durable evidence | `tau run logs <run>` + `taugrid-portal experiment status <name>` | Researcher (app) / platform (pipeline) |
 | 8 | Recovery handoff | see [8](#8-recovery-handoff) | — |
 
-Layers 1–3 are offline and cost nothing. Run them first when the symptom is
-ambiguous.
+The offline form of layer 1 and layer 3 cost nothing. Run them first when the
+symptom is ambiguous, then use the live connection check.
 
 ## The startup phase tree
 
@@ -70,22 +70,21 @@ Three distinctions that prevent misdiagnosis:
 ## 1. Repository/connection resolution and cluster access
 
 ```bash
-tau workspace connection inspect
+tau workspace connection
 ```
 
-**Success proves:** exactly one `tau/workspace.connection.yaml` was found for
-the current project, it passes schema validation, and Tau can name the cluster
-context and workspace it targets. This is offline — it does not call the
-cluster.
+**Success proves:** the current project's descriptor is valid, credentials
+resolve, Kubernetes is reachable, and the workspace, LocalQueue, and
+authorization contract match. Add `--offline` to check only repository
+configuration.
 
 **Failure means:** no descriptor, more than one candidate, or a schema
 violation. This is a repository configuration problem; every later layer is
 unreachable until it is fixed.
 
-Resolution and access are separate proofs. The first command that actually
-calls the API server — `tau workspace status`, or any `tau run` — is what
-proves access. A timeout or 401/403 there while `connection inspect` succeeded
-means kubeconfig/VPN/DNS reachability or RBAC, not a bad descriptor.
+If live connection fails while `tau workspace connection --offline` succeeds,
+the problem is credential resolution, VPN/DNS reachability, Kubernetes
+availability, or RBAC rather than a bad descriptor.
 
 **Next:** missing/invalid descriptor → get a valid one from the platform owner.
 Reachability or permission failure → platform action, or transient network.

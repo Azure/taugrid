@@ -16,12 +16,13 @@ import (
 const validDescriptorYAML = `schema: tau.workspace.connection.v1
 workspace: sample
 cluster:
-  provider: azure
-  resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/taugrid-flex
   contextName: taugrid-flex
   systemNamespace: tau-system
-identity:
-  tenantID: 11111111-1111-1111-1111-111111111111
+access:
+  method: aks
+  aks:
+    resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/taugrid-flex
+    tenantID: 11111111-1111-1111-1111-111111111111
 authorization:
   mode: cluster-wide
 requirements:
@@ -58,14 +59,44 @@ func TestDiscoverWalksParents(t *testing.T) {
 	}
 }
 
-func TestLegacyDescriptorResolvesLegacySystemNamespace(t *testing.T) {
+func TestDescriptorDefaultsSystemNamespace(t *testing.T) {
 	raw := strings.Replace(validDescriptorYAML, "  systemNamespace: tau-system\n", "", 1)
 	descriptor, err := Parse([]byte(raw))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if got := descriptor.ResolvedSystemNamespace(); got != "tau-platform" {
-		t.Fatalf("ResolvedSystemNamespace() = %q, want tau-platform", got)
+	if got := descriptor.ResolvedSystemNamespace(); got != "tau-system" {
+		t.Fatalf("ResolvedSystemNamespace() = %q, want tau-system", got)
+	}
+}
+
+func TestParseKubeconfigAccess(t *testing.T) {
+	raw := `schema: tau.workspace.connection.v1
+workspace: sample
+cluster:
+  contextName: local-cluster
+access:
+  method: kubeconfig
+authorization:
+  mode: cluster-wide
+requirements:
+  minTauVersion: 0.3.0
+network:
+  privateCluster: false
+`
+	descriptor, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if descriptor.AccessIdentity() != "kubeconfig:local-cluster" || descriptor.Access.AKS != nil {
+		t.Fatalf("kubeconfig descriptor = %#v", descriptor)
+	}
+}
+
+func TestParseRejectsAccessMetadataForWrongMethod(t *testing.T) {
+	raw := strings.Replace(validDescriptorYAML, "method: aks", "method: kubeconfig", 1)
+	if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "must be omitted") {
+		t.Fatalf("Parse() error = %v, want access.aks rejection", err)
 	}
 }
 

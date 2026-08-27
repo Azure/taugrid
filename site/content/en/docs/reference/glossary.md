@@ -81,13 +81,15 @@ pools, Kueue/KubeRay installation, and cloud RBAC outside TauWorkspace. See
 
 ## Workspace connection descriptor {#workspace-connection}
 
-The non-secret `tau/workspace.connection.yaml` file a platform operator hands to a repository once its TauWorkspace is [Ready](#status-condition). It names the exact cluster, TauGrid system namespace, and workspace contract a project resolves against and must never contain a credential or kubeconfig. This file is client-side project configuration only: the TauWorkspace object it describes is reconciled independently by the controller and is unaffected by edits to this file. New descriptors always write `cluster.systemNamespace`, which is `tau-system` for a default installation. Descriptors created before that field existed remain compatible and resolve an omitted field to the legacy `tau-platform` namespace.
+The non-secret `tau/workspace.connection.yaml` file a platform operator hands to a repository once its TauWorkspace is [Ready](#status-condition). It names the Kubernetes context, access method, TauGrid system namespace, and workspace contract a project resolves against and must never contain a credential or kubeconfig. This file is client-side project configuration only: the TauWorkspace object it describes is reconciled independently by the controller and is unaffected by edits to this file. `cluster.systemNamespace` defaults to `tau-system`.
 
 Checking in the descriptor is explicit repository/platform preconfiguration.
-`tau run` discovers it automatically; `tau workspace connection inspect` is an
-optional offline diagnostic. On first cluster-backed use, TauGrid obtains normal
-AKS cluster-user credentials, verifies the live workspace contract, and records
-a durable configuration pin separately from short-lived readiness evidence.
+`tau run` discovers it automatically; `tau workspace connection` verifies and
+pins the configured access before the first run, while `--offline` validates
+only the repository configuration. On first cluster-backed use, TauGrid isolates the
+named context from the user's kubeconfig or obtains AKS cluster-user credentials,
+verifies the live workspace contract, and records a durable configuration pin
+separately from short-lived readiness evidence.
 An unchanged pinned connection can refresh Ready, LocalQueue, and authorization
 checks noninteractively after the readiness cache expires. Descriptor, trust,
 or live workspace-contract drift requires interactive review.

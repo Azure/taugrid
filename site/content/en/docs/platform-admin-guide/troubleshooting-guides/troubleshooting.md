@@ -86,7 +86,7 @@ permissions are absent.
 
 | # | Layer | Primary command | Owner if it fails |
 |---|---|---|---|
-| 1 | Repository/connection resolution and cluster access | Offline `tau workspace connection inspect` or `tau run <target> --dry-run=client`; live `tau run smoke` | Researcher (descriptor) or platform (access) |
+| 1 | Repository/connection resolution and cluster access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) or platform (access) |
 | 2 | [TauWorkspace](../../reference/glossary/#tauworkspace) readiness and handoff validity | `tau workspace status <name>` | Platform operator |
 | 3 | Client-side config validation and rendering | `tau run validate --config tau/train.yaml` | Researcher |
 | 4 | [Queue](../../reference/glossary/#queue) admission and quota | `tau run status <run-name>` (Kueue admission phase) | Platform/queue owner |
@@ -103,28 +103,27 @@ permissions are absent.
 and whether the resolved [cluster context](../../reference/glossary/#cluster-context)
 is actually reachable.
 
-**Optional offline descriptor diagnostic:**
+**Connection check:**
 
 ```bash
-tau workspace connection inspect
+tau workspace connection
 ```
 
-**What success proves:** TauGrid found exactly one
-`tau/workspace.connection.yaml` for the current project and can name the
-cluster context and workspace it targets. This is a client-side, offline
-check performed entirely locally.
+**What success proves:** TauGrid found the current project's connection,
+resolved credentials, reached Kubernetes, and verified the TauWorkspace,
+LocalQueue, and authorization contract. Add `--offline` to prove only local
+project and descriptor resolution.
 
 **What failure means:** No descriptor found, more than one candidate found, or
 the descriptor failed schema validation. This is a repository configuration
 problem rather than a workload problem, and every later layer stays
 unreachable until it is fixed.
 
-`tau run` discovers the descriptor automatically, making `connection inspect`
-an optional diagnostic rather than an activation prerequisite. Cluster access is a separate proof from offline
-resolution. `tau workspace status <name>` (layer 2), or any `tau run`
-invocation, is what proves access. If that call times out or returns a 401/403
-while `connection inspect` succeeded, the problem is Azure authentication,
-VPN/DNS reachability, or RBAC, not descriptor parsing.
+`tau run` discovers the descriptor automatically, so this command is a
+preflight rather than an activation prerequisite. If live connection fails but
+`tau workspace connection --offline` succeeds, the problem is credential
+resolution, VPN/DNS reachability, Kubernetes availability, or RBAC rather than
+descriptor parsing.
 
 **Next owner/action:** Missing or invalid descriptor -- researcher action
 required; get a valid descriptor from the platform operator who owns the
@@ -196,7 +195,12 @@ while skipping admission.
 **What success proves:** The checked-in
 [direct run config](../../reference/glossary/#run-config-vs-manifest) parses,
 passes schema validation, and resolves to a renderable
-[Workload](../../reference/glossary/#workload) (`Job` or `RayJob`). `tau run validate` runs entirely offline. `tau run --dry-run=client` also stays offline: it validates the local descriptor and renders live-only namespace, queue, and service-account values as visible placeholders. Use `--dry-run=server` for API-server validation or `tau run smoke` for workspace readiness and admission.
+[Workload](../../reference/glossary/#workload) (`Job` or `RayJob`). `tau run
+validate` runs entirely offline. In a connected repository, `tau run
+--dry-run=client` activates the workspace connection and reads the live
+workload-profile catalog without submitting the rendered workload. Use
+`--dry-run=server` for API-server validation or submit a checked-in target to
+exercise workspace readiness and admission.
 
 **What failure means:** A schema or field error, an ambiguous
 [target](../../reference/glossary/#target), or a manifest that looks like an

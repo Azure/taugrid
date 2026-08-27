@@ -55,7 +55,7 @@ queue access, and Kubernetes permissions in the expected state.
 
    See [Workspace readiness and recovery](../../reference/workspace/#workspace-readiness-and-recovery)
    if either command reports a problem.
-6. Create `tau/workspace.connection.yaml` and run the smoke test in the
+6. Create `tau/workspace.connection.yaml` and run a checked-in project target in the
    [handoff checklist](../handoff/). This file contains workspace details and
    can be safely committed to the research repository.
 

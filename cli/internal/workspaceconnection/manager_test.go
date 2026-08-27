@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,17 +66,63 @@ func writeDescriptorFixture(t *testing.T) string {
 	return root
 }
 
+func writeKubeconfigDescriptorFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	path := filepath.Join(root, DescriptorRelativePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `schema: tau.workspace.connection.v1
+workspace: sample
+cluster:
+  contextName: taugrid-flex
+  systemNamespace: tau-system
+access:
+  method: kubeconfig
+authorization:
+  mode: cluster-wide
+requirements:
+  minTauVersion: 0.3.0
+network:
+  privateCluster: false
+`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func testKubeconfig(server, token string) []byte {
+	return []byte(fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: cluster
+  cluster:
+    server: %s
+contexts:
+- name: taugrid-flex
+  context:
+    cluster: cluster
+    user: researcher
+current-context: taugrid-flex
+users:
+- name: researcher
+  user:
+    token: %s
+`, server, token))
+}
+
 func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	credentials := &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")}
 	verifier := &fakeVerifier{result: Verification{
-		ContextName:       "taugrid-flex",
-		Namespace:         "sample",
-		Queue:             "jobqueue",
-		WorkspacePhase:    "Ready",
-		WorkspaceRevision: "7",
+		ContextName:    "taugrid-flex",
+		Namespace:      "sample",
+		Queue:          "jobqueue",
+		WorkspacePhase: "Ready",
 	}}
 	manager := Manager{
 		ConfigDir:   configDir,
@@ -99,9 +146,6 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 		connection.AuthorizationMode != AuthorizationModeClusterWide {
 		t.Fatalf("connection = %#v", connection)
 	}
-	if connection.ConfiguredAt != now || connection.VerifiedAt != now {
-		t.Fatalf("connection timestamps = %#v", connection)
-	}
 	info, err := os.Stat(connection.KubeconfigPath)
 	if err != nil {
 		t.Fatalf("kubeconfig: %v", err)
@@ -123,9 +167,9 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 	if state.Schema != connectionStateSchema ||
 		state.ConfiguredAt != now ||
 		state.VerifiedAt != now ||
-		state.Provider != "azure" ||
-		state.SystemNamespace != "tau-system" ||
-		state.TenantID != "11111111-1111-1111-1111-111111111111" {
+		state.AccessMethod != AccessMethodAKS ||
+		state.AccessIdentity != "aks:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-ai/providers/microsoft.containerservice/managedclusters/taugrid-flex:11111111-1111-1111-1111-111111111111" ||
+		state.SystemNamespace != "tau-system" {
 		t.Fatalf("persisted configuration/readiness state = %#v", state)
 	}
 }
@@ -137,6 +181,7 @@ func TestManagerPersistsConfiguredSystemNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	raw = []byte(strings.Replace(string(raw), "  systemNamespace: tau-system\n", "  systemNamespace: custom-system\n", 1))
 	if err := os.WriteFile(descriptorPath, raw, 0o644); err != nil {
 		t.Fatal(err)
@@ -148,7 +193,7 @@ func TestManagerPersistsConfiguredSystemNamespace(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 	}
 	connection, err := manager.Ensure(context.Background(), root)
@@ -160,10 +205,81 @@ func TestManagerPersistsConfiguredSystemNamespace(t *testing.T) {
 	}
 }
 
-func TestLegacyConnectionStateDefaultsSystemNamespace(t *testing.T) {
+func TestManagerRefreshesKubeconfigCredentialsAndRejectsTargetDrift(t *testing.T) {
+	root := writeKubeconfigDescriptorFixture(t)
+	configDir := t.TempDir()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	credentials := &fakeCredentialProvider{raw: testKubeconfig("https://first.example", "token-one")}
+	verifier := &fakeVerifier{result: Verification{
+		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+		WorkspacePhase: "Ready",
+	}}
+	manager := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: credentials,
+		Verifier:    verifier,
+		Now:         func() time.Time { return now },
+	}
+	first, err := manager.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	credentials.raw = testKubeconfig("https://first.example", "token-two")
+	if _, err := manager.Ensure(context.Background(), root); err != nil {
+		t.Fatalf("refresh same-target credentials: %v", err)
+	}
+	if credentials.calls != 2 || verifier.calls != 1 {
+		t.Fatalf("same-target refresh credentials=%d verifier=%d", credentials.calls, verifier.calls)
+	}
+	refreshed, err := os.ReadFile(first.KubeconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(refreshed, []byte("token-two")) {
+		t.Fatalf("isolated kubeconfig did not refresh credentials:\n%s", refreshed)
+	}
+
+	credentials.raw = testKubeconfig("https://second.example", "token-three")
+	_, err = manager.Ensure(context.Background(), root)
+	if !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), "Kubernetes context target changed") ||
+		strings.Contains(err.Error(), "stored configuration is incomplete") {
+		t.Fatalf("target drift error = %v", err)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("target drift verified before review: %d calls", verifier.calls)
+	}
+	unchanged, err := os.ReadFile(first.KubeconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(unchanged, []byte("https://first.example")) {
+		t.Fatalf("target drift replaced pinned kubeconfig before review:\n%s", unchanged)
+	}
+
+	descriptorPath := filepath.Join(root, DescriptorRelativePath)
+	rawDescriptor, err := os.ReadFile(descriptorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawDescriptor = []byte(strings.Replace(string(rawDescriptor), "minTauVersion: 0.3.0", "minTauVersion: 0.4.0", 1))
+	if err := os.WriteFile(descriptorPath, rawDescriptor, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Ensure(context.Background(), root)
+	if !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), "descriptor digest") ||
+		!strings.Contains(err.Error(), "Kubernetes context target changed") {
+		t.Fatalf("combined descriptor and target drift error = %v", err)
+	}
+}
+
+func TestConnectionStateDefaultsSystemNamespace(t *testing.T) {
 	connection := (connectionState{}).active()
-	if connection.SystemNamespace != "tau-platform" {
-		t.Fatalf("SystemNamespace = %q, want tau-platform", connection.SystemNamespace)
+	if connection.SystemNamespace != "tau-system" {
+		t.Fatalf("SystemNamespace = %q, want tau-system", connection.SystemNamespace)
 	}
 }
 
@@ -238,11 +354,10 @@ func TestManagerReusesFreshConnectionNonInteractively(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	firstCredentials := &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")}
 	firstVerifier := &fakeVerifier{result: Verification{
-		ContextName:       "taugrid-flex",
-		Namespace:         "sample",
-		Queue:             "jobqueue",
-		WorkspacePhase:    "Ready",
-		WorkspaceRevision: "7",
+		ContextName:    "taugrid-flex",
+		Namespace:      "sample",
+		Queue:          "jobqueue",
+		WorkspacePhase: "Ready",
 	}}
 	first := Manager{
 		ConfigDir:   configDir,
@@ -282,7 +397,7 @@ func TestManagerRevalidatesStaleConnectionWithoutRefetchingCredentials(t *testin
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -295,7 +410,7 @@ func TestManagerRevalidatesStaleConnectionWithoutRefetchingCredentials(t *testin
 	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
 	verifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-		WorkspacePhase: "Ready", WorkspaceRevision: "8",
+		WorkspacePhase: "Ready",
 	}}
 	second := Manager{
 		ConfigDir:    configDir,
@@ -305,18 +420,12 @@ func TestManagerRevalidatesStaleConnectionWithoutRefetchingCredentials(t *testin
 		Now:          func() time.Time { return now.Add(2 * time.Minute) },
 		ReadinessTTL: time.Minute,
 	}
-	got, err := second.Ensure(context.Background(), root)
+	_, err := second.Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatalf("stale cached Ensure: %v", err)
 	}
 	if credentials.calls != 0 || verifier.calls != 1 {
 		t.Fatalf("stale cache made credentials=%d verifier=%d calls", credentials.calls, verifier.calls)
-	}
-	if got.WorkspaceRevision != "8" {
-		t.Fatalf("workspace revision = %q, want 8", got.WorkspaceRevision)
-	}
-	if got.ConfiguredAt != now {
-		t.Fatalf("configuration timestamp changed during readiness refresh: %s", got.ConfiguredAt)
 	}
 }
 
@@ -330,7 +439,7 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			ServiceAccount: "workspace-sa", WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			ServiceAccount: "workspace-sa", WorkspacePhase: "Ready",
 		}},
 		Now: func() time.Time { return configuredAt },
 	}
@@ -347,7 +456,7 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 	credentials := &fakeCredentialProvider{raw: replacementRaw}
 	verifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-		ServiceAccount: "workspace-sa", WorkspacePhase: "Ready", WorkspaceRevision: "8",
+		ServiceAccount: "workspace-sa", WorkspacePhase: "Ready",
 	}}
 	second := Manager{
 		ConfigDir:   configDir,
@@ -372,13 +481,7 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 	if _, statErr := os.Stat(verifier.paths[0]); !os.IsNotExist(statErr) {
 		t.Fatalf("verified candidate was not removed: %v", statErr)
 	}
-	if got.ConfiguredAt != configuredAt || got.VerifiedAt != refreshedAt {
-		t.Fatalf("connection timestamps = %#v", got)
-	}
-	if got.WorkspaceUID != "workspace-uid" ||
-		got.Namespace != "sample" ||
-		got.Queue != "jobqueue" ||
-		got.ServiceAccount != "workspace-sa" {
+	if got.Namespace != "sample" || got.Queue != "jobqueue" {
 		t.Fatalf("reacquired connection = %#v", got)
 	}
 	info, err := os.Stat(got.KubeconfigPath)
@@ -421,7 +524,7 @@ func TestManagerMissingKubeconfigRejectsLiveDriftWithoutCredentialResidue(t *tes
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			ServiceAccount: "workspace-sa", WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			ServiceAccount: "workspace-sa", WorkspacePhase: "Ready",
 		}},
 		Now: func() time.Time { return configuredAt },
 	}
@@ -446,7 +549,7 @@ func TestManagerMissingKubeconfigRejectsLiveDriftWithoutCredentialResidue(t *tes
 	verifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample-v2", Queue: "priority",
 		ServiceAccount: "replacement-sa", WorkspaceUID: "replacement-uid",
-		WorkspacePhase: "Ready", WorkspaceRevision: "1",
+		WorkspacePhase: "Ready",
 	}}
 	second := Manager{
 		ConfigDir:   configDir,
@@ -487,7 +590,7 @@ func TestManagerMissingKubeconfigRejectsLiveDriftWithoutCredentialResidue(t *tes
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample-v2", Queue: "priority",
 			ServiceAccount: "replacement-sa", WorkspaceUID: "replacement-uid",
-			WorkspacePhase: "Ready", WorkspaceRevision: "1",
+			WorkspacePhase: "Ready",
 		}},
 		Now: func() time.Time { return configuredAt.Add(11 * time.Minute) },
 	}
@@ -495,11 +598,7 @@ func TestManagerMissingKubeconfigRejectsLiveDriftWithoutCredentialResidue(t *tes
 	if err != nil {
 		t.Fatalf("accept reacquired live drift: %v", err)
 	}
-	if accepted.ConfiguredAt != configuredAt.Add(11*time.Minute) ||
-		accepted.WorkspaceUID != "replacement-uid" ||
-		accepted.Namespace != "sample-v2" ||
-		accepted.Queue != "priority" ||
-		accepted.ServiceAccount != "replacement-sa" {
+	if accepted.Namespace != "sample-v2" || accepted.Queue != "priority" {
 		t.Fatalf("accepted connection = %#v", accepted)
 	}
 	if !strings.Contains(out.String(), "Pin the updated namespace") {
@@ -517,7 +616,7 @@ func TestManagerMissingKubeconfigVerificationFailureLeavesStateUntouched(t *test
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now: func() time.Time { return configuredAt },
 	}
@@ -580,7 +679,7 @@ func TestContractChangesTreatsEmptyServiceAccountAsDefault(t *testing.T) {
 	}
 }
 
-func TestManagerMigratesV1ConfirmationOnlyAfterLiveVerification(t *testing.T) {
+func TestManagerRejectsUnsupportedConnectionState(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
@@ -590,7 +689,7 @@ func TestManagerMigratesV1ConfirmationOnlyAfterLiveVerification(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -603,106 +702,19 @@ func TestManagerMigratesV1ConfirmationOnlyAfterLiveVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
-	state, err := loadConnectionState(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyState := map[string]any{
-		"schema":               connectionStateSchemaV1,
-		"workspace":            state.Workspace,
-		"resource_id":          state.ResourceID,
-		"authorization_mode":   state.AuthorizationMode,
-		"context_name":         state.ContextName,
-		"kubeconfig_path":      state.KubeconfigPath,
-		"namespace":            state.Namespace,
-		"queue":                state.Queue,
-		"service_account":      state.ServiceAccount,
-		"required_role":        state.RequiredRole,
-		"descriptor_path":      state.DescriptorPath,
-		"descriptor_digest":    state.DescriptorDigest,
-		"workspace_revision":   state.WorkspaceRevision,
-		"confirmed_at":         now,
-		"verified_at":          state.VerifiedAt,
-		"repository_root":      state.RepositoryRoot,
-		"private_cluster":      state.PrivateCluster,
-		"network_instructions": state.NetworkInstructions,
-	}
-	if err := fileutil.WriteJSONFileAtomic(statePath, legacyState); err != nil {
+	unsupportedState := map[string]any{"schema": "tau.workspace.connection-state.unsupported"}
+	if err := fileutil.WriteJSONFileAtomic(statePath, unsupportedState); err != nil {
 		t.Fatal(err)
 	}
 
-	failedVerifier := &fakeVerifier{err: errors.New("workspace API unavailable")}
-	failedMigration := Manager{
-		ConfigDir:    configDir,
-		Interactive:  false,
-		Verifier:     failedVerifier,
-		Now:          func() time.Time { return now.Add(15 * time.Second) },
-		ReadinessTTL: time.Minute,
-	}
-	if _, err := failedMigration.Ensure(context.Background(), root); err == nil ||
-		!strings.Contains(err.Error(), "workspace API unavailable") {
-		t.Fatalf("expected live verification failure, got %v", err)
-	}
-	unmigrated, err := loadConnectionState(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if unmigrated.Schema != connectionStateSchemaV1 ||
-		!unmigrated.ConfiguredAt.IsZero() ||
-		unmigrated.ConfirmedAt == nil ||
-		*unmigrated.ConfirmedAt != now {
-		t.Fatalf("v1 state migrated before verification: %#v", unmigrated)
-	}
-	rawBeforeMigration, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(rawBeforeMigration), "configured_at") {
-		t.Fatalf("v1 state gained configured_at before verification:\n%s", rawBeforeMigration)
-	}
-
-	verifier := &fakeVerifier{result: Verification{
-		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-		WorkspacePhase: "Ready", WorkspaceRevision: "8",
-	}}
-	second := Manager{
-		ConfigDir:    configDir,
-		Interactive:  false,
-		Verifier:     verifier,
-		Now:          func() time.Time { return now.Add(30 * time.Second) },
-		ReadinessTTL: time.Minute,
-	}
-	got, err := second.Ensure(context.Background(), root)
-	if err != nil {
-		t.Fatalf("migrate v1 configuration: %v", err)
-	}
-	if got.ConfiguredAt != now || got.WorkspaceUID != "workspace-uid" {
-		t.Fatalf("migrated connection = %#v", got)
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("fresh v1 migration verifier calls = %d, want 1", verifier.calls)
-	}
-	migrated, err := loadConnectionState(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrated.Schema != connectionStateSchema ||
-		migrated.WorkspaceUID != "workspace-uid" ||
-		migrated.Provider != "azure" ||
-		migrated.TenantID != "11111111-1111-1111-1111-111111111111" ||
-		migrated.ConfirmedAt != nil {
-		t.Fatalf("migrated state = %#v", migrated)
-	}
-	raw, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "confirmed_at") || strings.Contains(string(raw), "approved_at") {
-		t.Fatalf("migrated v2 state retained legacy timestamp fields:\n%s", raw)
+	second := Manager{ConfigDir: configDir, Interactive: false}
+	if _, err := second.Ensure(context.Background(), root); err == nil ||
+		!strings.Contains(err.Error(), "configured workspace connection changed") {
+		t.Fatalf("expected unsupported state rejection, got %v", err)
 	}
 }
 
-func TestManagerRejectsUIDLessV2StateNoninteractively(t *testing.T) {
+func TestManagerRejectsUIDLessStateNoninteractively(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
@@ -712,7 +724,7 @@ func TestManagerRejectsUIDLessV2StateNoninteractively(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now: func() time.Time { return now },
 	}
@@ -759,7 +771,7 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 		Credentials: &fakeCredentialProvider{raw: originalRaw},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 	}
 	connection, err := first.Ensure(context.Background(), root)
@@ -832,7 +844,7 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 	replacementRaw := []byte("apiVersion: v1\nkind: Config\ncurrent-context: replacement\n")
 	successVerifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-		WorkspacePhase: "Ready", WorkspaceRevision: "8",
+		WorkspacePhase: "Ready",
 	}}
 	successful := Manager{
 		ConfigDir:   configDir,
@@ -846,8 +858,7 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 	if err != nil {
 		t.Fatalf("successful staged reconfigure: %v", err)
 	}
-	if reconfigured.KubeconfigPath != connection.KubeconfigPath ||
-		reconfigured.WorkspaceUID != "workspace-uid" {
+	if reconfigured.KubeconfigPath != connection.KubeconfigPath {
 		t.Fatalf("reconfigured connection = %#v", reconfigured)
 	}
 	if len(successVerifier.paths) != 1 ||
@@ -877,7 +888,7 @@ func TestManagerRejectsDescriptorTrustChangeNonInteractively(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 	}
 	if _, err := first.Ensure(context.Background(), root); err != nil {
@@ -909,6 +920,15 @@ func TestManagerRejectsDescriptorTrustChangeNonInteractively(t *testing.T) {
 	if !errors.Is(err, ErrInteractiveRequired) {
 		t.Fatalf("expected changed descriptor to require review, got %v", err)
 	}
+	for _, secret := range []string{
+		"11111111-1111-1111-1111-111111111111",
+		"33333333-3333-3333-3333-333333333333",
+		"/subscriptions/",
+	} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("noninteractive drift error exposed %q: %v", secret, err)
+		}
+	}
 	if credentials.calls != 0 || verifier.calls != 0 {
 		t.Fatalf("changed trust fetched credentials=%d or verified=%d", credentials.calls, verifier.calls)
 	}
@@ -917,7 +937,7 @@ func TestManagerRejectsDescriptorTrustChangeNonInteractively(t *testing.T) {
 	interactiveCredentials := &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")}
 	interactiveVerifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-		WorkspacePhase: "Ready", WorkspaceRevision: "8",
+		WorkspacePhase: "Ready",
 	}}
 	interactive := Manager{
 		ConfigDir:   configDir,
@@ -934,13 +954,22 @@ func TestManagerRejectsDescriptorTrustChangeNonInteractively(t *testing.T) {
 	if interactiveCredentials.calls != 1 || interactiveVerifier.calls != 1 {
 		t.Fatalf("interactive credentials=%d verifier=%d", interactiveCredentials.calls, interactiveVerifier.calls)
 	}
-	if got.Workspace != "sample" || got.ConfiguredAt.IsZero() {
+	if got.Workspace != "sample" {
 		t.Fatalf("updated connection = %#v", got)
 	}
 	if !strings.Contains(out.String(), "change to the configured workspace connection") ||
-		!strings.Contains(out.String(), "tenant") ||
+		!strings.Contains(out.String(), "access identity") ||
 		!strings.Contains(out.String(), "Pin workspace") {
 		t.Fatalf("interactive drift review output:\n%s", out.String())
+	}
+	for _, secret := range []string{
+		"11111111-1111-1111-1111-111111111111",
+		"33333333-3333-3333-3333-333333333333",
+		"/subscriptions/",
+	} {
+		if strings.Contains(out.String(), secret) {
+			t.Fatalf("interactive drift output exposed %q:\n%s", secret, out.String())
+		}
 	}
 }
 
@@ -953,7 +982,7 @@ func TestManagerRejectsResourceChangeAcrossConnectionKeyNoninteractively(t *test
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 	}
 	if _, err := first.Ensure(context.Background(), root); err != nil {
@@ -984,8 +1013,12 @@ func TestManagerRejectsResourceChangeAcrossConnectionKeyNoninteractively(t *test
 	}
 	_, err = second.Ensure(context.Background(), root)
 	if !errors.Is(err, ErrInteractiveRequired) ||
-		!strings.Contains(err.Error(), "AKS resource") {
+		!strings.Contains(err.Error(), "access identity") {
 		t.Fatalf("expected changed resource to require review, got %v", err)
+	}
+	if strings.Contains(err.Error(), "/subscriptions/") ||
+		strings.Contains(err.Error(), "22222222-2222-2222-2222-222222222222") {
+		t.Fatalf("changed resource error exposed ARM identity: %v", err)
 	}
 	if credentials.calls != 0 || verifier.calls != 0 {
 		t.Fatalf("changed resource fetched credentials=%d or verified=%d", credentials.calls, verifier.calls)
@@ -1002,7 +1035,7 @@ func TestManagerRejectsNotReadyDuringNoninteractiveRefresh(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -1015,7 +1048,7 @@ func TestManagerRejectsNotReadyDuringNoninteractiveRefresh(t *testing.T) {
 		Interactive: false,
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Degraded", WorkspaceRevision: "8",
+			WorkspacePhase: "Degraded",
 		}},
 		Now:          func() time.Time { return now.Add(2 * time.Minute) },
 		ReadinessTTL: time.Minute,
@@ -1036,7 +1069,7 @@ func TestManagerRejectsLiveContractChangeNoninteractively(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -1049,7 +1082,7 @@ func TestManagerRejectsLiveContractChangeNoninteractively(t *testing.T) {
 		Interactive: false,
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample-v2", Queue: "priority",
-			WorkspaceUID: "replacement-uid", WorkspacePhase: "Ready", WorkspaceRevision: "1",
+			WorkspaceUID: "replacement-uid", WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now.Add(2 * time.Minute) },
 		ReadinessTTL: time.Minute,
@@ -1065,7 +1098,7 @@ func TestManagerRejectsLiveContractChangeNoninteractively(t *testing.T) {
 	var out bytes.Buffer
 	interactiveVerifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample-v2", Queue: "priority",
-		WorkspaceUID: "replacement-uid", WorkspacePhase: "Ready", WorkspaceRevision: "1",
+		WorkspaceUID: "replacement-uid", WorkspacePhase: "Ready",
 	}}
 	interactive := Manager{
 		ConfigDir:    configDir,
@@ -1080,10 +1113,7 @@ func TestManagerRejectsLiveContractChangeNoninteractively(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm live contract drift: %v", err)
 	}
-	if got.WorkspaceUID != "replacement-uid" ||
-		got.Namespace != "sample-v2" ||
-		got.Queue != "priority" ||
-		got.ConfiguredAt != now.Add(2*time.Minute) {
+	if got.Namespace != "sample-v2" || got.Queue != "priority" {
 		t.Fatalf("updated live contract = %#v", got)
 	}
 	if !strings.Contains(out.String(), "Pin the updated namespace") {
@@ -1115,7 +1145,7 @@ func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -1127,7 +1157,7 @@ func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
 	verifier := &fakeVerifier{result: Verification{
 		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-		WorkspacePhase: "Ready", WorkspaceRevision: "9",
+		WorkspacePhase: "Ready",
 	}}
 	second := Manager{
 		ConfigDir:    configDir,
@@ -1137,7 +1167,7 @@ func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 		Now:          func() time.Time { return now.Add(2 * time.Minute) },
 		ReadinessTTL: time.Minute,
 	}
-	got, err := second.Ensure(context.Background(), root)
+	_, err := second.Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatalf("non-interactive stale revalidation: %v", err)
 	}
@@ -1146,9 +1176,6 @@ func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 	}
 	if verifier.calls != 1 {
 		t.Fatalf("verifier called %d times, want 1", verifier.calls)
-	}
-	if got.WorkspaceRevision != "9" {
-		t.Fatalf("workspace revision = %q, want 9", got.WorkspaceRevision)
 	}
 }
 
@@ -1166,7 +1193,7 @@ func TestManagerBoundsNonInteractiveRevalidation(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -1210,7 +1237,7 @@ func TestManagerDoesNotBoundInteractiveRevalidation(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -1255,7 +1282,7 @@ func seedConnection(t *testing.T, root, configDir string, now time.Time) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
@@ -1312,7 +1339,7 @@ func TestManagerSeparatesClustersWithSameContextName(t *testing.T) {
 			Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 			Verifier: &fakeVerifier{result: Verification{
 				ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-				WorkspacePhase: "Ready", WorkspaceRevision: "7",
+				WorkspacePhase: "Ready",
 			}},
 		}
 	}
@@ -1361,14 +1388,14 @@ func TestManagerEnsureDiscoveryUsesExactDescriptor(t *testing.T) {
 		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
 		Verifier: &fakeVerifier{result: Verification{
 			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
-			WorkspacePhase: "Ready", WorkspaceRevision: "7",
+			WorkspacePhase: "Ready",
 		}},
 	}
 	connection, err := manager.EnsureDiscovery(context.Background(), discovery)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if connection.Workspace != "sample" || connection.DescriptorPath != secondPath {
+	if connection.Workspace != "sample" {
 		t.Fatalf("connection = %#v", connection)
 	}
 }

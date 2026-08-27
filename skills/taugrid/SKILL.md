@@ -68,7 +68,6 @@ easiest thing to get wrong, since it reads identically to a real subcommand:
 
 - `tau run train` → `run` root with `TARGET=train`, resolving `tau/train.yaml`
 - `tau run status` → the real `status` subcommand
-- `tau run smoke` → built-in onboarding target, always available
 
 Subcommands are exactly: `validate`, `schema`, `explain-config`, `list`,
 `status`, `logs`, `get`, `cancel`, `resume`, `history`. Anything else is a
@@ -175,7 +174,6 @@ Client dry-run redacts both while keeping the dependency shape visible.
 ## Running and observing
 
 ```bash
-tau run smoke                      # bounded onboarding job; proves the path works
 tau run train                      # submit the checked-in target
 tau run status <run-name> --watch  # startup phase tree, live
 tau run logs <run-name>            # Ray driver output, or Job pod logs
@@ -184,11 +182,11 @@ tau run cancel <run-name>          # delete workload; Kueue reclaims quota
 tau run list -n <namespace>        # Tau-managed Jobs and RayJobs
 ```
 
-On a repository's first interactive `tau run`, Tau asks the user to approve the
-connection descriptor, obtains AKS credentials with their Azure identity, and
-writes a dedicated kubeconfig. That kubeconfig avoids mutating their main one;
-it is **not** a researcher-isolation boundary and should not be described as
-one.
+On a repository's first cluster-backed `tau run`, Tau resolves credentials
+through the descriptor's access method: it either isolates an existing
+kubeconfig context or obtains AKS credentials with the user's Azure identity.
+The dedicated kubeconfig avoids mutating their main one; it is **not** a
+researcher-isolation boundary and should not be described as one.
 
 `tau run status` is the canonical lifecycle view. It walks an ordered phase
 tree — Submitted, Kueue admission, (RayCluster), pod scheduling, DRA
@@ -215,7 +213,7 @@ produces a misdiagnosis.
 
 | # | Layer | Command | Owner if it fails |
 |---|---|---|---|
-| 1 | Repo/connection resolution | `tau workspace connection inspect` | Researcher (descriptor) / platform (access) |
+| 1 | Repo/connection resolution and access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) / platform (access) |
 | 2 | TauWorkspace readiness | `tau workspace status <name>` | Platform operator |
 | 3 | Config validation and render | `tau run validate --config <path>` | Researcher |
 | 4 | Kueue admission and quota | `tau run status <run>` (admission phase) | Queue owner |

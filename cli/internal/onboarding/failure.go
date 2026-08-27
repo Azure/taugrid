@@ -126,10 +126,9 @@ func Classify(err error) Guidance {
 		strings.Contains(message, "errimagepull"):
 		return Guidance{
 			Owner:  FailureOwnerPlatform,
-			Action: "Ask the Tau release owner to verify the pinned onboarding image is pullable from this cluster.",
+			Action: "Ask the project or platform owner to verify the workload image is pullable from this cluster.",
 		}
-	case strings.Contains(message, "wait for onboarding smoke"),
-		strings.Contains(message, "deadline exceeded"),
+	case strings.Contains(message, "deadline exceeded"),
 		strings.Contains(message, "timed out"):
 		return Guidance{
 			Owner:  FailureOwnerTransient,

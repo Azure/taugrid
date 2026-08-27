@@ -145,7 +145,7 @@ func TestApplyAutomaticRunConnectionPreservesExplicitPolicy(t *testing.T) {
 	}
 }
 
-func TestApplyAutomaticRunConnectionRequiresDescriptorForSmoke(t *testing.T) {
+func TestApplyAutomaticRunConnectionRequiresDescriptor(t *testing.T) {
 	ensurer := &fakeRunConnectionEnsurer{err: workspaceconnection.ErrDescriptorNotFound}
 	_, _, err := applyAutomaticRunConnection(context.Background(), defaultRunDispatchOptions(), runConnectionSource{StartDir: "/repo"}, true, ensurer)
 	if !errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
@@ -386,18 +386,14 @@ func TestExplicitContextBypassesDescriptor(t *testing.T) {
 	}
 }
 
-// An ambient TAU_CONTEXT names the target cluster for the smoke path exactly as
+// An ambient TAU_CONTEXT names the target cluster for the run path exactly as
 // a typed --context does, so it must reach the dispatch options as explicit.
 //
-// This replaces TestAmbientContextIsNotAnExplicitSmokeOverride, which asserted
-// the opposite. That test guarded a real concern — a checked-in descriptor must
-// not be silently overridden by a forgotten shell variable — but the mechanism
-// was wrong: treating an ambient context as *unset* meant the connection layer
-// took over and pointed KUBECONFIG at a cached cluster, which is the same
-// silent redirection in the other direction. The concern is now handled where
-// it belongs, by checkDescriptorContextConflict reporting the disagreement
-// instead of either side winning quietly.
-func TestAmbientContextIsAnExplicitSmokeTarget(t *testing.T) {
+// A checked-in descriptor must not be silently overridden by a forgotten shell
+// variable, but treating an ambient context as unset lets the connection layer
+// take over and redirect KUBECONFIG to a cached cluster. The conflict is handled
+// by checkDescriptorContextConflict instead of either side winning quietly.
+func TestAmbientContextIsAnExplicitRunTarget(t *testing.T) {
 	t.Setenv("TAU_CONTEXT", "ambient-admin-context")
 	command := &cobra.Command{}
 	command.Flags().String("context", defaultKubeContext(), "")
@@ -405,7 +401,7 @@ func TestAmbientContextIsAnExplicitSmokeTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !runContextExplicit(command) {
-		t.Fatal("an ambient TAU_CONTEXT names a cluster, so smoke must treat it as explicit")
+		t.Fatal("an ambient TAU_CONTEXT names a cluster, so run must treat it as explicit")
 	}
 	if err := command.Flags().Set("context", "explicit-context"); err != nil {
 		t.Fatal(err)

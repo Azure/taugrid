@@ -147,5 +147,5 @@ tau cluster validate installation --context "$TAU_CONTEXT"
 ```
 
 Continue with [Create a workspace](../kubernetes/#4-create-a-workspace)
-and [Run the smoke workload](../kubernetes/#5-run-the-smoke-workload) in
+and [Run a project workload](../kubernetes/#5-run-a-project-workload) in
 the [Getting started on Kubernetes guide](../kubernetes/).

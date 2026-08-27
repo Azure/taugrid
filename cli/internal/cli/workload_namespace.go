@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 )
 
 // Namespace resolution is workspace-first, and the workspace is the only
@@ -76,10 +78,12 @@ const defaultRenderNamespace = "default"
 
 // workloadNamespaceDiscoverer is the test seam for resolveWorkloadNamespace.
 // Production leaves it nil so the real cluster lookup is used.
-var workloadNamespaceDiscoverer smokeWorkspaceDiscoverer
+type workspaceDiscoverer func(*cobra.Command, string) (tauworkspace.Workspace, error)
+
+var workloadNamespaceDiscoverer workspaceDiscoverer
 
 // resolveWorkloadNamespace is requireWorkloadNamespace plus the same v0
-// workspace discovery `tau run` and `tau run smoke` already perform.
+// workspace discovery `tau run` already performs.
 //
 // Without it the researcher experience is incoherent: a run submitted with no
 // `--workspace` lands in the cluster's single workspace namespace, but every

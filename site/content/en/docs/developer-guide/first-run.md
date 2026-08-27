@@ -12,29 +12,33 @@ Prerequisites:
 
 - The Tau CLI is installed.
 - The repository contains a workspace connection and a checked-in
-  [target](../../reference/glossary/#target) (`tau/train.yaml`, `tau/smoke.yaml`,
-  and so on).
+  [target](../../reference/glossary/#target), such as `tau/train.yaml`.
 - The platform workspace reports Ready.
 
-`tau run` is the config-first entry point. `smoke` and `train` below are
-values for its optional positional `TARGET` argument, which `tau run`
-resolves to `tau/<target>.yaml`. `smoke` is a built-in name that always runs
-the onboarding smoke test; any other value must match a checked-in target
-file. See the [direct run config reference](../../reference/run-config/) for
-the full `tau.yaml` field set. `tau run` automatically discovers the checked-in
-workspace connection; `tau workspace connection inspect` is only an optional
-offline diagnostic.
+`tau run` is the config-first entry point. Its optional positional `TARGET`
+argument resolves to a checked-in `tau/<target>.yaml` file. See the
+[direct run config reference](../../reference/run-config/) for the full
+`tau.yaml` field set. `tau run` automatically discovers the checked-in
+workspace connection.
 
 Validate before you spend a full submission, then submit:
 
 ```bash
 cd <research-repository>
-tau run smoke
+tau workspace connection
+tau run validate --config tau/train.yaml
 tau run train --dry-run=client
 tau run train
 ```
 
-`--dry-run=client` validates the local descriptor and config entirely offline, bypassing calls to Azure, Kubernetes, or cached connection activation. Values that require live workspace policy, such as namespace, LocalQueue, and service account, appear as `<unresolved-...>` unless the config or flags set them explicitly. Use `--dry-run=server` to validate the rendered object against the API server, and use `tau run smoke` to verify workspace readiness and queue admission. The Tau CLI prints the submitted [run](../../reference/glossary/#run) name; record it for the rest of this walkthrough.
+`tau workspace connection` verifies the repository's configured workspace,
+credentials, LocalQueue, and authorization without submitting a workload.
+`tau run validate` is the offline schema check. In a connected repository,
+`--dry-run=client` activates the workspace connection and reads the cluster's
+workload-profile catalog, but does not submit the rendered workload. Use
+`--dry-run=server` to also validate the rendered object against the API server.
+The Tau CLI prints the submitted [run](../../reference/glossary/#run) name;
+record it for the rest of this walkthrough.
 
 ```bash
 tau run status <run-name> --watch

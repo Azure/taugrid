@@ -110,7 +110,7 @@ configurations in place to avoid this conflict: recreating them can leave
 ## `tau workspace`
 
 Researcher-facing: `list`, `status <name>`, `check <name>`,
-`connection inspect [path]`, `quota show <workspace>`,
+`connection [path]`, `quota show <workspace>`,
 `quota request <workspace>`, and `init-repo NAME` (scaffold a TauGrid-ready repo).
 Platform-operator: `create [NAME]` (create the single v0 researcher workspace)
 and `adopt NAME` (adopt an existing platform-provisioned namespace). Only
@@ -121,8 +121,9 @@ default and needs `--apply` to take effect. Workspace desired state is a native
 
 `tau workspace create` requires `--principal-name <external-group-or-team>`;
 `--subject-name` defaults to that principal when it is omitted.
-`connection inspect` is an optional offline descriptor diagnostic; `tau run`
-discovers and configures the checked-in connection automatically.
+`tau workspace connection` verifies and pins the current project's configured
+workspace access. Add `--offline` to validate only the repository mapping and
+descriptor; `tau run` also discovers and configures the connection automatically.
 
 ## `tau run`
 

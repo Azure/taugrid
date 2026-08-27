@@ -244,12 +244,12 @@ func TestDiscoverRunInputResolvesNamedTrainConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverRunInput: %v", err)
 	}
-	if got.ConfigPath != configPath || got.BuiltinSmoke || got.ExplicitConfig {
+	if got.ConfigPath != configPath || got.ExplicitConfig {
 		t.Fatalf("discovery = %#v", got)
 	}
 }
 
-func TestDiscoverRunInputReservesSmokeForBuiltin(t *testing.T) {
+func TestDiscoverRunInputResolvesNamedSmokeConfig(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "tau", "smoke.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -263,7 +263,7 @@ func TestDiscoverRunInputReservesSmokeForBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverRunInput: %v", err)
 	}
-	if !got.BuiltinSmoke || got.ConfigPath != "" {
+	if got.ConfigPath != configPath || got.ExplicitConfig {
 		t.Fatalf("smoke discovery = %#v", got)
 	}
 }

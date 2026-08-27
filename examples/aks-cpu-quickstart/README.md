@@ -241,19 +241,13 @@ tau workspace create taugrid-default \
 tau workspace status taugrid-default --context tau-cpu-quickstart
 ```
 
-### 4. Workload validation: connectivity smoke test (`tau` only)
-
-```bash
-tau run smoke --context tau-cpu-quickstart
-```
-
-### 5. Workload validation: submit the real PyTorch workload (`tau` only)
+### 4. Workload validation: submit the PyTorch workload (`tau` only)
 
 ```bash
 tau run --config examples/aks-cpu-quickstart/tau.yaml --context tau-cpu-quickstart
 ```
 
-### 6. Workload validation: observe it running
+### 5. Workload validation: observe it running
 
 ```bash
 tau run status tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quickstart
@@ -290,7 +284,7 @@ evidence in this session's artifact log (see the creator session /
 [Recorded evidence](#recorded-evidence) below for the full researcher-journey
 video, which also verifies the Stellar metrics case.
 
-### 7. Workload validation: retrieve artifacts (optional)
+### 6. Workload validation: retrieve artifacts (optional)
 
 ```bash
 tau run get tau-aks-cpu-quickstart -n taugrid-default --context tau-cpu-quickstart
@@ -658,7 +652,7 @@ Stellar is confirmed live and reachable in this quickstart. Whether it shows
 data depends entirely on whether the submitted training script calls the
 `tau.stellar` SDK:
 
-- The shared `cpu-multi-interest-ray/train.py` (used in step 5 above)
+- The shared `cpu-multi-interest-ray/train.py` (used in step 4 above)
   only prints to stdout. Stellar correctly shows "No experiments found yet"
   for that run. Treat the Ray dashboard/logs as the source of truth for that
   run's PyTorch evidence.
@@ -848,7 +842,7 @@ invoke only `az`, `tau`, and `kubectl`. They exist to remove copy-paste error,
 not to hide any tool. Read them before running them.
 
 ```bash
-./examples/aks-cpu-quickstart/run.sh          # step 0 through step 6
+./examples/aks-cpu-quickstart/run.sh          # step 0 through step 5
 ./examples/aks-cpu-quickstart/cleanup.sh      # full teardown, prompts first
 ```
 

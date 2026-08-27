@@ -211,19 +211,68 @@ stages:
                     tau workspace check "${WORKSPACE_NAME}" \
                       --context "${KUBE_CONTEXT}"
 
-                    smoke_output="$(tau run smoke --context "${KUBE_CONTEXT}")"
-                    printf '%s\n' "${smoke_output}"
-                    grep -q '^Phase: Succeeded$' <<<"${smoke_output}"
-                    grep -q '^Platform reachable:' <<<"${smoke_output}"
+                    cat >"$(Pipeline.Workspace)/taucluster-profile-patch.yaml" <<YAML
+                    spec:
+                      workloadProfiles:
+                        - name: ado.workspace.cpu
+                          description: CPU profile for the live AKS CLI E2E
+                          applicability:
+                            namespaces:
+                              - ${WORKSPACE_NAME}
+                          gpusPerWorker: 0
+                          workerCount: 1
+                          mode: fixed
+                          placement: independent
+                          defaultLocalQueue: ${WORKSPACE_NAME}
+                          executionTarget: singleCluster
+                          priorities:
+                            disableDefaultPriorities: true
+                    YAML
+                    kubectl --context "${KUBE_CONTEXT}" \
+                      patch cluster.tau.azure.com cluster \
+                      --type=merge \
+                      --patch-file "$(Pipeline.Workspace)/taucluster-profile-patch.yaml"
+                    kubectl --context "${KUBE_CONTEXT}" \
+                      wait --for=condition=WorkloadProfilesReady \
+                      cluster.tau.azure.com/cluster --timeout=5m
 
-                    smoke_run="$(awk '/^Run: / {print $2; exit}' <<<"${smoke_output}")"
-                    if [[ -z "${smoke_run}" ]]; then
-                      echo "Tau smoke did not report a run ID" >&2
-                      exit 1
-                    fi
-                    tau run status "${smoke_run}" --context "${KUBE_CONTEXT}"
-                    tau run logs "${smoke_run}" --context "${KUBE_CONTEXT}"
-                  displayName: Run Tau CLI AKS smoke
+                    run_dir="$(mktemp -d)"
+                    trap 'rm -rf "${run_dir}"' EXIT
+                    cat >"${run_dir}/run.sh" <<'SH'
+                    #!/bin/sh
+                    set -eu
+                    echo tau-aks-e2e-ok
+                    SH
+                    chmod +x "${run_dir}/run.sh"
+                    cat >"${run_dir}/tau.yaml" <<'YAML'
+                    name: tau-aks-e2e
+                    engine: job
+                    entrypoint: run.sh
+                    runtime:
+                      image: mcr.microsoft.com/azurelinux/base/core:3.0
+                    compute:
+                      gpus: 0
+                      cpu_request: 50m
+                      memory_request: 64Mi
+                    policy:
+                      profile: ado.workspace.cpu
+                      disable_default_priorities: true
+                    YAML
+
+                    tau run \
+                      --config "${run_dir}/tau.yaml" \
+                      --workspace "${WORKSPACE_NAME}" \
+                      --context "${KUBE_CONTEXT}"
+                    kubectl --context "${KUBE_CONTEXT}" \
+                      --namespace "${WORKSPACE_NAME}" \
+                      wait --for=condition=complete job/tau-aks-e2e --timeout=5m
+                    tau run status tau-aks-e2e \
+                      --namespace "${WORKSPACE_NAME}" \
+                      --context "${KUBE_CONTEXT}"
+                    tau run logs tau-aks-e2e \
+                      --namespace "${WORKSPACE_NAME}" \
+                      --context "${KUBE_CONTEXT}" | grep -q tau-aks-e2e-ok
+                  displayName: Run Tau CLI AKS workload
                   env:
                     KUBE_CONTEXT: $(kubeContext)
                     KUBECONFIG: $(kubeconfigPath)

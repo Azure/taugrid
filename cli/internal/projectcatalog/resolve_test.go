@@ -15,7 +15,9 @@ func TestSubmissionProjectSelectionMatrix(t *testing.T) {
 	root := newGitRepo(t)
 	writeFile(t, filepath.Join(root, "connections", "shared.yaml"), testDescriptor)
 	writeFile(t, filepath.Join(root, "alpha", "tau", "train.yaml"), "name: alpha-train\n")
+	writeFile(t, filepath.Join(root, "alpha", "tau", "health.yaml"), "name: alpha-health\n")
 	writeFile(t, filepath.Join(root, "beta", "tau", "train.yml"), "name: beta-train\n")
+	writeFile(t, filepath.Join(root, "beta", "tau", "health.yaml"), "name: beta-health\n")
 	writeFile(t, filepath.Join(root, "beta", "tau", "eval.yaml"), "name: beta-eval\n")
 	alphaConfig := filepath.Join(root, "alpha", "experiments", "ablation", "tau.yaml")
 	writeFile(t, alphaConfig, "name: alpha-ablation\n")
@@ -77,19 +79,19 @@ func TestSubmissionProjectSelectionMatrix(t *testing.T) {
 			t.Fatalf("expected actionable target ambiguity, got %v", err)
 		}
 	})
-	t.Run("built-in smoke root ambiguity", func(t *testing.T) {
-		_, err := catalog.SelectProject(SelectionOptions{CWD: root, Target: "smoke"})
-		if err == nil || !strings.Contains(err.Error(), "Valid projects: alpha, beta") {
-			t.Fatalf("expected smoke ambiguity, got %v", err)
+	t.Run("duplicate health target", func(t *testing.T) {
+		_, err := catalog.SelectProject(SelectionOptions{CWD: root, Target: "health"})
+		if err == nil || !strings.Contains(err.Error(), "alpha, beta") || !strings.Contains(err.Error(), "--project") {
+			t.Fatalf("expected health ambiguity, got %v", err)
 		}
 	})
-	t.Run("explicit project smoke", func(t *testing.T) {
-		project, err := catalog.SelectProject(SelectionOptions{ProjectName: "alpha", CWD: root, Target: "smoke"})
+	t.Run("explicit project health", func(t *testing.T) {
+		project, err := catalog.SelectProject(SelectionOptions{ProjectName: "alpha", CWD: root, Target: "health"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		input, err := project.ResolveInput("", "smoke")
-		if err != nil || !input.BuiltinSmoke {
+		input, err := project.ResolveInput("", "health")
+		if err != nil || input.ConfigPath != filepath.Join(root, "alpha", "tau", "health.yaml") {
 			t.Fatalf("input=%#v err=%v", input, err)
 		}
 	})
@@ -179,7 +181,7 @@ func TestExplicitProjectSmokeConfigLoadsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.BuiltinSmoke || !input.ExplicitConfig || input.ConfigPath != smokeConfig {
+	if !input.ExplicitConfig || input.ConfigPath != smokeConfig {
 		t.Fatalf("explicit project smoke resolved incorrectly: %#v", input)
 	}
 }

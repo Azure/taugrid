@@ -47,7 +47,7 @@
 <text x="1828" y="770" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#000000"><tspan x="1828" dy="0">5</tspan></text>
 <text x="1872" y="756" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#000000"><tspan x="1872" dy="0">FIRST USE</tspan></text>
 <text x="1872" y="801" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="700" fill="#000000"><tspan x="1872" dy="0">Validate and run</tspan></text>
-<text x="1804" y="866" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1804" dy="0">inspect connection</tspan><tspan x="1804" dy="25">tau run smoke</tspan><tspan x="1804" dy="25">tau run train</tspan></text>
+<text x="1804" y="866" text-anchor="start" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="400" fill="#000000"><tspan x="1804" dy="0">tau run train</tspan><tspan x="1804" dy="25">tau run status &lt;run&gt;</tspan></text>
 <polyline points="1276,438 1526,438 1526,716" fill="none" stroke="#F7630C" stroke-width="5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
 <rect x="1352" y="396" width="350" height="44" rx="22" fill="#FFF4CE" stroke="#F7630C" stroke-width="2"/>
 <text x="1527" y="420" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#000000"><tspan x="1527" dy="0">READY WORKSPACE + REPOSITORY</tspan></text>

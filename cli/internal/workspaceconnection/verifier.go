@@ -6,7 +6,6 @@ package workspaceconnection
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
@@ -85,18 +84,17 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		}
 		if strings.TrimSpace(output) != "yes" {
 			return Verification{}, fmt.Errorf(
-				"workspace %q requests cluster-wide access, but the AKS cluster-user credential is not authorized across the cluster",
+				"workspace %q requests cluster-wide access, but the Kubernetes credential is not authorized across the cluster",
 				descriptor.Workspace,
 			)
 		}
 		return Verification{
-			ContextName:       descriptor.Cluster.ContextName,
-			Namespace:         namespace,
-			Queue:             queue,
-			ServiceAccount:    serviceAccount,
-			WorkspaceUID:      workspace.Metadata.UID,
-			WorkspacePhase:    workspace.Status.Phase,
-			WorkspaceRevision: strconv.FormatInt(workspace.Status.ObservedGeneration, 10),
+			ContextName:    descriptor.Cluster.ContextName,
+			Namespace:      namespace,
+			Queue:          queue,
+			ServiceAccount: serviceAccount,
+			WorkspaceUID:   workspace.Metadata.UID,
+			WorkspacePhase: workspace.Status.Phase,
 		}, nil
 	}
 	checks := []struct {
@@ -141,13 +139,12 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		}
 	}
 	return Verification{
-		ContextName:       descriptor.Cluster.ContextName,
-		Namespace:         namespace,
-		Queue:             queue,
-		ServiceAccount:    serviceAccount,
-		WorkspaceUID:      workspace.Metadata.UID,
-		WorkspacePhase:    workspace.Status.Phase,
-		WorkspaceRevision: strconv.FormatInt(workspace.Status.ObservedGeneration, 10),
+		ContextName:    descriptor.Cluster.ContextName,
+		Namespace:      namespace,
+		Queue:          queue,
+		ServiceAccount: serviceAccount,
+		WorkspaceUID:   workspace.Metadata.UID,
+		WorkspacePhase: workspace.Status.Phase,
 	}, nil
 }
 

@@ -17,11 +17,9 @@ import (
 const testDescriptor = `schema: tau.workspace.connection.v1
 workspace: sample
 cluster:
-  provider: azure
-  resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/taugrid-flex
   contextName: taugrid-flex
-identity:
-  tenantID: 11111111-1111-1111-1111-111111111111
+access:
+  method: kubeconfig
 authorization:
   mode: cluster-wide
 requirements:
@@ -236,8 +234,8 @@ func TestLoadDerivesTargetsAndAllowsSharedConnectionAndZeroTargets(t *testing.T)
 	if got := alpha.Targets["train"]; got != filepath.Join(root, "alpha", "tau", "train.yaml") {
 		t.Fatalf("train target = %q", got)
 	}
-	if _, ok := alpha.Targets["smoke"]; ok {
-		t.Fatal("reserved smoke was exposed as a public target")
+	if got := alpha.Targets["smoke"]; got != filepath.Join(root, "alpha", "tau", "smoke.yaml") {
+		t.Fatalf("smoke target = %q", got)
 	}
 	if len(beta.Targets) != 0 {
 		t.Fatalf("zero-target project has targets: %#v", beta.Targets)

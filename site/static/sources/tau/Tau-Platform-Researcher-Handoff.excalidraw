@@ -1388,11 +1388,11 @@
       "fillStyle": "solid",
       "fontSize": 18,
       "fontFamily": 2,
-      "text": "inspect connection\ntau run smoke\ntau run train",
+      "text": "tau run train\ntau run status <run>",
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "inspect connection\ntau run smoke\ntau run train",
+      "originalText": "tau run train\ntau run status <run>",
       "autoResize": false,
       "lineHeight": 1.35,
       "baseline": 18
