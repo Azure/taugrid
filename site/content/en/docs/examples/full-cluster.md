@@ -123,14 +123,14 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.al
 The default path is an operator sandbox using local administrator credentials.
 It creates platform infrastructure only, so a platform owner provisions the
 researcher workspace with an explicit Entra group object ID before submitting
-the built-in smoke run:
+workloads:
 
 ```bash
 tau workspace create taugrid-default \
   --namespace taugrid-default \
   --principal-name <entra-group-object-id> \
   --apply
-tau run smoke
+tau workspace check taugrid-default
 ```
 
 To provision the Entra-backed workspace in the same apply, set the following

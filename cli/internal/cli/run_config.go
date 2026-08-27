@@ -24,7 +24,6 @@ var defaultRunConfigFiles = runconfig.DefaultFiles
 type runInputDiscovery struct {
 	ConfigPath     string
 	ExplicitConfig bool
-	BuiltinSmoke   bool
 }
 
 func discoverRunInput(startDir, explicit, target string) (runInputDiscovery, error) {
@@ -46,9 +45,6 @@ func discoverRunInput(startDir, explicit, target string) (runInputDiscovery, err
 		return runInputDiscovery{ConfigPath: filepath.Clean(explicit), ExplicitConfig: true}, nil
 	}
 	target = strings.TrimSpace(target)
-	if target == "smoke" {
-		return runInputDiscovery{BuiltinSmoke: true}, nil
-	}
 	if target != "" {
 		if err := validateRunTargetName(target); err != nil {
 			return runInputDiscovery{}, err

@@ -16,7 +16,7 @@ uses a separately submitted `tau.serve(...)` handle. See the
 
 ## Workspace connection
 
-{{if .HasWorkspaceConnection}}The non-secret `tau/workspace.connection.yaml` requires `{{.AuthorizationMode}}` authorization and role `{{.RequiredRole}}`. On first use, Tau obtains AKS cluster-user credentials through your Azure sign-in, verifies that contract, and writes an isolated kubeconfig outside the repository. You do not need a preconfigured context, namespace, queue name, or `--config`.
+{{if .HasWorkspaceConnection}}The non-secret `tau/workspace.connection.yaml` requires `{{.AuthorizationMode}}` authorization and role `{{.RequiredRole}}`. On first use, {{if .HasAKSAccess}}Tau obtains AKS cluster-user credentials through your Azure sign-in{{else}}Tau loads the named context from your normal kubeconfig{{end}}, verifies that contract, and writes an isolated kubeconfig outside the repository. You do not need to pass a namespace, queue name, or `--config`.
 {{else}}This scaffold is not connected to a Tau workspace yet. Ask the platform owner to add `tau/workspace.connection.yaml`; do not commit kubeconfigs, tokens, namespace names, or queue names.
 {{end}}
 
@@ -42,7 +42,6 @@ PUBLISHED_IMAGE="$BUILD_IMAGE" # optionally replace with the registry digest
 {{if .HasUpstream}}./scripts/configure.sh --image "$PUBLISHED_IMAGE" --repo "$UPSTREAM_REPO" --ref "$UPSTREAM_REF"
 {{else}}./scripts/configure.sh --image "$PUBLISHED_IMAGE"
 {{end}}
-tau run validate --config tau/smoke.yaml
 tau run validate --config tau/train.yaml
 ```
 
@@ -52,8 +51,6 @@ Set `IMAGE` to an immutable build tag. After pushing, `configure.sh` can pin eit
 
 {{if .HasWorkspaceConnection}}
 ```bash
-tau run smoke
-tau run --config tau/smoke.yaml
 tau run train
 ```
 {{else}}Add `tau/workspace.connection.yaml` before running a target.
@@ -61,9 +58,8 @@ tau run train
 
 ## Run on GPUs
 
-`tau run smoke` and `tau run train` are both CPU-only on purpose: they verify
-the onboarding path before the platform has committed GPU capacity. Neither one
-proves a GPU works.
+`tau run train` is CPU-only on purpose: it verifies the project path before the
+platform has committed GPU capacity. It does not prove a GPU works.
 
 `tau/train-gpu.yaml` is the GPU counterpart:
 
@@ -87,10 +83,6 @@ Three things are platform-owned, so ask before assuming them:
 If a GPU pod stays `Pending`, it is almost always queue quota, a `gpu_class`
 that matches no node, or a missing PVC — not the config itself.
 
-`tau run smoke` is the reserved platform onboarding smoke. To run this
-repository's project-specific smoke config, use
-`tau run --config tau/smoke.yaml`.
-
 ## What each step actually proves
 
 These are different checks, and they fail for different reasons. Run them in
@@ -98,15 +90,8 @@ order; each one adds exactly one new thing that can break.
 
 | Command | Proves | Does not prove |
 |---|---|---|
-| `tau run smoke` | Workspace, queue admission, and pod execution work. Runs a public base image and a trivial command. | Nothing about your image, GPUs, or storage. |
-| `tau run --config tau/smoke.yaml` | Your container image pulls and runs. This is where private-registry (ACR) pull problems surface. | That your training code works. |
 | `tau run train` | Your training entrypoint runs on CPU. | Anything GPU-specific. |
 | `tau run train-gpu` | Your code runs on a real GPU. | Durable `/data` storage, unless you enable `storage.data_pvc`. |
-
-A green `tau run smoke` therefore does not mean "my code works" — it means the
-platform is reachable. If `tau run smoke` passes but
-`tau run --config tau/smoke.yaml` fails, suspect the image or registry
-credentials, not the cluster.
 
 ## Files
 
@@ -122,7 +107,7 @@ credentials, not the cluster.
 | `tau/train-gpu.yaml` | GPU counterpart of `tau/train.yaml`. |
 | `images/train.Dockerfile` | Runtime image build contract. |
 | `scripts/setup.sh` | Local `uv` and Tau CLI readiness setup. |
-| `scripts/setup-azure.sh` | Optional Azure/ACR helper for project image publication; not required to submit the onboarding smoke. |
+| `scripts/setup-azure.sh` | Optional Azure/ACR helper for project image publication; not required to submit a connected target. |
 | `scripts/doctor.sh` | Local readiness checks. |
 
 {{if .HasUpstream}}

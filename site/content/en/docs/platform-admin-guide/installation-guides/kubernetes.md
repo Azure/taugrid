@@ -205,18 +205,7 @@ needs a separate check. Test the mount with the same ServiceAccount and
 security settings the workload will use before handing the workspace to a
 researcher.
 
-## 5. Run the smoke workload
-
-The built-in smoke run verifies workspace discovery, queue admission,
-scheduling, ServiceAccount selection, and container execution:
-
-```bash
-tau run smoke --context "$TAU_CONTEXT"
-```
-
-A successful run exits with status `Succeeded`. Validate a project image,
-GPU, persistent volume, or external cloud service with your first real project
-workload.
+## 5. Run a project workload
 
 For a larger provider-neutral CPU workload, clone the repository and run the
 [distributed CPU Ray example](https://github.com/Azure/taugrid/tree/main/examples/cpu-multi-interest-ray):
@@ -239,7 +228,8 @@ Before a shared workspace is ready for researchers:
 3. Provision and test any required PVC and workload identity.
 4. Generate or configure the research repository, keeping kubeconfigs,
    tokens, client secrets, and registry credentials out of it.
-5. Prove `tau run smoke` from a clean researcher checkout and identity.
+5. Complete a checked-in project target from a clean researcher checkout and
+   identity.
 
 Use the platform admin guide to
 [enable a workspace](../enable-workspace/) and

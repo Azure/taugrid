@@ -26,6 +26,9 @@ type AKSUserCredentialProvider struct {
 }
 
 func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descriptor workspaceconnection.Descriptor) ([]byte, error) {
+	if descriptor.Access.AKS == nil {
+		return nil, fmt.Errorf("AKS workspace access metadata is missing")
+	}
 	authorizationMode := descriptor.Authorization.Mode
 	kubeloginPath := strings.TrimSpace(p.KubeloginPath)
 	if kubeloginPath == "" && authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC {
@@ -37,7 +40,7 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	} else if kubeloginPath == "" {
 		kubeloginPath, _ = exec.LookPath("kubelogin")
 	}
-	id, err := parseAKSResourceID(descriptor.Cluster.ResourceID)
+	id, err := parseAKSResourceID(descriptor.Access.AKS.ResourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +48,7 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	if factory == nil {
 		factory = UserCredentialFactory{Mode: p.AuthMode}
 	}
-	credential, err := factory.Credential(ctx, descriptor.Identity.TenantID)
+	credential, err := factory.Credential(ctx, descriptor.Access.AKS.TenantID)
 	if err != nil {
 		return nil, err
 	}

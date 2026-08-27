@@ -38,7 +38,7 @@ to create and delete those resources. It must also be allowed to create the
 OIDC or managed-identity service connection rather than a client secret.
 
 The deployment validates the checked-out Tau core controller image, creates a
-workspace, and runs the Tau CLI onboarding smoke against the AKS API. Its final
+workspace, and runs a Tau CLI workload against the AKS API. Its final
 step runs under `always()` and waits for the owned resource group to disappear.
 The ownership tag is `taugrid-e2e=true`, and resource names include the ADO
 build ID for audit and emergency cleanup.

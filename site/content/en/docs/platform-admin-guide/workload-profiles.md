@@ -130,7 +130,7 @@ Before changing queue bindings, profile scope, or execution target:
    reach zero;
 3. export the current TauCluster object and ready profile snapshot;
 4. apply the new catalog and wait for the new generation and every selected
-   profile to become Ready; then run connected server-dry-run smoke tests; and
+   profile to become Ready; then run connected server-dry-run checks; and
 5. restore admission.
 
 Rollback by draining again, restoring the previous catalog, waiting for its new

@@ -45,15 +45,9 @@ func newRunCmdWithConnectionFactory(connectionFactory runConnectionEnsurerFactor
 		Short: "Run a Tau workload",
 		Long: `Run a Tau workload from an experiment config.
 
-In a Tau-enabled repository, "smoke" runs the built-in platform onboarding
-smoke and any other TARGET resolves tau/TARGET.yaml. The config describes the
-entrypoint, runtime, compute, storage, and profiler intent; workspace
-policy and cluster access come from tau/workspace.connection.yaml.
-
-The built-in "smoke" target is a platform probe, not your workload: it runs a
-public base image and a trivial command to prove the workspace, queue, and pod
-path work. It does not exercise your container image, GPUs, or /data storage.
-Run your own config for that.
+In a Tau-enabled repository, TARGET resolves tau/TARGET.yaml. The config
+describes the entrypoint, runtime, compute, storage, and profiler intent;
+workspace policy and cluster access come from tau/workspace.connection.yaml.
 
 Evaluation is not a separate command or config shape: an eval is just a run
 whose image evaluates instead of trains. Point script/image at your eval
@@ -68,7 +62,6 @@ embedded profile catalog.
 See: tau run explain-config
 
 Common examples:
-  tau run smoke
   tau run train
   tau run
   tau run mc-rl --config experiments/mc-rl/tau.yaml
@@ -94,25 +87,11 @@ Common examples:
 				projectName,
 				configPath,
 				requestedTarget,
-				cmd.Flags().Changed("workspace") && strings.TrimSpace(workspace) != "",
 			)
 			if err != nil {
 				return err
 			}
 			input := resolution.Input
-			if input.BuiltinSmoke {
-				return executeBuiltinSmoke(cmd, builtinSmokeCLIOptions{
-					Workspace:           workspace,
-					Namespace:           namespace,
-					KubeContext:         kubeContext,
-					KubeContextExplicit: runContextExplicit(cmd),
-					KubeContextFromFlag: cmd.Flags().Changed("context"),
-					DryRun:              dryRun,
-					SystemNamespace:     systemNamespace,
-					Connection:          resolution.Connection,
-					ConnectionFactory:   connectionFactory,
-				})
-			}
 			resolvedConfigPath := input.ConfigPath
 			if resolvedConfigPath == "" {
 				return fmt.Errorf("no Tau run config found; create tau.yaml or pass --config")

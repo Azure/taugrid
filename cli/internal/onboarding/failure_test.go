@@ -40,7 +40,7 @@ func TestClassifyOnboardingFailures(t *testing.T) {
 			owner: FailureOwnerPlatform, action: "AKS Entra authentication",
 		},
 		{
-			name: "queue timeout", err: errors.New("wait for onboarding smoke: deadline exceeded"),
+			name: "queue timeout", err: errors.New("wait for workload: deadline exceeded"),
 			owner: FailureOwnerTransient, action: "run status",
 		},
 		{
@@ -55,12 +55,12 @@ func TestClassifyOnboardingFailures(t *testing.T) {
 		{
 			name:  "real ImagePullBackOff",
 			err:   errors.New("pod demo/train-xyz: container waiting reason ImagePullBackOff"),
-			owner: FailureOwnerPlatform, action: "pinned onboarding image",
+			owner: FailureOwnerPlatform, action: "workload image",
 		},
 		{
 			name:  "real ErrImagePull",
 			err:   errors.New("pod demo/train-xyz: container waiting reason ErrImagePull"),
-			owner: FailureOwnerPlatform, action: "pinned onboarding image",
+			owner: FailureOwnerPlatform, action: "workload image",
 		},
 	}
 	for _, test := range tests {

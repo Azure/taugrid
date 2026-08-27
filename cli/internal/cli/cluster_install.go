@@ -135,7 +135,7 @@ Next:
   2. Wait for: kubectl get workspaces.tau.azure.com -n %s
   3. Before storage-backed runs, pre-provision a Bound PVC in the workspace namespace.
   4. Generate its repository with: tau workspace init-repo
-  5. Give the repository to the researcher; their first command is: tau run smoke
+  5. Give the repository to the researcher; they can run its checked-in target with: tau run train
 `, spec.Release, spec.Namespace, spec.Namespace, spec.Namespace)
 			return nil
 		},

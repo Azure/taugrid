@@ -5,6 +5,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
@@ -63,9 +67,9 @@ policy:
   profile: test-routing
   queue: jobqueue
 `)
-	writeRunRoutingFile(t, filepath.Join(root, "alpha", "train.sh"), "#!/bin/sh\necho smoke\n")
-	projectSmoke := filepath.Join(root, "alpha", "tau", "smoke.yaml")
-	writeRunRoutingFile(t, projectSmoke, `name: alpha-project-smoke
+	writeRunRoutingFile(t, filepath.Join(root, "alpha", "train.sh"), "#!/bin/sh\necho health\n")
+	projectHealth := filepath.Join(root, "alpha", "tau", "health.yaml")
+	writeRunRoutingFile(t, projectHealth, `name: alpha-project-health
 engine: job
 entrypoint: ../train.sh
 compute:
@@ -108,24 +112,18 @@ policy:
 			t.Fatalf("duplicate target err=%v\nstderr:\n%s", result.err, result.stderr)
 		}
 	})
-	t.Run("built-in smoke ambiguity", func(t *testing.T) {
-		result := runTauRoutingSubprocess(t, root, "run", "smoke")
-		if result.err == nil || !strings.Contains(result.stderr, "Valid projects: alpha, beta") {
-			t.Fatalf("smoke ambiguity err=%v\nstderr:\n%s", result.err, result.stderr)
-		}
-	})
-	t.Run("project smoke client dry-run stays offline", func(t *testing.T) {
-		result := runTauRoutingSubprocess(t, root, "run", "smoke", "--project", "alpha", "--dry-run=client")
+	t.Run("project health resolves catalog connection", func(t *testing.T) {
+		result := runTauRoutingSubprocess(t, root, "run", "health", "--project", "alpha", "--dry-run=client")
 		if result.err != nil {
-			t.Fatalf("project smoke: %v\nstderr:\n%s", result.err, result.stderr)
+			t.Fatalf("project health: %v\nstderr:\n%s", result.err, result.stderr)
 		}
 		if !strings.Contains(result.stdout, "kind: Job") ||
-			!strings.Contains(result.stdout, "namespace: "+clientDryRunNamespacePlaceholder) ||
-			!strings.Contains(result.stdout, "kueue.x-k8s.io/queue-name: "+clientDryRunQueuePlaceholder) {
-			t.Fatalf("project smoke did not preserve offline placeholders:\n%s", result.stdout)
+			!strings.Contains(result.stdout, "namespace: catalog-namespace") ||
+			!strings.Contains(result.stdout, "kueue.x-k8s.io/queue-name: jobqueue") {
+			t.Fatalf("project health did not resolve catalog connection:\n%s", result.stdout)
 		}
 	})
-	t.Run("explicit project smoke config", func(t *testing.T) {
+	t.Run("explicit project health config", func(t *testing.T) {
 		result := runTauRoutingSubprocess(
 			t,
 			root,
@@ -133,16 +131,16 @@ policy:
 			"--project",
 			"alpha",
 			"--config",
-			projectSmoke,
+			projectHealth,
 			"--context",
 			"explicit",
 			"--dry-run=client",
 		)
 		if result.err != nil {
-			t.Fatalf("project smoke config: %v\nstderr:\n%s", result.err, result.stderr)
+			t.Fatalf("project health config: %v\nstderr:\n%s", result.err, result.stderr)
 		}
-		if !strings.Contains(result.stdout, "name: alpha-project-smoke") || strings.Contains(result.stdout, "Platform reachable:") {
-			t.Fatalf("project smoke did not render its file:\n%s", result.stdout)
+		if !strings.Contains(result.stdout, "name: alpha-project-health") {
+			t.Fatalf("project health did not render its file:\n%s", result.stdout)
 		}
 	})
 	t.Run("lifecycle project connection", func(t *testing.T) {
@@ -173,7 +171,7 @@ policy:
 			"--project",
 			"beta",
 			"--config",
-			projectSmoke,
+			projectHealth,
 		)
 		if result.err == nil || !strings.Contains(result.stderr, `--project "beta" does not own`) {
 			t.Fatalf("resume mismatch err=%v\nstderr:\n%s", result.err, result.stderr)
@@ -450,7 +448,34 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) {
 	}
 	configDir := t.TempDir()
 	kubeconfigPath := filepath.Join(configDir, "kubeconfig.yaml")
-	writeRunRoutingFile(t, kubeconfigPath, "apiVersion: v1\nkind: Config\n")
+	kubeconfig := `apiVersion: v1
+kind: Config
+clusters:
+- name: cluster
+  cluster:
+    server: https://routing.test.invalid
+contexts:
+- name: taugrid-flex
+  context:
+    cluster: cluster
+    user: researcher
+current-context: taugrid-flex
+users:
+- name: researcher
+  user:
+    token: test-token
+`
+	writeRunRoutingFile(t, kubeconfigPath, kubeconfig)
+	parsedKubeconfig, err := clientcmd.Load([]byte(kubeconfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawCluster, err := json.Marshal(parsedKubeconfig.Clusters["cluster"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprintSum := sha256.Sum256(rawCluster)
+	accessFingerprint := "sha256:" + hex.EncodeToString(fingerprintSum[:])
 	descriptorPath, err := filepath.EvalSymlinks(filepath.Join(root, "connections", "shared.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +487,9 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) {
 	state := map[string]any{
 		"schema":               "tau.workspace.connection-state.v1",
 		"workspace":            descriptor.Workspace,
-		"resource_id":          descriptor.Cluster.ResourceID,
+		"access_method":        descriptor.Access.Method,
+		"access_identity":      descriptor.AccessIdentity(),
+		"access_fingerprint":   accessFingerprint,
 		"authorization_mode":   descriptor.Authorization.Mode,
 		"context_name":         descriptor.Cluster.ContextName,
 		"kubeconfig_path":      kubeconfigPath,
@@ -472,6 +499,8 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) {
 		"descriptor_path":      descriptorPath,
 		"descriptor_digest":    digest,
 		"workspace_revision":   "1",
+		"workspace_uid":        "workspace-uid",
+		"configured_at":        time.Now().UTC().Add(-20 * time.Minute),
 		"verified_at":          time.Now().UTC().Add(-10 * time.Minute),
 		"repository_root":      repositoryRoot,
 		"private_cluster":      false,
@@ -484,4 +513,5 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) {
 	statePath := filepath.Join(configDir, "connections", workspaceconnection.ConnectionKey(descriptor)+".json")
 	writeRunRoutingFile(t, statePath, string(raw))
 	t.Setenv("TAU_CONFIG_DIR", configDir)
+	t.Setenv("KUBECONFIG", kubeconfigPath)
 }

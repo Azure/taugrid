@@ -1,13 +1,14 @@
 schema: tau.workspace.connection.v1
 workspace: {{.Workspace}}
 cluster:
-  provider: azure
-  resourceID: {{.AKSResourceID}}
-  contextName: {{.AKSCluster}}
+  contextName: {{.KubeContextYAML}}
   systemNamespace: {{.SystemNamespace}}
-identity:
-  tenantID: {{.AzureTenantID}}
-authorization:
+access:
+  method: {{.AccessMethod}}
+{{if .HasAKSAccess}}  aks:
+    resourceID: {{.AKSResourceID}}
+    tenantID: {{.AzureTenantID}}
+{{end}}authorization:
   mode: {{.AuthorizationMode}}
   requiredRole: {{.RequiredRole}}
 requirements:

@@ -175,9 +175,11 @@ func defaultRunConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
 		Input:       cmd.InOrStdin(),
 
 		Output: cmd.OutOrStdout(),
-		Credentials: clusteraccess.AKSUserCredentialProvider{
-			Credentials: credentialFactory,
-			AuthMode:    authMode,
+		Credentials: clusteraccess.Provider{
+			AKS: clusteraccess.AKSUserCredentialProvider{
+				Credentials: credentialFactory,
+				AuthMode:    authMode,
+			},
 		},
 		Verifier:   workspaceconnection.KubectlVerifier{},
 		TauVersion: version.Version,
@@ -277,9 +279,8 @@ func applyOfflineRunConnection(
 		options.kubeContext = discovery.Descriptor.Cluster.ContextName
 	}
 	return options, workspaceconnection.ActiveConnection{
-		Workspace:      discovery.Descriptor.Workspace,
-		ContextName:    discovery.Descriptor.Cluster.ContextName,
-		DescriptorPath: discovery.Path,
+		Workspace:   discovery.Descriptor.Workspace,
+		ContextName: discovery.Descriptor.Cluster.ContextName,
 	}, nil
 }
 

@@ -112,10 +112,7 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 		`docker build -f images/train.Dockerfile -t "$IMAGE" .`,
 		`docker push "$IMAGE"`,
 		`./scripts/configure.sh --image "$IMAGE"`,
-		`tau run validate --config tau/smoke.yaml`,
 		`tau run validate --config tau/train.yaml`,
-		`tau run smoke`,
-		`tau run --config tau/smoke.yaml`,
 		`tau run train`,
 	)
 
@@ -188,7 +185,7 @@ func TestRepoGenInitGeneratesScaffold(t *testing.T) {
 		!strings.Contains(out.String(), "# Ask the platform owner to add tau/workspace.connection.yaml before cluster runs.") {
 		t.Fatalf("unconnected next steps missing from output:\n%s", out.String())
 	}
-	if strings.Contains(out.String(), "tau run smoke") || strings.Contains(out.String(), "tau run train") {
+	if strings.Contains(out.String(), "tau run train") {
 		t.Fatalf("unconnected output included cluster runs:\n%s", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "tau", "smoke.yaml")); err != nil {

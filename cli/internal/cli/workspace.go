@@ -86,10 +86,10 @@ tau/train-gpu.yaml,
 images/train.Dockerfile, scripts/configure.sh, scripts/smoke.sh,
 scripts/train.sh, .gitignore, and supporting Python/Azure/agent setup files.
 
-This command does not create Azure resources and does not add policy.workspace to
-committed Tau configs. When --workspace, --azure-subscription-id,
---azure-tenant-id, --aks-resource-group, and --aks-cluster are all provided, the
-generated repo includes a non-secret tau/workspace.connection.yaml descriptor.`,
+This command does not create cloud resources and does not add policy.workspace to
+committed Tau configs. Provide --workspace with --kube-context to generate a
+provider-neutral connection descriptor that uses existing kubeconfig credentials.
+Add all AKS flags to let Tau acquire AKS credentials automatically.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
@@ -111,11 +111,8 @@ generated repo includes a non-secret tau/workspace.connection.yaml descriptor.`,
 			fmt.Fprintln(out, "  docker build -f images/train.Dockerfile -t \"$IMAGE\" .")
 			fmt.Fprintln(out, "  docker push \"$IMAGE\"")
 			fmt.Fprintln(out, "  ./scripts/configure.sh --image \"$IMAGE\"")
-			fmt.Fprintln(out, "  tau run validate --config tau/smoke.yaml")
 			fmt.Fprintln(out, "  tau run validate --config tau/train.yaml")
 			if slices.Contains(result.Files, "tau/workspace.connection.yaml") {
-				fmt.Fprintln(out, "  tau run smoke")
-				fmt.Fprintln(out, "  tau run --config tau/smoke.yaml")
 				fmt.Fprintln(out, "  tau run train")
 			} else {
 				fmt.Fprintln(out, "  # Ask the platform owner to add tau/workspace.connection.yaml before cluster runs.")
@@ -136,6 +133,7 @@ generated repo includes a non-secret tau/workspace.connection.yaml descriptor.`,
 	cmd.Flags().StringVar(&opts.AzureTenantID, "azure-tenant-id", "", "Microsoft Entra tenant ID for the workspace connection descriptor")
 	cmd.Flags().StringVar(&opts.AKSResourceGroup, "aks-resource-group", "", "AKS resource group for the connection descriptor")
 	cmd.Flags().StringVar(&opts.AKSCluster, "aks-cluster", "", "AKS cluster name for the connection descriptor")
+	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "Kubernetes context for the connection descriptor (defaults to --aks-cluster for AKS access)")
 	cmd.Flags().StringVar(&opts.SystemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 	cmd.Flags().StringVar(&opts.ACRName, "acr-name", "", "ACR name placeholder for .env.example and setup-azure.sh")
 	cmd.Flags().StringVar(&opts.UpstreamRepo, "upstream", "", "open GitHub repo URL for external-github/dpr templates")

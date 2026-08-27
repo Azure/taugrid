@@ -22,7 +22,6 @@ type SelectionOptions struct {
 type RunInput struct {
 	ConfigPath     string
 	ExplicitConfig bool
-	BuiltinSmoke   bool
 }
 
 type ExplicitConfig struct {
@@ -72,7 +71,7 @@ func (c *Catalog) SelectProject(options SelectionOptions) (*Project, error) {
 	}
 
 	target := strings.TrimSpace(options.Target)
-	if target != "" && target != "smoke" {
+	if target != "" {
 		var matches []*Project
 		for _, name := range c.Names() {
 			if _, ok := c.Projects[name].Targets[target]; ok {
@@ -195,9 +194,6 @@ func (p *Project) ResolveInput(explicitConfig, target string) (RunInput, error) 
 		return RunInput{ConfigPath: filepath.Clean(explicitConfig), ExplicitConfig: true}, nil
 	}
 	target = strings.TrimSpace(target)
-	if target == "smoke" {
-		return RunInput{BuiltinSmoke: true}, nil
-	}
 	if target != "" {
 		configPath, ok := p.Targets[target]
 		if !ok {

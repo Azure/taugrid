@@ -51,6 +51,7 @@ type Options struct {
 	AzureTenantID       string
 	AKSResourceGroup    string
 	AKSCluster          string
+	KubeContext         string
 	SystemNamespace     string
 	ACRName             string
 	UpstreamRepo        string
@@ -88,7 +89,7 @@ type templateData struct {
 	AzureTenantID          string
 	AKSResourceGroup       string
 	AKSCluster             string
-	AKSKubeContext         string
+	KubeContextYAML        string
 	SystemNamespace        string
 	ACRName                string
 	ACRLoginServer         string
@@ -106,6 +107,8 @@ type templateData struct {
 	HasUpstream            bool
 	HasPackageImport       bool
 	HasWorkspaceConnection bool
+	HasAKSAccess           bool
+	AccessMethod           string
 	AKSResourceID          string
 	MinTauVersion          string
 	AuthorizationMode      string
@@ -210,6 +213,23 @@ func normalizeOptions(opts Options) (Options, error) {
 	opts.AzureTenantID = strings.TrimSpace(opts.AzureTenantID)
 	opts.AKSResourceGroup = strings.TrimSpace(opts.AKSResourceGroup)
 	opts.AKSCluster = strings.TrimSpace(opts.AKSCluster)
+	opts.KubeContext = strings.TrimSpace(opts.KubeContext)
+	aksValues := []string{opts.AzureSubscriptionID, opts.AzureTenantID, opts.AKSResourceGroup, opts.AKSCluster}
+	aksValueCount := 0
+	for _, value := range aksValues {
+		if value != "" {
+			aksValueCount++
+		}
+	}
+	if aksValueCount != 0 && aksValueCount != len(aksValues) {
+		return Options{}, errors.New("--azure-subscription-id, --azure-tenant-id, --aks-resource-group, and --aks-cluster must be provided together")
+	}
+	if aksValueCount == len(aksValues) && opts.KubeContext == "" {
+		opts.KubeContext = opts.AKSCluster
+	}
+	if opts.KubeContext != "" && opts.Workspace == "<your-workspace>" {
+		return Options{}, errors.New("--workspace is required when --kube-context or AKS connection flags are provided")
+	}
 	opts.SystemNamespace = strings.TrimSpace(opts.SystemNamespace)
 	if opts.SystemNamespace == "" {
 		opts.SystemNamespace = tauworkspace.SystemNamespace
@@ -251,13 +271,14 @@ func buildTemplateData(opts Options) templateData {
 	if opts.ACRName != "" {
 		acrLogin = opts.ACRName + ".azurecr.io"
 	}
-	hasWorkspaceConnection := opts.Workspace != "<your-workspace>" &&
-		opts.AzureSubscriptionID != "" &&
-		opts.AzureTenantID != "" &&
-		opts.AKSResourceGroup != "" &&
-		opts.AKSCluster != ""
+	hasAKSAccess := opts.AzureSubscriptionID != ""
+	hasWorkspaceConnection := opts.Workspace != "<your-workspace>" && opts.KubeContext != ""
+	accessMethod := "kubeconfig"
+	if hasAKSAccess {
+		accessMethod = "aks"
+	}
 	aksResourceID := ""
-	if hasWorkspaceConnection {
+	if hasAKSAccess {
 		aksResourceID = fmt.Sprintf(
 			"/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ContainerService/managedClusters/%s",
 			opts.AzureSubscriptionID,
@@ -280,7 +301,7 @@ func buildTemplateData(opts Options) templateData {
 		AzureTenantID:          opts.AzureTenantID,
 		AKSResourceGroup:       opts.AKSResourceGroup,
 		AKSCluster:             opts.AKSCluster,
-		AKSKubeContext:         opts.AKSCluster,
+		KubeContextYAML:        strconv.Quote(opts.KubeContext),
 		SystemNamespace:        opts.SystemNamespace,
 		ACRName:                opts.ACRName,
 		ACRLoginServer:         acrLogin,
@@ -298,6 +319,8 @@ func buildTemplateData(opts Options) templateData {
 		HasUpstream:            hasUpstream,
 		HasPackageImport:       packageImport != "",
 		HasWorkspaceConnection: hasWorkspaceConnection,
+		HasAKSAccess:           hasAKSAccess,
+		AccessMethod:           accessMethod,
 		AKSResourceID:          aksResourceID,
 		MinTauVersion:          minTauVersion(version.Version),
 		AuthorizationMode:      tauworkspace.AuthorizationModeWorkspaceRBAC,
@@ -327,11 +350,7 @@ func templateFiles(opts Options) []fileSpec {
 		{"templates/common/init.py.tmpl", pkgPath + "/__init__.py", 0o644},
 		{"templates/common/train.py.tmpl", pkgPath + "/train.py", 0o644},
 	}
-	if opts.Workspace != "<your-workspace>" &&
-		opts.AzureSubscriptionID != "" &&
-		opts.AzureTenantID != "" &&
-		opts.AKSResourceGroup != "" &&
-		opts.AKSCluster != "" {
+	if opts.Workspace != "<your-workspace>" && opts.KubeContext != "" {
 		files = append(files, fileSpec{
 			"templates/common/workspace.connection.yaml.tmpl",
 			"tau/workspace.connection.yaml",

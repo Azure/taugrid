@@ -157,7 +157,6 @@ kubectl -n tau-system wait \
   workspace/taugrid-default \
   --timeout=5m
 tau workspace check taugrid-default
-tau run smoke
 ```
 
 Portal is installed as `tau-portal` in the `tau-system` namespace with a ClusterIP Service. Terraform does not expose it outside the cluster. For an operator diagnostic session:

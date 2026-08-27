@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Azure/taugrid/cli/internal/onboarding"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
@@ -266,71 +265,6 @@ func TestLifecycleFlagsResolveHonoursEnvContext(t *testing.T) {
 		t.Fatalf("$%s names the cluster, so the lifecycle verbs must treat it as explicit and leave the connection alone",
 			tauContextEnv)
 	}
-}
-
-// TestSmokeHonoursEnvContext covers `tau run smoke`, which reaches the
-// connection layer through its own options struct rather than the dispatch
-// path the other verbs share. It carried the bug after the rest was fixed,
-// because it derived "was a context named" from the emptiness of a string that
-// had already been blanked for exactly the case being tested.
-func TestSmokeHonoursEnvContext(t *testing.T) {
-	t.Setenv(tauContextEnv, "named-by-env")
-
-	cmd := &cobra.Command{Use: "smoke"}
-	cmd.Flags().String("context", defaultKubeContext(), kubeContextHelp())
-	if err := cmd.ParseFlags(nil); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-
-	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
-		Workspace: "cached", ContextName: "cached-cluster", KubeconfigPath: "/tmp/cached-kubeconfig",
-	}}
-	err := executeBuiltinSmoke(cmd, builtinSmokeCLIOptions{
-		KubeContext:         defaultKubeContext(),
-		KubeContextExplicit: runContextExplicit(cmd),
-		KubeContextFromFlag: cmd.Flags().Changed("context"),
-		DryRun:              "client",
-		// Catalog defeats the second short-circuit in
-		// applyAutomaticRunConnection (`!source.Catalog && kubeContext != ""`),
-		// so kubeContextExplicit is the only thing left that can prevent the
-		// takeover. Without this the test passes on the broken code, guarded by
-		// a condition it is not trying to test.
-		Connection:        runConnectionSource{StartDir: "/repo", Catalog: true},
-		ConnectionFactory: func(*cobra.Command) runConnectionEnsurer { return ensurer },
-		WorkspaceDiscoverer: func(_ *cobra.Command, kubeContext string) (tauworkspace.Workspace, error) {
-			if kubeContext != "named-by-env" {
-				t.Errorf("smoke resolved context %q, want the value from $%s", kubeContext, tauContextEnv)
-			}
-			ws := tauworkspace.Workspace{}
-			ws.Metadata.Name = "ws"
-			return ws, nil
-		},
-		WorkspaceFetcher: func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
-			ws := tauworkspace.Workspace{}
-			ws.Metadata.Name = "ws"
-			ws.Metadata.Generation = 1
-			ws.Status.ObservedGeneration = 1
-			ws.Status.Phase = "Ready"
-			ws.Status.Target.ResolvedNamespace = "ws-namespace"
-			ws.Status.Queue.LocalQueue = "ws-queue"
-			ws.Status.Conditions = []tauworkspace.Condition{{Type: "Ready", Status: "True"}}
-			return ws, nil
-		},
-		SmokeRunner: stubSmokeRunner{},
-	})
-	if err != nil {
-		t.Fatalf("smoke: %v", err)
-	}
-	if ensurer.calls != 0 {
-		t.Fatalf("$%s named the cluster, so smoke must not consult the connection cache; got %d calls",
-			tauContextEnv, ensurer.calls)
-	}
-}
-
-type stubSmokeRunner struct{}
-
-func (stubSmokeRunner) Run(context.Context, onboarding.SmokeOptions) (onboarding.SmokeResult, error) {
-	return onboarding.SmokeResult{Phase: "DryRun", Manifest: []byte("kind: Job\n")}, nil
 }
 
 // TestPlainRepositoryDescriptorConflictIsReported drives the real wiring rather

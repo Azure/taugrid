@@ -334,7 +334,7 @@ git -C "$RESEARCH_REPO" init
 git -C "$RESEARCH_REPO" add .
 
 cd "$RESEARCH_REPO"
-tau workspace connection inspect
+tau workspace connection
 ```
 
 The descriptor must contain `authorization.mode: workspace-rbac` and
@@ -358,7 +358,6 @@ From the generated repository:
 
 ```bash
 tau run --config tau.yaml --dry-run=client
-tau run smoke                  # optional platform-path probe
 tau run --config tau.yaml
 ```
 

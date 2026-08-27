@@ -26,11 +26,9 @@ import (
 const runRoutingDescriptor = `schema: tau.workspace.connection.v1
 workspace: sample
 cluster:
-  provider: azure
-  resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/taugrid-flex
   contextName: taugrid-flex
-identity:
-  tenantID: 11111111-1111-1111-1111-111111111111
+access:
+  method: kubeconfig
 authorization:
   mode: workspace-rbac
   requiredRole: tau-researcher-v1
@@ -47,7 +45,7 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 	writeRunRoutingFile(t, explicit, "name: alpha-ablation\n")
 
 	t.Run("unique target from root", func(t *testing.T) {
-		resolution, err := resolveRunRequest(root, "", "", "eval", false)
+		resolution, err := resolveRunRequest(root, "", "", "eval")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +57,7 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 		}
 	})
 	t.Run("explicit config derives unrelated repository", func(t *testing.T) {
-		resolution, err := resolveRunRequest(t.TempDir(), "", explicit, "", false)
+		resolution, err := resolveRunRequest(t.TempDir(), "", explicit, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,24 +66,9 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 		}
 	})
 	t.Run("context cannot resolve duplicate target", func(t *testing.T) {
-		_, err := resolveRunRequest(root, "", "", "train", false)
+		_, err := resolveRunRequest(root, "", "", "train")
 		if err == nil || !strings.Contains(err.Error(), "alpha, beta") {
 			t.Fatalf("expected duplicate target ambiguity, got %v", err)
-		}
-	})
-	t.Run("projectless smoke workspace bypass", func(t *testing.T) {
-		resolution, err := resolveRunRequest(root, "", "", "smoke", true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resolution.Project != nil || !resolution.Input.BuiltinSmoke {
-			t.Fatalf("resolution = %#v", resolution)
-		}
-	})
-	t.Run("smoke without workspace is ambiguous", func(t *testing.T) {
-		_, err := resolveRunRequest(root, "", "", "smoke", false)
-		if err == nil || !strings.Contains(err.Error(), "--project") {
-			t.Fatalf("expected smoke ambiguity, got %v", err)
 		}
 	})
 }
@@ -103,7 +86,7 @@ func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
 		if err := os.Symlink(actual, external); err != nil {
 			t.Fatal(err)
 		}
-		_, err := resolveRunRequest(filepath.Dir(external), "", external, "", false)
+		_, err := resolveRunRequest(filepath.Dir(external), "", external, "")
 		if err == nil || !strings.Contains(err.Error(), "not owned by any Tau project") {
 			t.Fatalf("expected external symlink ownership failure, got %v", err)
 		}
@@ -121,7 +104,7 @@ func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resolution, err := resolveRunRequest(root, "", relative, "", false)
+		resolution, err := resolveRunRequest(root, "", relative, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +126,7 @@ func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
 		if err := os.Symlink(outside, link); err != nil {
 			t.Fatal(err)
 		}
-		_, err := resolveRunRequest(root, "", link, "", false)
+		_, err := resolveRunRequest(root, "", link, "")
 		if err == nil || !strings.Contains(err.Error(), "not owned by any Tau project") {
 			t.Fatalf("expected escaping symlink ownership failure, got %v", err)
 		}
@@ -156,7 +139,7 @@ func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
 		if err := os.Symlink(outsideDir, linkDir); err != nil {
 			t.Fatal(err)
 		}
-		_, err := resolveRunRequest(root, "", filepath.Join(linkDir, "tau.yaml"), "", false)
+		_, err := resolveRunRequest(root, "", filepath.Join(linkDir, "tau.yaml"), "")
 		if err == nil || !strings.Contains(err.Error(), "not owned by any Tau project") {
 			t.Fatalf("expected directory symlink ownership failure, got %v", err)
 		}
@@ -171,7 +154,7 @@ func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
 		if err := os.Symlink(nestedConfig, link); err != nil {
 			t.Fatal(err)
 		}
-		_, err := resolveRunRequest(root, "", link, "", false)
+		_, err := resolveRunRequest(root, "", link, "")
 		if err == nil || !strings.Contains(err.Error(), "crosses Git worktrees") {
 			t.Fatalf("expected nested Git boundary failure, got %v", err)
 		}
@@ -185,7 +168,7 @@ func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
 		if err := os.Symlink(nested, linkDir); err != nil {
 			t.Fatal(err)
 		}
-		_, err := resolveRunRequest(root, "", filepath.Join(linkDir, "tau.yaml"), "", false)
+		_, err := resolveRunRequest(root, "", filepath.Join(linkDir, "tau.yaml"), "")
 		if err == nil || !strings.Contains(err.Error(), "crosses Git worktrees") {
 			t.Fatalf("expected nested Git directory boundary failure, got %v", err)
 		}
@@ -207,7 +190,7 @@ func TestResolveRunRequestRejectsConfigInUninitializedGitlink(t *testing.T) {
 	}
 	config := filepath.Join(root, "alpha", "vendor", "model", "tau.yaml")
 	writeRunRoutingFile(t, config, "name: gitlink-config\n")
-	_, err := resolveRunRequest(root, "", config, "", false)
+	_, err := resolveRunRequest(root, "", config, "")
 	if err == nil || !strings.Contains(err.Error(), "Git submodule") {
 		t.Fatalf("expected explicit config gitlink failure, got %v", err)
 	}
@@ -332,7 +315,7 @@ func TestNoGitSubmissionConnectionDiscoveryIsCWDBounded(t *testing.T) {
 	root := t.TempDir()
 	writeRunRoutingFile(t, filepath.Join(root, "tau", "workspace.connection.yaml"), runRoutingDescriptor)
 	writeRunRoutingFile(t, filepath.Join(root, "tau", "train.yaml"), "name: train\n")
-	resolution, err := resolveRunRequest(root, "", "", "train", false)
+	resolution, err := resolveRunRequest(root, "", "", "train")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +339,7 @@ func TestNoCatalogSymlinkUsesLexicalConnectionStart(t *testing.T) {
 	if err := os.Symlink(actual, link); err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := resolveRunRequest(root, "", link, "", false)
+	resolution, err := resolveRunRequest(root, "", link, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +364,7 @@ func TestExternalSymlinkToNoCatalogRepoUsesLexicalBoundary(t *testing.T) {
 	if err := os.Symlink(actual, link); err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := resolveRunRequest(externalDir, "", link, "", false)
+	resolution, err := resolveRunRequest(externalDir, "", link, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +385,7 @@ func TestNoCatalogInternalDirectorySymlinkToNoGitUsesPhysicalBoundary(t *testing
 	if err := os.Symlink(outside, linkDir); err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := resolveRunRequest(repo, "", filepath.Join(linkDir, "tau.yaml"), "", false)
+	resolution, err := resolveRunRequest(repo, "", filepath.Join(linkDir, "tau.yaml"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

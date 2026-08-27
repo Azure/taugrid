@@ -92,11 +92,9 @@ func writeConnectionDescriptor(t *testing.T, workspace string) {
 	body := "schema: tau.workspace.connection.v1\n" +
 		"workspace: " + workspace + "\n" +
 		"cluster:\n" +
-		"  provider: azure\n" +
-		"  resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/taugrid\n" +
 		"  contextName: taugrid\n" +
-		"identity:\n" +
-		"  tenantID: 11111111-1111-1111-1111-111111111111\n" +
+		"access:\n" +
+		"  method: kubeconfig\n" +
 		"authorization:\n" +
 		"  mode: cluster-wide\n" +
 		"requirements:\n" +

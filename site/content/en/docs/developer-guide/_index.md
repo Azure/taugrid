@@ -15,8 +15,32 @@ your platform team for a workspace connection.
 
 ## Get started
 
-- Confirm your workspace connection with your platform team, then
-  [run your first target](first-run/).
+Your platform team should give you access to a research repository containing
+the non-secret `tau/workspace.connection.yaml` descriptor. You do not need to
+configure or inspect it before running a target: `tau run` discovers it
+automatically, obtains the required cluster credentials, and verifies the live
+workspace contract. The descriptor selects a Kubernetes context and declares
+how Tau should access it. Most clusters use an existing kubeconfig context;
+AKS platforms can instead include optional Azure metadata so Tau obtains
+cluster-user credentials automatically. These are platform-supplied connection
+settings, not values researchers should copy from `kubectl` output or edit
+during onboarding.
+
+From the repository, run `tau workspace connection` to verify the complete
+read-only connection before submitting work. Use `--offline` when only local
+repository validation is appropriate.
+
+The examples in the TauGrid source repository, including
+`examples/aks-cpu-quickstart`, `examples/kind-smoke`, and
+`examples/ray-tune-smoke`, contain reusable workload configurations but do not
+contain a workspace connection. Kubernetes contexts, workspace names, and any
+provider-specific access metadata are environment-specific, so TauGrid does not
+commit them to the public examples. Copy an example into a Tau-enabled research
+repository, or add the descriptor supplied by the platform team, before
+submitting it.
+
+Continue with [run your first target](first-run/).
+
 - [Share research with a teammate](share-research/).
 - [Serve a trained model](serve-model/) once you have a run to promote.
 

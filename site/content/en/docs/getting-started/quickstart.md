@@ -7,4 +7,4 @@ build:
 ---
 
 The quickstart is now part of the single
-[Getting started on Kubernetes guide](../../platform-admin-guide/kubernetes/#5-run-the-smoke-workload).
+[Getting started on Kubernetes guide](../../platform-admin-guide/kubernetes/#5-run-a-project-workload).

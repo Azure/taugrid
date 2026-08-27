@@ -30,6 +30,8 @@ import (
 const (
 	DescriptorSchema               = "tau.workspace.connection.v1"
 	DescriptorRelativePath         = "tau/workspace.connection.yaml"
+	AccessMethodKubeconfig         = "kubeconfig"
+	AccessMethodAKS                = "aks"
 	AuthorizationModeClusterWide   = "cluster-wide"
 	AuthorizationModeWorkspaceRBAC = "workspace-rbac"
 )
@@ -40,14 +42,18 @@ var (
 )
 
 type ClusterDescriptor struct {
-	Provider        string `yaml:"provider" json:"provider"`
-	ResourceID      string `yaml:"resourceID" json:"resourceID"`
 	ContextName     string `yaml:"contextName" json:"contextName"`
 	SystemNamespace string `yaml:"systemNamespace,omitempty" json:"systemNamespace,omitempty"`
 }
 
-type IdentityDescriptor struct {
-	TenantID string `yaml:"tenantID" json:"tenantID"`
+type AKSAccessDescriptor struct {
+	ResourceID string `yaml:"resourceID" json:"resourceID"`
+	TenantID   string `yaml:"tenantID" json:"tenantID"`
+}
+
+type AccessDescriptor struct {
+	Method string               `yaml:"method" json:"method"`
+	AKS    *AKSAccessDescriptor `yaml:"aks,omitempty" json:"aks,omitempty"`
 }
 
 type AuthorizationDescriptor struct {
@@ -68,7 +74,7 @@ type Descriptor struct {
 	Schema        string                  `yaml:"schema" json:"schema"`
 	Workspace     string                  `yaml:"workspace" json:"workspace"`
 	Cluster       ClusterDescriptor       `yaml:"cluster" json:"cluster"`
-	Identity      IdentityDescriptor      `yaml:"identity" json:"identity"`
+	Access        AccessDescriptor        `yaml:"access" json:"access"`
 	Authorization AuthorizationDescriptor `yaml:"authorization" json:"authorization"`
 	Requirements  RequirementsDescriptor  `yaml:"requirements" json:"requirements"`
 	Network       NetworkDescriptor       `yaml:"network" json:"network"`
@@ -111,21 +117,6 @@ func (d Descriptor) Validate() error {
 	if problems := validation.IsDNS1123Subdomain(d.Workspace); len(problems) > 0 {
 		return fmt.Errorf("workspace connection workspace %q is invalid: %s", d.Workspace, strings.Join(problems, "; "))
 	}
-	if !strings.EqualFold(strings.TrimSpace(d.Cluster.Provider), "azure") {
-		return fmt.Errorf("workspace connection cluster.provider must be azure")
-	}
-	id, err := arm.ParseResourceID(strings.TrimSpace(d.Cluster.ResourceID))
-	if err != nil {
-		return fmt.Errorf("workspace connection cluster.resourceID: %w", err)
-	}
-	if !strings.EqualFold(id.ResourceType.Namespace, "Microsoft.ContainerService") ||
-		!strings.EqualFold(id.ResourceType.Type, "managedClusters") ||
-		id.SubscriptionID == "" || id.ResourceGroupName == "" || id.Name == "" {
-		return fmt.Errorf("workspace connection cluster.resourceID must identify an AKS managed cluster")
-	}
-	if !uuidPattern.MatchString(id.SubscriptionID) {
-		return fmt.Errorf("workspace connection cluster.resourceID has invalid subscription ID %q", id.SubscriptionID)
-	}
 	if strings.TrimSpace(d.Cluster.ContextName) == "" {
 		return fmt.Errorf("workspace connection cluster.contextName is required")
 	}
@@ -134,8 +125,36 @@ func (d Descriptor) Validate() error {
 			return fmt.Errorf("workspace connection cluster.systemNamespace %q is invalid: %s", namespace, strings.Join(problems, "; "))
 		}
 	}
-	if !uuidPattern.MatchString(strings.TrimSpace(d.Identity.TenantID)) {
-		return fmt.Errorf("workspace connection identity.tenantID must be a UUID")
+	switch d.Access.Method {
+	case AccessMethodKubeconfig:
+		if d.Access.AKS != nil {
+			return fmt.Errorf("workspace connection access.aks must be omitted for method %s", AccessMethodKubeconfig)
+		}
+	case AccessMethodAKS:
+		if d.Access.AKS == nil {
+			return fmt.Errorf("workspace connection access.aks is required for method %s", AccessMethodAKS)
+		}
+		id, err := arm.ParseResourceID(strings.TrimSpace(d.Access.AKS.ResourceID))
+		if err != nil {
+			return fmt.Errorf("workspace connection access.aks.resourceID: %w", err)
+		}
+		if !strings.EqualFold(id.ResourceType.Namespace, "Microsoft.ContainerService") ||
+			!strings.EqualFold(id.ResourceType.Type, "managedClusters") ||
+			id.SubscriptionID == "" || id.ResourceGroupName == "" || id.Name == "" {
+			return fmt.Errorf("workspace connection access.aks.resourceID must identify an AKS managed cluster")
+		}
+		if !uuidPattern.MatchString(id.SubscriptionID) {
+			return fmt.Errorf("workspace connection access.aks.resourceID has invalid subscription ID %q", id.SubscriptionID)
+		}
+		if !uuidPattern.MatchString(strings.TrimSpace(d.Access.AKS.TenantID)) {
+			return fmt.Errorf("workspace connection access.aks.tenantID must be a UUID")
+		}
+	default:
+		return fmt.Errorf(
+			"workspace connection access.method must be one of: %s, %s",
+			AccessMethodKubeconfig,
+			AccessMethodAKS,
+		)
 	}
 	switch d.Authorization.Mode {
 	case AuthorizationModeClusterWide:
@@ -172,10 +191,19 @@ func (d Descriptor) ResolvedSystemNamespace() string {
 	if namespace := strings.TrimSpace(d.Cluster.SystemNamespace); namespace != "" {
 		return namespace
 	}
-	// A v1 descriptor that omits this field predates namespace unification and
-	// points at a cluster whose TauWorkspace objects live in tau-platform. New
-	// descriptors always write the field explicitly, including tau-system.
-	return tauworkspace.LegacySystemNamespace
+	return tauworkspace.SystemNamespace
+}
+
+func (d Descriptor) AccessIdentity() string {
+	if d.Access.Method == AccessMethodAKS && d.Access.AKS != nil {
+		return AccessMethodAKS + ":" +
+			strings.ToLower(strings.TrimSpace(d.Access.AKS.ResourceID)) + ":" +
+			strings.ToLower(strings.TrimSpace(d.Access.AKS.TenantID))
+	}
+	if d.Access.Method == AccessMethodKubeconfig {
+		return AccessMethodKubeconfig + ":" + strings.TrimSpace(d.Cluster.ContextName)
+	}
+	return ""
 }
 
 func CheckTauVersion(current, minimum string) error {

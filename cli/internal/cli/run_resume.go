@@ -132,7 +132,7 @@ func resolveResumeRouting(
 	ensurer runConnectionEnsurer,
 ) (resumeRouting, func(), error) {
 	kubeContext = strings.TrimSpace(kubeContext)
-	resolution, err := resolveRunRequest(cwd, projectName, configPath, "", false)
+	resolution, err := resolveRunRequest(cwd, projectName, configPath, "")
 	if err != nil {
 		return resumeRouting{}, nil, err
 	}
@@ -281,7 +281,7 @@ func isRayJobRunning(snap status.Snapshot) bool {
 
 type resumeCommandHooks struct {
 	fetchStatus    func(context.Context, string, string, string) (status.Snapshot, error)
-	fetchWorkspace smokeWorkspaceFetcher
+	fetchWorkspace func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error)
 	validateTarget func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
 	deleteOld      func(context.Context, string, string, string, io.Writer) error
 	executeTarget  func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error

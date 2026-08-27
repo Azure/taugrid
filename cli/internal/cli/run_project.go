@@ -30,7 +30,6 @@ type runRequestResolution struct {
 
 func resolveRunRequest(
 	cwd, projectName, explicitConfig, target string,
-	allowProjectlessSmoke bool,
 ) (runRequestResolution, error) {
 	if err := validateRunTargetName(target); err != nil {
 		return runRequestResolution{}, err
@@ -123,14 +122,6 @@ func resolveRunRequest(
 	}
 
 	resolution.Connection.Catalog = true
-	if allowProjectlessSmoke &&
-		strings.TrimSpace(projectName) == "" &&
-		explicit.Lexical == "" &&
-		strings.TrimSpace(target) == "smoke" {
-		resolution.Input = runInputDiscovery{BuiltinSmoke: true}
-		return resolution, nil
-	}
-
 	project, err := repository.Catalog.SelectProject(projectcatalog.SelectionOptions{
 		ProjectName: projectName,
 		ConfigPath:  explicit.Lexical,
@@ -149,7 +140,6 @@ func resolveRunRequest(
 	resolution.Input = runInputDiscovery{
 		ConfigPath:     input.ConfigPath,
 		ExplicitConfig: input.ExplicitConfig,
-		BuiltinSmoke:   input.BuiltinSmoke,
 	}
 	resolution.Connection.Discovery = &project.Connection
 	if explicit.Resolved != "" {

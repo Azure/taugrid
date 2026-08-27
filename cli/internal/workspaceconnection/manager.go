@@ -5,6 +5,7 @@ package workspaceconnection
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,13 +18,14 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/client-go/tools/clientcmd"
+
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/fileutil"
 )
 
 const (
-	connectionStateSchemaV1 = "tau.workspace.connection-state.v1"
-	connectionStateSchema   = "tau.workspace.connection-state.v2"
+	connectionStateSchema = "tau.workspace.connection-state.v1"
 )
 
 // defaultRevalidationTimeout bounds non-interactive revalidation. Overridable
@@ -44,61 +46,43 @@ type Verifier interface {
 }
 
 type Verification struct {
-	ContextName       string
-	Namespace         string
-	Queue             string
-	ServiceAccount    string
-	WorkspaceUID      string
-	WorkspacePhase    string
-	WorkspaceRevision string
+	ContextName    string
+	Namespace      string
+	Queue          string
+	ServiceAccount string
+	WorkspaceUID   string
+	WorkspacePhase string
 }
 
 type ActiveConnection struct {
-	Workspace           string
-	ResourceID          string
-	AuthorizationMode   string
-	ContextName         string
-	SystemNamespace     string
-	KubeconfigPath      string
-	Namespace           string
-	Queue               string
-	ServiceAccount      string
-	RequiredRole        string
-	DescriptorPath      string
-	DescriptorDigest    string
-	WorkspaceUID        string
-	WorkspaceRevision   string
-	ConfiguredAt        time.Time
-	VerifiedAt          time.Time
-	RepositoryRoot      string
-	PrivateCluster      bool
-	NetworkInstructions string
+	Workspace         string
+	AuthorizationMode string
+	ContextName       string
+	SystemNamespace   string
+	KubeconfigPath    string
+	Namespace         string
+	Queue             string
 }
 
 type connectionState struct {
-	Schema              string     `json:"schema"`
-	Workspace           string     `json:"workspace"`
-	Provider            string     `json:"provider,omitempty"`
-	ResourceID          string     `json:"resource_id"`
-	TenantID            string     `json:"tenant_id,omitempty"`
-	AuthorizationMode   string     `json:"authorization_mode"`
-	ContextName         string     `json:"context_name"`
-	SystemNamespace     string     `json:"system_namespace,omitempty"`
-	KubeconfigPath      string     `json:"kubeconfig_path"`
-	Namespace           string     `json:"namespace"`
-	Queue               string     `json:"queue"`
-	ServiceAccount      string     `json:"service_account,omitempty"`
-	RequiredRole        string     `json:"required_role"`
-	DescriptorPath      string     `json:"descriptor_path"`
-	DescriptorDigest    string     `json:"descriptor_digest"`
-	WorkspaceUID        string     `json:"workspace_uid,omitempty"`
-	WorkspaceRevision   string     `json:"workspace_revision"`
-	ConfiguredAt        time.Time  `json:"configured_at,omitempty"`
-	ConfirmedAt         *time.Time `json:"confirmed_at,omitempty"`
-	VerifiedAt          time.Time  `json:"verified_at"`
-	RepositoryRoot      string     `json:"repository_root"`
-	PrivateCluster      bool       `json:"private_cluster"`
-	NetworkInstructions string     `json:"network_instructions,omitempty"`
+	Schema            string    `json:"schema"`
+	Workspace         string    `json:"workspace"`
+	AccessMethod      string    `json:"access_method"`
+	AccessIdentity    string    `json:"access_identity"`
+	AccessFingerprint string    `json:"access_fingerprint,omitempty"`
+	AuthorizationMode string    `json:"authorization_mode"`
+	ContextName       string    `json:"context_name"`
+	SystemNamespace   string    `json:"system_namespace,omitempty"`
+	KubeconfigPath    string    `json:"kubeconfig_path"`
+	Namespace         string    `json:"namespace"`
+	Queue             string    `json:"queue"`
+	ServiceAccount    string    `json:"service_account,omitempty"`
+	RequiredRole      string    `json:"required_role"`
+	DescriptorPath    string    `json:"descriptor_path"`
+	DescriptorDigest  string    `json:"descriptor_digest"`
+	WorkspaceUID      string    `json:"workspace_uid,omitempty"`
+	ConfiguredAt      time.Time `json:"configured_at,omitempty"`
+	VerifiedAt        time.Time `json:"verified_at"`
 }
 
 type Manager struct {
@@ -155,17 +139,31 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	stateConfigured := hasState && state.configures(discovery)
 	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
 	stateMatches := stateConfigured && !kubeconfigMissing
-	if stateMatches {
-		requiresVerificationBaseline := state.Schema == connectionStateSchemaV1
-		stateUpgraded := state.upgrade(discovery)
-		if m.stateFresh(state) && !requiresVerificationBaseline {
-			if stateUpgraded {
-				if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
-					return ActiveConnection{}, fmt.Errorf("upgrade Tau workspace connection state: %w", err)
-				}
-			}
-			return state.active(), nil
+	var sourceKubeconfig []byte
+	var sourceFingerprint string
+	sourceKubeconfigChanged := false
+	sourceTargetChanged := false
+	if hasState &&
+		state.AccessMethod == AccessMethodKubeconfig &&
+		discovery.Descriptor.Access.Method == AccessMethodKubeconfig {
+		sourceKubeconfig, sourceFingerprint, err = m.resolveUserKubeconfig(ctx, discovery.Descriptor, nil)
+		if err != nil {
+			return ActiveConnection{}, fmt.Errorf("refresh kubeconfig workspace access: %w", err)
 		}
+		sourceTargetChanged = state.AccessFingerprint != sourceFingerprint
+		if sourceTargetChanged {
+			stateMatches = false
+			kubeconfigMissing = false
+		} else if stateMatches {
+			installedKubeconfig, err := os.ReadFile(state.KubeconfigPath)
+			if err != nil {
+				return ActiveConnection{}, fmt.Errorf("read isolated Tau kubeconfig: %w", err)
+			}
+			sourceKubeconfigChanged = !bytes.Equal(installedKubeconfig, sourceKubeconfig)
+		}
+	}
+	if stateMatches && m.stateFresh(state) && !sourceKubeconfigChanged {
+		return state.active(), nil
 	}
 	if stateMatches {
 		if m.Verifier == nil {
@@ -173,14 +171,19 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		}
 		// Revalidation reads the TauWorkspace and runs `auth can-i` checks; it
 		// never asks the user anything, so it must not require a terminal.
-		// The kubeconfig is kubelogin exec auth (clusteraccess.NormalizeKubeconfig
-		// rejects static credentials), so kubectl *can* block on a browser or
-		// device-code prompt when kubelogin's token cache is cold. Without a
-		// terminal that would hang forever, which is worse for an automated
-		// caller than a clean failure, so bound it and report how to recover.
+		// A kubeconfig exec plugin can block on browser or device-code sign-in
+		// when its token cache is cold. Without a terminal that would hang
+		// forever, which is worse for an automated caller than a clean failure,
+		// so bound it and report how to recover.
 		verifyCtx, cancel := m.signInDeadline(ctx)
 		defer cancel()
-		verification, verifyErr := m.Verifier.Verify(verifyCtx, discovery.Descriptor, state.KubeconfigPath)
+		var verification Verification
+		var verifyErr error
+		if len(sourceKubeconfig) > 0 {
+			verification, verifyErr = m.verifyCandidate(verifyCtx, configDir, discovery, sourceKubeconfig)
+		} else {
+			verification, verifyErr = m.Verifier.Verify(verifyCtx, discovery.Descriptor, state.KubeconfigPath)
+		}
 		if verifyErr != nil {
 			if timeout := m.signInTimeout(verifyCtx, "revalidating the cached workspace connection"); timeout != nil {
 				return ActiveConnection{}, timeout
@@ -207,13 +210,13 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			}
 			state.ConfiguredAt = m.now()
 		}
-		state.ContextName = firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName)
-		state.Namespace = verification.Namespace
-		state.Queue = verification.Queue
-		state.ServiceAccount = verification.ServiceAccount
-		state.WorkspaceUID = verification.WorkspaceUID
-		state.WorkspaceRevision = verification.WorkspaceRevision
-		state.VerifiedAt = m.now()
+		if len(sourceKubeconfig) > 0 {
+			if err := fileutil.WriteFileAtomic(state.KubeconfigPath, sourceKubeconfig, 0o600); err != nil {
+				return ActiveConnection{}, fmt.Errorf("refresh isolated Tau kubeconfig: %w", err)
+			}
+			state.AccessFingerprint = sourceFingerprint
+		}
+		state.applyVerification(discovery.Descriptor, verification, m.now())
 		if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
 			return ActiveConnection{}, fmt.Errorf("update Tau workspace connection state: %w", err)
 		}
@@ -223,25 +226,18 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		return ActiveConnection{}, stateErr
 	}
 	if kubeconfigMissing {
-		if m.Credentials == nil {
-			return ActiveConnection{}, fmt.Errorf("workspace connection credential provider is not configured")
-		}
 		if m.Verifier == nil {
 			return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
 		}
-		rawKubeconfig, err := m.Credentials.UserKubeconfig(ctx, discovery.Descriptor)
+		rawKubeconfig, accessFingerprint, err := m.resolveUserKubeconfig(ctx, discovery.Descriptor, sourceKubeconfig)
 		if err != nil {
-			return ActiveConnection{}, fmt.Errorf("reacquire AKS cluster-user credentials: %w", err)
-		}
-		if len(rawKubeconfig) == 0 {
-			return ActiveConnection{}, fmt.Errorf("reacquire AKS cluster-user credentials: Azure returned an empty kubeconfig")
+			return ActiveConnection{}, fmt.Errorf("reacquire Kubernetes credentials: %w", err)
 		}
 		kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
 		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("verify reacquired Tau workspace connection: %w", err)
 		}
-		state.upgrade(discovery)
 		if changes := state.contractChanges(verification); len(changes) > 0 {
 			if !m.Interactive {
 				return ActiveConnection{}, fmt.Errorf(
@@ -263,14 +259,9 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		if err := fileutil.WriteFileAtomic(kubeconfigPath, rawKubeconfig, 0o600); err != nil {
 			return ActiveConnection{}, fmt.Errorf("replace isolated Tau kubeconfig: %w", err)
 		}
-		state.ContextName = firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName)
+		state.AccessFingerprint = accessFingerprint
 		state.KubeconfigPath = kubeconfigPath
-		state.Namespace = verification.Namespace
-		state.Queue = verification.Queue
-		state.ServiceAccount = verification.ServiceAccount
-		state.WorkspaceUID = verification.WorkspaceUID
-		state.WorkspaceRevision = verification.WorkspaceRevision
-		state.VerifiedAt = m.now()
+		state.applyVerification(discovery.Descriptor, verification, m.now())
 		if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
 			if !finalPreexisted {
 				_ = os.Remove(kubeconfigPath)
@@ -281,6 +272,9 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	}
 	if hasState {
 		changes := state.configurationChanges(discovery)
+		if sourceTargetChanged {
+			changes = append(changes, "Kubernetes context target changed")
+		}
 		if !m.Interactive {
 			return ActiveConnection{}, fmt.Errorf(
 				"%w: configured workspace connection changed (%s)",
@@ -296,25 +290,16 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			return ActiveConnection{}, ErrConnectionDeclined
 		}
 	}
-	if m.Credentials == nil {
-		return ActiveConnection{}, fmt.Errorf("workspace connection credential provider is not configured")
-	}
 	if m.Verifier == nil {
 		return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
 	}
 
-	// Credential acquisition stays on the caller context. Both supported auth
-	// modes (interactive browser, device code) are human-paced by design, and
-	// device code is explicitly the non-TTY flow: it prints a code to stderr and
-	// waits for someone to finish signing in elsewhere. A deadline here would
-	// cancel exactly the path this command is meant to support. Sign-in that
-	// never completes is the caller's own timeout to impose.
-	rawKubeconfig, err := m.Credentials.UserKubeconfig(ctx, discovery.Descriptor)
+	// Credential acquisition stays on the caller context. Provider-backed access
+	// may require a human-paced sign-in, while kubeconfig access may invoke its
+	// own exec credential plugin.
+	rawKubeconfig, accessFingerprint, err := m.resolveUserKubeconfig(ctx, discovery.Descriptor, sourceKubeconfig)
 	if err != nil {
-		return ActiveConnection{}, fmt.Errorf("obtain AKS cluster-user credentials: %w", err)
-	}
-	if len(rawKubeconfig) == 0 {
-		return ActiveConnection{}, fmt.Errorf("obtain AKS cluster-user credentials: Azure returned an empty kubeconfig")
+		return ActiveConnection{}, fmt.Errorf("obtain Kubernetes credentials: %w", err)
 	}
 	kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
 	verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
@@ -339,29 +324,20 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	previousKubeconfigPath := state.KubeconfigPath
 	now := m.now()
 	state = connectionState{
-		Schema:              connectionStateSchema,
-		Workspace:           discovery.Descriptor.Workspace,
-		Provider:            discovery.Descriptor.Cluster.Provider,
-		ResourceID:          discovery.Descriptor.Cluster.ResourceID,
-		TenantID:            discovery.Descriptor.Identity.TenantID,
-		AuthorizationMode:   discovery.Descriptor.Authorization.Mode,
-		ContextName:         firstNonEmpty(verification.ContextName, discovery.Descriptor.Cluster.ContextName),
-		SystemNamespace:     discovery.Descriptor.ResolvedSystemNamespace(),
-		KubeconfigPath:      kubeconfigPath,
-		Namespace:           verification.Namespace,
-		Queue:               verification.Queue,
-		ServiceAccount:      verification.ServiceAccount,
-		RequiredRole:        discovery.Descriptor.Authorization.RequiredRole,
-		DescriptorPath:      discovery.Path,
-		DescriptorDigest:    discovery.Digest,
-		WorkspaceUID:        verification.WorkspaceUID,
-		WorkspaceRevision:   verification.WorkspaceRevision,
-		ConfiguredAt:        now,
-		VerifiedAt:          now,
-		RepositoryRoot:      discovery.RepositoryRoot,
-		PrivateCluster:      discovery.Descriptor.Network.PrivateCluster,
-		NetworkInstructions: discovery.Descriptor.Network.Instructions,
+		Schema:            connectionStateSchema,
+		Workspace:         discovery.Descriptor.Workspace,
+		AccessMethod:      discovery.Descriptor.Access.Method,
+		AccessIdentity:    discovery.Descriptor.AccessIdentity(),
+		AccessFingerprint: accessFingerprint,
+		AuthorizationMode: discovery.Descriptor.Authorization.Mode,
+		SystemNamespace:   discovery.Descriptor.ResolvedSystemNamespace(),
+		KubeconfigPath:    kubeconfigPath,
+		RequiredRole:      discovery.Descriptor.Authorization.RequiredRole,
+		DescriptorPath:    discovery.Path,
+		DescriptorDigest:  discovery.Digest,
+		ConfiguredAt:      now,
 	}
+	state.applyVerification(discovery.Descriptor, verification, now)
 	if err := fileutil.WriteJSONFileAtomic(statePath, state); err != nil {
 		if !finalPreexisted {
 			_ = os.Remove(kubeconfigPath)
@@ -435,7 +411,7 @@ func (m Manager) confirmConfigurationChange(state connectionState, descriptor De
 	}
 	fmt.Fprintf(
 		output,
-		"\nPin workspace %q on AKS context %q for this repository? [y/N] ",
+		"\nPin workspace %q on Kubernetes context %q for this repository? [y/N] ",
 		descriptor.Workspace,
 		descriptor.Cluster.ContextName,
 	)
@@ -500,9 +476,7 @@ func validateVerification(descriptor Descriptor, verification Verification) erro
 	return nil
 }
 
-// revalidationTimeout bounds non-interactive revalidation so a kubelogin
-// sign-in prompt fails fast instead of hanging a caller with no terminal.
-// signInDeadline bounds a call that may block on a kubelogin sign-in prompt.
+// signInDeadline bounds a call that may block on a credential-plugin prompt.
 // Without a terminal that prompt can never be answered, so hanging forever is
 // strictly worse for an automated caller than failing with instructions.
 // Interactive callers keep the unbounded context so a human can complete it.
@@ -520,7 +494,7 @@ func (m Manager) signInTimeout(bounded context.Context, stage string) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"%w: %s timed out after %s, most likely because kubelogin needed a sign-in prompt and no terminal is attached; run a tau command in a terminal once to complete sign-in",
+		"%w: %s timed out after %s, most likely because the Kubernetes credential provider needed a sign-in prompt and no terminal is attached; run a tau command in a terminal once to complete sign-in",
 		ErrInteractiveRequired,
 		stage,
 		m.revalidationTimeout(),
@@ -589,80 +563,41 @@ func loadConnectionStateForDiscovery(statePath string, discovery Discovery) (con
 }
 
 func (s connectionState) configures(discovery Discovery) bool {
-	supportedSchema := s.Schema == connectionStateSchema || s.Schema == connectionStateSchemaV1
+	supportedSchema := s.Schema == connectionStateSchema
 	hasConfiguration := !s.ConfiguredAt.IsZero()
 	hasStableWorkspaceIdentity := strings.TrimSpace(s.WorkspaceUID) != ""
-	hasTrustIdentity := s.Provider == discovery.Descriptor.Cluster.Provider &&
-		s.TenantID == discovery.Descriptor.Identity.TenantID
-	if s.Schema == connectionStateSchemaV1 {
-		hasConfiguration = (s.ConfirmedAt != nil && !s.ConfirmedAt.IsZero()) || !s.VerifiedAt.IsZero()
-		hasStableWorkspaceIdentity = true
-		hasTrustIdentity = true
-	}
+	hasTrustIdentity := s.AccessMethod == discovery.Descriptor.Access.Method &&
+		s.AccessIdentity == discovery.Descriptor.AccessIdentity()
 	return supportedSchema &&
 		hasConfiguration &&
 		hasStableWorkspaceIdentity &&
 		hasTrustIdentity &&
 		s.Workspace == discovery.Descriptor.Workspace &&
-		s.ResourceID == discovery.Descriptor.Cluster.ResourceID &&
 		s.AuthorizationMode == discovery.Descriptor.Authorization.Mode &&
 		s.RequiredRole == discovery.Descriptor.Authorization.RequiredRole &&
 		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
 		s.DescriptorDigest == discovery.Digest
 }
 
-func (s *connectionState) upgrade(discovery Discovery) bool {
-	changed := false
-	if s.Schema == connectionStateSchemaV1 {
-		s.Schema = connectionStateSchema
-		if s.ConfirmedAt != nil {
-			s.ConfiguredAt = *s.ConfirmedAt
-		}
-		if s.ConfiguredAt.IsZero() {
-			s.ConfiguredAt = s.VerifiedAt
-		}
-		s.ConfirmedAt = nil
-		s.Provider = discovery.Descriptor.Cluster.Provider
-		s.TenantID = discovery.Descriptor.Identity.TenantID
-		changed = true
-	}
-	if s.DescriptorPath != discovery.Path {
-		s.DescriptorPath = discovery.Path
-		changed = true
-	}
-	if s.RepositoryRoot != discovery.RepositoryRoot {
-		s.RepositoryRoot = discovery.RepositoryRoot
-		changed = true
-	}
-	if s.SystemNamespace != discovery.Descriptor.ResolvedSystemNamespace() {
-		s.SystemNamespace = discovery.Descriptor.ResolvedSystemNamespace()
-		changed = true
-	}
-	return changed
-}
-
 func (s connectionState) configurationChanges(discovery Discovery) []string {
 	var changes []string
-	if s.Schema != connectionStateSchema && s.Schema != connectionStateSchemaV1 {
+	if s.Schema != connectionStateSchema {
 		changes = append(changes, fmt.Sprintf("state schema %q is unsupported", s.Schema))
 	}
 	if s.Workspace != discovery.Descriptor.Workspace {
 		changes = append(changes, fmt.Sprintf("workspace %q -> %q", s.Workspace, discovery.Descriptor.Workspace))
 	}
-	if s.Schema == connectionStateSchema && s.Provider != discovery.Descriptor.Cluster.Provider {
-		changes = append(changes, fmt.Sprintf("cluster provider %q -> %q", s.Provider, discovery.Descriptor.Cluster.Provider))
+	if s.AccessMethod != discovery.Descriptor.Access.Method {
+		changes = append(changes, fmt.Sprintf("access method %q -> %q", s.AccessMethod, discovery.Descriptor.Access.Method))
 	}
-	if s.ResourceID != discovery.Descriptor.Cluster.ResourceID {
-		changes = append(changes, fmt.Sprintf("AKS resource %q -> %q", s.ResourceID, discovery.Descriptor.Cluster.ResourceID))
+	if s.AccessIdentity != discovery.Descriptor.AccessIdentity() {
+		changes = append(changes, "access identity changed")
 	}
 	if s.ContextName != discovery.Descriptor.Cluster.ContextName {
-		changes = append(changes, fmt.Sprintf("AKS context %q -> %q", s.ContextName, discovery.Descriptor.Cluster.ContextName))
+		changes = append(changes, fmt.Sprintf("Kubernetes context %q -> %q", s.ContextName, discovery.Descriptor.Cluster.ContextName))
 	}
 	if s.SystemNamespace != discovery.Descriptor.ResolvedSystemNamespace() {
 		changes = append(changes, fmt.Sprintf("system namespace %q -> %q", s.SystemNamespace, discovery.Descriptor.ResolvedSystemNamespace()))
-	}
-	if s.Schema == connectionStateSchema && s.TenantID != discovery.Descriptor.Identity.TenantID {
-		changes = append(changes, fmt.Sprintf("tenant %q -> %q", s.TenantID, discovery.Descriptor.Identity.TenantID))
 	}
 	if s.AuthorizationMode != discovery.Descriptor.Authorization.Mode {
 		changes = append(changes, fmt.Sprintf("authorization mode %q -> %q", s.AuthorizationMode, discovery.Descriptor.Authorization.Mode))
@@ -678,9 +613,6 @@ func (s connectionState) configurationChanges(discovery Discovery) []string {
 	}
 	if s.Schema == connectionStateSchema && strings.TrimSpace(s.WorkspaceUID) == "" {
 		changes = append(changes, "workspace UID pin is missing")
-	}
-	if len(changes) == 0 {
-		changes = append(changes, "stored configuration is incomplete")
 	}
 	return changes
 }
@@ -704,6 +636,15 @@ func (s connectionState) contractChanges(verification Verification) []string {
 	return changes
 }
 
+func (s *connectionState) applyVerification(descriptor Descriptor, verification Verification, verifiedAt time.Time) {
+	s.ContextName = firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
+	s.Namespace = verification.Namespace
+	s.Queue = verification.Queue
+	s.ServiceAccount = verification.ServiceAccount
+	s.WorkspaceUID = verification.WorkspaceUID
+	s.VerifiedAt = verifiedAt
+}
+
 func effectiveServiceAccount(name string) string {
 	if name = strings.TrimSpace(name); name != "" {
 		return name
@@ -714,27 +655,12 @@ func effectiveServiceAccount(name string) string {
 func (s connectionState) active() ActiveConnection {
 	return ActiveConnection{
 		Workspace:         s.Workspace,
-		ResourceID:        s.ResourceID,
 		AuthorizationMode: s.AuthorizationMode,
 		ContextName:       s.ContextName,
-		// State created before system_namespace was persisted belongs to the
-		// legacy tau-platform contract. Newly written state always stores the
-		// descriptor's explicit system namespace.
-		SystemNamespace:     firstNonEmpty(s.SystemNamespace, tauworkspace.LegacySystemNamespace),
-		KubeconfigPath:      s.KubeconfigPath,
-		Namespace:           s.Namespace,
-		Queue:               s.Queue,
-		ServiceAccount:      s.ServiceAccount,
-		RequiredRole:        s.RequiredRole,
-		DescriptorPath:      s.DescriptorPath,
-		DescriptorDigest:    s.DescriptorDigest,
-		WorkspaceUID:        s.WorkspaceUID,
-		WorkspaceRevision:   s.WorkspaceRevision,
-		ConfiguredAt:        s.ConfiguredAt,
-		VerifiedAt:          s.VerifiedAt,
-		RepositoryRoot:      s.RepositoryRoot,
-		PrivateCluster:      s.PrivateCluster,
-		NetworkInstructions: s.NetworkInstructions,
+		SystemNamespace:   firstNonEmpty(s.SystemNamespace, tauworkspace.SystemNamespace),
+		KubeconfigPath:    s.KubeconfigPath,
+		Namespace:         s.Namespace,
+		Queue:             s.Queue,
 	}
 }
 
@@ -756,11 +682,11 @@ func safeFilename(value string) string {
 }
 
 func ConnectionKey(descriptor Descriptor) string {
-	return safeFilename(descriptor.Workspace) + "-" + resourceIDHash(descriptor.Cluster.ResourceID)
+	return safeFilename(descriptor.Workspace) + "-" + accessIdentityHash(descriptor.AccessIdentity())
 }
 
-func resourceIDHash(resourceID string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(resourceID))))
+func accessIdentityHash(identity string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(identity)))
 	return hex.EncodeToString(sum[:6])
 }
 
@@ -772,12 +698,70 @@ func descriptorDigestHash(digest string) string {
 	return safeFilename(value)
 }
 
+func descriptorAccessFingerprint(descriptor Descriptor, rawKubeconfig []byte) (string, error) {
+	if descriptor.Access.Method != AccessMethodKubeconfig {
+		return "", nil
+	}
+	fingerprint, err := kubeconfigAccessFingerprint(rawKubeconfig, descriptor.Cluster.ContextName)
+	if err != nil {
+		return "", fmt.Errorf("inspect kubeconfig workspace access: %w", err)
+	}
+	return fingerprint, nil
+}
+
+func (m Manager) resolveUserKubeconfig(
+	ctx context.Context,
+	descriptor Descriptor,
+	source []byte,
+) ([]byte, string, error) {
+	raw := source
+	if len(raw) == 0 {
+		if m.Credentials == nil {
+			return nil, "", fmt.Errorf("workspace connection credential provider is not configured")
+		}
+		var err error
+		raw, err = m.Credentials.UserKubeconfig(ctx, descriptor)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if len(raw) == 0 {
+		return nil, "", fmt.Errorf("provider returned an empty kubeconfig")
+	}
+	fingerprint, err := descriptorAccessFingerprint(descriptor, raw)
+	if err != nil {
+		return nil, "", err
+	}
+	return raw, fingerprint, nil
+}
+
+func kubeconfigAccessFingerprint(rawKubeconfig []byte, contextName string) (string, error) {
+	config, err := clientcmd.Load(rawKubeconfig)
+	if err != nil {
+		return "", fmt.Errorf("parse Kubernetes configuration: %w", err)
+	}
+	kubeContext, ok := config.Contexts[contextName]
+	if !ok {
+		return "", fmt.Errorf("Kubernetes context %q is missing", contextName)
+	}
+	cluster, ok := config.Clusters[kubeContext.Cluster]
+	if !ok {
+		return "", fmt.Errorf("Kubernetes context %q references missing cluster %q", contextName, kubeContext.Cluster)
+	}
+	rawCluster, err := json.Marshal(cluster)
+	if err != nil {
+		return "", fmt.Errorf("encode Kubernetes cluster target: %w", err)
+	}
+	sum := sha256.Sum256(rawCluster)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 func isolatedKubeconfigPath(configDir string, discovery Discovery) string {
 	return filepath.Join(
 		configDir,
 		"kubeconfigs",
 		safeFilename(discovery.Descriptor.Cluster.ContextName)+"-"+
-			resourceIDHash(discovery.Descriptor.Cluster.ResourceID)+"-"+
+			accessIdentityHash(discovery.Descriptor.AccessIdentity())+"-"+
 			descriptorDigestHash(discovery.Digest)+".yaml",
 	)
 }

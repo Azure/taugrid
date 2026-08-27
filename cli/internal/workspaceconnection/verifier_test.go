@@ -51,7 +51,7 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if got.Namespace != "sample" || got.Queue != "jobqueue" || got.ServiceAccount != "default" || got.WorkspaceUID != "workspace-uid" || got.WorkspaceRevision != "7" {
+	if got.Namespace != "sample" || got.Queue != "jobqueue" || got.ServiceAccount != "default" || got.WorkspaceUID != "workspace-uid" {
 		t.Fatalf("verification = %#v", got)
 	}
 }

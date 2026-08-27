@@ -20,7 +20,7 @@ choosing between direct config and decorators.
 | **Repository** | One Git worktree. It can contain one Tau project or a versioned `tau.projects.yaml` catalog for a monorepo. |
 | **Project** | The unit that owns workload configs, named targets, and a workspace connection. |
 | **Workspace** | Platform-owned cluster access and policy defaults such as namespace, queue, priority, and output root. It does not own project code or workload shape. |
-| **Target** | A checked-in runnable config such as `tau/train.yaml`. `smoke` is the built-in workspace and cluster readiness target. |
+| **Target** | A checked-in runnable config such as `tau/train.yaml`. |
 | **Run** | One submitted execution and its lifecycle handle: status, logs, results, resume, and cancel. |
 | **Workload** | The resolved execution intent Tau renders as a Kubernetes Job, RayJob, or serving resource. |
 | **Experiment** | A comparison set over runs, metrics, and artifacts. Expstore is the local/offline source of truth; ADX/Kusto is a hosted scalar projection. |
@@ -158,18 +158,15 @@ is:
 ```bash
 git clone <research-repository>
 cd <research-repository>
-tau run smoke
 tau run train
 ```
 
-`tau run smoke` automatically discovers the checked-in connection, obtains
+`tau run train` automatically discovers the checked-in connection, obtains
 normal AKS credentials, writes them to an isolated Tau kubeconfig, verifies the
-live workspace contract, pins local configuration state, and submits a bounded
-CPU smoke through Kueue. `tau workspace connection inspect` is an optional
-offline diagnostic, not a first-run prerequisite.
-`tau run train` resolves `tau/train.yaml` and submits the declared workload.
-Neither command requires a pre-existing kube context, `TAU_CONTEXT`, namespace,
-queue, or explicit `--config`.
+live workspace contract, pins local configuration state, resolves
+`tau/train.yaml`, and submits the declared workload. It does not require a
+pre-existing kube context, `TAU_CONTEXT`, namespace, queue, or explicit
+`--config`.
 
 During the current single-workspace phase, `cluster-wide` is the normal platform
 shape and supplies policy defaults, but workspace selection is not an
@@ -247,7 +244,10 @@ compatibility route requires an explicit migration decision and release note.
 - `tau.yaml`, `tau/<target>.yaml`, `tau.projects.yaml`, and
   `tau/workspace.connection.yaml` are separate contracts. Do not merge project
   workload intent with platform connection policy.
-- `tau run --dry-run=client` validates local descriptors and renders offline; live-only values remain visible placeholders. Server dry-run and submission activate the connection and may read the cluster.
+- `tau run validate` is the offline schema check. In a connected repository,
+  `tau run --dry-run=client` activates the connection and reads the live
+  workload-profile catalog without submitting a workload. Server dry-run also
+  asks the API server to validate the rendered object.
 - Workloads default to namespace `ray` only after explicit config, workspace,
   preset, and context resolution.
 - Ray Train remains the default distributed training API. Tau owns

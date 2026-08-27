@@ -799,21 +799,19 @@ if grep -q 'StorageReady' "${SCRATCH_DIR}/tau-workspace-status.txt"; then
 fi
 
 tau_home="${SCRATCH_DIR}/rune-home"
-mkdir -p "${tau_home}/home" "${tau_home}/tau" "${tau_home}/tau-config/connections" "${tau_home}/tau-config/kubeconfigs"
+mkdir -p "${tau_home}/home/.kube" "${tau_home}/tau" "${tau_home}/tau-config"
 go build -buildvcs=false -o "${tau_home}/tau-bin" ./cmd/tau
-cp "${SCRATCH_DIR}/kubeconfig-impersonation.json" "${tau_home}/tau-config/kubeconfigs/researcher.yaml"
-chmod 600 "${tau_home}/tau-config/kubeconfigs/researcher.yaml"
+cp "${SCRATCH_DIR}/kubeconfig-impersonation.json" "${tau_home}/home/.kube/config"
+chmod 600 "${tau_home}/home/.kube/config"
 
 cat >"${tau_home}/tau/workspace.connection.yaml" <<YAML
 schema: tau.workspace.connection.v1
 workspace: ${WORKSPACE_NAME}
 cluster:
-  provider: azure
-  resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/kind/providers/Microsoft.ContainerService/managedClusters/${CLUSTER_NAME}
   contextName: researcher
   systemNamespace: ${SYSTEM_NAMESPACE}
-identity:
-  tenantID: 11111111-1111-1111-1111-111111111111
+access:
+  method: kubeconfig
 authorization:
   mode: workspace-rbac
   requiredRole: tau-researcher-v1
@@ -846,39 +844,12 @@ policy:
   disable_default_priorities: true
 YAML
 
-descriptor_json="$(cd "${tau_home}" && "${tau_home}/tau-bin" workspace connection inspect -o json)"
-descriptor_digest="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' <<<"${descriptor_json}")"
-connection_key="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["connectionKey"])' <<<"${descriptor_json}")"
-cat >"${tau_home}/tau-config/connections/${connection_key}.json" <<JSON
-{
-  "schema": "tau.workspace.connection-state.v1",
-  "workspace": "${WORKSPACE_NAME}",
-  "resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/kind/providers/Microsoft.ContainerService/managedClusters/${CLUSTER_NAME}",
-  "authorization_mode": "workspace-rbac",
-  "context_name": "researcher",
-  "kubeconfig_path": "${tau_home}/tau-config/kubeconfigs/researcher.yaml",
-  "namespace": "${TARGET_NAMESPACE}",
-  "queue": "${WORKSPACE_NAME}",
-  "service_account": "tau-workload",
-  "required_role": "tau-researcher-v1",
-  "descriptor_path": "${tau_home}/tau/workspace.connection.yaml",
-  "descriptor_digest": "${descriptor_digest}",
-  "workspace_revision": "1",
-  "verified_at": "2000-01-01T00:00:00Z",
-  "repository_root": "${tau_home}",
-  "private_cluster": false
-}
-JSON
-
-# Force a real Kubernetes verifier pass against the Kind API before trusting
-# the local state. The pseudo-TTY permits stale-state revalidation without
-# fetching Azure credentials; the following smoke then proves the fresh
-# non-interactive path.
+# Activate the provider-neutral kubeconfig path and verify the live workspace
+# before the following submission proves the cached non-interactive path.
 if ! (
   cd "${tau_home}"
-  script -q -e -c \
-    "env HOME='${tau_home}/home' TAU_CONFIG_DIR='${tau_home}/tau-config' '${tau_home}/tau-bin' run train --dry-run=client" \
-    /dev/null
+  HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
+    "${tau_home}/tau-bin" run train --dry-run=client
 ) >"${tau_home}/verified-train.yaml"; then
   cat "${tau_home}/verified-train.yaml" >&2
   exit 1
@@ -893,41 +864,8 @@ for expected in \
   fi
 done
 
-kubectl -n "${TARGET_NAMESPACE}" delete jobs.batch \
-  -l tau.azure.com/onboarding-smoke=true \
+kubectl -n "${TARGET_NAMESPACE}" delete job project-train \
   --ignore-not-found --wait=true >/dev/null
-
-(
-  cd "${tau_home}"
-  HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run smoke >"${tau_home}/smoke.out" 2>"${tau_home}/smoke.err"
-) &
-SMOKE_PID=$!
-
-deadline=$((SECONDS + WAIT_SECONDS))
-smoke_job=""
-while (( SECONDS < deadline )); do
-  smoke_job="$(kubectl -n "${TARGET_NAMESPACE}" get jobs.batch -l tau.azure.com/onboarding-smoke=true -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep '^smoke-' | tail -n1 || true)"
-  [[ -n "${smoke_job}" ]] && break
-  sleep 1
-done
-if [[ -z "${smoke_job}" ]]; then
-  cat "${tau_home}/smoke.err" >&2 || true
-  exit 1
-fi
-kubectl -n "${TARGET_NAMESPACE}" get job "${smoke_job}" -o jsonpath='{.spec.suspend}' | grep -qx true
-kubectl -n "${TARGET_NAMESPACE}" get job "${smoke_job}" -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/queue-name}' | grep -qx "${WORKSPACE_NAME}"
-
-# The Kind fixture installs Kueue CRDs only (no real Kueue controller, no
-# GPU device plugin). Unsuspend by hand to model admission after proving
-# Tau submitted through the designated LocalQueue -- this is a CPU-only Job,
-# not a claim of real GPU scheduling or execution.
-kubectl -n "${TARGET_NAMESPACE}" patch job "${smoke_job}" --type=merge -p '{"spec":{"suspend":false}}' >/dev/null
-wait "${SMOKE_PID}"
-grep -q "Run: ${smoke_job}" "${tau_home}/smoke.out"
-grep -q "Workspace: ${WORKSPACE_NAME}" "${tau_home}/smoke.out"
-grep -q "Phase: Succeeded" "${tau_home}/smoke.out"
-grep -q "Platform reachable:" "${tau_home}/smoke.out"
 
 (
   cd "${tau_home}"
@@ -939,17 +877,34 @@ grep -q "job.batch/project-train created (server dry run)" "${SCRATCH_DIR}/tau-r
 (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run status "${smoke_job}"
-) >"${tau_home}/status.out"
-grep -q "Job: ${TARGET_NAMESPACE}/${smoke_job}" "${tau_home}/status.out"
+    "${tau_home}/tau-bin" run train >"${tau_home}/train.out" 2>"${tau_home}/train.err"
+)
+
+train_job="project-train"
+kubectl -n "${TARGET_NAMESPACE}" get job "${train_job}" -o jsonpath='{.spec.suspend}' | grep -qx true
+kubectl -n "${TARGET_NAMESPACE}" get job "${train_job}" -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/queue-name}' | grep -qx "${WORKSPACE_NAME}"
+
+# The Kind fixture installs Kueue CRDs only (no real Kueue controller, no
+# GPU device plugin). Unsuspend by hand to model admission after proving
+# Tau submitted through the designated LocalQueue -- this is a CPU-only Job,
+# not a claim of real GPU scheduling or execution.
+kubectl -n "${TARGET_NAMESPACE}" patch job "${train_job}" --type=merge -p '{"spec":{"suspend":false}}' >/dev/null
+kubectl -n "${TARGET_NAMESPACE}" wait --for=condition=complete "job/${train_job}" --timeout="${WAIT_SECONDS}s"
+
 (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run logs "${smoke_job}"
+    "${tau_home}/tau-bin" run status "${train_job}"
+) >"${tau_home}/status.out"
+grep -q "Job: ${TARGET_NAMESPACE}/${train_job}" "${tau_home}/status.out"
+(
+  cd "${tau_home}"
+  HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
+    "${tau_home}/tau-bin" run logs "${train_job}"
 ) >"${tau_home}/logs.out"
-grep -q tau-onboarding-smoke-ok "${tau_home}/logs.out"
+grep -q rune-project-train-ok "${tau_home}/logs.out"
 
-kubectl -n "${TARGET_NAMESPACE}" delete job "${smoke_job}" --wait=false >/dev/null
+kubectl -n "${TARGET_NAMESPACE}" delete job "${train_job}" --wait=false >/dev/null
 
 # ---------------------------------------------------------------------------
 # Authorization migration: the same platform-owned desired state can explicitly

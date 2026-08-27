@@ -254,9 +254,8 @@ Verify egress for each node pool before using `runtime.pip`.
 | 2c | `nvidia-smi -mig 0` + `az vmss restart` | MIG is on by default; CUDA fails until it is off |
 | 3 | `tau cluster install`, `tau cluster validate installation` | |
 | 4 | `tau workspace create taugrid-default --apply` | NAME is optional; pass it explicitly to keep overrides aligned |
-| 5 | `tau run smoke` | connectivity probe |
-| 6 | `tau run --config tau.yaml` | the real workload |
-| 7 | `tau run status` / `tau run logs` | |
+| 5 | `tau run --config tau.yaml` | submit the workload |
+| 6 | `tau run status` / `tau run logs` | |
 
 Step 2b handles a timing issue. A GPU node reports `Ready` before the device
 plugin registers the device. Submitting during this interval leaves the pod

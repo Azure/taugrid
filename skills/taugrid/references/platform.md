@@ -91,23 +91,24 @@ tau/
   train.yaml
 ```
 
-The descriptor names the exact cluster and workspace contract. It must **never**
-contain a credential or kubeconfig. Also supply:
+The descriptor names a Kubernetes context, its access method, and the workspace
+contract. It must **never** contain a credential or kubeconfig. Also supply:
 
 - The TauWorkspace name.
 - Proof that `tau workspace check <name>` exits 0.
 - Connection instructions when `network.privateCluster` is `true`.
 
-On the researcher's first interactive `tau run`, Tau shows the workspace, AKS
-resource ID, context, and authorization mode; asks for approval; uses their
-signed-in Azure identity (or interactive browser, or device code with
-`TAU_AUTH_MODE=devicecode`); requests normal AKS cluster-user credentials; and
-writes a dedicated kubeconfig with mode `0600`.
+On the researcher's first cluster-backed `tau run`, Tau verifies the descriptor
+and writes a dedicated kubeconfig with mode `0600`. `access.method:
+kubeconfig` isolates the descriptor's named context from the normal kubeconfig
+loading rules. `access.method: aks` uses the researcher's signed-in Azure
+identity (or interactive browser, or device code with
+`TAU_AUTH_MODE=devicecode`) to request normal AKS cluster-user credentials.
 
-Their Azure identity must be allowed to list AKS cluster-user credentials.
-`kubelogin` is required for `workspace-rbac` and for any returned Entra exec
-kubeconfig. Connect to the VPN/private network first when the cluster is
-private.
+For AKS access, their Azure identity must be allowed to list cluster-user
+credentials. `kubelogin` is required for `workspace-rbac` and for any returned
+Entra exec kubeconfig. Connect to the VPN/private network first when the
+cluster is private.
 
 `tau workspace init-repo NAME` scaffolds a Tau-ready Python + uv project
 (README, `tau/smoke.yaml`, `tau/train.yaml`, training Dockerfile, lifecycle
