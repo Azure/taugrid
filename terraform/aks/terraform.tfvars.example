@@ -38,8 +38,10 @@ gpu_max_count            = 1
 
 # ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
 enable_adx = true
-# Empty generates a stable name shaped like taugrid1a2b3c4d. Set an explicit
-# globally unique 4-22 character lowercase alphanumeric name only when needed.
+# Empty generates a stable 20-character name such as taugrid1a2b3c4d5e6f7.
+# Set an explicit globally unique 4-22 character lowercase alphanumeric name only
+# when needed. Terraform preserves an existing cluster name; change it only through
+# an explicit migration.
 adx_cluster_name = ""
 
 # Terraform bootstraps this target namespace before the TauGrid install so ADX,

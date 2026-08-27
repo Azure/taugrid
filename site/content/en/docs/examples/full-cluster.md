@@ -169,11 +169,15 @@ enable_lifecycle_recorder = true
 workspace_namespace       = "taugrid-default"
 ```
 
-An empty `adx_cluster_name` generates a stable `taugrid<8-hex-characters>`
-candidate from the subscription, resource group, and AKS cluster names. Set an
-explicit globally unique name only if Azure reports that the candidate is in
-use. After apply, inspect the resolved name with
-`terraform output -raw adx_cluster_name`.
+An empty `adx_cluster_name` generates a stable 20-character
+`taugrid<13-hex-characters>` candidate from the subscription, resource group,
+and AKS cluster names. Set an explicit globally unique name only if Azure
+reports that the candidate is in use. Terraform preserves the deployed name on
+later applies, including a legacy 15-character automatic name, so upgrading does
+not replace the cluster. After apply, inspect the deployed name with
+`terraform output -raw adx_cluster_name`. An explicit name is used unchanged for
+a new cluster; changing the name of an existing cluster requires an explicit
+data-preserving migration.
 
 Terraform installs adx-mon alongside TauGrid. In self-managed mode it
 discovers the upstream DCGM exporter Pod. TauGrid GPU monitoring uses that
