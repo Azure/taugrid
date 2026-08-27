@@ -21,7 +21,7 @@ spec:
     // Row-remap metrics replace ECC SBE/DBE counters because the stock dcgm-exporter
     // default-counters.csv does not include DCGM_FI_DEV_ECC_{SBE,DBE}_VOL_TOTAL.
     // To add ECC counters, ship a custom dcgm-exporter ConfigMap.
-    .create-or-alter function GpuHealth () {
+    .create-or-alter function with (skipvalidation = 'true') GpuHealth () {
       let gpu_util = DCGMFIDEVGPUUTIL
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),

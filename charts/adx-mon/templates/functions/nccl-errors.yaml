@@ -12,7 +12,7 @@ spec:
   body: |
     // NCCL error view: extracts NCCL communication errors from container logs.
     // NCCL errors indicate GPU interconnect failures (NVLink, NVSwitch, InfiniBand).
-    .create-or-alter function NcclErrors () {
+    .create-or-alter function with (skipvalidation = 'true') NcclErrors () {
       ContainerLogs
       | where Body has "NCCL" and (Body has "error" or Body has "WARN" or Body has "unhandled")
       | extend namespace = tostring(Resource["k8s.namespace.name"]),

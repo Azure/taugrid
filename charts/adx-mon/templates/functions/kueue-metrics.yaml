@@ -15,7 +15,7 @@ spec:
     // NOTE: admission_wait and admission_attempts require the Kueue controller
     // Prometheus endpoint to be scraped (added in values-ai-runtime.yaml, WI-18).
     // Until then, those union legs return empty results (not an error).
-    .create-or-alter function KueueMetrics () {
+    .create-or-alter function with (skipvalidation = 'true') KueueMetrics () {
       let cq_pending = KubeCustomresourceClusterqueuePendingWorkloads
     | extend cluster=tostring(column_ifexists("Cluster", "")),
              cluster_queue = tostring(Labels.name);
