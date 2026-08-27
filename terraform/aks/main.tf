@@ -101,8 +101,9 @@ locals {
   bootstrap_workspace_enabled       = var.bootstrap_workspace != null
   bootstrap_workspace_name          = try(var.bootstrap_workspace.name, "")
   bootstrap_workspace_group         = try(var.bootstrap_workspace.entra_group_object_id, "")
+  bootstrap_workspace_path          = "${local.generated_directory}/bootstrap-workspace.yaml"
   command_interpreter_is_powershell = can(regex("(?i)(pwsh|powershell)(\\.exe)?$", try(var.command_interpreter[0], "")))
-  bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local_file.bootstrap_workspace[0].filename}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local_file.bootstrap_workspace[0].filename}' '${local.bootstrap_workspace_name}'"
+  bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local.bootstrap_workspace_path}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local.bootstrap_workspace_path}' '${local.bootstrap_workspace_name}'"
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
     gpu_monitoring_sku_name      = var.gpu_monitoring_sku_name
@@ -371,7 +372,7 @@ resource "terraform_data" "install_taugrid" {
 
 resource "local_file" "bootstrap_workspace" {
   count           = local.bootstrap_workspace_enabled ? 1 : 0
-  filename        = "${local.generated_directory}/bootstrap-workspace.yaml"
+  filename        = local.bootstrap_workspace_path
   file_permission = "0600"
   content = templatefile("${path.module}/bootstrap-workspace.yaml.tftpl", {
     workspace_name        = local.bootstrap_workspace_name
