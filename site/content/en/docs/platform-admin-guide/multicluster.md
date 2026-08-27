@@ -39,7 +39,7 @@ prerequisites:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.3.1 \
+  --version 0.3.2 \
   --namespace tau-system --create-namespace \
   --wait --atomic
 ```
