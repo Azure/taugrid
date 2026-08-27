@@ -1,7 +1,7 @@
 ---
 title: TauGrid visual curriculum
 weight: 5
-description: Twenty-five diagrams from evaluation through contribution
+description: Twenty-three diagrams from evaluation through contribution
 ---
 
 Each diagram answers one reader question and preserves an editable source, SVG, and PNG. Solid elements represent GA capabilities. Orange dashed elements represent Alpha or Beta capabilities. Purple dashed elements represent Planned work.

@@ -1,7 +1,7 @@
 ---
 title: What is TauGrid?
 weight: 1
-description: The open AI compute platform for Kubernetes infrastructure you control
+description: An open-source AI compute platform for Kubernetes infrastructure you control
 aliases:
   - "/docs/overview/what-is-tau/"
 ---
@@ -31,7 +31,7 @@ resume.
 ## One platform for researchers and operators
 
 - **Researchers move faster.** The Tau CLI turns repository configuration into
-  repeatable runs without requiring every project to rebuild cluster access,
+  repeatable runs without requiring every project to set up its own cluster access,
   queueing, GPU placement, storage, logs, and recovery.
 - **Platform teams stay in control.** Kubernetes remains the source of truth
   for capacity, policy, identity, and workload state. Teams deploy TauGrid into
@@ -55,7 +55,7 @@ TauGrid brings together:
 
 Each layer keeps a clear operational owner: Kubernetes schedules pods, Kueue
 admits workloads, Ray and model frameworks execute training, and TauGrid
-provides the cohesive product experience across them.
+ties them together into a single workflow.
 
 Read [Architecture](../architecture/) for component ownership or
 [Getting started on Kubernetes](../../platform-admin-guide/kubernetes/) for a

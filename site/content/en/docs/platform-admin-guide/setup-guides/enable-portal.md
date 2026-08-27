@@ -46,7 +46,7 @@ The installation validation should include `PASS Portal`, the rollout should com
 
 ## Confirm release capability before enabling ADX boards
 
-Use a published TauGrid release whose chart and images include native Kusto Portal support; confirm the template contract for the exact release you use rather than assuming an arbitrary older release has the same one. The matching `taugrid-core` chart must accept `portal.runHistory.enabled` with `portal.kusto.endpoint` and no `portal.kusto.queryCommand`, and it must derive the `azure.workload.identity/use: "true"` Pod label from the Portal ServiceAccount's `azure.workload.identity/client-id` annotation.
+Use a published TauGrid release whose chart and images include native Kusto Portal support. Confirm the template contract for the exact release you use. The matching `taugrid-core` chart must accept `portal.runHistory.enabled` with `portal.kusto.endpoint` and no `portal.kusto.queryCommand`, and it must derive the `azure.workload.identity/use: "true"` Pod label from the Portal ServiceAccount's `azure.workload.identity/client-id` annotation.
 
 Before changing a production release, render the exact published chart and review these conditions together with its pinned Portal image. If the release lacks them, use a newer published release instead of working around the gate with a nonexistent `queryCommand` or a manual Deployment patch.
 

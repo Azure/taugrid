@@ -25,7 +25,7 @@ the full `tau.yaml` field set. `tau run` automatically discovers the checked-in
 workspace connection; `tau workspace connection inspect` is only an optional
 offline diagnostic.
 
-Validate before you spend a full submission, then submit:
+Validate before submitting a real workload:
 
 ```bash
 cd <research-repository>
@@ -50,7 +50,7 @@ driver's execution output rather than head-pod logs; for batch Jobs it streams
 the Job pod logs. `get` fetches durable run results and artifacts once the run
 has produced them.
 
-Named `status` and `logs` also work for a batch Job submitted outside TauGrid. Such
+The `status` and `logs` subcommands also work for a batch Job submitted outside TauGrid. Such
 Jobs are hidden from the default TauGrid-owned list; opt in when investigating a
 shared namespace:
 

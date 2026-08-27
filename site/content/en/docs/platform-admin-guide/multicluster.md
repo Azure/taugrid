@@ -127,12 +127,7 @@ workloads.
 
 ## Promotion blockers
 
-MultiKueue remains Alpha until released evidence covers manager-to-worker E2E
-across this environment matrix, negative authorization and credential tests,
-credential rotation and revocation, and repeatable enablement, drain, and
-rollback exercises.
-
-Promotion is blocked on a supported environment/version matrix, released
-manager-to-worker E2E coverage, negative authorization and credential tests,
-credential rotation/revocation evidence, and repeatable enablement, drain, and
-rollback exercises.
+Promotion to Beta is blocked on: a supported environment/version matrix,
+released manager-to-worker E2E coverage, negative authorization and credential
+tests, credential rotation/revocation evidence, and repeatable enablement,
+drain, and rollback exercises.

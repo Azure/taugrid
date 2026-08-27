@@ -29,5 +29,6 @@ controller binds the researcher subject in the workspace namespace.
 only, and the platform grants researcher access separately; some existing
 clusters run that way. The [multiple-workspace lifecycle](../../developer-guide/concepts/workspaces/#multiple-workspaces) is
 Alpha: v0 activates one workspace and blocks additional workspace objects until
-the active workspace is removed. Researcher isolation still requires its
-negative-access and production rollout gates.
+the active workspace is removed. Researcher isolation still requires tests proving
+that one workspace cannot access another's resources, plus production rollout
+gates.
