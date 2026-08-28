@@ -434,7 +434,7 @@ func (s *Server) viewer(r *http.Request) (Viewer, error) {
 
 func (s *Server) resolveWorkspaceScope(r *http.Request) (WorkspaceScope, error) {
 	if s.workspaceDirectory == nil {
-		scope := s.legacyScope
+		scope := s.singleWorkspaceScope
 		if scope.WorkspaceID == "" {
 			scope.WorkspaceID = "default"
 		}

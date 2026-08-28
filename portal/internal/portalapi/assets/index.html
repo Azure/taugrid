@@ -266,9 +266,11 @@
   }
 
   function withWorkspace(path, workspace) {
-    // Legacy (unscoped) portals report managed=false and use a "default"
+    // Single-workspace portals report managed=false and use their configured
+    // workspace identity.
     // sentinel workspace. Injecting workspace=default into links would filter
-    // Kusto rows by a tau_workspace tag that legacy data never carries, so we
+    // Kusto rows by a tau_workspace tag that an unscoped deployment might not
+    // carry, so we
     // leave paths untouched unless the portal runs in managed workspace mode.
     if (!workspaceManaged) return path;
     const id = workspace === undefined ? currentWorkspace() : workspace;

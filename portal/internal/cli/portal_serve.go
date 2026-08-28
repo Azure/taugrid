@@ -96,7 +96,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			// a portal on a host without cluster access still serves the shell,
 			// Stellar, and the Kusto boards. /api/portal/{jobs,ray,nodes,runs}
 			// then return 503 until access is configured.
-			rayOpts, runsOpts := legacyKubernetesBoardOptions(namespace)
+			rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions(namespace)
 			var nodesOpts portalapi.NodesOptions
 			if client, err := kubeclient.New(kubeconfig); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, and Runs boards disabled (no Kubernetes access): %v\n", err)
@@ -183,10 +183,10 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	// includeOpen=false: the portal has no single browser target to auto-open.
 	addExpServeFlags(cmd, &opts, false)
 	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig for the Jobs board when running out-of-cluster (default: in-cluster ServiceAccount, then $KUBECONFIG)")
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "optional legacy namespace for the Ray and Runs boards; empty reads cluster-wide and managed workspaces override it")
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "optional namespace for the Ray and Runs boards; empty reads cluster-wide and workspace directory entries override it")
 	cmd.Flags().StringVar(&jobsScopeMode, "jobs-scope-mode", string(portalapi.JobsScopeDisabled), "computed Jobs board scope mode: disabled, workspace, or operator")
 	cmd.Flags().StringSliceVar(&operatorScopes, "jobs-operator-scope", nil, "trusted operator Jobs scope as team=namespace/localQueue (repeatable; operator mode only)")
-	cmd.Flags().StringVar(&clusterName, "cluster", "", "legacy/default cluster scope for Kusto-backed boards (required when durable run history is configured)")
+	cmd.Flags().StringVar(&clusterName, "cluster", "", "cluster scope for Kusto-backed boards (required when durable run history is configured without a workspace directory)")
 	cmd.Flags().StringVar(&directory, "workspace-directory", "", "metadata-only JSON workspace directory; enables trusted Entra identity headers and server-resolved workspace scope")
 	cmd.Flags().StringVar(&userHeader, "workspace-user-header", "", "trusted authenticated user header (default: X-MS-CLIENT-PRINCIPAL-NAME)")
 	cmd.Flags().StringVar(&groupsHeader, "workspace-groups-header", "", "trusted authenticated groups header (default: X-MS-CLIENT-PRINCIPAL-GROUPS; comma or semicolon separated)")
@@ -200,7 +200,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	return cmd
 }
 
-func legacyKubernetesBoardOptions(namespace string) (portalapi.RayOptions, portalapi.RunsOptions) {
+func singleWorkspaceKubernetesBoardOptions(namespace string) (portalapi.RayOptions, portalapi.RunsOptions) {
 	return portalapi.RayOptions{Namespace: namespace}, portalapi.RunsOptions{Namespace: namespace}
 }
 

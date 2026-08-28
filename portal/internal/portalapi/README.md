@@ -1,7 +1,7 @@
 # portalapi — unified observability portal
 
 `portalapi` serves the runtime's single read-only web surface: the `/portal`
-frontend shell and the `/api/portal/*` board APIs. In legacy single-workspace
+frontend shell and the `/api/portal/*` board APIs. In single-workspace
 mode it also reuses the mounted Stellar experience (`/stellar*`,
 `/api/*stellar*`) unchanged for Experiments.
 It is started by `taugrid-portal portal serve` and, in-cluster, by a Deployment behind an
@@ -32,7 +32,7 @@ internal load balancer. It follows the persona-centered UI direction proposed in
   Kusto workspace boundary. Local scopes use local readers; remote scopes
   redirect only to a registered per-cluster Portal or return an explicit
   unavailable state.
-- **Experiments embed** — legacy mode keeps the persona sidebar visible and
+- **Experiments embed** — single-workspace mode keeps the persona sidebar visible and
   loads the mounted Stellar SPA in a same-origin `<iframe src="/stellar">`.
   Managed workspaces may use a local `/stellar` path or an explicit HTTPS
   experiment endpoint, but `experimentsUrl` requires a Kusto-backed source.
@@ -62,9 +62,8 @@ Portal endpoints are server-configured HTTPS origins/base paths. Browser query
 parameters cannot replace them and endpoint-like parameters are removed when a
 request is redirected.
 
-Without `--workspace-directory`, the Portal retains its previous behavior as one
-implicit `default` workspace derived from CLI flags. This is the supported
-migration path for single-workspace deployments. Directory mode intentionally
+Without `--workspace-directory`, the Portal serves one workspace derived from
+the `--workspace` CLI flag, defaulting to `default` when it is unset. Directory mode intentionally
 does not load remote kubeconfigs or infer viewer access from the shared Portal
 ServiceAccount. Local expstore and `source=auto` remain single-store tools rather
 than multi-tenant boundaries; managed workspace experiment views force
