@@ -734,7 +734,7 @@ func validateProfiler(mode string) (string, error) {
 
 func formatRunJobSubmission(name, profileName, namespace, kubeContext string) string {
 	return fmt.Sprintf(
-		"submitted %s (profile=%s, ns=%s)\nstatus:  tau run status %s -n %s%s\nlogs:    tau run logs %s -n %s -f%s\nprofile: tau run status %s -n %s --run-profile%s\n",
+		"submitted %s (profile=%s, ns=%s)\nstatus:  tau run status %s -n %s%s\nlogs:    tau logs %s -n %s -f%s\nprofile: tau run status %s -n %s --run-profile%s\n",
 		name, profileName, namespace,
 		name, namespace, contextFlag(kubeContext),
 		name, namespace, contextFlag(kubeContext),

@@ -93,6 +93,49 @@ network:
 	return root
 }
 
+func TestListCachedConnectionsReturnsConfiguredRoutesInStableOrder(t *testing.T) {
+	configDir := t.TempDir()
+	connectionsDir := filepath.Join(configDir, "connections")
+	if err := os.MkdirAll(connectionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	states := map[string]connectionState{
+		"z.json": {
+			Schema: connectionStateSchema, Workspace: "vision", ContextName: "west",
+			KubeconfigPath: "/tmp/vision-kubeconfig", Namespace: "vision-ns",
+			WorkspaceUID: "vision-uid", ConfiguredAt: now,
+		},
+		"a.json": {
+			Schema: connectionStateSchemaV2, Workspace: "language", ContextName: "east",
+			KubeconfigPath: "/tmp/language-kubeconfig", Namespace: "language-ns",
+			WorkspaceUID: "language-uid", ConfiguredAt: now,
+		},
+		"partial.json": {
+			Schema: connectionStateSchema, Workspace: "incomplete",
+		},
+	}
+	for name, state := range states {
+		if err := fileutil.WriteJSONFileAtomic(filepath.Join(connectionsDir, name), state); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ListCachedConnections(configDir)
+	if err != nil {
+		t.Fatalf("ListCachedConnections: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("connections = %#v", got)
+	}
+	if got[0].Workspace != "language" || got[1].Workspace != "vision" {
+		t.Fatalf("connections are not stably sorted: %#v", got)
+	}
+	if got[0].Namespace != "language-ns" || got[0].KubeconfigPath != "/tmp/language-kubeconfig" {
+		t.Fatalf("language route = %#v", got[0])
+	}
+}
+
 func testKubeconfig(server, token string) []byte {
 	return []byte(fmt.Sprintf(`apiVersion: v1
 kind: Config

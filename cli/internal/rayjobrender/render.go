@@ -475,7 +475,7 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		// cleanup, not an independent knob (KubeRay's own default is 0). Until it
 		// elapses a finished RayJob keeps its head/worker pods Running and holding
 		// node CPU/GPU, so a job can report SUCCEEDED while still consuming the
-		// cluster. Keep a short grace window so `tau run logs` can still read from
+		// cluster. Keep a short grace window so `tau logs` can still read from
 		// the Ray dashboard just after completion, then release the capacity.
 		// Matches the eval/CPU templates, which delete immediately for the same reason.
 		"ttlSecondsAfterFinished": int64(rayJobTTLSecondsAfterFinished),

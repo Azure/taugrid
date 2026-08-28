@@ -530,7 +530,7 @@ func printManagedWorkflowSubmission(stdout io.Writer, m *manifest.Manifest, name
 	isRay := workloadKind == manifest.WorkloadKindRayJob || workloadKind == manifest.WorkloadKindRayJobEval
 	followUp := fmt.Sprintf(
 		"status:  tau run status %s -n %s%s\n"+
-			"logs:    tau run logs %s -n %s -f%s\n"+
+			"logs:    tau logs %s -n %s -f%s\n"+
 			"profile: tau run status %s -n %s --run-profile%s\n",
 		resourceName, namespace, contextFlag(kubeContext),
 		resourceName, namespace, contextFlag(kubeContext),
@@ -548,7 +548,7 @@ func printManagedWorkflowSubmission(stdout io.Writer, m *manifest.Manifest, name
 			"status:  tau run status %s -n %s%s\n"+
 				"rayjob:  kubectl get rayjob %s -n %s%s\n"+
 				"head:    cluster=$(kubectl get rayjob %s -n %s -o jsonpath='{.status.rayClusterName}'%s) && kubectl get pod -n %s -l ray.io/cluster=$cluster,ray.io/node-type=head%s\n"+
-				"logs:    tau run logs %s -n %s -f%s\n"+
+				"logs:    tau logs %s -n %s -f%s\n"+
 				"kueue:   uid=$(kubectl get rayjob %s -n %s -o jsonpath='{.metadata.uid}'%s) && kubectl get workload -n %s -l kueue.x-k8s.io/job-uid=$uid%s\n",
 			resourceName, namespace, contextFlag(kubeContext),
 			resourceName, namespace, contextFlag(kubeContext),

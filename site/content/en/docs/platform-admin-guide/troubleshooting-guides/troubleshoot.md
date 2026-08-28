@@ -32,7 +32,7 @@ through the layers below, in order, until you reach that phase:
    remaining phases in `tau run status`.
 6. GPU/node/topology health -- `tau cluster validate nodes` /
    `tau cluster validate topology`.
-7. Ray/Job runtime progress and durable evidence -- `tau run logs <run-name>`
+7. Ray/Job runtime progress and durable evidence -- `tau logs <run-name>`
    and `taugrid-portal experiment status <name>`.
 8. Recovery handoff -- [Retry and resume](../recovery/).
 

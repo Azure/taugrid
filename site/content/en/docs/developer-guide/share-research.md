@@ -47,7 +47,7 @@ Both researchers can now check the run:
 
 ```bash
 tau run status <run-name>
-tau run logs <run-name>
+tau logs <run-name>
 ```
 
 Use `--watch` to keep the status open while the run starts:
@@ -167,7 +167,7 @@ Researcher 2 checks the same run from their own machine:
 
 ```bash
 tau run status tune-smoke
-tau run logs tune-smoke
+tau logs tune-smoke
 ```
 
 The names `ray-tune-demo` and `shared-research` are sample names. A team can

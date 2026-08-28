@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -95,11 +96,9 @@ func TestRunLogsCommand_LocalJobFallbackPreserved(t *testing.T) {
 		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
 			return status.Snapshot{Name: "train-001", Namespace: "ray"}, nil
 		},
-		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
-			return "", errors.New("not a rayjob")
-		},
-		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
-			return "batch job logs\n", nil
+		jobFollow: func(_ context.Context, _ *kube.Runner, _, _ string, _ runLogsOptions, writer io.Writer) error {
+			_, err := io.WriteString(writer, "batch job logs\n")
+			return err
 		},
 	})
 	if err != nil {
@@ -107,6 +106,46 @@ func TestRunLogsCommand_LocalJobFallbackPreserved(t *testing.T) {
 	}
 	if got := out.String(); got != "batch job logs\n" {
 		t.Fatalf("unexpected batch job logs output: %q", got)
+	}
+}
+
+func TestRunLogsCommand_MissingJobFollowDoesNotSucceedSilently(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "missing", runLogsOptions{
+		Namespace: "ray",
+		Follow:    true,
+		Tail:      10,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "missing", Namespace: "ray"}, nil
+		},
+		jobFollow: func(context.Context, *kube.Runner, string, string, runLogsOptions, io.Writer) error {
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), `no logs found for run "missing"`) {
+		t.Fatalf("error = %v, want missing-run failure", err)
+	}
+}
+
+func TestLocalJobLogsFollowStreamsWithDetailedFlags(t *testing.T) {
+	r := fakeKubectlRunner(t, `#!/bin/sh
+case "$*" in
+  *"logs -l job-name=train-001 -c trainer --timestamps=true -f --tail=25"*) printf 'live batch log\n' ;;
+  *) echo "unexpected: $*" >&2; exit 3 ;;
+esac
+`)
+	opts := runLogsOptions{
+		Container:  "trainer",
+		Timestamps: true,
+		Follow:     true,
+		Tail:       25,
+	}
+	var out strings.Builder
+	if err := localJobLogsFollow(context.Background(), r, "ray", "train-001", opts, &out); err != nil {
+		t.Fatalf("follow batch logs: %v", err)
+	}
+	if got := out.String(); got != "live batch log\n" {
+		t.Fatalf("output = %q", got)
 	}
 }
 
@@ -229,6 +268,40 @@ func TestRunLogsRoutesBatchFlagsForPartialSameNameSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunLogsStreamsPartialLocalRayJobSnapshot(t *testing.T) {
+	var out bytes.Buffer
+	var followed bool
+	err := runLogsCommandWithHooks(context.Background(), &out, nil, "ray-train", runLogsOptions{
+		Namespace: "ray",
+		Follow:    true,
+		Tail:      25,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				RayJob: status.RayJob{Found: true, Name: "ray-train"},
+			}, errors.New("workloads forbidden")
+		},
+		rayJobFollow: func(_ context.Context, _ *kube.Runner, namespace, name string, tail int, writer io.Writer) error {
+			followed = true
+			if namespace != "ray" || name != "ray-train" || tail != 25 {
+				t.Fatalf("follow target = %s/%s tail=%d", namespace, name, tail)
+			}
+			_, err := io.WriteString(writer, "streamed ray logs\n")
+			return err
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("partial local RayJob must not route to buffered batch logs")
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("partial local RayJob follow: %v", err)
+	}
+	if !followed || out.String() != "streamed ray logs\n" {
+		t.Fatalf("followed=%v output=%q", followed, out.String())
+	}
+}
+
 func TestRunLogsCommand_FoundRayJobNeverFallsBackToJobNameSelector(t *testing.T) {
 	var out bytes.Buffer
 	err := runLogsCommandWithHooks(context.Background(), &out, nil, "train-001", runLogsOptions{
@@ -268,7 +341,7 @@ func TestRunLogsCommand_FoundRayJobNeverFallsBackToJobNameSelector(t *testing.T)
 	}
 }
 
-func TestRunLogsCommand_FoundRayJobWithJobIDOmitsStartupHint(t *testing.T) {
+func TestRunLogsCommand_FoundRayJobWithJobIDReportsStatusHint(t *testing.T) {
 	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "train-001", runLogsOptions{
 		Namespace: "ray",
 	}, runLogsHooks{
@@ -298,7 +371,10 @@ func TestRunLogsCommand_FoundRayJobWithJobIDOmitsStartupHint(t *testing.T) {
 		t.Fatalf("expected the underlying cause to survive, got %q", err.Error())
 	}
 	if strings.Contains(err.Error(), "status.jobId") {
-		t.Fatalf("startup hint must not appear once jobId is populated, got %q", err.Error())
+		t.Fatalf("jobId-specific hint must not appear once jobId is populated, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "tau run status train-001") {
+		t.Fatalf("not-ready RayJob error must point to startup status, got %q", err.Error())
 	}
 }
 

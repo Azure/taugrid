@@ -90,7 +90,7 @@ Submit and follow the run:
 tau run --workspace taugrid-default \
   --config examples/portal-ray-stellar/tau.yaml
 tau run status portal-ray-stellar --watch
-tau run logs portal-ray-stellar
+tau logs portal-ray-stellar
 ```
 
 ## Inspect durable evidence

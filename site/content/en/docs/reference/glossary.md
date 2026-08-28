@@ -159,7 +159,7 @@ default a researcher writes directly. See
 ## Run {#run}
 
 One execution of a [target](#target) plus its lifecycle handle -- the
-object `tau run status`, `tau run logs`, `tau run get`,
+object `tau run status`, `tau logs`, `tau run get`,
 `tau run cancel`, and `tau run resume` operate on.
 
 ## Workload (Job / RayJob) {#workload}

@@ -6,7 +6,7 @@ description: Canonical Tau CLI command families
 
 {{< maturity status="ga" reviewed="2026-07-16" >}}
 
-The Tau CLI has exactly seven public command roots. Every example in this site uses
+The Tau CLI has exactly eight public command roots. Every example in this site uses
 one of these roots and its current nested subcommand path:
 
 | Root | Purpose |
@@ -14,6 +14,7 @@ one of these roots and its current nested subcommand path:
 | [`tau cluster`](#tau-cluster) | Install/uninstall TauGrid and validate an existing cluster |
 | [`tau workspace`](#tau-workspace) | Create/adopt workspaces and inspect readiness, quota, and repo scaffolds |
 | [`tau run`](#tau-run) | Config-first submit, lifecycle, and retry/resume for one [run](../glossary/#run) |
+| [`tau logs`](#tau-logs) | Find a run through configured Tau workspaces and stream its logs |
 | [`tau serve`](#tau-serve) | Render and manage serving deployments |
 | [`tau data`](#tau-data) | Inspect dataset and model registries |
 | `tau python` | Proxy setup and authoring commands to the Python SDK |
@@ -24,7 +25,7 @@ Run evidence and the observability portal ship in a separate binary,
 below.
 
 The old flat roots have been removed. Pre-v0.5 top-level aliases (ray, model,
-dataset, exp, queue, status, logs, cancel, topology, lanes, storage, eval,
+dataset, exp, queue, status, cancel, topology, lanes, storage, eval,
 shell, submit, and finetune) are gone; their capabilities live under the seven
 roots above. Job execution is owned directly by the config-first `tau run` path.
 
@@ -143,7 +144,7 @@ than a subcommand**: `tau run train --dry-run=client` runs the `run` root with
 | `explain-config` | Print the direct run config field reference |
 | `list` | List TauGrid-managed Jobs/RayJobs in a namespace |
 | `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
-| `logs <job-name>` | Stream Ray driver logs or the batch Job pod logs |
+| `logs <job-name>` | Compatibility path for `tau logs <job-name>` |
 | `get <name>` | Fetch durable run results and artifacts |
 | `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |
 | `resume <name> --config tau.yaml` | Manually restart a failed run from its checkpoint |
@@ -152,6 +153,15 @@ There is no `tau run retry` subcommand; automatic retry is driven entirely
 by the `resilience.*` fields in your run config. See
 [recovery](../../platform-admin-guide/recovery/) for the full retry and resume
 contract.
+
+## `tau logs`
+
+`tau logs <run-name>` searches the connected workspace first, then the locally
+configured Tau workspace connections. It streams Ray driver logs or batch Job
+pod logs without requiring Kubernetes context or namespace flags. Use
+`--workspace`, or `--context` and `--namespace`, when the same run name exists
+in more than one configured workspace. Use the native `--tail N` option instead
+of piping through the shell's `tail`.
 
 ## `tau serve`
 
@@ -205,6 +215,7 @@ Use built-in help for the exact installed release:
 ```bash
 tau --help
 tau run --help
+tau logs --help
 tau run status --help
 ```
 
