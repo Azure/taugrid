@@ -17,6 +17,10 @@ baselineQueue:
           - name: nvidia.com/gpu
             nominalQuota: "${gpu_quota}"
 
+tau-core-controller:
+  tauCluster:
+    defaultWorkloadProfileNamespace: ${workspace_namespace}
+
 taugrid-core:
   portal:
     enabled: true

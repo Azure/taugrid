@@ -94,6 +94,50 @@ func TestWorkloadProfilesResolveInObserveAndReconcileModesWithoutKueueMutations(
 	}
 }
 
+func TestWorkloadProfileBecomesReadyWhenCustomNamespaceLocalQueueExists(t *testing.T) {
+	ctx := context.Background()
+	workloadProfile := testWorkloadProfile("azure.research.training.l", []string{"team-alpha"})
+	workloadProfile.DefaultLocalQueue = "jobqueue"
+	workloadProfile.Priorities = profile.ProfilePriorities{
+		WorkloadPriorityClassName: "jobqueue-priority",
+		PodPriorityClassName:      "jobqueue-pod-priority",
+	}
+	cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{workloadProfile})
+	dependencies := omitProfileDependency(validProfileDependencies("jobqueue", "team-alpha"), "localqueue/team-alpha/jobqueue")
+	baseClient := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(dependencies...).
+		Build()
+	reconciler := &TauClusterReconciler{Client: baseClient}
+
+	state, err := reconciler.observeWorkloadProfiles(ctx, cluster)
+	if err != nil {
+		t.Fatalf("observe workload profiles before LocalQueue: %v", err)
+	}
+	if state.status.Ready != 0 {
+		t.Fatalf("ready profiles before LocalQueue = %d, want 0", state.status.Ready)
+	}
+	assertCondition(t, state.status.Profiles[0].Conditions, profile.ConditionReady, metav1.ConditionFalse)
+
+	if err := baseClient.Create(ctx, testLocalQueue("team-alpha", "jobqueue", "jobqueue-cq")); err != nil {
+		t.Fatalf("create custom namespace LocalQueue: %v", err)
+	}
+	state, err = reconciler.observeWorkloadProfiles(ctx, cluster)
+	if err != nil {
+		t.Fatalf("observe workload profiles after LocalQueue: %v", err)
+	}
+	if state.status.Ready != 1 {
+		t.Fatalf("ready profiles after LocalQueue = %d, want 1", state.status.Ready)
+	}
+	resolved := state.status.Profiles[0]
+	assertCondition(t, resolved.Conditions, profile.ConditionReady, metav1.ConditionTrue)
+	if got, want := resolved.LocalQueues, []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "jobqueue-cq",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved LocalQueues = %#v, want %#v", got, want)
+	}
+}
+
 func TestClusterQueueAdmissionCheckNamesSupportsKueueShapes(t *testing.T) {
 	clusterQueue := testObservedClusterQueue("research-cq", nil, true)
 	clusterQueue.Object["spec"].(map[string]any)["admissionChecksStrategy"] = map[string]any{

@@ -113,7 +113,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -131,7 +131,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -149,7 +149,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -167,7 +167,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -185,7 +185,7 @@ spec:
         lanes:
         - eval
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -203,7 +203,7 @@ spec:
         lanes:
         - elastic
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -221,7 +221,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - experimental
       defaultLocalQueue: jobqueue
@@ -239,7 +239,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - experimental
       defaultLocalQueue: jobqueue
@@ -257,7 +257,7 @@ spec:
         lanes:
         - training
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - experimental
       defaultLocalQueue: jobqueue
@@ -275,7 +275,7 @@ spec:
         lanes:
         - eval
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - experimental
       defaultLocalQueue: jobqueue
@@ -293,7 +293,7 @@ spec:
         lanes:
         - elastic
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - experimental
       defaultLocalQueue: jobqueue
@@ -311,7 +311,7 @@ spec:
         lanes:
         - large-memory
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -329,7 +329,7 @@ spec:
         lanes:
         - large-memory
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -347,7 +347,7 @@ spec:
         lanes:
         - large-memory
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue
@@ -365,7 +365,7 @@ spec:
         lanes:
         - large-memory
         namespaces:
-        - taugrid-default
+        - 'taugrid-default'
         teams:
         - research
       defaultLocalQueue: jobqueue

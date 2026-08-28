@@ -55,6 +55,23 @@ tests:
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
+      - equal:
+          path: spec.workloadProfiles[0].applicability.namespaces[0]
+          value: taugrid-default
+
+  - it: renders built-in workload profiles for a custom workspace namespace
+    set:
+      tauCluster.defaultWorkloadProfileNamespace: team-alpha
+    asserts:
+      - lengthEqual:
+          path: spec.workloadProfiles
+          count: 15
+      - equal:
+          path: spec.workloadProfiles[0].applicability.namespaces[0]
+          value: team-alpha
+      - equal:
+          path: spec.workloadProfiles[14].applicability.namespaces[0]
+          value: team-alpha
 
   - it: replaces the catalog and appends a platform supplied mapping
     set:
