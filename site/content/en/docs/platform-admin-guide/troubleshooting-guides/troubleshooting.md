@@ -92,7 +92,7 @@ permissions are absent.
 | 4 | [Queue](../../reference/glossary/#queue) admission and quota | `tau run status <run-name>` (Kueue admission phase) | Platform/queue owner |
 | 5 | Kubernetes scheduling, DRA, image pull, init, readiness | `tau run status <run-name>` (remaining phases) | Platform (scheduling/DRA/image) or researcher (crash) |
 | 6 | GPU/node/topology health | `tau cluster validate nodes` / `tau cluster validate topology` | Platform/node-pool operator |
-| 7 | Ray/Job runtime progress and durable evidence | `tau run logs <run-name>` and `taugrid-portal experiment status <name>` | Researcher (app logic) or platform (evidence pipeline) |
+| 7 | Ray/Job runtime progress and durable evidence | `tau logs <run-name>` and `taugrid-portal experiment status <name>` | Researcher (app logic) or platform (evidence pipeline) |
 | 8 | Recovery handoff | -- | See [Retry and resume](../recovery/) |
 
 ## 1. Repository/connection resolution and cluster access
@@ -348,11 +348,11 @@ progress, and whether that progress is durably recorded as
 **Primary commands:**
 
 ```bash
-tau run logs <run-name>
+tau logs <run-name>
 taugrid-portal experiment status <name>
 ```
 
-`tau run logs` fetches the actual Ray Job driver execution log for a
+`tau logs` fetches the actual Ray Job driver execution log for a
 RayJob (not head-pod container logs), or the batch `Job`'s pod logs for a
 plain job. `taugrid-portal experiment status`/`taugrid-portal experiment list`
 show durable
@@ -365,7 +365,7 @@ After KubeRay deletes a terminal RayJob's head pod, read the driver output from
 the central log offload by supplying the explicit ADX identity:
 
 ```bash
-tau run logs <run-name> \
+tau logs <run-name> \
   --kusto-cluster <Logs.ContainerLogs Cluster value> \
   --kusto-endpoint <adx-endpoint> \
   --kusto-database <logs-database>

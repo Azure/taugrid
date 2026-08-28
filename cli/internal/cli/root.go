@@ -8,6 +8,7 @@
 //	cluster    install, uninstall, and validate the TauGrid distribution
 //	workspace  inspect workspaces, request quota, scaffold repos
 //	run        submit a workload from a config, then drive its lifecycle
+//	logs       discover a run through configured workspaces and stream its logs
 //	serve      deploy, scale, inspect, and delete model endpoints
 //	data       dataset registry and model checkpoint registry
 //	python     proxy to the Tau Python SDK helper commands
@@ -48,6 +49,7 @@ contract; the Go CLI remains the Kubernetes executor.`,
 		newClusterCmd(),
 		newWorkspaceCmd(),
 		newRunCmd(),
+		newRootLogsCmd(),
 		newServeCmd(),
 		newDataCmd(),
 		newPythonCmd(),

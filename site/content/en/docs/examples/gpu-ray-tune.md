@@ -368,7 +368,7 @@ from `tau/workspace.connection.yaml`, so skip passing `--context`,
 Immediately capture the Ray Jobs application stream in one terminal:
 
 ```bash
-tau run logs tune-smoke -f | tee tune-smoke.log
+tau logs tune-smoke -f | tee tune-smoke.log
 ```
 
 Watch lifecycle state in another:
@@ -406,7 +406,7 @@ kubectl get clusterqueue jobqueue -o yaml
 
 KubeRay removes the RayCluster pods shortly after completion. Post-run local
 logs and `/home/nonroot/ray_results` persist only as long as the head pod
-unless central log offload is configured. Keep `tau run logs -f` attached through completion, or configure
+unless central log offload is configured. Keep `tau logs -f` attached through completion, or configure
 the platform's supported central log backend before the run. The checked-in
 example prints its result grid and best result to the application stream,
 which is the durable record; the head-local result directory is ephemeral

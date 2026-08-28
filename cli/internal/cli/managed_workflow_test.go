@@ -1174,7 +1174,7 @@ esac
 	for _, want := range []string{
 		"submitted tau-vit-enc-vision-smoke (kind=rayjob",
 		"status:  tau run status tau-vit-enc-vision-smoke",
-		"logs:    tau run logs tau-vit-enc-vision-smoke",
+		"logs:    tau logs tau-vit-enc-vision-smoke -n taugrid-e2e -f --context taugrid-flex",
 		"artifacts: /data is ephemeral (emptyDir); set storage.data_pvc to persist files beyond RayJob teardown",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -1182,7 +1182,7 @@ esac
 		}
 	}
 	for _, forbidden := range []string{
-		"logs:    tau run logs vit-enc-vision-smoke",
+		"logs:    tau logs vit-enc-vision-smoke -n taugrid-e2e -f --context taugrid-flex",
 		"results: tau run get",
 		"html:    tau run get",
 		"durable copy on  PVC",

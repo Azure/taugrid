@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -312,6 +313,14 @@ func renderShellCommand(args []string) string {
 }
 
 func newRunLogsCmd() *cobra.Command {
+	return newLogsCmd(false)
+}
+
+func newRootLogsCmd() *cobra.Command {
+	return newLogsCmd(true)
+}
+
+func newLogsCmd(discover bool) *cobra.Command {
 	var (
 		connection    runLifecycleConnectionFlags
 		follow        bool
@@ -325,11 +334,20 @@ func newRunLogsCmd() *cobra.Command {
 		kustoEndpoint string
 		kustoDatabase string
 	)
+	use := "logs <run-name>"
+	short := "Stream logs for a run"
+	if !discover {
+		short = "Stream logs for a job"
+	}
 	cmd := &cobra.Command{
-		Use:   "logs <job-name>",
-		Short: "Stream logs for a job",
+		Use:   use,
+		Short: short,
 		Args:  cobra.ExactArgs(1),
 		Long: `Stream logs for a tau-submitted job.
+
+When invoked as ` + "`tau logs`" + ` without routing flags, Tau searches the
+connected workspace first, then the locally configured Tau workspace connections.
+Use --workspace, or --context and --namespace, to select an exact target.
 
 For RayJobs with local worker access, fetches the actual job execution logs via
 the Ray Dashboard API (ray job logs) instead of the head pod container logs.
@@ -339,19 +357,13 @@ the selected worker is known. For batch/v1 Jobs, streams pod logs via the
 Kubernetes job-name=<name> label selector.
 
 Examples:
-  tau run logs lora-7b-001 -n ray
-  tau run logs lora-7b-001 -n ray -f --tail=100
-  tau run logs lora-7b-001 -n ray --kusto-endpoint=https://... --kusto-database=Logs`,
+  tau logs lora-7b-001
+  tau logs lora-7b-001 -f --tail=100
+  tau logs lora-7b-001 --context research-admin -n ray
+  tau logs lora-7b-001 --kusto-endpoint=https://... --kusto-database=Logs`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			resolvedContext, ns, restore, err := connection.resolve(cmd)
-			if err != nil {
-				return err
-			}
-			defer restore()
-			r := kube.New(resolvedContext)
-			return runLogsCommandWithHooks(cmd.Context(), cmd.OutOrStdout(), r, name, runLogsOptions{
-				Namespace:     ns,
+			opts := runLogsOptions{
 				Follow:        follow,
 				Tail:          tail,
 				Container:     container,
@@ -362,7 +374,37 @@ Examples:
 				KustoCluster:  kustoCluster,
 				KustoEndpoint: kustoEndpoint,
 				KustoDatabase: kustoDatabase,
-			}, runLogsHooks{})
+			}
+			explicitRoute := runContextExplicit(cmd) || cmd.Flags().Changed("namespace")
+			if discover && !explicitRoute && cmd.Flags().Changed("workspace") {
+				hooks := defaultRunLogsDiscoveryHooks(cmd, &connection)
+				route, found, err := cachedRunLogsWorkspaceRoute(connection.workspace, hooks)
+				if err != nil {
+					return err
+				}
+				if found {
+					return hooks.execute(cmd.Context(), cmd.OutOrStdout(), route, name, opts)
+				}
+				explicitRoute = true
+			}
+			if discover && !explicitRoute {
+				return runLogsWithDiscovery(
+					cmd.Context(),
+					cmd.OutOrStdout(),
+					cmd.ErrOrStderr(),
+					name,
+					opts,
+					defaultRunLogsDiscoveryHooks(cmd, &connection),
+				)
+			}
+			resolvedContext, ns, restore, err := connection.resolve(cmd)
+			if err != nil {
+				return err
+			}
+			defer restore()
+			r := kube.New(resolvedContext)
+			opts.Namespace = ns
+			return runLogsCommandWithHooks(cmd.Context(), cmd.OutOrStdout(), r, name, opts, runLogsHooks{})
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream new logs")
@@ -379,42 +421,40 @@ Examples:
 	return cmd
 }
 
-// rayJobLogs fetches Ray Job execution logs by exec-ing into the head pod.
+// rayJobLogs fetches Ray Job execution logs from the head pod.
 // Returns an error if the workload is not a RayJob or the logs cannot be retrieved.
-func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, follow bool) (string, error) {
-	// 1. Get the RayJob's jobId.
-	jobID, err := r.Raw(ctx, []string{
-		"-n", namespace, "get", "rayjob", name,
-		"-o", "jsonpath={.status.jobId}",
-	}, nil)
-	if err != nil || jobID == "" {
-		return "", fmt.Errorf("not a RayJob or jobId not available")
+func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, follow bool, tail int) (string, error) {
+	jobID, headPod, err := resolveRayJobLogTarget(ctx, r, namespace, name)
+	if err != nil {
+		return "", err
+	}
+	if tail == 0 && !follow {
+		return "", nil
 	}
 
-	// 2. Find the head pod through the KubeRay RayCluster name.
-	clusterName, err := r.Raw(ctx, []string{
-		"-n", namespace, "get", "rayjob", name,
-		"-o", "jsonpath={.status.rayClusterName}",
-	}, nil)
-	clusterName = strings.TrimSpace(clusterName)
-	if err != nil || clusterName == "" {
-		return "", fmt.Errorf("RayJob %s has no rayClusterName yet", name)
-	}
-	headPod, err := r.Raw(ctx, []string{
-		"-n", namespace, "get", "pods",
-		"-l", "ray.io/cluster=" + clusterName + ",ray.io/node-type=head",
-		"-o", "jsonpath={.items[0].metadata.name}",
-	}, nil)
-	if err != nil || headPod == "" {
-		return "", fmt.Errorf("head pod not found for RayJob %s", name)
+	// The log-offload sidecar supports Kubernetes' native tail and follow
+	// semantics. Prefer it for bounded reads; older RayJobs without the sidecar
+	// fall back to the Ray Dashboard CLI below.
+	var sidecarOut string
+	var sidecarErr error
+	if tail >= 0 {
+		sidecarOut, err = rayDriverSidecarLogs(ctx, r, namespace, headPod, follow, tail)
+		if err == nil {
+			return sidecarOut, nil
+		}
+		sidecarErr = err
 	}
 
-	// 3. Exec ray job logs inside the head pod.
-	execArgs := []string{"-n", namespace, "exec", headPod, "--", "ray", "job", "logs", jobID}
-	if follow {
-		execArgs = append(execArgs, "--follow")
+	execArgs := rayJobLogExecArgs(namespace, headPod, jobID, follow)
+	var out string
+	var execErr error
+	if tail >= 0 {
+		tailed := &lineTailWriter{limit: tail}
+		execErr = r.RawStream(ctx, execArgs, nil, tailed)
+		out = tailed.String()
+	} else {
+		out, execErr = r.Raw(ctx, execArgs, nil)
 	}
-	out, execErr := r.Raw(ctx, execArgs, nil)
 	if execErr == nil {
 		return out, nil
 	}
@@ -426,29 +466,194 @@ func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, fol
 	//
 	// The head pod also runs a log-offload sidecar that holds the same driver
 	// output and outlives the ray-head container, so fall back to reading it.
-	sidecarOut, sidecarErr := rayDriverSidecarLogs(ctx, r, namespace, headPod, follow)
-	if sidecarErr == nil {
-		return sidecarOut, nil
+	if tail < 0 {
+		sidecarOut, err := rayDriverSidecarLogs(ctx, r, namespace, headPod, follow, tail)
+		if err == nil {
+			return sidecarOut, nil
+		}
+		sidecarErr = err
 	}
-	return "", fmt.Errorf("ray job logs: %w (fallback to %s sidecar on pod %s also failed: %v)",
+	if out == "" {
+		out = sidecarOut
+	}
+	return out, fmt.Errorf("ray job logs: %w (fallback to %s sidecar on pod %s also failed: %v)",
 		execErr, raylogoffload.SidecarContainerName, headPod, sidecarErr)
+}
+
+func rayJobFollow(ctx context.Context, r *kube.Runner, namespace, name string, tail int, out io.Writer) error {
+	jobID, headPod, err := resolveRayJobLogTarget(ctx, r, namespace, name)
+	if err != nil {
+		return err
+	}
+
+	counted := &countingWriter{out: out}
+	sidecarErr := r.RawStream(ctx, rayDriverSidecarLogArgs(namespace, headPod, true, tail), nil, counted)
+	if sidecarErr == nil {
+		return nil
+	}
+	if counted.written > 0 {
+		return sidecarErr
+	}
+	if tail >= 0 {
+		return fmt.Errorf("bounded --follow requires the %s sidecar rendered by current Tau versions; retry with --tail=-1 for this legacy RayJob: %w",
+			raylogoffload.SidecarContainerName, sidecarErr)
+	}
+	if err := r.RawStream(ctx, rayJobLogExecArgs(namespace, headPod, jobID, true), nil, out); err != nil {
+		return fmt.Errorf(
+			"follow RayJob logs via Ray CLI: %w; prior %s sidecar attempt also failed: %v",
+			err,
+			raylogoffload.SidecarContainerName,
+			sidecarErr,
+		)
+	}
+	return nil
+}
+
+func resolveRayJobLogTarget(ctx context.Context, r *kube.Runner, namespace, name string) (string, string, error) {
+	jobID, err := r.Raw(ctx, []string{
+		"-n", namespace, "get", "rayjob", name,
+		"-o", "jsonpath={.status.jobId}",
+	}, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("read RayJob %s/%s: %w", namespace, name, err)
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return "", "", fmt.Errorf("%w: %s/%s has not reported status.jobId", errRayJobNotReady, namespace, name)
+	}
+
+	clusterName, err := r.Raw(ctx, []string{
+		"-n", namespace, "get", "rayjob", name,
+		"-o", "jsonpath={.status.rayClusterName}",
+	}, nil)
+	clusterName = strings.TrimSpace(clusterName)
+	if err != nil {
+		return "", "", errors.Join(
+			errRayJobNotReady,
+			fmt.Errorf("read RayJob %s/%s rayClusterName: %w", namespace, name, err),
+		)
+	}
+	if clusterName == "" {
+		return "", "", fmt.Errorf("%w: RayJob %s/%s has no rayClusterName yet", errRayJobNotReady, namespace, name)
+	}
+	headPod, err := r.Raw(ctx, []string{
+		"-n", namespace, "get", "pods",
+		"-l", "ray.io/cluster=" + clusterName + ",ray.io/node-type=head",
+		"-o", "jsonpath={.items[0].metadata.name}",
+	}, nil)
+	if err != nil {
+		return "", "", errors.Join(
+			errRayJobNotReady,
+			fmt.Errorf("list head pods for RayJob %s/%s: %w", namespace, name, err),
+		)
+	}
+	if strings.TrimSpace(headPod) == "" {
+		return "", "", fmt.Errorf("%w: head pod not found for RayJob %s", errRayJobNotReady, name)
+	}
+	return strings.TrimSpace(jobID), strings.TrimSpace(headPod), nil
+}
+
+func rayJobLogExecArgs(namespace, headPod, jobID string, follow bool) []string {
+	args := []string{"-n", namespace, "exec", headPod, "--", "ray", "job", "logs", jobID}
+	if follow {
+		args = append(args, "--follow")
+	}
+	return args
 }
 
 // rayDriverSidecarLogs reads driver output from the log-offload sidecar, which
 // survives the ray-head container's teardown on job completion.
-func rayDriverSidecarLogs(ctx context.Context, r *kube.Runner, namespace, headPod string, follow bool) (string, error) {
-	args := []string{"-n", namespace, "logs", headPod, "-c", raylogoffload.SidecarContainerName}
-	if follow {
-		args = append(args, "-f")
-	}
-	out, err := r.Raw(ctx, args, nil)
+func rayDriverSidecarLogs(ctx context.Context, r *kube.Runner, namespace, headPod string, follow bool, tail int) (string, error) {
+	out, err := r.Raw(ctx, rayDriverSidecarLogArgs(namespace, headPod, follow, tail), nil)
 	if err != nil {
-		return "", err
+		return out, err
 	}
 	if strings.TrimSpace(out) == "" {
 		return "", fmt.Errorf("sidecar %s produced no output", raylogoffload.SidecarContainerName)
 	}
 	return out, nil
+}
+
+func rayDriverSidecarLogArgs(namespace, headPod string, follow bool, tail int) []string {
+	args := []string{
+		"-n", namespace, "logs", headPod,
+		"-c", raylogoffload.SidecarContainerName,
+		fmt.Sprintf("--tail=%d", tail),
+	}
+	if follow {
+		args = append(args, "-f")
+	}
+	return args
+}
+
+func tailLogOutput(logs string, tail int) string {
+	if tail < 0 {
+		return logs
+	}
+	if tail == 0 || logs == "" {
+		return ""
+	}
+	lines := strings.SplitAfter(logs, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= tail {
+		return logs
+	}
+	return strings.Join(lines[len(lines)-tail:], "")
+}
+
+type countingWriter struct {
+	out     io.Writer
+	written int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.out.Write(p)
+	w.written += int64(n)
+	return n, err
+}
+
+type lineTailWriter struct {
+	limit   int
+	lines   []string
+	next    int
+	pending []byte
+}
+
+func (w *lineTailWriter) Write(p []byte) (int, error) {
+	if w.limit <= 0 {
+		return len(p), nil
+	}
+	start := 0
+	for i, b := range p {
+		if b != '\n' {
+			continue
+		}
+		w.pending = append(w.pending, p[start:i+1]...)
+		w.addLine(string(w.pending))
+		w.pending = w.pending[:0]
+		start = i + 1
+	}
+	w.pending = append(w.pending, p[start:]...)
+	return len(p), nil
+}
+
+func (w *lineTailWriter) String() string {
+	ordered := w.lines
+	if len(w.lines) == w.limit && w.next > 0 {
+		ordered = append(append(make([]string, 0, len(w.lines)), w.lines[w.next:]...), w.lines[:w.next]...)
+	}
+	logs := strings.Join(ordered, "") + string(w.pending)
+	return tailLogOutput(logs, w.limit)
+}
+
+func (w *lineTailWriter) addLine(line string) {
+	if len(w.lines) < w.limit {
+		w.lines = append(w.lines, line)
+		return
+	}
+	w.lines[w.next] = line
+	w.next = (w.next + 1) % w.limit
 }
 
 func newRunCancelCmd() *cobra.Command {

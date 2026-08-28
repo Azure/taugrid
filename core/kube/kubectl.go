@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -133,6 +134,25 @@ func (r *Runner) Get(ctx context.Context, kind, output string, allNamespaces boo
 func (r *Runner) Raw(ctx context.Context, extraArgs []string, stdin []byte) (string, error) {
 	args := append(r.baseArgs(), extraArgs...)
 	return r.run(ctx, args, stdin)
+}
+
+// RawStream runs kubectl with stdout connected directly to out.
+func (r *Runner) RawStream(ctx context.Context, extraArgs []string, stdin []byte, out io.Writer) error {
+	args := append(r.baseArgs(), extraArgs...)
+	cmd := exec.CommandContext(ctx, r.bin(), args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	if out == nil {
+		out = io.Discard
+	}
+	var stderr bytes.Buffer
+	cmd.Stdout = out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("kubectl %v: %w: %s", args, err, stderr.String())
+	}
+	return nil
 }
 
 // ExecInteractive runs `kubectl exec` with the process's stdin/stdout/stderr

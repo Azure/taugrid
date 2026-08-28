@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var publicRootCommands = []string{"cluster", "workspace", "run", "serve", "data", "python", "version"}
+var publicRootCommands = []string{"cluster", "workspace", "run", "logs", "serve", "data", "python", "version"}
 
 func TestPublicRootCommandTree(t *testing.T) {
 	root := NewRoot()

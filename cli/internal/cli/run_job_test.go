@@ -518,7 +518,7 @@ func TestFormatRunJobSubmission(t *testing.T) {
 	for _, want := range []string{
 		"submitted train-001 (profile=ai-train-gpu-m, ns=ray)",
 		"status:  tau run status train-001 -n ray --context research-admin",
-		"logs:    tau run logs train-001 -n ray -f --context research-admin",
+		"logs:    tau logs train-001 -n ray -f --context research-admin",
 		"profile: tau run status train-001 -n ray --run-profile --context research-admin",
 	} {
 		if !strings.Contains(out, want) {

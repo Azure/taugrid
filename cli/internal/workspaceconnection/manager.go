@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +27,9 @@ import (
 
 const (
 	connectionStateSchema = "tau.workspace.connection-state.v1"
+	// connectionStateSchemaV2 is written by newer Tau clients. The routing
+	// fields consumed by ListCachedConnections are unchanged.
+	connectionStateSchemaV2 = "tau.workspace.connection-state.v2"
 )
 
 // defaultRevalidationTimeout bounds non-interactive revalidation. Overridable
@@ -56,6 +60,7 @@ type Verification struct {
 
 type ActiveConnection struct {
 	Workspace         string
+	WorkspaceUID      string
 	AuthorizationMode string
 	ContextName       string
 	SystemNamespace   string
@@ -110,6 +115,64 @@ func DefaultConfigDir() (string, error) {
 		return "", fmt.Errorf("resolve user config directory: %w", err)
 	}
 	return filepath.Join(base, "tau"), nil
+}
+
+// ListCachedConnections returns the verified workspace routes Tau has already
+// configured locally. It does not refresh credentials or contact a cluster.
+func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
+	if strings.TrimSpace(configDir) == "" {
+		var err error
+		configDir, err = DefaultConfigDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	connectionsDir := filepath.Join(filepath.Clean(configDir), "connections")
+	entries, err := os.ReadDir(connectionsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect cached Tau workspace connections: %w", err)
+	}
+
+	connections := make([]ActiveConnection, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(connectionsDir, entry.Name())
+		state, err := loadConnectionState(path)
+		if err != nil {
+			return nil, err
+		}
+		if state.Schema != connectionStateSchema && state.Schema != connectionStateSchemaV2 {
+			return nil, fmt.Errorf("cached Tau workspace connection %s uses unsupported schema %q", path, state.Schema)
+		}
+		if state.ConfiguredAt.IsZero() || strings.TrimSpace(state.WorkspaceUID) == "" {
+			continue
+		}
+		connection := state.active()
+		if strings.TrimSpace(connection.Workspace) == "" ||
+			strings.TrimSpace(connection.ContextName) == "" ||
+			strings.TrimSpace(connection.KubeconfigPath) == "" ||
+			strings.TrimSpace(connection.Namespace) == "" {
+			continue
+		}
+		connections = append(connections, connection)
+	}
+	sort.Slice(connections, func(i, j int) bool {
+		left := connections[i]
+		right := connections[j]
+		if left.Workspace != right.Workspace {
+			return left.Workspace < right.Workspace
+		}
+		if left.ContextName != right.ContextName {
+			return left.ContextName < right.ContextName
+		}
+		return left.Namespace < right.Namespace
+	})
+	return connections, nil
 }
 
 func (m Manager) Ensure(ctx context.Context, startDir string) (ActiveConnection, error) {
@@ -655,6 +718,7 @@ func effectiveServiceAccount(name string) string {
 func (s connectionState) active() ActiveConnection {
 	return ActiveConnection{
 		Workspace:         s.Workspace,
+		WorkspaceUID:      s.WorkspaceUID,
 		AuthorizationMode: s.AuthorizationMode,
 		ContextName:       s.ContextName,
 		SystemNamespace:   firstNonEmpty(s.SystemNamespace, tauworkspace.SystemNamespace),

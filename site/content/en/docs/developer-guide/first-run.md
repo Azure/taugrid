@@ -44,7 +44,7 @@ record it for the rest of this walkthrough.
 
 ```bash
 tau run status <run-name> --watch
-tau run logs <run-name>
+tau logs <run-name>
 tau run get <run-name>
 ```
 
@@ -62,7 +62,7 @@ shared namespace:
 
 ```bash
 tau run list --include-external
-tau run logs <job-name> -c <container> --previous --timestamps
+tau logs <job-name> -c <container> --previous --timestamps
 tau run status <job-name> --diagnostic-hints
 ```
 
