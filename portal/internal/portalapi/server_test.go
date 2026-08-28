@@ -945,26 +945,26 @@ func TestRayBoardServesScopedDurableHistory(t *testing.T) {
 		strings.Contains(rec.Body.String(), "other-cluster") || strings.Contains(rec.Body.String(), "other-kind") {
 		t.Fatalf("ray response = %d %s", rec.Code, rec.Body.String())
 	}
-	if history.calls != 1 || history.scope.Cluster != "cluster-a" || history.scope.Namespace != "ray" ||
+	if history.calls != 1 || history.scope.Cluster != "cluster-a" || history.scope.Namespace != "ray" || history.scope.WorkspaceID != "default" ||
 		history.scope.Table != "TauExpRunLifecycle" || history.scope.Limit != 25 {
 		t.Fatalf("history scope = %+v (calls=%d)", history.scope, history.calls)
 	}
 
-	// Legacy live discovery remains configurable per request, while durable
+	// Single-workspace live discovery remains configurable per request, while durable
 	// history remains pinned to the namespace configured at startup.
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=other-namespace", nil))
 	if rec.Code != http.StatusOK || history.calls != 2 || history.scope.Namespace != "ray" {
-		t.Fatalf("legacy history response = %d, scope=%+v, calls=%d", rec.Code, history.scope, history.calls)
+		t.Fatalf("single-workspace history response = %d, scope=%+v, calls=%d", rec.Code, history.scope, history.calls)
 	}
 }
 
-func TestRayHistoryPinsLegacyDurableScope(t *testing.T) {
+func TestRayHistoryPinsSingleWorkspaceDurableScope(t *testing.T) {
 	history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
 		ResourceUID: "uid-1", Namespace: "ray", Cluster: "cluster-a", Kind: "RayJob", State: "succeeded",
 	}}}
 	server, err := NewServer(Options{
-		Stellar: expapi.Options{Source: "kusto"},
+		Stellar: expapi.Options{Source: "kusto", Workspace: "taugrid-default"},
 		Cluster: ClusterOptions{Cluster: "cluster-a"},
 		Runs:    RunsOptions{Namespace: "ray", History: history, HistoryTable: "TauExpRunLifecycle", HistoryLimit: 25},
 	})
@@ -973,18 +973,18 @@ func TestRayHistoryPinsLegacyDurableScope(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?namespace=other-namespace&cluster=other-cluster", nil))
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?workspace=other-workspace&namespace=other-namespace&cluster=other-cluster", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if history.timelineCalls != 1 || history.resourceUID != "uid-1" ||
-		history.timelineScope.Cluster != "cluster-a" || history.timelineScope.Namespace != "ray" ||
+		history.timelineScope.Cluster != "cluster-a" || history.timelineScope.Namespace != "ray" || history.timelineScope.WorkspaceID != "taugrid-default" ||
 		history.timelineScope.Table != "TauExpRunLifecycle" || history.timelineScope.Kind != "RayJob" || history.timelineScope.Limit != 25 {
 		t.Fatalf("timeline scope = %+v, resourceUID=%q, calls=%d", history.timelineScope, history.resourceUID, history.timelineCalls)
 	}
 }
 
-func TestRayHistoryAllowsLegacyClusterWideDurableScope(t *testing.T) {
+func TestRayHistoryAllowsSingleWorkspaceClusterWideDurableScope(t *testing.T) {
 	history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
 		ResourceUID: "uid-1", Namespace: "other-namespace", Cluster: "cluster-a", Kind: "RayJob", State: "succeeded",
 	}}}
@@ -997,7 +997,7 @@ func TestRayHistoryAllowsLegacyClusterWideDurableScope(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1", nil))
-	if rec.Code != http.StatusOK || history.timelineScope.Namespace != "" || history.timelineScope.Kind != "RayJob" {
+	if rec.Code != http.StatusOK || history.timelineScope.Namespace != "" || history.timelineScope.WorkspaceID != "default" || history.timelineScope.Kind != "RayJob" {
 		t.Fatalf("status=%d scope=%+v body=%s", rec.Code, history.timelineScope, rec.Body.String())
 	}
 }
@@ -1506,13 +1506,13 @@ func TestManagedRunsPassesResolvedScopeToDurableHistory(t *testing.T) {
 	}
 }
 
-func TestLegacyRunsDoNotApplySyntheticWorkspaceHistoryFilter(t *testing.T) {
+func TestSingleWorkspaceRunsApplyConfiguredWorkspaceHistoryFilter(t *testing.T) {
 	history := &scopedHistoryReader{rows: []runs.Run{{
-		Name: "legacy-terminal", Kind: "Job", Status: "succeeded",
+		Name: "configured-terminal", Kind: "Job", Status: "succeeded",
 		Namespace: "ray", Cluster: "cluster-a",
 	}}}
 	server, err := NewServer(Options{
-		Stellar: expapi.Options{Source: "kusto"},
+		Stellar: expapi.Options{Source: "kusto", Workspace: "taugrid-default"},
 		Cluster: ClusterOptions{Cluster: "cluster-a"},
 		Runs: RunsOptions{
 			Namespace: "ray", Reader: &scopedPortalReader{}, History: history,
@@ -1523,11 +1523,11 @@ func TestLegacyRunsDoNotApplySyntheticWorkspaceHistoryFilter(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "legacy-terminal") {
-		t.Fatalf("legacy runs response = %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "configured-terminal") {
+		t.Fatalf("single-workspace runs response = %d %s", rec.Code, rec.Body.String())
 	}
-	if history.scope.WorkspaceID != "" || history.scope.Namespace != "ray" || history.scope.Cluster != "cluster-a" {
-		t.Fatalf("legacy history scope = %+v", history.scope)
+	if history.scope.WorkspaceID != "taugrid-default" || history.scope.Namespace != "ray" || history.scope.Cluster != "cluster-a" {
+		t.Fatalf("single-workspace history scope = %+v", history.scope)
 	}
 	for _, path := range []string{
 		"/api/portal/runs?cluster=",
@@ -1548,7 +1548,7 @@ func TestLegacyRunsDoNotApplySyntheticWorkspaceHistoryFilter(t *testing.T) {
 	}
 }
 
-func TestLegacyDurableHistoryRequiresClusterScope(t *testing.T) {
+func TestSingleWorkspaceDurableHistoryRequiresClusterScope(t *testing.T) {
 	_, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
 		Runs: RunsOptions{
@@ -1560,7 +1560,7 @@ func TestLegacyDurableHistoryRequiresClusterScope(t *testing.T) {
 	}
 }
 
-func TestLegacyWorkspacePreservesStellarAndCrossNamespaceBoards(t *testing.T) {
+func TestSingleWorkspacePreservesStellarAndCrossNamespaceBoards(t *testing.T) {
 	costQuerier := &stubCostQuerier{}
 	rayReader := &stubRayReader{}
 	server, err := NewServer(Options{
@@ -1575,27 +1575,27 @@ func TestLegacyWorkspacePreservesStellarAndCrossNamespaceBoards(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workspaces", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"experimentsUrl":"/stellar"`) {
-		t.Fatalf("legacy workspace directory = %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("single-workspace directory = %d %s", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/cost", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("legacy cost status = %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("single-workspace cost status = %d: %s", rec.Code, rec.Body.String())
 	}
 	for _, kql := range costQuerier.kqls {
 		if strings.Contains(kql, "namespace ==") {
-			t.Fatalf("legacy cost was narrowed to Jobs namespace:\n%s", kql)
+			t.Fatalf("single-workspace cost was narrowed to Jobs namespace:\n%s", kql)
 		}
 	}
 
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("legacy ray status = %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("single-workspace ray status = %d: %s", rec.Code, rec.Body.String())
 	}
 	if rayReader.lastNS != "" {
-		t.Fatalf("legacy Ray namespace = %q, want cluster-wide empty namespace", rayReader.lastNS)
+		t.Fatalf("single-workspace Ray namespace = %q, want cluster-wide empty namespace", rayReader.lastNS)
 	}
 
 	costQuerier.calls = 0
@@ -1604,19 +1604,19 @@ func TestLegacyWorkspacePreservesStellarAndCrossNamespaceBoards(t *testing.T) {
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("legacy overview status = %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("single-workspace overview status = %d: %s", rec.Code, rec.Body.String())
 	}
 	for _, kql := range costQuerier.kqls {
 		if strings.Contains(kql, "namespace ==") {
-			t.Fatalf("legacy overview cost was narrowed to Jobs namespace:\n%s", kql)
+			t.Fatalf("single-workspace overview cost was narrowed to Jobs namespace:\n%s", kql)
 		}
 	}
 	if rayReader.lastNS != "" {
-		t.Fatalf("legacy overview Ray namespace = %q, want cluster-wide empty namespace", rayReader.lastNS)
+		t.Fatalf("single-workspace overview Ray namespace = %q, want cluster-wide empty namespace", rayReader.lastNS)
 	}
 }
 
-func TestLegacyNamespaceOverridesPreserveOriginalSemantics(t *testing.T) {
+func TestSingleWorkspaceNamespaceOverridesPreserveConfiguredSemantics(t *testing.T) {
 	rayReader := &stubRayReader{}
 	runsReader := &stubRunsReader{}
 	server, err := NewServer(Options{
@@ -1631,13 +1631,13 @@ func TestLegacyNamespaceOverridesPreserveOriginalSemantics(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=", nil))
 	if rec.Code != http.StatusOK || rayReader.lastNS != "configured-ray" {
-		t.Fatalf("legacy empty Ray override = status %d namespace %q", rec.Code, rayReader.lastNS)
+		t.Fatalf("single-workspace empty Ray override = status %d namespace %q", rec.Code, rayReader.lastNS)
 	}
 
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs?namespace=requested-runs", nil))
 	if rec.Code != http.StatusOK || runsReader.lastNS != "requested-runs" {
-		t.Fatalf("legacy Runs override = status %d namespace %q", rec.Code, runsReader.lastNS)
+		t.Fatalf("single-workspace Runs override = status %d namespace %q", rec.Code, runsReader.lastNS)
 	}
 }
 

@@ -49,7 +49,7 @@ func TestPortalJobsScopeDefaultsFailClosed(t *testing.T) {
 		t.Fatalf("--jobs-scope-mode default = %q, want disabled", got)
 	}
 	if got := serve.Flags().Lookup("namespace").DefValue; got != "" {
-		t.Fatalf("--namespace default = %q, want empty for cluster-wide legacy Ray/Runs reads", got)
+		t.Fatalf("--namespace default = %q, want empty for cluster-wide Ray/Runs reads", got)
 	}
 	if flag := serve.Flags().Lookup("policy"); flag != nil {
 		t.Fatalf("portal serve still exposes removed --policy flag: %#v", flag)
@@ -97,10 +97,10 @@ func TestPortalServeKeepsRunningWithoutKubernetesCredentials(t *testing.T) {
 	}
 }
 
-func TestLegacyKubernetesBoardsShareNamespace(t *testing.T) {
-	rayOpts, runsOpts := legacyKubernetesBoardOptions("tau-default")
+func TestSingleWorkspaceKubernetesBoardsShareNamespace(t *testing.T) {
+	rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions("tau-default")
 	if rayOpts.Namespace != "tau-default" || runsOpts.Namespace != "tau-default" {
-		t.Fatalf("legacy board namespaces = ray %q, runs %q; want tau-default", rayOpts.Namespace, runsOpts.Namespace)
+		t.Fatalf("board namespaces = ray %q, runs %q; want tau-default", rayOpts.Namespace, runsOpts.Namespace)
 	}
 }
 

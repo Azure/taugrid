@@ -5,7 +5,7 @@
 // surface that aggregates and cross-links the runtime's existing dashboards.
 //
 // The portal owns the /portal frontend shell and the /api/portal/* board APIs.
-// In legacy single-workspace mode it mounts the existing Stellar server
+// In single-workspace mode it mounts the existing Stellar server
 // (internal/expapi) unchanged. Managed workspace mode fails closed unless the
 // workspace points to an explicit HTTPS experiment endpoint.
 package portalapi
@@ -82,8 +82,8 @@ type Options struct {
 	// returns 503; it reuses the same Kusto querier as Cluster/Cost, so the
 	// Kusto-backed boards light up (or not) together.
 	NodeUtil NodeUtilOptions
-	// WorkspaceDirectory enables authenticated, server-resolved workspace mode.
-	// Nil preserves the legacy single/default-workspace behavior.
+	// WorkspaceDirectory enables authenticated, server-resolved multi-workspace
+	// mode. When it is unset, Stellar.Workspace configures the single workspace.
 	WorkspaceDirectory WorkspaceDirectory
 	// Identity names trusted Entra identity headers. It is used only when
 	// WorkspaceDirectory is configured.
@@ -184,7 +184,7 @@ type Server struct {
 	nodeUtil              NodeUtilOptions
 	workspaceDirectory    WorkspaceDirectory
 	identity              IdentityOptions
-	legacyScope           WorkspaceScope
+	singleWorkspaceScope  WorkspaceScope
 	kueueViz              KueueVizOptions
 }
 
@@ -233,9 +233,10 @@ func NewServer(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	legacyCluster := firstNonEmpty(opts.Cluster.Cluster, opts.Cost.Cluster, opts.NodeUtil.Cluster)
-	if opts.Runs.History != nil && opts.WorkspaceDirectory == nil && legacyCluster == "" {
-		return nil, fmt.Errorf("legacy durable run history requires an explicit cluster scope")
+	singleWorkspace := firstNonEmpty(opts.Stellar.Workspace, "default")
+	singleWorkspaceCluster := firstNonEmpty(opts.Cluster.Cluster, opts.Cost.Cluster, opts.NodeUtil.Cluster)
+	if opts.Runs.History != nil && opts.WorkspaceDirectory == nil && singleWorkspaceCluster == "" {
+		return nil, fmt.Errorf("durable run history requires an explicit cluster scope when no workspace directory is configured")
 	}
 	s := &Server{
 		mux:                   http.NewServeMux(),
@@ -251,10 +252,10 @@ func NewServer(opts Options) (*Server, error) {
 		workspaceDirectory:    opts.WorkspaceDirectory,
 		identity:              normalizeIdentityOptions(opts.Identity),
 		kueueViz:              opts.KueueViz,
-		legacyScope: WorkspaceScope{
-			WorkspaceID:       "default",
-			Name:              "Default",
-			Cluster:           legacyCluster,
+		singleWorkspaceScope: WorkspaceScope{
+			WorkspaceID:       singleWorkspace,
+			Name:              singleWorkspace,
+			Cluster:           singleWorkspaceCluster,
 			Namespace:         firstNonEmpty(opts.Runs.Namespace, opts.Ray.Namespace),
 			Source:            opts.Stellar.Source,
 			AuthorizationMode: workspaceAuthorizationClusterWide,
@@ -953,17 +954,15 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 	if scope.Managed {
 		namespace = scope.Namespace
 	}
-	historyWorkspaceID := ""
+	historyWorkspaceID := scope.WorkspaceID
 	historyCluster := scope.Cluster
 	historyNamespace := namespace
-	if scope.Managed {
-		historyWorkspaceID = scope.WorkspaceID
-	} else if s.runs.History != nil {
+	if !scope.Managed && s.runs.History != nil {
 		// Durable history is always bound to the cluster validated at startup,
-		// never to request-level overrides. Legacy live boards keep accepting a
+		// never to request-level overrides. Single-workspace live boards keep accepting a
 		// namespace filter, but HistoryScope must remain server-resolved.
-		historyCluster = s.legacyScope.Cluster
-		historyNamespace = s.legacyScope.Namespace
+		historyCluster = s.singleWorkspaceScope.Cluster
+		historyNamespace = s.singleWorkspaceScope.Namespace
 	}
 	snapshot, err := ray.Board(r.Context(), s.ray.Reader, ray.Options{
 		Namespace: namespace,
@@ -1008,13 +1007,11 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	historyScope := runs.HistoryScope{
 		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: scope.Namespace,
-		LocalQueue: scope.LocalQueue, Kind: "RayJob", Limit: s.runs.HistoryLimit,
+		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Kind: "RayJob", Limit: s.runs.HistoryLimit,
 	}
-	if scope.Managed {
-		historyScope.WorkspaceID = scope.WorkspaceID
-	} else {
-		historyScope.Cluster = s.legacyScope.Cluster
-		historyScope.Namespace = s.legacyScope.Namespace
+	if !scope.Managed {
+		historyScope.Cluster = s.singleWorkspaceScope.Cluster
+		historyScope.Namespace = s.singleWorkspaceScope.Namespace
 	}
 	events, err := reader.GetHistoryTimeline(r.Context(), historyScope, resourceUID)
 	if err != nil {
@@ -1131,17 +1128,15 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if scope.Managed {
 		namespace = scope.Namespace
 	}
-	historyWorkspaceID := ""
+	historyWorkspaceID := scope.WorkspaceID
 	historyCluster := scope.Cluster
 	historyNamespace := namespace
-	if scope.Managed {
-		historyWorkspaceID = scope.WorkspaceID
-	} else if s.runs.History != nil {
-		// Legacy live boards retain their request-level cluster override for
+	if !scope.Managed && s.runs.History != nil {
+		// Single-workspace live boards retain their request-level cluster override for
 		// compatibility, but durable history is always bound to the explicit
 		// cluster and namespace validated at startup.
-		historyCluster = s.legacyScope.Cluster
-		historyNamespace = s.legacyScope.Namespace
+		historyCluster = s.singleWorkspaceScope.Cluster
+		historyNamespace = s.singleWorkspaceScope.Namespace
 	}
 	snapshot, err := runs.Board(r.Context(), s.runs.Reader, runs.Options{
 		Namespace:         namespace,
