@@ -262,6 +262,36 @@ func TestRunSelectionAllowsUniqueImplicitProfiles(t *testing.T) {
 	}
 }
 
+func TestRunSelectionAuthorizesReadyProfileForCustomWorkspaceNamespace(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "gpu-cq",
+	}}
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = "azure.research.training.l"
+	options.profileNameExplicit = true
+	options.namespace = "team-alpha"
+	options.team = "research"
+	options.lane = "training"
+
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err != nil {
+		t.Fatalf("select profile for custom workspace namespace: %v", err)
+	}
+	if selected.selectedWorkloadProfile == nil ||
+		selected.selectedWorkloadProfile.ClusterQueue != "gpu-cq" ||
+		selected.queue != "jobqueue" {
+		t.Fatalf("custom workspace selection = %#v", selected.selectedWorkloadProfile)
+	}
+}
+
 func TestProfileRefreshDistinguishesConfigAssertionsFromPriorRevisionValues(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.engine = runconfig.EngineJob

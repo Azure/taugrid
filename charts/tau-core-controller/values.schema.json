@@ -47,6 +47,10 @@
         "queues": {
           "$ref": "#/definitions/ownership"
         },
+        "defaultWorkloadProfileNamespace": {
+          "type": "string",
+          "minLength": 1
+        },
         "workloadProfiles": {
           "type": "array",
           "items": {

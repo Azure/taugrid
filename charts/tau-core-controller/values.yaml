@@ -124,6 +124,9 @@ tauCluster:
   extraNodeLabelRules: []
   queues:
     ownership: External
+  # Namespace authorized by the built-in workload profile catalog. Set this
+  # when one workspace namespace is provisioned outside the sample default.
+  defaultWorkloadProfileNamespace: taugrid-default
   # Canonical default workload-profile catalog. This list is the hand-authored
   # source used by both Helm and the checked-in GitOps/sample TauCluster
   # manifests. Helm list replacement is intentional: platform owners can replace
@@ -137,7 +140,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
@@ -152,7 +155,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 2
       workerCount: 1
       mode: fixed
@@ -167,7 +170,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 4
       workerCount: 1
       mode: fixed
@@ -182,7 +185,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 8
       workerCount: 1
       mode: fixed
@@ -197,7 +200,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [eval]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
@@ -212,7 +215,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [elastic]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 1
       workerCount: 1
       mode: elastic
@@ -227,7 +230,7 @@ tauCluster:
       applicability:
         teams: [experimental]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
@@ -242,7 +245,7 @@ tauCluster:
       applicability:
         teams: [experimental]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 2
       workerCount: 1
       mode: fixed
@@ -257,7 +260,7 @@ tauCluster:
       applicability:
         teams: [experimental]
         lanes: [training]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 4
       workerCount: 1
       mode: fixed
@@ -272,7 +275,7 @@ tauCluster:
       applicability:
         teams: [experimental]
         lanes: [eval]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
@@ -287,7 +290,7 @@ tauCluster:
       applicability:
         teams: [experimental]
         lanes: [elastic]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 1
       workerCount: 1
       mode: elastic
@@ -302,7 +305,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [large-memory]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 2
       workerCount: 1
       mode: fixed
@@ -317,7 +320,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [large-memory]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 4
       workerCount: 1
       mode: fixed
@@ -332,7 +335,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [large-memory]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 8
       workerCount: 1
       mode: fixed
@@ -347,7 +350,7 @@ tauCluster:
       applicability:
         teams: [research]
         lanes: [large-memory]
-        namespaces: [taugrid-default]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 8
       workerCount: 2
       mode: fixed

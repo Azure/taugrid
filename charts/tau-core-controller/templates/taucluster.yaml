@@ -18,4 +18,4 @@ spec:
   queues:
 {{- toYaml .Values.tauCluster.queues | nindent 4 }}
   workloadProfiles:
-{{- toYaml .Values.tauCluster.workloadProfiles | nindent 4 }}
+{{- tpl (toYaml .Values.tauCluster.workloadProfiles) . | nindent 4 }}

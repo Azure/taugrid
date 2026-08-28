@@ -255,6 +255,14 @@ try {
     } "Portal ADX GPU telemetry query" $deadline
     if ($EnableBootstrapWorkspace) {
         Invoke-Native kubectl @("-n", "tau-system", "wait", "--for=jsonpath={.status.phase}=Ready", "workspace.tau.azure.com/$BootstrapWorkspaceName", "--timeout=10m")
+        Wait-ForCondition {
+            $tauCluster = kubectl get clusters.tau.azure.com cluster --output=json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Unable to read TauCluster workload profile status." }
+            $workloadProfile = @($tauCluster.status.workloadProfiles.profiles | Where-Object { $_.name -eq "azure.research.training.l" }) | Select-Object -First 1
+            if ($null -eq $workloadProfile) { return $false }
+            $readyCondition = @($workloadProfile.conditions | Where-Object { $_.type -eq "Ready" }) | Select-Object -First 1
+            $null -ne $readyCondition -and $readyCondition.status -eq "True"
+        } "azure.research.training.l workload profile readiness" $deadline
         $smokeContext = kubectl config current-context
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($smokeContext)) { throw "Unable to determine the administrator kubeconfig context for the smoke run." }
         $smokeName = "taugrid-verify-$run"
