@@ -32,6 +32,7 @@ import (
 
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -128,6 +129,16 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		headPodAnnotations[k] = v
 	}
 
+	topoProfile := p
+	topoProfile.Lane = ""
+	topoPlan, err := topology.Build(topoProfile, topology.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("render RayService topology: %w", err)
+	}
+	for k, v := range topoPlan.Annotations {
+		headPodAnnotations[k] = v
+	}
+
 	headPodSpec := map[string]any{}
 
 	headContainer := map[string]any{
@@ -161,6 +172,12 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		headContainer["resources"] = resources
 	}
 	headPodSpec["containers"] = []any{headContainer}
+	if gpu.Count > 0 {
+		headPodSpec["tolerations"] = []any{
+			map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},
+			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
+		}
+	}
 	if len(o.Volumes) > 0 {
 		headPodSpec["volumes"] = volumesToAny(o.Volumes)
 	}
