@@ -33,6 +33,7 @@ import (
 
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -289,6 +290,22 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	}
 	if len(o.Volumes) > 0 {
 		podSpec["volumes"] = volumesToAny(o.Volumes)
+	}
+	if gpu.Count > 0 {
+		podSpec["tolerations"] = []any{
+			map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},
+			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
+		}
+	}
+
+	topoProfile := p
+	topoProfile.Lane = ""
+	topoPlan, err := topology.Build(topoProfile, topology.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("render Deployment topology: %w", err)
+	}
+	for k, v := range topoPlan.Annotations {
+		podAnnotations[k] = v
 	}
 
 	deploySpec := map[string]any{
