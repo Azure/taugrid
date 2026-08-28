@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/kustoquery"
@@ -127,9 +129,214 @@ func TestRunLogsCommand_MissingJobFollowDoesNotSucceedSilently(t *testing.T) {
 	}
 }
 
+func TestRunLogsCommand_PreservesPartialRayFollowFailure(t *testing.T) {
+	var out bytes.Buffer
+	err := runLogsCommandWithHooks(context.Background(), &out, nil, "ray-train", runLogsOptions{
+		Namespace: "ray",
+		Follow:    true,
+		Tail:      -1,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "ray-train", Namespace: "ray"}, nil
+		},
+		rayJobFollow: func(_ context.Context, _ *kube.Runner, _, _ string, _ int, writer io.Writer) error {
+			_, _ = io.WriteString(writer, "partial ray output\n")
+			return errors.New("ray stream disconnected")
+		},
+		jobFollow: func(context.Context, *kube.Runner, string, string, runLogsOptions, io.Writer) error {
+			t.Fatal("batch fallback must not run after Ray output has been emitted")
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ray stream disconnected") {
+		t.Fatalf("error = %v, want the Ray follow failure", err)
+	}
+	if got := out.String(); got != "partial ray output\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestRunLogsCommand_RefreshesRayLookupAfterEmptySnapshot(t *testing.T) {
+	var out bytes.Buffer
+	err := runLogsCommandWithHooks(context.Background(), &out, nil, "ray-train", runLogsOptions{
+		Namespace: "ray",
+		Tail:      20,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "ray-train", Namespace: "ray"}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "fresh ray logs\n", nil
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("batch fallback must not run when the refreshed Ray lookup succeeds")
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("run logs: %v", err)
+	}
+	if got := out.String(); got != "fresh ray logs\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestRunLogsCommand_PreservesPartialRayReadFailure(t *testing.T) {
+	var out bytes.Buffer
+	err := runLogsCommandWithHooks(context.Background(), &out, nil, "ray-train", runLogsOptions{
+		Namespace: "ray",
+		Tail:      20,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "ray-train", Namespace: "ray"}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "partial ray output\n", errors.New("ray read disconnected")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("batch fallback must not run after Ray output was read")
+			return "", nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ray read disconnected") {
+		t.Fatalf("error = %v, want Ray read failure", err)
+	}
+	if got := out.String(); got != "partial ray output\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestRunLogsCommand_ExistingUnreadyRayIsNotReportedMissing(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "ray-train", runLogsOptions{
+		Namespace: "ray",
+		Tail:      20,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "ray-train", Namespace: "ray"}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", fmt.Errorf("%w: status.jobId is empty", errRayJobNotReady)
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			t.Fatal("batch fallback must not run after identifying an unready RayJob")
+			return "", nil
+		},
+	})
+	if err == nil {
+		t.Fatal("expected a RayJob startup error")
+	}
+	for _, want := range []string{"status.jobId is empty", "not ready for driver logs", "tau run status ray-train"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "no logs found for run") {
+		t.Fatalf("unready RayJob was misreported as missing: %v", err)
+	}
+}
+
+func TestRunLogsCommand_PreservesLookupFailureWhenNothingMatches(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "train", runLogsOptions{
+		Namespace: "research",
+		Tail:      20,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "train", Namespace: "research"}, errors.New("workloads forbidden")
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("rayjobs forbidden")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			return "", nil
+		},
+	})
+	if err == nil {
+		t.Fatal("expected lookup failure")
+	}
+	for _, want := range []string{"workloads forbidden", "rayjobs forbidden", "no logs found for run"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestRunLogsCommand_ExistingEmptyJobIsNotMissing(t *testing.T) {
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, nil, "empty-job", runLogsOptions{
+		Namespace: "jobs",
+		Tail:      20,
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{Name: "empty-job", Namespace: "jobs", JobFound: true}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("not a RayJob")
+		},
+		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("empty existing Job logs: %v", err)
+	}
+}
+
+func TestWaitForJobLogPodWaitsForPodCreation(t *testing.T) {
+	var podQueries int
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "get pods"):
+			podQueries++
+			if podQueries == 1 {
+				return "", nil
+			}
+			return "pod/empty-job-abc", nil
+		case strings.Contains(joined, "get job empty-job"):
+			return "job.batch/empty-job", nil
+		default:
+			t.Fatalf("unexpected args: %v", args)
+			return "", nil
+		}
+	})
+	if err := waitForJobLogPod(context.Background(), runner, "jobs", "empty-job", time.Millisecond); err != nil {
+		t.Fatalf("waitForJobLogPod: %v", err)
+	}
+	if podQueries != 2 {
+		t.Fatalf("pod queries = %d, want 2", podQueries)
+	}
+}
+
+func TestRunLogsCommand_RouteAwareStatusHint(t *testing.T) {
+	runner := kube.NewWithKubeconfig("research-admin", "/tmp/research kubeconfig")
+	err := runLogsCommandWithHooks(context.Background(), &bytes.Buffer{}, runner, "ray-train", runLogsOptions{
+		Namespace: "research",
+	}, runLogsHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				RayJob: status.RayJob{Found: true, Name: "ray-train"},
+			}, nil
+		},
+		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
+			return "", errors.New("jobId not available")
+		},
+	})
+	if err == nil {
+		t.Fatal("expected startup error")
+	}
+	for _, want := range []string{
+		`KUBECONFIG="/tmp/research kubeconfig"`,
+		"tau run status ray-train -n research --context research-admin",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
 func TestLocalJobLogsFollowStreamsWithDetailedFlags(t *testing.T) {
 	r := fakeKubectlRunner(t, `#!/bin/sh
 case "$*" in
+  *"get pods -l job-name=train-001 -o name"*) printf 'pod/train-001-abc\n' ;;
   *"logs -l job-name=train-001 -c trainer --timestamps=true -f --tail=25"*) printf 'live batch log\n' ;;
   *) echo "unexpected: $*" >&2; exit 3 ;;
 esac

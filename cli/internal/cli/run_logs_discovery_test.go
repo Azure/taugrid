@@ -166,6 +166,95 @@ func TestRunLogsDiscoverySkipsTimedOutCachedRoute(t *testing.T) {
 	}
 }
 
+func TestRunLogsDiscoveryBoundsConcurrentCachedProbes(t *testing.T) {
+	timeout := 40 * time.Millisecond
+	routes := []runLogsRoute{
+		{Workspace: "stale-1", KubeContext: "offline-1", Namespace: "ns-1"},
+		{Workspace: "stale-2", KubeContext: "offline-2", Namespace: "ns-2"},
+		{Workspace: "stale-3", KubeContext: "offline-3", Namespace: "ns-3"},
+		{Workspace: "target", KubeContext: "online", Namespace: "target-ns"},
+	}
+	started := time.Now()
+	err := runLogsWithDiscovery(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		"train",
+		runLogsOptions{Tail: 60},
+		runLogsDiscoveryHooks{
+			connected:    func() (runLogsRoute, error) { return runLogsRoute{}, errors.New("not connected") },
+			cached:       func() ([]runLogsRoute, error) { return routes, nil },
+			probeTimeout: timeout,
+			probe: func(ctx context.Context, route runLogsRoute, _ string) (bool, error) {
+				if route.Workspace == "target" {
+					return true, nil
+				}
+				<-ctx.Done()
+				return false, ctx.Err()
+			},
+			execute: func(context.Context, io.Writer, runLogsRoute, string, runLogsOptions) error {
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runLogsWithDiscovery: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 3*timeout {
+		t.Fatalf("cached probes took %s; want one bounded search window, not one timeout per route", elapsed)
+	}
+}
+
+func TestRunLogsDiscoveryKeepsCachedMatchFromPartialSnapshot(t *testing.T) {
+	target := runLogsRoute{Workspace: "research", KubeContext: "online", Namespace: "target-ns"}
+	var warnings bytes.Buffer
+	var executed runLogsRoute
+	err := runLogsWithDiscovery(
+		context.Background(),
+		&bytes.Buffer{},
+		&warnings,
+		"train",
+		runLogsOptions{Tail: 60},
+		runLogsDiscoveryHooks{
+			connected: func() (runLogsRoute, error) { return runLogsRoute{}, errors.New("not connected") },
+			cached:    func() ([]runLogsRoute, error) { return []runLogsRoute{target}, nil },
+			probe: func(context.Context, runLogsRoute, string) (bool, error) {
+				return true, errors.New("workloads forbidden")
+			},
+			execute: func(_ context.Context, _ io.Writer, route runLogsRoute, _ string, _ runLogsOptions) error {
+				executed = route
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runLogsWithDiscovery: %v", err)
+	}
+	if executed != target {
+		t.Fatalf("executed route = %#v, want %#v", executed, target)
+	}
+	if !strings.Contains(warnings.String(), "workloads forbidden") {
+		t.Fatalf("warning %q does not retain the partial snapshot error", warnings.String())
+	}
+}
+
+func TestProbeRunLogsRoutePreservesMatchAtDeadline(t *testing.T) {
+	timeout := 5 * time.Millisecond
+	found, err := probeRunLogsRoute(context.Background(), runLogsDiscoveryHooks{
+		probeTimeout: timeout,
+		probe: func(ctx context.Context, _ runLogsRoute, _ string) (bool, error) {
+			<-ctx.Done()
+			return true, ctx.Err()
+		},
+	}, runLogsRoute{}, "train")
+	if !found {
+		t.Fatal("positive workload identity was discarded at the deadline")
+	}
+	if err == nil || !strings.Contains(err.Error(), "probe timed out") {
+		t.Fatalf("error = %v, want deadline warning", err)
+	}
+}
+
 func TestRunLogsDiscoveryRejectsAmbiguousCachedMatches(t *testing.T) {
 	first := runLogsRoute{Workspace: "vision", KubeContext: "east", Namespace: "team-a"}
 	second := runLogsRoute{Workspace: "language", KubeContext: "west", Namespace: "team-b"}
@@ -193,6 +282,50 @@ func TestRunLogsDiscoveryRejectsAmbiguousCachedMatches(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q missing %q", err, want)
 		}
+	}
+}
+
+func TestValidateCachedRunLogsRouteRejectsWorkspaceDrift(t *testing.T) {
+	route := runLogsRoute{
+		Workspace:       "research",
+		WorkspaceUID:    "expected-uid",
+		SystemNamespace: "tau-system",
+		Namespace:       "research-ns",
+	}
+	for _, tc := range []struct {
+		name string
+		json string
+		want string
+	}{
+		{
+			name: "identity changed",
+			json: `{"metadata":{"uid":"replacement-uid","generation":1},"spec":{"target":{"namespace":"research-ns"}},"status":{"phase":"Ready","observedGeneration":1}}`,
+			want: "identity changed",
+		},
+		{
+			name: "namespace changed",
+			json: `{"metadata":{"uid":"expected-uid","generation":1},"spec":{"target":{"namespace":"other-ns"}},"status":{"phase":"Ready","observedGeneration":1}}`,
+			want: "namespace changed",
+		},
+		{
+			name: "not ready",
+			json: `{"metadata":{"uid":"expected-uid"},"spec":{"target":{"namespace":"research-ns"}},"status":{"phase":"Pending"}}`,
+			want: "not Ready",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+				wantArgs := "-n tau-system get workspace.tau.azure.com research -o json"
+				if got := strings.Join(args, " "); got != wantArgs {
+					t.Fatalf("args = %q, want %q", got, wantArgs)
+				}
+				return tc.json, nil
+			})
+			err := validateCachedRunLogsRoute(context.Background(), runner, route)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -434,9 +435,10 @@ func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, fol
 	// The log-offload sidecar supports Kubernetes' native tail and follow
 	// semantics. Prefer it for bounded reads; older RayJobs without the sidecar
 	// fall back to the Ray Dashboard CLI below.
+	var sidecarOut string
 	var sidecarErr error
 	if tail >= 0 {
-		sidecarOut, err := rayDriverSidecarLogs(ctx, r, namespace, headPod, follow, tail)
+		sidecarOut, err = rayDriverSidecarLogs(ctx, r, namespace, headPod, follow, tail)
 		if err == nil {
 			return sidecarOut, nil
 		}
@@ -471,7 +473,10 @@ func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, fol
 		}
 		sidecarErr = err
 	}
-	return "", fmt.Errorf("ray job logs: %w (fallback to %s sidecar on pod %s also failed: %v)",
+	if out == "" {
+		out = sidecarOut
+	}
+	return out, fmt.Errorf("ray job logs: %w (fallback to %s sidecar on pod %s also failed: %v)",
 		execErr, raylogoffload.SidecarContainerName, headPod, sidecarErr)
 }
 
@@ -493,7 +498,15 @@ func rayJobFollow(ctx context.Context, r *kube.Runner, namespace, name string, t
 		return fmt.Errorf("bounded --follow requires the %s sidecar rendered by current Tau versions; retry with --tail=-1 for this legacy RayJob: %w",
 			raylogoffload.SidecarContainerName, sidecarErr)
 	}
-	return r.RawStream(ctx, rayJobLogExecArgs(namespace, headPod, jobID, true), nil, out)
+	if err := r.RawStream(ctx, rayJobLogExecArgs(namespace, headPod, jobID, true), nil, out); err != nil {
+		return fmt.Errorf(
+			"follow RayJob logs via Ray CLI: %w; prior %s sidecar attempt also failed: %v",
+			err,
+			raylogoffload.SidecarContainerName,
+			sidecarErr,
+		)
+	}
+	return nil
 }
 
 func resolveRayJobLogTarget(ctx context.Context, r *kube.Runner, namespace, name string) (string, string, error) {
@@ -501,8 +514,11 @@ func resolveRayJobLogTarget(ctx context.Context, r *kube.Runner, namespace, name
 		"-n", namespace, "get", "rayjob", name,
 		"-o", "jsonpath={.status.jobId}",
 	}, nil)
-	if err != nil || jobID == "" {
-		return "", "", fmt.Errorf("not a RayJob or jobId not available")
+	if err != nil {
+		return "", "", fmt.Errorf("read RayJob %s/%s: %w", namespace, name, err)
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return "", "", fmt.Errorf("%w: %s/%s has not reported status.jobId", errRayJobNotReady, namespace, name)
 	}
 
 	clusterName, err := r.Raw(ctx, []string{
@@ -510,16 +526,28 @@ func resolveRayJobLogTarget(ctx context.Context, r *kube.Runner, namespace, name
 		"-o", "jsonpath={.status.rayClusterName}",
 	}, nil)
 	clusterName = strings.TrimSpace(clusterName)
-	if err != nil || clusterName == "" {
-		return "", "", fmt.Errorf("RayJob %s has no rayClusterName yet", name)
+	if err != nil {
+		return "", "", errors.Join(
+			errRayJobNotReady,
+			fmt.Errorf("read RayJob %s/%s rayClusterName: %w", namespace, name, err),
+		)
+	}
+	if clusterName == "" {
+		return "", "", fmt.Errorf("%w: RayJob %s/%s has no rayClusterName yet", errRayJobNotReady, namespace, name)
 	}
 	headPod, err := r.Raw(ctx, []string{
 		"-n", namespace, "get", "pods",
 		"-l", "ray.io/cluster=" + clusterName + ",ray.io/node-type=head",
 		"-o", "jsonpath={.items[0].metadata.name}",
 	}, nil)
-	if err != nil || headPod == "" {
-		return "", "", fmt.Errorf("head pod not found for RayJob %s", name)
+	if err != nil {
+		return "", "", errors.Join(
+			errRayJobNotReady,
+			fmt.Errorf("list head pods for RayJob %s/%s: %w", namespace, name, err),
+		)
+	}
+	if strings.TrimSpace(headPod) == "" {
+		return "", "", fmt.Errorf("%w: head pod not found for RayJob %s", errRayJobNotReady, name)
 	}
 	return strings.TrimSpace(jobID), strings.TrimSpace(headPod), nil
 }
@@ -537,7 +565,7 @@ func rayJobLogExecArgs(namespace, headPod, jobID string, follow bool) []string {
 func rayDriverSidecarLogs(ctx context.Context, r *kube.Runner, namespace, headPod string, follow bool, tail int) (string, error) {
 	out, err := r.Raw(ctx, rayDriverSidecarLogArgs(namespace, headPod, follow, tail), nil)
 	if err != nil {
-		return "", err
+		return out, err
 	}
 	if strings.TrimSpace(out) == "" {
 		return "", fmt.Errorf("sidecar %s produced no output", raylogoffload.SidecarContainerName)

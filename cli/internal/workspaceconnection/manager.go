@@ -60,6 +60,7 @@ type Verification struct {
 
 type ActiveConnection struct {
 	Workspace         string
+	WorkspaceUID      string
 	AuthorizationMode string
 	ContextName       string
 	SystemNamespace   string
@@ -717,6 +718,7 @@ func effectiveServiceAccount(name string) string {
 func (s connectionState) active() ActiveConnection {
 	return ActiveConnection{
 		Workspace:         s.Workspace,
+		WorkspaceUID:      s.WorkspaceUID,
 		AuthorizationMode: s.AuthorizationMode,
 		ContextName:       s.ContextName,
 		SystemNamespace:   firstNonEmpty(s.SystemNamespace, tauworkspace.SystemNamespace),

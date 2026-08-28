@@ -134,6 +134,9 @@ func TestListCachedConnectionsReturnsConfiguredRoutesInStableOrder(t *testing.T)
 	if got[0].Namespace != "language-ns" || got[0].KubeconfigPath != "/tmp/language-kubeconfig" {
 		t.Fatalf("language route = %#v", got[0])
 	}
+	if got[0].WorkspaceUID != "language-uid" || got[1].WorkspaceUID != "vision-uid" {
+		t.Fatalf("workspace identities were not surfaced for revalidation: %#v", got)
+	}
 }
 
 func testKubeconfig(server, token string) []byte {

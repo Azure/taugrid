@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -140,6 +141,63 @@ esac
 	}
 }
 
+func TestRayJobLogsReturnsPartialOutputWhenAllReadsFail(t *testing.T) {
+	r := fakeKubectlRunner(t, `#!/bin/sh
+case "$*" in`+headResolutionCases+`
+  *`+raylogoffload.SidecarContainerName+`*) printf 'sidecar partial\n'; echo 'sidecar failed' >&2; exit 1 ;;
+  *exec*) printf 'ray cli partial\n'; echo 'ray cli failed' >&2; exit 1 ;;
+  *) echo "unexpected: $*" >&2; exit 3 ;;
+esac
+`)
+
+	out, err := rayJobLogs(context.Background(), r, "pre-training-document", "demo-train", false, 20)
+	if err == nil {
+		t.Fatal("expected both reads to fail")
+	}
+	if out != "ray cli partial\n" {
+		t.Fatalf("partial output = %q", out)
+	}
+	for _, want := range []string{"sidecar failed", "ray cli failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestRayJobLogsReturnsSidecarPartialOutputWhenRayCLIFailsEmpty(t *testing.T) {
+	r := fakeKubectlRunner(t, `#!/bin/sh
+case "$*" in`+headResolutionCases+`
+  *`+raylogoffload.SidecarContainerName+`*) printf 'sidecar partial\n'; echo 'sidecar failed' >&2; exit 1 ;;
+  *exec*) echo 'ray cli failed' >&2; exit 1 ;;
+  *) echo "unexpected: $*" >&2; exit 3 ;;
+esac
+`)
+
+	out, err := rayJobLogs(context.Background(), r, "pre-training-document", "demo-train", false, 20)
+	if err == nil {
+		t.Fatal("expected both reads to fail")
+	}
+	if out != "sidecar partial\n" {
+		t.Fatalf("partial output = %q", out)
+	}
+}
+
+func TestResolveRayJobLogTargetIdentifiesUnreadyRayJob(t *testing.T) {
+	r := fakeKubectlRunner(t, `#!/bin/sh
+case "$*" in
+  *status.jobId*) exit 0 ;;
+  *) echo "unexpected: $*" >&2; exit 3 ;;
+esac
+`)
+	_, _, err := resolveRayJobLogTarget(context.Background(), r, "ray", "demo-train")
+	if !errors.Is(err, errRayJobNotReady) {
+		t.Fatalf("error = %v, want errRayJobNotReady", err)
+	}
+	if !strings.Contains(err.Error(), "status.jobId") {
+		t.Fatalf("error %q does not explain RayJob readiness", err)
+	}
+}
+
 func TestRayJobFollowStreamsSidecarFromTailZero(t *testing.T) {
 	r := fakeKubectlRunner(t, `#!/bin/sh
 case "$*" in`+headResolutionCases+`
@@ -170,6 +228,26 @@ esac
 	err := rayJobFollow(context.Background(), r, "pre-training-document", "demo-train", 20, &strings.Builder{})
 	if err == nil || !strings.Contains(err.Error(), "retry with --tail=-1") {
 		t.Fatalf("error = %v, want legacy bounded-follow guidance", err)
+	}
+}
+
+func TestRayJobFollowSurfacesSidecarAndRayCLIErrors(t *testing.T) {
+	r := fakeKubectlRunner(t, `#!/bin/sh
+case "$*" in`+headResolutionCases+`
+  *`+raylogoffload.SidecarContainerName+`*) echo 'sidecar stream failed' >&2; exit 1 ;;
+  *exec*) echo 'ray cli stream failed' >&2; exit 1 ;;
+  *) echo "unexpected: $*" >&2; exit 3 ;;
+esac
+`)
+
+	err := rayJobFollow(context.Background(), r, "pre-training-document", "demo-train", -1, &strings.Builder{})
+	if err == nil {
+		t.Fatal("expected an error when both follow paths fail")
+	}
+	for _, want := range []string{"sidecar stream failed", "ray cli stream failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
 	}
 }
 

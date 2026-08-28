@@ -9,20 +9,24 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/status"
 )
 
 type runLogsRoute struct {
-	Workspace   string
-	KubeContext string
-	Kubeconfig  string
-	Namespace   string
+	Workspace       string
+	WorkspaceUID    string
+	SystemNamespace string
+	KubeContext     string
+	Kubeconfig      string
+	Namespace       string
 }
 
 func (r runLogsRoute) label() string {
@@ -53,7 +57,10 @@ type runLogsDiscoveryHooks struct {
 	probeTimeout time.Duration
 }
 
-const defaultRunLogsProbeTimeout = 15 * time.Second
+const (
+	defaultRunLogsProbeTimeout = 15 * time.Second
+	maxRunLogsProbeConcurrency = 8
+)
 
 type runLogsProbeHooks struct {
 	fetchSnapshot func(context.Context) (status.Snapshot, error)
@@ -143,25 +150,13 @@ func runLogsWithDiscovery(
 	}
 	matches := make([]runLogsRoute, 0, 1)
 	searched := make([]string, 0, len(cached))
-	for _, route := range cached {
-		if _, duplicate := seen[route.key()]; duplicate {
-			continue
-		}
-		seen[route.key()] = struct{}{}
-		searched = append(searched, route.label())
-		found, probeErr := probeRunLogsRoute(ctx, hooks, route, name)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if found {
-			matches = append(matches, route)
-			continue
-		}
-		if probeErr != nil {
-			diagnostic := route.label() + ": " + probeErr.Error()
-			diagnostics = append(diagnostics, diagnostic)
-			warnings = append(warnings, diagnostic)
-		}
+	cachedMatches, cachedSearched, cachedErrors := probeCachedRunLogsRoutes(ctx, hooks, cached, seen, name)
+	matches = append(matches, cachedMatches...)
+	searched = append(searched, cachedSearched...)
+	diagnostics = append(diagnostics, cachedErrors...)
+	warnings = append(warnings, cachedErrors...)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	switch len(matches) {
@@ -196,6 +191,71 @@ func runLogsWithDiscovery(
 	}
 }
 
+func probeCachedRunLogsRoutes(
+	ctx context.Context,
+	hooks runLogsDiscoveryHooks,
+	routes []runLogsRoute,
+	seen map[string]struct{},
+	name string,
+) ([]runLogsRoute, []string, []string) {
+	unique := make([]runLogsRoute, 0, len(routes))
+	for _, route := range routes {
+		if _, duplicate := seen[route.key()]; duplicate {
+			continue
+		}
+		seen[route.key()] = struct{}{}
+		unique = append(unique, route)
+	}
+	if len(unique) == 0 {
+		return nil, nil, nil
+	}
+
+	timeout := hooks.probeTimeout
+	if timeout <= 0 {
+		timeout = defaultRunLogsProbeTimeout
+	}
+	searchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type probeResult struct {
+		found bool
+		err   error
+	}
+	results := make([]probeResult, len(unique))
+	jobs := make(chan int, len(unique))
+	for i := range unique {
+		jobs <- i
+	}
+	close(jobs)
+
+	workers := min(maxRunLogsProbeConcurrency, len(unique))
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				results[i].found, results[i].err = probeRunLogsRoute(searchCtx, hooks, unique[i], name)
+			}
+		}()
+	}
+	wg.Wait()
+
+	matches := make([]runLogsRoute, 0, len(unique))
+	searched := make([]string, 0, len(unique))
+	probeErrors := make([]string, 0, len(unique))
+	for i, route := range unique {
+		searched = append(searched, route.label())
+		if results[i].found {
+			matches = append(matches, route)
+		}
+		if results[i].err != nil {
+			probeErrors = append(probeErrors, route.label()+": "+results[i].err.Error())
+		}
+	}
+	return matches, searched, probeErrors
+}
+
 func probeRunLogsRoute(ctx context.Context, hooks runLogsDiscoveryHooks, route runLogsRoute, name string) (bool, error) {
 	timeout := hooks.probeTimeout
 	if timeout <= 0 {
@@ -204,8 +264,11 @@ func probeRunLogsRoute(ctx context.Context, hooks runLogsDiscoveryHooks, route r
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	found, err := hooks.probe(probeCtx, route, name)
-	if probeCtx.Err() != nil && ctx.Err() == nil {
-		return false, fmt.Errorf("probe timed out after %s: %w", timeout, probeCtx.Err())
+	if probeCtx.Err() == context.DeadlineExceeded {
+		return found, fmt.Errorf("probe timed out after %s: %w", timeout, probeCtx.Err())
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
 	return found, err
 }
@@ -234,16 +297,21 @@ func defaultRunLogsDiscoveryHooks(cmd *cobra.Command, connection *runLifecycleCo
 			routes := make([]runLogsRoute, 0, len(connections))
 			for _, connection := range connections {
 				routes = append(routes, runLogsRoute{
-					Workspace:   connection.Workspace,
-					KubeContext: connection.ContextName,
-					Kubeconfig:  connection.KubeconfigPath,
-					Namespace:   connection.Namespace,
+					Workspace:       connection.Workspace,
+					WorkspaceUID:    connection.WorkspaceUID,
+					SystemNamespace: connection.SystemNamespace,
+					KubeContext:     connection.ContextName,
+					Kubeconfig:      connection.KubeconfigPath,
+					Namespace:       connection.Namespace,
 				})
 			}
 			return routes, nil
 		},
 		probe: func(ctx context.Context, route runLogsRoute, name string) (bool, error) {
 			r := kube.NewWithKubeconfig(route.KubeContext, route.Kubeconfig)
+			if err := validateCachedRunLogsRoute(ctx, r, route); err != nil {
+				return false, err
+			}
 			return probeRunLogsWithHooks(ctx, runLogsProbeHooks{
 				fetchSnapshot: func(ctx context.Context) (status.Snapshot, error) {
 					return status.FetchRunLogs(ctx, r, route.Namespace, name)
@@ -261,7 +329,49 @@ func defaultRunLogsDiscoveryHooks(cmd *cobra.Command, connection *runLifecycleCo
 		execute: func(ctx context.Context, out io.Writer, route runLogsRoute, name string, opts runLogsOptions) error {
 			opts.Namespace = route.Namespace
 			r := kube.NewWithKubeconfig(route.KubeContext, route.Kubeconfig)
+			if err := validateCachedRunLogsRoute(ctx, r, route); err != nil {
+				return err
+			}
 			return runLogsCommandWithHooks(ctx, out, r, name, opts, runLogsHooks{})
 		},
 	}
+}
+
+func validateCachedRunLogsRoute(ctx context.Context, runner kubeRawRunner, route runLogsRoute) error {
+	if route.WorkspaceUID == "" {
+		return nil
+	}
+	raw, err := runner.Raw(ctx, []string{
+		"-n", route.SystemNamespace,
+		"get", "workspace.tau.azure.com", route.Workspace,
+		"-o", "json",
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("revalidate cached workspace %q: %w", route.Workspace, err)
+	}
+	workspace, err := tauworkspace.Parse([]byte(raw))
+	if err != nil {
+		return fmt.Errorf("revalidate cached workspace %q: %w", route.Workspace, err)
+	}
+	if workspace.Metadata.UID != route.WorkspaceUID {
+		return fmt.Errorf(
+			"cached workspace %q identity changed (expected UID %q, got %q); reconnect the workspace",
+			route.Workspace,
+			route.WorkspaceUID,
+			workspace.Metadata.UID,
+		)
+	}
+	namespace := tauworkspace.ResolvedNamespace(workspace)
+	if namespace != route.Namespace {
+		return fmt.Errorf(
+			"cached workspace %q namespace changed (expected %q, got %q); reconnect the workspace",
+			route.Workspace,
+			route.Namespace,
+			namespace,
+		)
+	}
+	if !tauworkspace.Ready(workspace) {
+		return fmt.Errorf("cached workspace %q is not Ready; reconnect the workspace", route.Workspace)
+	}
+	return nil
 }

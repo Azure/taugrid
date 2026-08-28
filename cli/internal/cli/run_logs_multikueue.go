@@ -6,9 +6,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-kusto-go/azkustodata"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
@@ -41,6 +44,7 @@ type runLogsHooks struct {
 	rayJobFollow            func(context.Context, *kube.Runner, string, string, int, io.Writer) error
 	jobLogs                 func(context.Context, kubeRawRunner, string, string, bool, int) (string, error)
 	jobFollow               func(context.Context, *kube.Runner, string, string, runLogsOptions, io.Writer) error
+	jobPodsExist            func(context.Context, kubeRawRunner, string, string) (bool, error)
 	resolveMultiKueueWorker func(context.Context, kubeRawRunner, string) (multiKueueWorkerRef, error)
 	queryADXLogs            func(context.Context, kustoLogsQuery) ([]kustoquery.Row, error)
 }
@@ -97,11 +101,21 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 		var logs string
 		var err error
 		if opts.Follow {
-			err = hooks.rayJobFollow(ctx, r, opts.Namespace, name, opts.Tail, out)
+			countedRay := &countingWriter{out: out}
+			err = hooks.rayJobFollow(ctx, r, opts.Namespace, name, opts.Tail, countedRay)
+			if err != nil && countedRay.written > 0 {
+				return fmt.Errorf("follow logs for RayJob %s: %w", name, err)
+			}
 		} else {
 			logs, err = hooks.rayJobLogs(ctx, r, opts.Namespace, name, false)
 		}
 		if err != nil {
+			if logs != "" {
+				if _, writeErr := io.WriteString(out, logs); writeErr != nil {
+					return writeErr
+				}
+				return fmt.Errorf("read logs for RayJob %s: %w", name, err)
+			}
 			if localRayJobTerminal(snap.RayJob) {
 				centralLogs, centralErr := localTerminalRayJobLogs(ctx, name, opts, snap, hooks)
 				if centralErr == nil {
@@ -113,10 +127,11 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 			// Distinguish "not ready yet" from "no logs". Terse on purpose:
 			// `tau run status` already renders the startup phases.
 			hint := ""
+			statusCommand := runRouteCommandHint(r, opts.Namespace, "run", "status", name)
 			if strings.TrimSpace(snap.RayJob.JobID) == "" {
-				hint = fmt.Sprintf("; the RayJob has not reported status.jobId yet, so no driver logs exist. Run `tau run status %s` to see startup progress, then retry", name)
+				hint = fmt.Sprintf("; the RayJob has not reported status.jobId yet, so no driver logs exist. Run `%s` to see startup progress, then retry", statusCommand)
 			} else {
-				hint = fmt.Sprintf("; run `tau run status %s` to inspect startup progress, then retry", name)
+				hint = fmt.Sprintf("; run `%s` to inspect startup progress, then retry", statusCommand)
 			}
 			return fmt.Errorf("read logs for RayJob %s: %w%s", name, err, hint)
 		}
@@ -133,10 +148,15 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 	// decide on the OBSERVED result rather than on a prediction from the snapshot.
 	var logs string
 	var err error
-	if !hasBatchLogOptions(opts) && (snap.RayJob.Found || snapErr != nil) {
+	var rayErr error
+	if !hasBatchLogOptions(opts) {
 		if opts.Follow {
-			if err = hooks.rayJobFollow(ctx, r, opts.Namespace, name, opts.Tail, out); err == nil {
+			countedRay := &countingWriter{out: out}
+			if err = hooks.rayJobFollow(ctx, r, opts.Namespace, name, opts.Tail, countedRay); err == nil {
 				return nil
+			}
+			if countedRay.written > 0 {
+				return fmt.Errorf("follow logs for RayJob %s: %w", name, err)
 			}
 		} else {
 			logs, err = hooks.rayJobLogs(ctx, r, opts.Namespace, name, false)
@@ -144,17 +164,35 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 				_, err = io.WriteString(out, logs)
 				return err
 			}
+			if logs != "" {
+				if _, writeErr := io.WriteString(out, logs); writeErr != nil {
+					return writeErr
+				}
+				return fmt.Errorf("read logs for RayJob %s: %w", name, err)
+			}
 		}
+		if errors.Is(err, errRayJobNotReady) {
+			return rayJobNotReadyError(r, name, opts.Namespace, err)
+		}
+		rayErr = err
 	}
 
 	if opts.Follow {
 		counted := &countingWriter{out: out}
 		if err := hooks.jobFollow(ctx, r, opts.Namespace, name, opts, counted); err != nil {
+			if errors.Is(err, errJobLogTargetNotFound) {
+				return missingRunLogsError(r, name, opts.Namespace, snapErr, rayErr)
+			}
 			return err
 		}
 		if counted.written == 0 && !snap.JobFound {
-			return fmt.Errorf("no logs found for run %q in namespace %s; it may not exist or may not have started — run `tau run list -n %s` to see available runs",
-				name, opts.Namespace, opts.Namespace)
+			found, findErr := hooks.jobPodsExist(ctx, r, opts.Namespace, name)
+			if findErr != nil {
+				return findErr
+			}
+			if !found {
+				return missingRunLogsError(r, name, opts.Namespace, snapErr, rayErr)
+			}
 		}
 		return nil
 	}
@@ -166,13 +204,22 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 		return err
 	}
 	if err == nil {
+		if snap.JobFound {
+			return nil
+		}
+		found, findErr := hooks.jobPodsExist(ctx, r, opts.Namespace, name)
+		if findErr != nil {
+			return findErr
+		}
+		if found {
+			return nil
+		}
 		// Both paths came back empty with no error. `kubectl logs -l
 		// job-name=<name>` matches nothing for an unknown name and reports
 		// success, so returning nil here would exit 0 in silence and a typo
 		// would read as "the run produced no output". Same empty-match hazard
 		// the RayJob guard above documents, reached when no object was found.
-		return fmt.Errorf("no logs found for run %q in namespace %s; it may not exist or may not have started — run `tau run list -n %s` to see available runs",
-			name, opts.Namespace, opts.Namespace)
+		return missingRunLogsError(r, name, opts.Namespace, snapErr, rayErr)
 	}
 	return err
 }
@@ -185,11 +232,19 @@ func normalizeRunLogsHooks(r *kube.Runner, opts runLogsOptions, name string, hoo
 	}
 	if hooks.rayJobLogs == nil {
 		hooks.rayJobLogs = func(ctx context.Context, r *kube.Runner, namespace, name string, follow bool) (string, error) {
+			if r == nil {
+				return "", fmt.Errorf("not a RayJob or jobId not available")
+			}
 			return rayJobLogs(ctx, r, namespace, name, follow, opts.Tail)
 		}
 	}
 	if hooks.rayJobFollow == nil {
-		hooks.rayJobFollow = rayJobFollow
+		hooks.rayJobFollow = func(ctx context.Context, r *kube.Runner, namespace, name string, tail int, out io.Writer) error {
+			if r == nil {
+				return fmt.Errorf("not a RayJob or jobId not available")
+			}
+			return rayJobFollow(ctx, r, namespace, name, tail, out)
+		}
 	}
 	if hooks.jobLogs == nil {
 		hooks.jobLogs = func(ctx context.Context, r kubeRawRunner, namespace, name string, _ bool, _ int) (string, error) {
@@ -199,6 +254,14 @@ func normalizeRunLogsHooks(r *kube.Runner, opts runLogsOptions, name string, hoo
 	if hooks.jobFollow == nil {
 		hooks.jobFollow = localJobLogsFollow
 	}
+	if hooks.jobPodsExist == nil {
+		hooks.jobPodsExist = func(ctx context.Context, _ kubeRawRunner, namespace, name string) (bool, error) {
+			if r == nil {
+				return false, nil
+			}
+			return localJobPodsExist(ctx, r, namespace, name)
+		}
+	}
 
 	if hooks.resolveMultiKueueWorker == nil {
 		hooks.resolveMultiKueueWorker = fetchMultiKueueWorkerRef
@@ -207,6 +270,63 @@ func normalizeRunLogsHooks(r *kube.Runner, opts runLogsOptions, name string, hoo
 		hooks.queryADXLogs = queryADXLogs
 	}
 	return hooks
+}
+
+func rayJobNotReadyError(r *kube.Runner, name, namespace string, cause error) error {
+	return fmt.Errorf(
+		"read logs for RayJob %s: %w; the RayJob is not ready for driver logs. Run `%s` to see startup progress, then retry",
+		name,
+		cause,
+		runRouteCommandHint(r, namespace, "run", "status", name),
+	)
+}
+
+func missingRunLogsError(r *kube.Runner, name, namespace string, lookupErrors ...error) error {
+	result := []error{fmt.Errorf(
+		"no logs found for run %q in namespace %s; it may not exist or may not have started — run `%s` to see available runs",
+		name,
+		namespace,
+		runRouteCommandHint(r, namespace, "run", "list"),
+	)}
+	for _, lookupErr := range lookupErrors {
+		if lookupErr == nil ||
+			errors.Is(lookupErr, errRayJobNotReady) ||
+			isExactObjectNotFound(lookupErr, name, "rayjob.ray.io", "rayjobs.ray.io") {
+			continue
+		}
+		result = append(result, fmt.Errorf("run lookup failed: %w", lookupErr))
+	}
+	return errors.Join(result...)
+}
+
+func runRouteCommandHint(r *kube.Runner, namespace string, args ...string) string {
+	parts := make([]string, 0, len(args)+7)
+	if r != nil && strings.TrimSpace(r.Kubeconfig) != "" {
+		parts = append(parts, "KUBECONFIG="+commandHintArg(r.Kubeconfig))
+	}
+	parts = append(parts, "tau")
+	for _, arg := range args {
+		parts = append(parts, commandHintArg(arg))
+	}
+	if strings.TrimSpace(namespace) != "" {
+		parts = append(parts, "-n", commandHintArg(namespace))
+	}
+	if r != nil && strings.TrimSpace(r.Context) != "" {
+		parts = append(parts, "--context", commandHintArg(r.Context))
+	}
+	return strings.Join(parts, " ")
+}
+
+func commandHintArg(value string) string {
+	if value != "" && strings.IndexFunc(value, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			strings.ContainsRune("-._/:@", r))
+	}) == -1 {
+		return value
+	}
+	return strconv.Quote(value)
 }
 
 func validateRunLogsOptions(opts runLogsOptions) error {
@@ -234,7 +354,8 @@ func shouldUseManagerMultiKueueLogs(snap status.Snapshot) bool {
 	return snap.RayJob.Found && snap.IsMultiKueue()
 }
 
-func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name string, opts runLogsOptions, snap status.Snapshot, hooks runLogsHooks) (string, error) {
+func managerMultiKueueRayJobLogs(ctx context.Context, r *kube.Runner, name string, opts runLogsOptions, snap status.Snapshot, hooks runLogsHooks) (string, error) {
+	statusCommand := runRouteCommandHint(r, opts.Namespace, "run", "status", name)
 	if worker := strings.TrimSpace(snap.PlacementWorkerCluster()); worker != "" {
 		if opts.Follow {
 			return "", fmt.Errorf("--follow is not supported for manager-side MultiKueue RayJob logs; tau queries ADX and does not implement cursor-based polling or de-duplication for centrally offloaded driver logs")
@@ -252,7 +373,7 @@ func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name stri
 		}
 		rayClusterName := strings.TrimSpace(snap.RayJob.RayClusterName)
 		if rayClusterName == "" {
-			return "", fmt.Errorf("RayJob %s has not reported its mirrored RayCluster name yet; wait for `tau run status %s` to show the worker-side RayCluster before reading manager-side logs", name, name)
+			return "", fmt.Errorf("RayJob %s has not reported its mirrored RayCluster name yet; wait for `%s` to show the worker-side RayCluster before reading manager-side logs", name, statusCommand)
 		}
 		logs, err := centralRayDriverLogs(ctx, name, adxCluster, rayClusterName, opts, hooks)
 		if err != nil {
@@ -270,9 +391,9 @@ func managerMultiKueueRayJobLogs(ctx context.Context, r kubeRawRunner, name stri
 		if len(nominated) > 0 {
 			return "", fmt.Errorf("RayJob %s has not been assigned to a MultiKueue worker yet; manager-side placement is still nominated for %s", name, strings.Join(nominated, ", "))
 		}
-		return "", fmt.Errorf("RayJob %s has not been assigned to a MultiKueue worker yet; wait for `tau run status %s` to show the selected worker before reading manager-side logs", name, name)
+		return "", fmt.Errorf("RayJob %s has not been assigned to a MultiKueue worker yet; wait for `%s` to show the selected worker before reading manager-side logs", name, statusCommand)
 	default:
-		return "", fmt.Errorf("RayJob %s does not have an unambiguous selected MultiKueue worker yet; run `tau run status %s` to inspect manager-side placement", name, name)
+		return "", fmt.Errorf("RayJob %s does not have an unambiguous selected MultiKueue worker yet; run `%s` to inspect manager-side placement", name, statusCommand)
 	}
 }
 
@@ -343,8 +464,65 @@ func localJobLogsWithOptions(ctx context.Context, r kubeRawRunner, namespace, na
 	return r.Raw(ctx, localJobLogArgs(namespace, name, opts), nil)
 }
 
+var (
+	errRayJobNotReady       = errors.New("RayJob is not ready for logs")
+	errJobLogTargetNotFound = errors.New("batch Job and matching pods were not found")
+)
+
 func localJobLogsFollow(ctx context.Context, r *kube.Runner, namespace, name string, opts runLogsOptions, out io.Writer) error {
+	if err := waitForJobLogPod(ctx, r, namespace, name, 500*time.Millisecond); err != nil {
+		return err
+	}
 	return r.RawStream(ctx, localJobLogArgs(namespace, name, opts), nil, out)
+}
+
+func waitForJobLogPod(ctx context.Context, r kubeRawRunner, namespace, name string, interval time.Duration) error {
+	for {
+		found, err := localJobPodsExist(ctx, r, namespace, name)
+		if err != nil {
+			return err
+		}
+		if found {
+			return nil
+		}
+		job, err := r.Raw(ctx, []string{
+			"-n", namespace,
+			"get", "job", name,
+			"-o", "name",
+			"--ignore-not-found",
+		}, nil)
+		if err != nil {
+			return fmt.Errorf("check batch Job %s/%s before following logs: %w", namespace, name, err)
+		}
+		if strings.TrimSpace(job) == "" {
+			return fmt.Errorf("%w: %s/%s", errJobLogTargetNotFound, namespace, name)
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func localJobPodsExist(ctx context.Context, r kubeRawRunner, namespace, name string) (bool, error) {
+	pods, err := r.Raw(ctx, []string{
+		"-n", namespace,
+		"get", "pods",
+		"-l", "job-name=" + name,
+		"-o", "name",
+	}, nil)
+	if err != nil {
+		return false, fmt.Errorf("list batch Job pods for %s/%s: %w", namespace, name, err)
+	}
+	return strings.TrimSpace(pods) != "", nil
 }
 
 func localJobLogArgs(namespace, name string, opts runLogsOptions) []string {
