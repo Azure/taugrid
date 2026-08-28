@@ -241,15 +241,21 @@ variable "adx_cluster_name" {
 }
 
 variable "adx_sku_name" {
-  description = "Azure Data Explorer SKU for an evaluation deployment."
+  description = "Azure Data Explorer compute SKU. Use Dev(No SLA)_Standard_D11_v2 for evaluation only."
   type        = string
-  default     = "Dev(No SLA)_Standard_D11_v2"
+  default     = "Standard_E8ads_v5"
 }
 
 variable "adx_sku_capacity" {
   description = "Number of Azure Data Explorer instances."
   type        = number
-  default     = 1
+  default     = 4
+}
+
+variable "adx_streaming_ingestion_enabled" {
+  description = "Enable streaming ingestion on the Azure Data Explorer cluster. Required for low-latency ingestion pipelines."
+  type        = bool
+  default     = true
 }
 
 variable "dcgm_exporter_chart_version" {

@@ -132,6 +132,8 @@ resource "azurerm_kusto_cluster" "this" {
   resource_group_name = azurerm_resource_group.this.name
   auto_stop_enabled   = true
 
+  streaming_ingestion_enabled = var.adx_streaming_ingestion_enabled
+
   sku {
     name     = var.adx_sku_name
     capacity = var.adx_sku_capacity

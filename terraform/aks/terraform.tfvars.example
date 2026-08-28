@@ -43,6 +43,9 @@ enable_adx = true
 # when needed. Terraform preserves an existing cluster name; change it only through
 # an explicit migration.
 adx_cluster_name = ""
+# For evaluation only, override to a dev SKU:
+# adx_sku_name     = "Dev(No SLA)_Standard_D11_v2"
+# adx_sku_capacity = 1
 
 # Terraform bootstraps this target namespace before the TauGrid install so ADX,
 # lifecycle recording, and Portal run history can be enabled in one apply.
