@@ -3,4 +3,4 @@ appVersion: v0.8.19
 description: Node Problem Detector with custom GPU and IB checks
 name: gpu-monitoring
 type: application
-version: 0.1.7
+version: 0.1.8
