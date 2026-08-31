@@ -55,7 +55,7 @@ A100 pool, it then normalizes MIG mode, restarts the GPU VM scale set, and
 waits for allocatable GPUs before running:
 
 ```bash
-tau cluster install --values generated/taugrid-values.yaml --version 0.3.2
+tau cluster install --values generated/taugrid-values.yaml --version 0.4.0
 ```
 
 In this mode, the generated values configure TauGrid GPU monitoring with

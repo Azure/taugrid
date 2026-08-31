@@ -8,7 +8,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:0.3.2
+          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:0.4.0
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent

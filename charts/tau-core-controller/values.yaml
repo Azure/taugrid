@@ -10,7 +10,7 @@ image:
   # Release image tags follow this chart's version. Set tag to "" when
   # overriding digest with an immutable sha256 reference.
   digest: ""
-  tag: "0.3.2"
+  tag: "0.4.0"
   pullPolicy: IfNotPresent
 
 resources:
