@@ -45,6 +45,12 @@ variable "cluster_name" {
   }
 }
 
+variable "kubeconfig_path" {
+  description = "Path to the administrator kubeconfig used by Terraform local-exec provisioners. Empty writes to generated/kubeconfig."
+  type        = string
+  default     = ""
+}
+
 variable "kubernetes_version" {
   description = "AKS Kubernetes version. Leave null to use the AKS default version for the region."
   type        = string

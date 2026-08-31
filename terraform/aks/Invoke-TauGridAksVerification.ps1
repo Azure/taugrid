@@ -36,6 +36,8 @@ param(
     [string] $BootstrapWorkspaceName = "taugrid-default",
     [ValidatePattern("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")]
     [string] $WorkspaceNamespace = "taugrid-default",
+    [ValidatePattern("^[0-9]+\.[0-9]+\.[0-9]+$")]
+    [string] $TauGridVersion = "0.4.0",
     [ValidateRange(10, 60)]
     [int] $PortalWaitMinutes = 30
 )
@@ -119,20 +121,32 @@ function Ensure-PortalPortForward {
 }
 
 function Invoke-TerraformApplyWithAdxRecovery {
-    param([string] $ModulePath, [string] $PlanFile, [string] $StateFile, [string] $VarsFile, [string] $ResourceGroup)
+    param([string] $ModulePath, [string] $PlanFile, [string] $StateFile, [string] $VarsFile, [string] $ResourceGroup, [string] $AdxClusterName)
 
     & terraform "-chdir=$ModulePath" apply "-state=$StateFile" $PlanFile
     if ($LASTEXITCODE -eq 0) { return }
 
     $stateEntries = @(terraform "-chdir=$ModulePath" state list "-state=$StateFile")
-    if ($LASTEXITCODE -ne 0 -or "azurerm_kusto_cluster.this[0]" -in $stateEntries) {
+    if ($LASTEXITCODE -ne 0) {
+        throw "Terraform apply failed and the verification state could not be read."
+    }
+    $portalIdentityAddress = "azurerm_user_assigned_identity.portal[0]"
+    if ($portalIdentityAddress -notin $stateEntries) {
+        $portalIdentityID = az identity show --resource-group $ResourceGroup --name "taugrid-portal-adx" --query id --output tsv 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($portalIdentityID)) {
+            $portalIdentityID = $portalIdentityID -replace "/resourcegroups/", "/resourceGroups/"
+            Invoke-Native terraform @("-chdir=$ModulePath", "import", "-state=$StateFile", "-var-file=$VarsFile", $portalIdentityAddress, $portalIdentityID)
+            Invoke-Native terraform @("-chdir=$ModulePath", "apply", "-auto-approve", "-state=$StateFile", "-var-file=$VarsFile")
+            return
+        }
+    }
+    if ("azurerm_kusto_cluster.this[0]" -in $stateEntries) {
         throw "Terraform apply failed and there is no recoverable untracked ADX cluster."
     }
-    $clusterIDs = @(az resource list --resource-group $ResourceGroup --resource-type "Microsoft.Kusto/clusters" --query "[].id" --output tsv)
-    if ($LASTEXITCODE -ne 0 -or $clusterIDs.Count -ne 1) {
-        throw "Terraform apply failed and did not leave exactly one recoverable ADX cluster in resource group '$ResourceGroup'."
+    $clusterID = az kusto cluster show --resource-group $ResourceGroup --cluster-name $AdxClusterName --query id --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($clusterID)) {
+        throw "Terraform apply failed and did not leave the expected recoverable ADX cluster '$AdxClusterName' in resource group '$ResourceGroup'."
     }
-    $clusterID = $clusterIDs[0]
     $deadline = (Get-Date).AddMinutes(20)
     Wait-ForCondition {
         $provisioningState = az resource show --ids $clusterID --api-version "2024-04-13" --query "properties.provisioningState" --output tsv
@@ -168,6 +182,7 @@ $run = if ($RunId) { $RunId } else { "{0}-{1:x4}" -f (Get-Date -Format "yyyyMMdd
 if ($run.Length -gt 13) { throw "RunId must be at most 13 characters." }
 $resourceGroup = "$ResourceNamePrefix-$run"
 if ($resourceGroup.Length -gt 54) { throw "The generated AKS name '$resourceGroup' exceeds 54 characters." }
+$adxClusterName = "taugrid$($run -replace '-', '')"
 
 $generated = Join-Path $modulePath "generated"
 $deployment = Join-Path $generated "deployments"
@@ -203,6 +218,8 @@ adx_sku_name        = "$AdxSkuName"
 adx_sku_capacity    = $AdxSkuCapacity
 resource_group_name = "$resourceGroup"
 cluster_name        = "$resourceGroup"
+adx_cluster_name    = "$adxClusterName"
+kubeconfig_path     = "generated/kubeconfig-$run"
 command_interpreter = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 gpu_vm_size             = "$GpuVmSize"
 gpu_node_count          = 1
@@ -216,6 +233,7 @@ normalize_gpu_mig       = $($NormalizeGpuMig.ToString().ToLowerInvariant())
 enable_adx                = true
 enable_lifecycle_recorder = true
 workspace_namespace       = "$WorkspaceNamespace"
+taugrid_version           = "$TauGridVersion"
 $bootstrapWorkspaceTfvars
 "@
 Set-Content -LiteralPath $varsFile -Value $tfvars -Encoding utf8NoBOM
@@ -232,7 +250,7 @@ $portForwardDiagnostics = [System.Collections.Generic.List[string]]::new()
 try {
     Invoke-Native terraform @("-chdir=$modulePath", "init", "-backend=false")
     Invoke-Native terraform @("-chdir=$modulePath", "plan", "-state=$stateFile", "-var-file=$varsFile", "-out=$planFile")
-    Invoke-TerraformApplyWithAdxRecovery -ModulePath $modulePath -PlanFile $planFile -StateFile $stateFile -VarsFile $varsFile -ResourceGroup $resourceGroup
+    Invoke-TerraformApplyWithAdxRecovery -ModulePath $modulePath -PlanFile $planFile -StateFile $stateFile -VarsFile $varsFile -ResourceGroup $resourceGroup -AdxClusterName $adxClusterName
     Invoke-Native az @("aks", "get-credentials", "--admin", "--subscription", $account.id, "--resource-group", $resourceGroup, "--name", $resourceGroup, "--file", $kubeconfig, "--overwrite-existing")
     Invoke-Native $tau.Source @("cluster", "validate", "installation", "--timeout", "10m")
     Invoke-Native kubectl @("-n", "tau-system", "rollout", "status", "deployment/tau-portal", "--timeout=15m")
@@ -315,7 +333,7 @@ runtime:
         } "smoke RayJob completion" $deadline
         Wait-ForCondition {
             Ensure-PortalPortForward -PortForward ([ref] $portForward) -Attempt ([ref] $portForwardAttempt) -Diagnostics $portForwardDiagnostics -GeneratedPath $generated -RunIdentifier $run
-            $history = Invoke-RestMethod -Uri "$($portForward.BaseUri)/api/portal/ray/history/$smokeResourceUID?workspace=$BootstrapWorkspaceName" -TimeoutSec 30
+            $history = Invoke-RestMethod -Uri "$($portForward.BaseUri)/api/portal/ray/history/${smokeResourceUID}?workspace=$BootstrapWorkspaceName" -TimeoutSec 30
             $history.state -eq "ready" -and @($history.events | Where-Object { $_.resourceUid -eq $smokeResourceUID }).Count -ge 1
         } "Portal lifecycle history from ADX" $deadline
     }
