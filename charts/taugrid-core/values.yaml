@@ -97,7 +97,7 @@ stellar:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
     # Release image tags follow this chart's version.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: "0.3.2"
+    tag: "0.4.0"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   deploymentAnnotations: {}
@@ -216,7 +216,7 @@ lifecycleRecorder:
     # Release image tags follow this chart's version. Set tag to "" when
     # overriding digest with an immutable sha256 reference.
     repository: mcr.microsoft.com/aks/ai-runtime/tau
-    tag: "0.3.2"
+    tag: "0.4.0"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -368,7 +368,7 @@ portal:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     # Release image tags follow this chart's version.
-    tag: "0.3.2"
+    tag: "0.4.0"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
