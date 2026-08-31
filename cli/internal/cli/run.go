@@ -59,10 +59,8 @@ from the configured cluster's TauCluster. Offline rendering is explicit:
 policy.workload_profile_snapshot must name a TauWorkloadProfileSnapshot and is
 accepted only with --dry-run=client; Tau never falls back to an environment or
 embedded profile catalog.
-See: tau run explain-config
-
-Common examples:
-  tau run train
+See: tau run explain-config`,
+		Example: `  tau run train
   tau run
   tau run mc-rl --config experiments/mc-rl/tau.yaml
   tau run --dry-run=client

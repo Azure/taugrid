@@ -77,6 +77,11 @@ func newModelCmd() *cobra.Command {
 The registry is stored as small JSON metadata records on the blob-training PVC.
 It points at existing completed-run artifacts; it does not move checkpoint
 payloads or replace managed workflow artifacts.`,
+		Example: `  tau data model list --model llama-7b-ft
+  tau data model best llama-7b-ft --metric eval_loss --direction lower
+  tau data model alias set llama-7b-ft latest run-20240115-093000`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(
 		newModelListCmd(),
@@ -94,7 +99,13 @@ func newModelListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List durable model runs",
-		Args:  cobra.NoArgs,
+		Long: `List completed Tau train runs recorded in the durable model registry,
+optionally filtered by model name, tags, or a metric threshold. Use -o json
+for machine-readable output.`,
+		Example: `  tau data model list --model llama-7b-ft
+  tau data model list --model llama-7b-ft --metric eval_loss --sort asc
+  tau data model list --output json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedContext, ns, restore, err := resolveWorkloadDataConnection(cmd, kubeContext, namespace)
 			if err != nil {
@@ -130,7 +141,7 @@ func newModelListCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&tags, "tag", nil, "tag filter key=value (repeatable)")
 	cmd.Flags().StringVar(&metricName, "metric", "", "metric to display/sort by")
 	cmd.Flags().StringVar(&sortDir, "sort", "", "metric sort direction: asc|desc (default: primary direction)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	return cmd
@@ -141,7 +152,12 @@ func newModelShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show MODEL/RUN|RUN",
 		Short: "Show a durable model registry record",
-		Args:  cobra.ExactArgs(1),
+		Long: `Show the full durable registry record for one train run, identified by
+MODEL/RUN or just RUN. Use -o json for the full record; -o summary prints the
+same one-line table row used by tau data model list.`,
+		Example: `  tau data model show llama-7b-ft/run-20240115-093000
+  tau data model show run-20240115-093000 --output summary`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "json" && output != "summary" {
 				return fmt.Errorf("--output must be one of: json, summary")
@@ -172,7 +188,14 @@ func newModelBestCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "best MODEL",
 		Short: "Select the best run for a model by metric",
-		Args:  cobra.ExactArgs(1),
+		Long: `Select the best completed run for MODEL by a metric, using each record's
+primary_metric direction unless --metric/--direction override it. -o ref
+(default) prints MODEL@RUN for piping into other tau commands; -o json prints
+the full record.`,
+		Example: `  tau data model best llama-7b-ft
+  tau data model best llama-7b-ft --metric eval_loss --direction lower
+  tau data model best llama-7b-ft --output json`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			modelName := args[0]
 			resolvedContext, ns, restore, err := resolveWorkloadDataConnection(cmd, kubeContext, namespace)
@@ -214,6 +237,13 @@ func newModelAliasCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alias",
 		Short: "Manage model alias pointers",
+		Long: `Manage movable aliases that point a model name at one of its completed
+train runs, so downstream configs can reference a stable name (e.g.
+"latest" or "production") instead of a specific run ID.`,
+		Example: `  tau data model alias set llama-7b-ft latest run-20240115-093000
+  tau data model alias get llama-7b-ft latest`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(newModelAliasSetCmd(), newModelAliasGetCmd())
 	return cmd
@@ -224,7 +254,11 @@ func newModelAliasSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set MODEL ALIAS RUN",
 		Short: "Point a model alias at an explicit run",
-		Args:  cobra.ExactArgs(3),
+		Long: `Point ALIAS at RUN for MODEL. Unlike dataset aliases, model aliases are
+overwritten unconditionally (no compare-and-swap); the previous run remains in
+the registry and reachable by its run ID.`,
+		Example: `  tau data model alias set llama-7b-ft latest run-20240115-093000`,
+		Args:    cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			modelName, alias, run := args[0], args[1], args[2]
 			if err := validateRegistrySegment("model", modelName); err != nil {
@@ -282,7 +316,11 @@ func newModelAliasGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get MODEL ALIAS",
 		Short: "Read a model alias pointer",
-		Args:  cobra.ExactArgs(2),
+		Long: `Print the run that ALIAS currently points at for MODEL. -o ref (default)
+prints MODEL@RUN; -o json prints the full alias record.`,
+		Example: `  tau data model alias get llama-7b-ft latest
+  tau data model alias get llama-7b-ft latest --output json`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedContext, ns, restore, err := resolveWorkloadDataConnection(cmd, kubeContext, namespace)
 			if err != nil {
@@ -313,6 +351,13 @@ func newModelIndexCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "index",
 		Short: "Maintain durable model registry indexes",
+		Long: `Maintain the durable model registry's index of completed runs. rebuild
+backfills registry records for runs whose artifacts exist on durable storage
+but were never indexed (e.g. after an outage or a registry migration).`,
+		Example: `  tau data model index rebuild
+  tau data model index rebuild --model llama-7b-ft --run run-20240115-093000`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(newModelRebuildCmd())
 	return cmd
@@ -323,7 +368,13 @@ func newModelRebuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rebuild",
 		Short: "Backfill registry rows from existing durable finetune artifacts",
-		Args:  cobra.NoArgs,
+		Long: `Scan durable finetune artifacts and write a registry record for any run
+that does not already have one. Without --run, scans every finetune run
+directory; --model assigns a model name to older runs that have no
+model.json.`,
+		Example: `  tau data model index rebuild
+  tau data model index rebuild --run run-20240115-093000 --model llama-7b-ft`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedContext, ns, restore, err := resolveWorkloadDataConnection(cmd, kubeContext, namespace)
 			if err != nil {

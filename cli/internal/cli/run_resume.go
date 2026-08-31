@@ -60,10 +60,8 @@ Requirements:
   - --config is required (the original config cannot be recovered from
     the cluster without a lockfile registry).
   - If the failure was OOM, --force is required (same config = same OOM
-    unless you also change compute resources).
-
-Examples:
-  tau run resume lora-7b-001 --config tau.yaml -n ray
+    unless you also change compute resources).`,
+		Example: `  tau run resume lora-7b-001 --config tau.yaml -n ray
   tau run resume lora-7b-001 --config tau.yaml --from /data/checkpoints/custom
   tau run resume lora-7b-001 --config tau.yaml --force -n ray
   tau run resume lora-7b-001 --config tau.yaml --dry-run=client`,

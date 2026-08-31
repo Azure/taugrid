@@ -70,6 +70,11 @@ Security:
   - Plaintext http:// is rejected; az://, file://, and public https:// are accepted source schemes.
   - Worker images must be pinned with @sha256: (mutable tags are rejected).
   - The workspace must be in Ready state before the Job is submitted.`,
+		Example: `  tau data dataset ingest training-corpus@v1 --source-root file:///data/training-corpus
+  tau data dataset ingest training-corpus@v1 --source-root az://src-acct/raw/train \
+      --workspace research-a \
+      --worker-image mcr.microsoft.com/taugrid/tau@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --wait
+  tau data dataset ingest training-corpus@v1 --source-root file:///data/training-corpus --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
@@ -151,7 +156,7 @@ Security:
 	cmd.Flags().StringVar(&workspace, "workspace", "", "TauWorkspace name to use for the ingest Job (workspace mode only)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "wait for the ingest Job to complete before returning (workspace mode only)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be done without creating any Kubernetes objects or writing bytes")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	rf.bind(cmd, "pvc")
 	return cmd
 }
@@ -429,6 +434,10 @@ still inspect a project's status. Workspace mode requires a digest-pinned
 --worker-image and an az:// --registry.
 
 The exit code is non-zero when the state is 'failed'.`,
+		Example: `  tau data dataset status training-corpus@v1
+  tau data dataset status training-corpus@v1 --output json
+  tau data dataset status training-corpus@v1 --workspace research-a \
+      --worker-image mcr.microsoft.com/taugrid/tau@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
@@ -477,7 +486,7 @@ The exit code is non-zero when the state is 'failed'.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "read status from inside the cluster under this TauWorkspace's workload identity")
 	cmd.Flags().StringVar(&workerImage, "worker-image", "", "digest-pinned worker image (image@sha256:...) for --workspace mode")
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait for the status Job to complete (workspace mode)")

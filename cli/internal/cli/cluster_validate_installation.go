@@ -46,6 +46,8 @@ admission guard. It does not submit a workload or mutate the cluster.
 Components the release turned off through components.<name>.enabled are reported
 as SKIP and do not fail validation, so a cluster that keeps its own Kueue or
 KubeRay can still use this command as a gate.`,
+		Example: `  tau cluster validate installation
+  tau cluster validate installation --release taugrid --namespace tau-system --timeout 10m`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			timeout, err := time.ParseDuration(timeoutText)

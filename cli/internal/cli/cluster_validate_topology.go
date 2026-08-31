@@ -40,11 +40,10 @@ ResourceFlavors without GPU capacity in the resolved ClusterQueue contract are
 reported and skipped.
 
 Use --profile to validate one ready TauCluster workload profile. Without it,
-Tau validates every ready profile in the current TauCluster profile-set revision.
-
-Examples:
-  tau cluster validate topology
+Tau validates every ready profile in the current TauCluster profile-set revision.`,
+		Example: `  tau cluster validate topology
   tau cluster validate topology --profile research-training`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			r := kube.New(kubeContext)
 			client, err := newClusterProfileClient(kubeContext)

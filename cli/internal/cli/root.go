@@ -38,6 +38,13 @@ Projects check in workload configs. Tau combines them with workspace policy,
 renders upstream Kubernetes resources, submits through Kueue, and provides run
 lifecycle and observability commands. The optional Python SDK generates the same
 contract; the Go CLI remains the Kubernetes executor.`,
+		Example: `  tau cluster install --version 0.3.2
+  tau workspace create --principal-name research-team --apply
+  tau run train
+  tau run status train -n ray
+  tau logs train -f
+  tau serve deploy my-7b --profile model-serve --image vllm/vllm-openai:v0.6.3
+  tau data dataset list`,
 		SilenceUsage: true,
 		// main() prints `error: %v` and exits 1, so cobra must not print the
 		// error too — without this every failure is reported twice.

@@ -17,7 +17,7 @@ one of these roots and its current nested subcommand path:
 | [`tau logs`](#tau-logs) | Find a run through configured Tau workspaces and stream its logs |
 | [`tau serve`](#tau-serve) | Render and manage serving deployments |
 | [`tau data`](#tau-data) | Inspect dataset and model registries |
-| `tau python` | Proxy setup and authoring commands to the Python SDK |
+| `tau python` | Optionally author decorator-based `@tau.train` / `@tau.eval` workflows; standard `tau.yaml` projects do not need the Python SDK |
 | `tau version` | Print the installed CLI version |
 
 Run evidence and the observability portal ship in a separate binary,
@@ -143,7 +143,7 @@ than a subcommand**: `tau run train --dry-run=client` runs the `run` root with
 | `schema` | Print the JSON schema for the direct run config |
 | `explain-config` | Print the direct run config field reference |
 | `list` | List TauGrid-managed Jobs/RayJobs in a namespace |
-| `status [job-name]` | Show lifecycle state and startup phases; `--watch` to poll |
+| `status <job-name>` | Show lifecycle state and startup phases; `--watch` to poll |
 | `logs <job-name>` | Compatibility path for `tau logs <job-name>` |
 | `get <name>` | Fetch durable run results and artifacts |
 | `cancel <job-name>` | Delete the underlying Job/RayJob and free its Kueue quota |
@@ -165,7 +165,7 @@ of piping through the shell's `tail`.
 
 ## `tau serve`
 
-`deploy [name]`, `status [name]`, `scale [name]`, and `delete [name]` render
+`deploy <name>`, `status <name>`, `scale <name>`, and `delete <name>` render
 and manage a serving deployment from the same run-config-shaped intent as
 `tau run`. `scale --kind=deployment` is implemented; RayService scaling must
 currently be done by redeploying with `--replicas` or autoscaling flags.

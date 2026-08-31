@@ -53,6 +53,10 @@ Creates a short-lived privileged pod on each GPU node, checks nvidia-smi, NVLink
 InfiniBand, and ECC status, then reports results and cleans up.
 
 Requires cluster-admin or equivalent RBAC to create privileged pods.`,
+		Example: `  tau cluster validate nodes
+  tau cluster validate nodes --gpu-class h200-141gb --min-healthy 2
+  tau cluster validate nodes --selector kubernetes.io/os=linux --timeout 5m`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			spec.Timeout, err = time.ParseDuration(timeoutStr)

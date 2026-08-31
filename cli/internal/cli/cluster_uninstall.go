@@ -59,6 +59,9 @@ custom resources, retained namespaces, cloud infrastructure, node labels,
 storage, and workspace data are intentionally not deleted. Release-owned queue
 policy and the TauCluster singleton are removed. Remove or migrate TauWorkspace
 objects before uninstalling the controller.`,
+		Example: `  tau cluster uninstall --dry-run
+  tau cluster uninstall --yes
+  tau cluster uninstall --yes --release taugrid --namespace tau-system`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateClusterUninstallSpec(spec); err != nil {
 				return err

@@ -228,7 +228,7 @@ Repositories that require catalog routing should set
 | `tau logs` | Find a run through configured Tau workspaces and stream its logs without Kubernetes routing flags. |
 | `tau serve` | Deploy and operate online model endpoints. |
 | `tau data` | Manage dataset and model registries. |
-| `tau python` | Invoke Python SDK helpers while keeping Go Tau as the executor. |
+| `tau python` | Optionally inspect, build, and submit decorator-based `@tau.train` / `@tau.eval` workflows; standard `tau.yaml` projects do not need the Python SDK. |
 | `tau version` | Print build and version information. |
 
 Experiment tracking (Stellar) and the observability Portal are no longer part
