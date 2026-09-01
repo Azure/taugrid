@@ -53,12 +53,12 @@ run_waiter() {
 
 run_waiter $'metrics\t2\t2\tSuccess\t\nlogs\t4\t4\tSuccess\t'
 
-if run_waiter $'metrics\t2\t1\tSuccess\t'; then
+if run_waiter $'metrics\t2\t1\tSuccess\t' >/dev/null 2>&1; then
   echo "The waiter accepted stale Function status." >&2
   exit 1
 fi
 
-if run_waiter $'metrics\t2\t2\tPermanentFailure\tinvalid KQL'; then
+if run_waiter $'metrics\t2\t2\tPermanentFailure\tinvalid KQL' >/dev/null 2>&1; then
   echo "The waiter accepted a terminal Function failure." >&2
   exit 1
 fi
