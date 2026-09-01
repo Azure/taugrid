@@ -113,7 +113,7 @@ for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
                 $_.Generation -ne $_.ObservedGeneration -or $_.Status -ne "Success"
             }).Count -eq 0) {
                 Write-Host "All adx-mon Functions reached Success."
-                exit 0
+                return
             }
         }
         Start-Sleep -Seconds 15
