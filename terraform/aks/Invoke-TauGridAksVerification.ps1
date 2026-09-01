@@ -130,12 +130,16 @@ function Invoke-TerraformApplyWithAdxRecovery {
     if ($LASTEXITCODE -ne 0 -or "azurerm_kusto_cluster.this[0]" -in $stateEntries) {
         throw "Terraform apply failed and there is no recoverable untracked ADX cluster."
     }
-    $clusterIDs = @(az resource list --resource-group $ResourceGroup --resource-type "Microsoft.Kusto/clusters" --query "[].id" --output tsv)
-    if ($LASTEXITCODE -ne 0 -or $clusterIDs.Count -ne 1) {
-        throw "Terraform apply failed and did not leave exactly one recoverable ADX cluster in resource group '$ResourceGroup'."
-    }
-    $clusterID = $clusterIDs[0]
     $deadline = (Get-Date).AddMinutes(20)
+    $clusterID = Wait-ForCondition {
+        $clusterIDs = @(az resource list --resource-group $ResourceGroup --resource-type "Microsoft.Kusto/clusters" --query "[].id" --output tsv)
+        if ($LASTEXITCODE -ne 0) { throw "Unable to list ADX clusters in resource group '$ResourceGroup'." }
+        if ($clusterIDs.Count -gt 1) {
+            throw [TerminalWaitError]::new("Terraform apply left multiple ADX clusters in isolated resource group '$ResourceGroup'; refusing to import an ambiguous resource.")
+        }
+        if ($clusterIDs.Count -eq 1) { return $clusterIDs[0] }
+        return $false
+    } "discovery of the ADX cluster after Terraform apply" $deadline
     Wait-ForCondition {
         $provisioningState = az resource show --ids $clusterID --api-version "2024-04-13" --query "properties.provisioningState" --output tsv
         if ($LASTEXITCODE -ne 0) { throw "Unable to inspect ADX cluster '$clusterID'." }

@@ -344,6 +344,13 @@ resource "terraform_data" "bootstrap_lifecycle_namespace" {
 
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
+    # Local-exec provisioners share generated/kubeconfig. Keep this bootstrap
+    # after the GPU and ADX local installation chain to prevent concurrent
+    # credential writes from corrupting the kubeconfig file.
+    terraform_data.install_nvidia_device_plugin,
+    terraform_data.normalize_gpu_mig,
+    terraform_data.install_dcgm_exporter,
+    terraform_data.install_adx_functions,
   ]
 }
 
