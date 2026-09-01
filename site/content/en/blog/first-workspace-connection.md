@@ -75,5 +75,5 @@ validation, fail-closed noninteractive first use, decline without local state,
 interactive approval, noninteractive reuse, and `tau run list` through the
 isolated connection.
 
-For installation requirements, identity fallbacks, and troubleshooting, read
-[Connect to an AKS workspace](../../docs/developer-guide/aks-access/).
+For the current workspace workflow and prerequisites, read
+[Run your first workload](../../docs/developer-guide/first-run/).
