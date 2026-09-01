@@ -196,7 +196,9 @@ func TestManagerConfiguresFirstConnectionAfterTrust(t *testing.T) {
 		t.Fatalf("credentials=%d verifier=%d", credentials.calls, verifier.calls)
 	}
 	for _, detail := range []string{
-		"untrusted workspace connection",
+		"First-time workspace connection",
+		"has not been connected with Tau on this machine",
+		"Review where Tau will connect",
 		"Workspace:       sample",
 		"Access method:   aks",
 		"Context:         taugrid-flex",
@@ -204,7 +206,8 @@ func TestManagerConfiguresFirstConnectionAfterTrust(t *testing.T) {
 		"Private network: required",
 		"AKS resource:",
 		"Entra tenant:",
-		"Trust this connection",
+		"Nothing has been accessed or saved yet",
+		"Approve and connect",
 	} {
 		if !strings.Contains(output.String(), detail) {
 			t.Fatalf("first-use review omitted %q:\n%s", detail, output.String())
@@ -260,7 +263,8 @@ func TestManagerRejectsNoninteractiveFirstUseWithoutSideEffects(t *testing.T) {
 
 	_, err := manager.Ensure(context.Background(), root)
 	if !errors.Is(err, ErrInteractiveRequired) ||
-		!strings.Contains(err.Error(), "run `tau workspace connection` from an interactive terminal") {
+		!strings.Contains(err.Error(), "run `tau workspace connection` from an interactive terminal") ||
+		!strings.Contains(err.Error(), "review and approve the destination") {
 		t.Fatalf("Ensure() error = %v", err)
 	}
 	if credentials.calls != 0 || verifier.calls != 0 {

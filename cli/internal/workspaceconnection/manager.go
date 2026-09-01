@@ -360,7 +360,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	if !hasState {
 		if !m.Interactive {
 			return ActiveConnection{}, fmt.Errorf(
-				"%w: this repository's workspace connection has not been trusted; run `tau workspace connection` from an interactive terminal to review it",
+				"%w: this repository has not been connected with Tau on this machine; run `tau workspace connection` from an interactive terminal to review and approve the destination",
 				ErrInteractiveRequired,
 			)
 		}
@@ -489,7 +489,9 @@ func (m Manager) confirmFirstUse(discovery Discovery) (bool, error) {
 		output = os.Stdout
 	}
 	descriptor := discovery.Descriptor
-	fmt.Fprintln(output, "Tau found an untrusted workspace connection in this repository:")
+	fmt.Fprintln(output, "First-time workspace connection")
+	fmt.Fprintln(output, "This repository has not been connected with Tau on this machine.")
+	fmt.Fprintln(output, "Review where Tau will connect:")
 	fmt.Fprintf(output, "  Descriptor:      %s\n", discovery.Path)
 	fmt.Fprintf(output, "  Workspace:       %s\n", descriptor.Workspace)
 	fmt.Fprintf(output, "  Access method:   %s\n", descriptor.Access.Method)
@@ -504,8 +506,11 @@ func (m Manager) confirmFirstUse(discovery Discovery) (bool, error) {
 		fmt.Fprintf(output, "  AKS resource:    %s\n", descriptor.Access.AKS.ResourceID)
 		fmt.Fprintf(output, "  Entra tenant:    %s\n", descriptor.Access.AKS.TenantID)
 	}
+	fmt.Fprintln(output, "\nIf approved, Tau will acquire your credentials, verify this workspace,")
+	fmt.Fprintln(output, "and save an isolated local connection for future commands.")
+	fmt.Fprintln(output, "Nothing has been accessed or saved yet.")
 	return m.readConfirmation(
-		"\nTrust this connection and acquire credentials? [y/N] ",
+		"\nApprove and connect? [y/N] ",
 		"first workspace connection",
 	)
 }

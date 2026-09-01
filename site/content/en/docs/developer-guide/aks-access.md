@@ -36,17 +36,23 @@ cd <research-repository>
 tau workspace connection
 ```
 
-On first use, Tau displays the repository descriptor path, workspace, access
-method, Kubernetes context, authorization mode, private-network requirement,
-AKS resource ID, and tenant. Review those values and answer `yes` only when they
-match the platform handoff. Tau does not access Azure credentials, invoke
-`kubelogin`, contact the cluster, or write connection state before this trust
-decision. The prompt defaults to decline.
+The last command guides the complete first-time setup:
 
-This first trust decision requires an interactive terminal. Automated Run or
-Serve commands fail closed with instructions to run
-`tau workspace connection` interactively; after trust and verification succeed,
-subsequent commands can reuse the pinned connection noninteractively.
+1. Tau shows where the repository wants to connect: the descriptor, workspace,
+   access method, Kubernetes context, authorization mode, network requirement,
+   AKS resource ID, and tenant.
+2. Compare those values with the platform handoff. Nothing has been accessed or
+   saved yet, and the prompt defaults to decline.
+3. Approve the destination to let Tau acquire credentials, verify the workspace,
+   and save an isolated local connection.
+
+When Tau prints `Connected`, the repository is ready for `tau run` and
+`tau serve`. You do not need a separate login or connection command inside Tau.
+
+The first approval requires an interactive terminal. If `tau run` or `tau serve`
+encounters a repository that has not been connected on this machine, it tells
+you to run `tau workspace connection`. After approval and verification,
+subsequent commands reuse the pinned connection noninteractively.
 
 The AKS resource ID in the repository selects the subscription and cluster, so
 you do not need to run `az aks get-credentials` or merge anything into your

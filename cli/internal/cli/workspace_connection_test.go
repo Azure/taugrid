@@ -48,6 +48,7 @@ func TestWorkspaceConnectionOfflineDiscoversParentDescriptor(t *testing.T) {
 		"Workspace:     sample",
 		"Descriptor:    tau/workspace.connection.yaml",
 		"Cluster access was not checked.",
+		"Next: run `tau workspace connection` to review, authenticate, and connect.",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("offline connection output missing %q:\n%s", want, out.String())
@@ -87,9 +88,34 @@ func TestWorkspaceConnectionActivatesResolvedDescriptor(t *testing.T) {
 		"Namespace:     tau-default",
 		"Queue:         jobqueue",
 		"Authorization: cluster-wide",
+		"Ready:         tau run and tau serve can now use this workspace.",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("live connection output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestWorkspaceConnectionGuidesInteractiveReview(t *testing.T) {
+	root := initWorkspaceConnectionRepo(t)
+	writeWorkspaceConnectionDescriptor(t, root)
+	ensurer := &fakeRunConnectionEnsurer{err: workspaceconnection.ErrInteractiveRequired}
+	cmd := newWorkspaceConnectionCmdWithEnsurer(ensurer)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{root})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected interactive review error")
+	}
+	for _, want := range []string{
+		"Owner: Researcher action required",
+		"Run `tau workspace connection` in an interactive terminal",
+		"then retry your original command",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("guided error missing %q:\n%s", want, err)
 		}
 	}
 }

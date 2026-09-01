@@ -139,7 +139,9 @@ func TestClassifyConcreteNetworkErrors(t *testing.T) {
 func TestExplainPreservesCause(t *testing.T) {
 	cause := workspaceconnection.ErrInteractiveRequired
 	err := Explain(cause)
-	if !errors.Is(err, cause) || !strings.Contains(err.Error(), "Owner: Researcher action required") {
+	if !errors.Is(err, cause) ||
+		!strings.Contains(err.Error(), "Owner: Researcher action required") ||
+		!strings.Contains(err.Error(), "Run `tau workspace connection` in an interactive terminal") {
 		t.Fatalf("guided error = %v", err)
 	}
 	if Explain(err) != err {

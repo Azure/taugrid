@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/onboarding"
 	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
@@ -58,7 +59,7 @@ cluster. Use --offline to validate only the repository mapping and descriptor.`,
 				Project:   project,
 			})
 			if err != nil {
-				return err
+				return onboarding.Explain(err)
 			}
 			printActiveConnection(cmd, project, displayConnectionPath(discovery), connection)
 			return nil
@@ -95,6 +96,7 @@ func printOfflineConnection(cmd *cobra.Command, project string, discovery worksp
 	fmt.Fprintln(cmd.OutOrStdout(), "Workspace connection configuration is valid.")
 	printConnectionIdentity(cmd, project, discovery.Descriptor.Workspace, displayConnectionPath(discovery))
 	fmt.Fprintln(cmd.OutOrStdout(), "Cluster access was not checked.")
+	fmt.Fprintln(cmd.OutOrStdout(), "Next: run `tau workspace connection` to review, authenticate, and connect.")
 }
 
 func printActiveConnection(cmd *cobra.Command, project, descriptorPath string, connection workspaceconnection.ActiveConnection) {
@@ -104,6 +106,7 @@ func printActiveConnection(cmd *cobra.Command, project, descriptorPath string, c
 	fmt.Fprintf(cmd.OutOrStdout(), "Namespace:     %s\n", connection.Namespace)
 	fmt.Fprintf(cmd.OutOrStdout(), "Queue:         %s\n", connection.Queue)
 	fmt.Fprintf(cmd.OutOrStdout(), "Authorization: %s\n", connection.AuthorizationMode)
+	fmt.Fprintln(cmd.OutOrStdout(), "Ready:         tau run and tau serve can now use this workspace.")
 }
 
 func printConnectionIdentity(cmd *cobra.Command, project, workspace, descriptorPath string) {
