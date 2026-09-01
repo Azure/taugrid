@@ -23,3 +23,18 @@ Core principles:
 
 External contract changes need external evidence. A manifest or telemetry change
 needs evidence beyond a utility unit test.
+
+## Publish a short blog post
+
+Use the blog archetype to create consistent front matter:
+
+```bash
+cd site
+make deps
+./.bin/hugo new content --kind blog blog/<post-slug>.md
+```
+
+Replace the generated title and description, set `draft: false`, and write the
+post in `content/en/blog/`. Keep detailed procedures in the task-oriented
+documentation and link to them from the post. Run `make check` before opening a
+pull request.

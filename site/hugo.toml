@@ -31,6 +31,10 @@ disableKinds = ["taxonomy", "term"]
     weight = 40
     pageRef = "/docs/overview"
   [[menu.main]]
+    name = "Blog"
+    weight = 50
+    pageRef = "/blog"
+  [[menu.main]]
     name = "GitHub"
     weight = 100
     url = "https://github.com/Azure/taugrid"
