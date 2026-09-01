@@ -158,6 +158,8 @@ function Invoke-TerraformApplyWithAdxRecovery {
     Invoke-Native terraform @("-chdir=$ModulePath", "apply", "-auto-approve", "-state=$StateFile", "-var-file=$VarsFile")
 }
 
+. (Join-Path $PSScriptRoot "AdxClusterName.ps1")
+
 foreach ($name in @("az", "terraform", "kubectl", "helm", "pwsh")) {
     if ($null -eq (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Required command '$name' was not found on PATH." }
 }
@@ -182,7 +184,7 @@ $run = if ($RunId) { $RunId } else { "{0}-{1:x4}" -f (Get-Date -Format "yyyyMMdd
 if ($run.Length -gt 13) { throw "RunId must be at most 13 characters." }
 $resourceGroup = "$ResourceNamePrefix-$run"
 if ($resourceGroup.Length -gt 54) { throw "The generated AKS name '$resourceGroup' exceeds 54 characters." }
-$adxClusterName = "taugrid$($run -replace '-', '')"
+$adxClusterName = Get-TauGridAdxClusterName -SubscriptionId $account.id -ResourceGroupName $resourceGroup -ClusterName $resourceGroup
 
 $generated = Join-Path $modulePath "generated"
 $deployment = Join-Path $generated "deployments"

@@ -40,7 +40,7 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
       if [[ -n "$permanent_failure" ]]; then
         break
       fi
-      if ! printf '%s\n' "$function_statuses" | awk -F '\t' '$2 != "Success" { exit 1 }'; then
+      if printf '%s\n' "$function_statuses" | awk -F '\t' '$2 != "Success" { exit 1 }'; then
         echo "All adx-mon Functions reached Success."
         exit 0
       fi
