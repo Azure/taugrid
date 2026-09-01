@@ -188,11 +188,13 @@ $deployment = Join-Path $generated "deployments"
 $state = Join-Path $generated "state"
 $plans = Join-Path $generated "plans"
 $data = Join-Path $generated "terraform-data-$run"
-New-Item -ItemType Directory -Force -Path $deployment, $state, $plans, $data | Out-Null
+$terraformGenerated = Join-Path $generated "terraform-$run"
+New-Item -ItemType Directory -Force -Path $deployment, $state, $plans, $data, $terraformGenerated | Out-Null
 $varsFile = Join-Path $deployment "$run.tfvars"
 $stateFile = Join-Path $state "$run.tfstate"
 $planFile = Join-Path $plans "$run.tfplan"
-$kubeconfig = Join-Path $generated "kubeconfig-$run"
+$kubeconfig = Join-Path $terraformGenerated "verification-kubeconfig"
+$terraformGeneratedForTfvars = $terraformGenerated.Replace('\', '/')
 
 $account = az account show --output json | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($account.id) -or [string]::IsNullOrWhiteSpace($account.tenantId)) { throw "Run az login and az account set first." }
@@ -217,6 +219,7 @@ adx_sku_name        = "$AdxSkuName"
 adx_sku_capacity    = $AdxSkuCapacity
 resource_group_name = "$resourceGroup"
 cluster_name        = "$resourceGroup"
+generated_directory = "$terraformGeneratedForTfvars"
 command_interpreter = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 gpu_vm_size             = "$GpuVmSize"
 gpu_node_count          = 1

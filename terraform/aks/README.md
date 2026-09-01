@@ -79,7 +79,9 @@ imports it, and resumes the apply. It writes tfvars, state, plan, and
 Terraform data beneath `terraform/aks/generated/` and never reads a local
 `terraform.tfvars` file. Its state is isolated with Terraform's local
 state-file flags and `init -backend=false`; it does not select a backend for
-normal Terraform deployments.
+normal Terraform deployments. The verifier also gives Terraform a per-run
+generated directory, so its kubeconfig, Helm state, and generated values do
+not conflict with another local Terraform process.
 
 By default the script validates the platform and that Portal reads GPU
 telemetry from ADX. To also create an Entra-backed workspace, run a smoke job,

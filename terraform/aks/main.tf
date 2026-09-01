@@ -92,7 +92,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 }
 
 locals {
-  generated_directory               = "${path.module}/generated"
+  generated_directory               = var.generated_directory != null ? abspath(var.generated_directory) : "${path.module}/generated"
   kubeconfig_path                   = "${local.generated_directory}/kubeconfig"
   adx_mon_values_path               = "${local.generated_directory}/adx-mon-values.yaml"
   helm_home_directory               = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
