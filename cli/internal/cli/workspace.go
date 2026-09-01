@@ -214,8 +214,8 @@ Service Account.`
 		short = "Show Tau workspace status and exit non-zero unless it is Ready"
 		invocation = "tau workspace check"
 		long = `Show the TauWorkspace status for NAME, then exit non-zero unless it is
-Ready. Also warns if the workspace's durable data PVC is missing so a storage-
-backed run fails fast with a clear diagnostic.`
+Ready. With --data-pvc, also warns if the named durable data PVC is missing so
+a storage-backed run fails fast with a clear diagnostic.`
 	}
 	cmd := &cobra.Command{
 		Use:   use,
