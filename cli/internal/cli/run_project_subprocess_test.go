@@ -57,6 +57,12 @@ func TestTauRoutingSubprocessMatrix(t *testing.T) {
 		t.Skip("routing subprocess test requires a POSIX fake kubectl")
 	}
 	root := multiProjectRunRoutingRepo(t)
+	descriptorPath := filepath.Join(root, "connections", "shared.yaml")
+	writeRunRoutingFile(
+		t,
+		descriptorPath,
+		strings.Replace(runRoutingDescriptor, "taugrid-flex", "aks-ai-runtime-flex", 1),
+	)
 	configureRunRoutingProfile(t)
 	writeRunRoutingFile(t, filepath.Join(root, "beta", "train.sh"), "#!/bin/sh\necho train\n")
 	writeRunRoutingFile(t, filepath.Join(root, "beta", "tau", "eval.yaml"), `name: beta-eval
@@ -150,7 +156,7 @@ policy:
 		if cache.Schema != activeWorkspaceCacheSchema ||
 			cache.Workspace != "sample" ||
 			cache.WorkspaceUID != "workspace-uid" ||
-			cache.ContextName != "taugrid-flex" ||
+			cache.ContextName != "aks-ai-runtime-flex" ||
 			cache.Namespace != "catalog-namespace" ||
 			cache.LocalQueue != "jobqueue" ||
 			cache.ClusterQueue != "gpu-cq" ||
@@ -162,6 +168,25 @@ policy:
 		}
 		if _, err := os.Stat(filepath.Join(root, "tau", activeWorkspaceCacheFilename)); !os.IsNotExist(err) {
 			t.Fatalf("repository-local active workspace cache exists: %v", err)
+		}
+		kubeconfigRaw, err := os.ReadFile(filepath.Join(configDir, "kubeconfig.yaml"))
+		if err != nil {
+			t.Fatalf("read isolated workspace kubeconfig: %v", err)
+		}
+		kubeconfig, err := clientcmd.Load(kubeconfigRaw)
+		if err != nil {
+			t.Fatalf("parse isolated workspace kubeconfig: %v", err)
+		}
+		kubeContext := kubeconfig.Contexts["aks-ai-runtime-flex"]
+		var server string
+		if kubeContext != nil && kubeconfig.Clusters[kubeContext.Cluster] != nil {
+			server = kubeconfig.Clusters[kubeContext.Cluster].Server
+		}
+		if kubeconfig.CurrentContext != "aks-ai-runtime-flex" ||
+			kubeContext == nil ||
+			server != "https://aks-ai-runtime-flex.test.invalid" ||
+			kubeconfig.Contexts["aks-ai-runtime-eastus2"] != nil {
+			t.Fatalf("isolated workspace kubeconfig selected wrong cluster: %+v", kubeconfig)
 		}
 	})
 	t.Run("explicit project health config", func(t *testing.T) {
@@ -488,7 +513,12 @@ esac
 
 func installCachedRoutingConnection(t *testing.T, root, namespace string) string {
 	t.Helper()
-	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	descriptorPath := filepath.Join(root, "connections", "shared.yaml")
+	descriptorRaw, err := os.ReadFile(descriptorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := workspaceconnection.Parse(descriptorRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,35 +528,35 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) string
 	}
 	configDir := t.TempDir()
 	kubeconfigPath := filepath.Join(configDir, "kubeconfig.yaml")
-	kubeconfig := `apiVersion: v1
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
 kind: Config
 clusters:
-- name: cluster
+- name: flex
   cluster:
-    server: https://routing.test.invalid
+    server: https://aks-ai-runtime-flex.test.invalid
 contexts:
-- name: taugrid-flex
+- name: %s
   context:
-    cluster: cluster
+    cluster: flex
     user: researcher
-current-context: taugrid-flex
+current-context: %s
 users:
 - name: researcher
   user:
     token: test-token
-`
+`, descriptor.Cluster.ContextName, descriptor.Cluster.ContextName)
 	writeRunRoutingFile(t, kubeconfigPath, kubeconfig)
 	parsedKubeconfig, err := clientcmd.Load([]byte(kubeconfig))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawCluster, err := json.Marshal(parsedKubeconfig.Clusters["cluster"])
+	rawCluster, err := json.Marshal(parsedKubeconfig.Clusters[parsedKubeconfig.Contexts[descriptor.Cluster.ContextName].Cluster])
 	if err != nil {
 		t.Fatal(err)
 	}
 	fingerprintSum := sha256.Sum256(rawCluster)
 	accessFingerprint := "sha256:" + hex.EncodeToString(fingerprintSum[:])
-	descriptorPath, err := filepath.EvalSymlinks(filepath.Join(root, "connections", "shared.yaml"))
+	descriptorPath, err = filepath.EvalSymlinks(descriptorPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +598,31 @@ users:
 	})+".json")
 	writeRunRoutingFile(t, statePath, string(raw))
 	ambientKubeconfigPath := filepath.Join(configDir, "ambient-kubeconfig.yaml")
-	writeRunRoutingFile(t, ambientKubeconfigPath, strings.Replace(kubeconfig, "current-context: taugrid-flex", `current-context: ""`, 1))
+	ambientKubeconfig := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: flex
+  cluster:
+    server: https://aks-ai-runtime-flex.test.invalid
+- name: eastus2
+  cluster:
+    server: https://aks-ai-runtime-eastus2.test.invalid
+contexts:
+- name: %s
+  context:
+    cluster: flex
+    user: researcher
+- name: aks-ai-runtime-eastus2
+  context:
+    cluster: eastus2
+    user: researcher
+current-context: ""
+users:
+- name: researcher
+  user:
+    token: test-token
+`, descriptor.Cluster.ContextName)
+	writeRunRoutingFile(t, ambientKubeconfigPath, ambientKubeconfig)
 	t.Setenv("TAU_CONFIG_DIR", configDir)
 	t.Setenv("KUBECONFIG", ambientKubeconfigPath)
 	t.Setenv("TAU_ROUTING_EXPECTED_KUBECONFIG", kubeconfigPath)
