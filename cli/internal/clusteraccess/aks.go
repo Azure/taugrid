@@ -25,6 +25,10 @@ type AKSUserCredentialProvider struct {
 	KubeloginPath string
 }
 
+func (AKSUserCredentialProvider) Method() workspaceconnection.AccessMethod {
+	return workspaceconnection.AccessMethodAKS
+}
+
 func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descriptor workspaceconnection.Descriptor) ([]byte, error) {
 	if descriptor.Access.AKS == nil {
 		return nil, fmt.Errorf("AKS workspace access metadata is missing")

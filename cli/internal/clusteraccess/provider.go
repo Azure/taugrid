@@ -14,26 +14,62 @@ import (
 )
 
 type Provider struct {
-	AKS        AKSUserCredentialProvider
-	Kubeconfig KubeconfigProvider
+	adapters map[workspaceconnection.AccessMethod]Adapter
+	err      error
+}
+
+type Adapter interface {
+	Method() workspaceconnection.AccessMethod
+	UserKubeconfig(context.Context, workspaceconnection.Descriptor) ([]byte, error)
+}
+
+func NewProvider(adapters ...Adapter) Provider {
+	provider := Provider{
+		adapters: make(map[workspaceconnection.AccessMethod]Adapter, len(adapters)),
+	}
+	for _, adapter := range adapters {
+		if adapter == nil {
+			provider.err = fmt.Errorf("cluster credential adapter is nil")
+			return provider
+		}
+		method := adapter.Method()
+		if method == "" {
+			provider.err = fmt.Errorf("cluster credential adapter has an empty access method")
+			return provider
+		}
+		if _, exists := provider.adapters[method]; exists {
+			provider.err = fmt.Errorf("multiple cluster credential adapters are configured for access method %q", method)
+			return provider
+		}
+		provider.adapters[method] = adapter
+	}
+	return provider
+}
+
+func NewDefaultProvider(aks AKSUserCredentialProvider) Provider {
+	return NewProvider(aks, KubeconfigProvider{})
 }
 
 func (p Provider) UserKubeconfig(ctx context.Context, descriptor workspaceconnection.Descriptor) ([]byte, error) {
-	switch descriptor.Access.Method {
-	case workspaceconnection.AccessMethodAKS:
-		return p.AKS.UserKubeconfig(ctx, descriptor)
-	case workspaceconnection.AccessMethodKubeconfig:
-		return p.Kubeconfig.UserKubeconfig(descriptor)
-	default:
+	if p.err != nil {
+		return nil, p.err
+	}
+	adapter, ok := p.adapters[descriptor.Access.Method]
+	if !ok {
 		return nil, fmt.Errorf("unsupported workspace access method %q", descriptor.Access.Method)
 	}
+	return adapter.UserKubeconfig(ctx, descriptor)
 }
 
 type KubeconfigProvider struct {
 	LoadingRules *clientcmd.ClientConfigLoadingRules
 }
 
-func (p KubeconfigProvider) UserKubeconfig(descriptor workspaceconnection.Descriptor) ([]byte, error) {
+func (KubeconfigProvider) Method() workspaceconnection.AccessMethod {
+	return workspaceconnection.AccessMethodKubeconfig
+}
+
+func (p KubeconfigProvider) UserKubeconfig(_ context.Context, descriptor workspaceconnection.Descriptor) ([]byte, error) {
 	rules := p.LoadingRules
 	if rules == nil {
 		rules = clientcmd.NewDefaultClientConfigLoadingRules()

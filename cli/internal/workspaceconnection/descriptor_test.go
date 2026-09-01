@@ -100,6 +100,14 @@ func TestParseRejectsAccessMetadataForWrongMethod(t *testing.T) {
 	}
 }
 
+func TestParseRejectsUnknownAccessMethod(t *testing.T) {
+	raw := strings.Replace(validDescriptorYAML, "method: aks", "method: future-managed", 1)
+	if _, err := Parse([]byte(raw)); err == nil ||
+		!strings.Contains(err.Error(), "access.method must be one of: kubeconfig, aks") {
+		t.Fatalf("Parse() error = %v, want supported access methods", err)
+	}
+}
+
 func TestDescriptorResolvesConfiguredSystemNamespace(t *testing.T) {
 	raw := strings.Replace(validDescriptorYAML, "  systemNamespace: tau-system\n", "  systemNamespace: custom-system\n", 1)
 	descriptor, err := Parse([]byte(raw))

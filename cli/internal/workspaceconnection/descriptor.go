@@ -28,12 +28,12 @@ import (
 )
 
 const (
-	DescriptorSchema               = "tau.workspace.connection.v1"
-	DescriptorRelativePath         = "tau/workspace.connection.yaml"
-	AccessMethodKubeconfig         = "kubeconfig"
-	AccessMethodAKS                = "aks"
-	AuthorizationModeClusterWide   = "cluster-wide"
-	AuthorizationModeWorkspaceRBAC = "workspace-rbac"
+	DescriptorSchema                            = "tau.workspace.connection.v1"
+	DescriptorRelativePath                      = "tau/workspace.connection.yaml"
+	AccessMethodKubeconfig         AccessMethod = "kubeconfig"
+	AccessMethodAKS                AccessMethod = "aks"
+	AuthorizationModeClusterWide                = "cluster-wide"
+	AuthorizationModeWorkspaceRBAC              = "workspace-rbac"
 )
 
 var (
@@ -51,8 +51,10 @@ type AKSAccessDescriptor struct {
 	TenantID   string `yaml:"tenantID" json:"tenantID"`
 }
 
+type AccessMethod string
+
 type AccessDescriptor struct {
-	Method string               `yaml:"method" json:"method"`
+	Method AccessMethod         `yaml:"method" json:"method"`
 	AKS    *AKSAccessDescriptor `yaml:"aks,omitempty" json:"aks,omitempty"`
 }
 
@@ -125,36 +127,27 @@ func (d Descriptor) Validate() error {
 			return fmt.Errorf("workspace connection cluster.systemNamespace %q is invalid: %s", namespace, strings.Join(problems, "; "))
 		}
 	}
-	switch d.Access.Method {
-	case AccessMethodKubeconfig:
-		if d.Access.AKS != nil {
-			return fmt.Errorf("workspace connection access.aks must be omitted for method %s", AccessMethodKubeconfig)
-		}
-	case AccessMethodAKS:
-		if d.Access.AKS == nil {
-			return fmt.Errorf("workspace connection access.aks is required for method %s", AccessMethodAKS)
-		}
-		id, err := arm.ParseResourceID(strings.TrimSpace(d.Access.AKS.ResourceID))
-		if err != nil {
-			return fmt.Errorf("workspace connection access.aks.resourceID: %w", err)
-		}
-		if !strings.EqualFold(id.ResourceType.Namespace, "Microsoft.ContainerService") ||
-			!strings.EqualFold(id.ResourceType.Type, "managedClusters") ||
-			id.SubscriptionID == "" || id.ResourceGroupName == "" || id.Name == "" {
-			return fmt.Errorf("workspace connection access.aks.resourceID must identify an AKS managed cluster")
-		}
-		if !uuidPattern.MatchString(id.SubscriptionID) {
-			return fmt.Errorf("workspace connection access.aks.resourceID has invalid subscription ID %q", id.SubscriptionID)
-		}
-		if !uuidPattern.MatchString(strings.TrimSpace(d.Access.AKS.TenantID)) {
-			return fmt.Errorf("workspace connection access.aks.tenantID must be a UUID")
-		}
-	default:
+	accessDefinition, ok := accessMethodDefinitionFor(d.Access.Method)
+	if !ok {
 		return fmt.Errorf(
-			"workspace connection access.method must be one of: %s, %s",
-			AccessMethodKubeconfig,
-			AccessMethodAKS,
+			"workspace connection access.method must be one of: %s",
+			strings.Join(supportedAccessMethodNames(), ", "),
 		)
+	}
+	for _, definition := range accessMethodDefinitions() {
+		if definition.method == d.Access.Method ||
+			definition.hasMetadata == nil ||
+			!definition.hasMetadata(d.Access) {
+			continue
+		}
+		return fmt.Errorf(
+			"workspace connection access.%s must be omitted for method %s",
+			definition.metadataField,
+			d.Access.Method,
+		)
+	}
+	if err := accessDefinition.validate(d.Access); err != nil {
+		return err
 	}
 	switch d.Authorization.Mode {
 	case AuthorizationModeClusterWide:
@@ -195,15 +188,94 @@ func (d Descriptor) ResolvedSystemNamespace() string {
 }
 
 func (d Descriptor) AccessIdentity() string {
-	if d.Access.Method == AccessMethodAKS && d.Access.AKS != nil {
-		return AccessMethodAKS + ":" +
-			strings.ToLower(strings.TrimSpace(d.Access.AKS.ResourceID)) + ":" +
-			strings.ToLower(strings.TrimSpace(d.Access.AKS.TenantID))
+	definition, ok := accessMethodDefinitionFor(d.Access.Method)
+	if !ok {
+		return ""
 	}
-	if d.Access.Method == AccessMethodKubeconfig {
-		return AccessMethodKubeconfig + ":" + strings.TrimSpace(d.Cluster.ContextName)
+	return definition.identity(d)
+}
+
+type accessMethodDefinition struct {
+	method                 AccessMethod
+	metadataField          string
+	hasMetadata            func(AccessDescriptor) bool
+	validate               func(AccessDescriptor) error
+	identity               func(Descriptor) string
+	tracksKubeconfigSource bool
+}
+
+func accessMethodDefinitions() []accessMethodDefinition {
+	return []accessMethodDefinition{
+		{
+			method:   AccessMethodKubeconfig,
+			validate: func(AccessDescriptor) error { return nil },
+			identity: func(descriptor Descriptor) string {
+				return string(AccessMethodKubeconfig) + ":" + strings.TrimSpace(descriptor.Cluster.ContextName)
+			},
+			tracksKubeconfigSource: true,
+		},
+		{
+			method:        AccessMethodAKS,
+			metadataField: "aks",
+			hasMetadata: func(access AccessDescriptor) bool {
+				return access.AKS != nil
+			},
+			validate: validateAKSAccess,
+			identity: func(descriptor Descriptor) string {
+				if descriptor.Access.AKS == nil {
+					return ""
+				}
+				return string(AccessMethodAKS) + ":" +
+					strings.ToLower(strings.TrimSpace(descriptor.Access.AKS.ResourceID)) + ":" +
+					strings.ToLower(strings.TrimSpace(descriptor.Access.AKS.TenantID))
+			},
+		},
 	}
-	return ""
+}
+
+func accessMethodDefinitionFor(method AccessMethod) (accessMethodDefinition, bool) {
+	for _, definition := range accessMethodDefinitions() {
+		if definition.method == method {
+			return definition, true
+		}
+	}
+	return accessMethodDefinition{}, false
+}
+
+func supportedAccessMethodNames() []string {
+	definitions := accessMethodDefinitions()
+	names := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		names = append(names, string(definition.method))
+	}
+	return names
+}
+
+func validateAKSAccess(access AccessDescriptor) error {
+	if access.AKS == nil {
+		return fmt.Errorf("workspace connection access.aks is required for method %s", AccessMethodAKS)
+	}
+	id, err := arm.ParseResourceID(strings.TrimSpace(access.AKS.ResourceID))
+	if err != nil {
+		return fmt.Errorf("workspace connection access.aks.resourceID: %w", err)
+	}
+	if !strings.EqualFold(id.ResourceType.Namespace, "Microsoft.ContainerService") ||
+		!strings.EqualFold(id.ResourceType.Type, "managedClusters") ||
+		id.SubscriptionID == "" || id.ResourceGroupName == "" || id.Name == "" {
+		return fmt.Errorf("workspace connection access.aks.resourceID must identify an AKS managed cluster")
+	}
+	if !uuidPattern.MatchString(id.SubscriptionID) {
+		return fmt.Errorf("workspace connection access.aks.resourceID has invalid subscription ID %q", id.SubscriptionID)
+	}
+	if !uuidPattern.MatchString(strings.TrimSpace(access.AKS.TenantID)) {
+		return fmt.Errorf("workspace connection access.aks.tenantID must be a UUID")
+	}
+	return nil
+}
+
+func (d Descriptor) tracksKubeconfigSource() bool {
+	definition, ok := accessMethodDefinitionFor(d.Access.Method)
+	return ok && definition.tracksKubeconfigSource
 }
 
 func CheckTauVersion(current, minimum string) error {

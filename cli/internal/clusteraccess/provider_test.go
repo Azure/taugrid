@@ -4,6 +4,7 @@
 package clusteraccess
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ func TestKubeconfigProviderIsolatesNamedContext(t *testing.T) {
 	provider := KubeconfigProvider{
 		LoadingRules: &clientcmd.ClientConfigLoadingRules{ExplicitPath: path},
 	}
-	gotRaw, err := provider.UserKubeconfig(workspaceconnection.Descriptor{
+	gotRaw, err := provider.UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
 		Cluster: workspaceconnection.ClusterDescriptor{ContextName: "wanted"},
 	})
 	if err != nil {
@@ -60,6 +61,10 @@ func TestKubeconfigProviderIsolatesNamedContext(t *testing.T) {
 	}
 	if _, ok := got.Contexts["other"]; ok {
 		t.Fatal("isolated kubeconfig retained unrelated context")
+	}
+	exec := got.AuthInfos["wanted-user"].Exec
+	if exec == nil || exec.Command != "credential-plugin" {
+		t.Fatalf("isolated kubeconfig did not preserve exec credential plugin: %#v", exec)
 	}
 }
 
@@ -96,7 +101,7 @@ func TestKubeconfigProviderPreservesCredentialFileReferences(t *testing.T) {
 
 	gotRaw, err := (KubeconfigProvider{
 		LoadingRules: &clientcmd.ClientConfigLoadingRules{ExplicitPath: path},
-	}).UserKubeconfig(workspaceconnection.Descriptor{
+	}).UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
 		Cluster: workspaceconnection.ClusterDescriptor{ContextName: "wanted"},
 	})
 	if err != nil {
@@ -135,10 +140,84 @@ func TestKubeconfigProviderRequiresNamedContext(t *testing.T) {
 	provider := KubeconfigProvider{
 		LoadingRules: &clientcmd.ClientConfigLoadingRules{ExplicitPath: path},
 	}
-	_, err := provider.UserKubeconfig(workspaceconnection.Descriptor{
+	_, err := provider.UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
 		Cluster: workspaceconnection.ClusterDescriptor{ContextName: "missing"},
 	})
 	if err == nil || !strings.Contains(err.Error(), `context "missing" was not found`) {
+		t.Fatalf("UserKubeconfig() error = %v", err)
+	}
+}
+
+type fakeAdapter struct {
+	method workspaceconnection.AccessMethod
+	raw    []byte
+	calls  int
+}
+
+func (a *fakeAdapter) Method() workspaceconnection.AccessMethod {
+	return a.method
+}
+
+func (a *fakeAdapter) UserKubeconfig(context.Context, workspaceconnection.Descriptor) ([]byte, error) {
+	a.calls++
+	return a.raw, nil
+}
+
+func TestProviderDispatchesByAccessMethod(t *testing.T) {
+	aks := &fakeAdapter{method: workspaceconnection.AccessMethodAKS, raw: []byte("aks")}
+	kubeconfig := &fakeAdapter{method: workspaceconnection.AccessMethodKubeconfig, raw: []byte("kubeconfig")}
+	provider := NewProvider(aks, kubeconfig)
+
+	raw, err := provider.UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
+		Access: workspaceconnection.AccessDescriptor{Method: workspaceconnection.AccessMethodKubeconfig},
+	})
+	if err != nil {
+		t.Fatalf("UserKubeconfig: %v", err)
+	}
+	if string(raw) != "kubeconfig" || kubeconfig.calls != 1 || aks.calls != 0 {
+		t.Fatalf("dispatch result = %q, AKS calls = %d, kubeconfig calls = %d", raw, aks.calls, kubeconfig.calls)
+	}
+}
+
+func TestProviderRejectsUnknownAccessMethod(t *testing.T) {
+	provider := NewProvider(&fakeAdapter{method: workspaceconnection.AccessMethodKubeconfig})
+	_, err := provider.UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
+		Access: workspaceconnection.AccessDescriptor{Method: workspaceconnection.AccessMethod("unknown")},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported workspace access method "unknown"`) {
+		t.Fatalf("UserKubeconfig() error = %v", err)
+	}
+}
+
+func TestProviderAcceptsIsolatedFutureAdapter(t *testing.T) {
+	const futureMethod workspaceconnection.AccessMethod = "future-managed"
+	future := &fakeAdapter{method: futureMethod, raw: []byte("future")}
+	provider := NewProvider(
+		&fakeAdapter{method: workspaceconnection.AccessMethodAKS},
+		&fakeAdapter{method: workspaceconnection.AccessMethodKubeconfig},
+		future,
+	)
+
+	raw, err := provider.UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
+		Access: workspaceconnection.AccessDescriptor{Method: futureMethod},
+	})
+	if err != nil {
+		t.Fatalf("UserKubeconfig: %v", err)
+	}
+	if string(raw) != "future" || future.calls != 1 {
+		t.Fatalf("future adapter result = %q, calls = %d", raw, future.calls)
+	}
+}
+
+func TestProviderRejectsDuplicateAdapters(t *testing.T) {
+	provider := NewProvider(
+		&fakeAdapter{method: workspaceconnection.AccessMethodAKS},
+		&fakeAdapter{method: workspaceconnection.AccessMethodAKS},
+	)
+	_, err := provider.UserKubeconfig(context.Background(), workspaceconnection.Descriptor{
+		Access: workspaceconnection.AccessDescriptor{Method: workspaceconnection.AccessMethodAKS},
+	})
+	if err == nil || !strings.Contains(err.Error(), "multiple cluster credential adapters") {
 		t.Fatalf("UserKubeconfig() error = %v", err)
 	}
 }

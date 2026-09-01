@@ -34,9 +34,14 @@ The only artifact a researcher needs is `tau/workspace.connection.yaml`, a non-s
 **It must never contain a credential, kubeconfig, client secret, or cloud access
 token.** With `access.method: kubeconfig`, `tau` loads the normal kubeconfig
 rules (including `KUBECONFIG`) and copies only the named context, cluster, and
-user into an isolated mode-`0600` kubeconfig outside the repository. With
-`access.method: aks`, it obtains normal AKS cluster-user credentials through the
-caller's Azure identity and isolates those instead.
+user into an isolated mode-`0600` kubeconfig outside the repository. Standard
+kubeconfig exec credential plugins remain available, so this is the universal
+path for conformant Kubernetes platforms including self-managed, bare-metal,
+and managed clusters. With `access.method: aks`, the first-class AKS adapter
+obtains normal cluster-user credentials through the caller's Azure identity,
+normalizes `kubelogin`, and isolates the result instead. Tau's workspace,
+Run, and Serve paths consume only that isolated Kubernetes connection; cloud
+provider behavior ends at credential acquisition.
 
 A provider-neutral descriptor uses an existing Kubernetes context:
 

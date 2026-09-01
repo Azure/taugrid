@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package clusteraccess obtains and normalizes normal-user AKS access for Tau.
+// Package clusteraccess obtains isolated user kubeconfigs through credential adapters.
 package clusteraccess
 
 import (

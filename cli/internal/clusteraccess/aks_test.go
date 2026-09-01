@@ -4,14 +4,54 @@
 package clusteraccess
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
+
+type recordingCredentialFactory struct {
+	ctx      context.Context
+	tenantID string
+	err      error
+}
+
+func (f *recordingCredentialFactory) Credential(ctx context.Context, tenantID string) (azcore.TokenCredential, error) {
+	f.ctx = ctx
+	f.tenantID = tenantID
+	return nil, f.err
+}
+
+func TestAKSUserCredentialProviderUsesCallerContextAndTenant(t *testing.T) {
+	wantErr := errors.New("credential unavailable")
+	factory := &recordingCredentialFactory{err: wantErr}
+	ctx := context.WithValue(context.Background(), struct{}{}, "caller")
+	_, err := (AKSUserCredentialProvider{Credentials: factory}).UserKubeconfig(ctx, workspaceconnection.Descriptor{
+		Cluster: workspaceconnection.ClusterDescriptor{ContextName: "aks"},
+		Access: workspaceconnection.AccessDescriptor{
+			Method: workspaceconnection.AccessMethodAKS,
+			AKS: &workspaceconnection.AKSAccessDescriptor{
+				ResourceID: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.ContainerService/managedClusters/aks",
+				TenantID:   "11111111-1111-1111-1111-111111111111",
+			},
+		},
+		Authorization: workspaceconnection.AuthorizationDescriptor{
+			Mode: workspaceconnection.AuthorizationModeClusterWide,
+		},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("UserKubeconfig() error = %v, want %v", err, wantErr)
+	}
+	if factory.ctx != ctx || factory.tenantID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("credential request used context %v and tenant %q", factory.ctx, factory.tenantID)
+	}
+}
 
 func TestParseAKSResourceID(t *testing.T) {
 	id, err := parseAKSResourceID("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-flex")

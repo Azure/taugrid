@@ -24,7 +24,9 @@ how Tau should access it. Most clusters use an existing kubeconfig context;
 AKS platforms can instead include optional Azure metadata so Tau obtains
 cluster-user credentials automatically. These are platform-supplied connection
 settings, not values researchers should copy from `kubectl` output or edit
-during onboarding.
+during onboarding. Kubeconfig remains the generic adapter for any conformant
+Kubernetes cluster and supports standard exec credential plugins; AKS is the
+only managed-cloud adapter with first-class onboarding in this release.
 
 From the repository, run `tau workspace connection` to verify the complete
 read-only connection before submitting work. Use `--offline` when only local

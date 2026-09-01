@@ -70,24 +70,24 @@ type ActiveConnection struct {
 }
 
 type connectionState struct {
-	Schema            string    `json:"schema"`
-	Workspace         string    `json:"workspace"`
-	AccessMethod      string    `json:"access_method"`
-	AccessIdentity    string    `json:"access_identity"`
-	AccessFingerprint string    `json:"access_fingerprint,omitempty"`
-	AuthorizationMode string    `json:"authorization_mode"`
-	ContextName       string    `json:"context_name"`
-	SystemNamespace   string    `json:"system_namespace,omitempty"`
-	KubeconfigPath    string    `json:"kubeconfig_path"`
-	Namespace         string    `json:"namespace"`
-	Queue             string    `json:"queue"`
-	ServiceAccount    string    `json:"service_account,omitempty"`
-	RequiredRole      string    `json:"required_role"`
-	DescriptorPath    string    `json:"descriptor_path"`
-	DescriptorDigest  string    `json:"descriptor_digest"`
-	WorkspaceUID      string    `json:"workspace_uid,omitempty"`
-	ConfiguredAt      time.Time `json:"configured_at,omitempty"`
-	VerifiedAt        time.Time `json:"verified_at"`
+	Schema            string       `json:"schema"`
+	Workspace         string       `json:"workspace"`
+	AccessMethod      AccessMethod `json:"access_method"`
+	AccessIdentity    string       `json:"access_identity"`
+	AccessFingerprint string       `json:"access_fingerprint,omitempty"`
+	AuthorizationMode string       `json:"authorization_mode"`
+	ContextName       string       `json:"context_name"`
+	SystemNamespace   string       `json:"system_namespace,omitempty"`
+	KubeconfigPath    string       `json:"kubeconfig_path"`
+	Namespace         string       `json:"namespace"`
+	Queue             string       `json:"queue"`
+	ServiceAccount    string       `json:"service_account,omitempty"`
+	RequiredRole      string       `json:"required_role"`
+	DescriptorPath    string       `json:"descriptor_path"`
+	DescriptorDigest  string       `json:"descriptor_digest"`
+	WorkspaceUID      string       `json:"workspace_uid,omitempty"`
+	ConfiguredAt      time.Time    `json:"configured_at,omitempty"`
+	VerifiedAt        time.Time    `json:"verified_at"`
 }
 
 type Manager struct {
@@ -207,8 +207,8 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	sourceKubeconfigChanged := false
 	sourceTargetChanged := false
 	if hasState &&
-		state.AccessMethod == AccessMethodKubeconfig &&
-		discovery.Descriptor.Access.Method == AccessMethodKubeconfig {
+		state.AccessMethod == discovery.Descriptor.Access.Method &&
+		discovery.Descriptor.tracksKubeconfigSource() {
 		sourceKubeconfig, sourceFingerprint, err = m.resolveUserKubeconfig(ctx, discovery.Descriptor, nil)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("refresh kubeconfig workspace access: %w", err)
@@ -763,7 +763,7 @@ func descriptorDigestHash(digest string) string {
 }
 
 func descriptorAccessFingerprint(descriptor Descriptor, rawKubeconfig []byte) (string, error) {
-	if descriptor.Access.Method != AccessMethodKubeconfig {
+	if !descriptor.tracksKubeconfigSource() {
 		return "", nil
 	}
 	fingerprint, err := kubeconfigAccessFingerprint(rawKubeconfig, descriptor.Cluster.ContextName)

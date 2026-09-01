@@ -169,20 +169,21 @@ func defaultRunConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
 		Mode:   authMode,
 		Output: cmd.ErrOrStderr(),
 	}
+	credentialProvider := clusteraccess.NewDefaultProvider(
+		clusteraccess.AKSUserCredentialProvider{
+			Credentials: credentialFactory,
+			AuthMode:    authMode,
+		},
+	)
 	return workspaceconnection.Manager{
 		ConfigDir:   strings.TrimSpace(os.Getenv("TAU_CONFIG_DIR")),
 		Interactive: stdinIsTerminal(cmd.InOrStdin()),
 		Input:       cmd.InOrStdin(),
 
-		Output: cmd.OutOrStdout(),
-		Credentials: clusteraccess.Provider{
-			AKS: clusteraccess.AKSUserCredentialProvider{
-				Credentials: credentialFactory,
-				AuthMode:    authMode,
-			},
-		},
-		Verifier:   workspaceconnection.KubectlVerifier{},
-		TauVersion: version.Version,
+		Output:      cmd.OutOrStdout(),
+		Credentials: credentialProvider,
+		Verifier:    workspaceconnection.KubectlVerifier{},
+		TauVersion:  version.Version,
 	}
 }
 
