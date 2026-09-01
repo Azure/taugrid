@@ -30,7 +30,9 @@ only managed-cloud adapter with first-class onboarding in this release.
 
 From the repository, run `tau workspace connection` to verify the complete
 read-only connection before submitting work. Use `--offline` when only local
-repository validation is appropriate.
+repository validation is appropriate. For AKS, see
+[Connect to an AKS workspace](aks-access/) for the clean-machine sign-in flow
+and the relationship between `az login`, Tau, and `kubelogin`.
 
 The examples in the TauGrid source repository, including
 `examples/aks-cpu-quickstart`, `examples/kind-smoke`, and
@@ -43,6 +45,7 @@ submitting it.
 
 Continue with [run your first target](first-run/).
 
+- [Connect to an AKS workspace](aks-access/).
 - [Share research with a teammate](share-research/).
 - [Serve a trained model](serve-model/) once you have a run to promote.
 

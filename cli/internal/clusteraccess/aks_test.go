@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
@@ -22,10 +21,10 @@ type recordingCredentialFactory struct {
 	err      error
 }
 
-func (f *recordingCredentialFactory) Credential(ctx context.Context, tenantID string) (azcore.TokenCredential, error) {
+func (f *recordingCredentialFactory) Credential(ctx context.Context, tenantID string) (CredentialResult, error) {
 	f.ctx = ctx
 	f.tenantID = tenantID
-	return nil, f.err
+	return CredentialResult{}, f.err
 }
 
 func TestAKSUserCredentialProviderUsesCallerContextAndTenant(t *testing.T) {
@@ -99,6 +98,40 @@ func TestNormalizeKubeconfigKeepsOnlyUserExecContext(t *testing.T) {
 	}
 	exec := got.AuthInfos["taugrid-flex"].Exec
 	if exec == nil || exec.Command != "kubelogin" || strings.Join(exec.Args, " ") != "get-token --login interactive --server-id server" {
+		t.Fatalf("normalized exec = %#v", exec)
+	}
+}
+
+func TestNormalizeKubeconfigReusesAzureCLILogin(t *testing.T) {
+	config := clientcmdapi.NewConfig()
+	config.CurrentContext = "clusterUser_rg_aks"
+	config.Clusters["aks"] = &clientcmdapi.Cluster{Server: "https://aks.example.test"}
+	config.AuthInfos["user"] = &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+		Command: "kubelogin",
+		Args:    []string{"get-token", "--login", "interactive", "--server-id", "server"},
+	}}
+	config.Contexts[config.CurrentContext] = &clientcmdapi.Context{Cluster: "aks", AuthInfo: "user"}
+	raw, err := clientcmd.Write(*config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	normalized, err := NormalizeKubeconfig(
+		raw,
+		"taugrid-flex",
+		workspaceconnection.AuthorizationModeWorkspaceRBAC,
+		AuthModeAzureCLI,
+		"/usr/local/bin/kubelogin",
+	)
+	if err != nil {
+		t.Fatalf("NormalizeKubeconfig: %v", err)
+	}
+	got, err := clientcmd.Load(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := got.AuthInfos["taugrid-flex"].Exec
+	if exec == nil || strings.Join(exec.Args, " ") != "get-token --login azurecli --server-id server" {
 		t.Fatalf("normalized exec = %#v", exec)
 	}
 }

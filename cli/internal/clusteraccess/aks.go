@@ -56,7 +56,10 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	if err != nil {
 		return nil, err
 	}
-	clientFactory, err := armcontainerservice.NewClientFactory(id.SubscriptionID, credential, nil)
+	if credential.Token == nil {
+		return nil, fmt.Errorf("AKS credential factory returned no token credential")
+	}
+	clientFactory, err := armcontainerservice.NewClientFactory(id.SubscriptionID, credential.Token, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create AKS ARM client: %w", err)
 	}
@@ -74,15 +77,11 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	if len(result.Kubeconfigs) == 0 || result.Kubeconfigs[0] == nil || len(result.Kubeconfigs[0].Value) == 0 {
 		return nil, fmt.Errorf("AKS returned no cluster-user kubeconfig for %s", id.Name)
 	}
-	mode := strings.ToLower(strings.TrimSpace(p.AuthMode))
-	if mode == "" {
-		mode = AuthModeInteractive
-	}
 	return NormalizeKubeconfig(
 		result.Kubeconfigs[0].Value,
 		descriptor.Cluster.ContextName,
 		authorizationMode,
-		mode,
+		credential.KubeloginMode,
 		kubeloginPath,
 	)
 }
@@ -129,9 +128,7 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 		if !strings.EqualFold(filepath.Base(authInfo.Exec.Command), "kubelogin") {
 			return nil, fmt.Errorf("AKS cluster-user kubeconfig exec command %q is not kubelogin", authInfo.Exec.Command)
 		}
-		switch authMode {
-		case AuthModeInteractive, AuthModeDeviceCode:
-		default:
+		if !supportedKubeloginMode(authMode) {
 			return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 		}
 		authInfo.Exec.Command = "kubelogin"
@@ -146,6 +143,9 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 			}
 			if kubeloginPath == "" {
 				return nil, fmt.Errorf("kubelogin is required for this AKS cluster-user kubeconfig")
+			}
+			if !supportedKubeloginMode(authMode) {
+				return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 			}
 			authInfo.Exec.Command = "kubelogin"
 			authInfo.Exec.Args = setKubeloginMode(authInfo.Exec.Args, authMode)
@@ -169,6 +169,15 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 		return nil, fmt.Errorf("write isolated AKS kubeconfig: %w", err)
 	}
 	return output, nil
+}
+
+func supportedKubeloginMode(mode string) bool {
+	switch mode {
+	case AuthModeAzureCLI, AuthModeInteractive, AuthModeDeviceCode:
+		return true
+	default:
+		return false
+	}
 }
 
 func hasStaticCredentials(authInfo *clientcmdapi.AuthInfo) bool {

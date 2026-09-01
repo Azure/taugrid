@@ -72,6 +72,15 @@ access:
     tenantID: <tenant-uuid>
 ```
 
+For a clean-machine researcher experience, grant the researcher permission to
+obtain cluster-user credentials, provide any private-network instructions, and
+point them to [Connect to an AKS workspace](../../developer-guide/aks-access/).
+They can run `az login --tenant <tenant-id>` once and Tau will reuse that Azure
+CLI session for both the ARM credential request and `kubelogin`. If they have no
+active Azure CLI session, Tau falls back to browser authentication; headless
+users can select device-code fallback with
+`TAU_AUTH_MODE=devicecode tau workspace connection`.
+
 ## Repository placement
 
 Commit `tau/workspace.connection.yaml` at the repository root, alongside the target configs it governs (for example `tau/smoke.yaml`, `tau/train.yaml`). Two ways to produce it:

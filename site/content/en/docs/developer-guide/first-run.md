@@ -17,6 +17,10 @@ Prerequisites:
   `tau/train.yaml`.
 - The platform workspace reports Ready.
 
+For an AKS repository on a new machine, first read
+[Connect to an AKS workspace](aks-access/) so `az login`, Tau, and `kubelogin`
+use the intended identity flow.
+
 `tau run` is the config-first entry point. Its optional positional `TARGET`
 argument resolves to a checked-in `tau/<target>.yaml` file. See the
 [direct run config reference](../../reference/run-config/) for the full
