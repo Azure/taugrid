@@ -126,7 +126,7 @@ policy:
 			t.Fatalf("project health did not resolve catalog connection:\n%s", result.stdout)
 		}
 	})
-	t.Run("connected run caches active workspace", func(t *testing.T) {
+	t.Run("connected run derives context and caches active workspace", func(t *testing.T) {
 		cachePath := filepath.Join(configDir, activeWorkspaceCacheFilename)
 		if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
@@ -458,6 +458,15 @@ func installFakeRoutingKubectl(t *testing.T, namespace string) {
 	script := fmt.Sprintf(`#!/bin/sh
 case " $* " in
   *" get workspace.tau.azure.com sample "*|*" get workspaces.tau.azure.com sample "*)
+    case " $* " in
+      *" --kubeconfig "*) ;;
+      *)
+        if [ "$KUBECONFIG" != "$TAU_ROUTING_EXPECTED_KUBECONFIG" ]; then
+          printf '%%s\n' "workspace lookup used ambient kubeconfig: $KUBECONFIG" >&2
+          exit 97
+        fi
+        ;;
+    esac
     printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"gpu-cq"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
@@ -558,7 +567,10 @@ users:
 		Digest:         digest,
 	})+".json")
 	writeRunRoutingFile(t, statePath, string(raw))
+	ambientKubeconfigPath := filepath.Join(configDir, "ambient-kubeconfig.yaml")
+	writeRunRoutingFile(t, ambientKubeconfigPath, strings.Replace(kubeconfig, "current-context: taugrid-flex", `current-context: ""`, 1))
 	t.Setenv("TAU_CONFIG_DIR", configDir)
-	t.Setenv("KUBECONFIG", kubeconfigPath)
+	t.Setenv("KUBECONFIG", ambientKubeconfigPath)
+	t.Setenv("TAU_ROUTING_EXPECTED_KUBECONFIG", kubeconfigPath)
 	return configDir
 }
