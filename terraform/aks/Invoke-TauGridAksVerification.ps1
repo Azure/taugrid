@@ -165,6 +165,14 @@ foreach ($name in @("az", "terraform", "kubectl", "helm", "pwsh")) {
 }
 $tau = Get-Command $TauCommand -ErrorAction SilentlyContinue
 if ($null -eq $tau) { throw "Tau command '$TauCommand' was not found. Install the OS-specific tau release or pass -TauCommand." }
+$expectedTauVersion = "v$TauGridVersion"
+$tauVersion = (@(& $tau.Source version --short) -join [Environment]::NewLine).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Tau command '$($tau.Source)' could not report its version. Install TauGrid CLI $expectedTauVersion or pass a matching -TauCommand."
+}
+if ($tauVersion -ne $expectedTauVersion) {
+    throw "Tau command '$($tau.Source)' is version '$tauVersion', but this deployment requires $expectedTauVersion to match TauGrid chart $TauGridVersion. Update Tau before provisioning Azure resources."
+}
 if ($EnableBootstrapWorkspace) {
     if ([string]::IsNullOrWhiteSpace($BootstrapWorkspaceEntraGroupObjectId)) {
         throw "BootstrapWorkspaceEntraGroupObjectId is required when EnableBootstrapWorkspace is set."

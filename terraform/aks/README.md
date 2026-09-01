@@ -64,8 +64,12 @@ This integration verification creates billable Azure resources and requires a
 subscription with sufficient regional quota. It is not part of the normal
 offline or CI test suite.
 
-The script resolves `tau` for the active OS. Pass `-TauCommand` with an
-absolute path when it is not on PATH; paths containing spaces are supported.
+The script resolves `tau` for the active OS and, before it accesses Azure,
+requires `tau version --short` to be exactly `v<TauGridVersion>` (by default
+`v0.4.0`). It rejects development builds and stale CLIs because the CLI and
+chart readiness contracts must match. Pass `-TauCommand` with an absolute path
+to a matching released binary when it is not on PATH; paths containing spaces
+are supported.
 It accepts the ADX SKU and capacity, plus the GPU VM SKU and its matching
 monitoring, class, and series metadata. The script queries the Azure Resource
 Manager ADX SKU catalog as an early validation; Azure service-side creation

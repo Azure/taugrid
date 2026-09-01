@@ -26,6 +26,10 @@ $nameDerivation = $verificationScript.IndexOf('$adxClusterName = Get-TauGridAdxC
 if ($accountLookup -lt 0 -or $nameDerivation -lt 0 -or $accountLookup -ge $nameDerivation) {
     throw "The verification runner must read the Azure account before deriving the ADX cluster name."
 }
+$tauVersionCheck = $verificationScript.IndexOf('$expectedTauVersion = "v$TauGridVersion"', [System.StringComparison]::Ordinal)
+if ($tauVersionCheck -lt 0 -or $tauVersionCheck -ge $accountLookup -or $verificationScript.IndexOf("Update Tau before provisioning Azure resources.", [System.StringComparison]::Ordinal) -lt 0) {
+    throw "The verification runner must reject a Tau CLI version that does not match the chart before accessing Azure."
+}
 
 $differentResourceGroupName = "taugrid-verify-other"
 $different = Get-TauGridAdxClusterName -SubscriptionId $subscriptionId -ResourceGroupName $differentResourceGroupName -ClusterName $differentResourceGroupName
