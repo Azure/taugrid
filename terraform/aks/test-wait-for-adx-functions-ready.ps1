@@ -64,11 +64,13 @@ function Invoke-WaiterCase {
 }
 
 $success = '{"items":[{"metadata":{"name":"metrics","generation":2},"status":{"observedGeneration":2,"status":"Success","error":""}}]}'
+$missingStatus = '{"items":[{}]}'
 $staleSuccess = '{"items":[{"metadata":{"name":"metrics","generation":2},"status":{"observedGeneration":1,"status":"Success","error":""}}]}'
 $terminalFailure = '{"items":[{"metadata":{"name":"metrics","generation":2},"status":{"observedGeneration":2,"status":"PermanentFailure","error":"invalid KQL"}}]}'
 $throttleFailure = '{"items":[{"metadata":{"name":"metrics","generation":2},"status":{"observedGeneration":2,"status":"PermanentFailure","error":"RequestRateLimitPolicy throttling"}}]}'
 
 Invoke-WaiterCase -Name "current success" -FunctionResponses @($success) -ExpectFailure $false
+Invoke-WaiterCase -Name "missing Function status" -FunctionResponses @($missingStatus, $success) -ExpectFailure $false
 Invoke-WaiterCase -Name "stale success" -FunctionResponses @($staleSuccess, $success) -ExpectFailure $false
 Invoke-WaiterCase -Name "terminal failure" -FunctionResponses @($terminalFailure) -ExpectFailure $true
 Invoke-WaiterCase -Name "retryable throttling" -FunctionResponses @($throttleFailure, $success) -ExpectFailure $false -ExpectedDelete "delete functions --namespace adx-mon metrics --ignore-not-found"

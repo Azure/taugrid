@@ -38,8 +38,10 @@ function Invoke-Native {
 function Get-FunctionReconciliationState {
     param([object] $Function)
 
-    $metadata = $Function.PSObject.Properties["metadata"].Value
-    $status = $Function.PSObject.Properties["status"].Value
+    $metadataProperty = $Function.PSObject.Properties["metadata"]
+    $statusProperty = $Function.PSObject.Properties["status"]
+    $metadata = if ($null -eq $metadataProperty) { $null } else { $metadataProperty.Value }
+    $status = if ($null -eq $statusProperty) { $null } else { $statusProperty.Value }
     if ($null -eq $metadata -or $null -eq $status) {
         return [pscustomobject]@{
             Name = ""

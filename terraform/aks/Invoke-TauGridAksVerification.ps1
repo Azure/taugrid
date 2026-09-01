@@ -127,8 +127,11 @@ function Invoke-TerraformApplyWithAdxRecovery {
     if ($LASTEXITCODE -eq 0) { return }
 
     $stateEntries = @(terraform "-chdir=$ModulePath" state list "-state=$StateFile")
-    if ($LASTEXITCODE -ne 0 -or "azurerm_kusto_cluster.this[0]" -in $stateEntries) {
-        throw "Terraform apply failed and there is no recoverable untracked ADX cluster."
+    if ($LASTEXITCODE -ne 0) {
+        throw "Terraform apply failed and Terraform state could not be read to assess ADX recovery."
+    }
+    if ("azurerm_kusto_cluster.this[0]" -in $stateEntries) {
+        throw "Terraform apply failed after ADX was recorded in Terraform state; no ADX recovery is applicable. See the preceding Terraform diagnostic."
     }
     $deadline = (Get-Date).AddMinutes(20)
     $clusterID = Wait-ForCondition {
