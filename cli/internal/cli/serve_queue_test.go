@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/Azure/taugrid/cli/internal/queueresolve"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 type serveQueueRunner struct {
@@ -57,7 +57,6 @@ func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 		"--profile", "model-serve",
 		"--image", "example.invalid/infer:v1",
 		"--gpus", "1",
-		"-n", "team-namespace",
 		"--dry-run=client",
 	)
 	if err != nil {
@@ -69,6 +68,9 @@ func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 	}
 	if podTemplateLabels["kueue.x-k8s.io/managed"] != "true" {
 		t.Fatalf("pod template lost the managed label: %v", podTemplateLabels)
+	}
+	if podTemplateLabels[workloadmeta.LabelWorkspace] != "sample" {
+		t.Fatalf("pod template lost the active workspace label: %v", podTemplateLabels)
 	}
 	if !strings.Contains(rendered, "kueue.x-k8s.io/pod-suspending-parent: deployment") {
 		t.Fatalf("pod template lost the suspending-parent annotation:\n%s", rendered)
@@ -116,18 +118,28 @@ func TestServeDeployDoesNotExposeQueueFlag(t *testing.T) {
 	}
 	for _, name := range []string{"team", "lane"} {
 		if cmd.Flags().Lookup(name) != nil {
-			t.Fatalf("serve deploy must derive %s from the platform profile/namespace contract", name)
+			t.Fatalf("serve deploy must derive %s from the selected workload profile", name)
 		}
 	}
 }
 
-func TestResolveServeTargetUsesKueueDefaultQueue(t *testing.T) {
+func TestServeDeployRejectsNamespaceOutsideActiveWorkspace(t *testing.T) {
+	_, _, err := serveDeployRender(
+		t,
+		"endpoint",
+		"--kind=deployment",
+		"--profile", "model-serve",
+		"--image", "example.invalid/infer:v1",
+		"--namespace", "other-workspace",
+		"--dry-run=client",
+	)
+	if err == nil || !strings.Contains(err.Error(), `conflicts with TauWorkspace "sample" target namespace "tau"`) {
+		t.Fatalf("namespace conflict error = %v", err)
+	}
+}
+
+func TestResolveServeTargetUsesWorkspaceQueue(t *testing.T) {
 	runner := &serveQueueRunner{outputs: map[string]string{
-		serveQueueKey("get", "namespaces", "-l", queueresolve.DefaultLocalQueueLabel, "-o", "json"): `{
-			"items": [{"metadata": {"name": "team-namespace", "labels": {
-				"kueue.x-k8s.io/default-local-queue": "operator-chosen-queue"
-			}}}]
-		}`,
 		serveQueueKey("auth", "can-i", "create", "deployments.apps", "-n", "team-namespace"):        "yes\n",
 		serveQueueKey("auth", "can-i", "get", "localqueues.kueue.x-k8s.io", "-n", "team-namespace"): "yes\n",
 		serveQueueKey("-n", "team-namespace", "get", "localqueue.kueue.x-k8s.io", "operator-chosen-queue", "-o", "json"): `{
@@ -136,29 +148,32 @@ func TestResolveServeTargetUsesKueueDefaultQueue(t *testing.T) {
 		}`,
 	}}
 
-	target, warning, err := resolveServeTarget(context.Background(), runner, "", "deployments.apps")
+	target, err := resolveServeTarget(
+		context.Background(),
+		runner,
+		"team-namespace",
+		"operator-chosen-queue",
+		"shared-cq",
+		"deployments.apps",
+	)
 	if err != nil {
 		t.Fatalf("resolveServeTarget: %v", err)
 	}
-	if warning != "" {
-		t.Fatalf("live resolution should not warn, got %q", warning)
-	}
 	if target.Namespace != "team-namespace" || target.Queue != "operator-chosen-queue" {
-		t.Fatalf("target = %+v, want the namespace's default LocalQueue", target)
+		t.Fatalf("target = %+v, want the workspace LocalQueue", target)
 	}
-	if len(runner.calls) != 4 {
-		t.Fatalf("resolution should verify namespace, RBAC, and LocalQueue; calls=%v", runner.calls)
+	if len(runner.calls) != 3 {
+		t.Fatalf("resolution should verify RBAC and the exact LocalQueue without listing namespaces; calls=%v", runner.calls)
+	}
+	for _, call := range runner.calls {
+		if len(call) >= 2 && call[0] == "get" && call[1] == "namespaces" {
+			t.Fatalf("workspace routing must not discover namespaces from labels: %v", runner.calls)
+		}
 	}
 }
 
-func TestResolveServeTargetUsesNamespaceOnlyToDisambiguate(t *testing.T) {
+func TestResolveServeTargetRejectsWorkspaceClusterQueueMismatch(t *testing.T) {
 	runner := &serveQueueRunner{outputs: map[string]string{
-		serveQueueKey("get", "namespaces", "-l", queueresolve.DefaultLocalQueueLabel, "-o", "json"): `{
-			"items": [
-				{"metadata": {"name": "team-a", "labels": {"kueue.x-k8s.io/default-local-queue": "jobqueue"}}},
-				{"metadata": {"name": "team-b", "labels": {"kueue.x-k8s.io/default-local-queue": "serve-queue"}}}
-			]
-		}`,
 		serveQueueKey("auth", "can-i", "create", "rayservices.ray.io", "-n", "team-b"):      "yes\n",
 		serveQueueKey("auth", "can-i", "get", "localqueues.kueue.x-k8s.io", "-n", "team-b"): "yes\n",
 		serveQueueKey("-n", "team-b", "get", "localqueue.kueue.x-k8s.io", "serve-queue", "-o", "json"): `{
@@ -167,53 +182,53 @@ func TestResolveServeTargetUsesNamespaceOnlyToDisambiguate(t *testing.T) {
 		}`,
 	}}
 
-	target, _, err := resolveServeTarget(context.Background(), runner, "team-b", "rayservices.ray.io")
-	if err != nil {
-		t.Fatalf("resolveServeTarget: %v", err)
-	}
-	if target.Namespace != "team-b" || target.Queue != "serve-queue" {
-		t.Fatalf("target = %+v, want team-b's platform default", target)
+	_, err := resolveServeTarget(
+		context.Background(),
+		runner,
+		"team-b",
+		"serve-queue",
+		"workspace-cq",
+		"rayservices.ray.io",
+	)
+	if err == nil || !strings.Contains(err.Error(), `expects LocalQueue "serve-queue" to use ClusterQueue "workspace-cq"`) {
+		t.Fatalf("ClusterQueue mismatch error = %v", err)
 	}
 }
 
 func TestResolveServeTargetRequiresConnectedRunner(t *testing.T) {
-	_, _, err := resolveServeTarget(context.Background(), nil, "", "deployments.apps")
+	_, err := resolveServeTarget(context.Background(), nil, "tau", "jobqueue", "", "deployments.apps")
 	if err == nil || !strings.Contains(err.Error(), "Kubernetes runner is required") {
 		t.Fatalf("connected serving resolution error = %v", err)
 	}
 }
 
-func TestResolveServeTargetFailsWhenKueueHasNoDefault(t *testing.T) {
-	runner := &serveQueueRunner{outputs: map[string]string{
-		serveQueueKey("get", "namespaces", "-l", queueresolve.DefaultLocalQueueLabel, "-o", "json"): `{"items":[]}`,
-	}}
-
-	_, _, err := resolveServeTarget(context.Background(), runner, "", "deployments.apps")
+func TestResolveServeTargetRequiresWorkspaceQueue(t *testing.T) {
+	_, err := resolveServeTarget(context.Background(), &serveQueueRunner{}, "tau", "", "", "deployments.apps")
 	if err == nil {
-		t.Fatal("missing platform default must fail before rendering a permanently gated workload")
+		t.Fatal("missing workspace LocalQueue must fail before rendering")
 	}
-	if !strings.Contains(err.Error(), queueresolve.DefaultLocalQueueLabel) {
-		t.Fatalf("error should identify the missing platform configuration: %v", err)
-	}
-	if strings.Contains(err.Error(), "--queue") {
-		t.Fatalf("error must not ask the researcher to choose platform queue policy: %v", err)
+	if !strings.Contains(err.Error(), "workspace LocalQueue is required") {
+		t.Fatalf("error should identify missing workspace placement: %v", err)
 	}
 }
 
-func TestResolveServeTargetRejectsNamespaceWithoutKueueDefault(t *testing.T) {
+func TestResolveServeTargetRejectsServingRBACDenial(t *testing.T) {
 	runner := &serveQueueRunner{outputs: map[string]string{
-		serveQueueKey("get", "namespaces", "-l", queueresolve.DefaultLocalQueueLabel, "-o", "json"): `{
-			"items": [{"metadata": {"name": "other-team", "labels": {
-				"kueue.x-k8s.io/default-local-queue": "jobqueue"
-			}}}]
-		}`,
+		serveQueueKey("auth", "can-i", "create", "deployments.apps", "-n", "team-namespace"): "no\n",
 	}}
 
-	_, _, err := resolveServeTarget(context.Background(), runner, "unconfigured-team", "deployments.apps")
+	_, err := resolveServeTarget(
+		context.Background(),
+		runner,
+		"team-namespace",
+		"jobqueue",
+		"",
+		"deployments.apps",
+	)
 	if err == nil {
-		t.Fatal("an explicit namespace without a platform default must fail")
+		t.Fatal("serving RBAC denial must fail")
 	}
-	for _, want := range []string{"unconfigured-team", queueresolve.DefaultLocalQueueLabel, "platform owner"} {
+	for _, want := range []string{"not authorized", "deployments.apps", "team-namespace"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
