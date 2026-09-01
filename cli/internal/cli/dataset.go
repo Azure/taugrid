@@ -37,6 +37,11 @@ Read verbs (list/show/ref/alias get) read records in-cluster via a short-lived
 helper pod that mounts the blob-training PVC, mirroring tau data model. Write/verify
 verbs (register/verify) use the caller's Azure RBAC directly so datasets can be
 ingested from a laptop or CI before any cluster exists.`,
+		Example: `  tau data dataset list
+  tau data dataset show training-corpus@v1
+  tau data dataset ingest training-corpus@v1 --source-root az://acct/container/train`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(
 		newDatasetListCmd(),
@@ -192,7 +197,13 @@ func newDatasetListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List registered datasets",
-		Args:  cobra.NoArgs,
+		Long: `List every dataset record in the registry, optionally filtered by purpose
+or tag. Use -o json for machine-readable output when scripting or piping into
+other tools.`,
+		Example: `  tau data dataset list
+  tau data dataset list --purpose pretrain --tag domain=code
+  tau data dataset list --output json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
 				return fmt.Errorf("--output must be one of: table, json")
@@ -223,7 +234,7 @@ func newDatasetListCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&purpose, "purpose", "", "filter by purpose: pretrain|rl|eval")
 	cmd.Flags().StringArrayVar(&tags, "tag", nil, "filter by tag key=value (repeatable)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	rf.bind(cmd, "pvc")
 	return cmd
 }
@@ -234,7 +245,13 @@ func newDatasetShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show NAME[@VERSION|@ALIAS]",
 		Short: "Show a dataset record",
-		Args:  cobra.ExactArgs(1),
+		Long: `Show the full registry record for one dataset, resolving an alias or version
+suffix if given. Without a suffix, shows the record referenced by the
+dataset's default alias.`,
+		Example: `  tau data dataset show training-corpus
+  tau data dataset show training-corpus@v3
+  tau data dataset show training-corpus@latest --output json`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
 				return fmt.Errorf("--output must be one of: table, json")
@@ -253,7 +270,7 @@ func newDatasetShowCmd() *cobra.Command {
 			return writeDatasetDetail(cmd.OutOrStdout(), rec)
 		},
 	}
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	rf.bind(cmd, "pvc")
 	return cmd
 }
@@ -277,6 +294,9 @@ forces a shared FUSE mount as the 16-GPU read path.
   -o env:           FineWeb-compatible ${PREFIX}_URIS/_SHA256S/_TOKEN_COUNTS env
                     lines. Requires --staged-root (file:// URIs) or --base-url,
                     since the dataset bytes are private (no SAS URLs are minted).`,
+		Example: `  tau data dataset ref training-corpus@latest
+  tau data dataset ref training-corpus@v3 --output env --staged-root /mnt/local/training-corpus
+  tau data dataset ref training-corpus@latest --output env --base-url https://proxy.internal/datasets`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "json" && output != "env" {
@@ -317,6 +337,13 @@ func newDatasetAliasCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alias",
 		Short: "Manage dataset aliases (movable pointers to pinned versions)",
+		Long: `Manage movable aliases that point at a pinned, immutable dataset version.
+Aliases let downstream configs reference a stable name (e.g. "latest") while
+the underlying version changes over time via compare-and-swap.`,
+		Example: `  tau data dataset alias set training-corpus latest v3
+  tau data dataset alias get training-corpus latest`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(newDatasetAliasSetCmd(), newDatasetAliasGetCmd())
 	return cmd
@@ -329,7 +356,14 @@ func newDatasetAliasSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set NAME ALIAS VERSION",
 		Short: "Point an alias at a version (compare-and-swap)",
-		Args:  cobra.ExactArgs(3),
+		Long: `Point ALIAS at VERSION for dataset NAME. The write is a compare-and-swap:
+use --expect to require the alias's current version, or --expect-absent to
+require the alias not yet exist, so concurrent movers cannot silently clobber
+each other.`,
+		Example: `  tau data dataset alias set training-corpus latest v3
+  tau data dataset alias set training-corpus latest v3 --expect v2
+  tau data dataset alias set training-corpus latest v1 --expect-absent`,
+		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
 				return fmt.Errorf("--output must be one of: table, json")
@@ -354,7 +388,7 @@ func newDatasetAliasSetCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&expect, "expect", "", "compare-and-swap: require the alias to currently point at this version")
 	cmd.Flags().BoolVar(&expectAbsent, "expect-absent", false, "compare-and-swap: require the alias to not yet exist")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	rf.bind(cmd, "pvc")
 	return cmd
 }
@@ -365,7 +399,12 @@ func newDatasetAliasGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get NAME ALIAS",
 		Short: "Read an alias pointer",
-		Args:  cobra.ExactArgs(2),
+		Long: `Print the dataset version that ALIAS currently points at for dataset NAME.
+Use -o json for the full alias record, including its compare-and-swap
+generation, when scripting.`,
+		Example: `  tau data dataset alias get training-corpus latest
+  tau data dataset alias get training-corpus latest --output json`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "ref" && output != "json" {
 				return fmt.Errorf("--output must be one of: ref, json")
@@ -401,6 +440,9 @@ digest still match the immutable record. Bytes are read either from --from
 (a local directory or az://account/container/prefix) or, by default, from the
 account/container/prefix recorded in the dataset record, using the caller's
 Azure RBAC.`,
+		Example: `  tau data dataset verify training-corpus@v3
+  tau data dataset verify training-corpus@v3 --from az://acct/container/train
+  tau data dataset verify training-corpus@v3 --output json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
@@ -443,7 +485,7 @@ Azure RBAC.`,
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "", "bytes source: local dir or az://account/container/prefix (default: record pointer)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	rf.bind(cmd, "pvc")
 	return cmd
 }
@@ -455,6 +497,10 @@ func newDatasetRemoveCmd() *cobra.Command {
 		Use:     "rm NAME@VERSION",
 		Aliases: []string{"remove"},
 		Short:   "Remove a dataset version (blocked while any alias points at it)",
+		Long: `Delete an immutable dataset version's registry record. Removal is blocked
+while any alias still points at the version; move the alias first with
+tau data dataset alias set. Requires --yes.`,
+		Example: `  tau data dataset rm training-corpus@v1 --yes`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := dataset.ParseRef(args[0])

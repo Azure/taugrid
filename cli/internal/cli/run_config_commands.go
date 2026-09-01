@@ -25,6 +25,9 @@ func newRunValidateCmd() *cobra.Command {
 
 This command covers direct tau run --config files. SDK-generated managed
 workflow manifests are intentionally outside this schema/reference path.`,
+		Example: `  tau run validate
+  tau run validate train --config tau.yaml
+  tau run validate --config experiments/mc-rl/tau.yaml`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedConfigPath, explicitConfig, err := discoverRunConfig(configPath)
@@ -72,7 +75,11 @@ func newRunSchemaCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "schema",
 		Short: "Print the Tau run config JSON Schema (machine-readable)",
-		Args:  cobra.NoArgs,
+		Long: `Print the Tau run config JSON Schema as machine-readable JSON, for editor
+autocomplete, config generators, or CI validation of tau.yaml files.`,
+		Example: `  tau run schema
+  tau run schema > tau.schema.json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(output) != "json" {
 				return fmt.Errorf("--output must be json")
@@ -93,7 +100,11 @@ func newRunExplainConfigCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "explain-config",
 		Short: "Print the Tau run config field reference (human-readable Markdown)",
-		Args:  cobra.NoArgs,
+		Long: `Print the full field reference for the Tau run config (tau.yaml) as
+Markdown, including every supported key, its type, default, and description.`,
+		Example: `  tau run explain-config
+  tau run explain-config > tau-config-reference.md`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Fprint(cmd.OutOrStdout(), runconfig.ReferenceMarkdown())
 			return nil

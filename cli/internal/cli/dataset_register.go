@@ -57,6 +57,12 @@ register refuses to overwrite an existing NAME@VERSION; only aliases move. The
 record is written to the registry backend selected by --registry (default: the
 in-cluster blob-training PVC; az://account/container for a no-cluster,
 server-immutability write; file://dir for a local seed catalog).`,
+		Example: `  tau data dataset register training-corpus@v1 --purpose pretrain \
+      --from az://src-acct/raw/train --account train-acct --container datasets \
+      --prefix training-corpus/v1
+  tau data dataset register training-corpus@v1 --purpose pretrain \
+      --manifest ./training-corpus-v1.json --account train-acct --container datasets \
+      --prefix training-corpus/v1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "table" && output != "json" {
@@ -267,7 +273,7 @@ server-immutability write; file://dir for a local seed catalog).`,
 	cmd.Flags().StringVar(&workerImage, "worker-image", "", "digest-pinned worker image (image@sha256:...) for --workspace mode")
 	cmd.Flags().BoolVar(&wait, "wait", false, "wait for the register Job to complete (required for --workspace)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "render manifests without applying (workspace mode)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	rf.bind(cmd, "az://")
 	return cmd
 }

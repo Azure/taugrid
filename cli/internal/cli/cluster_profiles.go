@@ -33,6 +33,13 @@ func newClusterProfilesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profiles",
 		Short: "Inspect ready TauCluster workload profiles",
+		Long: `Inspect the ready workload profiles published by the singleton TauCluster
+status. Workload profiles are the platform's authoritative catalog of
+schedulable GPU shapes; export prints a deterministic offline snapshot of them.`,
+		Example: `  tau cluster profiles export
+  tau cluster profiles export --output profiles.yaml`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(newClusterProfilesExportCmd())
 	return cmd
@@ -48,6 +55,8 @@ func newClusterProfilesExportCmd() *cobra.Command {
 status as a deterministic TauWorkloadProfileSnapshot. The command fails closed
 when status is missing, stale, unready, or has a mismatched profile-set hash.
 It reads only the ready TauCluster status published by the controller.`,
+		Example: `  tau cluster profiles export
+  tau cluster profiles export --output profiles.yaml --context aks-prod`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			client, err := newClusterProfileClient(kubeContext)

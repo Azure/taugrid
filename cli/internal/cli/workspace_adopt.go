@@ -40,6 +40,8 @@ server-side dry-run, and creates the TauWorkspace only when it is still absent.
 A compatible existing TauWorkspace is a no-op; conflicting intent is refused. The command
 does not create Namespace, RBAC, LocalQueue, PVC, StorageClass, ClusterQueue,
 Secret, or Azure resources.`,
+		Example: `  tau workspace adopt research-team
+  tau workspace adopt research-team --apply --system-namespace tau-system`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedSystemNamespace, err := resolveSystemNamespaceAlias(cmd, options.SystemNamespace, "platform-namespace", legacySystemNamespace)

@@ -36,7 +36,7 @@ func newRunStatusCmd() *cobra.Command {
 		diagnosticHints bool
 	)
 	cmd := &cobra.Command{
-		Use:   "status [job-name]",
+		Use:   "status <job-name>",
 		Short: "Show job lifecycle and startup phases",
 		Long: `Show the full lifecycle of a tau-submitted job:
   - The batch/v1 Job or RayJob (state, conditions, deployment status).
@@ -47,10 +47,8 @@ func newRunStatusCmd() *cobra.Command {
 
 For RayJobs, shows the deployment status (New/Initializing/Running/Complete/
 Failed/Suspended), the associated RayCluster name, and discovers pods via
-the ray.io/cluster label.
-
-Examples:
-  tau run status lora-7b-001 -n ray
+the ray.io/cluster label.`,
+		Example: `  tau run status lora-7b-001 -n ray
   tau run status my-job --context research-admin -n ray
   tau run status my-rayjob --context research-admin -n ray
   tau run status sample-finetune --watch -n ray`,
@@ -336,8 +334,10 @@ func newLogsCmd(discover bool) *cobra.Command {
 	)
 	use := "logs <run-name>"
 	short := "Stream logs for a run"
+	invocation := "tau logs"
 	if !discover {
 		short = "Stream logs for a job"
+		invocation = "tau run logs"
 	}
 	cmd := &cobra.Command{
 		Use:   use,
@@ -354,13 +354,11 @@ the Ray Dashboard API (ray job logs) instead of the head pod container logs.
 For manager-side MultiKueue RayJobs, reads centrally offloaded driver logs from
 ADX Logs.ContainerLogs and requires --kusto-endpoint plus --kusto-database once
 the selected worker is known. For batch/v1 Jobs, streams pod logs via the
-Kubernetes job-name=<name> label selector.
-
-Examples:
-  tau logs lora-7b-001
-  tau logs lora-7b-001 -f --tail=100
-  tau logs lora-7b-001 --context research-admin -n ray
-  tau logs lora-7b-001 --kusto-endpoint=https://... --kusto-database=Logs`,
+Kubernetes job-name=<name> label selector.`,
+		Example: `  ` + invocation + ` lora-7b-001
+  ` + invocation + ` lora-7b-001 -f --tail=100
+  ` + invocation + ` lora-7b-001 --context research-admin -n ray
+  ` + invocation + ` lora-7b-001 --kusto-endpoint=https://cluster.kusto.windows.net --kusto-database=Logs`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			opts := runLogsOptions{
@@ -695,10 +693,8 @@ explicitly.
 For MultiKueue jobs, tau waits for the manager-cluster Workload objects to
 disappear after the delete request. This is a manager-only proof that the
 MultiKueue finalizer finished its remote cleanup path; tau never calls worker
-clusters directly during cancel.
-
-Examples:
-  tau run cancel lora-7b-001 -n ray
+clusters directly during cancel.`,
+		Example: `  tau run cancel lora-7b-001 -n ray
   tau run cancel lora-7b-001 -n ray --wait=false`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]

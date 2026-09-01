@@ -16,6 +16,11 @@ func newVersionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print tau version",
+		Long: `Print the tau CLI version and build metadata (commit, build date, Go
+version). Use --short for just the bare version string, e.g. when scripting.`,
+		Example: `  tau version
+  tau version --short`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if short {
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), version.Version)

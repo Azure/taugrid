@@ -38,28 +38,29 @@ conditionally creates that one object. The Tau controller then creates or
 reconciles the workload Namespace, researcher RBAC, and jobqueue LocalQueue.
 The baseline jobqueue ClusterQueue must already exist from "tau cluster install".
 
-Omitting --principal-name defaults it to NAME, so an Entra cluster can be
-brought up before its identity group exists. Entra asserts groups by object ID,
-so the subject then names a group nobody asserts and the workspace grants
-nobody access until a real group is named. v0 permits one workspace, so once it
-is created, naming the group is an edit of that object rather than a second
-create:
+With the default --principal-provider entra and --subject-kind Group, omitting
+--principal-name defaults it to NAME when NAME is not object-ID-shaped. This
+lets a cluster be brought up before its identity group exists: Entra asserts
+groups by object ID, so the name-based subject grants nobody access until a
+real group is named. v0 permits one workspace, so once it is created, naming
+the group is an edit of that object rather than a second create:
 
   kubectl edit workspaces.tau.azure.com <name> -n <system-namespace>
 
-Every other combination requires --principal-name. A GitHub team slug, an Entra
-UPN, and a ServiceAccount name all share a shape with workspace names, so the
-same fallback there could bind a subject that really exists.
+Every other provider, subject kind, or object-ID-shaped NAME requires
+--principal-name. A GitHub team slug, an Entra UPN, and a ServiceAccount name
+can share a shape with workspace names, so defaulting those could bind a
+subject that really exists.
 
 Storage and Azure workload identity resources remain platform-owned. Optional
 workload identity flags configure only the Kubernetes ServiceAccount.
 
---principal-name is required and identifies the external Entra group or GitHub
-team that receives access to the workspace.
-
 --system-namespace selects where the TauWorkspace object is stored and defaults
 to the TauGrid system namespace. --namespace selects the researcher workload
 namespace and defaults to NAME.`,
+		Example: `  tau workspace create --principal-name research-team --apply
+  tau workspace create --principal-name research-team
+  tau workspace create research-team --principal-name research-team --namespace research-team --apply`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedSystemNamespace, err := resolveSystemNamespaceAlias(cmd, options.SystemNamespace, "platform-namespace", legacySystemNamespace)
@@ -121,7 +122,8 @@ namespace and defaults to NAME.`,
 	_ = cmd.Flags().MarkDeprecated("platform-namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&options.Queue, "queue", tauworkspace.DefaultWorkspaceQueue, "baseline ClusterQueue and LocalQueue name")
 	cmd.Flags().StringVar(&options.PrincipalProvider, "principal-provider", "entra", "external identity provider: entra|github")
-	cmd.Flags().StringVar(&options.PrincipalName, "principal-name", "", "external researcher group or team name (default NAME for an Entra Group)")
+	cmd.Flags().StringVar(&options.PrincipalName, "principal-name", "",
+		"external researcher group or team name (defaults to a non-object-ID NAME only for an Entra Group; otherwise required)")
 	cmd.Flags().StringVar(&options.KubernetesSubjectKind, "subject-kind", "Group", "Kubernetes RBAC subject kind: Group|User|ServiceAccount")
 	cmd.Flags().StringVar(&options.KubernetesSubjectName, "subject-name", "", "Kubernetes RBAC subject name (default --principal-name)")
 	cmd.Flags().StringVar(&options.OutputRoot, "output-root", "", "default durable result path (default /data/projects/NAME/runs)")

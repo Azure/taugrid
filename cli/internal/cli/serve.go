@@ -41,13 +41,14 @@ func newServeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Deploy a model endpoint",
-		Long: `Deploy a model as a RayService.
-
-Examples:
-  tau serve deploy my-7b --image vllm/vllm-openai:v0.6.3 --profile model-serve \
+		Long: `Deploy a model as a RayService or plain Kubernetes Deployment, then
+inspect, scale, or delete it.`,
+		Example: `  tau serve deploy my-7b --profile model-serve --image vllm/vllm-openai:v0.6.3 \
       --args "--model /data/checkpoints/my-7b --quantize awq"
   tau serve status my-7b
   tau serve delete my-7b`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(
 		newServeDeployCmd(),
@@ -98,7 +99,7 @@ func newServeDeployCmd() *cobra.Command {
 		scaleDownSec  int
 	)
 	cmd := &cobra.Command{
-		Use:   "deploy [name]",
+		Use:   "deploy <name>",
 		Short: "Deploy or update a serve endpoint",
 		Long: `Deploy a model endpoint. Two kinds supported:
 
@@ -106,26 +107,17 @@ func newServeDeployCmd() *cobra.Command {
   --kind=deployment:           plain k8s Deployment with Kueue
                                pod-integration. For non-Ray serving
                                (vLLM raw, TGI, triton, custom HTTP servers,
-                               multi-container shapes like fish-speech-tts).
-
-Examples:
-  tau serve deploy my-7b --profile model-serve \
-      --image vllm/vllm-openai:v0.6.3 \
+                               multi-container shapes like fish-speech-tts).`,
+		Example: `  tau serve deploy my-7b --profile model-serve --image vllm/vllm-openai:v0.6.3 \
       --args "--model /ckpt --quantize awq"
-
   tau serve deploy sample-compiled-demo --kind=rayservice --profile ai-serve-gpu-l \
       --image sampleprojectcr.azurecr.io/sample-demo:v7 \
       --import-path experiments.sample_serving.app:app \
-      --checkpoint demo-sample-1738/last.safetensors \
-      --env SAMPLE_INFER_BACKEND=compile \
-      --env SAMPLE_COMPILE_MODE=reduce-overhead
-
+      --checkpoint demo-sample-1738/last.safetensors --env SAMPLE_INFER_BACKEND=compile
   tau serve deploy gura-llm --kind=deployment --profile sample-project-llm-a100 \
       --image sampleprojectcr.azurecr.io/llm:v1 --dry-run=client
-
-  tau serve deploy tts --kind=deployment --profile model-serve \
-      --image my-reg/tts-api:v1 --deployment-port 8080 \
-      --readiness-path /health --service-port 8080 \
+  tau serve deploy tts --kind=deployment --profile model-serve --image my-reg/tts-api:v1 \
+      --deployment-port 8080 --readiness-path /health --service-port 8080 \
       --env MODEL_DIR=/models --replicas 1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -765,9 +757,14 @@ func validateMountsAgainstVolumes(mounts []serve.VolumeMount, vols []serve.Volum
 func newServeStatusCmd() *cobra.Command {
 	var namespace, kubeContext, kind string
 	cmd := &cobra.Command{
-		Use:   "status [name]",
+		Use:   "status <name>",
 		Short: "Show serve endpoint status",
-		Args:  cobra.ExactArgs(1),
+		Long: `Show the live status of a deployed serve endpoint: RayService serve status
+and endpoint count for --kind=rayservice, or Deployment replica readiness for
+--kind=deployment.`,
+		Example: `  tau serve status my-7b
+  tau serve status my-deployment --kind deployment`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ns, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
 			if err != nil {
@@ -809,9 +806,13 @@ func newServeScaleCmd() *cobra.Command {
 		kubeContext string
 	)
 	cmd := &cobra.Command{
-		Use:   "scale [name]",
+		Use:   "scale <name>",
 		Short: "Scale serve endpoint replicas",
-		Args:  cobra.ExactArgs(1),
+		Long: `Scale a deployed serve endpoint to --replicas. Only --kind=deployment is
+implemented; --kind=rayservice is not yet supported because serveConfigV2 is
+an opaque string blob — redeploy with a new --replicas value instead.`,
+		Example: `  tau serve scale my-deployment --kind deployment --replicas 3`,
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if kind == "" {
 				kind = "rayservice"
@@ -851,9 +852,13 @@ func newServeScaleCmd() *cobra.Command {
 func newServeDeleteCmd() *cobra.Command {
 	var namespace, kubeContext, kind string
 	cmd := &cobra.Command{
-		Use:   "delete [name]",
+		Use:   "delete <name>",
 		Short: "Delete a serve endpoint",
-		Args:  cobra.ExactArgs(1),
+		Long: `Delete a deployed serve endpoint (RayService or Deployment). The delete is
+idempotent: a missing endpoint is not an error.`,
+		Example: `  tau serve delete my-7b
+  tau serve delete my-deployment --kind deployment`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if kind == "" {
 				kind = "rayservice"

@@ -58,11 +58,10 @@ func newRunListCmd() *cobra.Command {
 Only workloads created by Tau (carrying an ` + workloadmeta.Domain + ` label) are shown.
 KubeRay-internal Jobs (owned by a RayJob) are excluded to avoid duplicates.
 
-Results are sorted by creation time, newest first.
-
-Examples:
-  tau run list -n ray
-  tau run list --context research-admin -n ray`,
+Results are sorted by creation time, newest first.`,
+		Example: `  tau run list -n ray
+  tau run list --context research-admin -n ray
+  tau run list -n ray --output json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			resolvedContext, ns, restore, err := resolveRunLifecycleConnection(
@@ -110,7 +109,7 @@ Examples:
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVar(&queue, "queue", "", "optional Kueue LocalQueue filter")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table or json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	cmd.Flags().StringVar(&kustoEndpoint, "kusto-endpoint", "", "Kusto endpoint metadata passed to --kusto-query-command placeholders")
 	cmd.Flags().StringVar(&kustoDatabase, "kusto-database", "", "Kusto database metadata passed to --kusto-query-command placeholders")
 	cmd.Flags().StringVar(&kustoQueryCommand, "kusto-query-command", "", "executable that queries durable run history; KQL is passed on stdin unless an arg contains {query}")

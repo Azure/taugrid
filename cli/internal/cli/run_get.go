@@ -62,12 +62,10 @@ fetch one file from it. Object-backed mounts are allowed to settle before Tau
 accepts a zero-entry listing, so a populated directory is not reported as empty
 during the BlobFuse mount-time list suppression window.
 Override the recorded path/pvc with --path/--pvc. For an externally submitted
-or already deleted workload with no Tau result annotations, pass both flags.
-
-Examples:
-  tau run get swordfish-bench-001 -n ray
+or already deleted workload with no Tau result annotations, pass both flags.`,
+		Example: `  tau run get swordfish-bench-001 -n ray
   tau run get swordfish-bench-001 -n ray --artifact profile/rank-0.summary.md
-  tau run get my-job --path /data/my-job/results --pvc research-data -o json`,
+  tau run get my-job --path /data/my-job/results --pvc research-data --output json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -149,7 +147,7 @@ Examples:
 	cmd.Flags().StringVar(&artifact, "artifact", "", "fetch this filename under the result directory")
 	cmd.Flags().StringVar(&pathOverride, "path", "", "override the recorded result path")
 	cmd.Flags().StringVar(&pvcOverride, "pvc", "", "override the recorded result PVC")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "table|json|raw")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table or raw (human-readable), or json (machine-readable)")
 	return cmd
 }
 

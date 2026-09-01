@@ -71,6 +71,9 @@ ServiceAccount.
 Storage-backed workloads must name an existing PVC in their target namespace.
 The platform pre-provisions and owns that claim, its StorageClass, CSI setup,
 cloud storage, access policy, and lifecycle outside TauGrid.`,
+		Example: `  tau cluster install
+  tau cluster install --dry-run
+  tau cluster install --namespace tau-system --set portal.enabled=false --wait`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateClusterInstallSpec(spec); err != nil {
 				return err

@@ -35,10 +35,13 @@ default for repository projects. The
 [`Tau authoring strategy`](../../docs/tau/tau-authoring-strategy.md) defines
 the objective selection, stability, parity, and migration contract.
 
-`import tau` is the Python SDK API; `tau python ...` is the Go CLI proxy into
-the same SDK. Keep Python focused on handles, authoring ergonomics, and local
-developer workflows. The Go CLI remains the canonical executor for
-Kubernetes, Kueue, RayJob submission, serving, expstore, and telemetry behavior.
+`import tau` is the optional Python SDK API; `tau python ...` is the Go CLI
+proxy into the same SDK. Standard repository projects should check in
+`tau.yaml` and use `tau run` without installing this SDK. Use the SDK path for
+code-centric projects that define `@tau.train` or `@tau.eval` handles and need
+Python-specific inspection, staging, build artifacts, or chained submission.
+The Go CLI remains the canonical executor for Kubernetes, Kueue, RayJob
+submission, serving, expstore, and telemetry behavior.
 The workload namespace default is `ray` after explicit config/context
 resolution. Storage-sensitive examples pass `--namespace ray` explicitly when
 they need to show the workload namespace.
@@ -457,7 +460,7 @@ the canonical Kusto identity and does not apply mutable grouping overrides (see
 Commands: `tau python inspect train.py`,
 `tau python build train.py --output dist/tau-build`,
 `tau python submit-build dist/tau-build`,
-`tau python submit train.py -n ray`, `tau python bootstrap --tag v0.1.0`,
+`tau python submit train.py -n ray`,
 and `tau python doctor -n ray`.
 Direct `python -m tau.cli ...` execution remains available for local SDK
 debugging.

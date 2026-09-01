@@ -22,7 +22,16 @@ func newRunHistoryCmd() *cobra.Command {
 }
 
 func newRunHistoryCmdWithFactories(sourceFactory runHistorySourceFactory, writerFactory runhistory.WriterFactory) *cobra.Command {
-	cmd := &cobra.Command{Use: "history", Short: "Record durable metadata-only run lifecycle history"}
+	cmd := &cobra.Command{
+		Use:   "history",
+		Short: "Record durable metadata-only run lifecycle history",
+		Long: `Record durable, metadata-only run lifecycle history to a Kusto (ADX) table
+for fleet-wide reporting. This does not touch dataset or model bytes; it only
+reconciles Job, RayJob, and Kueue Workload lifecycle metadata.`,
+		Example: `  tau run history record --cluster prod-westus2 --kusto-endpoint https://cluster.kusto.windows.net --namespace ray`,
+		Args:    cobra.NoArgs,
+		RunE:    showGroupHelp,
+	}
 	cmd.AddCommand(newRunHistoryRecordCmd(sourceFactory, writerFactory))
 	return cmd
 }
@@ -44,7 +53,13 @@ func newRunHistoryRecordCmd(sourceFactory runHistorySourceFactory, writerFactory
 	cmd := &cobra.Command{
 		Use:   "record",
 		Short: "Continuously ingest Tau Job, RayJob, and Kueue lifecycle metadata",
-		Args:  cobra.NoArgs,
+		Long: `Continuously reconcile Job, RayJob, and Kueue Workload lifecycle metadata
+in --namespace and ingest it into a Kusto (ADX) table. Intended to run as a
+long-lived controller/operator process, not an interactive command; use --once
+to reconcile a single pass and exit.`,
+		Example: `  tau run history record --cluster prod-westus2 --kusto-endpoint https://cluster.kusto.windows.net --namespace ray
+  tau run history record --cluster prod-westus2 --kusto-endpoint https://cluster.kusto.windows.net --namespace ray --once`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if cluster == "" {
 				return fmt.Errorf("--cluster is required")

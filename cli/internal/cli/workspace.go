@@ -31,6 +31,12 @@ Tau-ready research repositories.
 TauWorkspace is platform-owned policy. Researchers can read their workspace
 status, create quota requests, and generate workspace-first repos, but cannot
 mutate workspace policy from the repo scaffold.`,
+		Example: `  tau workspace create --principal-name research-team --apply
+  tau workspace list
+  tau workspace status research-team
+  tau workspace init-repo my-project --image myregistry.azurecr.io/my-project:latest`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(
 		newWorkspaceCreateCmd(),
@@ -67,14 +73,14 @@ policy remains platform-owned and is selected at run time.`,
 }
 
 func newRepoGenInitCmd() *cobra.Command {
-	return newRepoScaffoldCmd("init NAME", "Generate a Python + uv Tau workspace repo scaffold")
+	return newRepoScaffoldCmd("init NAME", "Generate a Python + uv Tau workspace repo scaffold", "tau-gen init")
 }
 
 func newWorkspaceInitRepoCmd() *cobra.Command {
-	return newRepoScaffoldCmd("init-repo NAME", "Generate a Python + uv Tau repo scaffold")
+	return newRepoScaffoldCmd("init-repo NAME", "Generate a Python + uv Tau repo scaffold", "tau workspace init-repo")
 }
 
-func newRepoScaffoldCmd(use, short string) *cobra.Command {
+func newRepoScaffoldCmd(use, short, invocation string) *cobra.Command {
 	var opts reposcaffold.Options
 	cmd := &cobra.Command{
 		Use:   use,
@@ -90,6 +96,9 @@ This command does not create cloud resources and does not add policy.workspace t
 committed Tau configs. Provide --workspace with --kube-context to generate a
 provider-neutral connection descriptor that uses existing kubeconfig credentials.
 Add all AKS flags to let Tau acquire AKS credentials automatically.`,
+		Example: `  ` + invocation + ` my-project --image myregistry.azurecr.io/my-project:latest
+  ` + invocation + ` my-project --image myregistry.azurecr.io/my-project:latest \
+      --workspace research-a --kube-context aks-research`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
@@ -150,6 +159,11 @@ func newWorkspaceListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List visible Tau workspaces",
+		Long: `List every TauWorkspace visible in the platform system namespace. Use -o
+json for machine-readable output when scripting.`,
+		Example: `  tau workspace list
+  tau workspace list --output json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var err error
 			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)
@@ -184,7 +198,7 @@ func newWorkspaceListCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
 	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	return cmd
 }
 
@@ -192,14 +206,24 @@ func newWorkspaceStatusCmd(check bool) *cobra.Command {
 	var namespace, legacyNamespace, kubeContext, output, dataPVC string
 	use := "status <name>"
 	short := "Show Tau workspace status"
+	invocation := "tau workspace status"
+	long := `Show the TauWorkspace status for NAME: phase, namespace, LocalQueue, and
+Service Account.`
 	if check {
 		use = "check <name>"
 		short = "Show Tau workspace status and exit non-zero unless it is Ready"
+		invocation = "tau workspace check"
+		long = `Show the TauWorkspace status for NAME, then exit non-zero unless it is
+Ready. With --data-pvc, also warns if the named durable data PVC is missing so
+a storage-backed run fails fast with a clear diagnostic.`
 	}
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
-		Args:  cobra.ExactArgs(1),
+		Long:  long,
+		Example: `  ` + invocation + ` research-team
+  ` + invocation + ` research-team --output json`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)
@@ -254,7 +278,7 @@ func newWorkspaceStatusCmd(check bool) *cobra.Command {
 	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
 	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	if check {
 		// No default: TauGrid does not own or name the durable claim, so there
 		// is no canonical value to assume. Opt in by naming your claim.
@@ -331,6 +355,14 @@ func newWorkspaceQuotaCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "quota",
 		Short: "Inspect and request Tau workspace quota",
+		Long: `Inspect a workspace's current quota decision and create structured
+requests to raise it. Quota is platform-owned policy; request creates a
+QuotaRequest object for the platform owner to review, it does not grant quota
+directly.`,
+		Example: `  tau workspace quota show research-team
+  tau workspace quota request research-team --resource gpu-h200 --requested 8 --reason "scale up training"`,
+		Args: cobra.NoArgs,
+		RunE: showGroupHelp,
 	}
 	cmd.AddCommand(newWorkspaceQuotaRequestCmd())
 	cmd.AddCommand(newWorkspaceQuotaShowCmd())
@@ -344,7 +376,14 @@ func newWorkspaceQuotaRequestCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "request <workspace>",
 		Short: "Create a structured workspace quota request",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a structured QuotaRequest object recording a request to raise a
+workspace's quota for one resource. This does not grant quota; the platform
+owner reviews and applies the request out of band.`,
+		Example: `  tau workspace quota request research-team --resource gpu-h200 --current 4 \
+      --requested 8 --duration 720h --reason "scale up training" --apply
+  tau workspace quota request research-team --resource gpu-h200 --requested 8 \
+      --reason "scale up training" > quota-request.yaml`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			namespace, err = resolveSystemNamespaceAlias(cmd, namespace, "namespace", legacyNamespace)

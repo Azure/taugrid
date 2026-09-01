@@ -28,11 +28,9 @@ flavor's nodeLabels and tolerations, so it is clear which node pool a request
 will land on, plus the workspace LocalQueue's admitted/pending/reserving counts.
 
 This is read-only reporting. Kueue is a queueing system: a request larger than
-the remaining quota is not an error, it simply waits for capacity.
-
-Examples:
-  tau workspace quota show pretraining-data
-  tau workspace quota show pretraining-data -o json`,
+the remaining quota is not an error, it simply waits for capacity.`,
+		Example: `  tau workspace quota show pretraining-data
+  tau workspace quota show pretraining-data --output json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var err error
@@ -74,7 +72,7 @@ Examples:
 	cmd.Flags().StringVarP(&legacyNamespace, "namespace", "n", "", "deprecated alias for --system-namespace")
 	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	// The ClusterQueue normally comes from workspace status. The override
 	// exists for the window where the controller has not published it yet.
 	cmd.Flags().StringVar(&clusterQueue, "cluster-queue", "", "ClusterQueue to report (default: from workspace status)")
