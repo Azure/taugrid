@@ -88,7 +88,7 @@ func TestWorkspaceConnectionActivatesResolvedDescriptor(t *testing.T) {
 		"Namespace:     tau-default",
 		"Queue:         jobqueue",
 		"Authorization: cluster-wide",
-		"Ready:         tau run and tau serve can now use this workspace.",
+		"Ready:         tau run can now use this workspace.",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("live connection output missing %q:\n%s", want, out.String())

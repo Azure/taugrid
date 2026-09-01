@@ -111,8 +111,8 @@ The researcher must run the first live `tau workspace connection` from an
 interactive terminal. Tau shows the descriptor's non-secret connection identity
 and requires explicit trust before it loads credentials, invokes an exec
 credential plugin, contacts the cloud or cluster, or writes local connection
-state. Noninteractive Run and Serve commands fail closed until that trust
-bootstrap succeeds. Later commands reuse the pinned connection, and any
+state. Noninteractive Run commands fail closed until that trust bootstrap
+succeeds. Later commands reuse the pinned connection, and any
 descriptor identity change requires review again.
 
 Before handoff, platform operators can also inspect the named workspace

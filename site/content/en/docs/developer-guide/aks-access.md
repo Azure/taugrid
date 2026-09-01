@@ -1,17 +1,22 @@
 ---
-title: Connect to an AKS workspace
+title: From Azure sign-in to your first Tau run
+linkTitle: Connect to AKS
 weight: 1
-description: Understand how Azure CLI sign-in, Tau, and kubelogin work together for repository-based AKS access
+description: Connect a fresh research repository to AKS without copying, merging, or managing kubeconfig
 ---
 
 {{< maturity status="ga" reviewed="2026-09-01" >}}
 
-An AKS research repository can contain the cluster's non-secret resource ID and
-Microsoft Entra tenant ID in `tau/workspace.connection.yaml`. You do not need a
-platform operator's kubeconfig. Tau obtains normal cluster-user credentials for
-your identity and stores an isolated kubeconfig outside the repository.
+You have cloned a research repository and want to run its first workload. The
+cluster belongs to the platform team, your access belongs to you, and neither
+should require passing a kubeconfig around.
 
-## Before your first connection
+That is the handoff Tau's workspace connection is designed to make. The
+repository carries only a non-secret AKS resource ID, Microsoft Entra tenant,
+workspace name, and expected authorization contract. Tau turns those details
+into an isolated Kubernetes connection for your identity.
+
+## The three-command path
 
 Install the required clients:
 
@@ -27,8 +32,7 @@ cluster-user credentials and the Kubernetes or Azure RBAC permissions declared
 by the workspace. For a private cluster, follow the repository descriptor's
 network instructions first.
 
-Azure CLI sign-in is recommended because Tau can reuse one session for both the
-Azure Resource Manager request and Kubernetes authentication:
+Then the researcher path is:
 
 ```bash
 az login --tenant <tenant-id>
@@ -36,7 +40,9 @@ cd <research-repository>
 tau workspace connection
 ```
 
-The last command guides the complete first-time setup:
+Azure CLI sign-in is recommended because Tau can reuse the same identity for the
+Azure Resource Manager credential request and Kubernetes authentication. The
+last command owns the complete connection setup:
 
 1. Tau shows where the repository wants to connect: the descriptor, workspace,
    access method, Kubernetes context, authorization mode, network requirement,
@@ -46,19 +52,38 @@ The last command guides the complete first-time setup:
 3. Approve the destination to let Tau acquire credentials, verify the workspace,
    and save an isolated local connection.
 
-When Tau prints `Connected`, the repository is ready for `tau run` and
-`tau serve`. You do not need a separate login or connection command inside Tau.
+The review looks like this:
 
-The first approval requires an interactive terminal. If `tau run` or `tau serve`
-encounters a repository that has not been connected on this machine, it tells
-you to run `tau workspace connection`. After approval and verification,
-subsequent commands reuse the pinned connection noninteractively.
+```text
+First-time workspace connection
+This repository has not been connected with Tau on this machine.
+Review where Tau will connect:
+  Workspace:       research-a
+  Access method:   aks
+  Context:         aks-research
+  Authorization:   workspace-rbac
+  Private network: not indicated
+
+If approved, Tau will acquire your credentials, verify this workspace,
+and save an isolated local connection for future commands.
+Nothing has been accessed or saved yet.
+
+Approve and connect? [y/N]
+```
+
+When Tau prints `Connected`, the repository is ready for `tau run`. You do not
+need a separate login or connection command inside Tau.
+
+The first approval requires an interactive terminal. If `tau run` encounters a
+repository that has not been connected on this machine, it tells you to run
+`tau workspace connection`. After approval and verification, subsequent
+commands reuse the pinned connection noninteractively.
 
 The AKS resource ID in the repository selects the subscription and cluster, so
 you do not need to run `az aks get-credentials` or merge anything into your
 normal kubeconfig.
 
-## How sign-in works
+## One identity from Azure to Kubernetes
 
 | Local state | What Tau does |
 | --- | --- |
@@ -74,9 +99,9 @@ beyond those assigned to your Microsoft Entra identity.
 
 Tau writes the selected context to a mode-`0600` kubeconfig in its local config
 directory and verifies the TauWorkspace, namespace, queue, and authorization
-contract before a Run or Serve command uses it.
+contract before a Run command uses it.
 
-## Start again without an active Azure session
+## Coming back later
 
 Signing out of Azure CLI does not modify the repository:
 
@@ -90,7 +115,7 @@ fresh Tau config directory, running `tau workspace connection` without an
 active Azure CLI session starts Tau's browser fallback. Use device-code mode
 for a terminal without a browser.
 
-## Troubleshooting
+## When the happy path stops
 
 Check whether Azure CLI has a session in the required tenant:
 

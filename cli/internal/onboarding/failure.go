@@ -66,7 +66,7 @@ func Classify(err error) Guidance {
 	case errors.Is(err, workspaceconnection.ErrConnectionDeclined):
 		return Guidance{
 			Owner:  FailureOwnerResearcher,
-			Action: "No connection was saved. Run `tau workspace connection` again when ready, and approve it only if the destination is expected.",
+			Action: "The proposed connection or change was not saved. Existing connection state, if any, is unchanged. Run `tau workspace connection` again when ready, and approve only if the destination is expected.",
 		}
 	}
 	var responseError *azcore.ResponseError

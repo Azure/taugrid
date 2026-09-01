@@ -5,6 +5,7 @@ package onboarding
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -26,6 +27,15 @@ func TestClassifyOnboardingFailures(t *testing.T) {
 		{
 			name: "descriptor", err: workspaceconnection.ErrDescriptorNotFound,
 			owner: FailureOwnerResearcher, action: "workspace.connection.yaml",
+		},
+		{
+			name: "first-use decline", err: workspaceconnection.ErrConnectionDeclined,
+			owner: FailureOwnerResearcher, action: "Existing connection state, if any, is unchanged",
+		},
+		{
+			name:  "existing-state drift decline",
+			err:   fmt.Errorf("configured workspace connection changed: %w", workspaceconnection.ErrConnectionDeclined),
+			owner: FailureOwnerResearcher, action: "Existing connection state, if any, is unchanged",
 		},
 		{
 			name: "azure forbidden", err: &azcore.ResponseError{StatusCode: 403},

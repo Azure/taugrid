@@ -106,7 +106,7 @@ func printActiveConnection(cmd *cobra.Command, project, descriptorPath string, c
 	fmt.Fprintf(cmd.OutOrStdout(), "Namespace:     %s\n", connection.Namespace)
 	fmt.Fprintf(cmd.OutOrStdout(), "Queue:         %s\n", connection.Queue)
 	fmt.Fprintf(cmd.OutOrStdout(), "Authorization: %s\n", connection.AuthorizationMode)
-	fmt.Fprintln(cmd.OutOrStdout(), "Ready:         tau run and tau serve can now use this workspace.")
+	fmt.Fprintln(cmd.OutOrStdout(), "Ready:         tau run can now use this workspace.")
 }
 
 func printConnectionIdentity(cmd *cobra.Command, project, workspace, descriptorPath string) {
