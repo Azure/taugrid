@@ -39,9 +39,9 @@ kubeconfig exec credential plugins remain available, so this is the universal
 path for conformant Kubernetes platforms including self-managed, bare-metal,
 and managed clusters. With `access.method: aks`, the first-class AKS adapter
 obtains normal cluster-user credentials through the caller's Azure identity,
-normalizes `kubelogin`, and isolates the result instead. Tau's workspace,
-Run, and Serve paths consume only that isolated Kubernetes connection; cloud
-provider behavior ends at credential acquisition.
+normalizes `kubelogin`, and isolates the result instead. Tau's workspace
+connection and Run paths consume only that isolated Kubernetes connection;
+cloud provider behavior ends at credential acquisition.
 
 A provider-neutral descriptor uses an existing Kubernetes context:
 
