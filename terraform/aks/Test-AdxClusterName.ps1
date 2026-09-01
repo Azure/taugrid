@@ -58,3 +58,8 @@ foreach ($helmEnvironmentVariable in @("HELM_CONFIG_HOME", "HELM_CACHE_HOME", "H
         throw "The DCGM Terraform local-exec environment must set $helmEnvironmentVariable."
     }
 }
+
+$functionsWaiter = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Wait-ForAdxFunctionsReady.ps1"))
+if ($functionsWaiter.IndexOf('function Get-FunctionReconciliationStatus', [System.StringComparison]::Ordinal) -lt 0 -or $functionsWaiter.IndexOf('PSObject.Properties["status"]', [System.StringComparison]::Ordinal) -lt 0) {
+    throw "The ADX Functions waiter must treat a missing status field as not ready instead of failing under StrictMode."
+}

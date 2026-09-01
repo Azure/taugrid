@@ -35,6 +35,20 @@ function Invoke-Native {
     }
 }
 
+function Get-FunctionReconciliationStatus {
+    param([object] $Function)
+
+    $statusProperty = $Function.PSObject.Properties["status"]
+    if ($null -eq $statusProperty -or $null -eq $statusProperty.Value) {
+        return ""
+    }
+    $reconciliationStatusProperty = $statusProperty.Value.PSObject.Properties["status"]
+    if ($null -eq $reconciliationStatusProperty -or $null -eq $reconciliationStatusProperty.Value) {
+        return ""
+    }
+    return [string] $reconciliationStatusProperty.Value
+}
+
 Invoke-Native az @("aks", "get-credentials", "--admin", "--subscription", $SubscriptionId, "--resource-group", $ResourceGroup, "--name", $ClusterName, "--file", $Kubeconfig, "--overwrite-existing")
 
 for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
@@ -49,11 +63,12 @@ for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
         }
         $functions = @((ConvertFrom-Json -InputObject ($rawFunctions -join [Environment]::NewLine)).items)
         if ($functions.Count -gt 0) {
-            $permanentFailures = @($functions | Where-Object { $_.status.status -eq "PermanentFailure" })
+            $functionStatuses = @($functions | ForEach-Object { Get-FunctionReconciliationStatus -Function $_ })
+            $permanentFailures = @($functions | Where-Object { (Get-FunctionReconciliationStatus -Function $_) -eq "PermanentFailure" })
             if ($permanentFailures.Count -gt 0) {
                 break
             }
-            if (@($functions | Where-Object { $_.status.status -ne "Success" }).Count -eq 0) {
+            if (@($functionStatuses | Where-Object { $_ -ne "Success" }).Count -eq 0) {
                 Write-Host "All adx-mon Functions reached Success."
                 exit 0
             }
