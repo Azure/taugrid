@@ -36,6 +36,18 @@ cd <research-repository>
 tau workspace connection
 ```
 
+On first use, Tau displays the repository descriptor path, workspace, access
+method, Kubernetes context, authorization mode, private-network requirement,
+AKS resource ID, and tenant. Review those values and answer `yes` only when they
+match the platform handoff. Tau does not access Azure credentials, invoke
+`kubelogin`, contact the cluster, or write connection state before this trust
+decision. The prompt defaults to decline.
+
+This first trust decision requires an interactive terminal. Automated Run or
+Serve commands fail closed with instructions to run
+`tau workspace connection` interactively; after trust and verification succeed,
+subsequent commands can reuse the pinned connection noninteractively.
+
 The AKS resource ID in the repository selects the subscription and cluster, so
 you do not need to run `az aks get-credentials` or merge anything into your
 normal kubeconfig.
@@ -46,7 +58,7 @@ normal kubeconfig.
 | --- | --- |
 | `az` has an active session for the descriptor's tenant | Tau verifies that session with an Azure Resource Manager token, fetches AKS cluster-user credentials, and configures `kubelogin` to reuse Azure CLI authentication. |
 | Azure CLI is missing or has no usable session | Tau opens browser-based Microsoft Entra sign-in and configures `kubelogin` for interactive authentication. |
-| Browser sign-in is unavailable | Run `TAU_AUTH_MODE=devicecode tau workspace connection`; Tau and `kubelogin` use device-code authentication after checking for a usable Azure CLI session. |
+| Browser sign-in is unavailable | From an interactive terminal, run `TAU_AUTH_MODE=devicecode tau workspace connection`; Tau and `kubelogin` use device-code authentication after checking for a usable Azure CLI session. |
 
 `az login` authenticates your local Azure CLI. Tau does not read or copy its
 tokens into the repository. Tau uses that identity to call the AKS cluster-user

@@ -28,8 +28,9 @@ func newWorkspaceConnectionCmdWithEnsurer(ensurer runConnectionEnsurer) *cobra.C
 
 By default Tau resolves credentials, contacts Kubernetes, verifies the
 TauWorkspace, LocalQueue, and authorization contract, and stores an isolated
-connection for later commands. Use --offline to validate only the repository
-mapping and descriptor.`,
+connection for later commands. A repository's first connection must be reviewed
+and trusted from an interactive terminal before Tau accesses credentials or the
+cluster. Use --offline to validate only the repository mapping and descriptor.`,
 		Example: `  tau workspace connection
   tau workspace connection --offline
   tau workspace connection ./my-project`,

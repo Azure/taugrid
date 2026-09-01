@@ -159,7 +159,14 @@ users:
 `, server, token))
 }
 
-func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
+func withFirstUseApproval(manager Manager) Manager {
+	manager.Interactive = true
+	manager.Input = strings.NewReader("yes\n")
+	manager.Output = &bytes.Buffer{}
+	return manager
+}
+
+func TestManagerConfiguresFirstConnectionAfterTrust(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
@@ -170,9 +177,12 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 		Queue:          "jobqueue",
 		WorkspacePhase: "Ready",
 	}}
+	var output bytes.Buffer
 	manager := Manager{
 		ConfigDir:   configDir,
-		Interactive: false,
+		Interactive: true,
+		Input:       strings.NewReader("yes\n"),
+		Output:      &output,
 		Credentials: credentials,
 		Verifier:    verifier,
 		Now:         func() time.Time { return now },
@@ -184,6 +194,21 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 	}
 	if credentials.calls != 1 || verifier.calls != 1 {
 		t.Fatalf("credentials=%d verifier=%d", credentials.calls, verifier.calls)
+	}
+	for _, detail := range []string{
+		"untrusted workspace connection",
+		"Workspace:       sample",
+		"Access method:   aks",
+		"Context:         taugrid-flex",
+		"Authorization:   cluster-wide",
+		"Private network: required",
+		"AKS resource:",
+		"Entra tenant:",
+		"Trust this connection",
+	} {
+		if !strings.Contains(output.String(), detail) {
+			t.Fatalf("first-use review omitted %q:\n%s", detail, output.String())
+		}
 	}
 	if connection.Workspace != "sample" ||
 		connection.Namespace != "sample" ||
@@ -203,10 +228,10 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")); err != nil {
+	if _, err := os.Stat(filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")); err != nil {
 		t.Fatalf("connection state missing: %v", err)
 	}
-	state, err := loadConnectionState(filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json"))
+	state, err := loadConnectionState(filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +242,99 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 		state.AccessIdentity != "aks:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-ai/providers/microsoft.containerservice/managedclusters/taugrid-flex:11111111-1111-1111-1111-111111111111" ||
 		state.SystemNamespace != "tau-system" {
 		t.Fatalf("persisted configuration/readiness state = %#v", state)
+	}
+}
+
+func TestManagerRejectsNoninteractiveFirstUseWithoutSideEffects(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	verifier := &fakeVerifier{}
+	manager := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Input:       strings.NewReader("yes\n"),
+		Credentials: credentials,
+		Verifier:    verifier,
+	}
+
+	_, err := manager.Ensure(context.Background(), root)
+	if !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), "run `tau workspace connection` from an interactive terminal") {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if credentials.calls != 0 || verifier.calls != 0 {
+		t.Fatalf("noninteractive first use acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+	entries, err := os.ReadDir(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("noninteractive first use wrote local state: %v", entries)
+	}
+}
+
+func TestManagerDoesNotShareTrustAcrossRepositories(t *testing.T) {
+	trustedRoot := writeDescriptorFixture(t)
+	copiedRoot := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	trusted := Manager{
+		ConfigDir:   configDir,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspacePhase: "Ready",
+		}},
+	}
+	if _, err := withFirstUseApproval(trusted).Ensure(context.Background(), trustedRoot); err != nil {
+		t.Fatalf("trust first repository: %v", err)
+	}
+
+	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	verifier := &fakeVerifier{}
+	copied := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: credentials,
+		Verifier:    verifier,
+	}
+	_, err := copied.Ensure(context.Background(), copiedRoot)
+	if !errors.Is(err, ErrInteractiveRequired) {
+		t.Fatalf("copied repository inherited trust: %v", err)
+	}
+	if credentials.calls != 0 || verifier.calls != 0 {
+		t.Fatalf("copied repository acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+}
+
+func TestManagerDeclinesFirstUseWithoutSideEffects(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	verifier := &fakeVerifier{}
+	manager := Manager{
+		ConfigDir:   configDir,
+		Interactive: true,
+		Input:       strings.NewReader("\n"),
+		Output:      &bytes.Buffer{},
+		Credentials: credentials,
+		Verifier:    verifier,
+	}
+
+	_, err := manager.Ensure(context.Background(), root)
+	if !errors.Is(err, ErrConnectionDeclined) {
+		t.Fatalf("Ensure() error = %v, want ErrConnectionDeclined", err)
+	}
+	if credentials.calls != 0 || verifier.calls != 0 {
+		t.Fatalf("declined first use acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+	entries, err := os.ReadDir(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("declined first use wrote local state: %v", entries)
 	}
 }
 
@@ -242,7 +360,7 @@ func TestManagerPersistsConfiguredSystemNamespace(t *testing.T) {
 			WorkspacePhase: "Ready",
 		}},
 	}
-	connection, err := manager.Ensure(context.Background(), root)
+	connection, err := withFirstUseApproval(manager).Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +385,7 @@ func TestManagerRefreshesKubeconfigCredentialsAndRejectsTargetDrift(t *testing.T
 		Verifier:    verifier,
 		Now:         func() time.Time { return now },
 	}
-	first, err := manager.Ensure(context.Background(), root)
+	first, err := withFirstUseApproval(manager).Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +477,7 @@ func TestManagerFirstConnectionCredentialFailureLeavesNoStateOrKubeconfig(t *tes
 		Verifier:    verifier,
 	}
 
-	_, err := manager.Ensure(context.Background(), root)
+	_, err := withFirstUseApproval(manager).Ensure(context.Background(), root)
 	if err == nil || !strings.Contains(err.Error(), "noninteractive Azure identity unavailable") {
 		t.Fatalf("expected credential failure, got %v", err)
 	}
@@ -388,7 +506,7 @@ func TestManagerFirstConnectionAuthorizationFailureLeavesNoTrustedState(t *testi
 		Verifier:    verifier,
 	}
 
-	_, err := manager.Ensure(context.Background(), root)
+	_, err := withFirstUseApproval(manager).Ensure(context.Background(), root)
 	if err == nil || !strings.Contains(err.Error(), "not authorized") {
 		t.Fatalf("expected authorization failure, got %v", err)
 	}
@@ -399,7 +517,7 @@ func TestManagerFirstConnectionAuthorizationFailureLeavesNoTrustedState(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	if _, statErr := os.Stat(statePath); !os.IsNotExist(statErr) {
 		t.Fatalf("authorization failure left trusted state at %s: %v", statePath, statErr)
 	}
@@ -430,7 +548,7 @@ func TestManagerReusesFreshConnectionNonInteractively(t *testing.T) {
 		Verifier:    firstVerifier,
 		Now:         func() time.Time { return now },
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -467,7 +585,7 @@ func TestManagerRevalidatesStaleConnectionWithoutRefetchingCredentials(t *testin
 		ReadinessTTL: time.Minute,
 	}
 
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -507,7 +625,7 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 		}},
 		Now: func() time.Time { return configuredAt },
 	}
-	connection, err := first.Ensure(context.Background(), root)
+	connection, err := withFirstUseApproval(first).Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +684,7 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	state, err := loadConnectionState(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +710,7 @@ func TestManagerMissingKubeconfigRejectsLiveDriftWithoutCredentialResidue(t *tes
 		}},
 		Now: func() time.Time { return configuredAt },
 	}
-	connection, err := first.Ensure(context.Background(), root)
+	connection, err := withFirstUseApproval(first).Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +721,7 @@ func TestManagerMissingKubeconfigRejectsLiveDriftWithoutCredentialResidue(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	stateBefore, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -684,7 +802,7 @@ func TestManagerMissingKubeconfigVerificationFailureLeavesStateUntouched(t *test
 		}},
 		Now: func() time.Time { return configuredAt },
 	}
-	connection, err := first.Ensure(context.Background(), root)
+	connection, err := withFirstUseApproval(first).Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -695,7 +813,7 @@ func TestManagerMissingKubeconfigVerificationFailureLeavesStateUntouched(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	stateBefore, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -758,14 +876,14 @@ func TestManagerRejectsUnsupportedConnectionState(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 	discovery, err := Discover(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	unsupportedState := map[string]any{"schema": "tau.workspace.connection-state.unsupported"}
 	if err := fileutil.WriteJSONFileAtomic(statePath, unsupportedState); err != nil {
 		t.Fatal(err)
@@ -792,14 +910,14 @@ func TestManagerRejectsUIDLessStateNoninteractively(t *testing.T) {
 		}},
 		Now: func() time.Time { return now },
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 	discovery, err := Discover(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	state, err := loadConnectionState(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -838,7 +956,7 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 			WorkspacePhase: "Ready",
 		}},
 	}
-	connection, err := first.Ensure(context.Background(), root)
+	connection, err := withFirstUseApproval(first).Ensure(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +964,7 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", ConnectionKey(discovery.Descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
 	state, err := loadConnectionState(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -955,7 +1073,7 @@ func TestManagerRejectsDescriptorTrustChangeNonInteractively(t *testing.T) {
 			WorkspacePhase: "Ready",
 		}},
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, DescriptorRelativePath)
@@ -1049,7 +1167,7 @@ func TestManagerRejectsResourceChangeAcrossConnectionKeyNoninteractively(t *test
 			WorkspacePhase: "Ready",
 		}},
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1104,7 +1222,7 @@ func TestManagerRejectsNotReadyDuringNoninteractiveRefresh(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 	second := Manager{
@@ -1138,7 +1256,7 @@ func TestManagerRejectsLiveContractChangeNoninteractively(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 	second := Manager{
@@ -1214,7 +1332,7 @@ func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1262,7 +1380,7 @@ func TestManagerBoundsNonInteractiveRevalidation(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1306,7 +1424,7 @@ func TestManagerDoesNotBoundInteractiveRevalidation(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := first.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1351,7 +1469,7 @@ func seedConnection(t *testing.T, root, configDir string, now time.Time) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
-	if _, err := seed.Ensure(context.Background(), root); err != nil {
+	if _, err := withFirstUseApproval(seed).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1407,11 +1525,11 @@ func TestManagerSeparatesClustersWithSameContextName(t *testing.T) {
 			}},
 		}
 	}
-	first, err := newManager().Ensure(context.Background(), firstRoot)
+	first, err := withFirstUseApproval(newManager()).Ensure(context.Background(), firstRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newManager().Ensure(context.Background(), secondRoot)
+	second, err := withFirstUseApproval(newManager()).Ensure(context.Background(), secondRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1455,7 +1573,7 @@ func TestManagerEnsureDiscoveryUsesExactDescriptor(t *testing.T) {
 			WorkspacePhase: "Ready",
 		}},
 	}
-	connection, err := manager.EnsureDiscovery(context.Background(), discovery)
+	connection, err := withFirstUseApproval(manager).EnsureDiscovery(context.Background(), discovery)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1468,12 +1586,12 @@ func TestManagerEnsureDiscoveryUsesExactDescriptor(t *testing.T) {
 // for a human to finish in a browser, which routinely outlives any short
 // deadline. Bounding credential acquisition would cancel exactly the path this
 // command advertises, so it must stay on the caller context.
-func TestManagerDoesNotBoundHumanPacedSignIn(t *testing.T) {
+func TestManagerDoesNotBoundHumanPacedSignInAfterTrust(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	credentials := &slowCredentialProvider{delay: 80 * time.Millisecond, raw: []byte("apiVersion: v1\nkind: Config\n")}
 	manager := Manager{
 		ConfigDir:   t.TempDir(),
-		Interactive: false,
+		Interactive: true,
 		Input:       strings.NewReader("y\n"),
 		Output:      &bytes.Buffer{},
 		Credentials: credentials,
@@ -1489,32 +1607,6 @@ func TestManagerDoesNotBoundHumanPacedSignIn(t *testing.T) {
 	}
 	if got.Namespace != "sample" {
 		t.Fatalf("namespace = %q, want sample", got.Namespace)
-	}
-}
-
-// The first verify runs against a kubeconfig whose exec credential may still be
-// uncached, so it needs the same bound as the credential fetch.
-func TestManagerBoundsBlockingVerifyOnColdStart(t *testing.T) {
-	root := writeDescriptorFixture(t)
-	verifier := &blockingVerifier{}
-	manager := Manager{
-		ConfigDir:           t.TempDir(),
-		Interactive:         false,
-		Input:               strings.NewReader("y\n"),
-		Output:              &bytes.Buffer{},
-		Credentials:         &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
-		Verifier:            verifier,
-		RevalidationTimeout: 50 * time.Millisecond,
-	}
-	_, err := manager.Ensure(context.Background(), root)
-	if !errors.Is(err, ErrInteractiveRequired) {
-		t.Fatalf("expected bounded verify, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "verifying the new workspace connection") {
-		t.Fatalf("error must name the stage that blocked, got %q", err.Error())
-	}
-	if verifier.calls != 1 {
-		t.Fatalf("verifier called %d times, want 1", verifier.calls)
 	}
 }
 

@@ -510,7 +510,12 @@ users:
 	if err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(configDir, "connections", workspaceconnection.ConnectionKey(descriptor)+".json")
+	statePath := filepath.Join(configDir, "connections", workspaceconnection.ConnectionKeyForDiscovery(workspaceconnection.Discovery{
+		Path:           descriptorPath,
+		RepositoryRoot: repositoryRoot,
+		Descriptor:     descriptor,
+		Digest:         digest,
+	})+".json")
 	writeRunRoutingFile(t, statePath, string(raw))
 	t.Setenv("TAU_CONFIG_DIR", configDir)
 	t.Setenv("KUBECONFIG", kubeconfigPath)

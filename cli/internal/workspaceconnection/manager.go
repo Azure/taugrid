@@ -195,10 +195,14 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	if err != nil {
 		return ActiveConnection{}, err
 	}
-	connectionKey := ConnectionKey(discovery.Descriptor)
+	connectionKey := ConnectionKeyForDiscovery(discovery)
 	statePath := filepath.Join(configDir, "connections", connectionKey+".json")
 	state, loadedStatePath, stateErr := loadConnectionStateForDiscovery(statePath, discovery)
-	hasState := stateErr == nil
+	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		return ActiveConnection{}, fmt.Errorf("load Tau workspace connection state: %w", stateErr)
+	}
+	hasState := stateErr == nil &&
+		(loadedStatePath == statePath || state.DescriptorPath == discovery.Path)
 	stateConfigured := hasState && state.configures(discovery)
 	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
 	stateMatches := stateConfigured && !kubeconfigMissing
@@ -353,6 +357,21 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			return ActiveConnection{}, ErrConnectionDeclined
 		}
 	}
+	if !hasState {
+		if !m.Interactive {
+			return ActiveConnection{}, fmt.Errorf(
+				"%w: this repository's workspace connection has not been trusted; run `tau workspace connection` from an interactive terminal to review it",
+				ErrInteractiveRequired,
+			)
+		}
+		confirmed, err := m.confirmFirstUse(discovery)
+		if err != nil {
+			return ActiveConnection{}, err
+		}
+		if !confirmed {
+			return ActiveConnection{}, ErrConnectionDeclined
+		}
+	}
 	if m.Verifier == nil {
 		return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
 	}
@@ -426,10 +445,6 @@ func (m Manager) configDir() (string, error) {
 }
 
 func (m Manager) confirmContractChange(state connectionState, verification Verification, changes []string) (bool, error) {
-	input := m.Input
-	if input == nil {
-		input = os.Stdin
-	}
 	output := m.Output
 	if output == nil {
 		output = os.Stdout
@@ -438,32 +453,18 @@ func (m Manager) confirmContractChange(state connectionState, verification Verif
 	for _, change := range changes {
 		fmt.Fprintf(output, "  - %s\n", change)
 	}
-	fmt.Fprintf(
-		output,
-		"\nPin the updated namespace %q and LocalQueue %q for workspace %q? [y/N] ",
-		verification.Namespace,
-		verification.Queue,
-		state.Workspace,
+	return m.readConfirmation(
+		fmt.Sprintf(
+			"\nPin the updated namespace %q and LocalQueue %q for workspace %q? [y/N] ",
+			verification.Namespace,
+			verification.Queue,
+			state.Workspace,
+		),
+		"workspace connection contract",
 	)
-	line, err := bufio.NewReader(input).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read workspace connection contract confirmation: %w", err)
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true, nil
-	case "", "n", "no":
-		return false, nil
-	default:
-		return false, fmt.Errorf("workspace connection contract confirmation must be yes or no")
-	}
 }
 
 func (m Manager) confirmConfigurationChange(state connectionState, descriptor Descriptor, changes []string) (bool, error) {
-	input := m.Input
-	if input == nil {
-		input = os.Stdin
-	}
 	output := m.Output
 	if output == nil {
 		output = os.Stdout
@@ -472,15 +473,56 @@ func (m Manager) confirmConfigurationChange(state connectionState, descriptor De
 	for _, change := range changes {
 		fmt.Fprintf(output, "  - %s\n", change)
 	}
-	fmt.Fprintf(
-		output,
-		"\nPin workspace %q on Kubernetes context %q for this repository? [y/N] ",
-		descriptor.Workspace,
-		descriptor.Cluster.ContextName,
+	return m.readConfirmation(
+		fmt.Sprintf(
+			"\nPin workspace %q on Kubernetes context %q for this repository? [y/N] ",
+			descriptor.Workspace,
+			descriptor.Cluster.ContextName,
+		),
+		"workspace connection configuration",
 	)
+}
+
+func (m Manager) confirmFirstUse(discovery Discovery) (bool, error) {
+	output := m.Output
+	if output == nil {
+		output = os.Stdout
+	}
+	descriptor := discovery.Descriptor
+	fmt.Fprintln(output, "Tau found an untrusted workspace connection in this repository:")
+	fmt.Fprintf(output, "  Descriptor:      %s\n", discovery.Path)
+	fmt.Fprintf(output, "  Workspace:       %s\n", descriptor.Workspace)
+	fmt.Fprintf(output, "  Access method:   %s\n", descriptor.Access.Method)
+	fmt.Fprintf(output, "  Context:         %s\n", descriptor.Cluster.ContextName)
+	fmt.Fprintf(output, "  Authorization:   %s\n", descriptor.Authorization.Mode)
+	if descriptor.Network.PrivateCluster {
+		fmt.Fprintln(output, "  Private network: required")
+	} else {
+		fmt.Fprintln(output, "  Private network: not indicated")
+	}
+	if descriptor.Access.AKS != nil {
+		fmt.Fprintf(output, "  AKS resource:    %s\n", descriptor.Access.AKS.ResourceID)
+		fmt.Fprintf(output, "  Entra tenant:    %s\n", descriptor.Access.AKS.TenantID)
+	}
+	return m.readConfirmation(
+		"\nTrust this connection and acquire credentials? [y/N] ",
+		"first workspace connection",
+	)
+}
+
+func (m Manager) readConfirmation(prompt, description string) (bool, error) {
+	input := m.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	output := m.Output
+	if output == nil {
+		output = os.Stdout
+	}
+	fmt.Fprint(output, prompt)
 	line, err := bufio.NewReader(input).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read workspace connection configuration confirmation: %w", err)
+		return false, fmt.Errorf("read %s confirmation: %w", description, err)
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
@@ -488,7 +530,7 @@ func (m Manager) confirmConfigurationChange(state connectionState, descriptor De
 	case "", "n", "no":
 		return false, nil
 	default:
-		return false, fmt.Errorf("workspace connection configuration confirmation must be yes or no")
+		return false, fmt.Errorf("%s confirmation must be yes or no", description)
 	}
 }
 
@@ -639,6 +681,7 @@ func (s connectionState) configures(discovery Discovery) bool {
 		s.AuthorizationMode == discovery.Descriptor.Authorization.Mode &&
 		s.RequiredRole == discovery.Descriptor.Authorization.RequiredRole &&
 		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
+		s.DescriptorPath == discovery.Path &&
 		s.DescriptorDigest == discovery.Digest
 }
 
@@ -749,6 +792,10 @@ func ConnectionKey(descriptor Descriptor) string {
 	return safeFilename(descriptor.Workspace) + "-" + accessIdentityHash(descriptor.AccessIdentity())
 }
 
+func ConnectionKeyForDiscovery(discovery Discovery) string {
+	return ConnectionKey(discovery.Descriptor) + "-" + accessIdentityHash(discovery.Path)
+}
+
 func accessIdentityHash(identity string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(identity)))
 	return hex.EncodeToString(sum[:6])
@@ -826,6 +873,7 @@ func isolatedKubeconfigPath(configDir string, discovery Discovery) string {
 		"kubeconfigs",
 		safeFilename(discovery.Descriptor.Cluster.ContextName)+"-"+
 			accessIdentityHash(discovery.Descriptor.AccessIdentity())+"-"+
+			accessIdentityHash(discovery.Path)+"-"+
 			descriptorDigestHash(discovery.Digest)+".yaml",
 	)
 }
