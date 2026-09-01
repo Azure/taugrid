@@ -32,3 +32,15 @@ $different = Get-TauGridAdxClusterName -SubscriptionId $subscriptionId -Resource
 if ($actual -eq $different) {
     throw "ADX cluster naming must distinguish independent resource groups."
 }
+
+$repositoryCommandOutput = @('local.helm_dcgm_repository_command' | & terraform "-chdir=$PSScriptRoot" console -no-color -var "subscription_id=$subscriptionId")
+if ($LASTEXITCODE -ne 0) {
+    throw "Terraform could not evaluate the DCGM Helm repository command."
+}
+$repositoryCommand = ($repositoryCommandOutput -join [Environment]::NewLine).Trim() | ConvertFrom-Json
+$initialUpdate = $repositoryCommand.IndexOf("helm repo update dcgm-exporter", [System.StringComparison]::Ordinal)
+$repositoryAdd = $repositoryCommand.IndexOf("helm repo add dcgm-exporter", [System.StringComparison]::Ordinal)
+$verifiedUpdate = $repositoryCommand.IndexOf("helm repo update dcgm-exporter", $repositoryAdd + 1, [System.StringComparison]::Ordinal)
+if ($initialUpdate -lt 0 -or $repositoryAdd -lt $initialUpdate -or $verifiedUpdate -lt $repositoryAdd) {
+    throw "The DCGM Helm repository command must validate repo update before and after repo add."
+}

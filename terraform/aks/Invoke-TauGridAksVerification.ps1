@@ -141,7 +141,7 @@ function Invoke-TerraformApplyWithAdxRecovery {
         }
     }
     if ("azurerm_kusto_cluster.this[0]" -in $stateEntries) {
-        throw "Terraform apply failed and there is no recoverable untracked ADX cluster."
+        throw "Terraform apply failed after ADX was already tracked in the verification state. Inspect the preceding Terraform error for the failed resource."
     }
     $clusterID = az kusto cluster show --resource-group $ResourceGroup --cluster-name $AdxClusterName --query id --output tsv 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($clusterID)) {
