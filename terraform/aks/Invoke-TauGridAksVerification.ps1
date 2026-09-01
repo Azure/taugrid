@@ -121,32 +121,20 @@ function Ensure-PortalPortForward {
 }
 
 function Invoke-TerraformApplyWithAdxRecovery {
-    param([string] $ModulePath, [string] $PlanFile, [string] $StateFile, [string] $VarsFile, [string] $ResourceGroup, [string] $AdxClusterName)
+    param([string] $ModulePath, [string] $PlanFile, [string] $StateFile, [string] $VarsFile, [string] $ResourceGroup)
 
     & terraform "-chdir=$ModulePath" apply "-state=$StateFile" $PlanFile
     if ($LASTEXITCODE -eq 0) { return }
 
     $stateEntries = @(terraform "-chdir=$ModulePath" state list "-state=$StateFile")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Terraform apply failed and the verification state could not be read."
+    if ($LASTEXITCODE -ne 0 -or "azurerm_kusto_cluster.this[0]" -in $stateEntries) {
+        throw "Terraform apply failed and there is no recoverable untracked ADX cluster."
     }
-    $portalIdentityAddress = "azurerm_user_assigned_identity.portal[0]"
-    if ($portalIdentityAddress -notin $stateEntries) {
-        $portalIdentityID = az identity show --resource-group $ResourceGroup --name "taugrid-portal-adx" --query id --output tsv 2>$null
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($portalIdentityID)) {
-            $portalIdentityID = $portalIdentityID -replace "/resourcegroups/", "/resourceGroups/"
-            Invoke-Native terraform @("-chdir=$ModulePath", "import", "-state=$StateFile", "-var-file=$VarsFile", $portalIdentityAddress, $portalIdentityID)
-            Invoke-Native terraform @("-chdir=$ModulePath", "apply", "-auto-approve", "-state=$StateFile", "-var-file=$VarsFile")
-            return
-        }
+    $clusterIDs = @(az resource list --resource-group $ResourceGroup --resource-type "Microsoft.Kusto/clusters" --query "[].id" --output tsv)
+    if ($LASTEXITCODE -ne 0 -or $clusterIDs.Count -ne 1) {
+        throw "Terraform apply failed and did not leave exactly one recoverable ADX cluster in resource group '$ResourceGroup'."
     }
-    if ("azurerm_kusto_cluster.this[0]" -in $stateEntries) {
-        throw "Terraform apply failed after ADX was already tracked in the verification state. Inspect the preceding Terraform error for the failed resource."
-    }
-    $clusterID = az kusto cluster show --resource-group $ResourceGroup --cluster-name $AdxClusterName --query id --output tsv 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($clusterID)) {
-        throw "Terraform apply failed and did not leave the expected recoverable ADX cluster '$AdxClusterName' in resource group '$ResourceGroup'."
-    }
+    $clusterID = $clusterIDs[0]
     $deadline = (Get-Date).AddMinutes(20)
     Wait-ForCondition {
         $provisioningState = az resource show --ids $clusterID --api-version "2024-04-13" --query "properties.provisioningState" --output tsv
@@ -157,8 +145,6 @@ function Invoke-TerraformApplyWithAdxRecovery {
     Invoke-Native terraform @("-chdir=$ModulePath", "import", "-state=$StateFile", "-var-file=$VarsFile", "azurerm_kusto_cluster.this[0]", $clusterID)
     Invoke-Native terraform @("-chdir=$ModulePath", "apply", "-auto-approve", "-state=$StateFile", "-var-file=$VarsFile")
 }
-
-. (Join-Path $PSScriptRoot "AdxClusterName.ps1")
 
 foreach ($name in @("az", "terraform", "kubectl", "helm", "pwsh")) {
     if ($null -eq (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Required command '$name' was not found on PATH." }
@@ -206,7 +192,6 @@ $kubeconfig = Join-Path $generated "kubeconfig-$run"
 
 $account = az account show --output json | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($account.id) -or [string]::IsNullOrWhiteSpace($account.tenantId)) { throw "Run az login and az account set first." }
-$adxClusterName = Get-TauGridAdxClusterName -SubscriptionId $account.id -ResourceGroupName $resourceGroup -ClusterName $resourceGroup
 $adxCatalog = az rest --method get --url "https://management.azure.com/subscriptions/$($account.id)/providers/Microsoft.Kusto/skus?api-version=2024-04-13" --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "Unable to list ADX SKUs for location '$Location'." }
 $availableAdxSkus = @($adxCatalog.value | Where-Object { $_.resourceType -eq "clusters" -and $_.locations -contains $Location } | ForEach-Object { $_.name })
@@ -228,8 +213,6 @@ adx_sku_name        = "$AdxSkuName"
 adx_sku_capacity    = $AdxSkuCapacity
 resource_group_name = "$resourceGroup"
 cluster_name        = "$resourceGroup"
-adx_cluster_name    = "$adxClusterName"
-kubeconfig_path     = "generated/kubeconfig-$run"
 command_interpreter = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 gpu_vm_size             = "$GpuVmSize"
 gpu_node_count          = 1
@@ -260,7 +243,7 @@ $portForwardDiagnostics = [System.Collections.Generic.List[string]]::new()
 try {
     Invoke-Native terraform @("-chdir=$modulePath", "init", "-backend=false")
     Invoke-Native terraform @("-chdir=$modulePath", "plan", "-state=$stateFile", "-var-file=$varsFile", "-out=$planFile")
-    Invoke-TerraformApplyWithAdxRecovery -ModulePath $modulePath -PlanFile $planFile -StateFile $stateFile -VarsFile $varsFile -ResourceGroup $resourceGroup -AdxClusterName $adxClusterName
+    Invoke-TerraformApplyWithAdxRecovery -ModulePath $modulePath -PlanFile $planFile -StateFile $stateFile -VarsFile $varsFile -ResourceGroup $resourceGroup
     Invoke-Native az @("aks", "get-credentials", "--admin", "--subscription", $account.id, "--resource-group", $resourceGroup, "--name", $resourceGroup, "--file", $kubeconfig, "--overwrite-existing")
     Invoke-Native $tau.Source @("cluster", "validate", "installation", "--timeout", "10m")
     Invoke-Native kubectl @("-n", "tau-system", "rollout", "status", "deployment/tau-portal", "--timeout=15m")

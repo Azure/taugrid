@@ -43,4 +43,3 @@ jobs:
           terraform -chdir=terraform/aks init -backend=false -lockfile=readonly
           terraform -chdir=terraform/aks validate
           bash terraform/aks/test-wait-for-adx-functions-ready.sh
-          pwsh -NoProfile -NonInteractive -File terraform/aks/Test-AdxClusterName.ps1

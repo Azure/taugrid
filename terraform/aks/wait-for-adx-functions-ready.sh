@@ -32,15 +32,24 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
     --timeout 30m
 
   deadline=$((SECONDS + function_wait_seconds))
-  permanent_failure=""
+  retryable_failure_names=()
   while ((SECONDS < deadline)); do
-    function_statuses="$(kubectl get functions --namespace adx-mon --output=jsonpath='{range .items[*]}{.metadata.name}{"\\t"}{.status.status}{"\\n"}{end}')"
+    function_statuses="$(kubectl get functions --namespace adx-mon --output=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.generation}{"\t"}{.status.observedGeneration}{"\t"}{.status.status}{"\t"}{.status.error}{"\n"}{end}')"
     if [[ -n "$function_statuses" ]]; then
-      permanent_failure="$(printf '%s\n' "$function_statuses" | awk -F '\t' '$2 == "PermanentFailure" { print $1 }')"
-      if [[ -n "$permanent_failure" ]]; then
+      terminal_failure="$(printf '%s\n' "$function_statuses" | awk -F '\t' '
+        $2 == $3 && $4 == "PermanentFailure" && $5 !~ /[Tt][Hh][Rr][Oo][Tt][Tt][Ll]|[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Rr][Aa][Tt][Ee][Ll][Ii][Mm][Ii][Tt][Pp][Oo][Ll][Ii][Cc][Yy]|[Tt][Oo][Oo][Mm][Aa][Nn][Yy][Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/ {
+          print $1 " (generation=" $2 ", observedGeneration=" $3 ", status=" $4 ", error=" $5 ")"
+        }')"
+      if [[ -n "$terminal_failure" ]]; then
+        echo "adx-mon Function reconciliation reached a terminal failure: $terminal_failure" >&2
+        exit 1
+      fi
+      mapfile -t retryable_failure_names < <(printf '%s\n' "$function_statuses" | awk -F '\t' '
+        $2 == $3 && $4 == "PermanentFailure" && $5 ~ /[Tt][Hh][Rr][Oo][Tt][Tt][Ll]|[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Rr][Aa][Tt][Ee][Ll][Ii][Mm][Ii][Tt][Pp][Oo][Ll][Ii][Cc][Yy]|[Tt][Oo][Oo][Mm][Aa][Nn][Yy][Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/ { print $1 }')
+      if ((${#retryable_failure_names[@]} > 0)); then
         break
       fi
-      if printf '%s\n' "$function_statuses" | awk -F '\t' '$2 != "Success" { exit 1 }'; then
+      if printf '%s\n' "$function_statuses" | awk -F '\t' '$2 != $3 || $4 != "Success" { exit 1 }'; then
         echo "All adx-mon Functions reached Success."
         exit 0
       fi
@@ -48,16 +57,16 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
     sleep 15
   done
 
-  if [[ -n "$permanent_failure" ]]; then
-    echo "adx-mon Functions reached PermanentFailure on attempt $attempt: $permanent_failure" >&2
-  else
+  if ((${#retryable_failure_names[@]} == 0)); then
     echo "adx-mon Functions did not reach Success within $function_wait_seconds seconds on attempt $attempt." >&2
+    exit 1
   fi
+  echo "adx-mon Functions reached retryable ADX throttling on attempt $attempt: ${retryable_failure_names[*]}" >&2
   if ((attempt == maximum_attempts)); then
-    echo "adx-mon Functions did not reach Success after $maximum_attempts attempts." >&2
+    echo "adx-mon Functions did not recover from ADX throttling after $maximum_attempts attempts." >&2
     exit 1
   fi
 
-  kubectl delete functions --namespace adx-mon --all --ignore-not-found
+  kubectl delete functions --namespace adx-mon "${retryable_failure_names[@]}" --ignore-not-found
   sleep $((60 * attempt))
 done

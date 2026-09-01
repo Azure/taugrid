@@ -93,7 +93,8 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 
 locals {
   generated_directory               = "${path.module}/generated"
-  kubeconfig_path                   = var.kubeconfig_path != "" ? var.kubeconfig_path : "${local.generated_directory}/kubeconfig"
+  kubeconfig_path                   = "${local.generated_directory}/kubeconfig"
+  adx_mon_values_path               = "${local.generated_directory}/adx-mon-values.yaml"
   helm_home_directory               = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
   helm_config_home                  = "${local.helm_home_directory}/config"
   helm_cache_home                   = "${local.helm_home_directory}/cache"
@@ -108,8 +109,7 @@ locals {
   bootstrap_workspace_path          = "${local.generated_directory}/bootstrap-workspace.yaml"
   command_interpreter_is_powershell = can(regex("(?i)(pwsh|powershell)(\\.exe)?$", try(var.command_interpreter[0], "")))
   bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local.bootstrap_workspace_path}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local.bootstrap_workspace_path}' '${local.bootstrap_workspace_name}'"
-  adx_functions_command             = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForAdxFunctionsReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -ChartPath '${path.module}/../../charts/adx-mon' -BaseValuesFile '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' -EnvironmentValuesFile '${local_file.adx_mon_values[0].filename}'" : "bash '${path.module}/wait-for-adx-functions-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${path.module}/../../charts/adx-mon' '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' '${local_file.adx_mon_values[0].filename}'"
-  taugrid_install_command           = local.command_interpreter_is_powershell ? "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && & { $attempt = 1; while ($attempt -le 3) { tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m; if ($LASTEXITCODE -eq 0) { exit 0 }; if ($attempt -lt 3) { Start-Sleep -Seconds (60 * $attempt) }; $attempt++ }; exit 1 }" : "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && attempt=1; while [ $attempt -le 3 ]; do tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m && exit 0; if [ $attempt -lt 3 ]; then sleep $((60 * attempt)); fi; attempt=$((attempt + 1)); done; exit 1"
+  adx_functions_command             = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForAdxFunctionsReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -ChartPath '${path.module}/../../charts/adx-mon' -BaseValuesFile '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' -EnvironmentValuesFile '${local.adx_mon_values_path}'" : "bash '${path.module}/wait-for-adx-functions-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${path.module}/../../charts/adx-mon' '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' '${local.adx_mon_values_path}'"
   helm_dcgm_repository_command      = local.command_interpreter_is_powershell ? "& { New-Item -ItemType Directory -Force -Path $env:HELM_CONFIG_HOME, $env:HELM_CACHE_HOME, $env:HELM_DATA_HOME | Out-Null; helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update; $repoAddExitCode = $LASTEXITCODE; $repositories = helm repo list --output json | ConvertFrom-Json; $repoListExitCode = $LASTEXITCODE; $expectedRepository = @($repositories | Where-Object { $_.name -eq 'dcgm-exporter' -and $_.url -eq 'https://nvidia.github.io/dcgm-exporter/helm-charts' }); if ($repoAddExitCode -ne 0) { Write-Warning 'helm repo add returned a non-zero exit code; continuing only because the repository state is verified below.' }; if ($repoListExitCode -ne 0 -or $expectedRepository.Count -ne 1) { Write-Error 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.'; exit 1 }; helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Error 'The expected dcgm-exporter chart version is not resolvable from the verified repository.'; exit 1 } }" : "mkdir -p \"$HELM_CONFIG_HOME\" \"$HELM_CACHE_HOME\" \"$HELM_DATA_HOME\" && { helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update || echo 'helm repo add returned a non-zero exit code; validating repository state.'; repositories=$(helm repo list --output json) && case \"$repositories\" in *dcgm-exporter*https://nvidia.github.io/dcgm-exporter/helm-charts*) ;; *) echo 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.' >&2; exit 1 ;; esac && helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' >/dev/null; }"
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
@@ -344,7 +344,6 @@ resource "terraform_data" "bootstrap_lifecycle_namespace" {
 
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
-    terraform_data.install_dcgm_exporter,
   ]
 }
 
@@ -355,8 +354,6 @@ resource "terraform_data" "install_taugrid" {
     azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.taugrid_values.content_sha256,
     var.taugrid_version,
-    local.taugrid_install_command,
-    abspath(local.kubeconfig_path),
     join(" ", var.command_interpreter),
   ]
 
@@ -366,7 +363,7 @@ resource "terraform_data" "install_taugrid" {
     environment = {
       KUBECONFIG = abspath(local.kubeconfig_path)
     }
-    command = local.taugrid_install_command
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
   }
 
   depends_on = [
@@ -425,7 +422,7 @@ resource "terraform_data" "bootstrap_workspace" {
 
 resource "local_file" "adx_mon_values" {
   count           = var.enable_adx ? 1 : 0
-  filename        = "${local.generated_directory}/adx-mon-values.yaml"
+  filename        = local.adx_mon_values_path
   file_permission = "0600"
   content = templatefile("${path.module}/adx-mon-values.yaml.tftpl", {
     adx_endpoint       = azurerm_kusto_cluster.this[0].uri
