@@ -132,7 +132,7 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 			return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 		}
 		authInfo.Exec.Command = "kubelogin"
-		authInfo.Exec.Args = setKubeloginMode(authInfo.Exec.Args, authMode)
+		authInfo.Exec.Args = normalizeKubeloginArgs(authInfo.Exec.Args, authMode)
 	case workspaceconnection.AuthorizationModeClusterWide:
 		if authInfo.Exec != nil {
 			if hasStaticCredentials(authInfo) {
@@ -148,7 +148,7 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 				return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 			}
 			authInfo.Exec.Command = "kubelogin"
-			authInfo.Exec.Args = setKubeloginMode(authInfo.Exec.Args, authMode)
+			authInfo.Exec.Args = normalizeKubeloginArgs(authInfo.Exec.Args, authMode)
 		} else if !hasStaticCredentials(authInfo) {
 			return nil, fmt.Errorf("AKS cluster-user kubeconfig has no usable static or exec credential")
 		}
@@ -189,19 +189,41 @@ func hasStaticCredentials(authInfo *clientcmdapi.AuthInfo) bool {
 		authInfo.Password != ""
 }
 
-func setKubeloginMode(args []string, mode string) []string {
+func normalizeKubeloginArgs(args []string, mode string) []string {
 	out := append([]string(nil), args...)
+	modeSet := false
 	for i, arg := range out {
 		switch {
 		case arg == "-l" || arg == "--login":
 			if i+1 < len(out) {
 				out[i+1] = mode
-				return out
+				modeSet = true
 			}
 		case strings.HasPrefix(arg, "--login="):
 			out[i] = "--login=" + mode
-			return out
+			modeSet = true
 		}
 	}
-	return append(out, "--login", mode)
+	if !modeSet {
+		out = append(out, "--login", mode)
+	}
+
+	const disableEnvironmentOverride = "--disable-environment-override"
+	normalized := make([]string, 0, len(out)+1)
+	overrideDisabled := false
+	for _, arg := range out {
+		if arg == disableEnvironmentOverride ||
+			strings.HasPrefix(arg, disableEnvironmentOverride+"=") {
+			if !overrideDisabled {
+				normalized = append(normalized, disableEnvironmentOverride)
+				overrideDisabled = true
+			}
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	if !overrideDisabled {
+		normalized = append(normalized, disableEnvironmentOverride)
+	}
+	return normalized
 }

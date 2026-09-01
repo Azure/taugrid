@@ -97,7 +97,9 @@ func TestNormalizeKubeconfigKeepsOnlyUserExecContext(t *testing.T) {
 		t.Fatalf("normalized kubeconfig = %#v", got)
 	}
 	exec := got.AuthInfos["taugrid-flex"].Exec
-	if exec == nil || exec.Command != "kubelogin" || strings.Join(exec.Args, " ") != "get-token --login interactive --server-id server" {
+	if exec == nil ||
+		exec.Command != "kubelogin" ||
+		strings.Join(exec.Args, " ") != "get-token --login interactive --server-id server --disable-environment-override" {
 		t.Fatalf("normalized exec = %#v", exec)
 	}
 }
@@ -131,8 +133,62 @@ func TestNormalizeKubeconfigReusesAzureCLILogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := got.AuthInfos["taugrid-flex"].Exec
-	if exec == nil || strings.Join(exec.Args, " ") != "get-token --login azurecli --server-id server" {
+	if exec == nil ||
+		strings.Join(exec.Args, " ") != "get-token --login azurecli --server-id server --disable-environment-override" {
 		t.Fatalf("normalized exec = %#v", exec)
+	}
+}
+
+func TestNormalizeKubeconfigDisablesEnvironmentOverridesForEveryAuthMode(t *testing.T) {
+	config := clientcmdapi.NewConfig()
+	config.CurrentContext = "clusterUser_rg_aks"
+	config.Clusters["aks"] = &clientcmdapi.Cluster{Server: "https://aks.example.test"}
+	config.AuthInfos["user"] = &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+		Command: "kubelogin",
+		Args: []string{
+			"get-token",
+			"--login",
+			"stale",
+			"--disable-environment-override=false",
+		},
+	}}
+	config.Contexts[config.CurrentContext] = &clientcmdapi.Context{Cluster: "aks", AuthInfo: "user"}
+	raw, err := clientcmd.Write(*config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, authorizationMode := range []string{
+		workspaceconnection.AuthorizationModeWorkspaceRBAC,
+		workspaceconnection.AuthorizationModeClusterWide,
+	} {
+		for _, authMode := range []string{
+			AuthModeAzureCLI,
+			AuthModeInteractive,
+			AuthModeDeviceCode,
+		} {
+			t.Run(authorizationMode+"/"+authMode, func(t *testing.T) {
+				normalized, err := NormalizeKubeconfig(
+					raw,
+					"taugrid-flex",
+					authorizationMode,
+					authMode,
+					"/usr/local/bin/kubelogin",
+				)
+				if err != nil {
+					t.Fatalf("NormalizeKubeconfig: %v", err)
+				}
+				got, err := clientcmd.Load(normalized)
+				if err != nil {
+					t.Fatal(err)
+				}
+				exec := got.AuthInfos["taugrid-flex"].Exec
+				want := "get-token --login " + authMode + " --disable-environment-override"
+				if exec == nil || strings.Join(exec.Args, " ") != want {
+					t.Fatalf("normalized exec = %#v, want args %q", exec, want)
+				}
+			})
+		}
 	}
 }
 
@@ -203,9 +259,9 @@ func TestNormalizeKubeconfigAcceptsStaticCredentialOnlyForClusterWideMode(t *tes
 	}
 }
 
-func TestSetKubeloginModeAddsMissingMode(t *testing.T) {
-	got := setKubeloginMode([]string{"get-token", "--server-id", "server"}, AuthModeDeviceCode)
-	if strings.Join(got, " ") != "get-token --server-id server --login devicecode" {
+func TestNormalizeKubeloginArgsAddsMissingSecurityFlags(t *testing.T) {
+	got := normalizeKubeloginArgs([]string{"get-token", "--server-id", "server"}, AuthModeDeviceCode)
+	if strings.Join(got, " ") != "get-token --server-id server --login devicecode --disable-environment-override" {
 		t.Fatalf("args = %v", got)
 	}
 }
