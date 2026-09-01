@@ -94,6 +94,10 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 locals {
   generated_directory               = "${path.module}/generated"
   kubeconfig_path                   = var.kubeconfig_path != "" ? var.kubeconfig_path : "${local.generated_directory}/kubeconfig"
+  helm_home_directory                = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
+  helm_config_home                   = "${local.helm_home_directory}/config"
+  helm_cache_home                    = "${local.helm_home_directory}/cache"
+  helm_data_home                     = "${local.helm_home_directory}/data"
   values_path                       = "${local.generated_directory}/taugrid-values.yaml"
   gpu_quota                         = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
   adx_databases                     = toset(["Metrics", "Logs", "CostTracking", "Audit"])
@@ -106,7 +110,7 @@ locals {
   bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local.bootstrap_workspace_path}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local.bootstrap_workspace_path}' '${local.bootstrap_workspace_name}'"
   adx_functions_command             = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForAdxFunctionsReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -ChartPath '${path.module}/../../charts/adx-mon' -BaseValuesFile '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' -EnvironmentValuesFile '${local_file.adx_mon_values[0].filename}'" : "bash '${path.module}/wait-for-adx-functions-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${path.module}/../../charts/adx-mon' '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' '${local_file.adx_mon_values[0].filename}'"
   taugrid_install_command           = local.command_interpreter_is_powershell ? "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && & { $attempt = 1; while ($attempt -le 3) { tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m; if ($LASTEXITCODE -eq 0) { exit 0 }; if ($attempt -lt 3) { Start-Sleep -Seconds (60 * $attempt) }; $attempt++ }; exit 1 }" : "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && attempt=1; while [ $attempt -le 3 ]; do tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m && exit 0; if [ $attempt -lt 3 ]; then sleep $((60 * attempt)); fi; attempt=$((attempt + 1)); done; exit 1"
-  helm_dcgm_repository_command      = local.command_interpreter_is_powershell ? "& { $attempt = 1; $lastExitCode = 1; while ($attempt -le 3) { helm repo update dcgm-exporter; if ($LASTEXITCODE -eq 0) { $lastExitCode = 0; break }; helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update; if ($LASTEXITCODE -ne 0) { Write-Warning 'helm repo add returned a non-zero exit code; validating the repository with helm repo update.' }; helm repo update dcgm-exporter; if ($LASTEXITCODE -eq 0) { $lastExitCode = 0; break }; if ($attempt -lt 3) { Start-Sleep -Seconds (15 * $attempt) }; $attempt++ }; if ($lastExitCode -ne 0) { exit $lastExitCode } }" : "attempt=1; last_exit_code=1; while [ $attempt -le 3 ]; do helm repo update dcgm-exporter && { last_exit_code=0; break; }; helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update || true; helm repo update dcgm-exporter && { last_exit_code=0; break; }; if [ $attempt -lt 3 ]; then sleep $((15 * attempt)); fi; attempt=$((attempt + 1)); done; [ $last_exit_code -eq 0 ]"
+  helm_dcgm_repository_command      = local.command_interpreter_is_powershell ? "& { New-Item -ItemType Directory -Force -Path $env:HELM_CONFIG_HOME, $env:HELM_CACHE_HOME, $env:HELM_DATA_HOME | Out-Null; helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update; $repoAddExitCode = $LASTEXITCODE; $repositories = helm repo list --output json | ConvertFrom-Json; $repoListExitCode = $LASTEXITCODE; $expectedRepository = @($repositories | Where-Object { $_.name -eq 'dcgm-exporter' -and $_.url -eq 'https://nvidia.github.io/dcgm-exporter/helm-charts' }); if ($repoAddExitCode -ne 0) { Write-Warning 'helm repo add returned a non-zero exit code; continuing only because the repository state is verified below.' }; if ($repoListExitCode -ne 0 -or $expectedRepository.Count -ne 1) { Write-Error 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.'; exit 1 }; helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Error 'The expected dcgm-exporter chart version is not resolvable from the verified repository.'; exit 1 } }" : "mkdir -p \"$HELM_CONFIG_HOME\" \"$HELM_CACHE_HOME\" \"$HELM_DATA_HOME\" && { helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update || echo 'helm repo add returned a non-zero exit code; validating repository state.'; repositories=$(helm repo list --output json) && case \"$repositories\" in *dcgm-exporter*https://nvidia.github.io/dcgm-exporter/helm-charts*) ;; *) echo 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.' >&2; exit 1 ;; esac && helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' >/dev/null; }"
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
     gpu_monitoring_sku_name      = var.gpu_monitoring_sku_name
@@ -449,6 +453,7 @@ resource "terraform_data" "install_dcgm_exporter" {
     azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.dcgm_exporter_values[0].content_sha256,
     var.dcgm_exporter_chart_version,
+    local.helm_dcgm_repository_command,
     join(" ", var.command_interpreter),
   ]
 
@@ -456,7 +461,10 @@ resource "terraform_data" "install_dcgm_exporter" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG       = local.kubeconfig_path
+      HELM_CONFIG_HOME = local.helm_config_home
+      HELM_CACHE_HOME  = local.helm_cache_home
+      HELM_DATA_HOME   = local.helm_data_home
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && ${local.helm_dcgm_repository_command} && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
   }

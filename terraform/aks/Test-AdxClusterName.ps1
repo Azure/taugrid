@@ -38,9 +38,23 @@ if ($LASTEXITCODE -ne 0) {
     throw "Terraform could not evaluate the DCGM Helm repository command."
 }
 $repositoryCommand = ($repositoryCommandOutput -join [Environment]::NewLine).Trim() | ConvertFrom-Json
-$initialUpdate = $repositoryCommand.IndexOf("helm repo update dcgm-exporter", [System.StringComparison]::Ordinal)
-$repositoryAdd = $repositoryCommand.IndexOf("helm repo add dcgm-exporter", [System.StringComparison]::Ordinal)
-$verifiedUpdate = $repositoryCommand.IndexOf("helm repo update dcgm-exporter", $repositoryAdd + 1, [System.StringComparison]::Ordinal)
-if ($initialUpdate -lt 0 -or $repositoryAdd -lt $initialUpdate -or $verifiedUpdate -lt $repositoryAdd) {
-    throw "The DCGM Helm repository command must validate repo update before and after repo add."
+$repositoryAdd = $repositoryCommand.IndexOf("helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update", [System.StringComparison]::Ordinal)
+$repositoryList = $repositoryCommand.IndexOf("helm repo list --output json", [System.StringComparison]::Ordinal)
+$expectedRepository = $repositoryCommand.IndexOf("https://nvidia.github.io/dcgm-exporter/helm-charts", $repositoryList, [System.StringComparison]::Ordinal)
+$chartVerification = $repositoryCommand.IndexOf("helm show chart dcgm-exporter/dcgm-exporter --version", [System.StringComparison]::Ordinal)
+if ($repositoryAdd -lt 0 -or $repositoryList -lt $repositoryAdd -or $expectedRepository -lt $repositoryList -or $chartVerification -lt $repositoryList) {
+    throw "The DCGM Helm repository command must verify the isolated repository state and the pinned chart version after adding the repository."
+}
+
+foreach ($helmEnvironmentVariable in @("HELM_CONFIG_HOME", "HELM_CACHE_HOME", "HELM_DATA_HOME")) {
+    if ($repositoryCommand.IndexOf("`$env:$helmEnvironmentVariable", [System.StringComparison]::Ordinal) -lt 0) {
+        throw "The DCGM Helm repository command must create the isolated $helmEnvironmentVariable directory."
+    }
+}
+
+$mainTerraform = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "main.tf"))
+foreach ($helmEnvironmentVariable in @("HELM_CONFIG_HOME", "HELM_CACHE_HOME", "HELM_DATA_HOME")) {
+    if ($mainTerraform -notmatch "(?m)^\s*$helmEnvironmentVariable\s+=\s+local\.") {
+        throw "The DCGM Terraform local-exec environment must set $helmEnvironmentVariable."
+    }
 }
