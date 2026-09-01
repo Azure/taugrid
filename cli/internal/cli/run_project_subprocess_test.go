@@ -84,7 +84,7 @@ policy:
   queue: jobqueue
 `)
 	installFakeRoutingKubectl(t, "catalog-namespace")
-	installCachedRoutingConnection(t, root, "catalog-namespace")
+	configDir := installCachedRoutingConnection(t, root, "catalog-namespace")
 	symlinkConfig := filepath.Join(root, "alpha", "experiments", "actual", "tau.yaml")
 	writeRunRoutingFile(t, symlinkConfig, fmt.Sprintf(`name: symlink-job
 engine: job
@@ -124,6 +124,44 @@ policy:
 			!strings.Contains(result.stdout, "namespace: catalog-namespace") ||
 			!strings.Contains(result.stdout, "kueue.x-k8s.io/queue-name: jobqueue") {
 			t.Fatalf("project health did not resolve catalog connection:\n%s", result.stdout)
+		}
+	})
+	t.Run("connected run caches active workspace", func(t *testing.T) {
+		cachePath := filepath.Join(configDir, activeWorkspaceCacheFilename)
+		if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		result := runTauRoutingSubprocess(t, root, "run", "health", "--project", "alpha", "--dry-run=client")
+		if result.err != nil {
+			t.Fatalf("connected run: %v\nstderr:\n%s", result.err, result.stderr)
+		}
+		raw, err := os.ReadFile(cachePath)
+		if err != nil {
+			t.Fatalf("read active workspace cache: %v", err)
+		}
+		var cache activeWorkspaceCache
+		if err := json.Unmarshal(raw, &cache); err != nil {
+			t.Fatalf("parse active workspace cache: %v", err)
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatalf("resolve repository root: %v", err)
+		}
+		if cache.Schema != activeWorkspaceCacheSchema ||
+			cache.Workspace != "sample" ||
+			cache.WorkspaceUID != "workspace-uid" ||
+			cache.ContextName != "taugrid-flex" ||
+			cache.Namespace != "catalog-namespace" ||
+			cache.LocalQueue != "jobqueue" ||
+			cache.ClusterQueue != "gpu-cq" ||
+			cache.RepositoryRoot != canonicalRoot ||
+			cache.DescriptorPath != filepath.Join(canonicalRoot, "connections", "shared.yaml") ||
+			cache.DescriptorDigest == "" ||
+			cache.ResolvedAt.IsZero() {
+			t.Fatalf("active workspace cache = %+v", cache)
+		}
+		if _, err := os.Stat(filepath.Join(root, "tau", activeWorkspaceCacheFilename)); !os.IsNotExist(err) {
+			t.Fatalf("repository-local active workspace cache exists: %v", err)
 		}
 	})
 	t.Run("explicit project health config", func(t *testing.T) {
@@ -420,7 +458,7 @@ func installFakeRoutingKubectl(t *testing.T, namespace string) {
 	script := fmt.Sprintf(`#!/bin/sh
 case " $* " in
   *" get workspace.tau.azure.com sample "*|*" get workspaces.tau.azure.com sample "*)
-    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue"}}}'
+    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"gpu-cq"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
     printf '%%s\n' 'localqueue.kueue.x-k8s.io/jobqueue'
@@ -439,7 +477,7 @@ esac
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func installCachedRoutingConnection(t *testing.T, root, namespace string) {
+func installCachedRoutingConnection(t *testing.T, root, namespace string) string {
 	t.Helper()
 	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
 	if err != nil {
@@ -522,4 +560,5 @@ users:
 	writeRunRoutingFile(t, statePath, string(raw))
 	t.Setenv("TAU_CONFIG_DIR", configDir)
 	t.Setenv("KUBECONFIG", kubeconfigPath)
+	return configDir
 }
