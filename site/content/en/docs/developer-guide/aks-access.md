@@ -16,7 +16,7 @@ your identity and stores an isolated kubeconfig outside the repository.
 Install the required clients:
 
 - the Tau CLI; and
-- [`kubelogin`](https://azure.github.io/kubelogin/install.html).
+- [`kubelogin`](https://azure.github.io/kubelogin/install.html) 0.1.7 or newer.
 
 Installing [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
 is recommended but not required. Without a usable Azure CLI session, Tau uses

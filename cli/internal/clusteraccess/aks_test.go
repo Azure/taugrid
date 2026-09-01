@@ -52,6 +52,74 @@ func TestAKSUserCredentialProviderUsesCallerContextAndTenant(t *testing.T) {
 	}
 }
 
+func TestResolveKubeloginPathRequiresCompatibleBinary(t *testing.T) {
+	provider := AKSUserCredentialProvider{
+		FindExecutable: func(string) (string, error) {
+			return "", errors.New("not found")
+		},
+	}
+	_, err := provider.resolveKubeloginPath(true)
+	if err == nil ||
+		!strings.Contains(err.Error(), "kubelogin 0.1.7 or newer is required") ||
+		!strings.Contains(err.Error(), "install or upgrade") {
+		t.Fatalf("resolveKubeloginPath() error = %v", err)
+	}
+}
+
+func TestRequireCompatibleKubelogin(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    string
+		output  string
+		wantErr string
+	}{
+		{
+			name:    "missing",
+			wantErr: "kubelogin 0.1.7 or newer is required",
+		},
+		{
+			name:    "old",
+			path:    "/usr/local/bin/kubelogin",
+			output:  "kubelogin version\ngit hash: v0.1.6/deadbeef\nGo version: go1.25.9\n",
+			wantErr: "kubelogin 0.1.6 is unsupported",
+		},
+		{
+			name:   "minimum",
+			path:   "/usr/local/bin/kubelogin",
+			output: "kubelogin version v0.1.7\n",
+		},
+		{
+			name:   "newer",
+			path:   "/usr/local/bin/kubelogin",
+			output: "kubelogin version\ngit hash: v0.2.17/dff9ca0\nGo version: go1.25.9\n",
+		},
+		{
+			name:    "unparseable",
+			path:    "/usr/local/bin/kubelogin",
+			output:  "kubelogin version\nGo version: go1.25.9\n",
+			wantErr: "could not determine kubelogin version",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := AKSUserCredentialProvider{
+				KubeloginVersion: func(context.Context, string) (string, error) {
+					return tc.output, nil
+				},
+			}
+			err := provider.requireCompatibleKubelogin(context.Background(), tc.path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("requireCompatibleKubelogin: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("requireCompatibleKubelogin() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestParseAKSResourceID(t *testing.T) {
 	id, err := parseAKSResourceID("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-flex")
 	if err != nil {
@@ -98,7 +166,7 @@ func TestNormalizeKubeconfigKeepsOnlyUserExecContext(t *testing.T) {
 	}
 	exec := got.AuthInfos["taugrid-flex"].Exec
 	if exec == nil ||
-		exec.Command != "kubelogin" ||
+		exec.Command != "/usr/local/bin/kubelogin" ||
 		strings.Join(exec.Args, " ") != "get-token --login interactive --server-id server --disable-environment-override" {
 		t.Fatalf("normalized exec = %#v", exec)
 	}

@@ -6,7 +6,6 @@ package clusteraccess
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -20,9 +19,11 @@ import (
 )
 
 type AKSUserCredentialProvider struct {
-	Credentials   CredentialFactory
-	AuthMode      string
-	KubeloginPath string
+	Credentials      CredentialFactory
+	AuthMode         string
+	KubeloginPath    string
+	FindExecutable   func(string) (string, error)
+	KubeloginVersion func(context.Context, string) (string, error)
 }
 
 func (AKSUserCredentialProvider) Method() workspaceconnection.AccessMethod {
@@ -34,15 +35,16 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 		return nil, fmt.Errorf("AKS workspace access metadata is missing")
 	}
 	authorizationMode := descriptor.Authorization.Mode
-	kubeloginPath := strings.TrimSpace(p.KubeloginPath)
-	if kubeloginPath == "" && authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC {
-		var err error
-		kubeloginPath, err = exec.LookPath("kubelogin")
-		if err != nil {
-			return nil, fmt.Errorf("kubelogin is required for AKS user authentication; install it and retry: %w", err)
+	kubeloginPath, err := p.resolveKubeloginPath(
+		authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC {
+		if err := p.requireCompatibleKubelogin(ctx, kubeloginPath); err != nil {
+			return nil, err
 		}
-	} else if kubeloginPath == "" {
-		kubeloginPath, _ = exec.LookPath("kubelogin")
 	}
 	id, err := parseAKSResourceID(descriptor.Access.AKS.ResourceID)
 	if err != nil {
@@ -77,13 +79,28 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	if len(result.Kubeconfigs) == 0 || result.Kubeconfigs[0] == nil || len(result.Kubeconfigs[0].Value) == 0 {
 		return nil, fmt.Errorf("AKS returned no cluster-user kubeconfig for %s", id.Name)
 	}
-	return NormalizeKubeconfig(
+	normalized, err := NormalizeKubeconfig(
 		result.Kubeconfigs[0].Value,
 		descriptor.Cluster.ContextName,
 		authorizationMode,
 		credential.KubeloginMode,
 		kubeloginPath,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if authorizationMode == workspaceconnection.AuthorizationModeClusterWide {
+		usesExec, err := kubeconfigUsesExecCredential(normalized)
+		if err != nil {
+			return nil, err
+		}
+		if usesExec {
+			if err := p.requireCompatibleKubelogin(ctx, kubeloginPath); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return normalized, nil
 }
 
 func parseAKSResourceID(resourceID string) (*arm.ResourceID, error) {
@@ -131,7 +148,7 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 		if !supportedKubeloginMode(authMode) {
 			return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 		}
-		authInfo.Exec.Command = "kubelogin"
+		authInfo.Exec.Command = kubeloginPath
 		authInfo.Exec.Args = normalizeKubeloginArgs(authInfo.Exec.Args, authMode)
 	case workspaceconnection.AuthorizationModeClusterWide:
 		if authInfo.Exec != nil {
@@ -147,7 +164,7 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 			if !supportedKubeloginMode(authMode) {
 				return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 			}
-			authInfo.Exec.Command = "kubelogin"
+			authInfo.Exec.Command = kubeloginPath
 			authInfo.Exec.Args = normalizeKubeloginArgs(authInfo.Exec.Args, authMode)
 		} else if !hasStaticCredentials(authInfo) {
 			return nil, fmt.Errorf("AKS cluster-user kubeconfig has no usable static or exec credential")
