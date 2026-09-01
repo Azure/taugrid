@@ -104,6 +104,42 @@ func TestLiveClientDryRunActivatesConnection(t *testing.T) {
 	}
 }
 
+func TestLiveRunConnectionTreatsConfiguredWorkspaceAsAssertion(t *testing.T) {
+	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery := workspaceconnection.Discovery{Descriptor: descriptor}
+	options := defaultRunDispatchOptions()
+	options.workspace = "sample"
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace: "sample", ContextName: "aks-flex",
+	}}
+	got, connection, err := applyLiveRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{Discovery: &discovery},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 1 || got.workspace != "sample" || connection.Workspace != "sample" {
+		t.Fatalf("calls=%d options=%#v connection=%#v", ensurer.calls, got, connection)
+	}
+
+	options.workspace = "other"
+	_, _, err = applyLiveRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{Discovery: &discovery},
+		ensurer,
+	)
+	if err == nil || !strings.Contains(err.Error(), "conflicts with active repository workspace connection") {
+		t.Fatalf("workspace conflict error = %v", err)
+	}
+}
+
 func TestCatalogClientDryRunUsesParsedDescriptorWithoutActivation(t *testing.T) {
 	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
 	if err != nil {
