@@ -184,7 +184,6 @@ $run = if ($RunId) { $RunId } else { "{0}-{1:x4}" -f (Get-Date -Format "yyyyMMdd
 if ($run.Length -gt 13) { throw "RunId must be at most 13 characters." }
 $resourceGroup = "$ResourceNamePrefix-$run"
 if ($resourceGroup.Length -gt 54) { throw "The generated AKS name '$resourceGroup' exceeds 54 characters." }
-$adxClusterName = Get-TauGridAdxClusterName -SubscriptionId $account.id -ResourceGroupName $resourceGroup -ClusterName $resourceGroup
 
 $generated = Join-Path $modulePath "generated"
 $deployment = Join-Path $generated "deployments"
@@ -199,6 +198,7 @@ $kubeconfig = Join-Path $generated "kubeconfig-$run"
 
 $account = az account show --output json | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($account.id) -or [string]::IsNullOrWhiteSpace($account.tenantId)) { throw "Run az login and az account set first." }
+$adxClusterName = Get-TauGridAdxClusterName -SubscriptionId $account.id -ResourceGroupName $resourceGroup -ClusterName $resourceGroup
 $adxCatalog = az rest --method get --url "https://management.azure.com/subscriptions/$($account.id)/providers/Microsoft.Kusto/skus?api-version=2024-04-13" --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "Unable to list ADX SKUs for location '$Location'." }
 $availableAdxSkus = @($adxCatalog.value | Where-Object { $_.resourceType -eq "clusters" -and $_.locations -contains $Location } | ForEach-Object { $_.name })

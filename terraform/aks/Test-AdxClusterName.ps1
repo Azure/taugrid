@@ -20,6 +20,13 @@ if ($actual -ne $expected) {
     throw "PowerShell ADX cluster name '$actual' does not match Terraform's '$expected'."
 }
 
+$verificationScript = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Invoke-TauGridAksVerification.ps1"))
+$accountLookup = $verificationScript.IndexOf('$account = az account show --output json | ConvertFrom-Json', [System.StringComparison]::Ordinal)
+$nameDerivation = $verificationScript.IndexOf('$adxClusterName = Get-TauGridAdxClusterName', [System.StringComparison]::Ordinal)
+if ($accountLookup -lt 0 -or $nameDerivation -lt 0 -or $accountLookup -ge $nameDerivation) {
+    throw "The verification runner must read the Azure account before deriving the ADX cluster name."
+}
+
 $differentResourceGroupName = "taugrid-verify-other"
 $different = Get-TauGridAdxClusterName -SubscriptionId $subscriptionId -ResourceGroupName $differentResourceGroupName -ClusterName $differentResourceGroupName
 if ($actual -eq $different) {
