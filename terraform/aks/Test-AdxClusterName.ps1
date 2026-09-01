@@ -53,6 +53,10 @@ foreach ($helmEnvironmentVariable in @("HELM_CONFIG_HOME", "HELM_CACHE_HOME", "H
 }
 
 $mainTerraform = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "main.tf"))
+if ($mainTerraform -notmatch '(?s)resource "terraform_data" "install_taugrid".*?triggers_replace\s+=\s+\[.*?abspath\(local\.kubeconfig_path\).*?KUBECONFIG\s+=\s+abspath\(local\.kubeconfig_path\)') {
+    throw "The TauGrid installer must receive and track an absolute kubeconfig path."
+}
+
 foreach ($helmEnvironmentVariable in @("HELM_CONFIG_HOME", "HELM_CACHE_HOME", "HELM_DATA_HOME")) {
     if ($mainTerraform -notmatch "(?m)^\s*$helmEnvironmentVariable\s+=\s+local\.") {
         throw "The DCGM Terraform local-exec environment must set $helmEnvironmentVariable."

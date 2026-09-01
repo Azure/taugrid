@@ -94,10 +94,10 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 locals {
   generated_directory               = "${path.module}/generated"
   kubeconfig_path                   = var.kubeconfig_path != "" ? var.kubeconfig_path : "${local.generated_directory}/kubeconfig"
-  helm_home_directory                = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
-  helm_config_home                   = "${local.helm_home_directory}/config"
-  helm_cache_home                    = "${local.helm_home_directory}/cache"
-  helm_data_home                     = "${local.helm_home_directory}/data"
+  helm_home_directory               = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
+  helm_config_home                  = "${local.helm_home_directory}/config"
+  helm_cache_home                   = "${local.helm_home_directory}/cache"
+  helm_data_home                    = "${local.helm_home_directory}/data"
   values_path                       = "${local.generated_directory}/taugrid-values.yaml"
   gpu_quota                         = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
   adx_databases                     = toset(["Metrics", "Logs", "CostTracking", "Audit"])
@@ -288,7 +288,7 @@ resource "terraform_data" "install_nvidia_device_plugin" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && kubectl rollout status daemonset/nvidia-device-plugin-daemonset --namespace kube-system --timeout=10m"
   }
@@ -312,7 +312,7 @@ resource "terraform_data" "normalize_gpu_mig" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f '${local_file.mig_normalizer[0].filename}' && kubectl rollout status daemonset/taugrid-mig-normalizer --namespace kube-system --timeout=10m && az vmss restart --subscription '${var.subscription_id}' --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --name $(az vmss list --subscription '${var.subscription_id}' --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --query \"[?starts_with(name, 'aks-${var.gpu_node_pool_name}-')].name | [0]\" --output tsv) && kubectl wait --for=condition=Ready node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl wait --for='jsonpath={.status.allocatable.nvidia\\.com/gpu}'='${var.gpu_count_per_node}' node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl delete -f '${local_file.mig_normalizer[0].filename}' --ignore-not-found"
   }
@@ -337,7 +337,7 @@ resource "terraform_data" "bootstrap_lifecycle_namespace" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl create namespace '${var.workspace_namespace}' --dry-run=client -o yaml | kubectl apply -f -"
   }
@@ -356,6 +356,7 @@ resource "terraform_data" "install_taugrid" {
     local_file.taugrid_values.content_sha256,
     var.taugrid_version,
     local.taugrid_install_command,
+    abspath(local.kubeconfig_path),
     join(" ", var.command_interpreter),
   ]
 
@@ -363,7 +364,7 @@ resource "terraform_data" "install_taugrid" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = local.taugrid_install_command
   }
@@ -412,7 +413,7 @@ resource "terraform_data" "bootstrap_workspace" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = local.bootstrap_workspace_command
   }
@@ -461,7 +462,7 @@ resource "terraform_data" "install_dcgm_exporter" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG       = local.kubeconfig_path
+      KUBECONFIG       = abspath(local.kubeconfig_path)
       HELM_CONFIG_HOME = local.helm_config_home
       HELM_CACHE_HOME  = local.helm_cache_home
       HELM_DATA_HOME   = local.helm_data_home
@@ -498,7 +499,7 @@ resource "terraform_data" "install_adx_mon" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --set functions.enabled=false --wait --timeout 30m"
   }
@@ -526,7 +527,7 @@ resource "terraform_data" "install_adx_functions" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = local.adx_functions_command
   }
