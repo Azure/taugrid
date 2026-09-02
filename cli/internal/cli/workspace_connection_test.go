@@ -28,6 +28,26 @@ network:
   privateCluster: false
 `
 
+func TestWorkspaceConnectionOfflineHelpExplainsLocalOnlyScope(t *testing.T) {
+	cmd := newWorkspaceConnectionCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"it does not access credentials",
+		"permissions, or save connection state",
+		"without credentials, network access, or saved connection state",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestWorkspaceConnectionOfflineDiscoversParentDescriptor(t *testing.T) {
 	root := initWorkspaceConnectionRepo(t)
 	writeWorkspaceConnectionDescriptor(t, root)

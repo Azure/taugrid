@@ -31,7 +31,9 @@ By default Tau resolves credentials, contacts Kubernetes, verifies the
 TauWorkspace, LocalQueue, and authorization contract, and stores an isolated
 connection for later commands. A repository's first connection must be reviewed
 and trusted from an interactive terminal before Tau accesses credentials or the
-cluster. Use --offline to validate only the repository mapping and descriptor.`,
+cluster. Use --offline only to check the repository mapping and descriptor
+locally; it does not access credentials, contact a provider or cluster, verify
+permissions, or save connection state.`,
 		Example: `  tau workspace connection
   tau workspace connection --offline
   tau workspace connection ./my-project`,
@@ -65,7 +67,7 @@ cluster. Use --offline to validate only the repository mapping and descriptor.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&offline, "offline", false, "validate repository connection configuration without contacting Kubernetes")
+	cmd.Flags().BoolVar(&offline, "offline", false, "check the descriptor locally without credentials, network access, or saved connection state")
 	return cmd
 }
 
