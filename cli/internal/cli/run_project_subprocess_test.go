@@ -53,6 +53,9 @@ func TestTauRoutingHelperProcess(t *testing.T) {
 }
 
 func TestTauRoutingSubprocessMatrix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("routing subprocess test requires a POSIX fake kubectl")
+	}
 	root := multiProjectRunRoutingRepo(t)
 	configureRunRoutingProfile(t)
 	writeRunRoutingFile(t, filepath.Join(root, "beta", "train.sh"), "#!/bin/sh\necho train\n")

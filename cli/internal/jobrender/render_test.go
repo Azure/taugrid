@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1597,6 +1598,9 @@ func TestProfileWrapperAvoidsOptionalImageUtilities(t *testing.T) {
 }
 
 func TestProfileWrapperEscapesControlCharactersInMetadataJSON(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a Bash wrapper")
+	}
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")
 	if err := os.Mkdir(binDir, 0o755); err != nil {
@@ -1664,6 +1668,9 @@ exit 0
 }
 
 func TestProfileWrapperTreatsNsysDuration143AsSuccessfulCapture(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a Bash wrapper")
+	}
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")
 	if err := os.Mkdir(binDir, 0o755); err != nil {
@@ -2335,6 +2342,9 @@ func TestRenderRejectsStagedPublicationForMultiNodeJob(t *testing.T) {
 }
 
 func TestMetricsCompletionWrapperPreservesTerminalStateAndExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a Bash wrapper")
+	}
 	tests := []struct {
 		name       string
 		command    string
@@ -2387,6 +2397,9 @@ func TestMetricsCompletionWrapperPreservesTerminalStateAndExitCode(t *testing.T)
 }
 
 func TestMetricsCompletionWrapperWaitsForSidecarBaseline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a Bash wrapper")
+	}
 	dir := t.TempDir()
 	completion := filepath.Join(dir, "metrics-completion.json")
 	ready := filepath.Join(dir, "metrics-ready")

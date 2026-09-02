@@ -160,7 +160,10 @@ func (f *registryFlags) backend() (dataset.Backend, error) {
 		}
 		return newAzBackend(account, container), nil
 	case strings.HasPrefix(f.registry, "file://"):
-		dir := strings.TrimPrefix(f.registry, "file://")
+		dir, err := localPathFromFileURI(f.registry)
+		if err != nil {
+			return nil, fmt.Errorf("--registry file URL: %w", err)
+		}
 		if dir == "" {
 			return nil, fmt.Errorf("--registry file URL must be file://<dir>")
 		}
@@ -652,7 +655,10 @@ func writeRefEnv(w io.Writer, ref dataset.ResolvedReference, prefix, stagedRoot,
 			if err != nil {
 				return err
 			}
-			uri = "file://" + filepath.ToSlash(abs)
+			uri, err = fileURIFromPath(abs)
+			if err != nil {
+				return err
+			}
 		default:
 			uri = strings.TrimSuffix(baseURL, "/") + "/" + f.Path
 		}

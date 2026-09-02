@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -211,7 +212,7 @@ func TestPVCListHelperEnumeratesNestedDirectory(t *testing.T) {
 		}
 	}
 
-	logs, stderr, err := runPVCListHelper(root, 0, nil, true)
+	logs, stderr, err := runPVCListHelper(t, root, 0, nil, true)
 	if err != nil {
 		t.Fatalf("helper failed: %v\nstderr:\n%s", err, stderr)
 	}
@@ -250,7 +251,7 @@ func TestPVCListHelperKeepsModelAndDatasetListingsShallow(t *testing.T) {
 
 	for _, dir := range []string{"models", "datasets"} {
 		listRoot := filepath.Join(root, dir)
-		logs, stderr, err := runPVCListHelper(listRoot, 0, nil, false)
+		logs, stderr, err := runPVCListHelper(t, listRoot, 0, nil, false)
 		if err != nil {
 			t.Fatalf("%s helper failed: %v\nstderr:\n%s", dir, err, stderr)
 		}
@@ -270,7 +271,7 @@ func TestPVCListHelperEnumeratesTrailingSlashPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "artifact.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	logs, stderr, err := runPVCListHelper(root+string(os.PathSeparator), 0, nil, true)
+	logs, stderr, err := runPVCListHelper(t, root+string(os.PathSeparator), 0, nil, true)
 	if err != nil {
 		t.Fatalf("helper failed: %v\nstderr:\n%s", err, stderr)
 	}
@@ -285,7 +286,7 @@ func TestPVCListHelperEnumeratesTrailingSlashPath(t *testing.T) {
 
 func TestPVCListHelperAcceptsGenuinelyEmptyDirectory(t *testing.T) {
 	root := t.TempDir()
-	logs, stderr, err := runPVCListHelper(root, 0, nil, true)
+	logs, stderr, err := runPVCListHelper(t, root, 0, nil, true)
 	if err != nil {
 		t.Fatalf("helper failed: %v\nstderr:\n%s", err, stderr)
 	}
@@ -336,7 +337,7 @@ exec "$TAU_TEST_REAL_FIND" "$@"
 		"TAU_TEST_REAL_FIND="+realFind,
 	)
 
-	logs, stderr, err := runPVCListHelper(root, 12, env, true)
+	logs, stderr, err := runPVCListHelper(t, root, 12, env, true)
 	if err != nil {
 		t.Fatalf("helper failed: %v\nstderr:\n%s", err, stderr)
 	}
@@ -354,7 +355,7 @@ func TestPVCListHelperRejectsDirectFilePath(t *testing.T) {
 	if err := os.WriteFile(file, []byte(`{"loss":1.25}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, stderr, err := runPVCListHelper(file, 0, nil, true)
+	_, stderr, err := runPVCListHelper(t, file, 0, nil, true)
 	if err == nil {
 		t.Fatal("helper unexpectedly treated a direct file path as a directory")
 	}
@@ -365,7 +366,7 @@ func TestPVCListHelperRejectsDirectFilePath(t *testing.T) {
 
 func TestPVCListHelperRejectsMissingPath(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
-	_, stderr, err := runPVCListHelper(missing, 0, nil, true)
+	_, stderr, err := runPVCListHelper(t, missing, 0, nil, true)
 	if err == nil {
 		t.Fatal("helper unexpectedly accepted a missing path")
 	}
@@ -375,6 +376,9 @@ func TestPVCListHelperRejectsMissingPath(t *testing.T) {
 }
 
 func TestPVCListHelperPreservesSpecialFilenames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain the newline fixture")
+	}
 	root := t.TempDir()
 	names := []string{
 		" leading-space",
@@ -393,7 +397,7 @@ func TestPVCListHelperPreservesSpecialFilenames(t *testing.T) {
 		}
 	}
 
-	logs, stderr, err := runPVCListHelper(root, 0, nil, true)
+	logs, stderr, err := runPVCListHelper(t, root, 0, nil, true)
 	if err != nil {
 		t.Fatalf("helper failed: %v\nstderr:\n%s", err, stderr)
 	}
@@ -417,7 +421,7 @@ func TestPVCListHelperReportsEnumerationFailure(t *testing.T) {
 	}
 	env := append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
 
-	_, stderr, err := runPVCListHelper(t.TempDir(), 0, env, true)
+	_, stderr, err := runPVCListHelper(t, t.TempDir(), 0, env, true)
 	if err == nil {
 		t.Fatal("helper unexpectedly accepted a failed directory probe")
 	}
@@ -426,7 +430,11 @@ func TestPVCListHelperReportsEnumerationFailure(t *testing.T) {
 	}
 }
 
-func runPVCListHelper(dir string, settleSeconds int, env []string, recursive bool) (string, string, error) {
+func runPVCListHelper(t *testing.T, dir string, settleSeconds int, env []string, recursive bool) (string, string, error) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a POSIX shell script")
+	}
 	cmd := exec.Command(
 		"sh",
 		"-c",

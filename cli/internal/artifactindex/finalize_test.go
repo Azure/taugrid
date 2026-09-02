@@ -13,10 +13,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 )
+
+func requireUnixShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a POSIX shell script")
+	}
+}
 
 // readerStructTags parses the JSON tag names off a struct declared in the
 // consuming package. The reader lives in package cli, which this package
@@ -101,6 +109,7 @@ func TestShellQuoteHandlesEmbeddedQuote(t *testing.T) {
 // real and asserts the JSON it produces is exactly what cli's reader parses.
 // A pure string test would not catch a Python syntax error or a key typo.
 func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
+	requireUnixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}
@@ -192,6 +201,7 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 // TestScriptSucceedsWhenArtifactMissing pins the best-effort contract: a
 // training run that produced real results must not be failed by bookkeeping.
 func TestScriptSucceedsWhenArtifactMissing(t *testing.T) {
+	requireUnixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}
@@ -234,6 +244,7 @@ func noPythonEnv(hot, durable string) []string {
 // only discovered much later when `tau serve deploy --from-finetune` cannot
 // resolve the run.
 func TestScriptFailsWhenInterpreterMissing(t *testing.T) {
+	requireUnixShell(t)
 	root := t.TempDir()
 	cmd := exec.Command("sh", "-eu")
 	cmd.Stdin = strings.NewReader(Script(Config{Artifact: "last.safetensors", Run: "demo"}))
@@ -272,6 +283,7 @@ func TestScriptFailsWhenInterpreterMissing(t *testing.T) {
 // stopped from writing into another researcher's directory was indistinguishable
 // from one that indexed cleanly. A refusal is not a written index.
 func TestScriptFailsWhenDestinationRefused(t *testing.T) {
+	requireUnixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}

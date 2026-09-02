@@ -8,13 +8,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
+func requireUnixShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a POSIX shell script")
+	}
+}
+
 func TestWrapShellScriptDefinesClosedArtifactContract(t *testing.T) {
+	requireUnixShell(t)
 	script, err := WrapShellScript("printf model > \"$TAU_OUTPUT_STAGING_DIR/model.safetensors\"\n", Runtime{
 		Mode:          ModeStaged,
 		OutputDir:     "/data/research-workspace/run-1",
@@ -42,6 +51,7 @@ func TestWrapShellScriptDefinesClosedArtifactContract(t *testing.T) {
 }
 
 func TestStagedPublicationIsVerifiedAndRetrySafe(t *testing.T) {
+	requireUnixShell(t)
 	runtime := Runtime{
 		Mode:          ModeStaged,
 		OutputDir:     "/data/test-output",
@@ -103,6 +113,7 @@ func TestRuntimeRejectsUnsafePublicationPaths(t *testing.T) {
 }
 
 func TestStagedPublicationRejectsSymlinks(t *testing.T) {
+	requireUnixShell(t)
 	runtime := Runtime{
 		Mode:          ModeStaged,
 		OutputDir:     "/data/test-output",
@@ -131,6 +142,7 @@ ln -s "$tau_link_target" "$TAU_OUTPUT_STAGING_DIR/model.safetensors"
 }
 
 func TestStagedPublicationRejectsReservedMarker(t *testing.T) {
+	requireUnixShell(t)
 	runtime := Runtime{
 		Mode:          ModeStaged,
 		OutputDir:     "/data/test-output",
@@ -154,6 +166,7 @@ func TestStagedPublicationRejectsReservedMarker(t *testing.T) {
 }
 
 func TestStagedPublicationWaitsForTerminatedChild(t *testing.T) {
+	requireUnixShell(t)
 	runtime := Runtime{
 		Mode:          ModeStaged,
 		OutputDir:     "/data/test-output",

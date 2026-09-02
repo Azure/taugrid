@@ -176,7 +176,7 @@ func TestFileBackendRejectsOutsidePaths(t *testing.T) {
 // since no bytes are hashed on the manifest path.
 func TestRegisterManifestDefaultsAssurance(t *testing.T) {
 	root := t.TempDir()
-	regURL := "file://" + root
+	regURL := testFileURI(t, root)
 
 	mdir := t.TempDir()
 	manifestPath := filepath.Join(mdir, "m.json")

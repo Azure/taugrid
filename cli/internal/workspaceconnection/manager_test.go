@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -22,6 +23,16 @@ type fakeCredentialProvider struct {
 	calls int
 	raw   []byte
 	err   error
+}
+
+func assertKubeconfigMode(t *testing.T, mode os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if mode.Perm() != 0o600 {
+		t.Fatalf("kubeconfig mode = %o, want 600", mode.Perm())
+	}
 }
 
 func (f *fakeCredentialProvider) UserKubeconfig(context.Context, Descriptor) ([]byte, error) {
@@ -196,9 +207,7 @@ func TestManagerConfiguresFirstConnectionNoninteractively(t *testing.T) {
 	if err != nil {
 		t.Fatalf("kubeconfig: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("kubeconfig mode = %o, want 600", info.Mode().Perm())
-	}
+	assertKubeconfigMode(t, info.Mode())
 	discovery, err := Discover(root)
 	if err != nil {
 		t.Fatal(err)
@@ -536,12 +545,10 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 	if credentials.calls != 1 || verifier.calls != 1 {
 		t.Fatalf("credentials=%d verifier=%d", credentials.calls, verifier.calls)
 	}
-	if len(verifier.paths) != 1 ||
-		verifier.paths[0] == got.KubeconfigPath ||
-		len(verifier.modes) != 1 ||
-		verifier.modes[0] != 0o600 {
+	if len(verifier.paths) != 1 || verifier.paths[0] == got.KubeconfigPath || len(verifier.modes) != 1 {
 		t.Fatalf("candidate paths=%v modes=%v final=%s", verifier.paths, verifier.modes, got.KubeconfigPath)
 	}
+	assertKubeconfigMode(t, verifier.modes[0])
 	if _, statErr := os.Stat(verifier.paths[0]); !os.IsNotExist(statErr) {
 		t.Fatalf("verified candidate was not removed: %v", statErr)
 	}
@@ -552,9 +559,7 @@ func TestManagerReacquiresMissingKubeconfigNoninteractively(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reacquired kubeconfig: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("kubeconfig mode = %o, want 600", info.Mode().Perm())
-	}
+	assertKubeconfigMode(t, info.Mode())
 	finalRaw, err := os.ReadFile(got.KubeconfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -878,12 +883,10 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 	if err == nil || !strings.Contains(err.Error(), "candidate verification failed") {
 		t.Fatalf("expected candidate verification failure, got %v", err)
 	}
-	if len(verifier.paths) != 1 ||
-		verifier.paths[0] == connection.KubeconfigPath ||
-		len(verifier.modes) != 1 ||
-		verifier.modes[0] != 0o600 {
+	if len(verifier.paths) != 1 || verifier.paths[0] == connection.KubeconfigPath || len(verifier.modes) != 1 {
 		t.Fatalf("candidate paths=%v modes=%v final=%s", verifier.paths, verifier.modes, connection.KubeconfigPath)
 	}
+	assertKubeconfigMode(t, verifier.modes[0])
 	if _, statErr := os.Stat(verifier.paths[0]); !os.IsNotExist(statErr) {
 		t.Fatalf("failed candidate was not removed: %v", statErr)
 	}
@@ -925,12 +928,10 @@ func TestManagerInteractiveReconfigureVerifierFailurePreservesExistingKubeconfig
 	if reconfigured.KubeconfigPath != connection.KubeconfigPath {
 		t.Fatalf("reconfigured connection = %#v", reconfigured)
 	}
-	if len(successVerifier.paths) != 1 ||
-		successVerifier.paths[0] == connection.KubeconfigPath ||
-		len(successVerifier.modes) != 1 ||
-		successVerifier.modes[0] != 0o600 {
+	if len(successVerifier.paths) != 1 || successVerifier.paths[0] == connection.KubeconfigPath || len(successVerifier.modes) != 1 {
 		t.Fatalf("successful candidate paths=%v modes=%v final=%s", successVerifier.paths, successVerifier.modes, connection.KubeconfigPath)
 	}
+	assertKubeconfigMode(t, successVerifier.modes[0])
 	if _, statErr := os.Stat(successVerifier.paths[0]); !os.IsNotExist(statErr) {
 		t.Fatalf("successful candidate was not removed: %v", statErr)
 	}
