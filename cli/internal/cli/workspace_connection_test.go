@@ -28,55 +28,43 @@ network:
   privateCluster: false
 `
 
-func TestWorkspaceConnectionOfflineHelpExplainsLocalOnlyScope(t *testing.T) {
-	cmd := newWorkspaceConnectionCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"--help"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"it does not access credentials",
-		"permissions, or save connection state",
-		"without credentials, network access, or saved connection state",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("help output missing %q:\n%s", want, out.String())
-		}
+func TestWorkspaceConnectionHasNoOfflineFlag(t *testing.T) {
+	if flag := newWorkspaceConnectionCmd().Flags().Lookup("offline"); flag != nil {
+		t.Fatalf("unexpected --offline flag: %#v", flag)
 	}
 }
 
-func TestWorkspaceConnectionOfflineDiscoversParentDescriptor(t *testing.T) {
+func TestWorkspaceConnectionDiscoversParentDescriptor(t *testing.T) {
 	root := initWorkspaceConnectionRepo(t)
 	writeWorkspaceConnectionDescriptor(t, root)
 	nested := filepath.Join(root, "src")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := newWorkspaceConnectionCmd()
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace:         "sample",
+		AuthorizationMode: workspaceconnection.AuthorizationModeClusterWide,
+		Namespace:         "tau-default",
+		Queue:             "jobqueue",
+	}}
+	cmd := newWorkspaceConnectionCmdWithEnsurer(ensurer)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{nested, "--offline"})
+	cmd.SetArgs([]string{nested})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
+	if ensurer.calls != 1 || len(ensurer.discoveries) != 1 {
+		t.Fatalf("connection activation calls=%d discoveries=%d", ensurer.calls, len(ensurer.discoveries))
+	}
 	for _, want := range []string{
-		"Workspace connection configuration is valid.",
+		"Connected.",
 		"Workspace:     sample",
 		"Descriptor:    tau/workspace.connection.yaml",
-		"Cluster access was not checked.",
-		"Next: run `tau workspace connection` to review, authenticate, and connect.",
 	} {
 		if !strings.Contains(out.String(), want) {
-			t.Fatalf("offline connection output missing %q:\n%s", want, out.String())
-		}
-	}
-	for _, hidden := range []string{"/subscriptions/", "Tenant:", "Digest:", "State key:"} {
-		if strings.Contains(out.String(), hidden) {
-			t.Fatalf("offline connection output exposed %q:\n%s", hidden, out.String())
+			t.Fatalf("connection output missing %q:\n%s", want, out.String())
 		}
 	}
 }
@@ -169,11 +157,17 @@ projects:
 		t.Fatal(err)
 	}
 
-	show := newWorkspaceConnectionCmd()
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace:         "sample",
+		AuthorizationMode: workspaceconnection.AuthorizationModeClusterWide,
+		Namespace:         "tau-default",
+		Queue:             "jobqueue",
+	}}
+	show := newWorkspaceConnectionCmdWithEnsurer(ensurer)
 	var showOut bytes.Buffer
 	show.SetOut(&showOut)
 	show.SetErr(&bytes.Buffer{})
-	show.SetArgs([]string{projectPath, "--offline"})
+	show.SetArgs([]string{projectPath})
 	if err := show.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +180,7 @@ projects:
 	ambiguous := newWorkspaceConnectionCmd()
 	ambiguous.SetOut(&bytes.Buffer{})
 	ambiguous.SetErr(&bytes.Buffer{})
-	ambiguous.SetArgs([]string{root, "--offline"})
+	ambiguous.SetArgs([]string{root})
 	if err := ambiguous.Execute(); err == nil || !strings.Contains(err.Error(), "pass a path inside the intended project") {
 		t.Fatalf("catalog-root connection error = %v", err)
 	}

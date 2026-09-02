@@ -84,11 +84,10 @@ The non-secret `tau/workspace.connection.yaml` file a platform operator hands to
 
 Checking in the descriptor is explicit repository/platform preconfiguration.
 `tau run` discovers it automatically; `tau workspace connection` verifies and
-pins the configured access before the first run, while `--offline` validates
-only the repository configuration. On first cluster-backed use, TauGrid isolates the
-named context from the user's kubeconfig or obtains AKS cluster-user credentials,
-verifies the live workspace contract, and records a durable configuration pin
-separately from short-lived readiness evidence.
+pins the configured access before the first run. On first cluster-backed use,
+TauGrid isolates the named context from the user's kubeconfig or obtains AKS
+cluster-user credentials, verifies the live workspace contract, and records a
+durable configuration pin separately from short-lived readiness evidence.
 An unchanged pinned connection can refresh Ready, LocalQueue, and authorization
 checks noninteractively after the readiness cache expires. Descriptor, trust,
 or live workspace-contract drift requires interactive review.

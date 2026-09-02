@@ -29,8 +29,7 @@ Kubernetes cluster and supports standard exec credential plugins; AKS is the
 only managed-cloud adapter with first-class onboarding in this release.
 
 From the repository, run `tau workspace connection` to verify the complete
-read-only connection before submitting work. Use `--offline` when only local
-repository validation is appropriate. For AKS, see
+read-only connection before submitting work. For AKS, see
 [Connect to an AKS workspace](aks-access/) for the clean-machine sign-in flow
 and the relationship between `az login`, Tau, and `kubelogin`.
 

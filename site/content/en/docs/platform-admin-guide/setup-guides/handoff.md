@@ -104,8 +104,7 @@ tau workspace connection
 
 This resolves credentials, contacts Kubernetes, and verifies the descriptor's
 workspace, LocalQueue, and authorization contract without submitting a
-workload. Use `tau workspace connection --offline` when only local descriptor
-validation is appropriate.
+workload.
 
 The researcher must run the first live `tau workspace connection` from an
 interactive terminal. Tau shows the descriptor's non-secret connection identity

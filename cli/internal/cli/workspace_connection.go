@@ -21,7 +21,6 @@ func newWorkspaceConnectionCmd() *cobra.Command {
 }
 
 func newWorkspaceConnectionCmdWithEnsurer(ensurer runConnectionEnsurer) *cobra.Command {
-	var offline bool
 	cmd := &cobra.Command{
 		Use:   "connection [PATH]",
 		Short: "Connect this project to its configured Tau workspace",
@@ -31,11 +30,8 @@ By default Tau resolves credentials, contacts Kubernetes, verifies the
 TauWorkspace, LocalQueue, and authorization contract, and stores an isolated
 connection for later commands. A repository's first connection must be reviewed
 and trusted from an interactive terminal before Tau accesses credentials or the
-cluster. Use --offline only to check the repository mapping and descriptor
-locally; it does not access credentials, contact a provider or cluster, verify
-permissions, or save connection state.`,
+cluster.`,
 		Example: `  tau workspace connection
-  tau workspace connection --offline
   tau workspace connection ./my-project`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -46,10 +42,6 @@ permissions, or save connection state.`,
 			project, discovery, err := resolveProjectConnection(start)
 			if err != nil {
 				return err
-			}
-			if offline {
-				printOfflineConnection(cmd, project, discovery)
-				return nil
 			}
 			activeEnsurer := ensurer
 			if activeEnsurer == nil {
@@ -67,7 +59,6 @@ permissions, or save connection state.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&offline, "offline", false, "check the descriptor locally without credentials, network access, or saved connection state")
 	return cmd
 }
 
@@ -92,13 +83,6 @@ func resolveProjectConnection(start string) (string, workspaceconnection.Discove
 		return "", workspaceconnection.Discovery{}, fmt.Errorf("%w; pass a path inside the intended project", err)
 	}
 	return project.Name, project.Connection, nil
-}
-
-func printOfflineConnection(cmd *cobra.Command, project string, discovery workspaceconnection.Discovery) {
-	fmt.Fprintln(cmd.OutOrStdout(), "Workspace connection configuration is valid.")
-	printConnectionIdentity(cmd, project, discovery.Descriptor.Workspace, displayConnectionPath(discovery))
-	fmt.Fprintln(cmd.OutOrStdout(), "Cluster access was not checked.")
-	fmt.Fprintln(cmd.OutOrStdout(), "Next: run `tau workspace connection` to review, authenticate, and connect.")
 }
 
 func printActiveConnection(cmd *cobra.Command, project, descriptorPath string, connection workspaceconnection.ActiveConnection) {
