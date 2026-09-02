@@ -70,24 +70,25 @@ type ActiveConnection struct {
 }
 
 type connectionState struct {
-	Schema            string    `json:"schema"`
-	Workspace         string    `json:"workspace"`
-	AccessMethod      string    `json:"access_method"`
-	AccessIdentity    string    `json:"access_identity"`
-	AccessFingerprint string    `json:"access_fingerprint,omitempty"`
-	AuthorizationMode string    `json:"authorization_mode"`
-	ContextName       string    `json:"context_name"`
-	SystemNamespace   string    `json:"system_namespace,omitempty"`
-	KubeconfigPath    string    `json:"kubeconfig_path"`
-	Namespace         string    `json:"namespace"`
-	Queue             string    `json:"queue"`
-	ServiceAccount    string    `json:"service_account,omitempty"`
-	RequiredRole      string    `json:"required_role"`
-	DescriptorPath    string    `json:"descriptor_path"`
-	DescriptorDigest  string    `json:"descriptor_digest"`
-	WorkspaceUID      string    `json:"workspace_uid,omitempty"`
-	ConfiguredAt      time.Time `json:"configured_at,omitempty"`
-	VerifiedAt        time.Time `json:"verified_at"`
+	Schema            string       `json:"schema"`
+	Workspace         string       `json:"workspace"`
+	AccessMethod      AccessMethod `json:"access_method"`
+	AccessIdentity    string       `json:"access_identity"`
+	AccessFingerprint string       `json:"access_fingerprint,omitempty"`
+	AuthorizationMode string       `json:"authorization_mode"`
+	ContextName       string       `json:"context_name"`
+	SystemNamespace   string       `json:"system_namespace,omitempty"`
+	KubeconfigPath    string       `json:"kubeconfig_path"`
+	Namespace         string       `json:"namespace"`
+	Queue             string       `json:"queue"`
+	ServiceAccount    string       `json:"service_account,omitempty"`
+	RequiredRole      string       `json:"required_role"`
+	RepositoryRoot    string       `json:"repository_root,omitempty"`
+	DescriptorPath    string       `json:"descriptor_path"`
+	DescriptorDigest  string       `json:"descriptor_digest"`
+	WorkspaceUID      string       `json:"workspace_uid,omitempty"`
+	ConfiguredAt      time.Time    `json:"configured_at,omitempty"`
+	VerifiedAt        time.Time    `json:"verified_at"`
 }
 
 type Manager struct {
@@ -136,7 +137,7 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 		return nil, fmt.Errorf("inspect cached Tau workspace connections: %w", err)
 	}
 
-	connections := make([]ActiveConnection, 0, len(entries))
+	states := make([]connectionState, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -159,19 +160,35 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 			strings.TrimSpace(connection.Namespace) == "" {
 			continue
 		}
-		connections = append(connections, connection)
+		states = append(states, state)
 	}
-	sort.Slice(connections, func(i, j int) bool {
-		left := connections[i]
-		right := connections[j]
+	sort.Slice(states, func(i, j int) bool {
+		left := states[i]
+		right := states[j]
 		if left.Workspace != right.Workspace {
 			return left.Workspace < right.Workspace
+		}
+		if left.WorkspaceUID != right.WorkspaceUID {
+			return left.WorkspaceUID < right.WorkspaceUID
+		}
+		if !left.VerifiedAt.Equal(right.VerifiedAt) {
+			return left.VerifiedAt.After(right.VerifiedAt)
+		}
+		if !left.ConfiguredAt.Equal(right.ConfiguredAt) {
+			return left.ConfiguredAt.After(right.ConfiguredAt)
 		}
 		if left.ContextName != right.ContextName {
 			return left.ContextName < right.ContextName
 		}
-		return left.Namespace < right.Namespace
+		if left.Namespace != right.Namespace {
+			return left.Namespace < right.Namespace
+		}
+		return left.KubeconfigPath < right.KubeconfigPath
 	})
+	connections := make([]ActiveConnection, 0, len(states))
+	for _, state := range states {
+		connections = append(connections, state.active())
+	}
 	return connections, nil
 }
 
@@ -195,20 +212,41 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	if err != nil {
 		return ActiveConnection{}, err
 	}
-	connectionKey := ConnectionKey(discovery.Descriptor)
+	connectionKey := ConnectionKeyForDiscovery(discovery)
 	statePath := filepath.Join(configDir, "connections", connectionKey+".json")
 	state, loadedStatePath, stateErr := loadConnectionStateForDiscovery(statePath, discovery)
-	hasState := stateErr == nil
+	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		return ActiveConnection{}, fmt.Errorf("load Tau workspace connection state: %w", stateErr)
+	}
+	loadedState := stateErr == nil
+	hasState := loadedState && state.trusts(discovery)
 	stateConfigured := hasState && state.configures(discovery)
 	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
 	stateMatches := stateConfigured && !kubeconfigMissing
+	expectedKubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
+	if stateMatches && state.KubeconfigPath != expectedKubeconfigPath {
+		legacyKubeconfigPath := state.KubeconfigPath
+		raw, err := os.ReadFile(legacyKubeconfigPath)
+		if err != nil {
+			return ActiveConnection{}, fmt.Errorf("read legacy isolated Tau kubeconfig: %w", err)
+		}
+		if err := fileutil.WriteFileAtomic(expectedKubeconfigPath, raw, 0o600); err != nil {
+			return ActiveConnection{}, fmt.Errorf("migrate isolated Tau kubeconfig: %w", err)
+		}
+		state.KubeconfigPath = expectedKubeconfigPath
+		if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
+			_ = os.Remove(expectedKubeconfigPath)
+			return ActiveConnection{}, fmt.Errorf("update migrated Tau workspace connection state: %w", err)
+		}
+		_ = removeUnreferencedKubeconfig(configDir, legacyKubeconfigPath)
+	}
 	var sourceKubeconfig []byte
 	var sourceFingerprint string
 	sourceKubeconfigChanged := false
 	sourceTargetChanged := false
 	if hasState &&
-		state.AccessMethod == AccessMethodKubeconfig &&
-		discovery.Descriptor.Access.Method == AccessMethodKubeconfig {
+		state.AccessMethod == discovery.Descriptor.Access.Method &&
+		discovery.Descriptor.tracksKubeconfigSource() {
 		sourceKubeconfig, sourceFingerprint, err = m.resolveUserKubeconfig(ctx, discovery.Descriptor, nil)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("refresh kubeconfig workspace access: %w", err)
@@ -296,7 +334,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("reacquire Kubernetes credentials: %w", err)
 		}
-		kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
+		kubeconfigPath := expectedKubeconfigPath
 		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("verify reacquired Tau workspace connection: %w", err)
@@ -333,7 +371,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		}
 		return state.active(), nil
 	}
-	if hasState {
+	if loadedState {
 		changes := state.configurationChanges(discovery)
 		if sourceTargetChanged {
 			changes = append(changes, "Kubernetes context target changed")
@@ -346,6 +384,21 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			)
 		}
 		confirmed, err := m.confirmConfigurationChange(state, discovery.Descriptor, changes)
+		if err != nil {
+			return ActiveConnection{}, err
+		}
+		if !confirmed {
+			return ActiveConnection{}, ErrConnectionDeclined
+		}
+	}
+	if !loadedState {
+		if !m.Interactive {
+			return ActiveConnection{}, fmt.Errorf(
+				"%w: this repository has not been connected with Tau on this machine; run `tau workspace connection` from an interactive terminal to review and approve the destination",
+				ErrInteractiveRequired,
+			)
+		}
+		confirmed, err := m.confirmFirstUse(discovery)
 		if err != nil {
 			return ActiveConnection{}, err
 		}
@@ -396,7 +449,8 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		SystemNamespace:   discovery.Descriptor.ResolvedSystemNamespace(),
 		KubeconfigPath:    kubeconfigPath,
 		RequiredRole:      discovery.Descriptor.Authorization.RequiredRole,
-		DescriptorPath:    discovery.Path,
+		RepositoryRoot:    discoveryTrustRoot(discovery),
+		DescriptorPath:    discoveryTrustPath(discovery),
 		DescriptorDigest:  discovery.Digest,
 		ConfiguredAt:      now,
 	}
@@ -407,15 +461,50 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		}
 		return ActiveConnection{}, fmt.Errorf("write Tau workspace connection state: %w", err)
 	}
-	if hasState {
+	if loadedStatePath != "" {
 		if loadedStatePath != statePath {
 			_ = os.Remove(loadedStatePath)
 		}
 		if previousKubeconfigPath != kubeconfigPath {
-			_ = os.Remove(previousKubeconfigPath)
+			_ = removeUnreferencedKubeconfig(configDir, previousKubeconfigPath)
 		}
 	}
+
 	return state.active(), nil
+}
+
+func removeUnreferencedKubeconfig(configDir, kubeconfigPath string) error {
+	if strings.TrimSpace(kubeconfigPath) == "" {
+		return nil
+	}
+	managedDir := filepath.Join(filepath.Clean(configDir), "kubeconfigs")
+	relative, err := filepath.Rel(managedDir, filepath.Clean(kubeconfigPath))
+	if err != nil ||
+		filepath.IsAbs(relative) ||
+		relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(configDir, "connections"))
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Remove(kubeconfigPath)
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		state, err := loadConnectionState(filepath.Join(configDir, "connections", entry.Name()))
+		if err != nil {
+			return fmt.Errorf("inspect Tau workspace connection state before kubeconfig cleanup: %w", err)
+		}
+		if state.KubeconfigPath == kubeconfigPath {
+			return nil
+		}
+	}
+	return os.Remove(kubeconfigPath)
 }
 
 func (m Manager) configDir() (string, error) {
@@ -426,10 +515,6 @@ func (m Manager) configDir() (string, error) {
 }
 
 func (m Manager) confirmContractChange(state connectionState, verification Verification, changes []string) (bool, error) {
-	input := m.Input
-	if input == nil {
-		input = os.Stdin
-	}
 	output := m.Output
 	if output == nil {
 		output = os.Stdout
@@ -438,32 +523,18 @@ func (m Manager) confirmContractChange(state connectionState, verification Verif
 	for _, change := range changes {
 		fmt.Fprintf(output, "  - %s\n", change)
 	}
-	fmt.Fprintf(
-		output,
-		"\nPin the updated namespace %q and LocalQueue %q for workspace %q? [y/N] ",
-		verification.Namespace,
-		verification.Queue,
-		state.Workspace,
+	return m.readConfirmation(
+		fmt.Sprintf(
+			"\nPin the updated namespace %q and LocalQueue %q for workspace %q? [y/N] ",
+			verification.Namespace,
+			verification.Queue,
+			state.Workspace,
+		),
+		"workspace connection contract",
 	)
-	line, err := bufio.NewReader(input).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read workspace connection contract confirmation: %w", err)
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true, nil
-	case "", "n", "no":
-		return false, nil
-	default:
-		return false, fmt.Errorf("workspace connection contract confirmation must be yes or no")
-	}
 }
 
 func (m Manager) confirmConfigurationChange(state connectionState, descriptor Descriptor, changes []string) (bool, error) {
-	input := m.Input
-	if input == nil {
-		input = os.Stdin
-	}
 	output := m.Output
 	if output == nil {
 		output = os.Stdout
@@ -472,15 +543,61 @@ func (m Manager) confirmConfigurationChange(state connectionState, descriptor De
 	for _, change := range changes {
 		fmt.Fprintf(output, "  - %s\n", change)
 	}
-	fmt.Fprintf(
-		output,
-		"\nPin workspace %q on Kubernetes context %q for this repository? [y/N] ",
-		descriptor.Workspace,
-		descriptor.Cluster.ContextName,
+	return m.readConfirmation(
+		fmt.Sprintf(
+			"\nPin workspace %q on Kubernetes context %q for this repository? [y/N] ",
+			descriptor.Workspace,
+			descriptor.Cluster.ContextName,
+		),
+		"workspace connection configuration",
 	)
+}
+
+func (m Manager) confirmFirstUse(discovery Discovery) (bool, error) {
+	output := m.Output
+	if output == nil {
+		output = os.Stdout
+	}
+	descriptor := discovery.Descriptor
+	fmt.Fprintln(output, "First-time workspace connection")
+	fmt.Fprintln(output, "This repository has not been connected with Tau on this machine.")
+	fmt.Fprintln(output, "Review where Tau will connect:")
+	fmt.Fprintf(output, "  Descriptor:      %q\n", discovery.Path)
+	fmt.Fprintf(output, "  Workspace:       %q\n", descriptor.Workspace)
+	fmt.Fprintf(output, "  Access method:   %q\n", descriptor.Access.Method)
+	fmt.Fprintf(output, "  Context:         %q\n", descriptor.Cluster.ContextName)
+	fmt.Fprintf(output, "  Authorization:   %q\n", descriptor.Authorization.Mode)
+	if descriptor.Network.PrivateCluster {
+		fmt.Fprintln(output, "  Private network: required")
+	} else {
+		fmt.Fprintln(output, "  Private network: not indicated")
+	}
+	if descriptor.Access.AKS != nil {
+		fmt.Fprintf(output, "  AKS resource:    %q\n", descriptor.Access.AKS.ResourceID)
+		fmt.Fprintf(output, "  Entra tenant:    %q\n", descriptor.Access.AKS.TenantID)
+	}
+	fmt.Fprintln(output, "\nIf approved, Tau will acquire your credentials, verify this workspace,")
+	fmt.Fprintln(output, "and save an isolated local connection for future commands.")
+	fmt.Fprintln(output, "Nothing has been accessed or saved yet.")
+	return m.readConfirmation(
+		"\nApprove and connect? [y/N] ",
+		"first workspace connection",
+	)
+}
+
+func (m Manager) readConfirmation(prompt, description string) (bool, error) {
+	input := m.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	output := m.Output
+	if output == nil {
+		output = os.Stdout
+	}
+	fmt.Fprint(output, prompt)
 	line, err := bufio.NewReader(input).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read workspace connection configuration confirmation: %w", err)
+		return false, fmt.Errorf("read %s confirmation: %w", description, err)
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
@@ -488,7 +605,7 @@ func (m Manager) confirmConfigurationChange(state connectionState, descriptor De
 	case "", "n", "no":
 		return false, nil
 	default:
-		return false, fmt.Errorf("workspace connection configuration confirmation must be yes or no")
+		return false, fmt.Errorf("%s confirmation must be yes or no", description)
 	}
 }
 
@@ -607,7 +724,7 @@ func loadConnectionStateForDiscovery(statePath string, discovery Discovery) (con
 		}
 		candidatePath := filepath.Join(connectionsDir, entry.Name())
 		candidate, candidateErr := loadConnectionState(candidatePath)
-		if candidateErr != nil || candidate.DescriptorPath != discovery.Path {
+		if candidateErr != nil || !candidate.canMigrateTo(discovery) {
 			continue
 		}
 		if matchedPath != "" {
@@ -639,7 +756,26 @@ func (s connectionState) configures(discovery Discovery) bool {
 		s.AuthorizationMode == discovery.Descriptor.Authorization.Mode &&
 		s.RequiredRole == discovery.Descriptor.Authorization.RequiredRole &&
 		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
+		s.trusts(discovery) &&
 		s.DescriptorDigest == discovery.Digest
+}
+
+func (s connectionState) trusts(discovery Discovery) bool {
+	return filepath.Clean(s.RepositoryRoot) == discoveryTrustRoot(discovery) &&
+		filepath.Clean(s.DescriptorPath) == discoveryTrustPath(discovery)
+}
+
+func (s connectionState) canMigrateTo(discovery Discovery) bool {
+	if strings.TrimSpace(s.DescriptorPath) == "" {
+		return false
+	}
+	descriptorPath := filepath.Clean(s.DescriptorPath)
+	if descriptorPath != discoveryTrustPath(discovery) &&
+		descriptorPath != filepath.Clean(discovery.Path) {
+		return false
+	}
+	return strings.TrimSpace(s.RepositoryRoot) == "" ||
+		filepath.Clean(s.RepositoryRoot) == discoveryTrustRoot(discovery)
 }
 
 func (s connectionState) configurationChanges(discovery Discovery) []string {
@@ -667,6 +803,12 @@ func (s connectionState) configurationChanges(discovery Discovery) []string {
 	}
 	if s.RequiredRole != discovery.Descriptor.Authorization.RequiredRole {
 		changes = append(changes, fmt.Sprintf("required role %q -> %q", s.RequiredRole, discovery.Descriptor.Authorization.RequiredRole))
+	}
+	if filepath.Clean(s.RepositoryRoot) != discoveryTrustRoot(discovery) {
+		changes = append(changes, "repository trust identity changed")
+	}
+	if filepath.Clean(s.DescriptorPath) != discoveryTrustPath(discovery) {
+		changes = append(changes, "descriptor trust target changed")
 	}
 	if s.DescriptorDigest != discovery.Digest {
 		changes = append(changes, fmt.Sprintf("descriptor digest %q -> %q", s.DescriptorDigest, discovery.Digest))
@@ -749,6 +891,37 @@ func ConnectionKey(descriptor Descriptor) string {
 	return safeFilename(descriptor.Workspace) + "-" + accessIdentityHash(descriptor.AccessIdentity())
 }
 
+func ConnectionKeyForDiscovery(discovery Discovery) string {
+	return ConnectionKey(discovery.Descriptor) + "-" + accessIdentityHash(discoveryTrustIdentity(discovery))
+}
+
+func discoveryTrustPath(discovery Discovery) string {
+	if strings.TrimSpace(discovery.RealPath) != "" {
+		return filepath.Clean(discovery.RealPath)
+	}
+	return filepath.Clean(discovery.Path)
+}
+
+func discoveryTrustRoot(discovery Discovery) string {
+	if strings.TrimSpace(discovery.RealRepositoryRoot) != "" {
+		return filepath.Clean(discovery.RealRepositoryRoot)
+	}
+	root := filepath.Clean(discovery.RepositoryRoot)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		if absolute, err := filepath.Abs(resolved); err == nil {
+			return filepath.Clean(absolute)
+		}
+	}
+	if absolute, err := filepath.Abs(root); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return root
+}
+
+func discoveryTrustIdentity(discovery Discovery) string {
+	return discoveryTrustRoot(discovery) + "\x00" + discoveryTrustPath(discovery)
+}
+
 func accessIdentityHash(identity string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(identity)))
 	return hex.EncodeToString(sum[:6])
@@ -763,7 +936,7 @@ func descriptorDigestHash(digest string) string {
 }
 
 func descriptorAccessFingerprint(descriptor Descriptor, rawKubeconfig []byte) (string, error) {
-	if descriptor.Access.Method != AccessMethodKubeconfig {
+	if !descriptor.tracksKubeconfigSource() {
 		return "", nil
 	}
 	fingerprint, err := kubeconfigAccessFingerprint(rawKubeconfig, descriptor.Cluster.ContextName)
@@ -826,6 +999,7 @@ func isolatedKubeconfigPath(configDir string, discovery Discovery) string {
 		"kubeconfigs",
 		safeFilename(discovery.Descriptor.Cluster.ContextName)+"-"+
 			accessIdentityHash(discovery.Descriptor.AccessIdentity())+"-"+
+			accessIdentityHash(discoveryTrustIdentity(discovery))+"-"+
 			descriptorDigestHash(discovery.Digest)+".yaml",
 	)
 }

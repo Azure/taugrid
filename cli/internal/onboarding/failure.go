@@ -61,12 +61,12 @@ func Classify(err error) Guidance {
 	case errors.Is(err, workspaceconnection.ErrInteractiveRequired):
 		return Guidance{
 			Owner:  FailureOwnerResearcher,
-			Action: "Review the reported connection drift in an interactive terminal, and confirm it only if the updated destination is intended.",
+			Action: "Run `tau workspace connection` in an interactive terminal. Review the destination and approve it only if it matches your platform handoff, then retry your original command.",
 		}
 	case errors.Is(err, workspaceconnection.ErrConnectionDeclined):
 		return Guidance{
 			Owner:  FailureOwnerResearcher,
-			Action: "Rerun the command and confirm the changed workspace connection only if the updated destination is intended.",
+			Action: "The proposed connection or change was not saved. Existing connection state, if any, is unchanged. Run `tau workspace connection` again when ready, and approve only if the destination is expected.",
 		}
 	}
 	var responseError *azcore.ResponseError

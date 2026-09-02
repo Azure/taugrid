@@ -844,8 +844,42 @@ policy:
   disable_default_priorities: true
 YAML
 
-# Activate the provider-neutral kubeconfig path and verify the live workspace
-# before the following submission proves the cached non-interactive path.
+# Approve the checked-in connection through a pseudo-terminal so the following
+# client dry-run exercises cached, noninteractive connection reuse.
+if ! (
+  cd "${tau_home}"
+  export HOME="${tau_home}/home"
+  export TAU_CONFIG_DIR="${tau_home}/tau-config"
+  python3 - "${tau_home}/tau-bin" <<'PY'
+import os
+import pty
+import sys
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], [sys.argv[1], "workspace", "connection"])
+
+os.write(fd, b"y\n")
+while True:
+    try:
+        output = os.read(fd, 4096)
+    except OSError:
+        break
+    if not output:
+        break
+    sys.stdout.buffer.write(output)
+
+_, status = os.waitpid(pid, 0)
+raise SystemExit(os.waitstatus_to_exitcode(status))
+PY
+) >"${tau_home}/workspace-connection.txt"; then
+  cat "${tau_home}/workspace-connection.txt" >&2
+  exit 1
+fi
+grep -q "Connected." "${tau_home}/workspace-connection.txt"
+
+# Use the provider-neutral kubeconfig path through the cached noninteractive
+# connection before the following submission.
 if ! (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \

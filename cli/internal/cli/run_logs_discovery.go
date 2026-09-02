@@ -49,6 +49,13 @@ func (r runLogsRoute) key() string {
 	}, "\x00")
 }
 
+func (r runLogsRoute) logicalKey() string {
+	if workspaceUID := strings.TrimSpace(r.WorkspaceUID); workspaceUID != "" {
+		return "uid\x00" + workspaceUID
+	}
+	return "route\x00" + r.key()
+}
+
 type runLogsDiscoveryHooks struct {
 	connected    func() (runLogsRoute, error)
 	cached       func() ([]runLogsRoute, error)
@@ -59,6 +66,7 @@ type runLogsDiscoveryHooks struct {
 
 const (
 	defaultRunLogsProbeTimeout = 15 * time.Second
+	defaultRunLogsProbeBudget  = 30 * time.Second
 	maxRunLogsProbeConcurrency = 8
 )
 
@@ -82,7 +90,11 @@ func probeRunLogsWithHooks(ctx context.Context, hooks runLogsProbeHooks) (bool, 
 	return strings.TrimSpace(podName) != "", nil
 }
 
-func cachedRunLogsWorkspaceRoute(workspace string, hooks runLogsDiscoveryHooks) (runLogsRoute, bool, error) {
+func cachedRunLogsWorkspaceRoute(
+	ctx context.Context,
+	workspace, name string,
+	hooks runLogsDiscoveryHooks,
+) (runLogsRoute, bool, error) {
 	cached, err := hooks.cached()
 	if err != nil {
 		return runLogsRoute{}, false, fmt.Errorf("discover configured Tau workspace connections: %w", err)
@@ -99,14 +111,32 @@ func cachedRunLogsWorkspaceRoute(workspace string, hooks runLogsDiscoveryHooks) 
 		return runLogsRoute{}, false, nil
 	case 1:
 		return matches[0], true, nil
+	}
+	probed, _, probeErrors := probeCachedRunLogsRoutes(ctx, hooks, matches, map[string]struct{}{}, name)
+	probed = deduplicateRunLogsRoutes(probed)
+	switch len(probed) {
+	case 0:
+		detail := ""
+		if len(probeErrors) > 0 {
+			detail = "; discovery errors: " + strings.Join(probeErrors, "; ")
+		}
+		return runLogsRoute{}, false, fmt.Errorf(
+			"run %q was not found in configured Tau workspace %q%s; pass --context and --namespace to select a target explicitly",
+			name,
+			workspace,
+			detail,
+		)
+	case 1:
+		return probed[0], true, nil
 	default:
-		locations := make([]string, 0, len(matches))
-		for _, route := range matches {
+		locations := make([]string, 0, len(probed))
+		for _, route := range probed {
 			locations = append(locations, route.label())
 		}
 		return runLogsRoute{}, false, fmt.Errorf(
-			"workspace %q has multiple configured Tau connections (%s); pass --context and --namespace to select one",
+			"workspace %q has multiple configured Tau connections containing run %q (%s); pass --context and --namespace to select one",
 			workspace,
+			name,
 			strings.Join(locations, "; "),
 		)
 	}
@@ -152,6 +182,7 @@ func runLogsWithDiscovery(
 	searched := make([]string, 0, len(cached))
 	cachedMatches, cachedSearched, cachedErrors := probeCachedRunLogsRoutes(ctx, hooks, cached, seen, name)
 	matches = append(matches, cachedMatches...)
+	matches = deduplicateRunLogsRoutes(matches)
 	searched = append(searched, cachedSearched...)
 	diagnostics = append(diagnostics, cachedErrors...)
 	warnings = append(warnings, cachedErrors...)
@@ -191,6 +222,20 @@ func runLogsWithDiscovery(
 	}
 }
 
+func deduplicateRunLogsRoutes(routes []runLogsRoute) []runLogsRoute {
+	unique := make([]runLogsRoute, 0, len(routes))
+	seen := make(map[string]struct{}, len(routes))
+	for _, route := range routes {
+		key := route.logicalKey()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, route)
+	}
+	return unique
+}
+
 func probeCachedRunLogsRoutes(
 	ctx context.Context,
 	hooks runLogsDiscoveryHooks,
@@ -210,11 +255,11 @@ func probeCachedRunLogsRoutes(
 		return nil, nil, nil
 	}
 
-	timeout := hooks.probeTimeout
-	if timeout <= 0 {
-		timeout = defaultRunLogsProbeTimeout
+	budget := defaultRunLogsProbeBudget
+	if hooks.probeTimeout > 0 {
+		budget = 2 * hooks.probeTimeout
 	}
-	searchCtx, cancel := context.WithTimeout(ctx, timeout)
+	searchCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	type probeResult struct {

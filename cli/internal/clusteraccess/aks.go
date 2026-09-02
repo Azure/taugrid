@@ -6,7 +6,6 @@ package clusteraccess
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -20,9 +19,15 @@ import (
 )
 
 type AKSUserCredentialProvider struct {
-	Credentials   CredentialFactory
-	AuthMode      string
-	KubeloginPath string
+	Credentials      CredentialFactory
+	AuthMode         string
+	KubeloginPath    string
+	FindExecutable   func(string) (string, error)
+	KubeloginVersion func(context.Context, string) (string, error)
+}
+
+func (AKSUserCredentialProvider) Method() workspaceconnection.AccessMethod {
+	return workspaceconnection.AccessMethodAKS
 }
 
 func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descriptor workspaceconnection.Descriptor) ([]byte, error) {
@@ -30,15 +35,16 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 		return nil, fmt.Errorf("AKS workspace access metadata is missing")
 	}
 	authorizationMode := descriptor.Authorization.Mode
-	kubeloginPath := strings.TrimSpace(p.KubeloginPath)
-	if kubeloginPath == "" && authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC {
-		var err error
-		kubeloginPath, err = exec.LookPath("kubelogin")
-		if err != nil {
-			return nil, fmt.Errorf("kubelogin is required for AKS user authentication; install it and retry: %w", err)
+	kubeloginPath, err := p.resolveKubeloginPath(
+		authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if authorizationMode == workspaceconnection.AuthorizationModeWorkspaceRBAC {
+		if err := p.requireCompatibleKubelogin(ctx, kubeloginPath); err != nil {
+			return nil, err
 		}
-	} else if kubeloginPath == "" {
-		kubeloginPath, _ = exec.LookPath("kubelogin")
 	}
 	id, err := parseAKSResourceID(descriptor.Access.AKS.ResourceID)
 	if err != nil {
@@ -52,7 +58,10 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	if err != nil {
 		return nil, err
 	}
-	clientFactory, err := armcontainerservice.NewClientFactory(id.SubscriptionID, credential, nil)
+	if credential.Token == nil {
+		return nil, fmt.Errorf("AKS credential factory returned no token credential")
+	}
+	clientFactory, err := armcontainerservice.NewClientFactory(id.SubscriptionID, credential.Token, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create AKS ARM client: %w", err)
 	}
@@ -70,17 +79,28 @@ func (p AKSUserCredentialProvider) UserKubeconfig(ctx context.Context, descripto
 	if len(result.Kubeconfigs) == 0 || result.Kubeconfigs[0] == nil || len(result.Kubeconfigs[0].Value) == 0 {
 		return nil, fmt.Errorf("AKS returned no cluster-user kubeconfig for %s", id.Name)
 	}
-	mode := strings.ToLower(strings.TrimSpace(p.AuthMode))
-	if mode == "" {
-		mode = AuthModeInteractive
-	}
-	return NormalizeKubeconfig(
+	normalized, err := NormalizeKubeconfig(
 		result.Kubeconfigs[0].Value,
 		descriptor.Cluster.ContextName,
 		authorizationMode,
-		mode,
+		credential.KubeloginMode,
 		kubeloginPath,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if authorizationMode == workspaceconnection.AuthorizationModeClusterWide {
+		usesExec, err := kubeconfigUsesExecCredential(normalized)
+		if err != nil {
+			return nil, err
+		}
+		if usesExec {
+			if err := p.requireCompatibleKubelogin(ctx, kubeloginPath); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return normalized, nil
 }
 
 func parseAKSResourceID(resourceID string) (*arm.ResourceID, error) {
@@ -125,13 +145,11 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 		if !strings.EqualFold(filepath.Base(authInfo.Exec.Command), "kubelogin") {
 			return nil, fmt.Errorf("AKS cluster-user kubeconfig exec command %q is not kubelogin", authInfo.Exec.Command)
 		}
-		switch authMode {
-		case AuthModeInteractive, AuthModeDeviceCode:
-		default:
+		if !supportedKubeloginMode(authMode) {
 			return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
 		}
-		authInfo.Exec.Command = "kubelogin"
-		authInfo.Exec.Args = setKubeloginMode(authInfo.Exec.Args, authMode)
+		authInfo.Exec.Command = kubeloginPath
+		authInfo.Exec.Args = normalizeKubeloginArgs(authInfo.Exec.Args, authMode)
 	case workspaceconnection.AuthorizationModeClusterWide:
 		if authInfo.Exec != nil {
 			if hasStaticCredentials(authInfo) {
@@ -143,8 +161,11 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 			if kubeloginPath == "" {
 				return nil, fmt.Errorf("kubelogin is required for this AKS cluster-user kubeconfig")
 			}
-			authInfo.Exec.Command = "kubelogin"
-			authInfo.Exec.Args = setKubeloginMode(authInfo.Exec.Args, authMode)
+			if !supportedKubeloginMode(authMode) {
+				return nil, fmt.Errorf("unsupported kubelogin mode %q", authMode)
+			}
+			authInfo.Exec.Command = kubeloginPath
+			authInfo.Exec.Args = normalizeKubeloginArgs(authInfo.Exec.Args, authMode)
 		} else if !hasStaticCredentials(authInfo) {
 			return nil, fmt.Errorf("AKS cluster-user kubeconfig has no usable static or exec credential")
 		}
@@ -167,6 +188,15 @@ func NormalizeKubeconfig(raw []byte, contextName, authorizationMode, authMode, k
 	return output, nil
 }
 
+func supportedKubeloginMode(mode string) bool {
+	switch mode {
+	case AuthModeAzureCLI, AuthModeInteractive, AuthModeDeviceCode:
+		return true
+	default:
+		return false
+	}
+}
+
 func hasStaticCredentials(authInfo *clientcmdapi.AuthInfo) bool {
 	return len(authInfo.ClientCertificateData) > 0 ||
 		len(authInfo.ClientKeyData) > 0 ||
@@ -176,19 +206,41 @@ func hasStaticCredentials(authInfo *clientcmdapi.AuthInfo) bool {
 		authInfo.Password != ""
 }
 
-func setKubeloginMode(args []string, mode string) []string {
+func normalizeKubeloginArgs(args []string, mode string) []string {
 	out := append([]string(nil), args...)
+	modeSet := false
 	for i, arg := range out {
 		switch {
 		case arg == "-l" || arg == "--login":
 			if i+1 < len(out) {
 				out[i+1] = mode
-				return out
+				modeSet = true
 			}
 		case strings.HasPrefix(arg, "--login="):
 			out[i] = "--login=" + mode
-			return out
+			modeSet = true
 		}
 	}
-	return append(out, "--login", mode)
+	if !modeSet {
+		out = append(out, "--login", mode)
+	}
+
+	const disableEnvironmentOverride = "--disable-environment-override"
+	normalized := make([]string, 0, len(out)+1)
+	overrideDisabled := false
+	for _, arg := range out {
+		if arg == disableEnvironmentOverride ||
+			strings.HasPrefix(arg, disableEnvironmentOverride+"=") {
+			if !overrideDisabled {
+				normalized = append(normalized, disableEnvironmentOverride)
+				overrideDisabled = true
+			}
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	if !overrideDisabled {
+		normalized = append(normalized, disableEnvironmentOverride)
+	}
+	return normalized
 }

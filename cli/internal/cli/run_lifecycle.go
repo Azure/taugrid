@@ -376,7 +376,7 @@ Kubernetes job-name=<name> label selector.`,
 			explicitRoute := runContextExplicit(cmd) || cmd.Flags().Changed("namespace")
 			if discover && !explicitRoute && cmd.Flags().Changed("workspace") {
 				hooks := defaultRunLogsDiscoveryHooks(cmd, &connection)
-				route, found, err := cachedRunLogsWorkspaceRoute(connection.workspace, hooks)
+				route, found, err := cachedRunLogsWorkspaceRoute(cmd.Context(), connection.workspace, name, hooks)
 				if err != nil {
 					return err
 				}

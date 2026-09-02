@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package clusteraccess obtains and normalizes normal-user AKS access for Tau.
+// Package clusteraccess obtains isolated user kubeconfigs through credential adapters.
 package clusteraccess
 
 import (
@@ -19,12 +19,18 @@ import (
 )
 
 const (
+	AuthModeAzureCLI    = "azurecli"
 	AuthModeInteractive = "interactive"
 	AuthModeDeviceCode  = "devicecode"
 )
 
+type CredentialResult struct {
+	Token         azcore.TokenCredential
+	KubeloginMode string
+}
+
 type CredentialFactory interface {
-	Credential(context.Context, string) (azcore.TokenCredential, error)
+	Credential(context.Context, string) (CredentialResult, error)
 }
 
 type UserCredentialFactory struct {
@@ -32,7 +38,7 @@ type UserCredentialFactory struct {
 	Output io.Writer
 }
 
-func (f UserCredentialFactory) Credential(ctx context.Context, tenantID string) (azcore.TokenCredential, error) {
+func (f UserCredentialFactory) Credential(ctx context.Context, tenantID string) (CredentialResult, error) {
 	mode := strings.ToLower(strings.TrimSpace(f.Mode))
 	if mode == "" {
 		mode = AuthModeInteractive
@@ -48,7 +54,10 @@ func (f UserCredentialFactory) Credential(ctx context.Context, tenantID string) 
 			if _, tokenErr := credential.GetToken(ctx, policy.TokenRequestOptions{
 				Scopes: []string{"https://management.azure.com/.default"},
 			}); tokenErr == nil {
-				return credential, nil
+				return CredentialResult{
+					Token:         credential,
+					KubeloginMode: AuthModeAzureCLI,
+				}, nil
 			}
 		}
 	}
@@ -59,9 +68,12 @@ func (f UserCredentialFactory) Credential(ctx context.Context, tenantID string) 
 			Cache:    tokenCache,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("create interactive Azure credential: %w", err)
+			return CredentialResult{}, fmt.Errorf("create interactive Azure credential: %w", err)
 		}
-		return credential, nil
+		return CredentialResult{
+			Token:         credential,
+			KubeloginMode: AuthModeInteractive,
+		}, nil
 	case AuthModeDeviceCode:
 		output := f.Output
 		if output == nil {
@@ -76,10 +88,13 @@ func (f UserCredentialFactory) Credential(ctx context.Context, tenantID string) 
 			},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("create Azure device-code credential: %w", err)
+			return CredentialResult{}, fmt.Errorf("create Azure device-code credential: %w", err)
 		}
-		return credential, nil
+		return CredentialResult{
+			Token:         credential,
+			KubeloginMode: AuthModeDeviceCode,
+		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported Tau Azure auth mode %q; use interactive or devicecode", f.Mode)
+		return CredentialResult{}, fmt.Errorf("unsupported Tau Azure auth mode %q; use interactive or devicecode", f.Mode)
 	}
 }

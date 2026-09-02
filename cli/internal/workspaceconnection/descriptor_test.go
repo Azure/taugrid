@@ -51,7 +51,18 @@ func TestDiscoverWalksParents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if got.Path != path || got.RepositoryRoot != root {
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != path ||
+		got.RealPath != realPath ||
+		got.RepositoryRoot != root ||
+		got.RealRepositoryRoot != realRoot {
 		t.Fatalf("discovery = %#v, want path %s root %s", got, path, root)
 	}
 	if got.Descriptor.Workspace != "sample" || got.Digest == "" {
@@ -97,6 +108,14 @@ func TestParseRejectsAccessMetadataForWrongMethod(t *testing.T) {
 	raw := strings.Replace(validDescriptorYAML, "method: aks", "method: kubeconfig", 1)
 	if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "must be omitted") {
 		t.Fatalf("Parse() error = %v, want access.aks rejection", err)
+	}
+}
+
+func TestParseRejectsUnknownAccessMethod(t *testing.T) {
+	raw := strings.Replace(validDescriptorYAML, "method: aks", "method: future-managed", 1)
+	if _, err := Parse([]byte(raw)); err == nil ||
+		!strings.Contains(err.Error(), "access.method must be one of: kubeconfig, aks") {
+		t.Fatalf("Parse() error = %v, want supported access methods", err)
 	}
 }
 
@@ -222,6 +241,66 @@ func TestParseRejectsInvalidWorkspaceName(t *testing.T) {
 	_, err := Parse([]byte(raw))
 	if err == nil || !strings.Contains(err.Error(), "workspace") || !strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("expected workspace-name error, got %v", err)
+	}
+}
+
+func TestDescriptorRejectsControlCharacters(t *testing.T) {
+	tests := []struct {
+		name   string
+		field  string
+		mutate func(*Descriptor)
+	}{
+		{
+			name:  "context",
+			field: "cluster.contextName",
+			mutate: func(descriptor *Descriptor) {
+				descriptor.Cluster.ContextName = "trusted\x1b[2Jspoofed"
+			},
+		},
+		{
+			name:  "network instructions",
+			field: "network.instructions",
+			mutate: func(descriptor *Descriptor) {
+				descriptor.Network.Instructions = "connect\nthen approve"
+			},
+		},
+		{
+			name:  "AKS resource ID",
+			field: "access.aks.resourceID",
+			mutate: func(descriptor *Descriptor) {
+				descriptor.Access.AKS.ResourceID += "\u009b2J"
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			descriptor, err := Parse([]byte(validDescriptorYAML))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(&descriptor)
+			err = descriptor.Validate()
+			if err == nil ||
+				!strings.Contains(err.Error(), tc.field) ||
+				!strings.Contains(err.Error(), "control characters") {
+				t.Fatalf("Validate() error = %v, want %s control-character rejection", err, tc.field)
+			}
+		})
+	}
+}
+
+func TestParseRejectsTerminalEscapeInContextName(t *testing.T) {
+	raw := strings.Replace(
+		validDescriptorYAML,
+		"contextName: taugrid-flex",
+		`contextName: "trusted\e[2Jspoofed"`,
+		1,
+	)
+	_, err := Parse([]byte(raw))
+	if err == nil ||
+		!strings.Contains(err.Error(), "cluster.contextName") ||
+		!strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("Parse() error = %v, want context control-character rejection", err)
 	}
 }
 
