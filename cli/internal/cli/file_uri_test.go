@@ -27,3 +27,33 @@ func TestFileURIFromPathRoundTripsLocalPath(t *testing.T) {
 		t.Fatalf("file URI round trip = %q, want %q", got, path)
 	}
 }
+
+func TestLocalPathParsersPreserveWindowsDriveRoot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path behavior")
+	}
+
+	want := `C:\`
+	for name, input := range map[string]string{
+		"bare path": want,
+		"file URI":  "file:///C:/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseLocalDestination(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("destination = %q, want %q", got, want)
+			}
+		})
+	}
+
+	got, err := parseLocalSource("file:///C:/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("source = %q, want %q", got, want)
+	}
+}

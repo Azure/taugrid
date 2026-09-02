@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -212,11 +213,10 @@ func runIngestLocal(ctx context.Context, out io.Writer, name, version string,
 	reg *dataset.Registry, rec dataset.Record,
 	sourceRoot, destination string, dryRun bool, output string,
 ) error {
-	srcDir, err := localPathFromFileURI(sourceRoot)
-	if err != nil || srcDir == "" {
-		return fmt.Errorf("--source-root file:// path must be non-empty")
+	srcDir, err := parseLocalSource(sourceRoot)
+	if err != nil {
+		return err
 	}
-	srcDir = strings.TrimRight(srcDir, "/\\")
 
 	destDir, err := parseLocalDestination(destination)
 	if err != nil {
@@ -260,6 +260,14 @@ func runIngestLocal(ctx context.Context, out io.Writer, name, version string,
 	return printDatasetIngestResult(out, ingestResult)
 }
 
+func parseLocalSource(sourceRoot string) (string, error) {
+	dir, err := localPathFromFileURI(sourceRoot)
+	if err != nil || dir == "" {
+		return "", fmt.Errorf("--source-root file:// path must be non-empty")
+	}
+	return filepath.Clean(dir), nil
+}
+
 // parseLocalDestination extracts the filesystem directory from a destination
 // URI. Accepts "file:///path", "file://path", or a bare path. Rejects az://.
 func parseLocalDestination(destination string) (string, error) {
@@ -277,11 +285,10 @@ func parseLocalDestination(destination string) (string, error) {
 			return "", fmt.Errorf("--destination: %w", err)
 		}
 	}
-	dir = strings.TrimRight(dir, "/\\")
 	if dir == "" {
 		return "", fmt.Errorf("--destination must be a non-empty file:// path for local mode")
 	}
-	return dir, nil
+	return filepath.Clean(dir), nil
 }
 
 // runIngestWorkspace renders and applies a hardened batch/v1 Job in the
