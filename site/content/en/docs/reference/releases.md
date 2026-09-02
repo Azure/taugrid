@@ -18,10 +18,10 @@ The workflow:
 4. Compares two independent binary builds.
 5. Builds the Python SDK wheel twice and requires byte-for-byte identical
    output.
-6. Publishes raw binaries, the SDK wheel, `install.sh`, `LICENSE`, and
+6. Publishes raw binaries, the SDK wheel, `install.sh`, `install.ps1`, `LICENSE`, and
    `SHA256SUMS` as new assets, leaving any existing ones untouched.
 7. Verifies every uploaded digest.
-8. Proves CLI and SDK installation on clean Ubuntu and macOS runners.
+8. Proves CLI and SDK installation on clean Ubuntu, macOS, and Windows runners.
 
 The Python SDK keeps its own package version, but its source-aligned
 `tau-*.whl` is published in the same GitHub Release as the CLI.

@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: build install test test-installer test-kind-e2e lint clean verify-release-inputs release-binaries release-assets
+.PHONY: build install test test-installer test-installer-windows test-kind-e2e lint clean verify-release-inputs release-binaries release-assets
 
 BINARY := tau
 GEN_BINARY := tau-gen
@@ -21,7 +21,7 @@ BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 # deliberately, in a PR that also fixes whatever the new version finds.
 STATICCHECK_VERSION := v0.7.0
 RELEASE_DIR := bin/release
-RELEASE_TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
+RELEASE_TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 DARWIN_MIN_VERSION := 12.0
 DARWIN_CGO_CFLAGS := -O2 -g -mmacosx-version-min=$(DARWIN_MIN_VERSION)
 DARWIN_CGO_LDFLAGS := -mmacosx-version-min=$(DARWIN_MIN_VERSION)
@@ -40,6 +40,9 @@ test:
 
 test-installer:
 	./scripts/test-install-tau.sh
+
+test-installer-windows:
+	pwsh -NoProfile -File ./scripts/test-install-tau.ps1
 
 test-kind-e2e: build
 	TAU_KIND_SKIP_BUILD=1 ./scripts/kind-smoke-e2e.sh
@@ -83,7 +86,9 @@ release-binaries: verify-release-inputs
 	  fi; \
 	  for spec in "$(BINARY):$(PKG)" "$(GEN_BINARY):$(GEN_PKG)"; do \
 	    name=$${spec%%:*}; pkg=$${spec#*:}; \
-	    out="$(RELEASE_DIR)/$$name-$$os-$$arch"; \
+	    suffix=""; \
+	    if [ "$$os" = "windows" ]; then suffix=".exe"; fi; \
+	    out="$(RELEASE_DIR)/$$name-$$os-$$arch$$suffix"; \
 	    echo "build $$out"; \
 	    MACOSX_DEPLOYMENT_TARGET=$(DARWIN_MIN_VERSION) CGO_CFLAGS="$$cgo_cflags" CGO_LDFLAGS="$$cgo_ldflags" \
 	      GOOS=$$os GOARCH=$$arch CGO_ENABLED=$$cgo \
@@ -103,7 +108,8 @@ release-assets: release-binaries
 		cp "$(PYTHON_WHEEL)" "$(RELEASE_DIR)/$$wheel_name"
 	@sed 's/@TAU_VERSION@/$(VERSION)/g' scripts/install-tau.sh > "$(RELEASE_DIR)/install.sh"
 	@chmod 0755 "$(RELEASE_DIR)/install.sh"
+	@sed 's/@TAU_VERSION@/$(VERSION)/g' scripts/install-tau.ps1 > "$(RELEASE_DIR)/install.ps1"
 	@cp ../LICENSE "$(RELEASE_DIR)/LICENSE"
-	@(cd "$(RELEASE_DIR)" && shasum -a 256 tau-* install.sh LICENSE > SHA256SUMS)
-	@ls -lh "$(RELEASE_DIR)"/tau-* "$(RELEASE_DIR)"/install.sh \
+	@(cd "$(RELEASE_DIR)" && shasum -a 256 tau-* install.sh install.ps1 LICENSE > SHA256SUMS)
+	@ls -lh "$(RELEASE_DIR)"/tau-* "$(RELEASE_DIR)"/install.sh "$(RELEASE_DIR)"/install.ps1 \
 		"$(RELEASE_DIR)"/LICENSE "$(RELEASE_DIR)"/SHA256SUMS

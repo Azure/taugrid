@@ -14,8 +14,9 @@ supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
 - Terraform 1.9 or later
 - Azure credentials usable by the AzureRM provider
 - `tau`, `helm`, and `kubectl` on PATH. Install the matching released `tau`
-  binary for Linux or macOS with the release installer; on Windows provide a
-  PATH entry or pass the executable path to the verification script.
+  binary for Linux or macOS with `install.sh`. On Windows amd64, download the
+  release `install.ps1`, run it, and add `%LOCALAPPDATA%\TauGrid\bin` to PATH;
+  alternatively pass the installed executable path to the verification script.
 - PowerShell 7. Terraform uses it for local installation commands and the
   maintainer verification entry point on Windows, Linux, and macOS. Linux,
   WSL, and macOS deployments can instead set

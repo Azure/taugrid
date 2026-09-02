@@ -50,8 +50,26 @@ helm version --short
 ```
 
 Add `$HOME/.local/bin` to your shell startup file so future terminals can find
-`tau`. The installer supports Linux and macOS on amd64 and arm64, verifies the
+the CLI. The installer supports Linux and macOS on amd64 and arm64, verifies the
 release checksum, and installs only the CLI.
+
+On Windows amd64, download the PowerShell installer and run it with standard
+user permissions:
+
+```powershell
+Invoke-WebRequest `
+  https://github.com/Azure/taugrid/releases/latest/download/install.ps1 `
+  -OutFile install.ps1
+.\install.ps1
+
+$env:PATH = "$env:LOCALAPPDATA\TauGrid\bin;$env:PATH"
+tau version --short
+```
+
+The PowerShell installer verifies the published checksum and embedded version,
+then installs `tau.exe` under `%LOCALAPPDATA%\TauGrid\bin`. It does not alter
+the user PATH; use the command it prints to persist that setting for future
+terminals.
 
 For a pinned version, upgrades, source builds, or the optional Python SDK, see
 the [Tau CLI release assets](https://github.com/Azure/taugrid/releases) and the

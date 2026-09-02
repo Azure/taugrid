@@ -9,12 +9,13 @@ workflow manually with an existing tag.
 Each release contains raw binaries and one checksum manifest. Linux binaries are
 statically linked. Darwin binaries use CGO for macOS Keychain access and link
 only to macOS system libraries and frameworks. Both Darwin architectures target
-macOS 12.0 or newer.
+macOS 12.0 or newer. Windows amd64 binaries are native PE executables.
 
-- `tau-{darwin,linux}-{amd64,arm64}`
-- `tau-gen-{darwin,linux}-{amd64,arm64}`
+- `tau-{darwin,linux}-{amd64,arm64}` and `tau-windows-amd64.exe`
+- `tau-gen-{darwin,linux}-{amd64,arm64}` and `tau-gen-windows-amd64.exe`
 - `tau-<sdk-version>-py3-none-any.whl`
 - `install.sh`
+- `install.ps1`
 - `LICENSE`
 - `SHA256SUMS`
 
@@ -90,11 +91,12 @@ wheel with the CLI assets.
    every GitHub asset digest, and only then publishes the draft. A retry resumes
    a draft only when its metadata, release notes, and assets exactly match the
    rebuilt release. It never overwrites an existing release or asset.
-6. After publication, clean GitHub-hosted Ubuntu and macOS runners install the
-   Python SDK wheel, install `tau` through the published `install.sh`, download
-   `tau-gen` from the same release, and exercise native help and version
-   commands. A failure leaves the immutable published release unchanged and
-   fails the workflow for explicit follow-up.
+6. Before publication, a clean GitHub-hosted Windows runner verifies the two
+   Windows executables and the `tau` release version. After publication,
+   Ubuntu and macOS runners install the Python SDK wheel and exercise native
+   CLI commands, while a Windows runner installs `tau` through `install.ps1`
+   and exercises both Windows executables. A failure leaves the immutable
+   published release unchanged when it occurs before publication.
 
 `v0.3.0` predates both this dispatch flow and its checked-in release notes. Its
 one-time recovery is restricted to the reviewed tag commit while taking the
