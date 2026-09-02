@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ import (
 )
 
 const JSONLImporterVersion = "tau.jsonl.import.v1"
+
+var ErrNoJSONLScalarMetrics = errors.New("JSONL history files contain no scalar metrics")
 
 type JSONLImportOptions struct {
 	RunID          string
@@ -107,7 +110,7 @@ func ImportJSONL(ctx context.Context, store *expstore.Store, opts JSONLImportOpt
 		scalars = append(scalars, fileScalars...)
 	}
 	if len(scalars) == 0 {
-		return JSONLImportResult{}, fmt.Errorf("JSONL history files contain no scalar metrics")
+		return JSONLImportResult{}, ErrNoJSONLScalarMetrics
 	}
 
 	rows, minStep, maxStep, err := jsonlMetricRows(opts, scalars)

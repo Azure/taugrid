@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -607,6 +608,9 @@ func processMetricsHistoryChunk(ctx context.Context, store *expstore.Store, out 
 		SkipArtifacts:  true,
 	})
 	if err != nil {
+		if errors.Is(err, expimport.ErrNoJSONLScalarMetrics) {
+			return metricsOnlineChunkResult{}, nil
+		}
 		return metricsOnlineChunkResult{}, err
 	}
 	result := metricsOnlineChunkResult{
@@ -682,6 +686,19 @@ func validateOnlineMetricsChunk(chunk metricsHistoryChunk) error {
 		wallTime := time.UnixMicro(int64(micros)).UTC()
 		if wallTime.Year() < 1 || wallTime.Year() > 9999 {
 			return fmt.Errorf("direct online metrics history %s line %d: _timestamp must be representable as an RFC3339 wall time", chunk.Path, line)
+		}
+		for key, value := range payload {
+			if strings.HasPrefix(key, "_") {
+				continue
+			}
+			number, ok := value.(json.Number)
+			if !ok {
+				continue
+			}
+			parsed, err := number.Float64()
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				return fmt.Errorf("direct online metrics history %s line %d: metric %q must be a finite number", chunk.Path, line, key)
+			}
 		}
 	}
 	return nil
