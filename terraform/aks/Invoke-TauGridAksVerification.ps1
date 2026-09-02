@@ -36,6 +36,8 @@ param(
     [string] $BootstrapWorkspaceName = "taugrid-default",
     [ValidatePattern("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")]
     [string] $WorkspaceNamespace = "taugrid-default",
+    [ValidatePattern("^[0-9]+\.[0-9]+\.[0-9]+$")]
+    [string] $TauGridVersion = "0.4.0",
     [ValidateRange(10, 60)]
     [int] $PortalWaitMinutes = 30
 )
@@ -125,15 +127,22 @@ function Invoke-TerraformApplyWithAdxRecovery {
     if ($LASTEXITCODE -eq 0) { return }
 
     $stateEntries = @(terraform "-chdir=$ModulePath" state list "-state=$StateFile")
-    if ($LASTEXITCODE -ne 0 -or "azurerm_kusto_cluster.this[0]" -in $stateEntries) {
-        throw "Terraform apply failed and there is no recoverable untracked ADX cluster."
+    if ($LASTEXITCODE -ne 0) {
+        throw "Terraform apply failed and Terraform state could not be read to assess ADX recovery."
     }
-    $clusterIDs = @(az resource list --resource-group $ResourceGroup --resource-type "Microsoft.Kusto/clusters" --query "[].id" --output tsv)
-    if ($LASTEXITCODE -ne 0 -or $clusterIDs.Count -ne 1) {
-        throw "Terraform apply failed and did not leave exactly one recoverable ADX cluster in resource group '$ResourceGroup'."
+    if ("azurerm_kusto_cluster.this[0]" -in $stateEntries) {
+        throw "Terraform apply failed after ADX was recorded in Terraform state; no ADX recovery is applicable. See the preceding Terraform diagnostic."
     }
-    $clusterID = $clusterIDs[0]
     $deadline = (Get-Date).AddMinutes(20)
+    $clusterID = Wait-ForCondition {
+        $clusterIDs = @(az resource list --resource-group $ResourceGroup --resource-type "Microsoft.Kusto/clusters" --query "[].id" --output tsv)
+        if ($LASTEXITCODE -ne 0) { throw "Unable to list ADX clusters in resource group '$ResourceGroup'." }
+        if ($clusterIDs.Count -gt 1) {
+            throw [TerminalWaitError]::new("Terraform apply left multiple ADX clusters in isolated resource group '$ResourceGroup'; refusing to import an ambiguous resource.")
+        }
+        if ($clusterIDs.Count -eq 1) { return $clusterIDs[0] }
+        return $false
+    } "discovery of the ADX cluster after Terraform apply" $deadline
     Wait-ForCondition {
         $provisioningState = az resource show --ids $clusterID --api-version "2024-04-13" --query "properties.provisioningState" --output tsv
         if ($LASTEXITCODE -ne 0) { throw "Unable to inspect ADX cluster '$clusterID'." }
@@ -149,6 +158,14 @@ foreach ($name in @("az", "terraform", "kubectl", "helm", "pwsh")) {
 }
 $tau = Get-Command $TauCommand -ErrorAction SilentlyContinue
 if ($null -eq $tau) { throw "Tau command '$TauCommand' was not found. Install the OS-specific tau release or pass -TauCommand." }
+$expectedTauVersion = "v$TauGridVersion"
+$tauVersion = (@(& $tau.Source version --short) -join [Environment]::NewLine).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Tau command '$($tau.Source)' could not report its version. Install TauGrid CLI $expectedTauVersion or pass a matching -TauCommand."
+}
+if ($tauVersion -ne $expectedTauVersion) {
+    throw "Tau command '$($tau.Source)' is version '$tauVersion', but this deployment requires $expectedTauVersion to match TauGrid chart $TauGridVersion. Update Tau before provisioning Azure resources."
+}
 if ($EnableBootstrapWorkspace) {
     if ([string]::IsNullOrWhiteSpace($BootstrapWorkspaceEntraGroupObjectId)) {
         throw "BootstrapWorkspaceEntraGroupObjectId is required when EnableBootstrapWorkspace is set."
@@ -174,11 +191,13 @@ $deployment = Join-Path $generated "deployments"
 $state = Join-Path $generated "state"
 $plans = Join-Path $generated "plans"
 $data = Join-Path $generated "terraform-data-$run"
-New-Item -ItemType Directory -Force -Path $deployment, $state, $plans, $data | Out-Null
+$terraformGenerated = Join-Path $generated "terraform-$run"
+New-Item -ItemType Directory -Force -Path $deployment, $state, $plans, $data, $terraformGenerated | Out-Null
 $varsFile = Join-Path $deployment "$run.tfvars"
 $stateFile = Join-Path $state "$run.tfstate"
 $planFile = Join-Path $plans "$run.tfplan"
-$kubeconfig = Join-Path $generated "kubeconfig-$run"
+$kubeconfig = Join-Path $terraformGenerated "verification-kubeconfig"
+$terraformGeneratedForTfvars = $terraformGenerated.Replace('\', '/')
 
 $account = az account show --output json | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($account.id) -or [string]::IsNullOrWhiteSpace($account.tenantId)) { throw "Run az login and az account set first." }
@@ -203,6 +222,7 @@ adx_sku_name        = "$AdxSkuName"
 adx_sku_capacity    = $AdxSkuCapacity
 resource_group_name = "$resourceGroup"
 cluster_name        = "$resourceGroup"
+generated_directory = "$terraformGeneratedForTfvars"
 command_interpreter = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 gpu_vm_size             = "$GpuVmSize"
 gpu_node_count          = 1
@@ -216,6 +236,7 @@ normalize_gpu_mig       = $($NormalizeGpuMig.ToString().ToLowerInvariant())
 enable_adx                = true
 enable_lifecycle_recorder = true
 workspace_namespace       = "$WorkspaceNamespace"
+taugrid_version           = "$TauGridVersion"
 $bootstrapWorkspaceTfvars
 "@
 Set-Content -LiteralPath $varsFile -Value $tfvars -Encoding utf8NoBOM
@@ -315,7 +336,7 @@ runtime:
         } "smoke RayJob completion" $deadline
         Wait-ForCondition {
             Ensure-PortalPortForward -PortForward ([ref] $portForward) -Attempt ([ref] $portForwardAttempt) -Diagnostics $portForwardDiagnostics -GeneratedPath $generated -RunIdentifier $run
-            $history = Invoke-RestMethod -Uri "$($portForward.BaseUri)/api/portal/ray/history/$smokeResourceUID?workspace=$BootstrapWorkspaceName" -TimeoutSec 30
+            $history = Invoke-RestMethod -Uri "$($portForward.BaseUri)/api/portal/ray/history/${smokeResourceUID}?workspace=$BootstrapWorkspaceName" -TimeoutSec 30
             $history.state -eq "ready" -and @($history.events | Where-Object { $_.resourceUid -eq $smokeResourceUID }).Count -ge 1
         } "Portal lifecycle history from ADX" $deadline
     }

@@ -22,12 +22,13 @@ separately with Helm.
 - an Azure subscription that passes the
   [AKS cluster prerequisites](../../platform-admin-guide/aks-setup/#prerequisites), has GPU quota for the
   selected region and SKU, and an approved Terraform identity;
-- Azure CLI, Terraform 1.9 or later, kubectl, Helm, and local Python
-  dependencies;
+- Azure CLI, Terraform 1.9 or later, `kubectl`, Helm, and `tau` on PATH; and
 - Azure credentials accepted by the AzureRM Terraform provider and permission
-  to provision AKS, networking, storage, and identities; and
-- `tau` and PowerShell 7 on PATH. Linux and macOS users can configure the
-  Terraform command interpreter to use Bash.
+  to provision AKS, networking, storage, and identities.
+
+Terraform uses PowerShell 7 by default on every supported host OS. Linux, WSL,
+and macOS users can instead enable the Bash interpreter setting in the local
+parameter file before creating a plan.
 
 The default deployment creates one `Standard_NC24ads_A100_v4` node. This node
 has one A100 80 GB GPU and is billable. Before applying, verify that the target
@@ -37,13 +38,28 @@ when selecting another GPU SKU.
 
 ## Deploy
 
-From a checkout of this repository:
+From a checkout of this repository, create a local parameter file, review the
+plan, and apply that exact plan:
 
 ```bash
 cd terraform/aks
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars: subscription_id, resource_group_name, cluster_name.
 terraform init
-terraform apply -var="subscription_id=<your-subscription-id>"
+terraform plan -out=taugrid.tfplan
+terraform show -no-color taugrid.tfplan
+terraform apply taugrid.tfplan
 ```
+
+In Windows PowerShell, use `Copy-Item terraform.tfvars.example terraform.tfvars`
+instead of `cp`. Keep `terraform.tfvars`, saved plans, generated kubeconfigs,
+and Terraform state out of source control. Use an encrypted remote backend with
+locking for every shared environment.
+
+The tracked parameter template deliberately enables ADX, lifecycle recording,
+and Portal telemetry in addition to the billable GPU node. Set both
+`enable_adx` and `enable_lifecycle_recorder` to `false` before creating the
+plan for a platform-only deployment.
 
 By default, Terraform uses `gpu_stack_mode = "self_managed"`: it installs a
 standalone NVIDIA device plugin plus the upstream NVIDIA DCGM exporter.
@@ -86,8 +102,7 @@ with the provider setting; retain the feature registration until AKS makes the
 feature generally available.
 
 If the local installation step fails after AKS has been created, correct the
-local prerequisite and rerun `terraform apply`. Terraform replaces that step
-when its cluster, generated values, or TauGrid version changes.
+local prerequisite, create and review a new plan, and apply that plan.
 
 An existing cluster with an externally managed GPU Operator is a third,
 distinct operational model alongside Terraform's standalone and AKS-managed
@@ -157,10 +172,11 @@ applying the CR but intentionally does not delete an existing workspace or its
 workloads. Remove a workspace through the workspace administration workflow
 after reviewing the impact.
 
-## Optional ADX and lifecycle history
+## ADX and lifecycle history
 
-ADX observability is opt-in because it creates additional billable resources.
-Both ADX and lifecycle history can be enabled in the initial plan and apply:
+The Terraform variable defaults are opt-in, but the tracked parameter template
+deliberately enables the complete ADX-backed observability path. Both ADX and
+lifecycle history are configured in the initial plan and apply:
 
 ```hcl
 enable_adx                = true
@@ -197,6 +213,12 @@ For a real GPU workload, use
 after the GPU allocatable-resource check succeeds. It verifies CUDA execution,
 not only scheduling, and can incur additional GPU cost.
 
+Maintainers can run the isolated
+[`Invoke-TauGridAksVerification.ps1`](https://github.com/Azure/taugrid/blob/main/terraform/aks/Invoke-TauGridAksVerification.ps1)
+with workspace bootstrap enabled to validate the complete GPU, ADX, Portal, and
+lifecycle path. It creates a disposable environment and requires an explicit
+Terraform destroy after verification.
+
 ## Portal
 
 Terraform uses the TauGrid distribution default and installs Portal as `tau-portal` in the `tau-system` namespace. Its Service is ClusterIP-only, keeping it reachable only from inside the cluster network. An operator can inspect it with:
@@ -215,5 +237,5 @@ and cost boards require separately configured ADX and Azure Workload Identity.
 Destroy the environment when it is no longer needed to stop GPU billing:
 
 ```bash
-terraform destroy -var="subscription_id=<your-subscription-id>"
+terraform destroy
 ```

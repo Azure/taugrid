@@ -16,8 +16,9 @@ supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
 - `tau`, `helm`, and `kubectl` on PATH. Install the matching released `tau`
   binary for Linux or macOS with the release installer; on Windows provide a
   PATH entry or pass the executable path to the verification script.
-- PowerShell 7 for the optional deployment-verification entry point. It is supported on Windows,
-  Linux, and macOS. Terraform local-exec can instead use
+- PowerShell 7. Terraform uses it for local installation commands and the
+  maintainer verification entry point on Windows, Linux, and macOS. Linux,
+  WSL, and macOS deployments can instead set
   `command_interpreter = ["bash", "-c"]`.
 
 ## GPU stack modes
@@ -50,7 +51,7 @@ When AzureRM exposes the managed GPU profile, replace that conditional tag in
 `main.tf` with the provider field and remove this workaround. Keep the feature
 registration until AKS makes the feature generally available.
 
-## Deploy
+## Maintainer deployment verification
 
 For a maintainer-only, disposable, ADX-backed Portal deployment verification on
 any supported host OS:
@@ -63,8 +64,12 @@ This integration verification creates billable Azure resources and requires a
 subscription with sufficient regional quota. It is not part of the normal
 offline or CI test suite.
 
-The script resolves `tau` for the active OS. Pass `-TauCommand` with an
-absolute path when it is not on PATH; paths containing spaces are supported.
+The script resolves `tau` for the active OS and, before it accesses Azure,
+requires `tau version --short` to be exactly `v<TauGridVersion>` (by default
+`v0.4.0`). It rejects development builds and stale CLIs because the CLI and
+chart readiness contracts must match. Pass `-TauCommand` with an absolute path
+to a matching released binary when it is not on PATH; paths containing spaces
+are supported.
 It accepts the ADX SKU and capacity, plus the GPU VM SKU and its matching
 monitoring, class, and series metadata. The script queries the Azure Resource
 Manager ADX SKU catalog as an early validation; Azure service-side creation
@@ -74,7 +79,9 @@ imports it, and resumes the apply. It writes tfvars, state, plan, and
 Terraform data beneath `terraform/aks/generated/` and never reads a local
 `terraform.tfvars` file. Its state is isolated with Terraform's local
 state-file flags and `init -backend=false`; it does not select a backend for
-normal Terraform deployments.
+normal Terraform deployments. The verifier also gives Terraform a per-run
+generated directory, so its kubeconfig, Helm state, and generated values do
+not conflict with another local Terraform process.
 
 By default the script validates the platform and that Portal reads GPU
 telemetry from ADX. To also create an Entra-backed workspace, run a smoke job,
@@ -87,6 +94,8 @@ pwsh -File terraform/aks/Invoke-TauGridAksVerification.ps1 `
   -BootstrapWorkspaceEntraGroupObjectId "<entra-group-object-id>"
 ```
 
+## Standard deployment
+
 ```bash
 cd terraform/aks
 terraform init
@@ -94,7 +103,10 @@ terraform init
 
 Keep the deployment inputs in a local `terraform.tfvars` file so every later
 `plan`, `apply`, and `destroy` uses the same environment. Do not commit this
-file. Start from the tracked template:
+file. Start from the tracked template. In Windows PowerShell, use `Copy-Item`;
+on Linux, WSL, and macOS, use `cp`. PowerShell 7 is the default Terraform
+interpreter; uncomment the Bash setting in the template only to use Bash
+instead:
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars
@@ -215,8 +227,7 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.al
 
 The default path is an operator sandbox, not an Entra researcher handoff.
 Create the workspace as the local administrator against the namespace that
-Terraform bootstrapped, wait for the complete Workspace contract, then run the
-standard smoke test:
+Terraform bootstrapped, then wait for the complete Workspace contract:
 
 ```bash
 tau workspace create taugrid-default \
@@ -230,6 +241,11 @@ kubectl -n tau-system wait \
   --timeout=5m
 tau workspace check taugrid-default
 ```
+
+Run the [A100 GPU quickstart](../../examples/aks-gpu-quickstart/README.md) after
+the workspace is ready to verify CUDA execution. The maintainer verification
+script above creates a temporary workspace and RayJob when invoked with
+`-EnableBootstrapWorkspace`.
 
 Portal is installed as `tau-portal` in the `tau-system` namespace with a ClusterIP Service. Terraform does not expose it outside the cluster. For an operator diagnostic session:
 
