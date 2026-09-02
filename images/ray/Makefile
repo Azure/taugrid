@@ -119,6 +119,15 @@ test:
 	@docker run --rm $(IMG) python3 -c "import ray.serve" 2>&1 && \
 		echo "PASS: ray[serve] - ray.serve importable" || \
 		{ echo "FAIL: ray[serve] - could not import ray.serve"; exit 1; }
+	@echo "=== Verifying protobuf<5 (Ray Serve proto compatibility) ==="
+	@docker run --rm $(IMG) python3 -c \
+		"from google.protobuf import __version__ as v; import sys; sys.exit(0 if int(v.split('.')[0]) < 5 else 1)" 2>&1 && \
+		echo "PASS: protobuf major version is <5" || \
+		{ echo "FAIL: protobuf>=5 detected — breaks Ray Serve's _proto_to_dict (FieldDescriptor.label removed)"; exit 1; }
+	@docker run --rm $(IMG) python3 -c \
+		"from google._upb._message import FieldDescriptor; import sys; sys.exit(0 if hasattr(FieldDescriptor, 'label') else 1)" 2>&1 && \
+		echo "PASS: FieldDescriptor.label is present (Ray Serve dashboard/controller/replica proto decoding works)" || \
+		{ echo "FAIL: FieldDescriptor.label missing — Ray Serve deployments will fail with AttributeError"; exit 1; }
 	@echo "=== Verifying wget is GNU Wget 1.x (not wget2) ==="
 	@docker run --rm $(IMG) wget --version 2>&1 | grep -q "^GNU Wget " && \
 		echo "PASS: GNU Wget 1.x is installed" || \
