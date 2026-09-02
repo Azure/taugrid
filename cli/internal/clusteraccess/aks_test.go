@@ -21,6 +21,8 @@ type recordingCredentialFactory struct {
 	err      error
 }
 
+type callerContextKey struct{}
+
 func (f *recordingCredentialFactory) Credential(ctx context.Context, tenantID string) (CredentialResult, error) {
 	f.ctx = ctx
 	f.tenantID = tenantID
@@ -30,7 +32,7 @@ func (f *recordingCredentialFactory) Credential(ctx context.Context, tenantID st
 func TestAKSUserCredentialProviderUsesCallerContextAndTenant(t *testing.T) {
 	wantErr := errors.New("credential unavailable")
 	factory := &recordingCredentialFactory{err: wantErr}
-	ctx := context.WithValue(context.Background(), struct{}{}, "caller")
+	ctx := context.WithValue(context.Background(), callerContextKey{}, "caller")
 	_, err := (AKSUserCredentialProvider{Credentials: factory}).UserKubeconfig(ctx, workspaceconnection.Descriptor{
 		Cluster: workspaceconnection.ClusterDescriptor{ContextName: "aks"},
 		Access: workspaceconnection.AccessDescriptor{
