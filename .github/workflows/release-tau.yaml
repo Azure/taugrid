@@ -272,6 +272,7 @@ jobs:
             LICENSE
             SHA256SUMS
             install.sh
+            install.ps1
             tau-darwin-amd64
             tau-darwin-arm64
             tau-gen-darwin-amd64
@@ -280,6 +281,8 @@ jobs:
             tau-gen-linux-arm64
             tau-linux-amd64
             tau-linux-arm64
+            tau-windows-amd64.exe
+            tau-gen-windows-amd64.exe
             "$wheel_name"
           )
           printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
@@ -291,7 +294,7 @@ jobs:
           while read -r _ asset; do
             cmp "$first/$asset" "$second/$asset"
             case "$asset" in
-              tau-darwin-* | tau-linux-* | tau-gen-darwin-* | tau-gen-linux-*)
+              tau-darwin-* | tau-linux-* | tau-windows-* | tau-gen-darwin-* | tau-gen-linux-* | tau-gen-windows-*)
                 go version -m "$first/$asset"
                 ;;
             esac
@@ -311,12 +314,45 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  validate-windows-assets:
+    name: Validate Windows release assets
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download validated release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tau-release-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}\tau-release
+
+      - name: Verify Windows binaries
+        shell: pwsh
+        env:
+          VERSION: ${{ env.RELEASE_TAG }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseDir = Join-Path $env:RUNNER_TEMP "tau-release"
+          foreach ($asset in @("tau-windows-amd64.exe", "tau-gen-windows-amd64.exe")) {
+            $checksumLine = Get-Content (Join-Path $releaseDir "SHA256SUMS") | Where-Object { $_ -match "^[A-Fa-f0-9]{64}\s+\*?$asset$" }
+            if (@($checksumLine).Count -ne 1) { throw "missing unique checksum for $asset" }
+            $expected = ($checksumLine -split "\s+")[0].ToLowerInvariant()
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseDir $asset)).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "checksum verification failed for $asset" }
+          }
+          $reportedVersion = (& (Join-Path $releaseDir "tau-windows-amd64.exe") version --short | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne $env:VERSION) { throw "tau reports '$reportedVersion', expected '$env:VERSION'" }
+          & (Join-Path $releaseDir "tau-windows-amd64.exe") --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "tau Windows help failed" }
+          & (Join-Path $releaseDir "tau-gen-windows-amd64.exe") --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "tau-gen Windows help failed" }
+
   publish:
     name: Publish immutable GitHub Release
     needs:
       - validate
       - gates
       - build
+      - validate-windows-assets
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -372,6 +408,7 @@ jobs:
             LICENSE
             SHA256SUMS
             install.sh
+            install.ps1
             tau-darwin-amd64
             tau-darwin-arm64
             tau-gen-darwin-amd64
@@ -380,6 +417,8 @@ jobs:
             tau-gen-linux-arm64
             tau-linux-amd64
             tau-linux-arm64
+            tau-windows-amd64.exe
+            tau-gen-windows-amd64.exe
             "$wheel_asset"
           )
           printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
@@ -553,3 +592,44 @@ jobs:
           tau-gen --help >/dev/null
           python -c 'import tau; print(tau.__version__)'
           python -m tau.cli --help >/dev/null
+
+  smoke-windows:
+    name: Smoke test windows-amd64
+    needs:
+      - validate
+      - publish
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download and exercise published Windows assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseDir = Join-Path $env:RUNNER_TEMP "release"
+          $binDir = Join-Path $env:RUNNER_TEMP "bin"
+          New-Item -ItemType Directory -Force -Path $releaseDir, $binDir | Out-Null
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir $releaseDir --pattern install.ps1 --pattern tau-windows-amd64.exe --pattern tau-gen-windows-amd64.exe --pattern SHA256SUMS --pattern LICENSE
+          if ($LASTEXITCODE -ne 0) { throw "unable to download Windows release assets" }
+          foreach ($asset in @("tau-windows-amd64.exe", "tau-gen-windows-amd64.exe")) {
+            $checksumLine = Get-Content (Join-Path $releaseDir "SHA256SUMS") | Where-Object { $_ -match "^[A-Fa-f0-9]{64}\s+\*?$asset$" }
+            if (@($checksumLine).Count -ne 1) { throw "missing unique checksum for $asset" }
+            $expected = ($checksumLine -split "\s+")[0].ToLowerInvariant()
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseDir $asset)).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "checksum verification failed for $asset" }
+          }
+          Push-Location $releaseDir
+          try {
+            & .\install.ps1 -InstallDir $binDir
+            $reportedVersion = (& (Join-Path $binDir "tau.exe") version --short | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne $env:TAG) { throw "installed tau reports '$reportedVersion', expected '$env:TAG'" }
+            & (Join-Path $binDir "tau.exe") --help | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "installed tau help failed" }
+            & .\tau-gen-windows-amd64.exe --help | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "tau-gen Windows help failed" }
+          } finally {
+            Pop-Location
+          }

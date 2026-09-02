@@ -90,6 +90,21 @@ command -v tau
 tau version --short
 ```
 
+On Windows amd64, download and run the PowerShell installer:
+
+```powershell
+Invoke-WebRequest `
+  https://github.com/Azure/taugrid/releases/latest/download/install.ps1 `
+  -OutFile install.ps1
+.\install.ps1
+
+$env:PATH = "$env:LOCALAPPDATA\TauGrid\bin;$env:PATH"
+tau version --short
+```
+
+The installer verifies the release checksum and version. It does not change the
+user PATH; it prints the command for making that change in future terminals.
+
 See the [installation guide](site/content/en/docs/platform-admin-guide/installation-guides/kubernetes.md#1-install-the-tau-cli)
 for PATH persistence, pinned versions, the Python SDK wheel, upgrades, and the
 advanced source installation.

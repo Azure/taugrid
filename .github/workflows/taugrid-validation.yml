@@ -284,6 +284,7 @@ jobs:
             LICENSE
             SHA256SUMS
             install.sh
+            install.ps1
             tau-darwin-amd64
             tau-darwin-arm64
             tau-gen-darwin-amd64
@@ -292,6 +293,8 @@ jobs:
             tau-gen-linux-arm64
             tau-linux-amd64
             tau-linux-arm64
+            tau-windows-amd64.exe
+            tau-gen-windows-amd64.exe
             "$wheel_name"
           )
           printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
@@ -303,7 +306,7 @@ jobs:
           while read -r _ asset; do
             cmp "$first/$asset" "$second/$asset"
             case "$asset" in
-              tau-darwin-* | tau-linux-* | tau-gen-darwin-* | tau-gen-linux-*)
+              tau-darwin-* | tau-linux-* | tau-windows-* | tau-gen-darwin-* | tau-gen-linux-* | tau-gen-windows-*)
                 go version -m "$first/$asset"
                 ;;
             esac
@@ -323,6 +326,26 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  release-windows-installer:
+    name: Release / Windows installer
+    needs: release-detect
+    if: needs.release-detect.outputs.enabled == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Test PowerShell release installer
+        shell: pwsh
+        run: pwsh -NoProfile -File cli/scripts/test-install-tau.ps1
+
   required:
     name: Required
     if: always()
@@ -333,6 +356,7 @@ jobs:
       - release-build
       - release-detect
       - release-installer
+      - release-windows-installer
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
@@ -343,6 +367,7 @@ jobs:
           RELEASE_BUILD_RESULT: ${{ needs.release-build.result }}
           RELEASE_DETECT_RESULT: ${{ needs.release-detect.result }}
           RELEASE_INSTALLER_RESULT: ${{ needs.release-installer.result }}
+          RELEASE_WINDOWS_INSTALLER_RESULT: ${{ needs.release-windows-installer.result }}
           RELEASE_PREFLIGHT_ENABLED: ${{ needs.release-detect.outputs.enabled }}
         run: |
           set -euo pipefail
@@ -352,8 +377,10 @@ jobs:
           test "${RELEASE_DETECT_RESULT}" = success
           if [[ "${RELEASE_PREFLIGHT_ENABLED}" == "true" ]]; then
             test "${RELEASE_INSTALLER_RESULT}" = success
+            test "${RELEASE_WINDOWS_INSTALLER_RESULT}" = success
             test "${RELEASE_BUILD_RESULT}" = success
           else
             test "${RELEASE_INSTALLER_RESULT}" = skipped
+            test "${RELEASE_WINDOWS_INSTALLER_RESULT}" = skipped
             test "${RELEASE_BUILD_RESULT}" = skipped
           fi
