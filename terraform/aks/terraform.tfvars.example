@@ -12,8 +12,9 @@ cluster_name        = "<cluster-name>"
 # aks_admin_group_object_ids = ["<entra-admin-group-object-id>"]
 # azure_rbac_enabled          = false
 
-# Use this interpreter on Linux, WSL, and macOS.
-command_interpreter = ["bash", "-c"]
+# PowerShell 7 is the default interpreter on every supported host OS.
+# On Linux, WSL, and macOS, uncomment the following setting to use Bash instead.
+# command_interpreter = ["bash", "-c"]
 
 # The defaults below create one billable A100 GPU node.
 gpu_vm_size             = "Standard_NC24ads_A100_v4"

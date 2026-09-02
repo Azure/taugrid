@@ -1,0 +1,23 @@
+{{ define "main" }}
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
+<div class="td-content">
+  <a class="td-rss-button" title="RSS" href="{{ with .OutputFormats.Get "rss" }}{{ .RelPermalink }}{{ end }}" target="_blank" rel="noopener">
+    <i class="fa-solid fa-rss" aria-hidden="true"></i>
+  </a>
+  <h1>{{ .Title }}</h1>
+  {{ .Content }}
+
+  <div class="section-index">
+    <hr class="panel-line">
+    {{ range .RegularPages.ByDate.Reverse }}
+      <article class="entry">
+        <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+        <p><time datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "January 2, 2006" }}</time></p>
+        <p>{{ .Description | markdownify }}</p>
+      </article>
+    {{ end }}
+  </div>
+</div>
+{{ end }}

@@ -92,8 +92,13 @@ resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
 }
 
 locals {
-  generated_directory               = "${path.module}/generated"
+  generated_directory               = var.generated_directory != null ? abspath(var.generated_directory) : "${path.module}/generated"
   kubeconfig_path                   = "${local.generated_directory}/kubeconfig"
+  adx_mon_values_path               = "${local.generated_directory}/adx-mon-values.yaml"
+  helm_home_directory               = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
+  helm_config_home                  = "${local.helm_home_directory}/config"
+  helm_cache_home                   = "${local.helm_home_directory}/cache"
+  helm_data_home                    = "${local.helm_home_directory}/data"
   values_path                       = "${local.generated_directory}/taugrid-values.yaml"
   gpu_quota                         = (var.gpu_auto_scaling_enabled ? var.gpu_max_count : var.gpu_node_count) * var.gpu_count_per_node
   adx_databases                     = toset(["Metrics", "Logs", "CostTracking", "Audit"])
@@ -104,6 +109,8 @@ locals {
   bootstrap_workspace_path          = "${local.generated_directory}/bootstrap-workspace.yaml"
   command_interpreter_is_powershell = can(regex("(?i)(pwsh|powershell)(\\.exe)?$", try(var.command_interpreter[0], "")))
   bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local.bootstrap_workspace_path}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local.bootstrap_workspace_path}' '${local.bootstrap_workspace_name}'"
+  adx_functions_command             = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForAdxFunctionsReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -ChartPath '${path.module}/../../charts/adx-mon' -BaseValuesFile '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' -EnvironmentValuesFile '${local.adx_mon_values_path}'" : "bash '${path.module}/wait-for-adx-functions-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${path.module}/../../charts/adx-mon' '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' '${local.adx_mon_values_path}'"
+  helm_dcgm_repository_command      = local.command_interpreter_is_powershell ? "& { New-Item -ItemType Directory -Force -Path $env:HELM_CONFIG_HOME, $env:HELM_CACHE_HOME, $env:HELM_DATA_HOME | Out-Null; helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update; $repoAddExitCode = $LASTEXITCODE; $repositories = helm repo list --output json | ConvertFrom-Json; $repoListExitCode = $LASTEXITCODE; $expectedRepository = @($repositories | Where-Object { $_.name -eq 'dcgm-exporter' -and $_.url -eq 'https://nvidia.github.io/dcgm-exporter/helm-charts' }); if ($repoAddExitCode -ne 0) { Write-Warning 'helm repo add returned a non-zero exit code; continuing only because the repository state is verified below.' }; if ($repoListExitCode -ne 0 -or $expectedRepository.Count -ne 1) { Write-Error 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.'; exit 1 }; helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Error 'The expected dcgm-exporter chart version is not resolvable from the verified repository.'; exit 1 } }" : "mkdir -p \"$HELM_CONFIG_HOME\" \"$HELM_CACHE_HOME\" \"$HELM_DATA_HOME\" && { helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update || echo 'helm repo add returned a non-zero exit code; validating repository state.'; repositories=$(helm repo list --output json) && case \"$repositories\" in *dcgm-exporter*https://nvidia.github.io/dcgm-exporter/helm-charts*) ;; *) echo 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.' >&2; exit 1 ;; esac && helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' >/dev/null; }"
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
     gpu_monitoring_sku_name      = var.gpu_monitoring_sku_name
@@ -281,7 +288,7 @@ resource "terraform_data" "install_nvidia_device_plugin" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f nvidia-device-plugin.yaml && kubectl rollout status daemonset/nvidia-device-plugin-daemonset --namespace kube-system --timeout=10m"
   }
@@ -305,7 +312,7 @@ resource "terraform_data" "normalize_gpu_mig" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl apply -f '${local_file.mig_normalizer[0].filename}' && kubectl rollout status daemonset/taugrid-mig-normalizer --namespace kube-system --timeout=10m && az vmss restart --subscription '${var.subscription_id}' --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --name $(az vmss list --subscription '${var.subscription_id}' --resource-group $(az aks show --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --query nodeResourceGroup --output tsv) --query \"[?starts_with(name, 'aks-${var.gpu_node_pool_name}-')].name | [0]\" --output tsv) && kubectl wait --for=condition=Ready node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl wait --for='jsonpath={.status.allocatable.nvidia\\.com/gpu}'='${var.gpu_count_per_node}' node --selector agentpool='${var.gpu_node_pool_name}' --timeout=20m && kubectl delete -f '${local_file.mig_normalizer[0].filename}' --ignore-not-found"
   }
@@ -330,13 +337,20 @@ resource "terraform_data" "bootstrap_lifecycle_namespace" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl create namespace '${var.workspace_namespace}' --dry-run=client -o yaml | kubectl apply -f -"
   }
 
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
+    # Local-exec provisioners share generated/kubeconfig. Keep this bootstrap
+    # after the GPU and ADX local installation chain to prevent concurrent
+    # credential writes from corrupting the kubeconfig file.
+    terraform_data.install_nvidia_device_plugin,
+    terraform_data.normalize_gpu_mig,
+    terraform_data.install_dcgm_exporter,
+    terraform_data.install_adx_functions,
   ]
 }
 
@@ -354,7 +368,7 @@ resource "terraform_data" "install_taugrid" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && tau cluster install --values '${local_file.taugrid_values.filename}' --version '${var.taugrid_version}' --timeout 20m"
   }
@@ -368,7 +382,7 @@ resource "terraform_data" "install_taugrid" {
     terraform_data.bootstrap_lifecycle_namespace,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
-    terraform_data.install_adx_mon,
+    terraform_data.install_adx_functions,
   ]
 }
 
@@ -403,7 +417,7 @@ resource "terraform_data" "bootstrap_workspace" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
     command = local.bootstrap_workspace_command
   }
@@ -415,7 +429,7 @@ resource "terraform_data" "bootstrap_workspace" {
 
 resource "local_file" "adx_mon_values" {
   count           = var.enable_adx ? 1 : 0
-  filename        = "${local.generated_directory}/adx-mon-values.yaml"
+  filename        = local.adx_mon_values_path
   file_permission = "0600"
   content = templatefile("${path.module}/adx-mon-values.yaml.tftpl", {
     adx_endpoint       = azurerm_kusto_cluster.this[0].uri
@@ -444,6 +458,7 @@ resource "terraform_data" "install_dcgm_exporter" {
     azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.dcgm_exporter_values[0].content_sha256,
     var.dcgm_exporter_chart_version,
+    local.helm_dcgm_repository_command,
     join(" ", var.command_interpreter),
   ]
 
@@ -451,13 +466,18 @@ resource "terraform_data" "install_dcgm_exporter" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG       = abspath(local.kubeconfig_path)
+      HELM_CONFIG_HOME = local.helm_config_home
+      HELM_CACHE_HOME  = local.helm_cache_home
+      HELM_DATA_HOME   = local.helm_data_home
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update && helm repo update dcgm-exporter && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && ${local.helm_dcgm_repository_command} && helm upgrade --install dcgm-exporter dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' --namespace dcgm-exporter --create-namespace --values '${local_file.dcgm_exporter_values[0].filename}' --set serviceMonitor.enabled=false --wait --timeout 15m"
   }
 
   depends_on = [
     azurerm_kubernetes_cluster_node_pool.gpu,
+    terraform_data.install_nvidia_device_plugin,
+    terraform_data.normalize_gpu_mig,
   ]
 }
 
@@ -483,9 +503,9 @@ resource "terraform_data" "install_adx_mon" {
     working_dir = path.module
     interpreter = var.command_interpreter
     environment = {
-      KUBECONFIG = local.kubeconfig_path
+      KUBECONFIG = abspath(local.kubeconfig_path)
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo update prometheus-community && helm dependency build ../../charts/adx-mon && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --wait --timeout 30m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --set functions.enabled=false --wait --timeout 30m"
   }
 
   depends_on = [
@@ -493,5 +513,30 @@ resource "terraform_data" "install_adx_mon" {
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
+  ]
+}
+
+resource "terraform_data" "install_adx_functions" {
+  count = var.enable_adx ? 1 : 0
+
+  triggers_replace = [
+    terraform_data.install_adx_mon[0].id,
+    local_file.adx_mon_values[0].content_sha256,
+    filesha256("${path.module}/Wait-ForAdxFunctionsReady.ps1"),
+    filesha256("${path.module}/wait-for-adx-functions-ready.sh"),
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = abspath(local.kubeconfig_path)
+    }
+    command = local.adx_functions_command
+  }
+
+  depends_on = [
+    terraform_data.install_adx_mon,
   ]
 }

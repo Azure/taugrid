@@ -42,3 +42,5 @@ jobs:
           terraform -chdir=terraform/aks fmt -check -recursive
           terraform -chdir=terraform/aks init -backend=false -lockfile=readonly
           terraform -chdir=terraform/aks validate
+          bash terraform/aks/test-wait-for-adx-functions-ready.sh
+          pwsh -File terraform/aks/test-wait-for-adx-functions-ready.ps1

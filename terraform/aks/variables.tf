@@ -175,6 +175,18 @@ variable "command_interpreter" {
   default     = ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 }
 
+variable "generated_directory" {
+  description = "Optional directory for the local kubeconfig, Helm state, and generated values. Null uses the module generated directory."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.generated_directory == null || trimspace(var.generated_directory) != ""
+    error_message = "generated_directory must not be empty when set."
+  }
+}
+
 variable "enable_adx" {
   description = "Create the optional Azure Data Explorer data plane and install adx-mon. This creates additional billable Azure resources."
   type        = bool

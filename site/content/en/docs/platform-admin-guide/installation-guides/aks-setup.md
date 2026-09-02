@@ -76,14 +76,21 @@ cd terraform/aks
 terraform init
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars: subscription_id, resource_group_name, cluster_name
-terraform apply
+terraform plan -out=taugrid.tfplan
+terraform show -no-color taugrid.tfplan
+terraform apply taugrid.tfplan
 ```
 
-The default GPU pool is one billable `Standard_NC24ads_A100_v4` node; keep
-`terraform.tfvars` out of source control since it can hold subscription and
-naming details. See the [full GPU-enabled AKS example](../../examples/full-cluster/)
-for the complete workflow, including GPU stack modes, ADX telemetry, and
-Portal. Destroy the environment with `terraform destroy` to stop GPU billing.
+The default GPU pool is one billable `Standard_NC24ads_A100_v4` node. The
+tracked template also enables billable ADX, lifecycle recording, and Portal
+telemetry. Keep `terraform.tfvars` and `taugrid.tfplan` out of source control,
+and use an encrypted remote backend with locking for shared environments.
+PowerShell 7 is the default `command_interpreter` on every supported host OS;
+Linux, WSL, and macOS users can uncomment the Bash setting in the template to
+use Bash instead. See the [full GPU-enabled AKS example](../../examples/full-cluster/)
+for the complete workflow, including GPU stack modes, workspace bootstrap, ADX
+telemetry, and Portal. Destroy the environment with `terraform destroy` to stop
+GPU and ADX billing.
 
 ### 3. An existing AKS cluster
 
