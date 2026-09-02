@@ -202,7 +202,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		return ActiveConnection{}, fmt.Errorf("load Tau workspace connection state: %w", stateErr)
 	}
 	hasState := stateErr == nil &&
-		(loadedStatePath == statePath || state.DescriptorPath == discovery.Path)
+		(loadedStatePath == statePath || descriptorPathMatchesDiscovery(state.DescriptorPath, discovery))
 	stateConfigured := hasState && state.configures(discovery)
 	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
 	stateMatches := stateConfigured && !kubeconfigMissing
@@ -415,7 +415,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		SystemNamespace:   discovery.Descriptor.ResolvedSystemNamespace(),
 		KubeconfigPath:    kubeconfigPath,
 		RequiredRole:      discovery.Descriptor.Authorization.RequiredRole,
-		DescriptorPath:    discovery.Path,
+		DescriptorPath:    discoveryTrustPath(discovery),
 		DescriptorDigest:  discovery.Digest,
 		ConfiguredAt:      now,
 	}
@@ -654,7 +654,7 @@ func loadConnectionStateForDiscovery(statePath string, discovery Discovery) (con
 		}
 		candidatePath := filepath.Join(connectionsDir, entry.Name())
 		candidate, candidateErr := loadConnectionState(candidatePath)
-		if candidateErr != nil || candidate.DescriptorPath != discovery.Path {
+		if candidateErr != nil || !descriptorPathMatchesDiscovery(candidate.DescriptorPath, discovery) {
 			continue
 		}
 		if matchedPath != "" {
@@ -686,7 +686,7 @@ func (s connectionState) configures(discovery Discovery) bool {
 		s.AuthorizationMode == discovery.Descriptor.Authorization.Mode &&
 		s.RequiredRole == discovery.Descriptor.Authorization.RequiredRole &&
 		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
-		s.DescriptorPath == discovery.Path &&
+		descriptorPathMatchesDiscovery(s.DescriptorPath, discovery) &&
 		s.DescriptorDigest == discovery.Digest
 }
 
@@ -798,7 +798,30 @@ func ConnectionKey(descriptor Descriptor) string {
 }
 
 func ConnectionKeyForDiscovery(discovery Discovery) string {
-	return ConnectionKey(discovery.Descriptor) + "-" + accessIdentityHash(discovery.Path)
+	return ConnectionKey(discovery.Descriptor) + "-" + accessIdentityHash(discoveryTrustPath(discovery))
+}
+
+func discoveryTrustPath(discovery Discovery) string {
+	if strings.TrimSpace(discovery.RealPath) != "" {
+		return filepath.Clean(discovery.RealPath)
+	}
+	return filepath.Clean(discovery.Path)
+}
+
+func descriptorPathMatchesDiscovery(path string, discovery Discovery) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	path = filepath.Clean(path)
+	if path == discoveryTrustPath(discovery) || path == filepath.Clean(discovery.Path) {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	resolved, err = filepath.Abs(resolved)
+	return err == nil && filepath.Clean(resolved) == discoveryTrustPath(discovery)
 }
 
 func accessIdentityHash(identity string) string {
@@ -878,7 +901,7 @@ func isolatedKubeconfigPath(configDir string, discovery Discovery) string {
 		"kubeconfigs",
 		safeFilename(discovery.Descriptor.Cluster.ContextName)+"-"+
 			accessIdentityHash(discovery.Descriptor.AccessIdentity())+"-"+
-			accessIdentityHash(discovery.Path)+"-"+
+			accessIdentityHash(discoveryTrustPath(discovery))+"-"+
 			descriptorDigestHash(discovery.Digest)+".yaml",
 	)
 }

@@ -51,7 +51,11 @@ func TestDiscoverWalksParents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if got.Path != path || got.RepositoryRoot != root {
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != path || got.RealPath != realPath || got.RepositoryRoot != root {
 		t.Fatalf("discovery = %#v, want path %s root %s", got, path, root)
 	}
 	if got.Descriptor.Workspace != "sample" || got.Digest == "" {

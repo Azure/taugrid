@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -279,6 +280,49 @@ func TestManagerRejectsNoninteractiveFirstUseWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsKubeconfigFirstUseWithoutSideEffects(t *testing.T) {
+	tests := []struct {
+		name        string
+		interactive bool
+		input       string
+		wantErr     error
+	}{
+		{name: "noninteractive", wantErr: ErrInteractiveRequired},
+		{name: "declined", interactive: true, input: "\n", wantErr: ErrConnectionDeclined},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeKubeconfigDescriptorFixture(t)
+			configDir := t.TempDir()
+			credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+			verifier := &fakeVerifier{}
+			manager := Manager{
+				ConfigDir:   configDir,
+				Interactive: test.interactive,
+				Input:       strings.NewReader(test.input),
+				Output:      &bytes.Buffer{},
+				Credentials: credentials,
+				Verifier:    verifier,
+			}
+
+			_, err := manager.Ensure(context.Background(), root)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("Ensure() error = %v, want %v", err, test.wantErr)
+			}
+			if credentials.calls != 0 || verifier.calls != 0 {
+				t.Fatalf("first use acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+			}
+			entries, err := os.ReadDir(configDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("first use wrote local state: %v", entries)
+			}
+		})
+	}
+}
+
 func TestManagerDoesNotShareTrustAcrossRepositories(t *testing.T) {
 	trustedRoot := writeDescriptorFixture(t)
 	copiedRoot := writeDescriptorFixture(t)
@@ -309,6 +353,106 @@ func TestManagerDoesNotShareTrustAcrossRepositories(t *testing.T) {
 	}
 	if credentials.calls != 0 || verifier.calls != 0 {
 		t.Fatalf("copied repository acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+}
+
+func TestManagerReusesTrustAcrossSymlinkedRepositoryPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	root := writeDescriptorFixture(t)
+	alias := filepath.Join(t.TempDir(), "repository")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	configDir := t.TempDir()
+	firstCredentials := &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")}
+	first := Manager{
+		ConfigDir:   configDir,
+		Credentials: firstCredentials,
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspacePhase: "Ready",
+		}},
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), alias); err != nil {
+		t.Fatalf("trust symlinked repository: %v", err)
+	}
+
+	secondCredentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	secondVerifier := &fakeVerifier{}
+	second := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: secondCredentials,
+		Verifier:    secondVerifier,
+	}
+	if _, err := second.Ensure(context.Background(), root); err != nil {
+		t.Fatalf("reuse trust through real path: %v", err)
+	}
+	if secondCredentials.calls != 0 || secondVerifier.calls != 0 {
+		t.Fatalf("trusted repository acquired credentials=%d or verified=%d", secondCredentials.calls, secondVerifier.calls)
+	}
+
+	aliasDiscovery, err := Discover(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realDiscovery, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ConnectionKeyForDiscovery(aliasDiscovery) != ConnectionKeyForDiscovery(realDiscovery) {
+		t.Fatalf("equivalent repository paths produced different connection keys")
+	}
+}
+
+func TestManagerReusesLegacyConnectionStateFilename(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	first := Manager{
+		ConfigDir:   configDir,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspacePhase: "Ready",
+		}},
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatalf("configure connection: %v", err)
+	}
+	discovery, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionsDir := filepath.Join(configDir, "connections")
+	scopedPath := filepath.Join(connectionsDir, ConnectionKeyForDiscovery(discovery)+".json")
+	legacyPath := filepath.Join(connectionsDir, ConnectionKey(discovery.Descriptor)+".json")
+	state, err := loadConnectionState(scopedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DescriptorPath = discovery.Path
+	if err := fileutil.WriteJSONFileAtomic(legacyPath, state); err != nil {
+		t.Fatalf("seed legacy state: %v", err)
+	}
+	if err := os.Remove(scopedPath); err != nil {
+		t.Fatalf("remove repository-scoped state: %v", err)
+	}
+
+	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	verifier := &fakeVerifier{}
+	second := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: credentials,
+		Verifier:    verifier,
+	}
+	if _, err := second.Ensure(context.Background(), root); err != nil {
+		t.Fatalf("reuse legacy state: %v", err)
+	}
+	if credentials.calls != 0 || verifier.calls != 0 {
+		t.Fatalf("legacy state acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
 	}
 }
 
