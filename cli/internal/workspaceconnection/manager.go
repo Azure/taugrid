@@ -83,6 +83,7 @@ type connectionState struct {
 	Queue             string       `json:"queue"`
 	ServiceAccount    string       `json:"service_account,omitempty"`
 	RequiredRole      string       `json:"required_role"`
+	RepositoryRoot    string       `json:"repository_root,omitempty"`
 	DescriptorPath    string       `json:"descriptor_path"`
 	DescriptorDigest  string       `json:"descriptor_digest"`
 	WorkspaceUID      string       `json:"workspace_uid,omitempty"`
@@ -136,7 +137,7 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 		return nil, fmt.Errorf("inspect cached Tau workspace connections: %w", err)
 	}
 
-	connections := make([]ActiveConnection, 0, len(entries))
+	statesByWorkspaceUID := make(map[string]connectionState, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -159,7 +160,13 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 			strings.TrimSpace(connection.Namespace) == "" {
 			continue
 		}
-		connections = append(connections, connection)
+		if existing, ok := statesByWorkspaceUID[state.WorkspaceUID]; !ok || stateIsNewer(state, existing) {
+			statesByWorkspaceUID[state.WorkspaceUID] = state
+		}
+	}
+	connections := make([]ActiveConnection, 0, len(statesByWorkspaceUID))
+	for _, state := range statesByWorkspaceUID {
+		connections = append(connections, state.active())
 	}
 	sort.Slice(connections, func(i, j int) bool {
 		left := connections[i]
@@ -173,6 +180,13 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 		return left.Namespace < right.Namespace
 	})
 	return connections, nil
+}
+
+func stateIsNewer(candidate, existing connectionState) bool {
+	if !candidate.VerifiedAt.Equal(existing.VerifiedAt) {
+		return candidate.VerifiedAt.After(existing.VerifiedAt)
+	}
+	return candidate.ConfiguredAt.After(existing.ConfiguredAt)
 }
 
 func (m Manager) Ensure(ctx context.Context, startDir string) (ActiveConnection, error) {
@@ -201,8 +215,8 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
 		return ActiveConnection{}, fmt.Errorf("load Tau workspace connection state: %w", stateErr)
 	}
-	hasState := stateErr == nil &&
-		(loadedStatePath == statePath || descriptorPathMatchesDiscovery(state.DescriptorPath, discovery))
+	loadedState := stateErr == nil
+	hasState := loadedState && state.trusts(discovery)
 	stateConfigured := hasState && state.configures(discovery)
 	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
 	stateMatches := stateConfigured && !kubeconfigMissing
@@ -337,7 +351,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		}
 		return state.active(), nil
 	}
-	if hasState {
+	if loadedState {
 		changes := state.configurationChanges(discovery)
 		if sourceTargetChanged {
 			changes = append(changes, "Kubernetes context target changed")
@@ -357,7 +371,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			return ActiveConnection{}, ErrConnectionDeclined
 		}
 	}
-	if !hasState {
+	if !loadedState {
 		if !m.Interactive {
 			return ActiveConnection{}, fmt.Errorf(
 				"%w: this repository has not been connected with Tau on this machine; run `tau workspace connection` from an interactive terminal to review and approve the destination",
@@ -415,6 +429,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		SystemNamespace:   discovery.Descriptor.ResolvedSystemNamespace(),
 		KubeconfigPath:    kubeconfigPath,
 		RequiredRole:      discovery.Descriptor.Authorization.RequiredRole,
+		RepositoryRoot:    discoveryTrustRoot(discovery),
 		DescriptorPath:    discoveryTrustPath(discovery),
 		DescriptorDigest:  discovery.Digest,
 		ConfiguredAt:      now,
@@ -426,7 +441,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		}
 		return ActiveConnection{}, fmt.Errorf("write Tau workspace connection state: %w", err)
 	}
-	if hasState {
+	if loadedStatePath != "" {
 		if loadedStatePath != statePath {
 			_ = os.Remove(loadedStatePath)
 		}
@@ -654,7 +669,7 @@ func loadConnectionStateForDiscovery(statePath string, discovery Discovery) (con
 		}
 		candidatePath := filepath.Join(connectionsDir, entry.Name())
 		candidate, candidateErr := loadConnectionState(candidatePath)
-		if candidateErr != nil || !descriptorPathMatchesDiscovery(candidate.DescriptorPath, discovery) {
+		if candidateErr != nil || !candidate.canMigrateTo(discovery) {
 			continue
 		}
 		if matchedPath != "" {
@@ -686,8 +701,26 @@ func (s connectionState) configures(discovery Discovery) bool {
 		s.AuthorizationMode == discovery.Descriptor.Authorization.Mode &&
 		s.RequiredRole == discovery.Descriptor.Authorization.RequiredRole &&
 		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
-		descriptorPathMatchesDiscovery(s.DescriptorPath, discovery) &&
+		s.trusts(discovery) &&
 		s.DescriptorDigest == discovery.Digest
+}
+
+func (s connectionState) trusts(discovery Discovery) bool {
+	return filepath.Clean(s.RepositoryRoot) == discoveryTrustRoot(discovery) &&
+		filepath.Clean(s.DescriptorPath) == discoveryTrustPath(discovery)
+}
+
+func (s connectionState) canMigrateTo(discovery Discovery) bool {
+	if strings.TrimSpace(s.DescriptorPath) == "" {
+		return false
+	}
+	descriptorPath := filepath.Clean(s.DescriptorPath)
+	if descriptorPath != discoveryTrustPath(discovery) &&
+		descriptorPath != filepath.Clean(discovery.Path) {
+		return false
+	}
+	return strings.TrimSpace(s.RepositoryRoot) == "" ||
+		filepath.Clean(s.RepositoryRoot) == discoveryTrustRoot(discovery)
 }
 
 func (s connectionState) configurationChanges(discovery Discovery) []string {
@@ -715,6 +748,12 @@ func (s connectionState) configurationChanges(discovery Discovery) []string {
 	}
 	if s.RequiredRole != discovery.Descriptor.Authorization.RequiredRole {
 		changes = append(changes, fmt.Sprintf("required role %q -> %q", s.RequiredRole, discovery.Descriptor.Authorization.RequiredRole))
+	}
+	if filepath.Clean(s.RepositoryRoot) != discoveryTrustRoot(discovery) {
+		changes = append(changes, "repository trust identity changed")
+	}
+	if filepath.Clean(s.DescriptorPath) != discoveryTrustPath(discovery) {
+		changes = append(changes, "descriptor trust target changed")
 	}
 	if s.DescriptorDigest != discovery.Digest {
 		changes = append(changes, fmt.Sprintf("descriptor digest %q -> %q", s.DescriptorDigest, discovery.Digest))
@@ -798,7 +837,7 @@ func ConnectionKey(descriptor Descriptor) string {
 }
 
 func ConnectionKeyForDiscovery(discovery Discovery) string {
-	return ConnectionKey(discovery.Descriptor) + "-" + accessIdentityHash(discoveryTrustPath(discovery))
+	return ConnectionKey(discovery.Descriptor) + "-" + accessIdentityHash(discoveryTrustIdentity(discovery))
 }
 
 func discoveryTrustPath(discovery Discovery) string {
@@ -808,20 +847,24 @@ func discoveryTrustPath(discovery Discovery) string {
 	return filepath.Clean(discovery.Path)
 }
 
-func descriptorPathMatchesDiscovery(path string, discovery Discovery) bool {
-	if strings.TrimSpace(path) == "" {
-		return false
+func discoveryTrustRoot(discovery Discovery) string {
+	if strings.TrimSpace(discovery.RealRepositoryRoot) != "" {
+		return filepath.Clean(discovery.RealRepositoryRoot)
 	}
-	path = filepath.Clean(path)
-	if path == discoveryTrustPath(discovery) || path == filepath.Clean(discovery.Path) {
-		return true
+	root := filepath.Clean(discovery.RepositoryRoot)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		if absolute, err := filepath.Abs(resolved); err == nil {
+			return filepath.Clean(absolute)
+		}
 	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return false
+	if absolute, err := filepath.Abs(root); err == nil {
+		return filepath.Clean(absolute)
 	}
-	resolved, err = filepath.Abs(resolved)
-	return err == nil && filepath.Clean(resolved) == discoveryTrustPath(discovery)
+	return root
+}
+
+func discoveryTrustIdentity(discovery Discovery) string {
+	return discoveryTrustRoot(discovery) + "\x00" + discoveryTrustPath(discovery)
 }
 
 func accessIdentityHash(identity string) string {

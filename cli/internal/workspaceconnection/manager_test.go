@@ -140,6 +140,42 @@ func TestListCachedConnectionsReturnsConfiguredRoutesInStableOrder(t *testing.T)
 	}
 }
 
+func TestListCachedConnectionsDeduplicatesRepositoryScopedRoutes(t *testing.T) {
+	configDir := t.TempDir()
+	connectionsDir := filepath.Join(configDir, "connections")
+	if err := os.MkdirAll(connectionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configuredAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	states := map[string]connectionState{
+		"older.json": {
+			Schema: connectionStateSchema, Workspace: "language", ContextName: "east",
+			KubeconfigPath: "/tmp/older-kubeconfig", Namespace: "language-ns",
+			WorkspaceUID: "language-uid", ConfiguredAt: configuredAt,
+			VerifiedAt: configuredAt,
+		},
+		"newer.json": {
+			Schema: connectionStateSchema, Workspace: "language", ContextName: "east",
+			KubeconfigPath: "/tmp/newer-kubeconfig", Namespace: "language-ns",
+			WorkspaceUID: "language-uid", ConfiguredAt: configuredAt,
+			VerifiedAt: configuredAt.Add(time.Minute),
+		},
+	}
+	for name, state := range states {
+		if err := fileutil.WriteJSONFileAtomic(filepath.Join(connectionsDir, name), state); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ListCachedConnections(configDir)
+	if err != nil {
+		t.Fatalf("ListCachedConnections: %v", err)
+	}
+	if len(got) != 1 || got[0].KubeconfigPath != "/tmp/newer-kubeconfig" {
+		t.Fatalf("deduplicated connections = %#v", got)
+	}
+}
+
 func testKubeconfig(server, token string) []byte {
 	return []byte(fmt.Sprintf(`apiVersion: v1
 kind: Config
@@ -356,6 +392,48 @@ func TestManagerDoesNotShareTrustAcrossRepositories(t *testing.T) {
 	}
 }
 
+func TestManagerDoesNotShareTrustForCommonDescriptorTarget(t *testing.T) {
+	firstRoot := writeDescriptorFixture(t)
+	secondRoot := t.TempDir()
+	firstDiscovery, err := Discover(firstRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDiscovery := firstDiscovery
+	secondDiscovery.RepositoryRoot = secondRoot
+	secondDiscovery.RealRepositoryRoot = secondRoot
+	configDir := t.TempDir()
+	first := Manager{
+		ConfigDir:   configDir,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspacePhase: "Ready",
+		}},
+	}
+	if _, err := withFirstUseApproval(first).EnsureDiscovery(context.Background(), firstDiscovery); err != nil {
+		t.Fatalf("trust first repository: %v", err)
+	}
+	if ConnectionKeyForDiscovery(firstDiscovery) == ConnectionKeyForDiscovery(secondDiscovery) {
+		t.Fatal("distinct canonical repository roots produced the same connection key")
+	}
+
+	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	verifier := &fakeVerifier{}
+	second := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: credentials,
+		Verifier:    verifier,
+	}
+	if _, err := second.EnsureDiscovery(context.Background(), secondDiscovery); !errors.Is(err, ErrInteractiveRequired) {
+		t.Fatalf("second repository inherited trust: %v", err)
+	}
+	if credentials.calls != 0 || verifier.calls != 0 {
+		t.Fatalf("second repository acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+}
+
 func TestManagerReusesTrustAcrossSymlinkedRepositoryPaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink setup requires elevated privileges on Windows")
@@ -407,7 +485,7 @@ func TestManagerReusesTrustAcrossSymlinkedRepositoryPaths(t *testing.T) {
 	}
 }
 
-func TestManagerReusesLegacyConnectionStateFilename(t *testing.T) {
+func TestManagerRequiresApprovalToMigrateLegacyConnectionState(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
 	first := Manager{
@@ -432,6 +510,7 @@ func TestManagerReusesLegacyConnectionStateFilename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.RepositoryRoot = ""
 	state.DescriptorPath = discovery.Path
 	if err := fileutil.WriteJSONFileAtomic(legacyPath, state); err != nil {
 		t.Fatalf("seed legacy state: %v", err)
@@ -448,11 +527,86 @@ func TestManagerReusesLegacyConnectionStateFilename(t *testing.T) {
 		Credentials: credentials,
 		Verifier:    verifier,
 	}
-	if _, err := second.Ensure(context.Background(), root); err != nil {
-		t.Fatalf("reuse legacy state: %v", err)
+	if _, err := second.Ensure(context.Background(), root); !errors.Is(err, ErrInteractiveRequired) {
+		t.Fatalf("legacy state reused without approval: %v", err)
 	}
 	if credentials.calls != 0 || verifier.calls != 0 {
 		t.Fatalf("legacy state acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+
+	second.Credentials = &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")}
+	second.Verifier = &fakeVerifier{result: Verification{
+		ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+		WorkspacePhase: "Ready",
+	}}
+	if _, err := withFirstUseApproval(second).Ensure(context.Background(), root); err != nil {
+		t.Fatalf("approve legacy state migration: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy state was not removed after migration: %v", err)
+	}
+	migrated, err := loadConnectionState(scopedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.RepositoryRoot != discoveryTrustRoot(discovery) ||
+		migrated.DescriptorPath != discoveryTrustPath(discovery) {
+		t.Fatalf("migrated trust identity = %#v", migrated)
+	}
+}
+
+func TestManagerRejectsRetargetedDescriptorSymlinkWithoutSideEffects(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup requires elevated privileges on Windows")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "tau"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firstTarget := filepath.Join(root, "first.yaml")
+	secondTarget := filepath.Join(root, "second.yaml")
+	if err := os.WriteFile(firstTarget, []byte(validDescriptorYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondTarget, []byte(validDescriptorYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	descriptorPath := filepath.Join(root, DescriptorRelativePath)
+	if err := os.Symlink(firstTarget, descriptorPath); err != nil {
+		t.Fatal(err)
+	}
+	configDir := t.TempDir()
+	first := Manager{
+		ConfigDir:   configDir,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspacePhase: "Ready",
+		}},
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatalf("trust first descriptor target: %v", err)
+	}
+	if err := os.Remove(descriptorPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secondTarget, descriptorPath); err != nil {
+		t.Fatal(err)
+	}
+
+	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
+	verifier := &fakeVerifier{}
+	second := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: credentials,
+		Verifier:    verifier,
+	}
+	if _, err := second.Ensure(context.Background(), root); !errors.Is(err, ErrInteractiveRequired) {
+		t.Fatalf("retargeted descriptor reused trust: %v", err)
+	}
+	if credentials.calls != 0 || verifier.calls != 0 {
+		t.Fatalf("retargeted descriptor acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
 	}
 }
 

@@ -83,11 +83,12 @@ type Descriptor struct {
 }
 
 type Discovery struct {
-	Path           string
-	RealPath       string
-	RepositoryRoot string
-	Descriptor     Descriptor
-	Digest         string
+	Path               string
+	RealPath           string
+	RepositoryRoot     string
+	RealRepositoryRoot string
+	Descriptor         Descriptor
+	Digest             string
 }
 
 func Parse(raw []byte) (Descriptor, error) {
@@ -370,11 +371,12 @@ func LoadFile(path, repositoryRoot string) (Discovery, error) {
 		return Discovery{}, err
 	}
 	return Discovery{
-		Path:           absolute,
-		RealPath:       realPath,
-		RepositoryRoot: absoluteRoot,
-		Descriptor:     descriptor,
-		Digest:         digest,
+		Path:               absolute,
+		RealPath:           realPath,
+		RepositoryRoot:     absoluteRoot,
+		RealRepositoryRoot: realRoot,
+		Descriptor:         descriptor,
+		Digest:             digest,
 	}, nil
 }
 
