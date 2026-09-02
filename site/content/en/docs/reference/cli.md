@@ -125,8 +125,8 @@ default and needs `--apply` to take effect. Workspace desired state is a native
 `tau workspace create` requires `--principal-name <external-group-or-team>`;
 `--subject-name` defaults to that principal when it is omitted.
 `tau workspace connection` verifies and pins the current project's configured
-workspace access; `tau run` also discovers and configures the connection
-automatically.
+workspace access. Add `--offline` to validate only the repository mapping and
+descriptor; `tau run` also discovers and configures the connection automatically.
 
 ## `tau run`
 

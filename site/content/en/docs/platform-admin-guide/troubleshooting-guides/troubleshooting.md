@@ -86,7 +86,7 @@ permissions are absent.
 
 | # | Layer | Primary command | Owner if it fails |
 |---|---|---|---|
-| 1 | Repository/connection resolution and cluster access | `tau workspace connection` | Researcher (descriptor) or platform (access) |
+| 1 | Repository/connection resolution and cluster access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) or platform (access) |
 | 2 | [TauWorkspace](../../reference/glossary/#tauworkspace) readiness and handoff validity | `tau workspace status <name>` | Platform operator |
 | 3 | Client-side config validation and rendering | `tau run validate --config tau/train.yaml` | Researcher |
 | 4 | [Queue](../../reference/glossary/#queue) admission and quota | `tau run status <run-name>` (Kueue admission phase) | Platform/queue owner |
@@ -111,7 +111,8 @@ tau workspace connection
 
 **What success proves:** TauGrid found the current project's connection,
 resolved credentials, reached Kubernetes, and verified the TauWorkspace,
-LocalQueue, and authorization contract.
+LocalQueue, and authorization contract. Add `--offline` to prove only local
+project and descriptor resolution.
 
 **What failure means:** No descriptor found, more than one candidate found, or
 the descriptor failed schema validation. This is a repository configuration
@@ -119,9 +120,10 @@ problem rather than a workload problem, and every later layer stays
 unreachable until it is fixed.
 
 `tau run` discovers the descriptor automatically, so this command is a
-preflight rather than an activation prerequisite. Errors identify whether
-descriptor parsing, credential resolution, VPN/DNS reachability, Kubernetes
-availability, or RBAC prevented the connection.
+preflight rather than an activation prerequisite. If live connection fails but
+`tau workspace connection --offline` succeeds, the problem is credential
+resolution, VPN/DNS reachability, Kubernetes availability, or RBAC rather than
+descriptor parsing.
 
 **Next owner/action:** Missing or invalid descriptor -- researcher action
 required; get a valid descriptor from the platform operator who owns the

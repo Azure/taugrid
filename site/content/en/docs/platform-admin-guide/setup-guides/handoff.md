@@ -34,14 +34,9 @@ The only artifact a researcher needs is `tau/workspace.connection.yaml`, a non-s
 **It must never contain a credential, kubeconfig, client secret, or cloud access
 token.** With `access.method: kubeconfig`, `tau` loads the normal kubeconfig
 rules (including `KUBECONFIG`) and copies only the named context, cluster, and
-user into an isolated mode-`0600` kubeconfig outside the repository. Standard
-kubeconfig exec credential plugins remain available, so this is the universal
-path for conformant Kubernetes platforms including self-managed, bare-metal,
-and managed clusters. With `access.method: aks`, the first-class AKS adapter
-obtains normal cluster-user credentials through the caller's Azure identity,
-normalizes `kubelogin`, and isolates the result instead. Tau's workspace
-connection and Run paths consume only that isolated Kubernetes connection;
-cloud provider behavior ends at credential acquisition.
+user into an isolated mode-`0600` kubeconfig outside the repository. With
+`access.method: aks`, it obtains normal AKS cluster-user credentials through the
+caller's Azure identity and isolates those instead.
 
 A provider-neutral descriptor uses an existing Kubernetes context:
 
@@ -72,15 +67,6 @@ access:
     tenantID: <tenant-uuid>
 ```
 
-For a clean-machine researcher experience, grant the researcher permission to
-obtain cluster-user credentials, provide any private-network instructions, and
-point them to [Connect to an AKS workspace](../../developer-guide/aks-access/).
-They can run `az login --tenant <tenant-id>` once and Tau will reuse that Azure
-CLI session for both the ARM credential request and `kubelogin`. If they have no
-active Azure CLI session, Tau falls back to browser authentication; headless
-users can select device-code fallback with
-`TAU_AUTH_MODE=devicecode tau workspace connection`.
-
 ## Repository placement
 
 Commit `tau/workspace.connection.yaml` at the repository root, alongside the target configs it governs (for example `tau/smoke.yaml`, `tau/train.yaml`). Two ways to produce it:
@@ -104,18 +90,9 @@ tau workspace connection
 
 This resolves credentials, contacts Kubernetes, and verifies the descriptor's
 workspace, LocalQueue, and authorization contract without submitting a
-workload.
-
-The researcher must run the first live `tau workspace connection` from an
-interactive terminal. Tau shows the descriptor's non-secret connection identity
-and requires explicit trust before it loads credentials, invokes an exec
-credential plugin, contacts the cloud or cluster, or writes local connection
-state. Noninteractive Run commands fail closed until that trust bootstrap
-succeeds. Later commands reuse the pinned connection, and any
-descriptor identity change requires review again.
-
-Before handoff, platform operators can also inspect the named workspace
-directly:
+workload. Use `tau workspace connection --offline` when only local descriptor
+validation is appropriate. Before handoff, platform operators can also inspect
+the named workspace directly:
 
 ```bash
 tau workspace check <workspace> --context <context>
