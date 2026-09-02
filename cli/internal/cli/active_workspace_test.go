@@ -161,3 +161,54 @@ func TestActiveWorkspaceResolverPreservesExplicitUnconnectedRun(t *testing.T) {
 		t.Fatalf("connection calls=%d resolution=%+v", ensurer.calls, resolution)
 	}
 }
+
+func TestActiveWorkspaceResolverStrictTargetUsesConnectionUnlessWorkspaceExplicit(t *testing.T) {
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:      "connected",
+		WorkspaceUID:   "workspace-uid",
+		ContextName:    "connected-context",
+		KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:      "connected-namespace",
+		Queue:          "connected-queue",
+	}
+	if err := os.WriteFile(connection.KubeconfigPath, []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver := newActiveWorkspaceResolver(
+		func(*cobra.Command) runConnectionEnsurer {
+			return &fakeRunConnectionEnsurer{connection: connection}
+		},
+		func(_ *cobra.Command, context, _, name string) (tauworkspace.Workspace, error) {
+			if context != connection.ContextName || name != connection.Workspace {
+				t.Fatalf("fetch context=%q workspace=%q", context, name)
+			}
+			workspace := readyWorkspace()
+			workspace.Metadata.Name = connection.Workspace
+			workspace.Metadata.UID = connection.WorkspaceUID
+			workspace.Status.Target.ResolvedNamespace = connection.Namespace
+			workspace.Status.Queue.LocalQueue = connection.Queue
+			return workspace, nil
+		},
+	)
+
+	resolution, err := resolver.Resolve(&cobra.Command{}, activeWorkspaceRequest{
+		Workspace:               "inherited",
+		RequireRepositoryTarget: true,
+	})
+	if err != nil {
+		t.Fatalf("inherited workspace blocked strict resolution: %v", err)
+	}
+	resolution.Restore()
+	if resolution.Placement.Workspace != connection.Workspace {
+		t.Fatalf("workspace = %q, want %q", resolution.Placement.Workspace, connection.Workspace)
+	}
+
+	_, err = resolver.Resolve(&cobra.Command{}, activeWorkspaceRequest{
+		Workspace:               "explicit",
+		WorkspaceExplicit:       true,
+		RequireRepositoryTarget: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `workspace "explicit" conflicts with active repository workspace connection "connected"`) {
+		t.Fatalf("explicit workspace conflict = %v", err)
+	}
+}

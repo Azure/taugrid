@@ -84,7 +84,9 @@ func (r activeWorkspaceResolver) Resolve(cmd *cobra.Command, request activeWorks
 		if err != nil {
 			return activeWorkspaceResolution{}, err
 		}
-		if workspaceName != "" && workspaceName != strings.TrimSpace(connection.Workspace) {
+		if workspaceName != "" &&
+			request.WorkspaceExplicit &&
+			workspaceName != strings.TrimSpace(connection.Workspace) {
 			return activeWorkspaceResolution{}, fmt.Errorf(
 				"workspace %q conflicts with active repository workspace connection %q",
 				workspaceName,
