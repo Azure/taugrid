@@ -562,19 +562,19 @@ func (m Manager) confirmFirstUse(discovery Discovery) (bool, error) {
 	fmt.Fprintln(output, "First-time workspace connection")
 	fmt.Fprintln(output, "This repository has not been connected with Tau on this machine.")
 	fmt.Fprintln(output, "Review where Tau will connect:")
-	fmt.Fprintf(output, "  Descriptor:      %s\n", discovery.Path)
-	fmt.Fprintf(output, "  Workspace:       %s\n", descriptor.Workspace)
-	fmt.Fprintf(output, "  Access method:   %s\n", descriptor.Access.Method)
-	fmt.Fprintf(output, "  Context:         %s\n", descriptor.Cluster.ContextName)
-	fmt.Fprintf(output, "  Authorization:   %s\n", descriptor.Authorization.Mode)
+	fmt.Fprintf(output, "  Descriptor:      %q\n", discovery.Path)
+	fmt.Fprintf(output, "  Workspace:       %q\n", descriptor.Workspace)
+	fmt.Fprintf(output, "  Access method:   %q\n", descriptor.Access.Method)
+	fmt.Fprintf(output, "  Context:         %q\n", descriptor.Cluster.ContextName)
+	fmt.Fprintf(output, "  Authorization:   %q\n", descriptor.Authorization.Mode)
 	if descriptor.Network.PrivateCluster {
 		fmt.Fprintln(output, "  Private network: required")
 	} else {
 		fmt.Fprintln(output, "  Private network: not indicated")
 	}
 	if descriptor.Access.AKS != nil {
-		fmt.Fprintf(output, "  AKS resource:    %s\n", descriptor.Access.AKS.ResourceID)
-		fmt.Fprintf(output, "  Entra tenant:    %s\n", descriptor.Access.AKS.TenantID)
+		fmt.Fprintf(output, "  AKS resource:    %q\n", descriptor.Access.AKS.ResourceID)
+		fmt.Fprintf(output, "  Entra tenant:    %q\n", descriptor.Access.AKS.TenantID)
 	}
 	fmt.Fprintln(output, "\nIf approved, Tau will acquire your credentials, verify this workspace,")
 	fmt.Fprintln(output, "and save an isolated local connection for future commands.")

@@ -326,6 +326,46 @@ func TestRunLogsDiscoveryProbesFallbackQueuedAfterTimedOutBatch(t *testing.T) {
 	}
 }
 
+func TestRunLogsDiscoveryBoundsMultipleTimedOutBatches(t *testing.T) {
+	timeout := 20 * time.Millisecond
+	routes := make([]runLogsRoute, 3*maxRunLogsProbeConcurrency)
+	for i := range routes {
+		routes[i] = runLogsRoute{
+			Workspace:   fmt.Sprintf("stale-%d", i),
+			KubeContext: fmt.Sprintf("offline-%d", i),
+			Namespace:   fmt.Sprintf("ns-%d", i),
+		}
+	}
+	started := time.Now()
+
+	err := runLogsWithDiscovery(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		"train",
+		runLogsOptions{Tail: 60},
+		runLogsDiscoveryHooks{
+			connected:    func() (runLogsRoute, error) { return runLogsRoute{}, errors.New("not connected") },
+			cached:       func() ([]runLogsRoute, error) { return routes, nil },
+			probeTimeout: timeout,
+			probe: func(ctx context.Context, _ runLogsRoute, _ string) (bool, error) {
+				<-ctx.Done()
+				return false, ctx.Err()
+			},
+			execute: func(context.Context, io.Writer, runLogsRoute, string, runLogsOptions) error {
+				t.Fatal("timed-out discovery must not execute logs")
+				return nil
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected run-not-found error")
+	}
+	if elapsed := time.Since(started); elapsed >= 3*timeout {
+		t.Fatalf("cached probes took %s; want one fixed discovery budget below %s", elapsed, 3*timeout)
+	}
+}
+
 func TestRunLogsDiscoveryKeepsCachedMatchFromPartialSnapshot(t *testing.T) {
 	target := runLogsRoute{Workspace: "research", KubeContext: "online", Namespace: "target-ns"}
 	var warnings bytes.Buffer

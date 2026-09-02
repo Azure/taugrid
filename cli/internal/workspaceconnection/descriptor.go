@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"gopkg.in/yaml.v3"
@@ -112,6 +113,37 @@ func Parse(raw []byte) (Descriptor, error) {
 }
 
 func (d Descriptor) Validate() error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"schema", d.Schema},
+		{"workspace", d.Workspace},
+		{"cluster.contextName", d.Cluster.ContextName},
+		{"cluster.systemNamespace", d.Cluster.SystemNamespace},
+		{"access.method", string(d.Access.Method)},
+		{"authorization.mode", d.Authorization.Mode},
+		{"authorization.requiredRole", d.Authorization.RequiredRole},
+		{"requirements.minTauVersion", d.Requirements.MinTauVersion},
+		{"network.instructions", d.Network.Instructions},
+	} {
+		if containsControlCharacter(field.value) {
+			return fmt.Errorf("workspace connection %s must not contain control characters", field.name)
+		}
+	}
+	if d.Access.AKS != nil {
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{"access.aks.resourceID", d.Access.AKS.ResourceID},
+			{"access.aks.tenantID", d.Access.AKS.TenantID},
+		} {
+			if containsControlCharacter(field.value) {
+				return fmt.Errorf("workspace connection %s must not contain control characters", field.name)
+			}
+		}
+	}
 	if d.Schema != DescriptorSchema {
 		return fmt.Errorf("workspace connection schema %q is unsupported; expected %q", d.Schema, DescriptorSchema)
 	}
@@ -180,6 +212,10 @@ func (d Descriptor) Validate() error {
 		return fmt.Errorf("workspace connection network.instructions is required for a private cluster")
 	}
 	return nil
+}
+
+func containsControlCharacter(value string) bool {
+	return strings.IndexFunc(value, unicode.IsControl) >= 0
 }
 
 func (d Descriptor) ResolvedSystemNamespace() string {

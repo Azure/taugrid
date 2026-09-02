@@ -66,6 +66,7 @@ type runLogsDiscoveryHooks struct {
 
 const (
 	defaultRunLogsProbeTimeout = 15 * time.Second
+	defaultRunLogsProbeBudget  = 30 * time.Second
 	maxRunLogsProbeConcurrency = 8
 )
 
@@ -254,6 +255,13 @@ func probeCachedRunLogsRoutes(
 		return nil, nil, nil
 	}
 
+	budget := defaultRunLogsProbeBudget
+	if hooks.probeTimeout > 0 {
+		budget = 2 * hooks.probeTimeout
+	}
+	searchCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
 	type probeResult struct {
 		found bool
 		err   error
@@ -272,7 +280,7 @@ func probeCachedRunLogsRoutes(
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				results[i].found, results[i].err = probeRunLogsRoute(ctx, hooks, unique[i], name)
+				results[i].found, results[i].err = probeRunLogsRoute(searchCtx, hooks, unique[i], name)
 			}
 		}()
 	}

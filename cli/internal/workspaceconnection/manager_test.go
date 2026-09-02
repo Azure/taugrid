@@ -280,10 +280,10 @@ func TestManagerConfiguresFirstConnectionAfterTrust(t *testing.T) {
 		"First-time workspace connection",
 		"has not been connected with Tau on this machine",
 		"Review where Tau will connect",
-		"Workspace:       sample",
-		"Access method:   aks",
-		"Context:         taugrid-flex",
-		"Authorization:   cluster-wide",
+		`Workspace:       "sample"`,
+		`Access method:   "aks"`,
+		`Context:         "taugrid-flex"`,
+		`Authorization:   "cluster-wide"`,
 		"Private network: required",
 		"AKS resource:",
 		"Entra tenant:",
@@ -326,6 +326,44 @@ func TestManagerConfiguresFirstConnectionAfterTrust(t *testing.T) {
 		state.AccessIdentity != "aks:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-ai/providers/microsoft.containerservice/managedclusters/taugrid-flex:11111111-1111-1111-1111-111111111111" ||
 		state.SystemNamespace != "tau-system" {
 		t.Fatalf("persisted configuration/readiness state = %#v", state)
+	}
+}
+
+func TestManagerFirstUseApprovalEscapesTerminalControls(t *testing.T) {
+	var output bytes.Buffer
+	manager := Manager{
+		Interactive: true,
+		Input:       strings.NewReader("no\n"),
+		Output:      &output,
+	}
+	discovery := Discovery{
+		Path: "/tmp/repository\x1b[2J/tau/workspace.connection.yaml",
+		Descriptor: Descriptor{
+			Workspace: "sample",
+			Cluster:   ClusterDescriptor{ContextName: "trusted\x1b[2Jspoofed"},
+			Access: AccessDescriptor{
+				Method: AccessMethodAKS,
+				AKS: &AKSAccessDescriptor{
+					ResourceID: "/subscriptions/trusted\x1b[2Jspoofed",
+					TenantID:   "tenant\x1b[2Jspoofed",
+				},
+			},
+			Authorization: AuthorizationDescriptor{Mode: AuthorizationModeClusterWide},
+		},
+	}
+
+	approved, err := manager.confirmFirstUse(discovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved {
+		t.Fatal("declined terminal-safety test was approved")
+	}
+	if strings.ContainsRune(output.String(), '\x1b') {
+		t.Fatalf("approval output contains a raw terminal escape: %q", output.String())
+	}
+	if count := strings.Count(output.String(), `\x1b`); count != 4 {
+		t.Fatalf("approval output escaped %d terminal controls, want 4:\n%s", count, output.String())
 	}
 }
 
