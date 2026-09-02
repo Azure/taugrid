@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -86,6 +87,81 @@ func TestRunLogsDiscoveryFallsBackToCachedConnection(t *testing.T) {
 	}
 	if warnings.Len() != 0 {
 		t.Fatalf("successful cache fallback printed warnings: %s", warnings.String())
+	}
+}
+
+func TestRunLogsDiscoveryKeepsOlderUsableRouteForSameWorkspace(t *testing.T) {
+	newest := runLogsRoute{
+		Workspace: "research", WorkspaceUID: "research-uid",
+		KubeContext: "newest", Kubeconfig: "/tmp/newest", Namespace: "research-ns",
+	}
+	older := runLogsRoute{
+		Workspace: "research", WorkspaceUID: "research-uid",
+		KubeContext: "older", Kubeconfig: "/tmp/older", Namespace: "research-ns",
+	}
+	var executed runLogsRoute
+
+	err := runLogsWithDiscovery(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		"train",
+		runLogsOptions{Tail: 60},
+		runLogsDiscoveryHooks{
+			connected: func() (runLogsRoute, error) { return runLogsRoute{}, errors.New("not connected") },
+			cached:    func() ([]runLogsRoute, error) { return []runLogsRoute{newest, older}, nil },
+			probe: func(_ context.Context, route runLogsRoute, _ string) (bool, error) {
+				if route == newest {
+					return false, errors.New("newest kubeconfig is unusable")
+				}
+				return route == older, nil
+			},
+			execute: func(_ context.Context, _ io.Writer, route runLogsRoute, _ string, _ runLogsOptions) error {
+				executed = route
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runLogsWithDiscovery: %v", err)
+	}
+	if executed != older {
+		t.Fatalf("executed route = %#v, want older usable route %#v", executed, older)
+	}
+}
+
+func TestRunLogsDiscoveryCollapsesUsableRoutesForSameWorkspace(t *testing.T) {
+	newest := runLogsRoute{
+		Workspace: "research", WorkspaceUID: "research-uid",
+		KubeContext: "newest", Kubeconfig: "/tmp/newest", Namespace: "research-ns",
+	}
+	older := runLogsRoute{
+		Workspace: "research", WorkspaceUID: "research-uid",
+		KubeContext: "older", Kubeconfig: "/tmp/older", Namespace: "research-ns",
+	}
+	var executed runLogsRoute
+
+	err := runLogsWithDiscovery(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		"train",
+		runLogsOptions{Tail: 60},
+		runLogsDiscoveryHooks{
+			connected: func() (runLogsRoute, error) { return runLogsRoute{}, errors.New("not connected") },
+			cached:    func() ([]runLogsRoute, error) { return []runLogsRoute{newest, older}, nil },
+			probe:     func(context.Context, runLogsRoute, string) (bool, error) { return true, nil },
+			execute: func(_ context.Context, _ io.Writer, route runLogsRoute, _ string, _ runLogsOptions) error {
+				executed = route
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runLogsWithDiscovery: %v", err)
+	}
+	if executed != newest {
+		t.Fatalf("executed route = %#v, want freshest usable route %#v", executed, newest)
 	}
 }
 
@@ -202,6 +278,51 @@ func TestRunLogsDiscoveryBoundsConcurrentCachedProbes(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed >= 3*timeout {
 		t.Fatalf("cached probes took %s; want one bounded search window, not one timeout per route", elapsed)
+	}
+}
+
+func TestRunLogsDiscoveryProbesFallbackQueuedAfterTimedOutBatch(t *testing.T) {
+	timeout := 10 * time.Millisecond
+	routes := make([]runLogsRoute, maxRunLogsProbeConcurrency+1)
+	for i := range maxRunLogsProbeConcurrency {
+		routes[i] = runLogsRoute{
+			Workspace:   fmt.Sprintf("stale-%d", i),
+			KubeContext: fmt.Sprintf("offline-%d", i),
+			Namespace:   fmt.Sprintf("ns-%d", i),
+		}
+	}
+	target := runLogsRoute{Workspace: "target", KubeContext: "online", Namespace: "target-ns"}
+	routes[len(routes)-1] = target
+	var executed runLogsRoute
+
+	err := runLogsWithDiscovery(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		"train",
+		runLogsOptions{Tail: 60},
+		runLogsDiscoveryHooks{
+			connected:    func() (runLogsRoute, error) { return runLogsRoute{}, errors.New("not connected") },
+			cached:       func() ([]runLogsRoute, error) { return routes, nil },
+			probeTimeout: timeout,
+			probe: func(ctx context.Context, route runLogsRoute, _ string) (bool, error) {
+				if route == target {
+					return true, nil
+				}
+				<-ctx.Done()
+				return false, ctx.Err()
+			},
+			execute: func(_ context.Context, _ io.Writer, route runLogsRoute, _ string, _ runLogsOptions) error {
+				executed = route
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runLogsWithDiscovery: %v", err)
+	}
+	if executed != target {
+		t.Fatalf("executed route = %#v, want queued fallback %#v", executed, target)
 	}
 }
 
@@ -348,7 +469,7 @@ func TestProbeRunLogsFindsPodsAfterJobTTLDeletion(t *testing.T) {
 
 func TestCachedRunLogsWorkspaceRouteSelectsNamedWorkspace(t *testing.T) {
 	target := runLogsRoute{Workspace: "research", KubeContext: "research-context", Namespace: "research-ns"}
-	got, found, err := cachedRunLogsWorkspaceRoute("research", runLogsDiscoveryHooks{
+	got, found, err := cachedRunLogsWorkspaceRoute(context.Background(), "research", "train", runLogsDiscoveryHooks{
 		cached: func() ([]runLogsRoute, error) {
 			return []runLogsRoute{
 				{Workspace: "other", KubeContext: "other-context", Namespace: "other-ns"},
@@ -361,6 +482,34 @@ func TestCachedRunLogsWorkspaceRouteSelectsNamedWorkspace(t *testing.T) {
 	}
 	if !found || got != target {
 		t.Fatalf("route = %#v, found=%v; want %#v", got, found, target)
+	}
+}
+
+func TestCachedRunLogsWorkspaceRouteFallsBackWithinLogicalWorkspace(t *testing.T) {
+	newest := runLogsRoute{
+		Workspace: "research", WorkspaceUID: "research-uid",
+		KubeContext: "newest", Kubeconfig: "/tmp/newest", Namespace: "research-ns",
+	}
+	older := runLogsRoute{
+		Workspace: "research", WorkspaceUID: "research-uid",
+		KubeContext: "older", Kubeconfig: "/tmp/older", Namespace: "research-ns",
+	}
+	got, found, err := cachedRunLogsWorkspaceRoute(context.Background(), "research", "train", runLogsDiscoveryHooks{
+		cached: func() ([]runLogsRoute, error) {
+			return []runLogsRoute{newest, older}, nil
+		},
+		probe: func(_ context.Context, route runLogsRoute, _ string) (bool, error) {
+			if route == newest {
+				return false, errors.New("newest kubeconfig is unusable")
+			}
+			return route == older, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("cachedRunLogsWorkspaceRoute: %v", err)
+	}
+	if !found || got != older {
+		t.Fatalf("route = %#v, found=%v; want older usable route %#v", got, found, older)
 	}
 }
 

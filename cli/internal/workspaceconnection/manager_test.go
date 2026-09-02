@@ -140,7 +140,7 @@ func TestListCachedConnectionsReturnsConfiguredRoutesInStableOrder(t *testing.T)
 	}
 }
 
-func TestListCachedConnectionsDeduplicatesRepositoryScopedRoutes(t *testing.T) {
+func TestListCachedConnectionsKeepsRepositoryScopedFallbackRoutes(t *testing.T) {
 	configDir := t.TempDir()
 	connectionsDir := filepath.Join(configDir, "connections")
 	if err := os.MkdirAll(connectionsDir, 0o700); err != nil {
@@ -171,8 +171,52 @@ func TestListCachedConnectionsDeduplicatesRepositoryScopedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCachedConnections: %v", err)
 	}
-	if len(got) != 1 || got[0].KubeconfigPath != "/tmp/newer-kubeconfig" {
-		t.Fatalf("deduplicated connections = %#v", got)
+	if len(got) != 2 ||
+		got[0].KubeconfigPath != "/tmp/newer-kubeconfig" ||
+		got[1].KubeconfigPath != "/tmp/older-kubeconfig" {
+		t.Fatalf("ordered fallback connections = %#v", got)
+	}
+}
+
+func TestListCachedConnectionsOrdersMixedWorkspaceIdentitiesDeterministically(t *testing.T) {
+	configDir := t.TempDir()
+	connectionsDir := filepath.Join(configDir, "connections")
+	if err := os.MkdirAll(connectionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configuredAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	states := map[string]connectionState{
+		"same-uid-older.json": {
+			Schema: connectionStateSchema, Workspace: "language", WorkspaceUID: "uid-b",
+			ContextName: "a-context", KubeconfigPath: "/tmp/older", Namespace: "language-ns",
+			ConfiguredAt: configuredAt, VerifiedAt: configuredAt,
+		},
+		"different-uid.json": {
+			Schema: connectionStateSchema, Workspace: "language", WorkspaceUID: "uid-a",
+			ContextName: "z-context", KubeconfigPath: "/tmp/different", Namespace: "language-ns",
+			ConfiguredAt: configuredAt, VerifiedAt: configuredAt.Add(2 * time.Minute),
+		},
+		"same-uid-newer.json": {
+			Schema: connectionStateSchema, Workspace: "language", WorkspaceUID: "uid-b",
+			ContextName: "z-context", KubeconfigPath: "/tmp/newer", Namespace: "language-ns",
+			ConfiguredAt: configuredAt, VerifiedAt: configuredAt.Add(time.Minute),
+		},
+	}
+	for name, state := range states {
+		if err := fileutil.WriteJSONFileAtomic(filepath.Join(connectionsDir, name), state); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ListCachedConnections(configDir)
+	if err != nil {
+		t.Fatalf("ListCachedConnections: %v", err)
+	}
+	if len(got) != 3 ||
+		got[0].WorkspaceUID != "uid-a" ||
+		got[1].KubeconfigPath != "/tmp/newer" ||
+		got[2].KubeconfigPath != "/tmp/older" {
+		t.Fatalf("mixed workspace identity order = %#v", got)
 	}
 }
 
@@ -417,6 +461,9 @@ func TestManagerDoesNotShareTrustForCommonDescriptorTarget(t *testing.T) {
 	if ConnectionKeyForDiscovery(firstDiscovery) == ConnectionKeyForDiscovery(secondDiscovery) {
 		t.Fatal("distinct canonical repository roots produced the same connection key")
 	}
+	if isolatedKubeconfigPath(configDir, firstDiscovery) == isolatedKubeconfigPath(configDir, secondDiscovery) {
+		t.Fatal("distinct canonical repository roots produced the same kubeconfig path")
+	}
 
 	credentials := &fakeCredentialProvider{raw: []byte("must-not-be-used")}
 	verifier := &fakeVerifier{}
@@ -431,6 +478,104 @@ func TestManagerDoesNotShareTrustForCommonDescriptorTarget(t *testing.T) {
 	}
 	if credentials.calls != 0 || verifier.calls != 0 {
 		t.Fatalf("second repository acquired credentials=%d or verified=%d", credentials.calls, verifier.calls)
+	}
+}
+
+func TestManagerMigratesSharedLegacyKubeconfigWithoutBreakingOtherState(t *testing.T) {
+	firstRoot := writeDescriptorFixture(t)
+	secondRoot := writeDescriptorFixture(t)
+	firstDiscovery, err := Discover(firstRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDiscovery, err := Discover(secondRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDir := t.TempDir()
+	legacyPath := filepath.Join(configDir, "kubeconfigs", "legacy-shared.yaml")
+	if err := fileutil.WriteFileAtomic(legacyPath, []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	writeState := func(discovery Discovery) string {
+		t.Helper()
+		state := connectionState{
+			Schema:            connectionStateSchema,
+			Workspace:         discovery.Descriptor.Workspace,
+			WorkspaceUID:      "workspace-uid",
+			AccessMethod:      discovery.Descriptor.Access.Method,
+			AccessIdentity:    discovery.Descriptor.AccessIdentity(),
+			AuthorizationMode: discovery.Descriptor.Authorization.Mode,
+			ContextName:       discovery.Descriptor.Cluster.ContextName,
+			SystemNamespace:   discovery.Descriptor.ResolvedSystemNamespace(),
+			KubeconfigPath:    legacyPath,
+			Namespace:         "sample",
+			Queue:             "jobqueue",
+			RequiredRole:      discovery.Descriptor.Authorization.RequiredRole,
+			RepositoryRoot:    discoveryTrustRoot(discovery),
+			DescriptorPath:    discoveryTrustPath(discovery),
+			DescriptorDigest:  discovery.Digest,
+			ConfiguredAt:      now,
+			VerifiedAt:        now,
+		}
+		statePath := filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json")
+		if err := fileutil.WriteJSONFileAtomic(statePath, state); err != nil {
+			t.Fatal(err)
+		}
+		return statePath
+	}
+	firstStatePath := writeState(firstDiscovery)
+	secondStatePath := writeState(secondDiscovery)
+	manager := Manager{ConfigDir: configDir, Now: func() time.Time { return now }}
+
+	first, err := manager.EnsureDiscovery(context.Background(), firstDiscovery)
+	if err != nil {
+		t.Fatalf("migrate first connection: %v", err)
+	}
+	if first.KubeconfigPath == legacyPath {
+		t.Fatalf("first connection retained shared kubeconfig path %s", legacyPath)
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("first migration removed kubeconfig still referenced by second state: %v", err)
+	}
+	firstState, err := loadConnectionState(firstStatePath)
+	if err != nil || firstState.KubeconfigPath != first.KubeconfigPath {
+		t.Fatalf("first migrated state = %#v, err=%v", firstState, err)
+	}
+
+	second, err := manager.EnsureDiscovery(context.Background(), secondDiscovery)
+	if err != nil {
+		t.Fatalf("migrate second connection: %v", err)
+	}
+	if second.KubeconfigPath == legacyPath || second.KubeconfigPath == first.KubeconfigPath {
+		t.Fatalf("repository-scoped kubeconfig paths first=%q second=%q", first.KubeconfigPath, second.KubeconfigPath)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("unreferenced legacy kubeconfig was not removed: %v", err)
+	}
+	secondState, err := loadConnectionState(secondStatePath)
+	if err != nil || secondState.KubeconfigPath != second.KubeconfigPath {
+		t.Fatalf("second migrated state = %#v, err=%v", secondState, err)
+	}
+}
+
+func TestRemoveUnreferencedKubeconfigRetainsFileWhenStateIsUnreadable(t *testing.T) {
+	configDir := t.TempDir()
+	kubeconfigPath := filepath.Join(configDir, "kubeconfigs", "legacy.yaml")
+	if err := fileutil.WriteFileAtomic(kubeconfigPath, []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(configDir, "connections", "unreadable.json")
+	if err := fileutil.WriteFileAtomic(statePath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeUnreferencedKubeconfig(configDir, kubeconfigPath); err == nil {
+		t.Fatal("removeUnreferencedKubeconfig succeeded with an unreadable connection state")
+	}
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		t.Fatalf("kubeconfig was removed while a connection state was unreadable: %v", err)
 	}
 }
 

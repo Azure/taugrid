@@ -137,7 +137,7 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 		return nil, fmt.Errorf("inspect cached Tau workspace connections: %w", err)
 	}
 
-	statesByWorkspaceUID := make(map[string]connectionState, len(entries))
+	states := make([]connectionState, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -160,33 +160,36 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 			strings.TrimSpace(connection.Namespace) == "" {
 			continue
 		}
-		if existing, ok := statesByWorkspaceUID[state.WorkspaceUID]; !ok || stateIsNewer(state, existing) {
-			statesByWorkspaceUID[state.WorkspaceUID] = state
-		}
+		states = append(states, state)
 	}
-	connections := make([]ActiveConnection, 0, len(statesByWorkspaceUID))
-	for _, state := range statesByWorkspaceUID {
-		connections = append(connections, state.active())
-	}
-	sort.Slice(connections, func(i, j int) bool {
-		left := connections[i]
-		right := connections[j]
+	sort.Slice(states, func(i, j int) bool {
+		left := states[i]
+		right := states[j]
 		if left.Workspace != right.Workspace {
 			return left.Workspace < right.Workspace
+		}
+		if left.WorkspaceUID != right.WorkspaceUID {
+			return left.WorkspaceUID < right.WorkspaceUID
+		}
+		if !left.VerifiedAt.Equal(right.VerifiedAt) {
+			return left.VerifiedAt.After(right.VerifiedAt)
+		}
+		if !left.ConfiguredAt.Equal(right.ConfiguredAt) {
+			return left.ConfiguredAt.After(right.ConfiguredAt)
 		}
 		if left.ContextName != right.ContextName {
 			return left.ContextName < right.ContextName
 		}
-		return left.Namespace < right.Namespace
+		if left.Namespace != right.Namespace {
+			return left.Namespace < right.Namespace
+		}
+		return left.KubeconfigPath < right.KubeconfigPath
 	})
-	return connections, nil
-}
-
-func stateIsNewer(candidate, existing connectionState) bool {
-	if !candidate.VerifiedAt.Equal(existing.VerifiedAt) {
-		return candidate.VerifiedAt.After(existing.VerifiedAt)
+	connections := make([]ActiveConnection, 0, len(states))
+	for _, state := range states {
+		connections = append(connections, state.active())
 	}
-	return candidate.ConfiguredAt.After(existing.ConfiguredAt)
+	return connections, nil
 }
 
 func (m Manager) Ensure(ctx context.Context, startDir string) (ActiveConnection, error) {
@@ -220,6 +223,23 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	stateConfigured := hasState && state.configures(discovery)
 	kubeconfigMissing := stateConfigured && !fileExists(state.KubeconfigPath)
 	stateMatches := stateConfigured && !kubeconfigMissing
+	expectedKubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
+	if stateMatches && state.KubeconfigPath != expectedKubeconfigPath {
+		legacyKubeconfigPath := state.KubeconfigPath
+		raw, err := os.ReadFile(legacyKubeconfigPath)
+		if err != nil {
+			return ActiveConnection{}, fmt.Errorf("read legacy isolated Tau kubeconfig: %w", err)
+		}
+		if err := fileutil.WriteFileAtomic(expectedKubeconfigPath, raw, 0o600); err != nil {
+			return ActiveConnection{}, fmt.Errorf("migrate isolated Tau kubeconfig: %w", err)
+		}
+		state.KubeconfigPath = expectedKubeconfigPath
+		if err := fileutil.WriteJSONFileAtomic(loadedStatePath, state); err != nil {
+			_ = os.Remove(expectedKubeconfigPath)
+			return ActiveConnection{}, fmt.Errorf("update migrated Tau workspace connection state: %w", err)
+		}
+		_ = removeUnreferencedKubeconfig(configDir, legacyKubeconfigPath)
+	}
 	var sourceKubeconfig []byte
 	var sourceFingerprint string
 	sourceKubeconfigChanged := false
@@ -314,7 +334,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("reacquire Kubernetes credentials: %w", err)
 		}
-		kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
+		kubeconfigPath := expectedKubeconfigPath
 		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("verify reacquired Tau workspace connection: %w", err)
@@ -446,10 +466,45 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			_ = os.Remove(loadedStatePath)
 		}
 		if previousKubeconfigPath != kubeconfigPath {
-			_ = os.Remove(previousKubeconfigPath)
+			_ = removeUnreferencedKubeconfig(configDir, previousKubeconfigPath)
 		}
 	}
+
 	return state.active(), nil
+}
+
+func removeUnreferencedKubeconfig(configDir, kubeconfigPath string) error {
+	if strings.TrimSpace(kubeconfigPath) == "" {
+		return nil
+	}
+	managedDir := filepath.Join(filepath.Clean(configDir), "kubeconfigs")
+	relative, err := filepath.Rel(managedDir, filepath.Clean(kubeconfigPath))
+	if err != nil ||
+		filepath.IsAbs(relative) ||
+		relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(configDir, "connections"))
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Remove(kubeconfigPath)
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		state, err := loadConnectionState(filepath.Join(configDir, "connections", entry.Name()))
+		if err != nil {
+			return fmt.Errorf("inspect Tau workspace connection state before kubeconfig cleanup: %w", err)
+		}
+		if state.KubeconfigPath == kubeconfigPath {
+			return nil
+		}
+	}
+	return os.Remove(kubeconfigPath)
 }
 
 func (m Manager) configDir() (string, error) {
@@ -944,7 +999,7 @@ func isolatedKubeconfigPath(configDir string, discovery Discovery) string {
 		"kubeconfigs",
 		safeFilename(discovery.Descriptor.Cluster.ContextName)+"-"+
 			accessIdentityHash(discovery.Descriptor.AccessIdentity())+"-"+
-			accessIdentityHash(discoveryTrustPath(discovery))+"-"+
+			accessIdentityHash(discoveryTrustIdentity(discovery))+"-"+
 			descriptorDigestHash(discovery.Digest)+".yaml",
 	)
 }
