@@ -150,7 +150,7 @@ func TestIngestStatus_AllowsBenignDoubleDotsInProofName(t *testing.T) {
 }
 
 func TestIngestStatus_RejectsTraversalAndAbsoluteProofPaths(t *testing.T) {
-	for _, path := range []string{"shards/../secret.jsonl", "/absolute/part.jsonl"} {
+	for _, path := range []string{"shards/../secret.jsonl", "/absolute/part.jsonl", "C:/absolute/part.jsonl"} {
 		s := IngestStatus{
 			SchemaVersion: IngestStatusSchemaVersion,
 			Name:          "ds",

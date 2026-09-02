@@ -6,6 +6,7 @@ package dataset
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -140,7 +141,7 @@ func (s IngestStatus) Validate() error {
 		if p.Path == "" {
 			return fmt.Errorf("ingest-status: completed_files[%d] has empty path", i)
 		}
-		if filepath.IsAbs(filepath.FromSlash(p.Path)) || hasTraversalSegment(p.Path) {
+		if path.IsAbs(p.Path) || filepath.IsAbs(filepath.FromSlash(p.Path)) || hasWindowsVolumePath(p.Path) || hasTraversalSegment(p.Path) {
 			return fmt.Errorf("ingest-status: completed_files[%d] path %q is not a clean relative path", i, p.Path)
 		}
 		if _, dup := seen[p.Path]; dup {
@@ -197,6 +198,12 @@ func (s IngestStatus) Validate() error {
 		}
 	}
 	return nil
+}
+
+func hasWindowsVolumePath(value string) bool {
+	return len(value) >= 3 &&
+		((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) &&
+		value[1] == ':' && (value[2] == '/' || value[2] == '\\')
 }
 
 func hasTraversalSegment(p string) bool {

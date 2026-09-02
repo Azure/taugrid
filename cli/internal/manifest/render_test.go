@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1099,7 +1100,7 @@ runtime:
 	for _, want := range []string{
 		scriptPayloadInitContainerName,
 		manifestPayloadInitContainerName,
-		"tau-rendertest\n",                         // Job name
+		"tau-rendertest",                           // Job name
 		"kueue.x-k8s.io/queue-name: jobqueue",      // Kueue admission path
 		"suspend: true",                            // Kueue flips false on admission
 		"backoffLimit: 0",                          // deterministic trainer failures should not retry
@@ -2144,6 +2145,9 @@ func assertEnvVar(t *testing.T, label string, container map[string]any, name, va
 }
 
 func TestRenderedEntrypointsAreBashSyntaxValid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test validates container Bash entrypoints")
+	}
 	cases := []struct {
 		name    string
 		raw     []byte

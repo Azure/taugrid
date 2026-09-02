@@ -5,9 +5,8 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -102,7 +101,7 @@ func TestHelmForceConflictsProbeReadsUpgradeHelp(t *testing.T) {
 		"helm 3 does not":       {"      --force   force resource updates through replacement", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			stubHelmBinary(t, "#!/bin/sh\ncat <<'EOF'\n"+tc.help+"\nEOF\n")
+			stubHelmUpgradeHelp(t, []byte(tc.help), nil)
 			if got := probeHelmForceConflicts(t.Context()); got != tc.want {
 				t.Fatalf("probe = %v, want %v", got, tc.want)
 			}
@@ -112,7 +111,7 @@ func TestHelmForceConflictsProbeReadsUpgradeHelp(t *testing.T) {
 
 // A probe that cannot run must not add a flag Helm 3 would reject.
 func TestHelmForceConflictsProbeFailsClosed(t *testing.T) {
-	stubHelmBinary(t, "#!/bin/sh\nexit 1\n")
+	stubHelmUpgradeHelp(t, nil, errors.New("helm unavailable"))
 	if probeHelmForceConflicts(t.Context()) {
 		t.Fatal("an unreadable probe must report no support")
 	}
@@ -127,7 +126,7 @@ func TestHelmRollbackOnFailureProbeReadsUpgradeHelp(t *testing.T) {
 		"helm 3 does not":       {"      --atomic   rollback the release on failure", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			stubHelmBinary(t, "#!/bin/sh\ncat <<'EOF'\n"+tc.help+"\nEOF\n")
+			stubHelmUpgradeHelp(t, []byte(tc.help), nil)
 			if got := probeHelmRollbackOnFailure(t.Context()); got != tc.want {
 				t.Fatalf("probe = %v, want %v", got, tc.want)
 			}
@@ -135,16 +134,11 @@ func TestHelmRollbackOnFailureProbeReadsUpgradeHelp(t *testing.T) {
 	}
 }
 
-// The probe shells out directly rather than through runHelmCommand, so it needs
-// a real executable on PATH to exercise. The fake is prepended rather than
-// replacing PATH, or its own shebang could not resolve the shell.
-func stubHelmBinary(t *testing.T, script string) {
+func stubHelmUpgradeHelp(t *testing.T, output []byte, err error) {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "helm"), []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake helm: %v", err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	original := helmUpgradeHelp
+	helmUpgradeHelp = func(context.Context) ([]byte, error) { return output, err }
+	t.Cleanup(func() { helmUpgradeHelp = original })
 }
 
 // recordUpgrades captures only `helm upgrade` invocations, so assertions stay

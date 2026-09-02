@@ -212,11 +212,11 @@ func runIngestLocal(ctx context.Context, out io.Writer, name, version string,
 	reg *dataset.Registry, rec dataset.Record,
 	sourceRoot, destination string, dryRun bool, output string,
 ) error {
-	srcDir := strings.TrimPrefix(sourceRoot, "file://")
-	if srcDir == "" {
+	srcDir, err := localPathFromFileURI(sourceRoot)
+	if err != nil || srcDir == "" {
 		return fmt.Errorf("--source-root file:// path must be non-empty")
 	}
-	srcDir = strings.TrimRight(srcDir, "/")
+	srcDir = strings.TrimRight(srcDir, "/\\")
 
 	destDir, err := parseLocalDestination(destination)
 	if err != nil {
@@ -269,8 +269,15 @@ func parseLocalDestination(destination string) (string, error) {
 				"use --workspace for Azure destinations",
 		)
 	}
-	dir := strings.TrimPrefix(destination, "file://")
-	dir = strings.TrimRight(dir, "/")
+	dir := destination
+	if strings.HasPrefix(destination, "file://") {
+		var err error
+		dir, err = localPathFromFileURI(destination)
+		if err != nil {
+			return "", fmt.Errorf("--destination: %w", err)
+		}
+	}
+	dir = strings.TrimRight(dir, "/\\")
 	if dir == "" {
 		return "", fmt.Errorf("--destination must be a non-empty file:// path for local mode")
 	}

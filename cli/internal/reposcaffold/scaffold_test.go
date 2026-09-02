@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -139,6 +140,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 
 	for _, rel := range []string{"tau/smoke.yaml", "tau/train.yaml", "tau/train-gpu.yaml"} {
 		raw := readFile(t, filepath.Join(dir, filepath.FromSlash(rel)))
+		raw = strings.ReplaceAll(raw, "\r\n", "\n")
 		assertNotContains(t, raw, "policy.workspace")
 		assertNotContains(t, raw, "schema_version")
 		assertContains(t, raw, "disable_default_priorities: true")
@@ -187,7 +189,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm()&0o111 == 0 {
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 			t.Fatalf("%s is not executable: %v", rel, info.Mode().Perm())
 		}
 	}
@@ -400,6 +402,9 @@ func TestCommandQuotingInGeneratedScriptsAndYAML(t *testing.T) {
 }
 
 func TestGeneratedShellSyntax(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test validates generated Bash scripts")
+	}
 	dir := t.TempDir()
 	if _, err := Render(Options{Name: "shell-test", OutputDir: dir, Image: "example.azurecr.io/shell:test"}); err != nil {
 		t.Fatalf("Render failed: %v", err)
@@ -413,6 +418,9 @@ func TestGeneratedShellSyntax(t *testing.T) {
 }
 
 func TestConfigureScriptKeepsEnvInSync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a generated Bash script")
+	}
 	const newImage = "example.azurecr.io/shell:configured"
 
 	t.Run("existing env is updated", func(t *testing.T) {

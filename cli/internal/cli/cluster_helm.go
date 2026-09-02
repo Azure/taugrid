@@ -31,6 +31,14 @@ type helmCommandRunner func(context.Context, io.Reader, io.Writer, io.Writer, []
 
 var runHelmCommand helmCommandRunner = executeHelmCommand
 
+var helmUpgradeHelp = func(ctx context.Context) ([]byte, error) {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		return nil, err
+	}
+	return exec.CommandContext(ctx, helm, "upgrade", "--help").Output()
+}
+
 // helmSupportsForceConflicts reports whether the installed Helm accepts
 // --force-conflicts. Indirected so tests can answer it without a Helm on PATH.
 var helmSupportsForceConflicts = sync.OnceValue(func() bool {
@@ -56,11 +64,7 @@ var helmSupportsRollbackOnFailure = sync.OnceValue(func() bool {
 // Fails closed: Helm 3 rejects an unknown flag outright, so a probe that cannot
 // run must not add one.
 func probeHelmForceConflicts(ctx context.Context) bool {
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		return false
-	}
-	out, err := exec.CommandContext(ctx, helm, "upgrade", "--help").Output()
+	out, err := helmUpgradeHelp(ctx)
 	if err != nil {
 		return false
 	}
@@ -68,11 +72,7 @@ func probeHelmForceConflicts(ctx context.Context) bool {
 }
 
 func probeHelmRollbackOnFailure(ctx context.Context) bool {
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		return false
-	}
-	out, err := exec.CommandContext(ctx, helm, "upgrade", "--help").Output()
+	out, err := helmUpgradeHelp(ctx)
 	if err != nil {
 		return false
 	}

@@ -23,7 +23,7 @@ func TestTuneDriverForwardsWorkerMetricsAndSelectsBestResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read module load trace: %v", err)
 	}
-	if got := strings.Count(string(loads), "loaded\n"); got != 3 {
+	if got := strings.Count(strings.ReplaceAll(string(loads), "\r\n", "\n"), "loaded\n"); got != 3 {
 		t.Fatalf("researcher module loaded %d time(s), want 3 (head validation plus two Torch worker reloads)", got)
 	}
 

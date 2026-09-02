@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -24,6 +25,9 @@ import (
 // the researcher's script directly, so this resolution failed for every
 // CLI-only run and `--checkpoint <absolute path>` was the only way to serve.
 func TestServeResolvesArtifactIndexWrittenByManagedWorkflow(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a POSIX shell script")
+	}
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}

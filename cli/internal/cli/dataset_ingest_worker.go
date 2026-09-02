@@ -141,9 +141,14 @@ func buildWorkerComponents(
 	dstIsFile := strings.HasPrefix(destination, "file://") || (!strings.Contains(destination, "://"))
 
 	if srcIsFile && dstIsFile {
-		srcDir := strings.TrimPrefix(sourceRoot, "file://")
-		dstDir := strings.TrimPrefix(destination, "file://")
-		dstDir = strings.TrimRight(dstDir, "/")
+		srcDir, err := parseLocalDestination(sourceRoot)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("--source-root: %w", err)
+		}
+		dstDir, err := parseLocalDestination(destination)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("--destination: %w", err)
+		}
 		if srcDir == "" || dstDir == "" {
 			return nil, nil, nil, fmt.Errorf("--source-root and --destination must be non-empty for file:// mode")
 		}
@@ -190,9 +195,9 @@ func buildWorkerComponents(
 			return nil, nil, nil, fmt.Errorf("HTTPS source: %w", err)
 		}
 		if dstIsFile {
-			dstDir := strings.TrimRight(strings.TrimPrefix(destination, "file://"), "/")
-			if dstDir == "" {
-				return nil, nil, nil, fmt.Errorf("--destination must be non-empty for file:// mode")
+			dstDir, err := parseLocalDestination(destination)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("--destination: %w", err)
 			}
 			return src, datasetingest.FileSink{Root: dstDir}, datasetingest.FileLocker{Dir: dstDir}, nil
 		}

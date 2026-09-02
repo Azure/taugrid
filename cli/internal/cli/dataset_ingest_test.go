@@ -24,6 +24,15 @@ func fileRegistryWithIngest(t *testing.T) (*dataset.Registry, string) {
 	return dataset.NewRegistry(newFileBackend(root), datasetRegistryPaths(), nil), root
 }
 
+func testFileURI(t *testing.T, path string) string {
+	t.Helper()
+	uri, err := fileURIFromPath(path)
+	if err != nil {
+		t.Fatalf("file URI for %s: %v", path, err)
+	}
+	return uri
+}
+
 // ingestRecord registers a minimal record and returns the registered Record.
 func ingestRecord(t *testing.T, reg *dataset.Registry, name, version string, files []dataset.File) dataset.Record {
 	t.Helper()
@@ -69,7 +78,7 @@ func TestDatasetStatusCmd_notFound(t *testing.T) {
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"status", "nope@v1", "--registry", "file://" + regRoot})
+	cmd.SetArgs([]string{"status", "nope@v1", "--registry", testFileURI(t, regRoot)})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for missing status")
@@ -103,9 +112,9 @@ func TestDatasetStatusCmd_json(t *testing.T) {
 	ingestCmd.SetErr(&buf)
 	ingestCmd.SetArgs([]string{
 		"ingest", "ds@v1",
-		"--registry", "file://" + regRoot,
-		"--source-root", "file://" + srcDir,
-		"--destination", "file://" + dstDir,
+		"--registry", testFileURI(t, regRoot),
+		"--source-root", testFileURI(t, srcDir),
+		"--destination", testFileURI(t, dstDir),
 		"-o", "json",
 	})
 	if err := ingestCmd.Execute(); err != nil {
@@ -119,7 +128,7 @@ func TestDatasetStatusCmd_json(t *testing.T) {
 	statusCmd.SetErr(&buf)
 	statusCmd.SetArgs([]string{
 		"status", "ds@v1",
-		"--registry", "file://" + regRoot,
+		"--registry", testFileURI(t, regRoot),
 		"-o", "json",
 	})
 	if err := statusCmd.Execute(); err != nil {
@@ -157,9 +166,9 @@ func TestDatasetIngestCmd_dryRun(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		"ingest", "ds@v1",
-		"--registry", "file://" + regRoot,
-		"--source-root", "file://" + srcDir,
-		"--destination", "file://" + dstDir,
+		"--registry", testFileURI(t, regRoot),
+		"--source-root", testFileURI(t, srcDir),
+		"--destination", testFileURI(t, dstDir),
 		"--dry-run",
 	})
 	if err := cmd.Execute(); err != nil {
@@ -186,7 +195,7 @@ func TestDatasetIngestCmd_mutableWorkerImageRejected(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		"ingest", "ds@v1",
-		"--registry", "file://" + regRoot,
+		"--registry", testFileURI(t, regRoot),
 		"--source-root", "az://myaccount/datasets",
 		"--workspace", "my-workspace",
 		"--worker-image", "mcr.microsoft.com/tau:latest", // mutable tag, no digest
@@ -210,7 +219,7 @@ func TestDatasetIngestCmd_sasTokenRejected(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		"ingest", "ds@v1",
-		"--registry", "file://" + regRoot,
+		"--registry", testFileURI(t, regRoot),
 		"--source-root", "https://myaccount.blob.core.windows.net/ctr?sv=2020-08-04&sig=abc",
 		"--workspace", "my-workspace",
 		"--worker-image", "mcr.microsoft.com/tau@sha256:" + strings.Repeat("a", 64),
@@ -231,7 +240,7 @@ func TestDatasetIngestCmd_requiresVersion(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		"ingest", "ds", // no @version
-		"--registry", "file://" + regRoot,
+		"--registry", testFileURI(t, regRoot),
 		"--source-root", "file:///some/src",
 	})
 	err := cmd.Execute()
@@ -258,7 +267,7 @@ func TestDatasetStatusCmd_tableFormat(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		"status", "ds@v1",
-		"--registry", "file://" + regRoot,
+		"--registry", testFileURI(t, regRoot),
 		"-o", "table",
 	})
 	// status is "registered" (no ingest yet) — the exit code is non-zero only
@@ -297,9 +306,9 @@ func TestDatasetIngestWorkerCmd_fileMode(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		ingestWorkerCmdName, "ds@v1",
-		"--registry", "file://" + regRoot,
-		"--source-root", "file://" + srcDir,
-		"--destination", "file://" + dstDir,
+		"--registry", testFileURI(t, regRoot),
+		"--source-root", testFileURI(t, srcDir),
+		"--destination", testFileURI(t, dstDir),
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("ingest-worker command: %v (output: %s)", err, buf.String())

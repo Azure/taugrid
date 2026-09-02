@@ -577,7 +577,7 @@ func TestDatasetIngest_DestinationMismatchFailsBeforeApply(t *testing.T) {
 	cmd.SetErr(&out)
 	cmd.SetArgs([]string{
 		"ingest", "ds@v1",
-		"--registry", "file://" + root,
+		"--registry", testFileURI(t, root),
 		"--source-root", "file:///nonexistent",
 		"--destination", "az://wrong/ctr/ds/v1",
 	})

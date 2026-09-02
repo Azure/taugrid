@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -20,6 +21,9 @@ import (
 // argv to a log file and replies with the given script body.
 func fakeKubectl(t *testing.T, body string) (logPath string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake kubectl uses a POSIX shell script")
+	}
 	dir := t.TempDir()
 	logPath = filepath.Join(dir, "calls.log")
 	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\n" + body

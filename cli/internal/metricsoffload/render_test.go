@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,9 @@ func testRuntime(dir string) Runtime {
 }
 
 func TestWrapCommandSurfacesMissingTerminalPublication(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes a Bash wrapper")
+	}
 	runtime := testRuntime(t.TempDir())
 	if err := os.WriteFile(runtime.ReadyFile, []byte("ready\n"), 0o644); err != nil {
 		t.Fatal(err)

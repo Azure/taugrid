@@ -6,6 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -85,13 +86,21 @@ func TestWriteRefEnv_StagedRoot(t *testing.T) {
 	if err := writeRefEnv(&buf, sampleRef(), "FINEWEB_DATASET", "/staging/fw", ""); err != nil {
 		t.Fatal(err)
 	}
+	firstURI, err := fileURIFromPath(filepath.Join("/staging/fw", "shard_0000.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondURI, err := fileURIFromPath(filepath.Join("/staging/fw", "shard_0001.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	out := buf.String()
 	for _, want := range []string{
 		"FINEWEB_DATASET_URIS=",
 		"FINEWEB_DATASET_SHA256S=aa,bb",
 		"FINEWEB_DATASET_TOKEN_COUNTS=100,200",
-		"file:///staging/fw/shard_0000.bin",
-		"file:///staging/fw/shard_0001.bin",
+		firstURI,
+		secondURI,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("env output missing %q:\n%s", want, out)

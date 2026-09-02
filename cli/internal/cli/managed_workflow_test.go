@@ -1446,7 +1446,7 @@ runtime:
 	if !strings.Contains(stderr, "inferred workload_kind=rayjob-eval") {
 		t.Errorf("stderr should warn about inferred eval kind; got:\n%s", stderr)
 	}
-	if !strings.Contains(rendered, "name: tau-eval-smoke\n") {
+	if !strings.Contains(rendered, "name: tau-eval-smoke") {
 		t.Errorf("rendered output should use default tau- resource prefix; got:\n%s", rendered)
 	}
 }
