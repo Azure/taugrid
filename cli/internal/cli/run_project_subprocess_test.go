@@ -169,7 +169,8 @@ policy:
 		if _, err := os.Stat(filepath.Join(root, "tau", activeWorkspaceCacheFilename)); !os.IsNotExist(err) {
 			t.Fatalf("repository-local active workspace cache exists: %v", err)
 		}
-		kubeconfigRaw, err := os.ReadFile(filepath.Join(configDir, "kubeconfig.yaml"))
+		kubeconfigPath := activeRoutingKubeconfigPath(t, configDir)
+		kubeconfigRaw, err := os.ReadFile(kubeconfigPath)
 		if err != nil {
 			t.Fatalf("read isolated workspace kubeconfig: %v", err)
 		}
@@ -486,7 +487,7 @@ case " $* " in
     case " $* " in
       *" --kubeconfig "*) ;;
       *)
-        if [ "$KUBECONFIG" != "$TAU_ROUTING_EXPECTED_KUBECONFIG" ]; then
+        if [ -z "$KUBECONFIG" ] || [ "$KUBECONFIG" = "$TAU_ROUTING_AMBIENT_KUBECONFIG" ]; then
           printf '%%s\n' "workspace lookup used ambient kubeconfig: $KUBECONFIG" >&2
           exit 97
         fi
@@ -625,6 +626,38 @@ users:
 	writeRunRoutingFile(t, ambientKubeconfigPath, ambientKubeconfig)
 	t.Setenv("TAU_CONFIG_DIR", configDir)
 	t.Setenv("KUBECONFIG", ambientKubeconfigPath)
-	t.Setenv("TAU_ROUTING_EXPECTED_KUBECONFIG", kubeconfigPath)
+	t.Setenv("TAU_ROUTING_AMBIENT_KUBECONFIG", ambientKubeconfigPath)
 	return configDir
+}
+
+func activeRoutingKubeconfigPath(t *testing.T, configDir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(configDir, "connections"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(configDir, "connections", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state struct {
+			Workspace      string `json:"workspace"`
+			KubeconfigPath string `json:"kubeconfig_path"`
+		}
+		if err := json.Unmarshal(raw, &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.Workspace == "sample" && state.KubeconfigPath != "" {
+			paths = append(paths, state.KubeconfigPath)
+		}
+	}
+	if len(paths) != 1 {
+		t.Fatalf("active sample workspace kubeconfigs = %v", paths)
+	}
+	return paths[0]
 }
