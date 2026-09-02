@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,9 @@ func TestScriptAvoidsAwkDependency(t *testing.T) {
 }
 
 func TestScriptWarnsWhenDfUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test depends on POSIX shell PATH semantics")
+	}
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")

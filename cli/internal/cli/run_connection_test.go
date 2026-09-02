@@ -457,9 +457,19 @@ func TestLifecycleCatalogRoutingRequiresProjectAtRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ensurer.discoveries) != 1 ||
-		ensurer.discoveries[0].Path != wantDiscovery {
+	if len(ensurer.discoveries) != 1 {
 		t.Fatalf("exact catalog discoveries = %#v", ensurer.discoveries)
+	}
+	info, err := os.Stat(ensurer.discoveries[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInfo, err := os.Stat(wantDiscovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(info, wantInfo) {
+		t.Fatalf("discovery path = %q, want %q", ensurer.discoveries[0].Path, wantDiscovery)
 	}
 }
 

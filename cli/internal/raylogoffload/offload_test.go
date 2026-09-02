@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,10 +82,6 @@ func TestPrepareInitContainerPreparesSharedRayTmpVolume(t *testing.T) {
 
 func TestScriptTailsDriverLogsWithoutDuplicatingSessionLatest(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("bash sidecar script test requires Unix signal semantics")
-	}
-
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "offload.sh")
 	if err := os.WriteFile(scriptPath, []byte(Script), 0o700); err != nil {
@@ -244,10 +239,6 @@ func TestScriptTailsDriverLogsWithoutDuplicatingSessionLatest(t *testing.T) {
 
 func TestScriptExitsAfterCompletionAndDrainsFinalLogs(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("bash sidecar script test requires Unix signal semantics")
-	}
-
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "offload.sh")
 	if err := os.WriteFile(scriptPath, []byte(Script), 0o700); err != nil {
@@ -324,10 +315,6 @@ func TestScriptExitsAfterCompletionAndDrainsFinalLogs(t *testing.T) {
 
 func TestScriptExitsWhenContainerPIDReceivesSIGTERM(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("bash sidecar script test requires Unix signal semantics")
-	}
-
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "offload.sh")
 	if err := os.WriteFile(scriptPath, []byte(Script), 0o700); err != nil {
@@ -402,10 +389,6 @@ func TestScriptExitsWhenContainerPIDReceivesSIGTERM(t *testing.T) {
 
 func TestWrapShellScriptWritesCompletionAndPreservesExitCode(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("bash entrypoint wrapper test requires Unix shell semantics")
-	}
-
 	for _, tc := range []struct {
 		name     string
 		command  string
@@ -444,10 +427,6 @@ func TestWrapShellScriptWritesCompletionAndPreservesExitCode(t *testing.T) {
 
 func TestWrapShellScriptForwardsTermToWorkload(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("bash entrypoint wrapper test requires Unix signal semantics")
-	}
-
 	root := t.TempDir()
 	completionPath := filepath.Join(root, "tau-driver-complete")
 	readyPath := filepath.Join(root, "workload-ready")
@@ -512,10 +491,6 @@ func TestWrapShellScriptForwardsTermToWorkload(t *testing.T) {
 
 func TestWrapShellScriptTerminatesNestedForegroundProcess(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("bash entrypoint wrapper test requires Unix signal semantics")
-	}
-
 	root := t.TempDir()
 	completionPath := filepath.Join(root, "tau-driver-complete")
 	childPIDPath := filepath.Join(root, "child.pid")
