@@ -196,6 +196,7 @@ func TestDetailJobUsesUIDToRejectStaleIncarnationMetadata(t *testing.T) {
 		]}`),
 		workloads: []byte(`{"items":[
 			{"metadata":{"name":"job-train-new","ownerReferences":[{"name":"train","uid":"job-new","controller":true}]}},
+			{"metadata":{"name":"job-train-observer","ownerReferences":[{"name":"train","uid":"job-new","controller":false}]}},
 			{"metadata":{"name":"job-train-old","ownerReferences":[{"name":"train","uid":"job-old","controller":true}]}}
 		]}`),
 		events: []byte(`{"items":[

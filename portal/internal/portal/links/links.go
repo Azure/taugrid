@@ -113,7 +113,7 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 			if ref.Name != "" {
 				owners = append(owners, ref.Name)
 			}
-			if ref.UID != "" {
+			if ref.UID != "" && ref.Controller != nil && *ref.Controller {
 				ownerUIDs = append(ownerUIDs, ref.UID)
 			}
 		}
@@ -274,8 +274,9 @@ type workloadItem struct {
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
 		OwnerReferences   []struct {
-			Name string `json:"name"`
-			UID  string `json:"uid"`
+			Name       string `json:"name"`
+			UID        string `json:"uid"`
+			Controller *bool  `json:"controller"`
 		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
