@@ -358,12 +358,13 @@ portal:
     frontendService: kueue-kueueviz-frontend
   rbac:
     # Create the ClusterRole + ClusterRoleBinding granting the portal's
-    # ServiceAccount read access to core Services (Ray board discovery), core
-    # Nodes (Cluster Nodes board), and Kueue LocalQueues/ClusterQueues/Workloads
-    # (Jobs board), plus get-only access to the singleton TauCluster workload
-    # profile status. Requires serviceAccount.create=true. Without it, the Jobs,
-    # Ray, Cluster Nodes, and profile readiness views degrade while the portal
-    # still serves the shell, Experiments, Cluster Health, and Cost.
+    # ServiceAccount read access to core Services (Ray board discovery), Pods,
+    # Events, and RayClusters (Job detail), core Nodes (Cluster Nodes board), and
+    # Kueue LocalQueues/ClusterQueues/Workloads (Jobs board), plus get-only
+    # access to the singleton TauCluster workload profile status. Requires
+    # serviceAccount.create=true. Without it, the Jobs, Ray, Cluster Nodes, and
+    # profile readiness views degrade while the portal still serves the shell,
+    # Experiments, Cluster Health, and Cost.
     create: false
   image:
     # The portal ships in the taugrid-portal binary, not the tau CLI.

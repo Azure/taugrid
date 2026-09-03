@@ -136,6 +136,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # Job detail: surface namespaced scheduling, image-pull, and failure Events.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   # Cluster Nodes board: read node hardware inventory (SKU, agentpool,
   # CPU/memory/GPU capacity) from cluster-scoped Node objects.
   - apiGroups: [""]
@@ -154,12 +158,13 @@ rules:
     resources: ["clusters"]
     resourceNames: ["cluster"]
     verbs: ["get"]
-  # Runs board: list submitted RayJobs and batch Jobs in the workload namespace.
+  # Runs board and Job detail: read submitted RayJobs, their RayClusters, and
+  # batch Jobs in the workload namespace.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["ray.io"]
-    resources: ["rayjobs"]
+    resources: ["rayjobs", "rayclusters"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

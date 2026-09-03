@@ -149,3 +149,37 @@ tests:
               - cluster
             verbs:
               - get
+
+  - it: grants read-only access to Job detail events
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+             - ""
+            resources:
+             - events
+            verbs:
+             - get
+             - list
+             - watch
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+             - ray.io
+            resources:
+             - rayjobs
+             - rayclusters
+            verbs:
+             - get
+             - list
+             - watch

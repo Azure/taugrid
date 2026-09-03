@@ -19,8 +19,8 @@ import (
 // fakeReader drives Detail() without a live API. Each read returns its byte
 // payload and error independently, so tests can exercise per-source degradation.
 type fakeReader struct {
-	job, rayJob, pods, events, workloads, services []byte
-	jobErr, rayErr, podErr, evtErr, wlErr, svcErr  error
+	job, rayJob, rayCluster, pods, events, workloads, services   []byte
+	jobErr, rayErr, rayClusterErr, podErr, evtErr, wlErr, svcErr error
 }
 
 func (f fakeReader) GetJob(context.Context, string, string) ([]byte, error) {
@@ -28,6 +28,9 @@ func (f fakeReader) GetJob(context.Context, string, string) ([]byte, error) {
 }
 func (f fakeReader) GetRayJob(context.Context, string, string) ([]byte, error) {
 	return f.rayJob, f.rayErr
+}
+func (f fakeReader) GetRayCluster(context.Context, string, string) ([]byte, error) {
+	return f.rayCluster, f.rayClusterErr
 }
 func (f fakeReader) ListPods(context.Context, string) ([]byte, error) {
 	return f.pods, f.podErr
@@ -142,6 +145,111 @@ func TestDetailJobK8sOnly(t *testing.T) {
 	}
 	if snap.Lifecycle != nil {
 		t.Fatalf("Lifecycle = %+v, want nil (no Querier)", snap.Lifecycle)
+	}
+}
+
+// TestDetailJobPodsUseCurrentMetadataContract covers Jobs rendered by the
+// current Tau producer: run-id is the Tau identity, while Kubernetes owns the
+// pod association labels and tau.azure.com/job is not required. A pod matching
+// every compatible label must still appear only once.
+func TestDetailJobPodsUseCurrentMetadataContract(t *testing.T) {
+	r := fakeReader{
+		rayErr: errors.New("no rayjob"),
+		job: []byte(`{"metadata":{"name":"train-current","namespace":"ray","labels":{
+			"` + workloadmeta.LabelManagedBy + `":"tau",
+			"` + workloadmeta.LabelRunID + `":"train-current",
+			"` + workloadmeta.LabelWorkloadKind + `":"job",
+			"` + workloadmeta.LabelWorkspace + `":"research"
+		}},"status":{"active":1}}`),
+		pods: []byte(`{"items":[
+			{"metadata":{"name":"standard","labels":{"job-name":"train-current","batch.kubernetes.io/job-name":"train-current","` + workloadmeta.LabelRunID + `":"train-current"}},"status":{"phase":"Running"}},
+			{"metadata":{"name":"qualified","labels":{"batch.kubernetes.io/job-name":"train-current"}},"status":{"phase":"Pending"}},
+			{"metadata":{"name":"run-id-only","labels":{"` + workloadmeta.LabelRunID + `":"train-current"}},"status":{"phase":"Running"}},
+			{"metadata":{"name":"legacy","labels":{"` + workloadmeta.LabelJob + `":"train-current"}},"status":{"phase":"Succeeded"}},
+			{"metadata":{"name":"other","labels":{"job-name":"other","` + workloadmeta.LabelRunID + `":"other"}},"status":{"phase":"Running"}}
+		]}`),
+	}
+
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "train-current"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if got := len(snap.Pods); got != 4 {
+		t.Fatalf("len(Pods) = %d, want 4 compatible pods without duplicates: %+v", got, snap.Pods)
+	}
+	want := []string{"standard", "qualified", "run-id-only", "legacy"}
+	for i, name := range want {
+		if snap.Pods[i].Name != name {
+			t.Fatalf("Pods[%d].Name = %q, want %q; pods=%+v", i, snap.Pods[i].Name, name, snap.Pods)
+		}
+	}
+}
+
+func TestDetailJobUsesUIDToRejectStaleIncarnationMetadata(t *testing.T) {
+	r := fakeReader{
+		rayErr: errors.New("no rayjob"),
+		job: []byte(`{"metadata":{"name":"train","namespace":"ray","uid":"job-new",
+			"labels":{"batch.kubernetes.io/job-name":"train","` + workloadmeta.LabelRunID + `":"run-shared"}},"status":{"active":1}}`),
+		pods: []byte(`{"items":[
+			{"metadata":{"name":"train-new","uid":"pod-new","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-new","controller":true}]},"status":{"phase":"Running"}},
+			{"metadata":{"name":"train-old","uid":"pod-old","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-old","controller":true}]},"status":{"phase":"Failed"}}
+		]}`),
+		workloads: []byte(`{"items":[
+			{"metadata":{"name":"job-train-new","ownerReferences":[{"name":"train","uid":"job-new","controller":true}]}},
+			{"metadata":{"name":"job-train-observer","ownerReferences":[{"name":"train","uid":"job-new","controller":false}]}},
+			{"metadata":{"name":"job-train-old","ownerReferences":[{"name":"train","uid":"job-old","controller":true}]}}
+		]}`),
+		events: []byte(`{"items":[
+			{"reason":"CurrentJob","involvedObject":{"kind":"Job","name":"train","uid":"job-new"}},
+			{"reason":"CurrentPod","involvedObject":{"kind":"Pod","name":"train-new","uid":"pod-new"}},
+			{"reason":"OldJob","involvedObject":{"kind":"Job","name":"train","uid":"job-old"}},
+			{"reason":"OldPod","involvedObject":{"kind":"Pod","name":"train-old","uid":"pod-old"}},
+			{"reason":"Sibling","involvedObject":{"kind":"Pod","name":"train-big-abc","uid":"pod-sibling"}}
+		]}`),
+	}
+
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "train"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if len(snap.Pods) != 1 || snap.Pods[0].Name != "train-new" {
+		t.Fatalf("Pods = %+v, want only the current Job incarnation", snap.Pods)
+	}
+	if len(snap.Workloads) != 1 || snap.Workloads[0].Name != "job-train-new" {
+		t.Fatalf("Workloads = %+v, want only the current Job incarnation", snap.Workloads)
+	}
+	if len(snap.Events) != 2 {
+		t.Fatalf("Events = %+v, want current Job and Pod events only", snap.Events)
+	}
+}
+
+func TestDetailRayJobTraversesRayClusterUIDForPods(t *testing.T) {
+	r := fakeReader{
+		rayJob: []byte(`{"metadata":{"name":"ray-train","namespace":"ray","uid":"rayjob-new"},
+			"status":{"jobDeploymentStatus":"Running","rayClusterName":"ray-cluster"}}`),
+		rayCluster: []byte(`{"metadata":{"name":"ray-cluster","uid":"cluster-new",
+			"ownerReferences":[{"uid":"rayjob-new","controller":true}]}}`),
+		pods: []byte(`{"items":[
+			{"metadata":{"name":"head-new","uid":"head-new","labels":{"ray.io/cluster":"ray-cluster"},"ownerReferences":[{"uid":"cluster-new","controller":true}]},"status":{"phase":"Running"}},
+			{"metadata":{"name":"head-old","uid":"head-old","labels":{"ray.io/cluster":"ray-cluster"},"ownerReferences":[{"uid":"cluster-old","controller":true}]},"status":{"phase":"Running"}}
+		]}`),
+		events: []byte(`{"items":[
+			{"reason":"RayJob","involvedObject":{"kind":"RayJob","name":"ray-train","uid":"rayjob-new"}},
+			{"reason":"RayCluster","involvedObject":{"kind":"RayCluster","name":"ray-cluster","uid":"cluster-new"}},
+			{"reason":"HeadPod","involvedObject":{"kind":"Pod","name":"head-new","uid":"head-new"}},
+			{"reason":"OldHeadPod","involvedObject":{"kind":"Pod","name":"head-old","uid":"head-old"}}
+		]}`),
+	}
+
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "ray-train"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if len(snap.Pods) != 1 || snap.Pods[0].Name != "head-new" {
+		t.Fatalf("Pods = %+v, want only Pods controlled by the current RayCluster", snap.Pods)
+	}
+	if len(snap.Events) != 3 {
+		t.Fatalf("Events = %+v, want current RayJob, RayCluster, and Pod events", snap.Events)
 	}
 }
 
@@ -293,6 +401,22 @@ func TestDetailRayJobDoesNotClaimComputeReusableWhenPodsUnreadable(t *testing.T)
 	}
 	if !strings.Contains(snap.ResourceRelease.Message, "cannot be confirmed") {
 		t.Fatalf("ResourceRelease.Message = %q", snap.ResourceRelease.Message)
+	}
+}
+
+func TestDetailRayJobDoesNotClaimComputeReusableWhenRayClusterOwnershipIsUnresolved(t *testing.T) {
+	r := fakeReader{
+		rayJob: []byte(`{"metadata":{"name":"ray-complete","namespace":"tau","uid":"rayjob-current"},
+			"status":{"jobDeploymentStatus":"Complete","jobStatus":"SUCCEEDED","rayClusterName":"ray-complete-cluster"}}`),
+		rayClusterErr: errors.New("raycluster forbidden"),
+		pods:          []byte(`{"items":[]}`),
+	}
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "tau", Name: "ray-complete"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if snap.ResourceRelease == nil || snap.ResourceRelease.ComputeState != "unknown" {
+		t.Fatalf("ResourceRelease = %+v, want unknown compute state", snap.ResourceRelease)
 	}
 }
 
