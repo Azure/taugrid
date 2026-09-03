@@ -1,0 +1,88 @@
+name: Trigger chart-integration-test (aks-ai-runtime)
+
+# images/ray builds and runs its integration suite in aks-ai-runtime's ADO
+# pipelines, which can't repo-resource-trigger off a GitHub repo. Queue that
+# pipeline directly instead of relying on someone to remember to run it
+# manually before merging a Ray image change.
+#
+# Uses aks-ai-runtime's chart-integration-test.yml TauGridRayImagePR incoming
+# webhook resource, not the PAT-gated "Run pipeline" REST API — this org
+# blocks ADO PAT creation. The webhook is authenticated with an HMAC-SHA1
+# checksum over the request body (bare uppercase hex, no "sha1=" prefix —
+# ADO's own convention, not GitHub's), keyed by a shared secret set on the
+# Incoming WebHook service connection (ADO project settings), not a PAT.
+#
+# Requires a repo secret ADO_WEBHOOK_SECRET matching that service connection's
+# secret, stored under Settings > Secrets and variables > Actions.
+#
+# The webhook response doesn't reliably expose the queued run's ID, so the PR
+# comment links to the pipeline's run list instead of a specific run.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - images/ray/**
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: trigger-chart-integration-test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  queue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Queue chart-integration-test
+        env:
+          ADO_WEBHOOK_SECRET: ${{ secrets.ADO_WEBHOOK_SECRET }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ADO_WEBHOOK_SECRET}" ]; then
+            echo "::error::ADO_WEBHOOK_SECRET secret is not set. Create it to match the TauGridRayImagePR Incoming WebHook service connection's secret in the CloudNativeCompute ADO project, then add it as a repo secret named ADO_WEBHOOK_SECRET." >&2
+            exit 1
+          fi
+
+          payload=$(jq -nc \
+            --arg ref "refs/heads/${HEAD_REF}" \
+            --argjson pr "${PR_NUMBER}" \
+            --arg url "${PR_URL}" \
+            '{sourceRef: $ref, prNumber: $pr, prUrl: $url}')
+          # ADO computes SHA1(secret).ComputeHash(body) and compares the raw
+          # hex digest as-is (uppercase, no prefix) against this header —
+          # see https://learn.microsoft.com/azure/devops/pipelines/yaml-schema/resources-webhooks-webhook
+          signature=$(printf '%s' "${payload}" | openssl dgst -sha1 -hmac "${ADO_WEBHOOK_SECRET}" | awk '{print $NF}' | tr '[:lower:]' '[:upper:]')
+
+          response="$(mktemp)"
+          status=$(curl -sS \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature: ${signature}" \
+            -X POST \
+            "https://dev.azure.com/msazure/_apis/public/distributedtask/webhooks/TauGridRayImagePR?api-version=6.0-preview" \
+            -d "${payload}" \
+            -o "${response}" -w '%{http_code}')
+
+          if [ "${status}" != "200" ]; then
+            echo "::error::ADO webhook call failed (HTTP ${status})" >&2
+            cat "${response}" >&2
+            exit 1
+          fi
+
+          echo "Triggered chart-integration-test webhook for refs/heads/${HEAD_REF} (HTTP ${status})"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🔄 Triggered [chart-integration-test](https://msazure.visualstudio.com/CloudNativeCompute/_build?definitionId=470554) in aks-ai-runtime against this branch (\`${{ github.event.pull_request.head.ref }}\`) to validate this Ray image change before merge. Look for the newest run against \`refs/heads/${{ github.event.pull_request.head.ref }}\`.`,
+            });
