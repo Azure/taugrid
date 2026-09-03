@@ -48,6 +48,7 @@ type Workload struct {
 	Job          string    `json:"job,omitempty"`
 	RunID        string    `json:"runId,omitempty"`
 	Owners       []string  `json:"owners,omitempty"`
+	OwnerUIDs    []string  `json:"-"`
 	Queue        string    `json:"queue,omitempty"`
 	ClusterQueue string    `json:"clusterQueue,omitempty"`
 	Admitted     bool      `json:"admitted"`
@@ -107,9 +108,13 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 		labels := it.Metadata.Labels
 		executionTarget := workloadExecutionTarget(it)
 		var owners []string
+		var ownerUIDs []string
 		for _, ref := range it.Metadata.OwnerReferences {
 			if ref.Name != "" {
 				owners = append(owners, ref.Name)
+			}
+			if ref.UID != "" {
+				ownerUIDs = append(ownerUIDs, ref.UID)
 			}
 		}
 		out = append(out, Workload{
@@ -118,6 +123,7 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 			Job:             labels[workloadmeta.LabelJob],
 			RunID:           labels[experiment.LabelRunID],
 			Owners:          owners,
+			OwnerUIDs:       ownerUIDs,
 			Queue:           it.Spec.QueueName,
 			ClusterQueue:    it.Status.Admission.ClusterQueue,
 			Admitted:        admitted,
@@ -269,6 +275,7 @@ type workloadItem struct {
 		Labels            map[string]string `json:"labels"`
 		OwnerReferences   []struct {
 			Name string `json:"name"`
+			UID  string `json:"uid"`
 		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {

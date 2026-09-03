@@ -171,3 +171,15 @@ tests:
              - get
              - list
              - watch
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+             - ray.io
+            resources:
+             - rayjobs
+             - rayclusters
+            verbs:
+             - get
+             - list
+             - watch
