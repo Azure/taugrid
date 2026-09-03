@@ -81,15 +81,8 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 
 	// Prefer the primary workload's immutable UID. The name label can match a
 	// stale Job and RayJob simultaneously when both kinds reuse a run name.
-	workloadSelectors := make([]string, 0, 2)
 	rj := snapshotRayJob(s)
-	if s.JobFound && s.JobUID != "" {
-		workloadSelectors = append(workloadSelectors, "kueue.x-k8s.io/job-uid="+s.JobUID)
-	} else if rj.Found && rj.UID != "" {
-		workloadSelectors = append(workloadSelectors, "kueue.x-k8s.io/job-uid="+rj.UID)
-	} else {
-		workloadSelectors = append(workloadSelectors, workloadmeta.LabelJob+"="+name)
-	}
+	workloadSelectors := runStatusWorkloadSelectors(s, rj, name)
 	for _, selector := range workloadSelectors {
 		wlJSON, queryErr := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
 			"-l", selector, "-o", "json"}, nil)
@@ -124,6 +117,22 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	s.Events = fetchEvents(ctx, r, namespace, eventObjects(s))
 
 	return s, nil
+}
+
+func runStatusWorkloadSelectors(s Snapshot, rj RayJob, name string) []string {
+	selectors := make([]string, 0, 2)
+	if s.JobFound && s.JobUID != "" {
+		selectors = append(selectors, "kueue.x-k8s.io/job-uid="+s.JobUID)
+	} else if rj.Found && rj.UID != "" {
+		selectors = append(selectors, "kueue.x-k8s.io/job-uid="+rj.UID)
+	}
+	// The durable run-name label survives same-kind object recreation. It is
+	// safe only when the run name resolves to one workload kind; otherwise it
+	// can mix a stale Job and RayJob.
+	if !s.JobFound || !rj.Found {
+		selectors = append(selectors, workloadmeta.LabelJob+"="+name)
+	}
+	return selectors
 }
 
 // FetchManagerCleanup populates the subset of Snapshot needed by manager-side
