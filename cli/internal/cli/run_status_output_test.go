@@ -237,7 +237,7 @@ func TestRunStatusHumanAndJSONShareActions(t *testing.T) {
 	if err := json.Unmarshal(raw.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded.Actions) != 2 || len(doc.Actions) != len(decoded.Actions) {
+	if len(decoded.Actions) != 1 || len(doc.Actions) != len(decoded.Actions) {
 		t.Fatalf("actions: document=%+v JSON=%+v", doc.Actions, decoded.Actions)
 	}
 	for _, action := range decoded.Actions {
@@ -391,7 +391,7 @@ func TestRunStatusCompletedActionsOnlyOfferRetrievableResults(t *testing.T) {
 		JobFound:      true,
 		JobConditions: []status.Condition{{Type: "Complete", Status: "True"}},
 	}
-	if actions := runStatusActions(complete, "", ""); len(actions) != 1 || actions[0].Name != "logs" {
+	if actions := runStatusActions(complete, "", ""); len(actions) != 0 {
 		t.Fatalf("unannotated completed run actions = %+v", actions)
 	}
 
@@ -399,17 +399,31 @@ func TestRunStatusCompletedActionsOnlyOfferRetrievableResults(t *testing.T) {
 		workloadmeta.AnnotationResultPath: "/data/runs/train-001/",
 		workloadmeta.AnnotationResultPVC:  "research-data",
 	}
-	if actions := runStatusActions(complete, "", ""); len(actions) != 2 || actions[1].Name != "results" {
+	if actions := runStatusActions(complete, "", ""); len(actions) != 1 || actions[0].Name != "results" {
 		t.Fatalf("retrievable completed run actions = %+v", actions)
 	}
 
 	complete.RayJob = status.RayJob{Found: true, Name: complete.Name}
-	if actions := runStatusActions(complete, "", ""); len(actions) != 1 || actions[0].Name != "logs" {
+	if actions := runStatusActions(complete, "", ""); len(actions) != 0 {
 		t.Fatalf("ambiguous completed run actions = %+v", actions)
 	}
 }
 
 func TestRunStatusActionsOnlyOfferRetrievableLogs(t *testing.T) {
+	queuedJob := status.Snapshot{
+		Name:         "train-001",
+		Namespace:    "ray",
+		JobFound:     true,
+		JobSuspended: true,
+	}
+	if actions := runStatusActions(queuedJob, "", ""); len(actions) != 1 || actions[0].Name != "watch" {
+		t.Fatalf("queued Job actions = %+v", actions)
+	}
+	queuedJob.Pods = []status.Pod{{Name: "train-001-pod"}}
+	if actions := runStatusActions(queuedJob, "", ""); len(actions) != 2 || actions[1].Name != "logs" {
+		t.Fatalf("Job with local pod actions = %+v", actions)
+	}
+
 	unreadyRay := status.Snapshot{
 		Name:      "train-001",
 		Namespace: "ray",
@@ -464,6 +478,17 @@ func TestRunStatusManagerViewOmitsLocalPodDiagnostics(t *testing.T) {
 	for _, diagnostic := range doc.Diagnostics {
 		if diagnostic.Code == "DEEP_DIAGNOSTICS" {
 			t.Fatalf("manager-only view advertised local pod diagnostics: %+v", diagnostic)
+		}
+	}
+	if commands := kubectlDiagnosticCommands("manager", "/tmp/manager-kubeconfig", snap.Namespace, snap.Name, snap); len(commands) != 0 {
+		t.Fatalf("manager-only view generated local pod commands: %+v", commands)
+	}
+
+	snap.Workloads[0].AdmissionChecks[0].State = "Rejected"
+	actions := runStatusActions(snap, "manager", "/tmp/manager-kubeconfig")
+	for _, action := range actions {
+		if action.Name == "diagnostics" {
+			t.Fatalf("failed manager-only view advertised diagnostic hints: %+v", actions)
 		}
 	}
 }

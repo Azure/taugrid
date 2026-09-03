@@ -238,6 +238,9 @@ func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name strin
 }
 
 func kubectlDiagnosticCommands(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) [][]string {
+	if snap.ManagerOnlyMultiKueueView() {
+		return nil
+	}
 	if snap.JobFound && snap.RayJob.Found {
 		// Status gives a same-name batch Job precedence. The fetched pod set can
 		// contain both Job and Ray pods, so use the Job selector rather than

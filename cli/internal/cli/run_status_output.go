@@ -286,10 +286,7 @@ func runStatusDiagnostics(snap status.Snapshot, phases []status.Phase, kubeConte
 			Suggestion: phase.Hint,
 		})
 	}
-	commands := [][]string(nil)
-	if !snap.ManagerOnlyMultiKueueView() {
-		commands = kubectlDiagnosticCommands(kubeContext, kubeconfig, snap.Namespace, snap.Name, snap)
-	}
+	commands := kubectlDiagnosticCommands(kubeContext, kubeconfig, snap.Namespace, snap.Name, snap)
 	rendered := make([]runStatusInvocation, 0, len(commands))
 	for _, command := range commands {
 		rendered = append(rendered, newRunStatusInvocation(command))
@@ -325,11 +322,14 @@ func runStatusActions(snap status.Snapshot, kubeContext, kubeconfig string) []ru
 				Command:     command("logs", snap.Name, "--tail", "200"),
 			})
 		}
-		return append(actions, runStatusAction{
-			Name:        "diagnostics",
-			Description: "Show scoped deep-diagnostic commands.",
-			Command:     command("status", snap.Name, "--diagnostic-hints"),
-		})
+		if len(kubectlDiagnosticCommands(kubeContext, kubeconfig, snap.Namespace, snap.Name, snap)) > 0 {
+			actions = append(actions, runStatusAction{
+				Name:        "diagnostics",
+				Description: "Show scoped deep-diagnostic commands.",
+				Command:     command("status", snap.Name, "--diagnostic-hints"),
+			})
+		}
+		return actions
 	case state == status.LifecycleSucceeded:
 		actions := make([]runStatusAction, 0, 2)
 		if runStatusLogsRetrievable(snap) {
@@ -366,7 +366,7 @@ func runStatusActions(snap status.Snapshot, kubeContext, kubeconfig string) []ru
 
 func runStatusLogsRetrievable(snap status.Snapshot) bool {
 	if snap.JobFound {
-		return true
+		return !snap.ManagerOnlyMultiKueueView() && len(snap.Pods) > 0
 	}
 	rayJob := status.CanonicalRayJob(snap)
 	return rayJob.Found &&
