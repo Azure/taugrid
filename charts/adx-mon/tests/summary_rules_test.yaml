@@ -38,6 +38,9 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "percentile\\(Value, 95\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "labels\\.exported_namespace.*labels\\.namespace"
 
   - it: does not render gpu-utilization-hourly when disabled
     template: summary-rules/gpu-utilization-hourly.yaml
@@ -77,6 +80,9 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.body
+          pattern: "labels\\.exported_namespace.*labels\\.namespace"
 
   - it: includes GPU rates from values in the datatable
     template: summary-rules/gpu-cost-hourly.yaml

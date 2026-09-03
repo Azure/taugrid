@@ -24,7 +24,7 @@ spec:
     | extend gpu = tostring(labels.gpu),
              instance = tostring(labels.instance),
              modelName = tostring(labels.modelName),
-             namespace = tostring(labels.exported_namespace),
+             namespace = case(isnotempty(tostring(labels.exported_namespace)), tostring(labels.exported_namespace), tostring(labels.namespace)),
              pod = tostring(labels.pod)
     | summarize
         avg_util = avg(Value),

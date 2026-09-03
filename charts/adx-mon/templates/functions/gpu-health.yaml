@@ -12,9 +12,10 @@ spec:
   body: |
     // GPU health view: utilization, temperature, power, memory, row-remap errors.
     // Lifts Prometheus labels from the dynamic Labels column for clean queries.
-    // Prefer PodResources labels when configured. AKS host DCGM exporters instead
-    // expose Hostname and rely on the collector's lifted Host/Namespace/Pod
-    // columns, so fall back to those without collapsing multiple hosts.
+    // Prefer PodResources labels when configured. The collector's lifted
+    // Namespace/Pod columns identify the exporter scrape target, not the GPU
+    // workload, so keep workload attribution empty when DCGM has no assignment.
+    // Host remains a valid fallback for the physical node identity.
     //
     // NOTE: DCGM metrics are ALL UPPERCASE, so adx-mon NormalizeMetricName produces
     // all-caps table names (underscores stripped, case preserved).
@@ -25,50 +26,50 @@ spec:
       let gpu_util = DCGMFIDEVGPUUTIL
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let gpu_temp = DCGMFIDEVGPUTEMP
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let gpu_power = DCGMFIDEVPOWERUSAGE
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let mem_used = DCGMFIDEVFBUSED
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let mem_free = DCGMFIDEVFBFREE
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let remap_correctable = DCGMFIDEVCORRECTABLEREMAPPEDROWS
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let remap_uncorrectable = DCGMFIDEVUNCORRECTABLEREMAPPEDROWS
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       let remap_failure = DCGMFIDEVROWREMAPFAILURE
       | extend gpu = tostring(Labels.gpu),
                instance = iff(isnotempty(tostring(Labels.instance)), tostring(Labels.instance), iff(isnotempty(tostring(Labels.Hostname)), tostring(Labels.Hostname), tostring(Host))),
-               namespace = iff(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), tostring(Namespace)),
-               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), tostring(Pod)),
+               namespace = case(isnotempty(tostring(Labels.exported_namespace)), tostring(Labels.exported_namespace), isnotempty(tostring(Labels.namespace)), tostring(Labels.namespace), ""),
+               pod = iff(isnotempty(tostring(Labels.pod)), tostring(Labels.pod), ""),
                modelName = tostring(Labels.modelName);
       union
         (gpu_util           | project Timestamp, Cluster, instance, gpu, modelName, namespace, pod, metric="gpu_utilization", Value),

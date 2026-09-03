@@ -48,7 +48,7 @@ spec:
     let gpu_util_by_pod = database("{{ .Values.adx.metricsDatabase }}").DCGMFIDEVGPUUTIL
     | where Timestamp between (_startTime .. _endTime)
     | extend labels = parse_json(Labels)
-    | extend namespace = tostring(labels.exported_namespace),
+    | extend namespace = case(isnotempty(tostring(labels.exported_namespace)), tostring(labels.exported_namespace), tostring(labels.namespace)),
              pod = tostring(labels.pod)
     | where isnotempty(pod)
     | summarize avg_util = avg(Value) by bin(Timestamp, 1h), namespace, pod;

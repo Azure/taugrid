@@ -36,8 +36,14 @@ tests:
           pattern: "Labels.Hostname"
       - matchRegex:
           path: spec.body
-          pattern: "tostring\\(Namespace\\)"
+          pattern: "Labels.exported_namespace"
       - matchRegex:
+          path: spec.body
+          pattern: "Labels.namespace"
+      - notMatchRegex:
+          path: spec.body
+          pattern: "tostring\\(Namespace\\)"
+      - notMatchRegex:
           path: spec.body
           pattern: "tostring\\(Pod\\)"
       - isNotEmpty:
