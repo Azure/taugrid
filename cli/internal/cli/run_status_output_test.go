@@ -409,6 +409,65 @@ func TestRunStatusCompletedActionsOnlyOfferRetrievableResults(t *testing.T) {
 	}
 }
 
+func TestRunStatusActionsOnlyOfferRetrievableLogs(t *testing.T) {
+	unreadyRay := status.Snapshot{
+		Name:      "train-001",
+		Namespace: "ray",
+		RayJob:    status.RayJob{Found: true, JobDeploymentStatus: "Initializing"},
+	}
+	if actions := runStatusActions(unreadyRay, "", ""); len(actions) != 1 || actions[0].Name != "watch" {
+		t.Fatalf("unready RayJob actions = %+v", actions)
+	}
+
+	unreadyRay.RayJob.JobID = "submission-1"
+	unreadyRay.RayJob.RayClusterName = "train-001-cluster"
+	if actions := runStatusActions(unreadyRay, "", ""); len(actions) != 2 || actions[1].Name != "logs" {
+		t.Fatalf("ready local RayJob actions = %+v", actions)
+	}
+
+	managerRay := status.Snapshot{
+		Name:      "train-001",
+		Namespace: "ray",
+		RayJob: status.RayJob{
+			Found:          true,
+			ManagedBy:      "kueue.x-k8s.io/multikueue",
+			JobID:          "submission-1",
+			RayClusterName: "train-001-cluster",
+		},
+		Workloads: []status.Workload{{
+			ClusterName: "worker-a",
+			AdmissionChecks: []status.AdmissionCheck{{
+				Name: "multikueue", State: "Ready", ControllerName: "kueue.x-k8s.io/multikueue",
+			}},
+		}},
+	}
+	if actions := runStatusActions(managerRay, "", ""); len(actions) != 1 || actions[0].Name != "watch" {
+		t.Fatalf("manager-only RayJob actions = %+v", actions)
+	}
+}
+
+func TestRunStatusManagerViewOmitsLocalPodDiagnostics(t *testing.T) {
+	snap := status.Snapshot{
+		Name:      "train-001",
+		Namespace: "ray",
+		RayJob: status.RayJob{
+			Found:     true,
+			ManagedBy: "kueue.x-k8s.io/multikueue",
+		},
+		Workloads: []status.Workload{{
+			AdmissionChecks: []status.AdmissionCheck{{
+				Name: "multikueue", State: "Pending", ControllerName: "kueue.x-k8s.io/multikueue",
+			}},
+		}},
+	}
+	doc := newRunStatusDocument(snap, false, "manager", "/tmp/manager-kubeconfig")
+	for _, diagnostic := range doc.Diagnostics {
+		if diagnostic.Code == "DEEP_DIAGNOSTICS" {
+			t.Fatalf("manager-only view advertised local pod diagnostics: %+v", diagnostic)
+		}
+	}
+}
+
 func TestRunStatusProfileHasHumanJSONParity(t *testing.T) {
 	doc := newRunStatusDocument(status.Snapshot{
 		Name:      "train-001",

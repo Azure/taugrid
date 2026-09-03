@@ -1549,6 +1549,15 @@ func TestPrimaryJobExcludesSameNameRayJobFromStartup(t *testing.T) {
 	}
 }
 
+func TestRayJobFailedUsesSharedTerminalMarkers(t *testing.T) {
+	if !RayJobFailed(RayJob{JobDeploymentStatus: "Running", Reason: "SubmissionFailed"}) {
+		t.Fatal("RayJob failure reason was not classified as failed")
+	}
+	if RayJobFailed(RayJob{JobDeploymentStatus: "Running", JobStatus: "RUNNING"}) {
+		t.Fatal("running RayJob was classified as failed")
+	}
+}
+
 func TestPrimaryJobExcludesSameNameRayJobMetadataAndEvents(t *testing.T) {
 	snap := Snapshot{
 		Name:        "shared-name",

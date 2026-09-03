@@ -286,7 +286,10 @@ func runStatusDiagnostics(snap status.Snapshot, phases []status.Phase, kubeConte
 			Suggestion: phase.Hint,
 		})
 	}
-	commands := kubectlDiagnosticCommands(kubeContext, kubeconfig, snap.Namespace, snap.Name, snap)
+	commands := [][]string(nil)
+	if !snap.ManagerOnlyMultiKueueView() {
+		commands = kubectlDiagnosticCommands(kubeContext, kubeconfig, snap.Namespace, snap.Name, snap)
+	}
 	rendered := make([]runStatusInvocation, 0, len(commands))
 	for _, command := range commands {
 		rendered = append(rendered, newRunStatusInvocation(command))
@@ -314,16 +317,28 @@ func runStatusActions(snap status.Snapshot, kubeContext, kubeconfig string) []ru
 	state := status.CanonicalLifecycleState(snap)
 	switch {
 	case state == status.LifecycleFailed:
-		return []runStatusAction{
-			{Name: "logs", Description: "Inspect the workload's execution logs.", Command: command("logs", snap.Name, "--tail", "200")},
-			{Name: "diagnostics", Description: "Show scoped deep-diagnostic commands.", Command: command("status", snap.Name, "--diagnostic-hints")},
+		actions := make([]runStatusAction, 0, 2)
+		if runStatusLogsRetrievable(snap) {
+			actions = append(actions, runStatusAction{
+				Name:        "logs",
+				Description: "Inspect the workload's execution logs.",
+				Command:     command("logs", snap.Name, "--tail", "200"),
+			})
 		}
+		return append(actions, runStatusAction{
+			Name:        "diagnostics",
+			Description: "Show scoped deep-diagnostic commands.",
+			Command:     command("status", snap.Name, "--diagnostic-hints"),
+		})
 	case state == status.LifecycleSucceeded:
-		actions := []runStatusAction{{
-			Name:        "logs",
-			Description: "Inspect the completed workload's execution logs.",
-			Command:     command("logs", snap.Name, "--tail", "200"),
-		}}
+		actions := make([]runStatusAction, 0, 2)
+		if runStatusLogsRetrievable(snap) {
+			actions = append(actions, runStatusAction{
+				Name:        "logs",
+				Description: "Inspect the completed workload's execution logs.",
+				Command:     command("logs", snap.Name, "--tail", "200"),
+			})
+		}
 		if runStatusResultsRetrievable(snap) {
 			actions = append(actions, runStatusAction{
 				Name:        "results",
@@ -333,11 +348,31 @@ func runStatusActions(snap status.Snapshot, kubeContext, kubeconfig string) []ru
 		}
 		return actions
 	default:
-		return []runStatusAction{
-			{Name: "watch", Description: "Follow lifecycle progress until the run is ready or fails.", Command: command("status", snap.Name, "--watch")},
-			{Name: "logs", Description: "Inspect currently available execution logs.", Command: command("logs", snap.Name, "--tail", "200")},
+		actions := []runStatusAction{{
+			Name:        "watch",
+			Description: "Follow lifecycle progress until the run is ready or fails.",
+			Command:     command("status", snap.Name, "--watch"),
+		}}
+		if runStatusLogsRetrievable(snap) {
+			actions = append(actions, runStatusAction{
+				Name:        "logs",
+				Description: "Inspect currently available execution logs.",
+				Command:     command("logs", snap.Name, "--tail", "200"),
+			})
 		}
+		return actions
 	}
+}
+
+func runStatusLogsRetrievable(snap status.Snapshot) bool {
+	if snap.JobFound {
+		return true
+	}
+	rayJob := status.CanonicalRayJob(snap)
+	return rayJob.Found &&
+		!snap.ManagerOnlyMultiKueueView() &&
+		strings.TrimSpace(rayJob.JobID) != "" &&
+		strings.TrimSpace(rayJob.RayClusterName) != ""
 }
 
 func runStatusResultsRetrievable(snap status.Snapshot) bool {
@@ -382,7 +417,7 @@ func terminalFailureDiagnostic(snap status.Snapshot, phases []status.Phase) *run
 		}
 	}
 	rayJob := status.CanonicalRayJob(snap)
-	if !snap.JobFound && rayJob.Found && rayJobHasFailureStatus(rayJob) {
+	if !snap.JobFound && rayJob.Found && status.RayJobFailed(rayJob) {
 		return &runStatusDiagnostic{
 			Code:       "RUN_FAILED",
 			Severity:   "error",
@@ -423,19 +458,6 @@ func terminalFailureDiagnostic(snap status.Snapshot, phases []status.Phase) *run
 		Message:    "run failed",
 		Suggestion: "inspect execution logs and deep diagnostics before retrying",
 	}
-}
-
-func rayJobHasFailureStatus(rayJob status.RayJob) bool {
-	for _, value := range []string{rayJob.JobStatus, rayJob.JobDeploymentStatus, rayJob.Reason} {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if strings.Contains(value, "fail") ||
-			strings.Contains(value, "error") ||
-			strings.Contains(value, "stop") ||
-			strings.Contains(value, "cancel") {
-			return true
-		}
-	}
-	return false
 }
 
 func newRunStatusInvocation(argv []string) runStatusInvocation {

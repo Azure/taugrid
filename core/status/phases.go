@@ -1160,6 +1160,12 @@ func rayJobStatusFailed(rj RayJob) bool {
 	return false
 }
 
+// RayJobFailed reports whether any authoritative RayJob status field contains
+// a terminal failure marker.
+func RayJobFailed(rj RayJob) bool {
+	return rayJobStatusFailed(rj)
+}
+
 // singleLine collapses all whitespace runs into single spaces. Kubernetes
 // condition messages wrap across lines, and a raw newline would break the
 // rendered row it is placed in.
