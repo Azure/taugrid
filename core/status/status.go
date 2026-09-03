@@ -255,33 +255,11 @@ func CanonicalLifecycleState(s Snapshot) LifecycleState {
 		return LifecycleNotFound
 	}
 	rj := snapshotRayJob(s)
-	if s.JobFound {
-		if jobStatusFailed(s) {
-			return LifecycleFailed
-		}
-		if jobStatusSucceeded(s) {
-			return LifecycleSucceeded
-		}
-		primary := s
-		primary.RayJob = RayJob{}
-		primary.RayJobFound = false
-		if StartupFailed(primary) ||
-			(primary.ManagerOnlyMultiKueueView() && primary.AnyAdmissionCheckRejected()) {
-			return LifecycleFailed
-		}
-	} else {
-		if rayJobStatusFailed(rj) {
-			return LifecycleFailed
-		}
-		if rayJobStatusSucceeded(rj) {
-			return LifecycleSucceeded
-		}
-		if StartupFailed(s) {
-			return LifecycleFailed
-		}
-		if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
-			return LifecycleFailed
-		}
+	if StartupFailed(s) {
+		return LifecycleFailed
+	}
+	if primaryWorkloadSucceeded(s) {
+		return LifecycleSucceeded
 	}
 	if s.JobFound {
 		if s.JobActive > 0 {
