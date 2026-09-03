@@ -39,19 +39,18 @@ func newRunStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status <job-name>",
 		Short: "Show job lifecycle and startup phases",
-		Long: `Show the full lifecycle of a tau-submitted job:
-  - The batch/v1 Job or RayJob (state, conditions, deployment status).
-  - Kueue Workload(s) (queue, admission, phase, blocking reason if any).
-  - Startup phases: Kueue admission, pod scheduling, DRA allocation, image pull,
-    init containers, container start, readiness, and RayJob status.
-  - Pods (phase, ready, restarts, node).
+		Long: `Show a decision-oriented lifecycle summary for a batch/v1 Job or RayJob.
 
-For RayJobs, shows the deployment status (New/Initializing/Running/Complete/
-Failed/Suspended), the associated RayCluster name, and discovers pods via
-the ray.io/cluster label.`,
+The default table view presents the canonical state, startup progress,
+resource readiness, actionable diagnostics, and valid next commands. Use
+--output json for the complete versioned record, including workload conditions,
+Kueue admission details, pods, resource claims, events, and structured actions.
+
+For RayJobs, Tau also tracks RayCluster creation and RayJob terminal status.`,
 		Example: `  tau run status lora-7b-001 -n ray
   tau run status my-job --context research-admin -n ray
   tau run status my-rayjob --context research-admin -n ray
+  tau run status my-rayjob --output json -n ray
   tau run status sample-finetune --watch -n ray`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

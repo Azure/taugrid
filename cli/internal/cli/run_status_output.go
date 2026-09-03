@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/status"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 const runStatusAPIVersion = "tau.azure.com/v1alpha1"
@@ -318,16 +319,33 @@ func runStatusActions(snap status.Snapshot, kubeContext, kubeconfig string) []ru
 			{Name: "diagnostics", Description: "Show scoped deep-diagnostic commands.", Command: command("status", snap.Name, "--diagnostic-hints")},
 		}
 	case state == status.LifecycleSucceeded:
-		return []runStatusAction{
-			{Name: "logs", Description: "Inspect the completed workload's execution logs.", Command: command("logs", snap.Name, "--tail", "200")},
-			{Name: "results", Description: "Fetch persisted run results and artifacts.", Command: command("get", snap.Name)},
+		actions := []runStatusAction{{
+			Name:        "logs",
+			Description: "Inspect the completed workload's execution logs.",
+			Command:     command("logs", snap.Name, "--tail", "200"),
+		}}
+		if runStatusResultsRetrievable(snap) {
+			actions = append(actions, runStatusAction{
+				Name:        "results",
+				Description: "Fetch persisted run results and artifacts.",
+				Command:     command("get", snap.Name),
+			})
 		}
+		return actions
 	default:
 		return []runStatusAction{
 			{Name: "watch", Description: "Follow lifecycle progress until the run is ready or fails.", Command: command("status", snap.Name, "--watch")},
 			{Name: "logs", Description: "Inspect currently available execution logs.", Command: command("logs", snap.Name, "--tail", "200")},
 		}
 	}
+}
+
+func runStatusResultsRetrievable(snap status.Snapshot) bool {
+	if snap.JobFound && status.CanonicalRayJob(snap).Found {
+		return false
+	}
+	return strings.TrimSpace(snap.Annotations[workloadmeta.AnnotationResultPath]) != "" &&
+		strings.TrimSpace(snap.Annotations[workloadmeta.AnnotationResultPVC]) != ""
 }
 
 func runStatusTauCommand(snap status.Snapshot, kubeContext, kubeconfig string) func(...string) runStatusInvocation {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/status"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 func TestWriteRunStatusJSONExposesStableAgentContract(t *testing.T) {
@@ -380,6 +381,31 @@ func TestRunStatusCompletedRunOmitsStalePendingDiagnostic(t *testing.T) {
 		if diagnostic.Code == "KUEUE_PENDING" {
 			t.Fatalf("completed run retained stale pending diagnostic: %+v", doc.Diagnostics)
 		}
+	}
+}
+
+func TestRunStatusCompletedActionsOnlyOfferRetrievableResults(t *testing.T) {
+	complete := status.Snapshot{
+		Name:          "train-001",
+		Namespace:     "ray",
+		JobFound:      true,
+		JobConditions: []status.Condition{{Type: "Complete", Status: "True"}},
+	}
+	if actions := runStatusActions(complete, "", ""); len(actions) != 1 || actions[0].Name != "logs" {
+		t.Fatalf("unannotated completed run actions = %+v", actions)
+	}
+
+	complete.Annotations = map[string]string{
+		workloadmeta.AnnotationResultPath: "/data/runs/train-001/",
+		workloadmeta.AnnotationResultPVC:  "research-data",
+	}
+	if actions := runStatusActions(complete, "", ""); len(actions) != 2 || actions[1].Name != "results" {
+		t.Fatalf("retrievable completed run actions = %+v", actions)
+	}
+
+	complete.RayJob = status.RayJob{Found: true, Name: complete.Name}
+	if actions := runStatusActions(complete, "", ""); len(actions) != 1 || actions[0].Name != "logs" {
+		t.Fatalf("ambiguous completed run actions = %+v", actions)
 	}
 }
 

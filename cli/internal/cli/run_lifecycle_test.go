@@ -40,6 +40,19 @@ func TestRunStatusRegistersMachineReadableOutputFlag(t *testing.T) {
 	}
 }
 
+func TestRunStatusHelpDistinguishesSummaryAndCompleteJSON(t *testing.T) {
+	help := newRunStatusCmd().Long
+	for _, want := range []string{
+		"decision-oriented lifecycle summary",
+		"--output json for the complete versioned record",
+		"Kueue admission details",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("status help missing %q:\n%s", want, help)
+		}
+	}
+}
+
 func TestResolveRunStatusConnectionKeepsJSONStdoutClean(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd := &cobra.Command{}
