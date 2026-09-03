@@ -1,4 +1,5 @@
 .bin/
+.generated/
 .hugo_build.lock
 .hugo_cache*/
 node_modules/

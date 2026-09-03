@@ -91,7 +91,7 @@ cd site
 make train-market-policy
 ```
 
-The target writes `.hugo_cache/tau-market-policy.cpu.json`; it does not replace
+The target writes `.generated/tau-market-policy.cpu.json`; it does not replace
 the checked-in H200 artifact. `make check` verifies that canonical artifact's
 H200 provenance, model contract, quality gates, parameter count, and SHA-256.
 The TauGrid manifest sets `MARKET_POLICY_USE_RAY=1` and
