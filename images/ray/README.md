@@ -9,6 +9,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
 | **Ray** | 2.56.0 — `ray[default]`, `ray[data]`, `ray[serve]` |
+| **protobuf** | Pinned `<5` — Ray Serve's `_proto_to_dict` reads `FieldDescriptor.label`, which protobuf 5+'s upb backend removed |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
 | **NCCL** | NVIDIA Collective Communications Library — multi-GPU all-reduce, broadcast; uses RDMA/IB transport when available |
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
@@ -152,6 +153,7 @@ Prevents unbounded tag growth in ACR by removing PR-scoped image tags:
 3. `ray[default]` — `ray.dashboard` is importable
 4. `ray[data]` — `ray.data` is importable
 5. `ray[serve]` — `ray.serve` is importable
-6. GNU Wget 1.x is installed (not wget2)
-7. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
-8. NCCL (`libnccl`) is loadable
+6. protobuf major version is `<5` and `FieldDescriptor.label` is present (Ray Serve proto compatibility)
+7. GNU Wget 1.x is installed (not wget2)
+8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
+9. NCCL (`libnccl`) is loadable
