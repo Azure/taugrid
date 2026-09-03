@@ -276,6 +276,9 @@ func CanonicalLifecycleState(s Snapshot) LifecycleState {
 		if rayJobStatusSucceeded(rj) {
 			return LifecycleSucceeded
 		}
+		if StartupFailed(s) {
+			return LifecycleFailed
+		}
 		if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
 			return LifecycleFailed
 		}

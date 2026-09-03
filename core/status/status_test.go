@@ -1447,6 +1447,18 @@ func TestCanonicalLifecycleState(t *testing.T) {
 			want: LifecycleRunning,
 		},
 		{
+			name: "nonterminal rayjob with image pull failure",
+			snap: Snapshot{
+				RayJob: RayJob{Found: true, JobDeploymentStatus: "Initializing"},
+				Pods: []Pod{{
+					Containers: []Container{{
+						State: "waiting", Reason: "ImagePullBackOff",
+					}},
+				}},
+			},
+			want: LifecycleFailed,
+		},
+		{
 			name: "succeeded rayjob",
 			snap: Snapshot{RayJob: RayJob{
 				Found: true, JobStatus: "SUCCEEDED",
