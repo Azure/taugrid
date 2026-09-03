@@ -79,41 +79,37 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 		hydrateRayJob(&s, []byte(rayJobJSON))
 	}
 
-	// Workloads. Kueue labels the Workload with kueue.x-k8s.io/job-uid =
-	// the Job's metadata.uid, AND we add tau.azure.com/job=<name> via
-	// the workload metadata/template labels. Either selector should work; we prefer
-	// our own label since it survives Job recreation.
-	wlJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
-		"-l", workloadmeta.LabelJob + "=" + name, "-o", "json"}, nil)
-	if err == nil {
-		s.Workloads = hydrateWorkloads([]byte(wlJSON))
-	}
-	// Fall back to job-uid selector if our label found nothing.
-	if len(s.Workloads) == 0 && s.JobFound {
-		uid := jobUID([]byte(jobJSON))
-		if uid != "" {
-			wlJSON2, err2 := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
-				"-l", "kueue.x-k8s.io/job-uid=" + uid, "-o", "json"}, nil)
-			if err2 == nil {
-				s.Workloads = hydrateWorkloads([]byte(wlJSON2))
-			}
-		}
-	}
+	// Prefer the primary workload's immutable UID. The name label can match a
+	// stale Job and RayJob simultaneously when both kinds reuse a run name.
+	workloadSelectors := make([]string, 0, 2)
 	rj := snapshotRayJob(s)
-	if len(s.Workloads) == 0 && rj.Found && rj.UID != "" {
-		wlJSON2, err2 := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
-			"-l", "kueue.x-k8s.io/job-uid=" + rj.UID, "-o", "json"}, nil)
-		if err2 == nil {
-			s.Workloads = hydrateWorkloads([]byte(wlJSON2))
+	if s.JobFound && s.JobUID != "" {
+		workloadSelectors = append(workloadSelectors, "kueue.x-k8s.io/job-uid="+s.JobUID)
+	} else if rj.Found && rj.UID != "" {
+		workloadSelectors = append(workloadSelectors, "kueue.x-k8s.io/job-uid="+rj.UID)
+	} else {
+		workloadSelectors = append(workloadSelectors, workloadmeta.LabelJob+"="+name)
+	}
+	for _, selector := range workloadSelectors {
+		wlJSON, queryErr := r.Raw(ctx, []string{"-n", namespace, "get", "workloads.kueue.x-k8s.io",
+			"-l", selector, "-o", "json"}, nil)
+		if queryErr == nil {
+			s.Workloads = hydrateWorkloads([]byte(wlJSON))
+			if len(s.Workloads) > 0 {
+				break
+			}
 		}
 	}
 	hydrateAdmissionCheckControllers(ctx, r, s.Workloads)
 
-	// Pods: combine selectors. job-name is the standard k8s Job label;
-	// tau.azure.com/job is ours, and Ray pods also carry ray.io/cluster.
-	selectors := []string{"job-name=" + name, workloadmeta.LabelJob + "=" + name}
-	if rj.RayClusterName != "" {
-		selectors = append(selectors, "ray.io/cluster="+rj.RayClusterName)
+	// A batch Job's standard selector is authoritative. Name-based Tau labels
+	// and RayCluster selectors are used only when RayJob is the primary kind.
+	selectors := []string{"job-name=" + name}
+	if !s.JobFound {
+		selectors = []string{workloadmeta.LabelJob + "=" + name}
+		if rj.RayClusterName != "" {
+			selectors = append(selectors, "ray.io/cluster="+rj.RayClusterName)
+		}
 	}
 	for _, selector := range selectors {
 		podJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "pods",
@@ -125,7 +121,7 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	}
 
 	s.ResourceClaims = fetchResourceClaims(ctx, r, namespace, uniquePodResourceClaims(s.Pods))
-	s.Events = fetchEvents(ctx, r, namespace, eventObjectNames(s))
+	s.Events = fetchEvents(ctx, r, namespace, eventObjects(s))
 
 	return s, nil
 }

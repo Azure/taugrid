@@ -34,6 +34,7 @@ func newRunStatusCmd() *cobra.Command {
 		watchInterval   time.Duration
 		maxIterations   int
 		diagnosticHints bool
+		output          string
 	)
 	cmd := &cobra.Command{
 		Use:   "status <job-name>",
@@ -55,7 +56,11 @@ the ray.io/cluster label.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			resolvedContext, ns, restore, err := connection.resolve(cmd)
+			resolvedContext, ns, restore, err := resolveRunStatusConnection(
+				cmd,
+				output,
+				connection.resolve,
+			)
 			if err != nil {
 				return err
 			}
@@ -69,6 +74,7 @@ the ray.io/cluster label.`,
 				Interval:        watchInterval,
 				MaxIterations:   maxIterations,
 				DiagnosticHints: diagnosticHints,
+				Output:          output,
 			}
 			return runStatusCommand(cmd, opts, name)
 		},
@@ -79,7 +85,25 @@ the ray.io/cluster label.`,
 	cmd.Flags().DurationVar(&watchInterval, "interval", 2*time.Second, "poll interval when --watch is set")
 	cmd.Flags().IntVar(&maxIterations, "max-iterations", 0, "maximum watch iterations; 0 runs until ready, failed, or interrupted")
 	cmd.Flags().BoolVar(&diagnosticHints, "diagnostic-hints", false, "print scoped kubectl commands for deep pod diagnostics")
+	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	return cmd
+}
+
+type runStatusConnectionResolver func(*cobra.Command) (string, string, func(), error)
+
+func resolveRunStatusConnection(
+	cmd *cobra.Command,
+	output string,
+	resolve runStatusConnectionResolver,
+) (string, string, func(), error) {
+	if output != "json" {
+		return resolve(cmd)
+	}
+	stdout := cmd.OutOrStdout()
+	cmd.SetOut(cmd.ErrOrStderr())
+	resolvedContext, namespace, restore, err := resolve(cmd)
+	cmd.SetOut(stdout)
+	return resolvedContext, namespace, restore, err
 }
 
 func activeKubeconfigPath() string {
@@ -99,17 +123,27 @@ type statusRunOptions struct {
 	MaxIterations   int
 	RunProfile      bool
 	DiagnosticHints bool
+	Output          string
 }
 
 func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) error {
+	if opts.Watch && opts.DiagnosticHints {
+		return fmt.Errorf("--diagnostic-hints cannot be used with --watch")
+	}
+	if opts.Output != "table" && opts.Output != "json" {
+		return fmt.Errorf("--output must be table or json")
+	}
+	if opts.Watch && opts.Output == "json" {
+		return fmt.Errorf("--output json cannot be used with --watch; poll status for one JSON document per request")
+	}
+	if opts.DiagnosticHints && opts.Output == "json" {
+		return fmt.Errorf("--diagnostic-hints cannot be used with --output json; JSON output already includes diagnostic commands")
+	}
 	resolvedNamespace, err := resolveWorkloadNamespace(cmd, opts.KubeContext, opts.Namespace)
 	if err != nil {
 		return err
 	}
 	opts.Namespace = resolvedNamespace
-	if opts.Watch && opts.DiagnosticHints {
-		return fmt.Errorf("--diagnostic-hints cannot be used with --watch")
-	}
 	if opts.Watch {
 		return watchStatusCommand(cmd, opts, name)
 	}
@@ -118,7 +152,13 @@ func runStatusCommand(cmd *cobra.Command, opts statusRunOptions, name string) er
 	if err != nil {
 		return err
 	}
-	writeStatusSnapshot(cmd.OutOrStdout(), snap, opts.RunProfile)
+	doc := newRunStatusDocument(snap, opts.RunProfile, opts.KubeContext, opts.Kubeconfig)
+	if opts.Output == "json" {
+		return writeRunStatusJSONDocument(cmd.OutOrStdout(), doc)
+	}
+	if err := writeRunStatusHuman(cmd.OutOrStdout(), doc); err != nil {
+		return err
+	}
 	if opts.DiagnosticHints {
 		fmt.Fprint(cmd.OutOrStdout(), renderKubectlDiagnosticHints(opts.KubeContext, opts.Kubeconfig, opts.Namespace, name, snap))
 	}
@@ -163,7 +203,10 @@ func watchStatusCommandWithHooks(cmd *cobra.Command, opts statusRunOptions, name
 		out := cmd.OutOrStdout()
 		hooks.clearScreen(out)
 		fmt.Fprintf(out, "watching %s/%s every %s\n\n", opts.Namespace, name, opts.Interval)
-		writeStatusSnapshot(out, snap, opts.RunProfile)
+		doc := newRunStatusDocument(snap, opts.RunProfile, opts.KubeContext, opts.Kubeconfig)
+		if err := writeRunStatusHuman(out, doc); err != nil {
+			return err
+		}
 		if status.WatchFailed(snap) {
 			return fmt.Errorf("startup phase failed for %s/%s", opts.Namespace, name)
 		}
@@ -183,14 +226,19 @@ func clearStatusScreen(w io.Writer) {
 	fmt.Fprint(w, "\033[H\033[2J")
 }
 
-func writeStatusSnapshot(w io.Writer, snap status.Snapshot, runProfile bool) {
-	fmt.Fprint(w, status.Render(snap))
-	if runProfile {
-		fmt.Fprint(w, status.RenderRunProfile(snap, status.CostProfile{}))
+func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) string {
+	commands := kubectlDiagnosticCommands(kubeContext, kubeconfig, namespace, name, snap)
+	var b strings.Builder
+	b.WriteString("\nDeep diagnostics (kubectl escape hatches):\n")
+	for _, command := range commands {
+		b.WriteString("  ")
+		b.WriteString(renderShellCommand(command))
+		b.WriteByte('\n')
 	}
+	return b.String()
 }
 
-func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) string {
+func kubectlDiagnosticCommands(kubeContext, kubeconfig, namespace, name string, snap status.Snapshot) [][]string {
 	if snap.JobFound && snap.RayJob.Found {
 		// Status gives a same-name batch Job precedence. The fetched pod set can
 		// contain both Job and Ray pods, so use the Job selector rather than
@@ -207,20 +255,15 @@ func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name strin
 	base = append(base, "-n", namespace)
 	selector := diagnosticPodSelector(name, snap)
 
-	var b strings.Builder
-	b.WriteString("\nDeep diagnostics (kubectl escape hatches):\n")
+	commands := make([][]string, 0, len(snap.Pods)+2)
 	if len(snap.Pods) > 0 {
 		for _, pod := range snap.Pods {
 			topArgs := append(append([]string{}, base...), "top", "pod", pod.Name, "--containers")
-			b.WriteString("  ")
-			b.WriteString(renderShellCommand(topArgs))
-			b.WriteByte('\n')
+			commands = append(commands, topArgs)
 		}
 	} else {
 		topArgs := append(append([]string{}, base...), "top", "pod", "-l", selector, "--containers")
-		b.WriteString("  ")
-		b.WriteString(renderShellCommand(topArgs))
-		b.WriteByte('\n')
+		commands = append(commands, topArgs)
 	}
 
 	logArgs := append(append([]string{}, base...), "logs", "-l", selector, "--all-containers=true", "--prefix=true", "--timestamps=true")
@@ -231,17 +274,13 @@ func renderKubectlDiagnosticHints(kubeContext, kubeconfig, namespace, name strin
 		}
 		logArgs = append(logArgs, "--timestamps=true")
 	}
-	b.WriteString("  ")
-	b.WriteString(renderShellCommand(logArgs))
-	b.WriteByte('\n')
+	commands = append(commands, logArgs)
 
 	if pod, container, ok := firstRunnableContainer(snap); ok {
 		execArgs := append(append([]string{}, base...), "exec", "-it", pod, "-c", container, "--", "/bin/sh")
-		b.WriteString("  ")
-		b.WriteString(renderShellCommand(execArgs))
-		b.WriteByte('\n')
+		commands = append(commands, execArgs)
 	}
-	return b.String()
+	return commands
 }
 
 func diagnosticPodSelector(name string, snap status.Snapshot) string {

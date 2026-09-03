@@ -89,41 +89,41 @@ type Snapshot struct {
 }
 
 type Condition struct {
-	Type    string
-	Status  string
-	Reason  string
-	Message string
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type Workload struct {
-	Name     string
-	Queue    string // local queue name
-	Admitted bool
-	Phase    string // pending|admitted|finished|...
-	Reason   string
+	Name     string `json:"name"`
+	Queue    string `json:"queue,omitempty"` // local queue name
+	Admitted bool   `json:"admitted"`
+	Phase    string `json:"phase"` // pending|admitted|finished|...
+	Reason   string `json:"reason,omitempty"`
 	// Message is the condition message explaining why a workload is not
 	// admitted. Kueue puts the actionable detail here (which flavors and
 	// nodes were excluded, and why) while Reason is often just "Pending".
-	Message    string
-	Preemption string
+	Message    string `json:"message,omitempty"`
+	Preemption string `json:"preemption,omitempty"`
 
 	// MultiKueue fields, populated only from manager-visible Workload
 	// status — never from worker-cluster credentials or objects.
 	//
 	// ClusterName is status.clusterName: the worker cluster Kueue has
 	// selected for this workload. Empty until selection happens.
-	ClusterName string
+	ClusterName string `json:"clusterName,omitempty"`
 	// NominatedClusterNames is status.nominatedClusterNames: candidate
 	// worker clusters under consideration before a cluster is selected.
 	// Mutually exclusive with ClusterName upstream (Kueue resets one
 	// when the other is set), but both are modeled so hydration never
 	// has to guess which is authoritative.
-	NominatedClusterNames []string
+	NominatedClusterNames []string `json:"nominatedClusterNames,omitempty"`
 	// AdmissionChecks lists status.admissionChecks, sorted by name for
 	// deterministic output. The MultiKueue admission check controller
 	// reports selection/placement progress here (Pending/Ready/Retry/
 	// Rejected).
-	AdmissionChecks []AdmissionCheck
+	AdmissionChecks []AdmissionCheck `json:"admissionChecks,omitempty"`
 }
 
 // waiting reports whether Kueue has neither admitted nor finished this
@@ -142,84 +142,84 @@ func (w Workload) waiting() bool {
 // placement can fall back to the exact upstream MultiKueue check name until
 // platform RBAC and activation tests lock that contract down.
 type AdmissionCheck struct {
-	Name                   string
-	State                  string
-	Message                string
-	LastTransitionTime     time.Time
-	ControllerName         string
-	ControllerLookupFailed bool
+	Name                   string    `json:"name"`
+	State                  string    `json:"state"`
+	Message                string    `json:"message,omitempty"`
+	LastTransitionTime     time.Time `json:"lastTransitionTime,omitempty,omitzero"`
+	ControllerName         string    `json:"controllerName,omitempty"`
+	ControllerLookupFailed bool      `json:"controllerLookupFailed,omitempty"`
 }
 
 type Pod struct {
-	Name            string
-	UID             string
-	CreatedAt       time.Time
-	Phase           string
-	Node            string
-	Restarts        int
-	Ready           string // "1/1"
-	StartedAt       time.Time
-	ResourceClaims  []string
-	ContainerReason string
-	ExitCode        *int32
-	OOMKilled       bool
-	Conditions      []Condition
-	InitContainers  []Container
-	Containers      []Container
+	Name            string      `json:"name"`
+	UID             string      `json:"uid,omitempty"`
+	CreatedAt       time.Time   `json:"createdAt,omitempty,omitzero"`
+	Phase           string      `json:"phase"`
+	Node            string      `json:"node,omitempty"`
+	Restarts        int         `json:"restarts"`
+	Ready           string      `json:"ready"` // "1/1"
+	StartedAt       time.Time   `json:"startedAt,omitempty,omitzero"`
+	ResourceClaims  []string    `json:"resourceClaims,omitempty"`
+	ContainerReason string      `json:"containerReason,omitempty"`
+	ExitCode        *int32      `json:"exitCode,omitempty"`
+	OOMKilled       bool        `json:"oomKilled,omitempty"`
+	Conditions      []Condition `json:"conditions,omitempty"`
+	InitContainers  []Container `json:"initContainers,omitempty"`
+	Containers      []Container `json:"containers,omitempty"`
 }
 
 type Container struct {
-	Name         string
-	Image        string
-	Ready        bool
-	RestartCount int
-	State        string // waiting|running|terminated
-	Reason       string
-	Message      string
-	LastReason   string
-	LastMessage  string
-	StartedAt    time.Time
-	FinishedAt   time.Time
-	ExitCode     *int32
-	LastExitCode *int32
+	Name         string    `json:"name"`
+	Image        string    `json:"image,omitempty"`
+	Ready        bool      `json:"ready"`
+	RestartCount int       `json:"restartCount"`
+	State        string    `json:"state"` // waiting|running|terminated
+	Reason       string    `json:"reason,omitempty"`
+	Message      string    `json:"message,omitempty"`
+	LastReason   string    `json:"lastReason,omitempty"`
+	LastMessage  string    `json:"lastMessage,omitempty"`
+	StartedAt    time.Time `json:"startedAt,omitempty,omitzero"`
+	FinishedAt   time.Time `json:"finishedAt,omitempty,omitzero"`
+	ExitCode     *int32    `json:"exitCode,omitempty"`
+	LastExitCode *int32    `json:"lastExitCode,omitempty"`
 }
 
 type ResourceClaim struct {
-	Name        string
-	CreatedAt   time.Time
-	Allocated   bool
-	Allocation  string
-	Conditions  []Condition
-	LastReason  string
-	LastMessage string
+	Name        string      `json:"name"`
+	CreatedAt   time.Time   `json:"createdAt,omitempty,omitzero"`
+	Allocated   bool        `json:"allocated"`
+	Allocation  string      `json:"allocation,omitempty"`
+	Conditions  []Condition `json:"conditions,omitempty"`
+	LastReason  string      `json:"lastReason,omitempty"`
+	LastMessage string      `json:"lastMessage,omitempty"`
 }
 
 type Event struct {
-	InvolvedKind string
-	InvolvedName string
-	Type         string
-	Reason       string
-	Message      string
-	Count        int
-	FirstSeen    time.Time
-	LastSeen     time.Time
+	InvolvedKind string    `json:"involvedKind"`
+	InvolvedName string    `json:"involvedName"`
+	Type         string    `json:"type"`
+	Reason       string    `json:"reason,omitempty"`
+	Message      string    `json:"message,omitempty"`
+	Count        int       `json:"count"`
+	FirstSeen    time.Time `json:"firstSeen,omitempty,omitzero"`
+	LastSeen     time.Time `json:"lastSeen,omitempty,omitzero"`
 }
 
 type RayJob struct {
-	Found               bool
-	Name                string
-	UID                 string
-	CreatedAt           time.Time
-	StartedAt           time.Time
-	FinishedAt          time.Time
-	RayClusterName      string
-	JobID               string
-	JobDeploymentStatus string
-	JobStatus           string
-	RayClusterStatus    string
-	Reason              string
-	Message             string
-	Conditions          []Condition
+	Found               bool        `json:"found"`
+	Name                string      `json:"name"`
+	UID                 string      `json:"uid,omitempty"`
+	CreatedAt           time.Time   `json:"createdAt,omitempty,omitzero"`
+	StartedAt           time.Time   `json:"startedAt,omitempty,omitzero"`
+	FinishedAt          time.Time   `json:"finishedAt,omitempty,omitzero"`
+	RayClusterName      string      `json:"rayClusterName,omitempty"`
+	JobID               string      `json:"jobId,omitempty"`
+	JobDeploymentStatus string      `json:"jobDeploymentStatus,omitempty"`
+	JobStatus           string      `json:"jobStatus,omitempty"`
+	RayClusterStatus    string      `json:"rayClusterStatus,omitempty"`
+	Reason              string      `json:"reason,omitempty"`
+	Message             string      `json:"message,omitempty"`
+	Conditions          []Condition `json:"conditions,omitempty"`
 	// ManagedBy mirrors spec.managedBy on the RayJob. It is an immutable
 	// opt-in flag set at admission time (not a live routing indicator):
 	// KubeRay's MultiKueue integration sets it to
@@ -228,7 +228,101 @@ type RayJob struct {
 	// "ray.io/kuberay-operator". Actual worker-cluster placement progress
 	// is tracked separately via Workload.ClusterName /
 	// NominatedClusterNames / AdmissionChecks.
-	ManagedBy string
+	ManagedBy string `json:"managedBy,omitempty"`
+}
+
+// LifecycleState is the stable, finite run state exposed to machine consumers.
+type LifecycleState string
+
+const (
+	LifecycleNotFound  LifecycleState = "not_found"
+	LifecycleQueued    LifecycleState = "queued"
+	LifecycleStarting  LifecycleState = "starting"
+	LifecycleRunning   LifecycleState = "running"
+	LifecycleSucceeded LifecycleState = "succeeded"
+	LifecycleFailed    LifecycleState = "failed"
+)
+
+// RunFound reports whether the snapshot contains a batch Job or RayJob.
+func RunFound(s Snapshot) bool {
+	return s.JobFound || snapshotRayJob(s).Found
+}
+
+// CanonicalLifecycleState maps Kubernetes, Kueue, and Ray states onto the
+// versioned finite state set used by machine consumers.
+func CanonicalLifecycleState(s Snapshot) LifecycleState {
+	if !RunFound(s) {
+		return LifecycleNotFound
+	}
+	rj := snapshotRayJob(s)
+	if s.JobFound {
+		if jobStatusFailed(s) {
+			return LifecycleFailed
+		}
+		if jobStatusSucceeded(s) {
+			return LifecycleSucceeded
+		}
+		primary := s
+		primary.RayJob = RayJob{}
+		primary.RayJobFound = false
+		if StartupFailed(primary) ||
+			(primary.ManagerOnlyMultiKueueView() && primary.AnyAdmissionCheckRejected()) {
+			return LifecycleFailed
+		}
+	} else {
+		if rayJobStatusFailed(rj) {
+			return LifecycleFailed
+		}
+		if rayJobStatusSucceeded(rj) {
+			return LifecycleSucceeded
+		}
+		if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
+			return LifecycleFailed
+		}
+	}
+	if s.JobFound {
+		if s.JobActive > 0 {
+			return LifecycleRunning
+		}
+		if s.JobSuspended {
+			return LifecycleQueued
+		}
+	} else {
+		if strings.EqualFold(rj.JobDeploymentStatus, "Running") ||
+			strings.EqualFold(rj.JobStatus, "Running") {
+			return LifecycleRunning
+		}
+		if strings.EqualFold(rj.JobDeploymentStatus, "Suspended") ||
+			strings.EqualFold(rj.JobStatus, "Suspended") {
+			return LifecycleQueued
+		}
+	}
+	for _, workload := range s.Workloads {
+		if !workload.Admitted && !strings.EqualFold(workload.Phase, "Finished") {
+			return LifecycleQueued
+		}
+	}
+	return LifecycleStarting
+}
+
+// CanonicalRayJob returns the hydrated RayJob, including compatibility fields
+// used by older snapshot producers.
+func CanonicalRayJob(s Snapshot) RayJob {
+	return snapshotRayJob(s)
+}
+
+// HeadlineState returns the same lifecycle state used by the human renderer.
+func HeadlineState(s Snapshot) string {
+	switch CanonicalLifecycleState(s) {
+	case LifecycleNotFound:
+		return "NotFound"
+	case LifecycleFailed:
+		return "Failed"
+	case LifecycleSucceeded:
+		return "Complete"
+	default:
+		return deriveState(s)
+	}
 }
 
 // Render returns a human-readable multi-section status view.
@@ -421,12 +515,12 @@ func deriveState(s Snapshot) string {
 		if state, ok := managerMultiKueueJobState(s); ok {
 			return state
 		}
-		if state, ok := managerMultiKueueRayJobState(snapshotRayJob(s)); ok {
+		if state, ok := managerMultiKueueRayJobState(primaryRayJob(s)); ok {
 			return state
 		}
 		return string(s.MultiKueueState())
 	}
-	rj := snapshotRayJob(s)
+	rj := primaryRayJob(s)
 	if rj.Found && !s.JobFound {
 		switch firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus) {
 		case "Failed":
@@ -497,7 +591,7 @@ func multiKueueTerminalState(s Snapshot) (string, bool) {
 			return "Failed", true
 		}
 	}
-	rj := snapshotRayJob(s)
+	rj := primaryRayJob(s)
 	if rayJobStatusFailed(rj) {
 		return "Failed", true
 	}
