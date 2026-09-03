@@ -147,6 +147,53 @@ def round_values(values: torch.Tensor) -> list[float]:
     return [round(float(value), 7) for value in values.detach().cpu().reshape(-1)]
 
 
+def metrics_history_dir() -> Path | None:
+    """Return the Stellar history directory for a Tau-submitted run.
+
+    Tau injects ``TAU_OUTPUT_DIR`` from ``storage.output``. Local deterministic
+    exports do not set it, so they keep producing only the browser artifact.
+    """
+    output_dir = os.environ.get("TAU_OUTPUT_DIR")
+    if not output_dir:
+        return None
+    path = Path(output_dir) / "metrics-history-attempt-0"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def metrics_row(
+    step: int,
+    loss: float,
+    metrics: dict[str, float],
+) -> dict[str, float | int]:
+    """Build one Stellar-compatible scalar metrics row."""
+    return {
+        "_step": step,
+        "_timestamp": time.time(),
+        "train/loss": loss,
+        "validation/policy_accuracy": metrics["policyAccuracy"],
+        "validation/value_rmse": metrics["valueRmse"],
+    }
+
+
+def publish_metrics_row(
+    directory: Path,
+    step: int,
+    loss: float,
+    metrics: dict[str, float],
+) -> Path:
+    """Atomically publish one immutable JSONL chunk for the offloader."""
+    token = f"{step:06d}-{time.time_ns()}"
+    final = directory / f"chunk-{token}.jsonl"
+    temporary = directory / f".{final.name}.tmp-{os.getpid()}"
+    with temporary.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(metrics_row(step, loss, metrics), sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, final)
+    return final
+
+
 def export_artifact(
     model: MarketPolicy,
     config: TrainConfig,
@@ -255,6 +302,7 @@ def train_and_export(
     model = MarketPolicy().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     batch_rng = torch.Generator(device="cpu").manual_seed(config.seed + 1)
+    history_dir = metrics_history_dir()
     started = time.perf_counter()
 
     for step in range(1, config.steps + 1):
@@ -279,11 +327,18 @@ def train_and_export(
                 validation_actions,
                 validation_values,
             )
+            loss_value = round(float(loss.detach().cpu()), 6)
+            published = (
+                publish_metrics_row(history_dir, step, loss_value, metrics)
+                if history_dir is not None
+                else None
+            )
             print(
                 json.dumps(
                     {
                         "step": step,
-                        "loss": round(float(loss.detach().cpu()), 6),
+                        "loss": loss_value,
+                        "metricsChunk": str(published) if published else "",
                         **metrics,
                     },
                     sort_keys=True,

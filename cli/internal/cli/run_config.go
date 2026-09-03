@@ -284,6 +284,8 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	if !c.LooksLikeManagedWorkflow() {
 		o.metricsHistory = append([]string{}, c.Metrics.History...)
 		o.metricsOffloadEnabled = c.Metrics.Offload.Enabled
+		o.metricsOffloadImage = strings.TrimSpace(c.Metrics.Offload.Image)
+		o.metricsOffloadOut = strings.TrimSpace(c.Metrics.Offload.Out)
 	}
 
 	if c.Execution.Launcher != nil {

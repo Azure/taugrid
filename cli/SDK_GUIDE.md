@@ -216,10 +216,27 @@ The workload must have an explicit entrypoint, Ready TauWorkspace,
 durable writable data PVC/output, and `experiment.project` plus
 `experiment.name`. Project, experiment, and optional group values must be
 lowercase expstore IDs. Tau propagates the exact experiment ID through the
-workload and hosted metric rows. The platform supplies a pinned offloader image through
-`TAU_METRICS_OFFLOAD_IMAGE`; endpoint, interval, and source may be supplied by
-the corresponding `TAU_METRICS_OFFLOAD_*` environment values. Researcher YAML
-cannot embed image, endpoint, credentials, or workspace policy.
+workload and hosted metric rows. Direct configs may supply a pinned offloader
+image and its checkpoint spool:
+
+```yaml
+metrics:
+  history:
+    - metrics-history-attempt-*/*.jsonl
+  offload:
+    enabled: true
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0
+    out: /var/run/tau/metrics-offload
+```
+
+`metrics.offload.image` requires an explicit non-latest tag or `@sha256`
+digest. `metrics.offload.out` must be a clean absolute path under `/data` or
+`/var/run/tau`; when omitted, Tau uses a session-scoped directory beneath
+`storage.output`. Platform operators may override these values through
+`TAU_METRICS_OFFLOAD_IMAGE` and `TAU_METRICS_OFFLOAD_OUT`; endpoint, interval,
+and source remain available through the corresponding
+`TAU_METRICS_OFFLOAD_*` environment values. Researcher YAML cannot embed
+endpoint, credentials, or workspace policy.
 
 Tau gives each fresh Kubernetes submission a metrics session and stores its
 expstore and offload checkpoints beneath

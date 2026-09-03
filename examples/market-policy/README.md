@@ -12,6 +12,9 @@ This example owns both sides of the demonstration:
   TauGrid GPU worker.
 - The trainer writes `tau-market-policy.json`, the exact format loaded by the
   documentation site's module Worker.
+- During a Tau-submitted run, the trainer also publishes immutable scalar
+  history chunks for Stellar under
+  `metrics-history-attempt-0/*.jsonl`.
 
 The synthetic task exposes signal, volatility, inventory, episode phase,
 phase sine/cosine, previous action, and micro-noise. The actor predicts Short,
@@ -20,10 +23,11 @@ quality gate requires at least 98% action accuracy and at most 0.04 reward RMSE.
 
 ## Train it on TauGrid
 
-Set `storage.data_pvc` in `tau.yaml` to the writable PVC supplied for your
-workspace. Tau resolves the target namespace and LocalQueue from the `default`
-workspace; change `policy.workspace` if your platform handoff uses another
-name.
+The checked-in configuration targets the `default` workspace and its writable
+`workspace-data` PVC. The commands below use those values directly; a platform
+with different workspace bindings should maintain a platform-specific copy of
+the config rather than requiring researchers to edit commands while running
+the example.
 
 Render the workload before submitting it:
 
@@ -32,6 +36,19 @@ Render the workload before submitting it:
 make install-tau-cli
 tau run --config examples/market-policy/tau.yaml --dry-run=client
 ```
+
+The checked-in `metrics.offload` block pins the published TauGrid Portal
+`0.4.0` image, which contains `taugrid-portal experiment offload metrics`, and
+keeps the sidecar's checkpoint spool on the shared `/var/run/tau` emptyDir.
+That avoids atomic-write incompatibilities on Azure File RWX volumes; an
+abrupt pod loss can therefore lose rows that have not yet been remote-written.
+Tau packages `train.py` into the submitted workload, so enabling Stellar does
+not require a new training image build. The sidecar watches the JSONL chunks,
+remote-writes the three scalar series (`train/loss`,
+`validation/policy_accuracy`, and `validation/value_rmse`), and publishes a
+terminal `tau/run_status` marker. Platform operators can still override the
+checked-in image or spool directory with `TAU_METRICS_OFFLOAD_IMAGE` and
+`TAU_METRICS_OFFLOAD_OUT`.
 
 Run the exact trainer on an H200-capable TauGrid workspace:
 
@@ -57,7 +74,7 @@ already been removed:
 tau run get market-policy \
   --artifact tau-market-policy.json \
   --path /data/market-policy \
-  --pvc <workspace-pvc> \
+  --pvc workspace-data \
   --output raw
 ```
 

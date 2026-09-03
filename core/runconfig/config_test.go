@@ -555,6 +555,8 @@ metrics:
     - /data/shared/eval-*.jsonl
   offload:
     enabled: true
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0
+    out: /var/run/tau/metrics-offload
 experiment:
   project: pretraining.v1
   name: modernbert-fineweb
@@ -564,7 +566,10 @@ experiment:
 		t.Fatalf("parse should accept direct Job metrics offload: %v", err)
 	}
 
-	if !cfg.Metrics.Offload.Enabled || len(cfg.Metrics.History) != 2 {
+	if !cfg.Metrics.Offload.Enabled ||
+		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0" ||
+		cfg.Metrics.Offload.Out != "/var/run/tau/metrics-offload" ||
+		len(cfg.Metrics.History) != 2 {
 		t.Fatalf("unexpected metrics config: %+v", cfg.Metrics)
 	}
 }
@@ -728,6 +733,30 @@ experiment:
     endpoint: https://example.invalid
 `,
 			want: "field endpoint not found",
+		},
+		{
+			name: "mutable offload image",
+			yaml: `metrics:
+  offload:
+    image: example.com/taugrid-portal:latest
+`,
+			want: "must not use the unpinned :latest tag",
+		},
+		{
+			name: "relative offload out",
+			yaml: `metrics:
+  offload:
+    out: metrics-offload
+`,
+			want: "must be a clean absolute container path",
+		},
+		{
+			name: "offload out outside shared mounts",
+			yaml: `metrics:
+  offload:
+    out: /tmp/metrics-offload
+`,
+			want: "must be under /data or /var/run/tau",
 		},
 	}
 	for _, tt := range tests {
@@ -897,6 +926,8 @@ func TestReferenceMarkdownCallsOutScopeAndUnsupportedFields(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`metrics.offload.image` | supported",
+		"`metrics.offload.out` | supported",
 		"`experiment.project` | supported",
 	} {
 		if !strings.Contains(got, want) {

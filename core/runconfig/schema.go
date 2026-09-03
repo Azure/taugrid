@@ -142,8 +142,10 @@ var fieldCatalog = map[string]FieldInfo{
 
 	"metrics":                 {Status: statusSupported, Description: "Opt-in durable Stellar metrics for single-pod Jobs and RayJobs."},
 	"metrics.history":         {Status: statusSupported, Description: "Published JSONL metric paths or globs. Every online row requires integer _step and finite positive Unix-seconds _timestamp fields. Cache-backed/object PVC producers must close and atomically rename unique immutable chunks before they match. Relative paths resolve beneath storage.output; absolute paths must be under /data."},
-	"metrics.offload":         {Status: statusSupported, Description: "Job and RayJob metrics producer opt-in. Runtime image and endpoint policy remain platform-owned."},
+	"metrics.offload":         {Status: statusSupported, Description: "Job and RayJob metrics producer opt-in. Direct configs may pin the sidecar image and checkpoint directory; TAU_METRICS_OFFLOAD_* values remain platform overrides."},
 	"metrics.offload.enabled": {Status: statusSupported, Description: "Render the checkpointed Tau metrics offloader sidecar for a single-pod Job or RayJob head pod. Multi-node Indexed Jobs are rejected.", Default: "false"},
+	"metrics.offload.image":   {Status: statusSupported, Description: "Pinned taugrid-portal sidecar image. Use an explicit non-latest tag or @sha256 digest. TAU_METRICS_OFFLOAD_IMAGE overrides this value."},
+	"metrics.offload.out":     {Status: statusSupported, Description: "Clean absolute sidecar spool/checkpoint directory under /data or /var/run/tau. TAU_METRICS_OFFLOAD_OUT overrides this value.", Notes: "When omitted, Tau uses a session-scoped directory beneath storage.output."},
 
 	"experiment":         {Status: statusSupported, Description: "Stellar experiment grouping metadata."},
 	"experiment.project": {Status: statusSupported, Description: "Project name. Metrics offload requires a lowercase identifier using alphanumerics with internal '-', '_', or '.'."},
