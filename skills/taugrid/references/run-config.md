@@ -273,18 +273,25 @@ When set, the renderer stamps `tau.azure.com/experiment` and injects
 
 ## metrics
 
-Opt-in durable Stellar metrics for **single-pod direct Jobs**.
+Opt-in durable Stellar metrics for direct Jobs and RayJobs. The sidecar runs
+once per direct Job, or on the RayJob head pod.
 
 | Field | Default | Notes |
 |---|---|---|
 | `history` | — | Published JSONL metric paths or globs |
 | `offload.enabled` | false | Render the checkpointed metrics offloader sidecar |
+| `offload.image` | — | Pinned taugrid-portal image; explicit non-latest tag or `@sha256` digest |
+| `offload.out` | session-scoped path under `storage.output` | Sidecar spool/checkpoint directory under `/data` or `/var/run/tau` |
 
 Every online row needs an integer `_step` and a finite positive Unix-seconds
 `_timestamp`. Cache-backed or object-PVC producers must close and atomically
 rename unique immutable chunks before they match a glob — otherwise the
 offloader may read a partially written file. Relative paths resolve beneath
 `storage.output`; absolute paths must be under `/data`.
+
+Direct configs may set `offload.image` and `offload.out` so a checked-in
+example is runnable without shell setup. Platform operators can override them
+with `TAU_METRICS_OFFLOAD_IMAGE` and `TAU_METRICS_OFFLOAD_OUT`.
 
 ## profiler
 

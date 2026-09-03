@@ -187,6 +187,8 @@ type runDirectMetrics struct {
 	metricsHistory        []string
 	metricsSessionID      string
 	metricsOffloadEnabled bool
+	metricsOffloadImage   string
+	metricsOffloadOut     string
 	checkpointPath        string
 	experiment            runExperimentMetadata
 }

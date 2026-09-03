@@ -3,7 +3,7 @@ engine: rayjob
 entrypoint: train.py
 
 experiment:
-  project: Tau examples
+  project: tau-examples
   name: market-policy-training
   group: browser-inference
 
@@ -29,9 +29,19 @@ compute:
   gpus_per_worker: 1
 
 storage:
-  # Replace this with the writable PVC supplied for your workspace.
+  # Writable PVC bound to the checked-in default workspace example.
   data_pvc: workspace-data
   output: /data/market-policy
+
+# Publish immutable scalar-history chunks for the Stellar metrics offloader.
+# Paths are relative to storage.output.
+metrics:
+  history:
+    - metrics-history-attempt-0/*.jsonl
+  offload:
+    enabled: true
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0
+    out: /var/run/tau/metrics-offload
 
 policy:
   workspace: default

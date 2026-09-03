@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Azure/taugrid/core/runconfig"
 )
 
 const (
@@ -106,25 +108,7 @@ func (r Runtime) Validate() error {
 
 // ValidatePinnedImage rejects mutable or implicit sidecar image references.
 func ValidatePinnedImage(image string) error {
-	image = strings.TrimSpace(image)
-	if image == "" {
-		return fmt.Errorf("metrics offload image is required when metrics offload is enabled")
-	}
-	if strings.ContainsAny(image, " \t\r\n") {
-		return fmt.Errorf("metrics offload image must not contain whitespace")
-	}
-	if strings.Contains(image, "@sha256:") {
-		return nil
-	}
-	lastSlash := strings.LastIndex(image, "/")
-	lastColon := strings.LastIndex(image, ":")
-	if lastColon <= lastSlash || lastColon == len(image)-1 {
-		return fmt.Errorf("metrics offload image %q must include an explicit non-latest tag or @sha256 digest", image)
-	}
-	if strings.EqualFold(image[lastColon+1:], "latest") {
-		return fmt.Errorf("metrics offload image must not use the unpinned :latest tag")
-	}
-	return nil
+	return runconfig.ValidateMetricsOffloadImage(image)
 }
 
 // MergeTags applies experiment overrides and then protected platform scope.
