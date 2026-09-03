@@ -2,7 +2,54 @@ suite: ManagementCommand pre-create tables
 templates:
   - templates/management-commands/precreate-metrics-tables.yaml
   - templates/management-commands/precreate-logs-tables.yaml
+  - templates/management-commands/precreate-summary-tables.yaml
 tests:
+  - it: "creates upgrade-safe summary table schemas"
+    template: templates/management-commands/precreate-summary-tables.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.database
+          value: "Metrics"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.body
+          pattern: "GpuUtilizationHourly"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.body
+          pattern: "Cluster: string"
+        documentIndex: 0
+      - equal:
+          path: spec.database
+          value: "CostTracking"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "GpuCostHourly"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "workspace: string"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "peak_gpu_count: real"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "schema_version: long"
+        documentIndex: 1
+
+  - it: "does not create summary table schemas when disabled"
+    template: templates/management-commands/precreate-summary-tables.yaml
+    set:
+      managementCommands.precreateSummaryTables.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
   # --- Metrics table pre-creation ---
   - it: "renders metrics ManagementCommands when enabled"
     template: templates/management-commands/precreate-metrics-tables.yaml
@@ -109,3 +156,12 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "ExperimentMetrics.*Timestamp.*datetime.*SeriesId.*long.*Labels.*dynamic.*Value.*real.*Container.*string.*Namespace.*string.*Pod.*string.*Cluster.*string.*Host.*string"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubeNamespaceLabels"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubePodStatusPhase"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubePodResourceclaimInfo"

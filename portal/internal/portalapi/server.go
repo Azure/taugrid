@@ -122,8 +122,9 @@ type ClusterOptions struct {
 // to in a shared Metrics database (a per-request ?cluster= query param overrides
 // it); empty means unscoped.
 type CostOptions struct {
-	Querier kustoquery.Querier
-	Cluster string
+	Querier      kustoquery.Querier
+	Cluster      string
+	CostDatabase string
 }
 
 // RayOptions configures the Ray board's data access. Reader lists core Services
@@ -656,7 +657,9 @@ func (s *Server) resolveCards(ctx context.Context, resp *overviewResponse, scope
 	// Cost — Kusto-backed.
 	if s.cost.Querier == nil {
 		resp.Cards.CostUnavailable = "portal started without a Kusto query command"
-	} else if snap, err := cost.Board(ctx, s.cost.Querier, cost.Options{Cluster: costClusterScope, Namespace: costNamespaceScope}); err != nil {
+	} else if snap, err := cost.Board(ctx, s.cost.Querier, cost.Options{
+		Cluster: costClusterScope, Namespace: costNamespaceScope, CostDatabase: s.cost.CostDatabase,
+	}); err != nil {
 		resp.Cards.CostUnavailable = err.Error()
 	} else {
 		resp.Cards.Cost = &costCard{
@@ -873,11 +876,9 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.TotalGPUs == 0))
 }
 
-// handleCost serves the Cost board: GPU-hours by namespace plus the
-// idle/underutilized GPU list, derived from GpuHealth() gpu_utilization samples
-// in the Metrics ADX database. Optional ?window=&namespace=&idle-threshold=
-// scope the query. When the board has no Kusto querier it returns 503; a query
-// failure returns 502.
+// handleCost serves allocation-based GPU-hours and estimated cost by TauGrid
+// workspace, plus physical underutilized GPUs. Optional
+// ?window=&namespace=&idle-threshold= scope the query.
 func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -898,7 +899,11 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 		namespaceScope = workloadMetricsNamespace(scope)
 		clusterScope = scope.Cluster
 	}
-	opts := cost.Options{Namespace: namespaceScope, Cluster: clusterScope}
+	opts := cost.Options{
+		Namespace:    namespaceScope,
+		Cluster:      clusterScope,
+		CostDatabase: s.cost.CostDatabase,
+	}
 	if window := q.Get("window"); window != "" {
 		if d, err := time.ParseDuration(window); err == nil {
 			opts.Window = d
@@ -914,7 +919,7 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
-	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(len(snapshot.Namespaces) == 0 && len(snapshot.IdleGPUs) == 0))
+	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(len(snapshot.Workspaces) == 0 && len(snapshot.IdleGPUs) == 0))
 }
 
 // workloadMetricsNamespace preserves namespace isolation for workspaces that

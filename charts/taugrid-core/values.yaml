@@ -316,6 +316,7 @@ portal:
   kusto:
     endpoint: ""
     database: ""
+    costDatabase: CostTracking
     ingestion: remote-write
     # Executable that runs generated KQL and emits Kusto REST JSON. Reused by the
     # Experiments, Cluster Health, and Cost boards. Empty leaves the Cluster

@@ -3,16 +3,15 @@
 
 // Package cost builds the portal's Cost board.
 //
-// The board's spine is GPU-hours by namespace: from GpuHealth() gpu_utilization
-// samples it derives, per namespace, the distinct GPU count, the observed span,
-// GPU-hours (span_hours * gpus), and average utilization — the chargeback rows
-// the FinOps view leads with. A second query lists idle/underutilized GPUs
-// (avg < threshold) so owners can reclaim capacity.
+// The board's spine is allocation-based GPU-hours and estimated cost by TauGrid
+// workspace from CostTracking.GpuCostHourly. A second query uses GpuHealth()
+// utilization to list underutilized physical GPUs so operators can reclaim
+// capacity without treating exporter pods as owners.
 //
 // Data access is the shell-out kustoquery.Querier seam (shared with the Cluster
 // board), so tests inject a fake with canned Kusto JSON and no live ADX.
-// GpuHealth() lives in the Metrics database, the same target the portal's
-// --kusto-* flags already point at.
+// The portal queries Metrics and reaches CostTracking through a same-cluster
+// cross-database reference.
 package cost
 
 import (
@@ -45,17 +44,19 @@ const idleMinSamples = 10
 type Options struct {
 	Window           time.Duration
 	IdleThresholdPct float64
+	CostDatabase     string
 	Namespace        string
 	Cluster          string
 }
 
-// NamespaceCost is one namespace's GPU chargeback row: GPU-hours over the
-// window plus the distinct GPU count and average utilization.
-type NamespaceCost struct {
-	Namespace  string  `json:"namespace"`
-	GPUs       int     `json:"gpus"`
-	GPUHours   float64 `json:"gpuHours"`
-	AvgUtilPct float64 `json:"avgUtilPct"`
+// WorkspaceCost is one workspace's allocation chargeback over the window.
+type WorkspaceCost struct {
+	Workspace        string  `json:"workspace"`
+	Namespace        string  `json:"namespace"`
+	PeakGPUs         float64 `json:"peakGPUs"`
+	GPUHours         float64 `json:"gpuHours"`
+	EstimatedCostUSD float64 `json:"estimatedCostUSD"`
+	AvgUtilPct       float64 `json:"avgUtilPct"`
 }
 
 // IdleGPU is one underutilized GPU (average utilization below the threshold).
@@ -69,17 +70,18 @@ type IdleGPU struct {
 	Samples    int     `json:"samples"`
 }
 
-// Snapshot is the Cost board payload: per-namespace GPU-hours plus the idle-GPU
-// list and window-total rollups.
+// Snapshot is the Cost board payload: per-workspace allocation cost plus the
+// physical idle-GPU list and window-total rollups.
 type Snapshot struct {
-	Window        string          `json:"window"`
-	TotalGPUHours float64         `json:"totalGPUHours"`
-	Namespaces    []NamespaceCost `json:"namespaces"`
-	IdleGPUs      []IdleGPU       `json:"idleGPUs"`
+	Window                string          `json:"window"`
+	TotalGPUHours         float64         `json:"totalGPUHours"`
+	TotalEstimatedCostUSD float64         `json:"totalEstimatedCostUSD"`
+	Workspaces            []WorkspaceCost `json:"workspaces"`
+	IdleGPUs              []IdleGPU       `json:"idleGPUs"`
 }
 
-// Board runs the two GpuHealth()-derived queries via the Querier and assembles
-// the Snapshot.
+// Board runs the allocation-cost and GpuHealth utilization queries via the
+// Querier and assembles the Snapshot.
 func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, error) {
 	window := opts.Window
 	if window <= 0 {
@@ -90,15 +92,15 @@ func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, e
 		threshold = DefaultIdleThresholdPct
 	}
 
-	nsRows, err := q.Query(ctx, buildNamespaceKQL(window, opts.Namespace, opts.Cluster))
+	workspaceRows, err := q.Query(ctx, buildWorkspaceKQL(window, opts.CostDatabase, opts.Namespace, opts.Cluster))
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("query gpu hours by namespace: %w", err)
+		return Snapshot{}, fmt.Errorf("query allocation cost by workspace: %w", err)
 	}
 	idleRows, err := q.Query(ctx, buildIdleKQL(window, threshold, opts.Namespace, opts.Cluster))
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("query idle gpus: %w", err)
 	}
-	return assemble(window, opts.Namespace, nsRows, idleRows), nil
+	return assemble(window, opts.Namespace, workspaceRows, idleRows), nil
 }
 
 // windowSeconds renders a duration as an integer-second count for ago(), never
@@ -107,25 +109,32 @@ func windowSeconds(window time.Duration) int64 {
 	return max(int64(window/time.Second), 1)
 }
 
-// buildNamespaceKQL renders the GPU-hours-by-namespace chargeback query,
-// combining the GPU-hours and average-utilization aggregations in one pass. When
-// cluster is set the query is scoped to that cluster's rows so a shared Metrics
-// database's other clusters do not inflate the chargeback totals.
-func buildNamespaceKQL(window time.Duration, namespace, cluster string) string {
-	var b strings.Builder
-	b.WriteString("GpuHealth()\n")
-	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
-	b.WriteString("| where metric == 'gpu_utilization'\n")
-	if cluster != "" {
-		fmt.Fprintf(&b, "| where Cluster == %s\n", kustoquery.QuoteString(cluster))
+// buildWorkspaceKQL renders allocation GPU-hours and estimated cost from the
+// hourly chargeback table. It accepts only schema-v4 rows because older rows
+// have no trustworthy cluster identity in shared ADX databases. gpu_count is
+// fractional GPU-hours; peak_gpu_count is each cluster's sampled peak.
+func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string) string {
+	if strings.TrimSpace(database) == "" {
+		database = "CostTracking"
 	}
-	b.WriteString("| where isnotempty(namespace)\n")
+	var b strings.Builder
+	fmt.Fprintf(&b, "let CostRows = database(%s).GpuCostHourly\n", kustoquery.QuoteString(database))
+	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
 	if namespace != "" {
 		fmt.Fprintf(&b, "| where namespace == %s\n", kustoquery.QuoteString(namespace))
 	}
-	b.WriteString("| summarize MinT=min(Timestamp), MaxT=max(Timestamp), Gpus=dcount(strcat(instance, gpu)), AvgUtil=round(avg(Value), 1) by namespace\n")
-	b.WriteString("| extend GpuHours=round(datetime_diff('second', MaxT, MinT) / 3600.0 * Gpus, 1)\n")
-	b.WriteString("| project namespace, GpuHours, Gpus, AvgUtil\n")
+	b.WriteString("| extend workspace=tostring(column_ifexists('workspace', '')), reported_peak_gpu_count=toreal(column_ifexists('peak_gpu_count', real(null))), schema_version=tolong(column_ifexists('schema_version', long(null)))\n")
+	b.WriteString("| extend workspace=iff(isempty(workspace), namespace, workspace);\n")
+	b.WriteString("CostRows\n")
+	b.WriteString("| where schema_version == 4\n")
+	if cluster != "" {
+		fmt.Fprintf(&b, "| where Cluster == %s\n", kustoquery.QuoteString(cluster))
+	}
+	b.WriteString("| where isnotempty(workspace) and isnotempty(namespace)\n")
+	b.WriteString("| summarize ClusterGpuHours=sum(gpu_count), ClusterCost=sum(hourly_cost), ClusterPeakGpus=max(reported_peak_gpu_count), ClusterUtil=avg(avg_util) by Timestamp, workspace, namespace, Cluster\n")
+	b.WriteString("| summarize HourlyGpuHours=sum(ClusterGpuHours), HourlyCost=sum(ClusterCost), HourlyPeakGpus=sum(ClusterPeakGpus), HourlyUtil=avg(ClusterUtil) by Timestamp, workspace, namespace\n")
+	b.WriteString("| summarize GpuHours=round(sum(HourlyGpuHours), 1), EstimatedCostUSD=round(sum(HourlyCost), 2), PeakGpus=round(max(HourlyPeakGpus), 2), AvgUtil=round(avg(HourlyUtil), 1) by workspace, namespace\n")
+	b.WriteString("| project workspace, namespace, GpuHours, EstimatedCostUSD, PeakGpus, AvgUtil\n")
 	b.WriteString("| order by GpuHours desc")
 	return b.String()
 }
@@ -144,7 +153,7 @@ func buildIdleKQL(window time.Duration, threshold float64, namespace, cluster st
 	if namespace != "" {
 		fmt.Fprintf(&b, "| where namespace == %s\n", kustoquery.QuoteString(namespace))
 	}
-	b.WriteString("| summarize AvgUtil=round(avg(Value), 1), Samples=count() by instance, gpu, modelName, namespace, pod\n")
+	b.WriteString("| summarize AvgUtil=round(avg(Value), 1), Samples=count(), arg_max(Timestamp, modelName, namespace, pod) by Cluster, instance, gpu\n")
 	fmt.Fprintf(&b, "| where AvgUtil < %g and Samples > %d\n", threshold, idleMinSamples)
 	b.WriteString("| project instance, gpu, modelName, namespace, pod, AvgUtil, Samples\n")
 	b.WriteString("| order by AvgUtil asc")
@@ -152,30 +161,39 @@ func buildIdleKQL(window time.Duration, threshold float64, namespace, cluster st
 }
 
 // assemble folds the two result sets into a Snapshot and totals GPU-hours.
-func assemble(window time.Duration, namespace string, nsRows, idleRows []kustoquery.Row) Snapshot {
+func assemble(window time.Duration, namespace string, workspaceRows, idleRows []kustoquery.Row) Snapshot {
 	snap := Snapshot{
 		Window:     window.String(),
-		Namespaces: make([]NamespaceCost, 0, len(nsRows)),
+		Workspaces: make([]WorkspaceCost, 0, len(workspaceRows)),
 		IdleGPUs:   make([]IdleGPU, 0, len(idleRows)),
 	}
-	for _, row := range nsRows {
+	for _, row := range workspaceRows {
 		if namespace != "" && row.Str("namespace") != namespace {
 			continue
 		}
 		gpuHours, _ := row.Num("GpuHours")
-		gpus, _ := row.Num("Gpus")
+		estimatedCost, _ := row.Num("EstimatedCostUSD")
+		peakGPUs, _ := row.Num("PeakGpus")
 		avgUtil, _ := row.Num("AvgUtil")
-		snap.Namespaces = append(snap.Namespaces, NamespaceCost{
-			Namespace:  row.Str("namespace"),
-			GPUs:       int(gpus),
-			GPUHours:   gpuHours,
-			AvgUtilPct: avgUtil,
+		workspace := row.Str("workspace")
+		if workspace == "" {
+			workspace = row.Str("namespace")
+		}
+		snap.Workspaces = append(snap.Workspaces, WorkspaceCost{
+			Workspace:        workspace,
+			Namespace:        row.Str("namespace"),
+			PeakGPUs:         peakGPUs,
+			GPUHours:         gpuHours,
+			EstimatedCostUSD: estimatedCost,
+			AvgUtilPct:       avgUtil,
 		})
 		snap.TotalGPUHours += gpuHours
+		snap.TotalEstimatedCostUSD += estimatedCost
 	}
 	snap.TotalGPUHours = round1(snap.TotalGPUHours)
-	sort.SliceStable(snap.Namespaces, func(i, j int) bool {
-		return snap.Namespaces[i].GPUHours > snap.Namespaces[j].GPUHours
+	snap.TotalEstimatedCostUSD = round2(snap.TotalEstimatedCostUSD)
+	sort.SliceStable(snap.Workspaces, func(i, j int) bool {
+		return snap.Workspaces[i].GPUHours > snap.Workspaces[j].GPUHours
 	})
 
 	for _, row := range idleRows {
@@ -204,4 +222,8 @@ func assemble(window time.Duration, namespace string, nsRows, idleRows []kustoqu
 // don't accumulate float noise in the payload.
 func round1(v float64) float64 {
 	return math.Round(v*10) / 10
+}
+
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
 }

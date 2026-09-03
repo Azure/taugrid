@@ -117,6 +117,11 @@ documentation. Regardless of which of these three models owns the stack,
 workload configs always request standard Kubernetes `nvidia.com/gpu`
 resources unchanged.
 
+For an existing AKS cluster with attached Flex GPU nodes, use the repository's
+[pinned GPU Operator Terraform example](https://github.com/Azure/taugrid/tree/main/terraform/aks-flex-gpu-operator).
+It keeps the Flex-provided host driver, installs the toolkit, device plugin, and
+DCGM exporter, and documents the mixed-cluster ownership checks.
+
 ## Verify and provision a workspace
 
 Fetch an operator kubeconfig:
