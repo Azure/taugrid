@@ -136,6 +136,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # Job detail: surface namespaced scheduling, image-pull, and failure Events.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   # Cluster Nodes board: read node hardware inventory (SKU, agentpool,
   # CPU/memory/GPU capacity) from cluster-scoped Node objects.
   - apiGroups: [""]

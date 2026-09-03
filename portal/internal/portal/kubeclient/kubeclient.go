@@ -170,8 +170,8 @@ func (c *Client) ListRayJobs(ctx context.Context, namespace string) ([]byte, err
 }
 
 // ListPods returns the namespaced core Pods list as raw JSON. The job detail
-// page filters these to a run's pods (by ray.io/cluster or tau.azure.com/job) to
-// report per-pod phase, node placement, and restart counts.
+// page filters these to a run's pods by Ray cluster, canonical Kubernetes Job
+// ownership labels, Tau run identity, or the legacy tau.azure.com/job selector.
 func (c *Client) ListPods(ctx context.Context, namespace string) ([]byte, error) {
 	return c.listRaw(ctx, podGVR, namespace)
 }

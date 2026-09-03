@@ -45,16 +45,13 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
 )
 
-// runIDLabel is the Tau run identity label (mirror of experiment.LabelRunID),
-// kept as a literal here to avoid importing the experiment package into this
-// aggregation layer — the same choice runs.go and links.go make.
-
-// labelJob is the job-name label tau stamps on Jobs and Kueue copies onto the
-// Workload. Used to filter this job's Workloads and to select its Pods.
-
 // rayClusterLabel is the label KubeRay stamps on a RayJob's pods (value is the
 // owning RayCluster's name). Used to select a RayJob's pods.
-const rayClusterLabel = "ray.io/cluster"
+const (
+	rayClusterLabel       = "ray.io/cluster"
+	jobNameLabel          = "job-name"
+	qualifiedJobNameLabel = "batch.kubernetes.io/job-name"
+)
 
 // ErrNotFound signals the requested job (Job and RayJob) does not exist, so the
 // handler can return 404 rather than a soft-degraded empty page.
@@ -288,10 +285,10 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	}
 
 	// Tier 1b: Pods backing the run (best-effort). Filter by RayCluster (RayJob)
-	// or job label (Job).
+	// or the compatible Job ownership/run identity labels.
 	podsVisible := false
 	if raw, err := r.ListPods(ctx, opts.Namespace); err == nil {
-		snap.Pods, podsVisible = parsePodsWithStatus(raw, obj.podSelectorKey, obj.podSelectorValue)
+		snap.Pods, podsVisible = parsePodsWithStatus(raw, obj.podSelectors)
 	}
 	if obj.kind == "RayJob" {
 		snap.ResourceRelease = rayResourceRelease(obj.detail, snap.Workloads, snap.Pods, podsVisible)
@@ -330,14 +327,13 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 
 // resolved carries the fields extracted from whichever object was found.
 type resolved struct {
-	kind             string
-	status           string
-	runID            string
-	experiment       ExperimentIdentity
-	detail           ObjectDetail
-	rayClusterName   string
-	podSelectorKey   string
-	podSelectorValue string
+	kind           string
+	status         string
+	runID          string
+	experiment     ExperimentIdentity
+	detail         ObjectDetail
+	rayClusterName string
+	podSelectors   []podLabelSelector
 }
 
 // resolveObject tries the RayJob first (its pods and native status are richer),
@@ -461,8 +457,15 @@ func parseJob(data []byte) (resolved, bool) {
 			ManagedBy:       o.Spec.ManagedBy,
 			ExecutionTarget: executionTarget,
 		},
-		podSelectorKey:   workloadmeta.LabelJob,
-		podSelectorValue: o.Metadata.Name,
+		// Kubernetes Job controller labels are canonical pod ownership. run-id is
+		// Tau's run identity; tau.azure.com/job remains a reader-only compatibility
+		// selector for workloads produced by older or custom clients.
+		podSelectors: []podLabelSelector{
+			{key: jobNameLabel, value: o.Metadata.Name},
+			{key: qualifiedJobNameLabel, value: o.Metadata.Name},
+			{key: workloadmeta.LabelRunID, value: o.Metadata.Labels[workloadmeta.LabelRunID]},
+			{key: workloadmeta.LabelJob, value: o.Metadata.Name},
+		},
 	}, true
 }
 
@@ -508,9 +511,10 @@ func parseRayJob(data []byte) (resolved, bool) {
 			Reason:              o.Status.Reason,
 			Message:             o.Status.Message,
 		},
-		rayClusterName:   o.Status.RayClusterName,
-		podSelectorKey:   rayClusterLabel,
-		podSelectorValue: o.Status.RayClusterName,
+		rayClusterName: o.Status.RayClusterName,
+		podSelectors: []podLabelSelector{
+			{key: rayClusterLabel, value: o.Status.RayClusterName},
+		},
 	}, true
 }
 
@@ -575,10 +579,15 @@ type podList struct {
 	} `json:"items"`
 }
 
-// parsePodsWithStatus keeps pods whose selectorKey label equals selectorValue.
-// An empty selectorValue matches nothing until the RayCluster exists.
-func parsePodsWithStatus(data []byte, selectorKey, selectorValue string) ([]PodDetail, bool) {
-	if selectorValue == "" {
+type podLabelSelector struct {
+	key   string
+	value string
+}
+
+// parsePodsWithStatus keeps each pod once when any compatible label matches.
+// Empty selector values never match, including before a RayCluster exists.
+func parsePodsWithStatus(data []byte, selectors []podLabelSelector) ([]PodDetail, bool) {
+	if !hasUsablePodSelector(selectors) {
 		return nil, false
 	}
 	var list podList
@@ -587,7 +596,7 @@ func parsePodsWithStatus(data []byte, selectorKey, selectorValue string) ([]PodD
 	}
 	var out []PodDetail
 	for _, it := range list.Items {
-		if it.Metadata.Labels[selectorKey] != selectorValue {
+		if !podLabelsMatch(it.Metadata.Labels, selectors) {
 			continue
 		}
 		restarts := 0
@@ -603,6 +612,24 @@ func parsePodsWithStatus(data []byte, selectorKey, selectorValue string) ([]PodD
 		})
 	}
 	return out, true
+}
+
+func hasUsablePodSelector(selectors []podLabelSelector) bool {
+	for _, selector := range selectors {
+		if selector.key != "" && selector.value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func podLabelsMatch(labels map[string]string, selectors []podLabelSelector) bool {
+	for _, selector := range selectors {
+		if selector.value != "" && labels[selector.key] == selector.value {
+			return true
+		}
+	}
+	return false
 }
 
 func rayResourceRelease(object ObjectDetail, workloads []links.Workload, pods []PodDetail, podsVisible bool) *ResourceReleaseDetail {

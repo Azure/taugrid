@@ -5,13 +5,13 @@
 //
 // Cross-linking is the portal's core value-add over five separate dashboards.
 // The join keys already exist on the Kubernetes objects the runtime stamps:
-// every tau Job carries tau.azure.com/run-id (the experiment run) and
-// tau.azure.com/job (the job name), and Kueue copies those Job-level labels onto
-// the Workload it admits. This package reads the same Kueue Workloads the Jobs
-// board already fetches, but projects them into those join keys — including
-// admitted (running) workloads, which the researcher-facing queue.Snapshot
-// intentionally drops — and centralizes the cross-link URL scheme so the
-// backend overview and the frontend agree on one contract.
+// every current Tau Job carries tau.azure.com/run-id (the Tau run identity), and
+// Kueue copies Job-level labels onto the Workload it admits. This package reads
+// the same Kueue Workloads the Jobs board already fetches, projects the run-id
+// plus the compatibility tau.azure.com/job key when present — including admitted
+// (running) workloads, which the researcher-facing queue.Snapshot intentionally
+// drops — and centralizes the cross-link URL scheme so the backend overview and
+// the frontend agree on one contract.
 //
 // It deliberately does not touch queue.Snapshot: that is the `tau queue status`
 // compatibility surface. The portal's board-to-board wiring is additive here.
@@ -29,12 +29,6 @@ import (
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
-
-// labelJob is the job-name label tau stamps on Jobs and Kueue copies onto the
-// Workload. It is kept as a local constant (mirroring internal/autocapture,
-// internal/status) because it is not exported from internal/experiment; the
-// run-id key is reused from experiment.LabelRunID so there is one source of
-// truth for the headline join key.
 
 // WorkloadReader fetches the raw Kueue Workloads list as JSON. Both
 // jobs.Reader and kubeclient.Client satisfy it structurally, so the overview

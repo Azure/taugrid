@@ -145,6 +145,43 @@ func TestDetailJobK8sOnly(t *testing.T) {
 	}
 }
 
+// TestDetailJobPodsUseCurrentMetadataContract covers Jobs rendered by the
+// current Tau producer: run-id is the Tau identity, while Kubernetes owns the
+// pod association labels and tau.azure.com/job is not required. A pod matching
+// every compatible label must still appear only once.
+func TestDetailJobPodsUseCurrentMetadataContract(t *testing.T) {
+	r := fakeReader{
+		rayErr: errors.New("no rayjob"),
+		job: []byte(`{"metadata":{"name":"train-current","namespace":"ray","labels":{
+			"` + workloadmeta.LabelManagedBy + `":"tau",
+			"` + workloadmeta.LabelRunID + `":"train-current",
+			"` + workloadmeta.LabelWorkloadKind + `":"job",
+			"` + workloadmeta.LabelWorkspace + `":"research"
+		}},"status":{"active":1}}`),
+		pods: []byte(`{"items":[
+			{"metadata":{"name":"standard","labels":{"job-name":"train-current","batch.kubernetes.io/job-name":"train-current","` + workloadmeta.LabelRunID + `":"train-current"}},"status":{"phase":"Running"}},
+			{"metadata":{"name":"qualified","labels":{"batch.kubernetes.io/job-name":"train-current"}},"status":{"phase":"Pending"}},
+			{"metadata":{"name":"run-id-only","labels":{"` + workloadmeta.LabelRunID + `":"train-current"}},"status":{"phase":"Running"}},
+			{"metadata":{"name":"legacy","labels":{"` + workloadmeta.LabelJob + `":"train-current"}},"status":{"phase":"Succeeded"}},
+			{"metadata":{"name":"other","labels":{"job-name":"other","` + workloadmeta.LabelRunID + `":"other"}},"status":{"phase":"Running"}}
+		]}`),
+	}
+
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "train-current"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if got := len(snap.Pods); got != 4 {
+		t.Fatalf("len(Pods) = %d, want 4 compatible pods without duplicates: %+v", got, snap.Pods)
+	}
+	want := []string{"standard", "qualified", "run-id-only", "legacy"}
+	for i, name := range want {
+		if snap.Pods[i].Name != name {
+			t.Fatalf("Pods[%d].Name = %q, want %q; pods=%+v", i, snap.Pods[i].Name, name, snap.Pods)
+		}
+	}
+}
+
 // TestDetailWorkloadJoinByOwnerReference covers the Gap #1 fallback: a Kueue
 // Workload admitted for a RayJob that carries no tau.azure.com/{job,run-id}
 // labels (Kueue only copies labels tau stamped) is still scoped to the run by
