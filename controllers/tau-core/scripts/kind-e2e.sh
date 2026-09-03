@@ -930,7 +930,7 @@ kubectl -n "${TARGET_NAMESPACE}" wait --for=condition=complete "job/${train_job}
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
     "${tau_home}/tau-bin" run status "${train_job}"
 ) >"${tau_home}/status.out"
-grep -q "Job: ${TARGET_NAMESPACE}/${train_job}" "${tau_home}/status.out"
+grep -q "Job ${TARGET_NAMESPACE}/${train_job}" "${tau_home}/status.out"
 (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \

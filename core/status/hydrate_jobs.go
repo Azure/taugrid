@@ -141,14 +141,6 @@ func hydrateRayJob(s *Snapshot, data []byte) {
 	}
 }
 
-func jobUID(data []byte) string {
-	var j jobObj
-	if err := json.Unmarshal(data, &j); err != nil {
-		return ""
-	}
-	return j.Metadata.UID
-}
-
 func summarizeRawStatus(raw json.RawMessage) string {
 	text := strings.TrimSpace(string(raw))
 	if text == "" || text == "null" {
