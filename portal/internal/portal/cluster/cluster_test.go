@@ -143,11 +143,30 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		"namespace == @'team-alpha'",
 		"instance == @'node-7'",
 		"modelName == @'H100'",
+		"let latest_attribution = samples",
+		"arg_max(Timestamp, Value) by Cluster, instance, gpu, metric",
+		"arg_max(Timestamp, namespace, pod, modelName) by Cluster, instance, gpu",
 		"evaluate pivot(metric",
+		"join kind=leftouter latest_attribution on Cluster, instance, gpu",
 		"@'uncorrectable_remapped_rows'",
 	} {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("KQL missing %q:\n%s", want, kql)
+		}
+	}
+}
+
+func TestBuildKQLUsesPhysicalGPUIdentity(t *testing.T) {
+	kql := buildKQL(Options{})
+	if strings.Contains(kql, "by Cluster, instance, gpu, modelName, namespace, pod, metric") {
+		t.Fatalf("KQL still treats workload attribution as GPU identity:\n%s", kql)
+	}
+	for _, want := range []string{
+		"by Cluster, instance, gpu, metric",
+		"by Cluster, instance, gpu",
+	} {
+		if !strings.Contains(kql, want) {
+			t.Fatalf("KQL missing physical GPU grouping %q:\n%s", want, kql)
 		}
 	}
 }

@@ -248,6 +248,18 @@ resource "azurerm_kusto_database_principal_assignment" "portal" {
   tenant_id           = azurerm_user_assigned_identity.portal[0].tenant_id
 }
 
+resource "azurerm_kusto_database_principal_assignment" "portal_cost_tracking" {
+  count               = var.enable_adx ? 1 : 0
+  name                = "taugrid-portal-cost-viewer"
+  resource_group_name = azurerm_resource_group.this.name
+  cluster_name        = azurerm_kusto_cluster.this[0].name
+  database_name       = azurerm_kusto_database.this["CostTracking"].name
+  principal_id        = azurerm_user_assigned_identity.portal[0].client_id
+  principal_type      = "App"
+  role                = "Viewer"
+  tenant_id           = azurerm_user_assigned_identity.portal[0].tenant_id
+}
+
 resource "azurerm_kusto_database_principal_assignment" "lifecycle_recorder" {
   count               = var.enable_lifecycle_recorder ? 1 : 0
   name                = "taugrid-lifecycle-recorder-ingestor"
@@ -512,6 +524,7 @@ resource "terraform_data" "install_adx_mon" {
     terraform_data.install_dcgm_exporter,
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
+    azurerm_kusto_database_principal_assignment.portal_cost_tracking,
     azurerm_kusto_database_principal_assignment.lifecycle_recorder,
   ]
 }

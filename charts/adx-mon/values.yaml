@@ -137,7 +137,7 @@ collector:
       - '^process.*'                 # Process-level metrics (redundant with cadvisor)
 
       # ---- KSM metrics NOT needed by PRD ----
-      # PRD requires: pods, nodes, deployments, jobs, Kueue CRs only.
+      # PRD requires: namespaces, pods, nodes, deployments, jobs, Kueue CRs only.
       - '^kube_apiserver.*'           # KSM apiserver allocator metrics
       - '^kube_certificatesigning.*'  # CSR metrics
       - '^kube_configmap.*'           # ConfigMap metadata (noisy)
@@ -145,7 +145,6 @@ collector:
       - '^kube_endpoint.*'            # Endpoint/EndpointSlice metrics
       - '^kube_lease.*'               # Lease metrics
       - '^kube_mutatingwebhook.*'     # Webhook config metrics
-      - '^kube_namespace.*'           # Namespace metrics (not in PRD)
       - '^kube_networkpolicy.*'       # Network policy metrics
       - '^kube_persistentvolume.*'    # PV/PVC metrics (not in PRD)
       - '^kube_replicaset.*'          # ReplicaSet metrics (redundant with Deployment)
@@ -534,6 +533,7 @@ kube-state-metrics:
         verbs: ["list", "watch"]
   # -- Metric labels to allow (reduces cardinality)
   metricLabelsAllowlist:
+    - namespaces=[tau.azure.com/workspace]
     - pods=[app.kubernetes.io/name,app.kubernetes.io/component,ray.io/is-ray-node]
     - nodes=[node.kubernetes.io/instance-type,kubernetes.azure.com/agentpool]
   resources:
@@ -655,16 +655,21 @@ summaryRules:
     gpuCostHourly:
       enabled: true
       interval: 1h
+      ingestionDelay: 2m
       database: CostTracking
       table: GpuCostHourly
     gpuCostDaily:
-      enabled: true
+      # Derived append-only rollups cannot be made dependency-safe by adx-mon
+      # v0.3.0 when rule generations change. The Portal reads hourly data.
+      enabled: false
       interval: 24h
+      ingestionDelay: 10m
       database: CostTracking
       table: GpuCostDaily
     namespaceCostMonthly:
-      enabled: true
+      enabled: false
       interval: 24h
+      ingestionDelay: 20m
       database: CostTracking
       table: NamespaceCostMonthly
     nodeResourcesHourly:
@@ -735,6 +740,9 @@ _test:
 # commands exceed the ADX control plane limit (20/window), causing a 10-20 min data blackout.
 # These ManagementCommands use .create-merge tables (batched) to pre-create known tables.
 managementCommands:
+  precreateSummaryTables:
+    # -- Create or merge SummaryRule table schemas, including upgrade columns.
+    enabled: true
   precreateMetricsTables:
     # -- Enable pre-creation of metrics tables
     enabled: false
@@ -766,10 +774,14 @@ managementCommands:
       - KubeJobDurationSeconds
       - KubeJobOwner
       # -- KSM: Node and pod metrics
+      - KubeNamespaceLabels
       - KubeNodeStatusCondition
       - KubeNodeLabels
       - KubePodContainerResourceLimits
       - KubePodContainerResourceRequests
+      - KubePodInfo
+      - KubePodResourceclaimInfo
+      - KubePodStatusPhase
       - KubePodOwner
       # -- Node-exporter metrics (subset used by Functions/AlertRules)
       - NodeCpuSecondsTotal
