@@ -8,9 +8,9 @@ description: |
   present. See ../INSTALL.md for the recommended install order.
 type: application
 # TauGrid-owned charts and images share one public release version.
-version: 0.4.0
+version: 0.4.1
 # The tau and taugrid-portal image release tags follow appVersion.
-appVersion: "0.4.0"
+appVersion: "0.4.1"
 keywords: [taugrid, ai, kueue, multi-cloud]
 maintainers:
   - name: taugrid

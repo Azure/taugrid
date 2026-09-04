@@ -81,7 +81,7 @@ kueue:
     manager:
       image:
         repository: mcr.microsoft.com/oss/v2/kueue/kueue
-        tag: v0.18.2
+        tag: v0.19.0
         pullPolicy: IfNotPresent
   # Keep the active upstream configuration when replacing this embedded YAML
   # string, and include the AKS DRA device-class mapping used by the published
