@@ -40,7 +40,7 @@ metrics:
     - metrics-history-attempt-0/*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.1
     out: /var/run/tau/metrics-offload
 
 policy:

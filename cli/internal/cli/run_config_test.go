@@ -106,7 +106,7 @@ func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T
 	if err != nil {
 		t.Fatalf("resolve market-policy metrics offload: %v", err)
 	}
-	if got, want := runtime.Image, "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0"; got != want {
+	if got, want := runtime.Image, "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.1"; got != want {
 		t.Fatalf("metrics offload image = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/metrics-offload"; got != want {

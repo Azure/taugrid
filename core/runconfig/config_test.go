@@ -555,7 +555,7 @@ metrics:
     - /data/shared/eval-*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.1
     out: /var/run/tau/metrics-offload
 experiment:
   project: pretraining.v1
@@ -567,7 +567,7 @@ experiment:
 	}
 
 	if !cfg.Metrics.Offload.Enabled ||
-		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.0" ||
+		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.1" ||
 		cfg.Metrics.Offload.Out != "/var/run/tau/metrics-offload" ||
 		len(cfg.Metrics.History) != 2 {
 		t.Fatalf("unexpected metrics config: %+v", cfg.Metrics)

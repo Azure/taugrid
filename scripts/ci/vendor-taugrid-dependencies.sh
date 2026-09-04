@@ -159,6 +159,53 @@ version_is_older() {
   return 1
 }
 
+preserve_kueue_crd_retention() (
+  local archive="$1"
+  local work_dir
+  local chart_dir
+  local crd
+  local patched=0
+
+  # Kueue 0.18.2 used this policy, so restoring it in 0.19.0 also makes a
+  # direct enabled-to-disabled upgrade retain the CRDs owned by the old release.
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/taugrid-kueue.XXXXXX")"
+  trap 'rm -rf "$work_dir"' EXIT
+  tar -xzf "$archive" -C "$work_dir"
+  chart_dir="${work_dir}/kueue"
+
+  for crd in "${chart_dir}"/templates/crd/*.yaml; do
+    [[ -f "$crd" ]] || {
+      echo "Kueue dependency contains no templated CRDs: ${archive}" >&2
+      return 1
+    }
+    if grep -Fq 'helm.sh/resource-policy: keep' "$crd"; then
+      patched=$((patched + 1))
+      continue
+    fi
+    awk '
+      { print }
+      /^  annotations:$/ {
+        print "    helm.sh/resource-policy: keep"
+        inserted = 1
+      }
+      END { if (!inserted) exit 1 }
+    ' "$crd" >"${crd}.tmp" || {
+      rm -f "${crd}.tmp"
+      echo "Could not add CRD retention policy to ${crd}" >&2
+      return 1
+    }
+    mv "${crd}.tmp" "$crd"
+    patched=$((patched + 1))
+  done
+
+  [[ "$patched" -gt 0 ]] || {
+    echo "Kueue dependency contains no CRDs to retain: ${archive}" >&2
+    return 1
+  }
+  rm -f "$archive"
+  COPYFILE_DISABLE=1 tar -czf "$archive" -C "$work_dir" kueue
+)
+
 vendor_taugrid_dependencies() {
   local chart_dir="${1:-${REPO_ROOT}/charts/taugrid}"
   local vendor_dir="${chart_dir}/charts"
@@ -206,6 +253,9 @@ vendor_taugrid_dependencies() {
     case "$repository" in
       oci://*)
         helm pull "${repository}/${name}" --version "$version" --destination "$vendor_dir"
+        if [[ "$name" == "kueue" ]]; then
+          preserve_kueue_crd_retention "${vendor_dir}/${name}-${version}.tgz"
+        fi
         ;;
       http://*|https://*)
         helm pull "$name" --repo "$repository" --version "$version" --destination "$vendor_dir"

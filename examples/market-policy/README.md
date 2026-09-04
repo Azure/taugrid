@@ -38,7 +38,7 @@ tau run --config examples/market-policy/tau.yaml --dry-run=client
 ```
 
 The checked-in `metrics.offload` block pins the published TauGrid Portal
-`0.4.0` image, which contains `taugrid-portal experiment offload metrics`, and
+`0.4.1` image, which contains `taugrid-portal experiment offload metrics`, and
 keeps the sidecar's checkpoint spool on the shared `/var/run/tau` emptyDir.
 That avoids atomic-write incompatibilities on Azure File RWX volumes; an
 abrupt pod loss can therefore lose rows that have not yet been remote-written.

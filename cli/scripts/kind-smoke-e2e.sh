@@ -418,7 +418,7 @@ fi
 
 "$TAU_BIN" cluster install \
   --chart "$REPO_ROOT/charts/taugrid" \
-  --version 0.4.0 \
+  --version 0.4.1 \
   --release "$TAUGRID_RELEASE" \
   --namespace "$TAUGRID_NAMESPACE" \
   --context "$KUBE_CONTEXT" \

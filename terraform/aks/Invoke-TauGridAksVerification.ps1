@@ -37,7 +37,7 @@ param(
     [ValidatePattern("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")]
     [string] $WorkspaceNamespace = "taugrid-default",
     [ValidatePattern("^[0-9]+\.[0-9]+\.[0-9]+$")]
-    [string] $TauGridVersion = "0.4.0",
+    [string] $TauGridVersion = "0.4.1",
     [ValidateRange(10, 60)]
     [int] $PortalWaitMinutes = 30
 )

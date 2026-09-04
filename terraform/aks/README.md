@@ -71,7 +71,7 @@ offline or CI test suite.
 
 The script resolves `tau` for the active OS and, before it accesses Azure,
 requires `tau version --short` to be exactly `v<TauGridVersion>` (by default
-`v0.4.0`). It rejects development builds and stale CLIs because the CLI and
+`v0.4.1`). It rejects development builds and stale CLIs because the CLI and
 chart readiness contracts must match. Pass `-TauCommand` with an absolute path
 to a matching released binary when it is not on PATH; paths containing spaces
 are supported.

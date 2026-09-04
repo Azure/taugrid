@@ -11,10 +11,10 @@ tests:
     asserts:
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'name: dcgm-exporter\s+url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics'
+          pattern: 'name: "dcgm-exporter"\s+url: "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"'
       - notMatchRegex:
           path: data["rules.yaml"]
-          pattern: 'http://localhost:19400/metrics'
+          pattern: '"http://localhost:19400/metrics"'
 
   - it: keeps the managed DCGM endpoint for A100
     documentSelector:
@@ -23,4 +23,4 @@ tests:
     asserts:
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'name: dcgm-exporter\s+url: http://localhost:19400/metrics'
+          pattern: 'name: "dcgm-exporter"\s+url: "http://localhost:19400/metrics"'

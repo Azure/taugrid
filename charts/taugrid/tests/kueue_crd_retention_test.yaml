@@ -1,0 +1,9 @@
+suite: Kueue CRDs survive release removal
+templates:
+  - charts/kueue/templates/crd/*.yaml
+tests:
+  - it: keeps every Kueue CRD on dependency disable or uninstall
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
