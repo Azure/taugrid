@@ -34,25 +34,25 @@ const (
 // GPURuntimeEvidence is a current, run-scoped DCGM snapshot. It intentionally
 // does not retain samples after a pod releases its GPU allocation.
 type GPURuntimeEvidence struct {
-	State         GPURuntimeState
-	Source        string
-	Reason        string
-	NodesExpected int
-	NodesScraped  int
-	Devices       []GPUDeviceEvidence
+	State         GPURuntimeState     `json:"state"`
+	Source        string              `json:"source,omitempty"`
+	Reason        string              `json:"reason,omitempty"`
+	NodesExpected int                 `json:"nodesExpected"`
+	NodesScraped  int                 `json:"nodesScraped"`
+	Devices       []GPUDeviceEvidence `json:"devices"`
 }
 
 // GPUDeviceEvidence joins one DCGM device sample to its Kubernetes owner.
 // Observation booleans distinguish a real zero from a missing metric.
 type GPUDeviceEvidence struct {
-	Pod                     string
-	Container               string
-	GPU                     string
-	UUID                    string
-	UtilizationPercent      float64
-	UtilizationObserved     bool
-	FramebufferUsedMiB      float64
-	FramebufferUsedObserved bool
+	Pod                     string  `json:"pod"`
+	Container               string  `json:"container"`
+	GPU                     string  `json:"gpu"`
+	UUID                    string  `json:"uuid,omitempty"`
+	UtilizationPercent      float64 `json:"utilizationPercent"`
+	UtilizationObserved     bool    `json:"utilizationObserved"`
+	FramebufferUsedMiB      float64 `json:"framebufferUsedMiB"`
+	FramebufferUsedObserved bool    `json:"framebufferUsedObserved"`
 }
 
 type dcgmExporterPodList struct {
@@ -405,11 +405,14 @@ func runFinished(s Snapshot) bool {
 			return true
 		}
 	}
+	if s.JobFound {
+		return false
+	}
 	if s.RayJobFound || s.RayJob.Found {
-		status := firstNonEmpty(s.RayJobStatus, s.RayJob.JobDeploymentStatus)
-		return strings.EqualFold(status, "Complete") ||
-			strings.EqualFold(status, "Failed") ||
-			!s.RayJobFinishedAt.IsZero()
+		rayJob := snapshotRayJob(s)
+		return rayJobStatusSucceeded(rayJob) ||
+			rayJobStatusFailed(rayJob) ||
+			!rayJob.FinishedAt.IsZero()
 	}
 	return false
 }

@@ -1340,6 +1340,251 @@ func TestStartupFailedStopsOnCurrentImagePullFailure(t *testing.T) {
 	}
 }
 
+func TestCanonicalLifecycleState(t *testing.T) {
+	tests := []struct {
+		name string
+		snap Snapshot
+		want LifecycleState
+	}{
+		{name: "not found", snap: Snapshot{}, want: LifecycleNotFound},
+		{
+			name: "queued batch",
+			snap: Snapshot{
+				JobFound:     true,
+				JobSuspended: true,
+				Workloads:    []Workload{{Phase: "Pending"}},
+			},
+			want: LifecycleQueued,
+		},
+		{
+			name: "starting batch",
+			snap: Snapshot{
+				JobFound:  true,
+				Workloads: []Workload{{Phase: "Admitted", Admitted: true}},
+			},
+			want: LifecycleStarting,
+		},
+		{name: "running batch", snap: Snapshot{JobFound: true, JobActive: 1}, want: LifecycleRunning},
+		{
+			name: "succeeded batch",
+			snap: Snapshot{
+				JobFound:      true,
+				JobConditions: []Condition{{Type: "Complete", Status: "True"}},
+			},
+			want: LifecycleSucceeded,
+		},
+		{
+			name: "failed batch",
+			snap: Snapshot{
+				JobFound:      true,
+				JobConditions: []Condition{{Type: "Failed", Status: "True"}},
+			},
+			want: LifecycleFailed,
+		},
+		{
+			name: "failed condition beats complete condition",
+			snap: Snapshot{
+				JobFound: true,
+				JobConditions: []Condition{
+					{Type: "Complete", Status: "True"},
+					{Type: "Failed", Status: "True"},
+				},
+			},
+			want: LifecycleFailed,
+		},
+		{
+			name: "primary job failure ignores same-name ray success",
+			snap: Snapshot{
+				JobFound:      true,
+				JobConditions: []Condition{{Type: "Failed", Status: "True"}},
+				RayJob:        RayJob{Found: true, JobStatus: "SUCCEEDED"},
+			},
+			want: LifecycleFailed,
+		},
+		{
+			name: "primary job success ignores same-name ray failure",
+			snap: Snapshot{
+				JobFound:      true,
+				JobConditions: []Condition{{Type: "Complete", Status: "True"}},
+				RayJob:        RayJob{Found: true, JobStatus: "FAILED"},
+			},
+			want: LifecycleSucceeded,
+		},
+		{
+			name: "inactive primary job ignores same-name running rayjob",
+			snap: Snapshot{
+				JobFound: true,
+				RayJob:   RayJob{Found: true, JobDeploymentStatus: "Running"},
+			},
+			want: LifecycleStarting,
+		},
+		{
+			name: "primary job startup ignores same-name failed rayjob",
+			snap: Snapshot{
+				JobFound: true,
+				RayJob:   RayJob{Found: true, JobStatus: "FAILED"},
+			},
+			want: LifecycleStarting,
+		},
+		{
+			name: "queued multikueue",
+			snap: Snapshot{
+				RayJob: RayJob{Found: true, ManagedBy: "kueue.x-k8s.io/multikueue"},
+				Workloads: []Workload{{
+					Phase: "Pending",
+					AdmissionChecks: []AdmissionCheck{{
+						Name: "multikueue", State: "Nominated", ControllerName: "kueue.x-k8s.io/multikueue",
+					}},
+				}},
+			},
+			want: LifecycleQueued,
+		},
+		{
+			name: "running rayjob",
+			snap: Snapshot{RayJob: RayJob{
+				Found: true, JobDeploymentStatus: "Running",
+			}},
+			want: LifecycleRunning,
+		},
+		{
+			name: "nonterminal rayjob with image pull failure",
+			snap: Snapshot{
+				RayJob: RayJob{Found: true, JobDeploymentStatus: "Initializing"},
+				Pods: []Pod{{
+					Containers: []Container{{
+						State: "waiting", Reason: "ImagePullBackOff",
+					}},
+				}},
+			},
+			want: LifecycleFailed,
+		},
+		{
+			name: "succeeded rayjob",
+			snap: Snapshot{RayJob: RayJob{
+				Found: true, JobStatus: "SUCCEEDED",
+			}},
+			want: LifecycleSucceeded,
+		},
+		{
+			name: "failed rayjob",
+			snap: Snapshot{RayJob: RayJob{
+				Found: true, JobStatus: "FAILED",
+			}},
+			want: LifecycleFailed,
+		},
+		{
+			name: "ray deployment failure beats job status success",
+			snap: Snapshot{RayJob: RayJob{
+				Found: true, JobStatus: "SUCCEEDED", JobDeploymentStatus: "Failed",
+			}},
+			want: LifecycleFailed,
+		},
+		{
+			name: "ray job failure beats deployment success",
+			snap: Snapshot{RayJob: RayJob{
+				Found: true, JobStatus: "FAILED", JobDeploymentStatus: "Complete",
+			}},
+			want: LifecycleFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CanonicalLifecycleState(tt.snap); got != tt.want {
+				t.Fatalf("CanonicalLifecycleState() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHeadlineStateAgreesWithCanonicalTerminalState(t *testing.T) {
+	imagePull := Snapshot{
+		JobFound: true,
+		Pods: []Pod{{
+			Containers: []Container{{State: "waiting", Reason: "ImagePullBackOff"}},
+		}},
+	}
+	if got := CanonicalLifecycleState(imagePull); got != LifecycleFailed {
+		t.Fatalf("image-pull canonical state = %q", got)
+	}
+	if got := HeadlineState(imagePull); got != "Failed" {
+		t.Fatalf("image-pull display state = %q", got)
+	}
+
+	rejected := Snapshot{
+		RayJob: RayJob{Found: true, ManagedBy: "kueue.x-k8s.io/multikueue"},
+		Workloads: []Workload{{
+			AdmissionChecks: []AdmissionCheck{{
+				Name: "multikueue", State: "Rejected", ControllerName: "kueue.x-k8s.io/multikueue",
+			}},
+		}},
+	}
+	if got := CanonicalLifecycleState(rejected); got != LifecycleFailed {
+		t.Fatalf("rejected canonical state = %q", got)
+	}
+	if got := HeadlineState(rejected); got != "Failed" {
+		t.Fatalf("rejected display state = %q", got)
+	}
+}
+
+func TestPrimaryJobExcludesSameNameRayJobFromStartup(t *testing.T) {
+	snap := Snapshot{
+		JobFound: true,
+		RayJob: RayJob{
+			Found:               true,
+			JobStatus:           "SUCCEEDED",
+			JobDeploymentStatus: "Failed",
+			RayClusterName:      "stale-cluster",
+		},
+	}
+	if StartupComplete(snap) {
+		t.Fatal("stale RayJob success must not complete a primary Job")
+	}
+	if StartupFailed(snap) {
+		t.Fatal("stale RayJob failure must not fail a primary Job")
+	}
+	for _, phase := range StartupPhases(snap) {
+		if phase.Name == "RayCluster" || phase.Name == "RayJob status" || phase.Name == "Compute release" {
+			t.Fatalf("primary Job phases include stale RayJob phase: %+v", phase)
+		}
+	}
+}
+
+func TestRayJobFailedUsesSharedTerminalMarkers(t *testing.T) {
+	if !RayJobFailed(RayJob{JobDeploymentStatus: "Running", Reason: "SubmissionFailed"}) {
+		t.Fatal("RayJob failure reason was not classified as failed")
+	}
+	if RayJobFailed(RayJob{JobDeploymentStatus: "Running", JobStatus: "RUNNING"}) {
+		t.Fatal("running RayJob was classified as failed")
+	}
+}
+
+func TestPrimaryJobExcludesSameNameRayJobMetadataAndEvents(t *testing.T) {
+	snap := Snapshot{
+		Name:        "shared-name",
+		JobFound:    true,
+		Labels:      map[string]string{},
+		Annotations: map[string]string{},
+	}
+	hydrateRayJob(&snap, []byte(`{
+		"metadata": {
+			"name": "shared-name",
+			"labels": {"source": "ray"},
+			"annotations": {"owner": "ray"}
+		}
+	}`))
+	if len(snap.Labels) != 0 || len(snap.Annotations) != 0 {
+		t.Fatalf("RayJob metadata contaminated primary Job: labels=%v annotations=%v", snap.Labels, snap.Annotations)
+	}
+
+	events := filterEvents([]Event{
+		{InvolvedKind: "Job", InvolvedName: "shared-name", Reason: "job"},
+		{InvolvedKind: "RayJob", InvolvedName: "shared-name", Reason: "ray"},
+	}, eventObjects(snap))
+	if len(events) != 1 || events[0].Reason != "job" {
+		t.Fatalf("primary Job events = %+v", events)
+	}
+}
+
 func TestStartupFailedDoesNotStopRetryingBatchJobOnFailedPod(t *testing.T) {
 	snap := Snapshot{
 		JobFound: true,
