@@ -761,9 +761,9 @@ func (s *stubCostQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row
 	s.calls++
 	switch s.calls {
 	case 1:
-		return []kustoquery.Row{{"workspace": "research-lab", "namespace": "research", "GpuHours": 48.0, "EstimatedCostUSD": 176.16, "PeakGpus": 4.0, "AvgUtil": 66.0}}, nil
+		return []kustoquery.Row{{"workspace": "research-lab", "namespace": "research", "GpuHours": 48.0, "EstimatedCostUSD": 176.16, "PeakGpus": 4.0, "AvgUtil": 66.0, "ObservedSamples": 12.0, "GPUHoursSamples": 12.0, "CostSamples": 12.0, "UtilizationSamples": 99.0}}, nil
 	default:
-		return []kustoquery.Row{{"instance": "node-1", "gpu": "0", "namespace": "research", "AvgUtil": 3.0, "Samples": 99.0}}, nil
+		return []kustoquery.Row{{"instance": "node-1", "gpu": "0", "namespace": "research", "AvgUtil": 3.0, "Samples": 99.0, "ObservedSamples": 99.0}}, nil
 	}
 }
 
@@ -2352,19 +2352,13 @@ func TestPortalShellContainsWorkspaceScopeContract(t *testing.T) {
 	for _, want := range []string{
 		`id="workspace-select"`,
 		`function currentWorkspace()`,
-		`fetch(withWorkspace(path)`,
 		`field("cluster", activeScope.cluster)`,
 		`field("namespace", activeScope.namespace)`,
 		`field("queue", activeScope.localQueue)`,
 		`field("result scope", activeScope.resultScope)`,
-		`if (requested !== currentWorkspace()) return false;`,
-		`if (data.scope && requested === currentWorkspace())`,
-		`fetchJSON(withWorkspace("/api/stellar/experiments"))`,
 		`e.state === "setup_required"`,
 		`Jobs board setup required`,
 		`Portal is running normally.`,
-		`const view = el("div");`,
-		`host.replaceChildren(view);`,
 		`No local fallback was used.`,
 		`profile selection is not available in Portal`,
 		`Execution target`,

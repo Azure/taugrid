@@ -45,13 +45,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
 )
 
-// runIDLabel is the Tau run identity label (mirror of experiment.LabelRunID),
-// kept as a literal here to avoid importing the experiment package into this
-// aggregation layer — the same choice runs.go and links.go make.
-
-// labelJob is the job-name label tau stamps on Jobs and Kueue copies onto the
-// Workload. Used to filter this job's Workloads and to select its Pods.
-
 // rayClusterLabel is the label KubeRay stamps on a RayJob's pods (value is the
 // owning RayCluster's name). Used to select a RayJob's pods.
 const rayClusterLabel = "ray.io/cluster"

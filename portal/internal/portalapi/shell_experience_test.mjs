@@ -472,8 +472,45 @@ test("older diagnostic payloads do not contradict present evidence with invented
 test("cost no-observation state does not claim every GPU is busy", async () => {
   const env = shell("/portal/cost?workspace=team-b", withDirectory(() => response({ workspaces: [], idleGPUs: [] })));
   await env.context.boot;
-  assert.match(env.view.textContent, /telemetry may be absent or incomplete/);
+  assert.match(env.view.textContent, /total GPU-hours: Unknown · estimated cost: Unknown/);
+  assert.match(env.view.textContent, /Insufficient utilization samples/);
   assert.doesNotMatch(env.view.textContent, /every GPU is above|all healthy/);
+});
+
+test("cost availability distinguishes measured zero, partial sums and unknown rows", async () => {
+  const env = shell("/portal/cost?workspace=team-b", withDirectory(() => response({
+    totalGPUHours: 0, gpuHoursAvailable: true, totalEstimatedCostUSD: 0, costAvailable: false,
+    costCoverage: { observedSamples: 4, gpuHoursSamples: 2, costSamples: 0, utilizationSamples: 90 },
+    workspaces: [{
+      workspace: "team-b", gpuHours: 0, gpuHoursAvailable: false, estimatedCostUSD: 0, costAvailable: true,
+      avgUtilPct: null, coverage: { observedSamples: 4, gpuHoursSamples: 0, costSamples: 4, utilizationSamples: 0 },
+    }],
+    idleAvailable: true, idleGPUs: [],
+    idleCoverage: { observedGPUs: 3, measuredGPUs: 2, eligibleGPUs: 1, observedSamples: 30, validSamples: 20 },
+  })));
+  await env.context.boot;
+  assert.match(env.view.textContent, /total GPU-hours: 0 · estimated cost: Unknown/);
+  assert.match(env.view.textContent, /GPU-hours: Partial: 2 \/ 4 allocation samples/);
+  assert.match(env.view.querySelector("tbody").textContent, /team-b.*Unknown\$0.00/);
+  assert.match(env.view.textContent, /Partial: 1 \/ 3 observed GPUs have enough samples/);
+  assert.match(env.view.textContent, /No idle GPUs among 1 eligible observed GPUs/);
+  assert.doesNotMatch(env.view.textContent, /90 \/ 4|every GPU/);
+});
+
+test("platform allocation cards preserve unknown hours and idle coverage", async () => {
+  const env = shell("/portal?persona=platform&workspace=team-b", withDirectory(url => {
+    if (url.pathname.endsWith("/cost")) return response({
+      totalGPUHours: 0, gpuHoursAvailable: false, idleAvailable: false, idleGPUs: [],
+      costCoverage: { observedSamples: 1, gpuHoursSamples: 0, costSamples: 0, utilizationSamples: 0 },
+      idleCoverage: { observedGPUs: 2, measuredGPUs: 0, eligibleGPUs: 0, observedSamples: 2, validSamples: 0 },
+    });
+    return response({ cards: { queue: {} }, gpus: [] });
+  }));
+  await env.context.boot;
+  const panel = panelNamed(env, "Allocation cost");
+  assert.match(panel.textContent, /GPU-hoursUnknown/);
+  assert.match(panel.textContent, /Observed idle GPUsUnknown/);
+  assert.match(panel.textContent, /0 \/ 2 observed GPUs have enough samples/);
 });
 
 test("unsupported destinations expose alternatives and responsive navigation has explicit expanded state", async () => {
