@@ -2158,11 +2158,11 @@ func TestManagedWorkspaceAdversarialIsolationMatrix(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
 		req.Header.Set(defaultViewerUserHeader, "alpha@example.com")
 		req.Header.Set(defaultViewerGroupsHeader, "group-alpha")
-		req.AddCookie(&http.Cookie{Name: rayTargetCookie, Value: cookie})
+		req.AddCookie(&http.Cookie{Name: "ray_target", Value: cookie})
 		rec := httptest.NewRecorder()
 		server.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("forged Ray cookie %q status = %d, want 404: %s", cookie, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("obsolete Ray cookie %q status = %d, want explicit 400: %s", cookie, rec.Code, rec.Body.String())
 		}
 	}
 

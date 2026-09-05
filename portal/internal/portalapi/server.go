@@ -340,13 +340,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/portal/ray", s.handleRay)
 	s.mux.HandleFunc("/api/portal/ray/history/", s.handleRayHistory)
 	s.mux.HandleFunc("/api/portal/ray/proxy/", s.handleRayProxy)
-	// Ray dashboard SPA root-absolute assets. The dashboard fetches these from the
-	// origin root (/api, /static, ...), so they carry no proxy prefix; the asset
-	// handler uses the ray_target cookie set by handleRayProxy to pick the upstream
-	// head Service. Registered on the exact Ray dashboard prefixes to avoid
-	// shadowing the portal's own routes.
-	for _, p := range rayAssetPrefixes {
-		s.mux.HandleFunc(p, s.handleRayAsset)
+	s.mux.HandleFunc(rayWorkspaceProxyPrefix, s.handleRayProxy)
+	// Ray 2.56 has one root-absolute profiling-capability fetch. Profiling is
+	// disabled by Portal policy regardless of target; this never queries Ray.
+	s.mux.HandleFunc("/api/profiling_enabled", handleRayProfilingDisabled)
+	for _, p := range rayUnscopedPrefixes {
+		s.mux.HandleFunc(p, handleRayUnscoped)
 	}
 	s.mux.HandleFunc("/api/portal/nodes", s.handleNodes)
 	s.mux.HandleFunc("/api/portal/nodeutil", s.handleNodeUtil)
