@@ -23,8 +23,7 @@ install:
 	go install $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" $(PKG)
 
 test:
-	go test ./...
-
+	TAUGRID_REQUIRE_FRONTEND_TESTS=1 go test ./...
 
 lint:
 	go vet ./...
