@@ -12,9 +12,8 @@
 //     admitted for it (queue/admission state), its Pods (phase/node/restarts),
 //     and recent Events. Sourced from the client-go reads in
 //     internal/portal/kubeclient.
-//   - Tier 2 (cross-links): pure URLs — an "Open in Stellar" deep-link built from
-//     the run-id (links.ExperimentPath) and a per-pod Cluster board link
-//     (links.ClusterInstancePath). No new data is fetched.
+//   - Tier 2 (cross-links): an "Open in Stellar" deep-link backed by indexed
+//     metrics and a per-pod Cluster board link (links.ClusterInstancePath).
 //   - Tier 3 (durable Kusto): optional. When a Querier is configured, the run's
 //     terminal lifecycle is derived from the `tau/run_status` marker row the
 //     metrics-offload sidecar remote-writes into the ExperimentMetrics table
@@ -31,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -86,6 +86,10 @@ type Reader interface {
 type Options struct {
 	Namespace string
 	Name      string
+	// WorkspaceID is the authoritative selected workspace, not a normalized
+	// object label. Empty retains legacy cross-workspace discovery.
+	WorkspaceID string
+	Cluster     string
 }
 
 // Snapshot is the job detail payload, designed for the page rather than reusing
@@ -110,7 +114,31 @@ type Snapshot struct {
 	// Experiment is the Stellar identity `tau run` stamped on this object. It is
 	// omitted for a workload that carries none (a bare Job, or a run submitted
 	// without experiment metadata).
-	Experiment *ExperimentIdentity `json:"experiment,omitempty"`
+	Experiment  *ExperimentIdentity `json:"experiment,omitempty"`
+	Diagnostics Diagnostics         `json:"diagnostics"`
+}
+
+// Diagnostics keeps source failures distinct from successful empty reads.
+type Diagnostics struct {
+	Workloads SourceDiagnostic `json:"workloads"`
+	Pods      SourceDiagnostic `json:"pods"`
+	Events    SourceDiagnostic `json:"events"`
+	Tracking  SourceDiagnostic `json:"tracking"`
+}
+
+type SourceDiagnostic struct {
+	State   string `json:"state"` // ready | empty | unavailable | not_configured
+	Message string `json:"message,omitempty"`
+}
+
+func sourceDiagnostic(source string, count int, err error) SourceDiagnostic {
+	if err != nil {
+		return SourceDiagnostic{State: "unavailable", Message: source + " could not be read. Retry this detail view."}
+	}
+	if count == 0 {
+		return SourceDiagnostic{State: "empty", Message: "No matching " + source + " were found."}
+	}
+	return SourceDiagnostic{State: "ready"}
 }
 
 // ExperimentIdentity is the Stellar identity every Tau run path stamps on its
@@ -200,9 +228,8 @@ type EventDetail struct {
 	Last    *time.Time `json:"last,omitempty"`
 }
 
-// DetailLinks holds the tier-2 cross-links. StellarPath is empty unless the run
-// has a durable Kusto lifecycle row (proof it was mirrored to Stellar), so the
-// frontend omits the button rather than emitting a dead "record not found" link.
+// DetailLinks holds the tier-2 cross-links. StellarPath requires indexed metrics
+// or a terminal lifecycle marker with an unambiguous project/workspace identity.
 // RayDashboardPath is set only for a RayJob that has a named RayCluster: it
 // reverse-proxies that cluster's own Ray dashboard (tasks/actors/logs) and is
 // only reachable while the cluster is running.
@@ -283,47 +310,35 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	}
 
 	// Tier 1b: Workloads admitted for this job (best-effort).
-	if wls, err := links.ListWorkloads(ctx, r, opts.Namespace); err == nil {
+	wls, workloadErr := links.ListWorkloads(ctx, r, opts.Namespace)
+	if workloadErr == nil {
 		snap.Workloads = filterWorkloads(wls, opts.Name, opts.Name, obj.runID)
+	}
+	snap.Diagnostics.Workloads = sourceDiagnostic("workloads", len(snap.Workloads), workloadErr)
+	if apierrors.IsNotFound(workloadErr) {
+		snap.Diagnostics.Workloads = SourceDiagnostic{State: "not_configured", Message: "Kueue workloads are not available in this cluster."}
 	}
 
 	// Tier 1b: Pods backing the run (best-effort). Filter by RayCluster (RayJob)
 	// or job label (Job).
-	podsVisible := false
-	if raw, err := r.ListPods(ctx, opts.Namespace); err == nil {
-		snap.Pods, podsVisible = parsePodsWithStatus(raw, obj.podSelectorKey, obj.podSelectorValue)
+	rawPods, podErr := r.ListPods(ctx, opts.Namespace)
+	if podErr == nil {
+		snap.Pods, podErr = parsePods(rawPods, obj.podSelectorKey, obj.podSelectorValue)
 	}
+	snap.Diagnostics.Pods = sourceDiagnostic("pods", len(snap.Pods), podErr)
+	podsVisible := podErr == nil && obj.podSelectorValue != ""
 	if obj.kind == "RayJob" {
 		snap.ResourceRelease = rayResourceRelease(obj.detail, snap.Workloads, snap.Pods, podsVisible)
 	}
 
 	// Tier 1b: recent Events (best-effort).
-	if raw, err := r.ListEvents(ctx, opts.Namespace); err == nil {
-		snap.Events = parseEvents(raw, opts.Name, obj.rayClusterName)
+	rawEvents, eventErr := r.ListEvents(ctx, opts.Namespace)
+	if eventErr == nil {
+		snap.Events, eventErr = parseEvents(rawEvents, opts.Name, obj.rayClusterName)
 	}
+	snap.Diagnostics.Events = sourceDiagnostic("events", len(snap.Events), eventErr)
 
-	// Tier 3: durable Kusto lifecycle (optional, best-effort). The Stellar
-	// deep-link is emitted only when this lookup succeeds: a run-id alone does not
-	// prove the run was ever mirrored to Kusto (a bare Job / `tau ray submit`
-	// without metric offload never writes ExperimentMetrics), and linking on run-id
-	// alone yields a dead "experiment store record not found" page. The lifecycle
-	// row is the one signal that the run is durably indexed and Stellar can render.
-	if q != nil && obj.runID != "" {
-		if row, ok := lifecycle(ctx, q, obj.runID); ok {
-			snap.Lifecycle = row
-			// Scope the link with the Kusto row's project ONLY, never with the
-			// project stamped on the object. metricsoffload.Runtime.Validate
-			// rejects an empty project, so a run whose marker row exists always
-			// has one; row.Project == "" therefore means the projection did not
-			// carry it, not that the run has no project, and substituting the
-			// annotation would filter a working unscoped link down to rows that
-			// do not match. The two values are also not interchangeable in
-			// general: the direct `tau run --config` path passes
-			// experiment.project straight through, but the manifest path
-			// defaults the offload project to "tau-finetune" independently.
-			snap.Links.StellarPath = links.ExperimentProjectPath(obj.runID, row.Project)
-		}
-	}
+	snap.Links.StellarPath, snap.Lifecycle, snap.Diagnostics.Tracking = tracking(ctx, q, obj.runID, opts)
 
 	return snap, nil
 }
@@ -575,15 +590,18 @@ type podList struct {
 	} `json:"items"`
 }
 
-// parsePodsWithStatus keeps pods whose selectorKey label equals selectorValue.
+// parsePods keeps pods whose selectorKey label equals selectorValue.
 // An empty selectorValue matches nothing until the RayCluster exists.
-func parsePodsWithStatus(data []byte, selectorKey, selectorValue string) ([]PodDetail, bool) {
-	if selectorValue == "" {
-		return nil, false
-	}
+func parsePods(data []byte, selectorKey, selectorValue string) ([]PodDetail, error) {
 	var list podList
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, false
+		return nil, err
+	}
+	if list.Items == nil {
+		return nil, errors.New("pod response has no items array")
+	}
+	if selectorValue == "" {
+		return nil, nil
 	}
 	var out []PodDetail
 	for _, it := range list.Items {
@@ -602,7 +620,7 @@ func parsePodsWithStatus(data []byte, selectorKey, selectorValue string) ([]PodD
 			NodePath: links.ClusterInstancePath(it.Spec.NodeName),
 		})
 	}
-	return out, true
+	return out, nil
 }
 
 func rayResourceRelease(object ObjectDetail, workloads []links.Workload, pods []PodDetail, podsVisible bool) *ResourceReleaseDetail {
@@ -707,10 +725,13 @@ type eventList struct {
 // prefix match catches both without attributing a sibling whose name merely
 // starts with the same string (e.g. "train" must not match "train-big"'s
 // events). Newest last-timestamp first.
-func parseEvents(data []byte, jobName, rayClusterName string) []EventDetail {
+func parseEvents(data []byte, jobName, rayClusterName string) ([]EventDetail, error) {
 	var list eventList
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil
+		return nil, err
+	}
+	if list.Items == nil {
+		return nil, errors.New("event response has no items array")
 	}
 	var out []EventDetail
 	for _, it := range list.Items {
@@ -727,10 +748,10 @@ func parseEvents(data []byte, jobName, rayClusterName string) []EventDetail {
 		})
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
 	sortEventsNewestFirst(out)
-	return out
+	return out, nil
 }
 
 // eventBelongsTo reports whether an event's involved-object name belongs to the
@@ -745,19 +766,52 @@ func eventBelongsTo(name, owner string) bool {
 	return name == owner || strings.HasPrefix(name, owner+"-")
 }
 
-// lifecycle derives the run's durable lifecycle from the metrics table's
-// tau/run_status terminal marker — the same signal Stellar's cockpit reads —
-// rather than the writer-less TauExpRunLifecycle projection. The metrics-offload
-// sidecar remote-writes ExperimentMetrics (including a step-less tau/run_status
-// row whose value sign and tags encode the terminal state); querying that table
-// is what actually lights up tier 3 for offloaded runs. Any error (including
-// ErrNoQueryCommand) or the absence of a terminal marker yields ok=false so tier
-// 3 is simply omitted (and, with it, the Stellar deep-link).
-func lifecycle(ctx context.Context, q kustoquery.Querier, runID string) (*LifecycleRow, bool) {
-	rows, err := q.Query(ctx, runStatusQuery(runID))
-	if err != nil {
-		return nil, false
+func tracking(ctx context.Context, q kustoquery.Querier, runID string, opts Options) (string, *LifecycleRow, SourceDiagnostic) {
+	if q == nil {
+		return "", nil, SourceDiagnostic{State: "not_configured", Message: "Experiment tracking lookup is not configured."}
 	}
+	if runID == "" {
+		return "", nil, SourceDiagnostic{State: "not_configured", Message: "This workload has no experiment run identity."}
+	}
+	rows, err := q.Query(ctx, trackingQuery(runID, opts.WorkspaceID, opts.Cluster))
+	if err != nil {
+		if errors.Is(err, kustoquery.ErrNoQueryCommand) {
+			return "", nil, SourceDiagnostic{State: "not_configured", Message: "Experiment tracking lookup is not configured."}
+		}
+		return "", nil, sourceDiagnostic("Experiment tracking", 0, err)
+	}
+	var scoped []kustoquery.Row
+	project, workspace, cluster := "", "", ""
+	hasMetrics := false
+	for _, row := range rows {
+		if opts.WorkspaceID != "" && row.Str("workspace_id") != opts.WorkspaceID {
+			continue
+		}
+		if opts.Cluster != "" && row.Str("cluster") != opts.Cluster {
+			continue
+		}
+		p := strings.TrimSpace(row.Str("project_id"))
+		w := strings.TrimSpace(row.Str("workspace_id"))
+		c := strings.TrimSpace(row.Str("cluster"))
+		if p == "" || (len(scoped) > 0 && (p != project || w != workspace || c != cluster)) {
+			return "", nil, SourceDiagnostic{State: "unavailable", Message: "Indexed tracking identity is missing or ambiguous; a scoped Stellar link cannot be resolved."}
+		}
+		project, workspace, cluster = p, w, c
+		scoped = append(scoped, row)
+		_, hasStep := row.Num("step")
+		value, hasValue := row.Num("value")
+		hasValue = hasValue && !math.IsNaN(value) && !math.IsInf(value, 0)
+		hasMetrics = hasMetrics || (row.Str("metric_name") != "" && row.Str("metric_name") != expkusto.RunStatusMetricName && hasStep && hasValue)
+	}
+	lifecycleRow, _ := lifecycle(scoped)
+	if !hasMetrics && lifecycleRow == nil {
+		return "", nil, SourceDiagnostic{State: "empty", Message: "No indexed metrics were found; metric offload may be disabled or indexing may still be pending."}
+	}
+	return links.ExperimentProjectPath(runID, project, workspace), lifecycleRow, SourceDiagnostic{State: "ready"}
+}
+
+// lifecycle derives only final status, independently of tracking existence.
+func lifecycle(rows []kustoquery.Row) (*LifecycleRow, bool) {
 	row, ok := latestRunStatusRow(rows)
 	if !ok {
 		return nil, false
@@ -765,7 +819,7 @@ func lifecycle(ctx context.Context, q kustoquery.Querier, runID string) (*Lifecy
 	tags := runStatusTags(row)
 	state := runStatusState(row, tags)
 	if state != "succeeded" && state != "failed" && state != "cancelled" {
-		// No terminal marker yet: don't emit a lifecycle row or the Stellar link.
+		// A running marker is not a final lifecycle result.
 		return nil, false
 	}
 	return &LifecycleRow{
@@ -780,32 +834,41 @@ func lifecycle(ctx context.Context, q kustoquery.Querier, runID string) (*Lifecy
 	}, true
 }
 
-// runStatusQuery builds a step-less KQL over the remote-write metrics table for
-// the run's tau/run_status marker rows, newest first. A dedicated query is
-// required because the standard metrics query drops step-less rows (the marker
-// carries no step).
-func runStatusQuery(runID string) string {
+// trackingQuery uses the same step/value eligibility as Stellar metrics while
+// retaining step-less lifecycle markers. Two row kinds per identity suffice;
+// three returned rows are enough to detect ambiguous projects/workspaces.
+func trackingQuery(runID, workspaceID, cluster string) string {
 	var b strings.Builder
 	b.WriteString(expkusto.DefaultRemoteWriteTable + "\n")
 	// Labels['project'] uses bracket notation because `project` is a KQL reserved
 	// keyword; the dotted form Labels.project fails to parse (HTTP 400).
-	b.WriteString("| extend run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), tags=tostring(Labels.tags), project_id=tostring(Labels['project']), value=todouble(Value), wall_time=Timestamp\n")
+	b.WriteString("| extend run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), tags=tostring(Labels.tags), project_id=tostring(Labels['project']), workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), step=tolong(Labels.step), value=todouble(Value), wall_time=Timestamp\n")
 	b.WriteString("| where run_id == " + kustoquery.QuoteString(runID) + "\n")
-	b.WriteString("| where metric_name == " + kustoquery.QuoteString(expkusto.RunStatusMetricName) + "\n")
-	b.WriteString("| project run_id, metric_name, value, wall_time, tags, project_id\n")
-	b.WriteString("| order by wall_time desc\n")
+	if workspaceID != "" {
+		b.WriteString("| where workspace_id == " + kustoquery.QuoteString(workspaceID) + "\n")
+	}
+	if cluster != "" {
+		b.WriteString("| where cluster == " + kustoquery.QuoteString(cluster) + "\n")
+	}
+	b.WriteString("| where isnotempty(metric_name) and isnotnull(value) and isfinite(value)\n")
+	b.WriteString("| where isnotnull(step) or metric_name == " + kustoquery.QuoteString(expkusto.RunStatusMetricName) + "\n")
+	b.WriteString("| extend row_kind = iff(metric_name == " + kustoquery.QuoteString(expkusto.RunStatusMetricName) + ", 'lifecycle', 'metrics')\n")
+	b.WriteString("| summarize arg_max(wall_time, *) by project_id, workspace_id, cluster, row_kind\n")
+	b.WriteString("| project run_id, metric_name, step, value, wall_time, tags, project_id, workspace_id, cluster\n")
+	b.WriteString("| take 3\n")
 	return b.String()
 }
 
-// latestRunStatusRow returns the newest tau/run_status row. The query already
-// orders by wall_time desc, but tolerate unordered input by scanning. wall_time
-// is compared as a parsed timestamp (falling back to lexical order only when it
-// does not parse) so mixed offsets/precisions don't misorder the marker.
+// latestRunStatusRow returns the newest tau/run_status row without treating
+// ordinary positive-valued training metrics as completion markers.
 func latestRunStatusRow(rows []kustoquery.Row) (kustoquery.Row, bool) {
 	var latest kustoquery.Row
 	var latestWall time.Time
 	ok := false
 	for _, row := range rows {
+		if row.Str("metric_name") != expkusto.RunStatusMetricName {
+			continue
+		}
 		wall := parseRunStatusWallTime(row.Str("wall_time"))
 		if !ok || wall.After(latestWall) {
 			latest = row
