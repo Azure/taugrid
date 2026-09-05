@@ -5,7 +5,9 @@ package cost
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -36,15 +38,17 @@ func (s *scriptedQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row
 }
 
 var workspaceRows = []kustoquery.Row{
-	{"workspace": "research-lab", "namespace": "research", "GpuHours": 120.5, "EstimatedCostUSD": 442.24, "PeakGpus": 8.0, "AvgUtil": 71.0},
-	{"workspace": "infra-lab", "namespace": "infra", "GpuHours": 12.0, "EstimatedCostUSD": 44.04, "PeakGpus": 2.0, "AvgUtil": 15.0},
+	{"workspace": "research-lab", "namespace": "research", "GpuHours": 120.5, "EstimatedCostUSD": 442.24, "PeakGpus": 8.0, "AvgUtil": 71.0,
+		"ObservedSamples": 20.0, "GPUHoursSamples": 20.0, "CostSamples": 20.0, "UtilizationSamples": 240.0},
+	{"workspace": "infra-lab", "namespace": "infra", "GpuHours": 12.0, "EstimatedCostUSD": 44.04, "PeakGpus": 2.0, "AvgUtil": 15.0,
+		"ObservedSamples": 10.0, "GPUHoursSamples": 10.0, "CostSamples": 10.0, "UtilizationSamples": 50.0},
 }
 
 var idleRows = []kustoquery.Row{
 	{"instance": "node-3", "gpu": "2", "modelName": "A100", "namespace": "infra", "pod": "idle-pod",
-		"AvgUtil": 3.5, "Samples": 240.0},
+		"AvgUtil": 3.5, "Samples": 240.0, "ObservedSamples": 250.0},
 	{"instance": "node-9", "gpu": "0", "modelName": "H100", "namespace": "", "pod": "",
-		"AvgUtil": "12", "Samples": "50"}, // numeric strings (Kusto tostring())
+		"AvgUtil": "12", "Samples": "50", "ObservedSamples": "50"}, // numeric strings (Kusto tostring())
 }
 
 func TestBoardAssemblesBothQueries(t *testing.T) {
@@ -69,7 +73,7 @@ func TestBoardAssemblesBothQueries(t *testing.T) {
 		snap.Workspaces[0].GPUHours != 120.5 || snap.Workspaces[0].PeakGPUs != 8 {
 		t.Fatalf("workspace[0] = %#v, want research-lab 120.5h/8gpu", snap.Workspaces[0])
 	}
-	if snap.Workspaces[0].AvgUtilPct != 71 || snap.Workspaces[0].EstimatedCostUSD != 442.24 {
+	if snap.Workspaces[0].AvgUtilPct == nil || *snap.Workspaces[0].AvgUtilPct != 71 || snap.Workspaces[0].EstimatedCostUSD != 442.24 {
 		t.Fatalf("workspace[0] metrics = %#v", snap.Workspaces[0])
 	}
 	if snap.TotalGPUHours != 132.5 {
@@ -89,6 +93,15 @@ func TestBoardAssemblesBothQueries(t *testing.T) {
 	if snap.IdleGPUs[1].AvgUtilPct != 12 || snap.IdleGPUs[1].Samples != 50 {
 		t.Fatalf("idle[1] = %#v, want 12%% 50 samples (from strings)", snap.IdleGPUs[1])
 	}
+	if !snap.CostAvailable || !snap.GPUHoursAvailable || !snap.IdleAvailable {
+		t.Fatalf("availability = %+v", snap)
+	}
+	if snap.CostCoverage != (CostCoverage{ObservedSamples: 30, GPUHoursSamples: 30, CostSamples: 30, UtilizationSamples: 290}) {
+		t.Fatalf("cost coverage = %+v", snap.CostCoverage)
+	}
+	if snap.IdleCoverage != (IdleCoverage{ObservedGPUs: 2, MeasuredGPUs: 2, EligibleGPUs: 2, ObservedSamples: 300, ValidSamples: 290}) {
+		t.Fatalf("idle coverage = %+v", snap.IdleCoverage)
+	}
 }
 
 func TestBoardEmpty(t *testing.T) {
@@ -103,6 +116,10 @@ func TestBoardEmpty(t *testing.T) {
 	// Slices must be non-nil so they serialize as [] not null.
 	if snap.Workspaces == nil || snap.IdleGPUs == nil {
 		t.Fatal("empty slices are nil, want non-nil")
+	}
+	if snap.CostAvailable || snap.GPUHoursAvailable || snap.IdleAvailable ||
+		snap.CostCoverage != (CostCoverage{}) || snap.IdleCoverage != (IdleCoverage{}) {
+		t.Fatalf("empty coverage = %+v", snap)
 	}
 }
 
@@ -147,10 +164,22 @@ func TestBuildWorkspaceKQL(t *testing.T) {
 		"GpuHours=round(sum(HourlyGpuHours), 1)",
 		"EstimatedCostUSD=round(sum(HourlyCost), 2)",
 		"PeakGpus=round(max(HourlyPeakGpus), 2)",
+		"ObservedSamples=count()",
+		"GPUHoursSamples=countif(isnotnull(gpu_count))",
+		"CostSamples=countif(isnotnull(hourly_cost))",
+		"let WorkspaceUtil = GpuHealth()",
+		"| where isfinite(Value) and Value between (0.0 .. 100.0)",
+		"UtilSum=sum(Value), UtilizationSamples=count() by Cluster, namespace",
+		"| join kind=inner (CostRows | distinct Cluster, workspace, namespace) on Cluster, namespace",
+		"AvgUtil=round(sum(UtilSum) / sum(UtilizationSamples), 1)",
+		"| join kind=leftouter WorkspaceUtil on workspace, namespace",
 		"order by GpuHours desc",
 	} {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("namespace KQL missing %q:\n%s", want, kql)
+		}
+		if strings.Contains(kql, "avg(avg_util)") || strings.Contains(kql, "coalesce(AvgUtil") {
+			t.Fatalf("workspace util must not use pre-coalesced cost telemetry:\n%s", kql)
 		}
 	}
 }
@@ -182,26 +211,39 @@ func TestBuildWorkspaceKQLClusterScopeExcludesUnattributableLegacyRows(t *testin
 	}
 }
 
-func TestBuildIdleKQLThreshold(t *testing.T) {
-	kql := buildIdleKQL(DefaultWindow, DefaultIdleThresholdPct, "", "")
-	if !strings.Contains(kql, "where AvgUtil < 20 and Samples > 10") {
-		t.Fatalf("idle KQL threshold clause wrong:\n%s", kql)
+func TestBuildIdleKQLPreservesCoverage(t *testing.T) {
+	kql := buildIdleKQL(DefaultWindow, "", "")
+	for _, want := range []string{
+		"ValidUtil=iff(isfinite(Value) and Value between (0.0 .. 100.0), Value, real(null))",
+		"AvgUtil=round(avg(ValidUtil), 1)",
+		"Samples=countif(isnotnull(ValidUtil))",
+		"ObservedSamples=count()",
+		"by Cluster, instance, gpu",
+		"| project Cluster, instance, gpu",
+	} {
+		if !strings.Contains(kql, want) {
+			t.Fatalf("idle KQL missing %q:\n%s", want, kql)
+		}
+	}
+	for _, unwanted := range []string{"| where AvgUtil", "| where Samples", "| where isfinite(Value)", "coalesce("} {
+		if strings.Contains(kql, unwanted) {
+			t.Fatalf("idle KQL loses coverage with %q:\n%s", unwanted, kql)
+		}
 	}
 	if strings.Contains(kql, "Cluster ==") {
 		t.Fatalf("unscoped idle KQL should have no cluster filter:\n%s", kql)
 	}
 }
 
-// TestBoardCustomThreshold verifies a non-default threshold reaches the idle KQL.
+// TestBoardCustomThreshold verifies classification uses the requested threshold.
 func TestBoardCustomThreshold(t *testing.T) {
-	q := &scriptedQuerier{results: [][]kustoquery.Row{nil, nil}}
-	_, err := Board(context.Background(), q, Options{IdleThresholdPct: 5})
+	q := &scriptedQuerier{results: [][]kustoquery.Row{nil, idleRows}}
+	snap, err := Board(context.Background(), q, Options{IdleThresholdPct: 5})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
-	// kqls[1] is the idle query.
-	if len(q.kqls) != 2 || !strings.Contains(q.kqls[1], "AvgUtil < 5 and") {
-		t.Fatalf("custom threshold not applied: %v", q.kqls)
+	if len(snap.IdleGPUs) != 1 || snap.IdleGPUs[0].Instance != "node-3" || snap.IdleCoverage.EligibleGPUs != 2 {
+		t.Fatalf("custom threshold not applied: %+v", snap)
 	}
 }
 
@@ -221,7 +263,7 @@ func TestBuildKQLClusterScope(t *testing.T) {
 	if !strings.Contains(nsKQL, "Cluster == @'taugrid-flex'") {
 		t.Fatalf("namespace KQL missing cluster scope:\n%s", nsKQL)
 	}
-	idleKQL := buildIdleKQL(DefaultWindow, DefaultIdleThresholdPct, "", "taugrid-flex")
+	idleKQL := buildIdleKQL(DefaultWindow, "", "taugrid-flex")
 	if !strings.Contains(idleKQL, "Cluster == @'taugrid-flex'") {
 		t.Fatalf("idle KQL missing cluster scope:\n%s", idleKQL)
 	}
@@ -263,8 +305,9 @@ func TestBoardEnforcesNamespaceOnEveryQueryAndResult(t *testing.T) {
 			{"workspace": "beta", "namespace": "team-beta", "GpuHours": 99.0, "PeakGpus": 8.0, "AvgUtil": 90.0},
 		},
 		{
-			{"instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "alpha-pod", "AvgUtil": 4.0, "Samples": 20.0},
-			{"instance": "beta-node", "gpu": "0", "namespace": "team-beta", "pod": "beta-pod", "AvgUtil": 1.0, "Samples": 20.0},
+			{"Cluster": "cluster-a", "instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "alpha-pod", "AvgUtil": 4.0, "Samples": 20.0, "ObservedSamples": 20.0},
+			{"Cluster": "cluster-a", "instance": "beta-node", "gpu": "0", "namespace": "team-beta", "pod": "beta-pod", "AvgUtil": 1.0, "Samples": 20.0, "ObservedSamples": 20.0},
+			{"Cluster": "cluster-b", "instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "other-cluster-pod", "AvgUtil": 1.0, "Samples": 20.0, "ObservedSamples": 20.0},
 		},
 	}}
 	snap, err := Board(context.Background(), q, Options{Namespace: "team-alpha", Cluster: "cluster-a"})
@@ -287,4 +330,194 @@ func TestBoardEnforcesNamespaceOnEveryQueryAndResult(t *testing.T) {
 	if len(snap.IdleGPUs) != 1 || snap.IdleGPUs[0].Pod != "alpha-pod" {
 		t.Fatalf("idle GPUs = %+v, want only alpha-pod", snap.IdleGPUs)
 	}
+	if snap.IdleCoverage.ObservedGPUs != 1 || snap.IdleCoverage.ObservedSamples != 20 {
+		t.Fatalf("out-of-scope telemetry counted: %+v", snap.IdleCoverage)
+	}
+}
+
+func TestBoardIdleAvailability(t *testing.T) {
+	tests := []struct {
+		name     string
+		rows     []kustoquery.Row
+		coverage IdleCoverage
+		idle     int
+	}{
+		{name: "no data"},
+		{
+			name:     "all invalid",
+			rows:     []kustoquery.Row{{"AvgUtil": nil, "Samples": 0.0, "ObservedSamples": 100.0}},
+			coverage: IdleCoverage{ObservedGPUs: 1, ObservedSamples: 100},
+		},
+		{
+			name:     "insufficient valid samples",
+			rows:     []kustoquery.Row{{"AvgUtil": 0.0, "Samples": 10.0, "ObservedSamples": 100.0}},
+			coverage: IdleCoverage{ObservedGPUs: 1, MeasuredGPUs: 1, ObservedSamples: 100, ValidSamples: 10},
+		},
+		{
+			name:     "measured non idle",
+			rows:     []kustoquery.Row{{"AvgUtil": 20.0, "Samples": 11.0, "ObservedSamples": 11.0}},
+			coverage: IdleCoverage{ObservedGPUs: 1, MeasuredGPUs: 1, EligibleGPUs: 1, ObservedSamples: 11, ValidSamples: 11},
+		},
+		{
+			name:     "actual zero",
+			rows:     []kustoquery.Row{{"AvgUtil": 0.0, "Samples": 11.0, "ObservedSamples": 11.0}},
+			coverage: IdleCoverage{ObservedGPUs: 1, MeasuredGPUs: 1, EligibleGPUs: 1, ObservedSamples: 11, ValidSamples: 11},
+			idle:     1,
+		},
+		{
+			name: "partial coverage",
+			rows: []kustoquery.Row{
+				{"AvgUtil": 0.0, "Samples": 11.0, "ObservedSamples": 20.0},
+				{"AvgUtil": 90.0, "Samples": 11.0, "ObservedSamples": 11.0},
+				{"AvgUtil": 0.0, "Samples": 2.0, "ObservedSamples": 20.0},
+				{"AvgUtil": nil, "Samples": 0.0, "ObservedSamples": 20.0},
+			},
+			coverage: IdleCoverage{ObservedGPUs: 4, MeasuredGPUs: 3, EligibleGPUs: 2, ObservedSamples: 71, ValidSamples: 24},
+			idle:     1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &scriptedQuerier{results: [][]kustoquery.Row{nil, tt.rows}}
+			snap, err := Board(context.Background(), q, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.IdleCoverage != tt.coverage || snap.IdleAvailable != (tt.coverage.EligibleGPUs > 0) || len(snap.IdleGPUs) != tt.idle {
+				t.Fatalf("snapshot = %+v; want coverage %+v, idle %d", snap, tt.coverage, tt.idle)
+			}
+		})
+	}
+}
+
+func TestBoardRejectsInvalidUtilization(t *testing.T) {
+	for _, value := range []any{nil, "bad", "NaN", math.NaN(), math.Inf(1), math.Inf(-1), -1.0, 101.0} {
+		t.Run(stringValue(value), func(t *testing.T) {
+			q := &scriptedQuerier{results: [][]kustoquery.Row{
+				{{"namespace": "research", "AvgUtil": value, "UtilizationSamples": 20.0}},
+				{{"AvgUtil": value, "Samples": 20.0, "ObservedSamples": 20.0}},
+			}}
+			snap, err := Board(context.Background(), q, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.Workspaces[0].AvgUtilPct != nil || len(snap.IdleGPUs) != 0 ||
+				snap.IdleAvailable || snap.IdleCoverage.MeasuredGPUs != 0 {
+				t.Fatalf("invalid utilization accepted: %+v", snap)
+			}
+			if _, err := json.Marshal(snap); err != nil {
+				t.Fatalf("JSON marshal: %v", err)
+			}
+		})
+	}
+}
+
+func TestBoardRejectsInvalidSampleCounts(t *testing.T) {
+	for _, value := range []any{nil, "bad", math.NaN(), math.Inf(1), -1.0, 10.5, 1e100, 21.0} {
+		t.Run(stringValue(value), func(t *testing.T) {
+			q := &scriptedQuerier{results: [][]kustoquery.Row{nil, {{"AvgUtil": 0.0, "Samples": value, "ObservedSamples": 20.0}}}}
+			snap, err := Board(context.Background(), q, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.IdleAvailable || len(snap.IdleGPUs) != 0 {
+				t.Fatalf("invalid sample count accepted: %+v", snap)
+			}
+		})
+	}
+}
+
+func TestBoardCostAvailability(t *testing.T) {
+	tests := []struct {
+		name        string
+		row         kustoquery.Row
+		cost        bool
+		hours       bool
+		utilization bool
+	}{
+		{name: "absent", row: kustoquery.Row{}},
+		{name: "rollup zero without observations", row: kustoquery.Row{"GpuHours": 0.0, "EstimatedCostUSD": 0.0, "AvgUtil": 0.0}},
+		{
+			name: "actual zero",
+			row: kustoquery.Row{"GpuHours": 0.0, "EstimatedCostUSD": 0.0, "AvgUtil": 0.0,
+				"ObservedSamples": 10.0, "GPUHoursSamples": 10.0, "CostSamples": 10.0, "UtilizationSamples": 10.0},
+			cost: true, hours: true, utilization: true,
+		},
+		{
+			name: "cost without utilization",
+			row: kustoquery.Row{"GpuHours": 2.0, "EstimatedCostUSD": 3.0,
+				"ObservedSamples": 10.0, "GPUHoursSamples": 10.0, "CostSamples": 5.0},
+			cost: true, hours: true,
+		},
+		{
+			name: "hours without cost",
+			row: kustoquery.Row{"GpuHours": 2.0, "EstimatedCostUSD": 0.0,
+				"ObservedSamples": 10.0, "GPUHoursSamples": 10.0, "CostSamples": 0.0},
+			hours: true,
+		},
+		{
+			name: "invalid cost",
+			row: kustoquery.Row{"GpuHours": math.Inf(1), "EstimatedCostUSD": math.NaN(), "PeakGpus": math.Inf(-1),
+				"ObservedSamples": 10.0, "GPUHoursSamples": 10.0, "CostSamples": 10.0},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &scriptedQuerier{results: [][]kustoquery.Row{{tt.row}, nil}}
+			snap, err := Board(context.Background(), q, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := snap.Workspaces[0]
+			if snap.CostAvailable != tt.cost || workspace.CostAvailable != tt.cost ||
+				snap.GPUHoursAvailable != tt.hours || workspace.GPUHoursAvailable != tt.hours ||
+				(workspace.AvgUtilPct != nil) != tt.utilization {
+				t.Fatalf("availability = %+v / %+v", snap, workspace)
+			}
+			if snap.CostCoverage != workspace.Coverage {
+				t.Fatalf("aggregate coverage = %+v, workspace %+v", snap.CostCoverage, workspace.Coverage)
+			}
+			if tt.utilization && *workspace.AvgUtilPct != 0 {
+				t.Fatalf("observed zero utilization = %v, want 0", *workspace.AvgUtilPct)
+			}
+			if _, err := json.Marshal(snap); err != nil {
+				t.Fatalf("JSON marshal: %v", err)
+			}
+		})
+	}
+}
+
+func TestBuildWorkspaceKQLScopesRawUtilization(t *testing.T) {
+	kql := buildWorkspaceKQL(DefaultWindow, "", "ns'alpha", "cluster'a")
+	for _, clause := range []string{"namespace == @'ns''alpha'", "Cluster == @'cluster''a'", "Timestamp > ago(604800s)"} {
+		if strings.Count(kql, clause) != 2 {
+			t.Fatalf("cost and raw utilization must both contain %q:\n%s", clause, kql)
+		}
+	}
+}
+
+func TestBoardJSONAvailability(t *testing.T) {
+	q := &scriptedQuerier{results: [][]kustoquery.Row{{{"namespace": "research"}}, nil}}
+	snap, err := Board(context.Background(), q, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"avgUtilPct":null`, `"totalGPUHours":0`, `"totalEstimatedCostUSD":0`,
+		`"costAvailable":false`, `"gpuHoursAvailable":false`, `"idleAvailable":false`,
+		`"costCoverage":`, `"coverage":`, `"utilizationSamples":0`,
+		`"idleCoverage":{"observedGPUs":0,"measuredGPUs":0,"eligibleGPUs":0,"observedSamples":0,"validSamples":0}`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("JSON missing %s: %s", want, data)
+		}
+	}
+}
+
+func stringValue(value any) string {
+	return kustoquery.Row{"value": value}.Str("value")
 }
