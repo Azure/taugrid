@@ -223,6 +223,18 @@ func TestBuildKQL(t *testing.T) {
 	}
 }
 
+func TestBuildKQLQuotesReservedKindColumn(t *testing.T) {
+	kql := buildKQL(Options{})
+	for _, kind := range []string{"cpu", "memory_total", "memory_available", "overflow"} {
+		if want := "['kind'] = '" + kind + "'"; !strings.Contains(kql, want) {
+			t.Errorf("missing escaped row discriminator %q", want)
+		}
+	}
+	if strings.Contains(kql, " kind = ") {
+		t.Fatal("unescaped kind column is rejected by the Kusto parser")
+	}
+}
+
 func assertNumber(t *testing.T, got, want *float64) {
 	t.Helper()
 	if got == nil || want == nil {
