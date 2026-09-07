@@ -279,6 +279,14 @@ namespace if needed so the TauGrid chart can install the lifecycle recorder.
 It does not create a TauWorkspace or add workload policy to that namespace
 unless `bootstrap_workspace` is configured.
 
+The lifecycle recorder ADX `Ingestor` assignment retries only the transient
+`AAD principal was not found` response, which can occur while a newly created
+managed identity propagates from Entra to ADX. Retries use exponential backoff
+for at most 60 minutes. Any other assignment error fails immediately. If the
+60 minute bound is reached, inspect the reported managed identity and ADX
+diagnostic, then rerun the same `terraform apply` command after resolving the
+underlying Azure configuration issue.
+
 ## Optional workspace bootstrap
 
 Set `bootstrap_workspace` to create TauGrid's single v0 Entra-backed

@@ -260,16 +260,32 @@ resource "azurerm_kusto_database_principal_assignment" "portal_cost_tracking" {
   tenant_id           = azurerm_user_assigned_identity.portal[0].tenant_id
 }
 
-resource "azurerm_kusto_database_principal_assignment" "lifecycle_recorder" {
-  count               = var.enable_lifecycle_recorder ? 1 : 0
-  name                = "taugrid-lifecycle-recorder-ingestor"
-  resource_group_name = azurerm_resource_group.this.name
-  cluster_name        = azurerm_kusto_cluster.this[0].name
-  database_name       = azurerm_kusto_database.this["Metrics"].name
-  principal_id        = azurerm_user_assigned_identity.lifecycle_recorder[0].client_id
-  principal_type      = "App"
-  role                = "Ingestor"
-  tenant_id           = azurerm_user_assigned_identity.lifecycle_recorder[0].tenant_id
+resource "azapi_resource" "lifecycle_recorder_principal_assignment" {
+  count     = var.enable_lifecycle_recorder ? 1 : 0
+  type      = "Microsoft.Kusto/clusters/databases/principalAssignments@2024-04-13"
+  parent_id = azurerm_kusto_database.this["Metrics"].id
+  name      = "taugrid-lifecycle-recorder-ingestor"
+
+  body = {
+    properties = {
+      principalId   = azurerm_user_assigned_identity.lifecycle_recorder[0].client_id
+      principalType = "App"
+      role          = "Ingestor"
+      tenantId      = azurerm_user_assigned_identity.lifecycle_recorder[0].tenant_id
+    }
+  }
+
+  schema_validation_enabled = false
+
+  retry = {
+    error_message_regex  = ["(?i)AAD principal was not found"]
+    interval_seconds     = 10
+    max_interval_seconds = 180
+  }
+
+  timeouts {
+    create = "60m"
+  }
 }
 
 resource "local_file" "taugrid_values" {
@@ -393,7 +409,7 @@ resource "terraform_data" "install_taugrid" {
     terraform_data.normalize_gpu_mig,
     terraform_data.bootstrap_lifecycle_namespace,
     azurerm_federated_identity_credential.lifecycle_recorder,
-    azurerm_kusto_database_principal_assignment.lifecycle_recorder,
+    azapi_resource.lifecycle_recorder_principal_assignment,
     terraform_data.install_adx_functions,
   ]
 }
@@ -525,7 +541,7 @@ resource "terraform_data" "install_adx_mon" {
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
     azurerm_kusto_database_principal_assignment.portal_cost_tracking,
-    azurerm_kusto_database_principal_assignment.lifecycle_recorder,
+    azapi_resource.lifecycle_recorder_principal_assignment,
   ]
 }
 
