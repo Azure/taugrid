@@ -81,18 +81,16 @@ ENV CUDA_HOME="/usr/local/cuda"
 # find the stub during flashinfer JIT compilation.
 ENV LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
 
-# protobuf 5+ (python package version 5.x, i.e. protobuf 7.x in the new
-# upstream versioning) drops the `.label` attribute from the upb (C) backend's
-# FieldDescriptor. Ray Serve's `_proto_to_dict` (ray/serve/_private/config.py,
-# replica.py) still reads `field.label`, so anything newer than protobuf 4.x
-# breaks Serve's dashboard/controller/replica proto handling. Pin protobuf<5
-# as recommended by Ray upstream for 2.x releases until Serve migrates to
-# MessageToDict.
+# Python protobuf 7.34 removed FieldDescriptor.label, which Ray 2.56 Serve
+# still reads during proto deserialization. Keep 6.x available so the resolver
+# need not downgrade unrelated dependencies to accommodate protobuf 4.x.
+# See https://protobuf.dev/support/migration/#fielddescriptorlabel
 RUN pip install --no-cache-dir \
     "ray[default]==${RAY_VERSION}" \
     "ray[data]==${RAY_VERSION}" \
     "ray[serve]==${RAY_VERSION}" \
-    "protobuf<5"
+    "protobuf<7" \
+    && pip check
 
 # Run as non-root for security (nonroot user is built into the base image)
 USER nonroot:nonroot

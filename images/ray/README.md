@@ -9,7 +9,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
 | **Ray** | 2.56.0 — `ray[default]`, `ray[data]`, `ray[serve]` |
-| **protobuf** | Pinned `<5` — Ray Serve's `_proto_to_dict` reads `FieldDescriptor.label`, which protobuf 5+'s upb backend removed |
+| **protobuf** | Constrained `<7` — Ray 2.56 Serve reads `FieldDescriptor.label`, removed in Python protobuf 7.34; protobuf 6.x remains compatible |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
 | **NCCL** | NVIDIA Collective Communications Library — multi-GPU all-reduce, broadcast; uses RDMA/IB transport when available |
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
@@ -30,6 +30,7 @@ The image runs as the `nonroot` user and exposes Ray's default ports:
 images/ray/
 ├── Dockerfile       # Multi-stage build: GNU Wget builder → final Ray image
 ├── Makefile         # Build, test, and push targets
+├── test_serve.py     # CPU-only Serve proto and startup smoke tests
 ├── versions.json    # Version matrix: Python × Ray × CUDA combos to build
 └── README.md
 ```
@@ -44,7 +45,9 @@ Version combinations are defined in [`versions.json`](versions.json):
 ]
 ```
 
-Each entry defines a Python/Ray/CUDA combination to build. The entry with `"default": true` gets the `:latest` tag on canonical builds. There must be at most one default.
+Each entry records a Python/Ray/CUDA combination intended for release. There
+must be at most one `"default": true` entry. The Makefile uses its own defaults;
+this file does not currently trigger automated builds or `:latest` publication.
 
 ### Adding a new version combination
 
@@ -57,7 +60,8 @@ Add a new entry to `versions.json`:
 ]
 ```
 
-No workflow or Dockerfile changes are needed — the CI matrix picks it up automatically.
+Pass each new combination explicitly to the Makefile's build and test targets.
+There is currently no Ray CI matrix consuming this file automatically.
 
 ## Building
 
@@ -70,8 +74,11 @@ make docker-build
 # Build with custom versions
 make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.56.0 CUDA_VERSION=13.0
 
-# Run smoke tests (verifies Python, Ray, and wget versions)
+# Run smoke tests, including a local CPU-only Serve deployment
 make test
+
+# Run only dependency consistency and Serve behavior checks
+make test-serve
 
 # Build multi-arch manifest and push to registry (emulates the non-native
 # platform with QEMU under the hood — see the native split below for CI)
@@ -127,22 +134,15 @@ mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 
 ## CI/CD
 
-### Publish workflow (`.github/workflows/publish-ray-image.yaml`)
+This checkout does not contain a Ray image publishing or PR-tag cleanup
+workflow. The general image-validation workflow does not build Ray images,
+so green PR checks are not evidence that this image has been rebuilt.
+Release owners must build and test both architectures and publish through the
+approved ACR-to-MCR process; contributor PRs must not publish images.
 
-Builds and pushes multi-arch images to ACR using a matrix from `versions.json`.
-
-| Trigger | Behavior |
-|---------|----------|
-| **Push to `main`** | Builds all combos from `versions.json`; updates `:latest` for the default combo |
-| **`workflow_call`** | Builds exactly one combo (from caller inputs or Makefile defaults) with a PR-scoped tag that never overwrites `:latest` |
-| **`workflow_dispatch`** | With version inputs → builds one combo; without → builds full matrix |
-
-### Cleanup workflow (`.github/workflows/cleanup-ray-pr-tags.yaml`)
-
-Prevents unbounded tag growth in ACR by removing PR-scoped image tags:
-
-- On `pull_request:closed` — deletes tags for the specific PR.
-- On a daily schedule (06:00 UTC) — prunes PR tags older than 7 days.
+A source fix alone does not repair an already-published image. Issue #206
+requires publication of the corrected image and a RayService rollout check
+against its digest before the runtime incident can be considered resolved.
 
 ## Testing
 
@@ -153,7 +153,21 @@ Prevents unbounded tag growth in ACR by removing PR-scoped image tags:
 3. `ray[default]` — `ray.dashboard` is importable
 4. `ray[data]` — `ray.data` is importable
 5. `ray[serve]` — `ray.serve` is importable
-6. protobuf major version is `<5` and `FieldDescriptor.label` is present (Ray Serve proto compatibility)
-7. GNU Wget 1.x is installed (not wget2)
-8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
-9. NCCL (`libnccl`) is loadable
+6. `pip check` succeeds and Serve deployment config round-trips through protobuf (including nested/repeated fields and user config)
+7. A CPU-only Serve replica starts and answers both a deployment-handle request and HTTP; the dashboard reports its application as `RUNNING`
+8. GNU Wget 1.x is installed (not wget2)
+9. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
+10. NCCL (`libnccl`) is loadable
+
+`make test-serve` uses Python's standard-library `unittest` runner and starts
+an isolated Ray instance inside the container, with a 180-second startup/request
+test timeout. It does not connect to Kubernetes or require a GPU. The proto
+round-trip reproduces the `FieldDescriptor.label` error with protobuf 7.36.0;
+checking imports or descriptor attributes alone does not cover this path.
+
+The compatibility boundary is Python protobuf 7.34, not 5.x (see the
+[protobuf migration guide](https://protobuf.dev/support/migration/#fielddescriptorlabel)).
+Resolving all three Ray 2.56 extras with `<7` allows protobuf 6.x and current
+OpenTelemetry proto packages rather than forcing the older versions needed
+by `<5`. Revisit the constraint when upgrading Ray, using the behavioral
+smoke tests rather than assuming a newer Ray version has removed every use.
