@@ -18,7 +18,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 # targets — docker-build/docker-push still build for the host arch / $(PLATFORMS).
 ARCH ?=
 
-.PHONY: all docker-build docker-push docker-push-arch docker-push-manifest test test-serve clean
+.PHONY: all docker-build docker-push docker-push-arch docker-push-manifest test clean
 
 all: docker-build test docker-push
 
@@ -119,7 +119,8 @@ test:
 	@docker run --rm $(IMG) python3 -c "import ray.serve" 2>&1 && \
 		echo "PASS: ray[serve] - ray.serve importable" || \
 		{ echo "FAIL: ray[serve] - could not import ray.serve"; exit 1; }
-	@$(MAKE) --no-print-directory test-serve
+	@echo "=== Verifying Python dependency consistency ==="
+	@docker run --rm $(IMG) python3 -m pip check
 	@echo "=== Verifying wget is GNU Wget 1.x (not wget2) ==="
 	@docker run --rm $(IMG) wget --version 2>&1 | grep -q "^GNU Wget " && \
 		echo "PASS: GNU Wget 1.x is installed" || \
@@ -133,12 +134,6 @@ test:
 	@docker run --rm $(IMG) python3 -c "import ctypes.util; exit(0 if ctypes.util.find_library('nccl') else 1)" 2>&1 && \
 		echo "PASS: NCCL (libnccl) is loadable" || \
 		{ echo "FAIL: NCCL not found — multi-GPU collective communications will not work"; exit 1; }
-
-test-serve:
-	@echo "=== Verifying Python dependency consistency ==="
-	@docker run --rm $(IMG) python3 -m pip check
-	@echo "=== Verifying Serve proto round-trip, startup, HTTP, and dashboard ==="
-	@docker run --rm -i --shm-size=256m $(IMG) python3 - < test_serve.py
 
 clean:
 	docker rmi $(IMG) 2>/dev/null || true

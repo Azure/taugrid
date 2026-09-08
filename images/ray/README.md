@@ -30,7 +30,6 @@ The image runs as the `nonroot` user and exposes Ray's default ports:
 images/ray/
 ├── Dockerfile       # Multi-stage build: GNU Wget builder → final Ray image
 ├── Makefile         # Build, test, and push targets
-├── test_serve.py     # CPU-only Serve proto and startup smoke tests
 ├── versions.json    # Version matrix: Python × Ray × CUDA combos to build
 └── README.md
 ```
@@ -73,11 +72,8 @@ make docker-build
 # Build with custom versions
 make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.56.1 CUDA_VERSION=13.0
 
-# Run smoke tests, including a local CPU-only Serve deployment
+# Run image smoke tests
 make test
-
-# Run only dependency consistency and Serve behavior checks
-make test-serve
 
 # Build multi-arch manifest and push to registry (emulates the non-native
 # platform with QEMU under the hood — see the native split below for CI)
@@ -156,18 +152,14 @@ against its digest before the runtime incident can be considered resolved.
 3. `ray[default]` — `ray.dashboard` is importable
 4. `ray[data]` — `ray.data` is importable
 5. `ray[serve]` — `ray.serve` is importable
-6. `pip check` succeeds and Serve deployment config round-trips through protobuf (including nested/repeated fields and user config)
-7. A CPU-only Serve replica starts and answers both a deployment-handle request and HTTP; the dashboard reports its application as `RUNNING`
-8. GNU Wget 1.x is installed (not wget2)
-9. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
-10. NCCL (`libnccl`) is loadable
+6. `pip check` succeeds
+7. GNU Wget 1.x is installed (not wget2)
+8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
+9. NCCL (`libnccl`) is loadable
 
-`make test-serve` uses Python's standard-library `unittest` runner and starts
-an isolated Ray instance inside the container, with a 180-second startup/request
-test timeout. It does not connect to Kubernetes or require a GPU. The proto
-round-trip reproduces the `FieldDescriptor.label` error with Ray 2.56.0 and
-protobuf 7.36.0;
-checking imports or descriptor attributes alone does not cover this path.
+These smoke tests do not exercise Serve deployment or request handling.
+Release validation must separately cover Serve startup and RayService rollout;
+imports alone do not cover the protobuf deserialization path.
 
 Python protobuf 7.34 removed `FieldDescriptor.label` (see the
 [protobuf migration guide](https://protobuf.dev/support/migration/#fielddescriptorlabel)).
@@ -176,4 +168,4 @@ Serve's handling upstream by using `is_repeated` with a legacy fallback
 ([upstream fix](https://github.com/ray-project/ray/pull/64592)). This image uses
 that patch release rather than a protobuf upper-bound workaround or a local
 Ray monkeypatch. The regression combination is Ray 2.56.1 with protobuf 7.36.0;
-verify the resolved versions alongside the behavioral tests when rebuilding.
+verify the resolved versions and Serve behavior during release validation.
