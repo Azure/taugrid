@@ -174,7 +174,7 @@ func newServeDeployCmd() *cobra.Command {
 			activeWorkspace, err := workspaceResolver.Resolve(cmd, activeWorkspaceRequest{
 				Source:                  runConnectionSource{StartDir: workingDirectory},
 				KubeContext:             kubeContext,
-				KubeContextExplicit:     cmd.Flags().Changed("context"),
+				KubeContextExplicit:     runContextExplicit(cmd),
 				KubeContextFromFlag:     cmd.Flags().Changed("context"),
 				Namespace:               namespace,
 				RequireRepositoryTarget: true,

@@ -190,6 +190,26 @@ func serveArgs(base []string, extras ...string) []string {
 	return append(out, extras...)
 }
 
+func TestServeDeployRejectsAmbientContextConflict(t *testing.T) {
+	t.Setenv(tauContextEnv, "ambient-context")
+	root := newConnectedServeTestRoot(t)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{
+		"serve", "deploy", "endpoint",
+		"--profile", "model-serve",
+		"--image", "example.invalid/serve:v1",
+		"--dry-run=client",
+	})
+
+	err := root.Execute()
+	if err == nil ||
+		!strings.Contains(err.Error(), `context "ambient-context" conflicts`) ||
+		!strings.Contains(err.Error(), `connection context "connected-context"`) {
+		t.Fatalf("ambient context conflict error = %v", err)
+	}
+}
+
 func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 	ordinary := serveTestProfile("serve-1gpu", profile.ExecutionTargetSingleCluster, "jobqueue", 1, 1, 23)
 	ordinary.Applicability = profile.ProfileApplicability{
