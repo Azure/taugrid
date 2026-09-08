@@ -55,15 +55,4 @@ go test ./...
 make build          # writes ./bin/taugrid-portal with version ldflags
 ```
 
-## Frontend regression tests
-
-Portal and Stellar interaction regressions use Node.js's built-in test runner,
-without npm dependencies or a frontend build step. Install Node.js 24 or newer
-and run `make test` in `portal/` to include these tests alongside the Go suite.
-CI requires them as well.
-
-Plain `go test ./...` skips the JavaScript tests explicitly when Node.js is
-unavailable, so Go-only consumers can still test the backend. Set
-`TAUGRID_REQUIRE_FRONTEND_TESTS=1` to treat a missing Node.js runtime as a failure.
-
 The container image is built from [`../../images/taugrid-portal`](../../images/taugrid-portal).

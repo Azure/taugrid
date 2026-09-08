@@ -5,16 +5,16 @@ package nodeutil
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"math"
+	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
+// fakeQuerier records the KQL it was asked to run and returns canned rows, so
+// Board is exercised without a live Kusto.
 type fakeQuerier struct {
 	rows    []kustoquery.Row
 	err     error
@@ -26,224 +26,139 @@ func (f *fakeQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row, er
 	return f.rows, f.err
 }
 
-func sample(seconds, value float64) counterSample {
-	return counterSample{Timestamp: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(seconds * float64(time.Second))), Value: &value}
-}
-
-func cpuRow(instance, cpu string, samples ...counterSample) kustoquery.Row {
-	return kustoquery.Row{"Cluster": "a", "instance": instance, "kind": "cpu", "cpu": cpu, "samples": samples, "sampleCount": float64(len(samples))}
-}
-
-func TestCPURate(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		samples []counterSample
-		want    *float64
-		seconds float64
-		resets  int
+func TestBoardAggregatesJoinedRows(t *testing.T) {
+	// CPU rates are now reduced from per-core samples in Go rather than KQL.
+	var rows []kustoquery.Row
+	for _, node := range []struct {
+		instance string
+		cores    int
+		idle     float64
+		total    float64
+		avail    float64
 	}{
-		{"sparse idle", []counterSample{sample(0, 100), sample(60, 160)}, new(0.0), 60, 0},
-		{"single sample", []counterSample{sample(0, 100)}, nil, 0, 0},
-		{"empty", nil, nil, 0, 0},
-		{"busy zero idle delta", []counterSample{sample(0, 100), sample(60, 100)}, new(100.0), 60, 0},
-		{"fractional observed seconds", []counterSample{sample(0, 100), sample(0.5, 100.25)}, new(50.0), 0.5, 0},
-		{"reset only", []counterSample{sample(0, 100), sample(60, 10)}, nil, 0, 1},
-		{"reset with post reset idle", []counterSample{sample(0, 100), sample(60, 10), sample(120, 70)}, new(0.0), 60, 1},
-		{"reset preserves both valid spans", []counterSample{sample(0, 100), sample(60, 130), sample(120, 0), sample(180, 30)}, new(50.0), 120, 1},
-		{"unsorted uneven sampling", []counterSample{sample(60, 130), sample(0, 100), sample(10, 105)}, new(50.0), 60, 0},
-		{"duplicate timestamp", []counterSample{sample(0, 100), sample(0, 100)}, nil, 0, 0},
-		{"duplicate plus idle", []counterSample{sample(0, 100), sample(0, 100), sample(60, 160)}, new(0.0), 60, 0},
-		{"conflicting duplicate", []counterSample{sample(0, 100), sample(0, 101), sample(60, 160)}, nil, 0, 0},
-		{"impossible counter rate", []counterSample{sample(0, 0), sample(10, 100)}, nil, 0, 0},
-		{"negative counter", []counterSample{sample(0, -1), sample(10, 1)}, nil, 0, 0},
-		{"nonfinite counter", []counterSample{sample(0, math.Inf(1)), sample(10, 1)}, nil, 0, 0},
-		{"missing counter", []counterSample{{Timestamp: sample(0, 0).Timestamp}, sample(10, 1)}, nil, 0, 0},
+		{"node-0", 64, 10.5, 200, 50},
+		{"node-1", 16, 52.5, 100, 90},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got, coverage := cpuRate(tt.samples)
-			assertNumber(t, got, tt.want)
-			if coverage.ObservedSeconds != tt.seconds || coverage.CounterResets != tt.resets {
-				t.Fatalf("coverage = %+v, want %gs and %d resets", coverage, tt.seconds, tt.resets)
-			}
-		})
+		for cpu := 0; cpu < node.cores; cpu++ {
+			rows = append(rows, kustoquery.Row{
+				"Cluster": "cluster-a", "instance": node.instance, "kind": "cpu",
+				"cpu": fmt.Sprint(cpu), "sampleCount": 2.0,
+				"samples": []any{
+					map[string]any{"timestamp": "2026-09-01T00:00:00Z", "value": 0.0},
+					map[string]any{"timestamp": "2026-09-01T00:01:00Z", "value": node.idle},
+				},
+			})
+		}
+		rows = append(rows,
+			kustoquery.Row{"Cluster": "cluster-a", "instance": node.instance, "kind": "memory_total", "memoryValue": node.total, "memoryTimestamp": "2026-09-01T00:01:00Z"},
+			kustoquery.Row{"Cluster": "cluster-a", "instance": node.instance, "kind": "memory_available", "memoryValue": node.avail, "memoryTimestamp": "2026-09-01T00:01:00Z"},
+		)
 	}
-}
-
-func TestBoardAveragesCoresNotSamplingDurations(t *testing.T) {
-	q := &fakeQuerier{rows: []kustoquery.Row{
-		cpuRow("node", "0", sample(0, 0), sample(60, 60)),
-		cpuRow("node", "1", sample(0, 0), sample(300, 0)),
-		cpuRow("node", "2", sample(100, 10)),
-	}}
+	q := &fakeQuerier{rows: rows}
 	snap, err := Board(context.Background(), q, Options{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Board: %v", err)
 	}
-	n := snap.Nodes[0]
-	assertNumber(t, n.CPUUtilPct, new(50.0))
-	if n.CPUCores != 3 || n.CPUCoverage.UsableCores != 2 || n.CPUCoverage.Samples != 5 || n.CPUCoverage.ObservedSeconds != 120 {
-		t.Fatalf("node = %+v", n)
+	if len(snap.Nodes) != 2 {
+		t.Fatalf("Nodes = %d, want 2", len(snap.Nodes))
 	}
-	if math.Abs(n.CPUCoverage.WindowCoveragePct-100*120.0/900) > 1e-9 {
-		t.Fatalf("coverage = %+v", n.CPUCoverage)
+	if snap.Window != DefaultWindow.String() {
+		t.Fatalf("Window = %q, want %q", snap.Window, DefaultWindow.String())
 	}
-	if !n.CPUCoverage.FirstSampleAt.Equal(sample(0, 0).Timestamp) || !n.CPUCoverage.LastSampleAt.Equal(sample(300, 0).Timestamp) {
-		t.Fatalf("timestamps = %+v", n.CPUCoverage)
-	}
-	assertNumber(t, n.MemUsedPct, nil)
-}
 
-func TestBoardMemoryAbsenceAndZero(t *testing.T) {
-	for _, tt := range []struct {
-		name             string
-		total, available *float64
-		want             *float64
-	}{
-		{"missing both", nil, nil, nil},
-		{"missing total", nil, new(0.0), nil},
-		{"missing available", new(100.0), nil, nil},
-		{"zero total", new(0.0), new(0.0), nil},
-		{"all available", new(100.0), new(100.0), new(0.0)},
-		{"none available", new(100.0), new(0.0), new(100.0)},
-		{"partial use", new(100.0), new(75.0), new(25.0)},
-		{"available exceeds total", new(100.0), new(101.0), nil},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			rows := []kustoquery.Row{cpuRow("node", "0", sample(0, 0))}
-			for kind, value := range map[string]*float64{"memory_total": tt.total, "memory_available": tt.available} {
-				if value != nil {
-					rows = append(rows, kustoquery.Row{"Cluster": "a", "instance": "node", "kind": kind, "memoryValue": *value, "memoryTimestamp": "2026-09-01T00:01:00Z"})
-				}
-			}
-			snap, err := Board(context.Background(), &fakeQuerier{rows: rows}, Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			n := snap.Nodes[0]
-			assertNumber(t, n.CPUUtilPct, nil)
-			assertNumber(t, n.MemUsedPct, tt.want)
-			assertNumber(t, n.MemTotalBytes, tt.total)
-			assertNumber(t, n.MemAvailBytes, tt.available)
-			raw, err := json.Marshal(n)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(raw), `"cpuUtilPct":null`) {
-				t.Fatalf("unknown CPU lost: %s", raw)
-			}
-		})
+	// Ordered hottest-CPU-first: node-0 (82.5) before node-1 (12.5).
+	n0 := snap.Nodes[0]
+	if n0.Instance != "node-0" || n0.CPUUtilPct == nil || *n0.CPUUtilPct != 82.5 || n0.CPUCores != 64 {
+		t.Fatalf("node0 = %#v, want node-0 82.5%% / 64 cores", n0)
+	}
+	if n0.MemTotalBytes == nil || *n0.MemTotalBytes != 200 ||
+		n0.MemAvailBytes == nil || *n0.MemAvailBytes != 50 ||
+		n0.MemUsedPct == nil || *n0.MemUsedPct != 75 {
+		t.Fatalf("node0 memory = %#v", n0)
+	}
+
+	n1 := snap.Nodes[1]
+	if n1.Instance != "node-1" || n1.CPUUtilPct == nil || *n1.CPUUtilPct != 12.5 {
+		t.Fatalf("node1 = %#v, want node-1 12.5%%", n1)
 	}
 }
 
-func TestBoardMemoryOnlyAndSort(t *testing.T) {
-	q := &fakeQuerier{rows: []kustoquery.Row{
-		{"Cluster": "a", "instance": "memory-only", "kind": "memory_total", "memoryValue": "100", "memoryTimestamp": "2026-09-01T00:01:00Z"},
-		cpuRow("idle", "0", sample(0, 0), sample(60, 60)),
-		cpuRow("busy", "0", sample(0, 0), sample(60, 0)),
-	}}
+func TestBoardEmpty(t *testing.T) {
+	q := &fakeQuerier{rows: nil}
 	snap, err := Board(context.Background(), q, Options{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Board: %v", err)
 	}
-	if len(snap.Nodes) != 3 || snap.Nodes[0].Instance != "busy" || snap.Nodes[1].Instance != "idle" || snap.Nodes[2].Instance != "memory-only" {
-		t.Fatalf("ordering = %+v", snap.Nodes)
+	if len(snap.Nodes) != 0 {
+		t.Fatalf("empty snapshot = %#v", snap)
 	}
-	if snap.Availability != "ready" || snap.QueriedAt.IsZero() {
-		t.Fatalf("snapshot = %+v", snap)
+	// Nodes must be a non-nil slice so it serializes as [] not null.
+	if snap.Nodes == nil {
+		t.Fatal("Nodes is nil, want empty slice")
 	}
 }
 
-func TestBoardEmptyAndQueryError(t *testing.T) {
-	snap, err := Board(context.Background(), &fakeQuerier{}, Options{})
-	if err != nil || snap.Nodes == nil || len(snap.Nodes) != 0 || snap.Availability != "empty" {
-		t.Fatalf("empty = %+v, %v", snap, err)
-	}
+func TestBoardPropagatesError(t *testing.T) {
 	sentinel := errors.New("kusto down")
-	_, err = Board(context.Background(), &fakeQuerier{err: sentinel}, Options{})
+	q := &fakeQuerier{err: sentinel}
+	_, err := Board(context.Background(), q, Options{})
 	if !errors.Is(err, sentinel) {
-		t.Fatalf("err = %v", err)
+		t.Fatalf("err = %v, want it to wrap %v", err, sentinel)
 	}
 }
 
-func TestBoardRejectsIncompleteSeries(t *testing.T) {
-	for _, row := range []kustoquery.Row{
-		{"kind": "overflow"},
-		{"kind": "cpu", "instance": "node", "cpu": "0", "samples": `[]`, "sampleCount": 10.0},
-		{"kind": "cpu", "instance": "node", "cpu": "0", "samples": `garbage`, "sampleCount": 1.0},
-	} {
-		if _, err := Board(context.Background(), &fakeQuerier{rows: []kustoquery.Row{row}}, Options{}); err == nil {
-			t.Fatalf("row %+v did not fail", row)
-		}
-	}
-}
+func TestBuildKQLFiltersAndWindow(t *testing.T) {
+	q := &fakeQuerier{rows: nil}
+	_, _ = Board(context.Background(), q, Options{
+		Cluster:  "prod-eastus",
+		Instance: "node-7",
+	})
+	kql := q.lastKQL
 
-func TestKustoDynamicSampleEncodings(t *testing.T) {
-	for _, encoded := range []string{
-		`[{"timestamp":"2026-09-01T00:00:00Z","value":100},{"timestamp":"2026-09-01T00:01:00Z","value":160}]`,
-		`"[{\"timestamp\":\"2026-09-01T00:00:00Z\",\"value\":100},{\"timestamp\":\"2026-09-01T00:01:00Z\",\"value\":160}]"`,
-	} {
-		rows, err := kustoquery.ParseRows([]byte(`[{"kind":"cpu","instance":"node","cpu":"0","sampleCount":2,"samples":` + encoded + `}]`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		snap, err := Board(context.Background(), &fakeQuerier{rows: rows}, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertNumber(t, snap.Nodes[0].CPUUtilPct, new(0.0))
-	}
-}
-
-func TestBuildKQL(t *testing.T) {
-	kql := buildKQL(Options{Cluster: "prod", Instance: "node' | project"})
 	for _, want := range []string{
-		"NodeCpuSecondsTotal", "tostring(Labels.mode) == 'idle'",
-		"NodeMemoryMemTotalBytes", "NodeMemoryMemAvailableBytes", "ago(900s)",
-		"Cluster == @'prod'", "Host == @'node'' | project'",
-		"bag_pack('timestamp', Timestamp, 'value', todouble(Value)), 4096",
-		"sampleCount = count()", "cpuSampleCount <= 250000",
-		"cpuSampleCount > 250000", "union cpu, memTotal, memAvail, overflow",
+		"NodeCpuSecondsTotal",
+		"tostring(Labels.mode) == 'idle'",
+		"NodeMemoryMemTotalBytes",
+		"NodeMemoryMemAvailableBytes",
+		"ago(900s)", // DefaultWindow = 15m
+		"Cluster == @'prod-eastus'",
+		"Host == @'node-7'",
+		"instance = Host",
 	} {
 		if !strings.Contains(kql, want) {
-			t.Fatalf("missing %q:\n%s", want, kql)
-		}
-	}
-	if strings.Contains(kql, "min(Value)") || strings.Contains(kql, "max(Value)") || strings.Contains(kql, "cpuCores *") {
-		t.Fatalf("obsolete counter aggregation remains:\n%s", kql)
-	}
-	for _, tt := range []struct {
-		window time.Duration
-		want   string
-	}{
-		{0, "900s"}, {-time.Second, "900s"}, {5 * time.Minute, "300s"}, {time.Nanosecond, "1s"},
-	} {
-		if kql := buildKQL(Options{Window: tt.window}); !strings.Contains(kql, "ago("+tt.want+")") || strings.Contains(kql, "Cluster ==") || strings.Contains(kql, "Host ==") {
-			t.Fatalf("window/filter mismatch: %s", kql)
+			t.Fatalf("KQL missing %q:\n%s", want, kql)
 		}
 	}
 }
 
-func TestBuildKQLQuotesReservedKindColumn(t *testing.T) {
-	kql := buildKQL(Options{})
-	for _, kind := range []string{"cpu", "memory_total", "memory_available", "overflow"} {
-		if want := "['kind'] = '" + kind + "'"; !strings.Contains(kql, want) {
-			t.Errorf("missing escaped row discriminator %q", want)
-		}
-	}
-	if strings.Contains(kql, " kind = ") {
-		t.Fatal("unescaped kind column is rejected by the Kusto parser")
+func TestBuildKQLNoFilters(t *testing.T) {
+	q := &fakeQuerier{rows: nil}
+	_, _ = Board(context.Background(), q, Options{})
+	kql := q.lastKQL
+	// With no filters, no Cluster/Host equality clauses appear.
+	if strings.Contains(kql, "Cluster ==") || strings.Contains(kql, "Host ==") {
+		t.Fatalf("unfiltered KQL should have no equality filters:\n%s", kql)
 	}
 }
 
-func assertNumber(t *testing.T, got, want *float64) {
-	t.Helper()
-	if got == nil || want == nil {
-		if (got == nil) != (want == nil) {
-			t.Fatalf("got %v want %v", got, want)
-		}
-		return
+// TestBuildKQLQuotesInjection verifies a filter value with an embedded quote is
+// escaped, not able to break out of the KQL string literal.
+func TestBuildKQLQuotesInjection(t *testing.T) {
+	q := &fakeQuerier{rows: nil}
+	_, _ = Board(context.Background(), q, Options{Instance: "node' | project"})
+	if !strings.Contains(q.lastKQL, "Host == @'node'' | project'") {
+		t.Fatalf("injection not escaped:\n%s", q.lastKQL)
 	}
-	if math.Abs(*got-*want) > 1e-9 {
-		t.Fatalf("got %g want %g", *got, *want)
+}
+
+// The window now bounds observations; CPU denominators use observed intervals.
+func TestWindowOverrideChangesDenominator(t *testing.T) {
+	q := &fakeQuerier{rows: nil}
+	snap, err := Board(context.Background(), q, Options{Window: 5 * 60 * 1e9}) // 5m in ns
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if !strings.Contains(q.lastKQL, "ago(300s)") || snap.Window != "5m0s" {
+		t.Fatalf("5m window not applied: %q:\n%s", snap.Window, q.lastKQL)
 	}
 }

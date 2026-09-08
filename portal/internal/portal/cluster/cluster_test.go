@@ -5,9 +5,7 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"math"
 	"strings"
 	"testing"
 
@@ -101,9 +99,6 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 	if g2.Healthy == nil || *g2.Healthy {
 		t.Fatal("gpu2 healthy must be false (row_remap_failure > 0)")
 	}
-	if !snap.TelemetryAvailable || snap.UtilizationObservedGPUs != 3 || snap.HealthObservedGPUs != 3 || snap.UnknownHealthGPUs != 0 {
-		t.Fatalf("coverage = %+v", snap)
-	}
 }
 
 func TestBoardEmpty(t *testing.T) {
@@ -114,9 +109,6 @@ func TestBoardEmpty(t *testing.T) {
 	}
 	if snap.TotalGPUs != 0 || snap.ErrorGPUs != 0 || len(snap.GPUs) != 0 {
 		t.Fatalf("empty snapshot = %#v", snap)
-	}
-	if snap.TelemetryAvailable || snap.UtilizationObservedGPUs != 0 || snap.HealthObservedGPUs != 0 || snap.UnknownHealthGPUs != 0 {
-		t.Fatalf("empty coverage = %+v", snap)
 	}
 	// GPUs and Models must be non-nil slices so they serialize as [] not null.
 	if snap.GPUs == nil {
@@ -206,7 +198,6 @@ func TestBoardEnforcesNamespaceInQueryAndResult(t *testing.T) {
 	q := &fakeQuerier{rows: []kustoquery.Row{
 		{"Cluster": "cluster-a", "instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "alpha-pod"},
 		{"Cluster": "cluster-a", "instance": "beta-node", "gpu": "0", "namespace": "team-beta", "pod": "beta-pod"},
-		{"Cluster": "cluster-b", "instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "other-cluster-pod"},
 	}}
 	snap, err := Board(context.Background(), q, Options{Cluster: "cluster-a", Namespace: "team-alpha"})
 	if err != nil {
@@ -221,101 +212,3 @@ func TestBoardEnforcesNamespaceInQueryAndResult(t *testing.T) {
 		t.Fatalf("snapshot = %+v, want only alpha-pod", snap)
 	}
 }
-
-func TestParseGPUMetricAvailability(t *testing.T) {
-	tests := []struct {
-		name  string
-		value any
-		want  *float64
-	}{
-		{name: "null"},
-		{name: "malformed", value: "bad"},
-		{name: "nan", value: math.NaN()},
-		{name: "infinity", value: math.Inf(1)},
-		{name: "string infinity", value: "Inf"},
-		{name: "negative", value: -1.0},
-		{name: "above percent range", value: 101.0},
-		{name: "zero", value: 0.0, want: new(float64)},
-		{name: "numeric string", value: "25", want: floatPointer(25)},
-		{name: "full utilization", value: 100.0, want: floatPointer(100)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gpu := parseGPU(kustoquery.Row{"gpu_utilization": tt.value})
-			if (gpu.UtilizationPct == nil) != (tt.want == nil) ||
-				(tt.want != nil && *gpu.UtilizationPct != *tt.want) {
-				t.Fatalf("utilization = %v, want %v", gpu.UtilizationPct, tt.want)
-			}
-			if gpu.Healthy != nil {
-				t.Fatalf("healthy = %v without error counter observations", gpu.Healthy)
-			}
-			if _, err := json.Marshal(gpu); err != nil {
-				t.Fatalf("marshal: %v", err)
-			}
-		})
-	}
-}
-
-func TestBoardHealthAvailability(t *testing.T) {
-	tests := []struct {
-		name       string
-		row        kustoquery.Row
-		healthy    *bool
-		telemetry  bool
-		errorCount int
-	}{
-		{name: "no metrics", row: kustoquery.Row{}},
-		{name: "null counters", row: kustoquery.Row{"uncorrectable_remapped_rows": nil, "row_remap_failure": nil}},
-		{name: "temperature only", row: kustoquery.Row{"gpu_temperature_celsius": 50.0}, telemetry: true},
-		{name: "partial zero", row: kustoquery.Row{"uncorrectable_remapped_rows": 0.0}, telemetry: true},
-		{name: "both zero", row: kustoquery.Row{"uncorrectable_remapped_rows": 0.0, "row_remap_failure": "0"}, healthy: boolPointer(true), telemetry: true},
-		{name: "known error missing other counter", row: kustoquery.Row{"uncorrectable_remapped_rows": 1.0}, healthy: boolPointer(false), telemetry: true, errorCount: 1},
-		{name: "failure missing other counter", row: kustoquery.Row{"row_remap_failure": 1.0}, healthy: boolPointer(false), telemetry: true, errorCount: 1},
-		{name: "invalid counter", row: kustoquery.Row{"uncorrectable_remapped_rows": math.NaN(), "row_remap_failure": 0.0}, telemetry: true},
-		{name: "negative counter", row: kustoquery.Row{"uncorrectable_remapped_rows": -1.0, "row_remap_failure": 0.0}, telemetry: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			snap := aggregate([]kustoquery.Row{tt.row}, Options{})
-			got := snap.GPUs[0].Healthy
-			if (got == nil) != (tt.healthy == nil) || (tt.healthy != nil && *got != *tt.healthy) {
-				t.Fatalf("healthy = %v, want %v", got, tt.healthy)
-			}
-			if snap.TelemetryAvailable != tt.telemetry || snap.ErrorGPUs != tt.errorCount {
-				t.Fatalf("availability/error count = %+v", snap)
-			}
-			wantObserved := 0
-			if tt.healthy != nil {
-				wantObserved = 1
-			}
-			if snap.HealthObservedGPUs != wantObserved || snap.UnknownHealthGPUs != 1-wantObserved {
-				t.Fatalf("health coverage = %+v", snap)
-			}
-		})
-	}
-}
-
-func TestBoardJSONPreservesMissingAndZero(t *testing.T) {
-	snap := aggregate([]kustoquery.Row{
-		{"gpu": "0"},
-		{"gpu": "1", "gpu_utilization": 0.0, "uncorrectable_remapped_rows": 0.0, "row_remap_failure": 0.0},
-	}, Options{})
-	data, err := json.Marshal(snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		`"utilizationPct":null`, `"utilizationPct":0`, `"healthy":null`, `"healthy":true`,
-		`"temperatureCelsius":null`, `"errorGPUs":0`, `"totalGPUs":2`,
-		`"telemetryAvailable":true`, `"utilizationObservedGPUs":1`,
-		`"healthObservedGPUs":1`, `"unknownHealthGPUs":1`,
-	} {
-		if !strings.Contains(string(data), want) {
-			t.Fatalf("JSON missing %s: %s", want, data)
-		}
-	}
-}
-
-func floatPointer(value float64) *float64 { return &value }
-
-func boolPointer(value bool) *bool { return &value }

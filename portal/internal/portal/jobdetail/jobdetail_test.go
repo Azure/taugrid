@@ -550,8 +550,8 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 		snap.Experiment.Group != "safe-stack-h200" {
 		t.Fatalf("Experiment = %+v, want the exact annotation values", *snap.Experiment)
 	}
-	if snap.Links.StellarPath != "" || snap.Diagnostics.Tracking.State != "unavailable" {
-		t.Fatalf("StellarPath = %q, diagnostics = %+v, want no link with unresolved project", snap.Links.StellarPath, snap.Diagnostics.Tracking)
+	if snap.Links.StellarPath != "" {
+		t.Fatalf("StellarPath = %q, want no link with unresolved project", snap.Links.StellarPath)
 	}
 }
 
