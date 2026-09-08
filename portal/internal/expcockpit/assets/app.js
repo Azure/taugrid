@@ -1822,6 +1822,7 @@ function focusedSeriesCacheKey(metricName, queryOptions = {}) {
     text(controls.startStep, "").trim(),
     text(controls.endStep, "").trim(),
     text(controls.stepInterval, "auto").trim() || "auto",
+    text(controls.maxPoints, "").trim(),
     String(budget),
   ].join("|");
 }
@@ -1986,7 +1987,7 @@ async function loadFocusedSeriesDetail(options = {}) {
     if (cacheKey) {
       state.focusedSeriesCache.set(cacheKey, detail);
     }
-    if (focusedSeriesCacheKey(state.metric) === cacheKey) applyFocusedSeriesDetail(detail);
+    if (focusedSeriesCacheKey(state.metric, queryOptions) === cacheKey) applyFocusedSeriesDetail(detail);
   } catch (error) {
     if (routeVersion === state.routeVersion) state.focusedSeriesError = error.message || String(error);
   } finally {
@@ -6310,21 +6311,28 @@ function attachChartBrush(brush) {
   });
 }
 
+function setFocusedSeriesRange(startStep, endStep) {
+  const range = {
+    startStep,
+    endStep,
+    stepInterval: "auto",
+    customStepInterval: "",
+  };
+  state.focusedSeriesControls = { ...state.focusedSeriesControls, ...range };
+  if (state.focusedSeriesDraft) {
+    state.focusedSeriesDraft = { ...state.focusedSeriesDraft, ...range };
+  }
+  state.focusedSeriesError = "";
+  updateURL();
+  loadFocusedSeriesDetail().catch(renderError);
+}
+
 // applyBrushRange writes a brushed [lo, hi] step window into the focused-series
 // controls and reloads detail at that window. Resolution is reset to auto so
 // the narrower window is re-sampled finely (autoFocusedSeriesStepInterval picks
 // 20 for <=2000-step spans), which is the whole point of zooming in.
 function applyBrushRange(lo, hi) {
-  state.focusedSeriesControls = {
-    ...state.focusedSeriesControls,
-    startStep: String(lo),
-    endStep: String(hi),
-    stepInterval: "auto",
-    customStepInterval: "",
-  };
-  state.focusedSeriesError = "";
-  updateURL();
-  loadFocusedSeriesDetail().catch(renderError);
+  setFocusedSeriesRange(String(lo), String(hi));
 }
 
 // clearBrushRange resets the brushed window (reset zoom) and reloads the full
@@ -6334,16 +6342,7 @@ function clearBrushRange() {
   if (!text(controls.startStep, "").trim() && !text(controls.endStep, "").trim()) {
     return; // already full-range; nothing to reset
   }
-  state.focusedSeriesControls = {
-    ...controls,
-    startStep: "",
-    endStep: "",
-    stepInterval: "auto",
-    customStepInterval: "",
-  };
-  state.focusedSeriesError = "";
-  updateURL();
-  loadFocusedSeriesDetail().catch(renderError);
+  setFocusedSeriesRange("", "");
 }
 
 function hideChartHover(context) {
