@@ -81,15 +81,12 @@ ENV CUDA_HOME="/usr/local/cuda"
 # find the stub during flashinfer JIT compilation.
 ENV LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
 
-# Python protobuf 7.34 removed FieldDescriptor.label, which Ray 2.56 Serve
-# still reads during proto deserialization. Keep 6.x available so the resolver
-# need not downgrade unrelated dependencies to accommodate protobuf 4.x.
-# See https://protobuf.dev/support/migration/#fielddescriptorlabel
+# Ray 2.56.1 includes the upstream Serve fix for protobuf 7; no local
+# protobuf upper bound or Ray monkeypatch is needed.
 RUN pip install --no-cache-dir \
     "ray[default]==${RAY_VERSION}" \
     "ray[data]==${RAY_VERSION}" \
     "ray[serve]==${RAY_VERSION}" \
-    "protobuf<7" \
     && pip check
 
 # Run as non-root for security (nonroot user is built into the base image)
