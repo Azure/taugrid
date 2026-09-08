@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -364,7 +365,7 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&sideSpecs, "sidecar", nil, "sidecar container NAME=IMAGE for --kind=deployment (repeatable)")
 	cmd.Flags().StringArrayVar(&volSpecs, "volume", nil, "volume NAME=KIND[:src] for the serve pod (repeatable). KIND ∈ pvc|emptyDir|configMap|secret. e.g. --volume data=pvc:blob-training, --volume shm=emptyDir, --volume creds=secret:hf-token")
 	cmd.Flags().StringArrayVar(&mountSpecs, "mount", nil, "mount NAME:PATH[:ro] on the serve container (repeatable). NAME must match a --volume.")
-	cmd.Flags().StringVar(&checkpoint, "checkpoint", "", "checkpoint path to serve; relative paths resolve under /data/checkpoints and set TAU_MODEL_PATH")
+	cmd.Flags().StringVar(&checkpoint, "checkpoint", "", "checkpoint path setting TAU_MODEL_PATH; projects/... resolves under /data, other relative paths under /data/checkpoints; absolute paths preserved; '..' components rejected")
 	cmd.Flags().StringVar(&checkpointPVC, "checkpoint-pvc", "blob-training", "PVC mounted at /data when --checkpoint is set")
 	cmd.Flags().StringVar(&fromFinetune, "from-finetune", "", "completed finetune run whose ready checkpoint artifact should be served")
 	cmd.Flags().StringVar(&checkpointRef, "checkpoint-ref", "", "checkpoint reference to serve, e.g. finetune/RUN[:artifact]")
@@ -605,7 +606,24 @@ func applyCheckpointMount(env map[string]string, volumes []serve.Volume, mounts 
 	if checkpointPVC == "" {
 		return nil, nil, nil, fmt.Errorf("--checkpoint-pvc is required when --checkpoint is set")
 	}
-	normalizedCheckpointPath := storage.NormalizeCheckpointPath(checkpointPath)
+	if strings.ContainsRune(checkpointPath, '\x00') {
+		return nil, nil, nil, fmt.Errorf("--checkpoint must not contain NUL bytes")
+	}
+	for _, component := range strings.Split(checkpointPath, "/") {
+		if component == ".." {
+			return nil, nil, nil, fmt.Errorf("--checkpoint must not contain '..' path components")
+		}
+	}
+	normalizedCheckpointPath := checkpointPath
+	if !path.IsAbs(checkpointPath) {
+		relativePath := path.Clean(checkpointPath)
+		// Workspace outputs live directly on the PVC, alongside legacy checkpoints.
+		if strings.HasPrefix(relativePath, "projects/") {
+			normalizedCheckpointPath = path.Join(storage.DurableRoot, relativePath)
+		} else {
+			normalizedCheckpointPath = storage.NormalizeCheckpointPath(relativePath)
+		}
+	}
 	if existing, ok := env["TAU_MODEL_PATH"]; ok && existing != "" && existing != normalizedCheckpointPath {
 		return nil, nil, nil, fmt.Errorf("--checkpoint conflicts with --env TAU_MODEL_PATH=%s", existing)
 	}

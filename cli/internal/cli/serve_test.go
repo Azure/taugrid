@@ -7,7 +7,108 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/yaml"
 )
+
+func TestApplyCheckpointMountPaths(t *testing.T) {
+	for _, tt := range []struct {
+		name, checkpoint, want string
+		wantErr                bool
+	}{
+		{"workspace", "projects/taugrid-default/runs/train/checkpoints/last.pt", "/data/projects/taugrid-default/runs/train/checkpoints/last.pt", false},
+		{"workspace dot prefix", "./projects/ws/runs/train/checkpoints/last.pt", "/data/projects/ws/runs/train/checkpoints/last.pt", false},
+		{"legacy", "finetunes/run/checkpoints/best.pt", "/data/checkpoints/finetunes/run/checkpoints/best.pt", false},
+		{"prefix boundary", "projects-old/model.pt", "/data/checkpoints/projects-old/model.pt", false},
+		{"absolute workspace", "/data/projects/ws/runs/train/checkpoints/last.pt", "/data/projects/ws/runs/train/checkpoints/last.pt", false},
+		{"absolute legacy", "/data/checkpoints/train/last.pt", "/data/checkpoints/train/last.pt", false},
+		{"absolute custom", "/models/last.pt", "/models/last.pt", false},
+		{"relative escape", "../last.pt", "", true},
+		{"workspace escape", "projects/ws/../../last.pt", "", true},
+		{"internal traversal", "projects/ws/runs/../other/last.pt", "", true},
+		{"absolute escape", "/data/../last.pt", "", true},
+		{"nul", "projects/ws/\x00last.pt", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env, volumes, mounts, err := applyCheckpointMount(nil, nil, nil, tt.checkpoint, "blob-training")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected invalid checkpoint to fail")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if env["TAU_MODEL_PATH"] != tt.want {
+				t.Fatalf("TAU_MODEL_PATH = %q, want %q", env["TAU_MODEL_PATH"], tt.want)
+			}
+			if len(volumes) != 1 || volumes[0].PVC != "blob-training" ||
+				len(mounts) != 1 || mounts[0].MountPath != "/data" || mounts[0].SubPath != "" {
+				t.Fatalf("checkpoint must mount PVC root at /data: volumes=%+v mounts=%+v", volumes, mounts)
+			}
+		})
+	}
+}
+
+func TestServeDeployWorkspaceCheckpoint(t *testing.T) {
+	for _, kind := range []string{"deployment", "rayservice"} {
+		t.Run(kind, func(t *testing.T) {
+			cmd := newConnectedServeTestRoot(t)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{"serve", "deploy", "workspace-model", "--kind=" + kind,
+				"--profile", "model-serve", "--image", "test:v1", "--dry-run=client", "-n", "tau",
+				"--checkpoint", "projects/ws/runs/train/checkpoints/last.pt", "--checkpoint-pvc", "training-data"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			pod := serveTestPodSpec(t, out.Bytes(), kind)
+			container := pod.Containers[0]
+			found := false
+			for _, env := range container.Env {
+				if env.Name == "TAU_MODEL_PATH" {
+					found = env.Value == "/data/projects/ws/runs/train/checkpoints/last.pt"
+				}
+			}
+			if !found {
+				t.Fatalf("workspace checkpoint missing: %+v", container.Env)
+			}
+			if len(pod.Volumes) != 1 || pod.Volumes[0].PersistentVolumeClaim == nil ||
+				pod.Volumes[0].PersistentVolumeClaim.ClaimName != "training-data" ||
+				len(container.VolumeMounts) != 1 || container.VolumeMounts[0].MountPath != "/data" ||
+				container.VolumeMounts[0].SubPath != "" {
+				t.Fatalf("expected full checkpoint PVC at /data: %+v", pod)
+			}
+		})
+	}
+}
+
+func serveTestPodSpec(t *testing.T, manifest []byte, kind string) corev1.PodSpec {
+	t.Helper()
+	var doc struct {
+		Spec struct {
+			Template         corev1.PodTemplateSpec `json:"template"`
+			RayClusterConfig struct {
+				HeadGroupSpec struct {
+					Template corev1.PodTemplateSpec `json:"template"`
+				} `json:"headGroupSpec"`
+			} `json:"rayClusterConfig"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(manifest, &doc); err != nil {
+		t.Fatal(err)
+	}
+	pod := doc.Spec.Template.Spec
+	if kind == "rayservice" {
+		pod = doc.Spec.RayClusterConfig.HeadGroupSpec.Template.Spec
+	}
+	if len(pod.Containers) == 0 {
+		t.Fatal("rendered manifest has no serving container")
+	}
+	return pod
+}
 
 func TestApplyCheckpointMount(t *testing.T) {
 	env, volumes, mounts, err := applyCheckpointMount(nil, nil, nil, "finetunes/run/checkpoints/best.safetensors", "blob-training")

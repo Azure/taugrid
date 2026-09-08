@@ -43,9 +43,22 @@ tau serve deploy <service-name> \
   --dry-run=client
 ```
 
-`--checkpoint` mounts the selected PVC at `/data`, resolves relative paths
-under `/data/checkpoints`, and sets `TAU_MODEL_PATH`. Your application still
-owns how it loads the model and handles requests.
+`--checkpoint` mounts the selected PVC root at `/data` (without a workspace
+subdirectory mount) and sets `TAU_MODEL_PATH`:
+
+| Checkpoint input | `TAU_MODEL_PATH` |
+| --- | --- |
+| `projects/<workspace>/runs/<run>/checkpoints/last.pt` | `/data/projects/<workspace>/runs/<run>/checkpoints/last.pt` |
+| `finetunes/<run>/checkpoints/best.pt` (legacy relative path) | `/data/checkpoints/finetunes/<run>/checkpoints/best.pt` |
+| `/data/projects/<workspace>/runs/<run>/checkpoints/last.pt` (absolute path) | Unchanged |
+
+Other relative paths continue to resolve under `/data/checkpoints`. Absolute
+paths are preserved, including custom container paths; if an absolute path is
+outside `/data`, your image or additional mounts must make it available.
+Paths containing a `..` component are rejected, even if they would resolve
+back inside `/data`. No filesystem lookup or active-workspace inference is
+performed: use the PVC containing the training output and its actual path.
+Your application still owns how it loads the model and handles requests.
 
 ## Deploy and inspect
 
