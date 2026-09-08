@@ -165,6 +165,32 @@ assert_invalid 1.2.3+build_1 1.2.3 "build metadata identifier"
 assert_invalid 1.2.3+build+1 1.2.3 "build metadata must contain non-empty"
 assert_invalid 1.2.3 1.2.3-01 "reference chart version"
 
+retention_chart="$TEST_ROOT/kueue"
+retention_archive="$TEST_ROOT/kueue-0.19.0.tgz"
+mkdir -p "$retention_chart/templates/crd"
+cat >"$retention_chart/Chart.yaml" <<'EOF'
+apiVersion: v2
+name: kueue
+version: 0.19.0
+EOF
+for name in workloads clusterqueues; do
+  cat >"$retention_chart/templates/crd/${name}.yaml" <<EOF
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: ${name}.kueue.x-k8s.io
+EOF
+done
+COPYFILE_DISABLE=1 tar -czf "$retention_archive" -C "$TEST_ROOT" kueue
+preserve_kueue_crd_retention "$retention_archive"
+for name in workloads clusterqueues; do
+  tar -xOf "$retention_archive" "kueue/templates/crd/${name}.yaml" |
+    grep -Fq 'helm.sh/resource-policy: keep' ||
+    fail "Kueue ${name} CRD did not retain the Helm keep policy"
+done
+
 export FAKE_DEPENDENCY_VERSION=0.1.3
 vendor_taugrid_dependencies "$TEST_CHART"
 [[ -f "$TEST_CHART/charts/gpu-monitoring-0.1.3.tgz" ]] ||

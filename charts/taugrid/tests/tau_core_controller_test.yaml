@@ -22,7 +22,7 @@ tests:
           value: IfNotPresent
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:0.4.0
+          value: mcr.microsoft.com/aks/ai-runtime/tau-core-controller:0.4.1
 
   - it: accepts a mirrored image so clusters without private ACR access can install
     template: charts/tau-core-controller/templates/deployment.yaml

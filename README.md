@@ -6,6 +6,8 @@
   Cloud-native AI infrastructure for GPU workloads on Kubernetes
 </p>
 
+[![Join us on Discord](https://img.shields.io/badge/Join%20us%20on-Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/nwbb6hBvds)
+
 ---
 
 TauGrid runs GPU workloads on Kubernetes, including data preparation, distributed training, fine-tuning, and inference.
@@ -65,7 +67,7 @@ that goal are welcome.
 ```bash
 helm install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.0 \
+  --version 0.4.1 \
   --namespace tau-system \
   --create-namespace
 ```
@@ -119,7 +121,7 @@ Create a minimal `tau.yaml`:
 
 ```yaml
 name: hello-gpu
-image: mcr.microsoft.com/aks/ai-runtime/tau:0.4.0
+image: mcr.microsoft.com/aks/ai-runtime/tau:0.4.1
 command: ["python", "train.py"]
 resources:
   gpu: 4
@@ -164,6 +166,11 @@ chart's `Chart.yaml`; published versions are immutable.
 ## Documentation
 
 Full documentation is available at [https://azure.github.io/taugrid](https://azure.github.io/taugrid).
+
+## Community
+
+Join the [TauGrid Discord community](https://discord.gg/nwbb6hBvds) to meet
+other users, discuss workloads, and get help.
 
 ## Roadmap
 

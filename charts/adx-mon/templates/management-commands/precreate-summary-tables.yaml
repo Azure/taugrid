@@ -1,0 +1,65 @@
+{{- if .Values.managementCommands.precreateSummaryTables.enabled }}
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-precreate-summary-metrics
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.adx.metricsDatabase | quote }}
+  body: |
+    .create-merge tables
+      {{ .Values.summaryRules.items.gpuUtilizationHourly.table }} (
+        Timestamp: datetime,
+        instance: string,
+        gpu: string,
+        modelName: string,
+        avg_util: real,
+        max_util: real,
+        p95_util: real,
+        avg_temp: real,
+        max_temp: real,
+        avg_power: real,
+        max_power: real,
+        avg_mem_used: real,
+        max_mem_used: real,
+        Cluster: string
+      ),
+      KubePodResourceclaimInfo (
+        Timestamp: datetime,
+        Labels: dynamic,
+        Value: real,
+        Cluster: string
+      )
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-precreate-summary-cost
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.adx.costTrackingDatabase | quote }}
+  body: |
+    .create-merge tables
+      {{ .Values.summaryRules.items.gpuCostHourly.table }} (
+        Timestamp: datetime,
+        namespace: string,
+        pod: string,
+        node: string,
+        sku: string,
+        gpu_count: real,
+        avg_util: real,
+        rate_per_gpu_hour: real,
+        hourly_cost: real,
+        Cluster: string,
+        workspace: string,
+        peak_gpu_count: real,
+        schema_version: long
+      )
+{{- end }}

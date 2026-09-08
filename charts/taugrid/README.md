@@ -5,7 +5,7 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 ## Install
 
 ```bash
-tau cluster install --version 0.4.0 --values taugrid-values.yaml
+tau cluster install --version 0.4.1 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -13,7 +13,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.0 \
+  --version 0.4.1 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -199,7 +199,7 @@ the controller image:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `kueue.controllerManager.manager.image.repository` | string | `mcr.microsoft.com/oss/v2/kueue/kueue` | Kueue controller image |
-| `kueue.controllerManager.manager.image.tag` | string | `v0.18.2` | Kueue image tag |
+| `kueue.controllerManager.manager.image.tag` | string | `v0.19.0` | Kueue image tag |
 | `kueue.managerConfig.controllerManagerConfigYaml` | string | (embedded) | Full Kueue Configuration YAML |
 
 Refer to the [upstream Kueue chart values](https://kueue.sigs.k8s.io/docs/installation/)
@@ -284,7 +284,8 @@ gets DaemonSets that schedule nothing, so bundling is safe on CPU-only clusters.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `gpu-monitoring.gpuSkus` | map | 13 profiles covering A10, A100, H100, H200, GB200, and GB300 | Per-SKU DaemonSet definitions |
-| `gpu-monitoring.gpuSkus.<profile>.scrapeTargets` | list | global collector targets | Per-profile DCGM/node-exporter endpoints for mixed managed and GPU Operator clusters |
+| `gpu-monitoring.gpuSkus.<profile>.dcgmHealth.source` | string | global `dcgmHealth.source` | Per-profile DCGM health provider (`host-dcgmi` or `exporter`) |
+| `gpu-monitoring.gpuSkus.<profile>.dcgmHealth.exporterUrl` | string | global `dcgmHealth.exporterUrl` | Per-profile DCGM exporter endpoint for mixed managed and GPU Operator clusters |
 | `gpu-monitoring.daemonset.requireAcceleratorLabel` | bool | `false` | Also require `kubernetes.azure.com/accelerator=nvidia`. Externally-joined GPU nodes never receive that label, so requiring it leaves them unmonitored |
 | `gpu-monitoring.namespace` | string | `""` (deprecated) | Must remain empty; use Helm `--namespace` for all TauGrid system components |
 

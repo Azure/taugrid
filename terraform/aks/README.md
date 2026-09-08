@@ -34,6 +34,10 @@ provided:
   provides the driver, device plugin, and node-local DCGM exporter at port
   `19400`. This mode requires the subscription feature registration below and
   does not support GPU cluster autoscaling during the preview.
+- Existing AKS clusters with attached Flex GPU nodes use the separate
+  [GPU Operator Terraform example](../aks-flex-gpu-operator/README.md). Do not
+  combine that cluster-scoped Operator with this root's `self_managed` stack on
+  the same nodes.
 
 Before using `aks_managed_preview`, register the feature and wait until its
 state is `Registered`, then refresh the AKS resource provider:
@@ -67,7 +71,7 @@ offline or CI test suite.
 
 The script resolves `tau` for the active OS and, before it accesses Azure,
 requires `tau version --short` to be exactly `v<TauGridVersion>` (by default
-`v0.4.0`). It rejects development builds and stale CLIs because the CLI and
+`v0.4.1`). It rejects development builds and stale CLIs because the CLI and
 chart readiness contracts must match. Pass `-TauCommand` with an absolute path
 to a matching released binary when it is not on PATH; paths containing spaces
 are supported.

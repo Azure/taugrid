@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/cli/internal/jobrender"
+	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -178,11 +179,77 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 	if runtime.Store != wantStore || runtime.Out != wantOut {
 		t.Fatalf("session state paths = store %q out %q, want store %q out %q", runtime.Store, runtime.Out, wantStore, wantOut)
 	}
+
+	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "/var/run/tau/metrics-offload")
+	runtime, err = resolveMetricsOffload(
+		o,
+		"modernbert-bounded",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/modernbert-bounded",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err != nil {
+		t.Fatalf("resolveMetricsOffload with runtime out: %v", err)
+	}
+	if got, want := runtime.Out, "/var/run/tau/metrics-offload"; got != want {
+		t.Fatalf("runtime out = %q, want %q", got, want)
+	}
 	if !runtime.BaselineExistingHistory || runtime.ReadyFile != "/var/run/tau/metrics-ready" {
 		t.Fatalf("fresh history gate = baseline %v ready %q", runtime.BaselineExistingHistory, runtime.ReadyFile)
 	}
 	if runtime.DoneFile != "/var/run/tau/metrics-done" || runtime.DoneTimeout <= 0 {
 		t.Fatalf("terminal publication gate = done %q timeout %s", runtime.DoneFile, runtime.DoneTimeout)
+	}
+}
+
+func TestResolveDirectJobMetricsOffloadConfigAndEnvPrecedence(t *testing.T) {
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "")
+	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "")
+	o := defaultRunDispatchOptions()
+	o.workspace = "research-workspace"
+	o.metricsSessionID = "session-config"
+	o.metricsHistory = []string{"metrics-history-attempt-*/*.jsonl"}
+	o.metricsOffloadImage = "registry.example.com/taugrid-portal:config"
+	o.metricsOffloadOut = "/var/run/tau/config-spool"
+	o.experiment = runExperimentMetadata{
+		Project:      "pretraining",
+		ExperimentID: "modernbert-bounded",
+	}
+	resolve := func() metricsoffload.Runtime {
+		t.Helper()
+		runtime, err := resolveMetricsOffload(
+			o,
+			"modernbert-bounded",
+			"research-workspace",
+			"sample-gpu-cluster",
+			"/data/research-workspace/modernbert-bounded",
+			true,
+			map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+		)
+		if err != nil {
+			t.Fatalf("resolveMetricsOffload: %v", err)
+		}
+		return runtime
+	}
+
+	runtime := resolve()
+	if got, want := runtime.Image, "registry.example.com/taugrid-portal:config"; got != want {
+		t.Fatalf("config image = %q, want %q", got, want)
+	}
+	if got, want := runtime.Out, "/var/run/tau/config-spool"; got != want {
+		t.Fatalf("config out = %q, want %q", got, want)
+	}
+
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid-portal:platform")
+	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "/var/run/tau/platform-spool")
+	runtime = resolve()
+	if got, want := runtime.Image, "registry.example.com/taugrid-portal:platform"; got != want {
+		t.Fatalf("platform image override = %q, want %q", got, want)
+	}
+	if got, want := runtime.Out, "/var/run/tau/platform-spool"; got != want {
+		t.Fatalf("platform out override = %q, want %q", got, want)
 	}
 }
 

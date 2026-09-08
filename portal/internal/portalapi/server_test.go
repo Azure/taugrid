@@ -249,11 +249,12 @@ func TestOverviewJobsHintsNameTheirCause(t *testing.T) {
 // overview handler summarizes each into a headline card (reusing the same stubs
 // the per-board handler tests use), with no card marked unavailable.
 func TestOverviewCardsAllAvailable(t *testing.T) {
+	costQuerier := &stubCostQuerier{}
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
 		Jobs:    testOperatorJobs(t, stubJobsReader{}),
 		Cluster: ClusterOptions{Querier: &stubClusterQuerier{}},
-		Cost:    CostOptions{Querier: &stubCostQuerier{}},
+		Cost:    CostOptions{Querier: costQuerier, CostDatabase: "Chargeback"},
 		Ray:     RayOptions{Reader: &stubRayReader{}, Namespace: "ray"},
 		Nodes:   NodesOptions{Reader: stubNodesReader{}},
 	})
@@ -288,6 +289,9 @@ func TestOverviewCardsAllAvailable(t *testing.T) {
 	// Cost: from stubCostQuerier (48 GPU-hours, 1 idle GPU).
 	if c.Cost == nil || c.Cost.TotalGPUHours != 48 || c.Cost.IdleGPUs != 1 {
 		t.Fatalf("cost card = %+v, want 48 gpu-hours / 1 idle", c.Cost)
+	}
+	if len(costQuerier.kqls) == 0 || !strings.Contains(costQuerier.kqls[0], "database(@'Chargeback').GpuCostHourly") {
+		t.Fatalf("overview cost query did not use configured database: %v", costQuerier.kqls)
 	}
 	// Ray: from stubRayReader (1 discovered dashboard).
 	if c.Ray == nil || c.Ray.Clusters != 1 {
@@ -757,7 +761,7 @@ func (s *stubCostQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row
 	s.calls++
 	switch s.calls {
 	case 1:
-		return []kustoquery.Row{{"namespace": "research", "GpuHours": 48.0, "Gpus": 4.0, "AvgUtil": 66.0}}, nil
+		return []kustoquery.Row{{"workspace": "research-lab", "namespace": "research", "GpuHours": 48.0, "EstimatedCostUSD": 176.16, "PeakGpus": 4.0, "AvgUtil": 66.0}}, nil
 	default:
 		return []kustoquery.Row{{"instance": "node-1", "gpu": "0", "namespace": "research", "AvgUtil": 3.0, "Samples": 99.0}}, nil
 	}
@@ -780,10 +784,11 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 	}
 	var got struct {
 		TotalGPUHours float64 `json:"totalGPUHours"`
-		Namespaces    []struct {
+		Workspaces    []struct {
+			Workspace string  `json:"workspace"`
 			Namespace string  `json:"namespace"`
 			GPUHours  float64 `json:"gpuHours"`
-		} `json:"namespaces"`
+		} `json:"workspaces"`
 		IdleGPUs []struct {
 			Instance string `json:"instance"`
 		} `json:"idleGPUs"`
@@ -791,8 +796,9 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode snapshot: %v\n%s", err, rec.Body.String())
 	}
-	if got.TotalGPUHours != 48 || len(got.Namespaces) != 1 || got.Namespaces[0].Namespace != "research" {
-		t.Fatalf("snapshot namespaces = %+v, want research 48h", got.Namespaces)
+	if got.TotalGPUHours != 48 || len(got.Workspaces) != 1 ||
+		got.Workspaces[0].Workspace != "research-lab" || got.Workspaces[0].Namespace != "research" {
+		t.Fatalf("snapshot workspaces = %+v, want research-lab 48h", got.Workspaces)
 	}
 	if len(got.IdleGPUs) != 1 || got.IdleGPUs[0].Instance != "node-1" {
 		t.Fatalf("idle gpus = %+v, want [node-1]", got.IdleGPUs)
