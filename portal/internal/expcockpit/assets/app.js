@@ -1734,7 +1734,6 @@ async function refreshNow(options = {}) {
       } catch (error) {
         if (routeVersion !== state.routeVersion) return;
         state.fullSnapshotError = error.message || String(error);
-        throw error;
       }
     }
     const seriesError = await refreshFocusedSeriesAfterSnapshot();
@@ -1760,11 +1759,14 @@ async function refreshNow(options = {}) {
 }
 
 function criticalRefreshError(seriesError = state.focusedSeriesError) {
-  return state.experimentsError
-    || seriesError
-    || state.featuredErrors.values().next().value
-    || state.presetMetricErrors.values().next().value
-    || "";
+  const errors = [
+    state.experimentsError,
+    state.fullSnapshotError,
+    seriesError,
+    ...state.featuredErrors.values(),
+    ...state.presetMetricErrors.values(),
+  ].filter(Boolean);
+  return [...new Set(errors)].join("; ");
 }
 
 function dashboardHasActiveControl() {
