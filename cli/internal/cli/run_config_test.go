@@ -16,6 +16,7 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -1573,11 +1574,53 @@ func newConnectedRunConfigTestCommand(t *testing.T, args []string) *cobra.Comman
 	if configPath == "" {
 		t.Fatal("connected run config test requires --config")
 	}
-	installClusterProfileClientForTest(t, runConfigProfileForTest(t, configPath))
+	resolvedProfile := runConfigProfileForTest(t, configPath)
+	installClusterProfileClientForTest(t, resolvedProfile)
+	workspaceName := "test-workspace"
+	if cfg, err := runconfig.Load(configPath); err == nil {
+		workspaceName = firstNonEmpty(cfg.Policy.Workspace, workspaceName)
+	}
+	namespace := "test-workspace"
+	if len(resolvedProfile.LocalQueues) > 0 {
+		namespace = resolvedProfile.LocalQueues[0].Namespace
+	}
+	for i, arg := range runArgs {
+		switch {
+		case (arg == "--namespace" || arg == "-n") && i+1 < len(runArgs):
+			namespace = runArgs[i+1]
+		case strings.HasPrefix(arg, "--namespace="):
+			namespace = strings.TrimPrefix(arg, "--namespace=")
+		}
+	}
+	queue := firstNonEmpty(resolvedProfile.DefaultLocalQueue, "jobqueue")
 	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
-		ContextName: "test-context",
-		Namespace:   "test-workspace",
+		Workspace:    workspaceName,
+		WorkspaceUID: "workspace-uid",
+		ContextName:  "test-context",
+		Namespace:    namespace,
+		Queue:        queue,
 	}}
+	originalWorkspaceFetcher := fetchRunWorkspace
+	fetchRunWorkspace = func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
+		return tauworkspace.Workspace{
+			Metadata: tauworkspace.ObjectMeta{
+				Name:       workspaceName,
+				UID:        "workspace-uid",
+				Generation: 1,
+			},
+			Spec: tauworkspace.WorkspaceSpec{
+				Target: tauworkspace.WorkspaceTarget{Namespace: namespace},
+				Queue:  queue,
+			},
+			Status: tauworkspace.WorkspaceStatus{
+				Phase:              "Ready",
+				ObservedGeneration: 1,
+				Target:             tauworkspace.WorkspaceTargetStatus{ResolvedNamespace: namespace},
+				Queue:              tauworkspace.WorkspaceQueueStatus{LocalQueue: queue},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { fetchRunWorkspace = originalWorkspaceFetcher })
 	cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer {
 		return ensurer
 	})

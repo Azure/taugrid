@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 
@@ -17,11 +18,15 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/kube"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 var newServeRunner = func(kubeContext string) kubeRawRunner {
 	return kube.New(kubeContext)
 }
+
+var newServeConnectionEnsurer = defaultRunConnectionEnsurer
+var fetchServeWorkspace = fetchWorkspace
 
 // newServeCmd: north-star §1 / §5 — deploy a model endpoint as a
 // KubeRay RayService.
@@ -175,9 +180,34 @@ func newServeDeployCmd() *cobra.Command {
 				}
 			}
 
+			workingDirectory, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("resolve current repository: %w", err)
+			}
+			workspaceResolver := newActiveWorkspaceResolver(newServeConnectionEnsurer, fetchServeWorkspace)
+			activeWorkspace, err := workspaceResolver.Resolve(cmd, activeWorkspaceRequest{
+				Source:                  runConnectionSource{StartDir: workingDirectory},
+				KubeContext:             kubeContext,
+				KubeContextExplicit:     runContextExplicit(cmd),
+				KubeContextFromFlag:     cmd.Flags().Changed("context"),
+				Namespace:               namespace,
+				RequireRepositoryTarget: true,
+			})
+			if err != nil {
+				return err
+			}
+			defer activeWorkspace.Restore()
+			kubeContext = activeWorkspace.Context
+			placement := activeWorkspace.Placement
+
 			runner := newServeRunner(kubeContext)
-			target, _, err := resolveServeTarget(
-				cmd.Context(), runner, namespace, serveWorkloadResource(kind),
+			target, err := resolveServeTarget(
+				cmd.Context(),
+				runner,
+				placement.Namespace,
+				placement.LocalQueue,
+				placement.ClusterQueue,
+				serveWorkloadResource(kind),
 			)
 			if err != nil {
 				return err
@@ -197,7 +227,6 @@ func newServeDeployCmd() *cobra.Command {
 				profile.NewClusterProvider(client),
 				profileName,
 				ns,
-				target.Team,
 				target.Queue,
 				target.ClusterQueue,
 				explicitGPUs,
@@ -209,6 +238,7 @@ func newServeDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			labels = workloadmeta.StampWorkspace(labels, placement.Workspace)
 			env, envErr := parseEnvKV(envKV)
 			if envErr != nil {
 				return envErr
@@ -413,14 +443,14 @@ func newServeDeployCmd() *cobra.Command {
 func selectServeWorkloadProfile(
 	ctx context.Context,
 	provider *profile.Provider,
-	profileName, namespace, team, resolvedQueue, resolvedClusterQueue string,
+	profileName, namespace, resolvedQueue, resolvedClusterQueue string,
 	explicitGPUs *int,
 ) (profile.Profile, *selectedWorkloadProfile, error) {
 	set, err := provider.ProfileSet(ctx)
 	if err != nil {
 		return profile.Profile{}, nil, err
 	}
-	lane, err := serveProfileLane(set, profileName)
+	team, lane, err := serveProfileApplicability(set, profileName)
 	if err != nil {
 		return profile.Profile{}, nil, err
 	}
@@ -481,26 +511,38 @@ func selectServeWorkloadProfile(
 	return renderProfile, selected, nil
 }
 
-func serveProfileLane(set profile.ProfileSet, profileName string) (string, error) {
+func serveProfileApplicability(set profile.ProfileSet, profileName string) (string, string, error) {
 	name := strings.TrimSpace(profileName)
 	for _, candidate := range set.Profiles {
 		if candidate.Name != name {
 			continue
 		}
+		team := ""
+		switch len(candidate.Applicability.Teams) {
+		case 0:
+		case 1:
+			team = candidate.Applicability.Teams[0]
+		default:
+			return "", "", fmt.Errorf(
+				"workload profile %q authorizes multiple teams (%s); serving requires a profile with at most one team",
+				candidate.Name,
+				strings.Join(candidate.Applicability.Teams, ", "),
+			)
+		}
 		switch len(candidate.Applicability.Lanes) {
 		case 0:
-			return "", nil
+			return team, "", nil
 		case 1:
-			return candidate.Applicability.Lanes[0], nil
+			return team, candidate.Applicability.Lanes[0], nil
 		default:
-			return "", fmt.Errorf(
+			return "", "", fmt.Errorf(
 				"workload profile %q authorizes multiple lanes (%s); serving requires a profile with exactly one lane",
 				candidate.Name,
 				strings.Join(candidate.Applicability.Lanes, ", "),
 			)
 		}
 	}
-	return "", fmt.Errorf("workload profile %q is unavailable", name)
+	return "", "", fmt.Errorf("workload profile %q is unavailable", name)
 }
 
 type serveCheckpointRef struct {

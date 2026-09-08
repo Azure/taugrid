@@ -57,6 +57,12 @@ func TestTauRoutingSubprocessMatrix(t *testing.T) {
 		t.Skip("routing subprocess test requires a POSIX fake kubectl")
 	}
 	root := multiProjectRunRoutingRepo(t)
+	descriptorPath := filepath.Join(root, "connections", "shared.yaml")
+	writeRunRoutingFile(
+		t,
+		descriptorPath,
+		strings.Replace(runRoutingDescriptor, "taugrid-flex", "aks-ai-runtime-flex", 1),
+	)
 	configureRunRoutingProfile(t)
 	writeRunRoutingFile(t, filepath.Join(root, "beta", "train.sh"), "#!/bin/sh\necho train\n")
 	writeRunRoutingFile(t, filepath.Join(root, "beta", "tau", "eval.yaml"), `name: beta-eval
@@ -66,6 +72,21 @@ compute:
   gpus: 0
 runtime:
   image: busybox:1.36
+policy:
+  profile: test-routing
+  queue: jobqueue
+`)
+	escapedOutput := filepath.Join(root, "alpha", "tau", "escaped-output.yaml")
+	writeRunRoutingFile(t, escapedOutput, `name: alpha-escaped-output
+engine: job
+entrypoint: ../train.sh
+compute:
+  gpus: 0
+runtime:
+  image: busybox:1.36
+storage:
+  data_pvc: research-workspace
+  output: /data/projects/sample/runs-escape/attempt-1
 policy:
   profile: test-routing
   queue: jobqueue
@@ -84,7 +105,7 @@ policy:
   queue: jobqueue
 `)
 	installFakeRoutingKubectl(t, "catalog-namespace")
-	installCachedRoutingConnection(t, root, "catalog-namespace")
+	configDir := installCachedRoutingConnection(t, root, "catalog-namespace")
 	symlinkConfig := filepath.Join(root, "alpha", "experiments", "actual", "tau.yaml")
 	writeRunRoutingFile(t, symlinkConfig, fmt.Sprintf(`name: symlink-job
 engine: job
@@ -124,6 +145,81 @@ policy:
 			!strings.Contains(result.stdout, "namespace: catalog-namespace") ||
 			!strings.Contains(result.stdout, "kueue.x-k8s.io/queue-name: jobqueue") {
 			t.Fatalf("project health did not resolve catalog connection:\n%s", result.stdout)
+		}
+	})
+	t.Run("connected run derives context and caches active workspace", func(t *testing.T) {
+		cachePath := filepath.Join(configDir, activeWorkspaceCacheFilename)
+		if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		result := runTauRoutingSubprocess(t, root, "run", "health", "--project", "alpha", "--dry-run=client")
+		if result.err != nil {
+			t.Fatalf("connected run: %v\nstderr:\n%s", result.err, result.stderr)
+		}
+		raw, err := os.ReadFile(cachePath)
+		if err != nil {
+			t.Fatalf("read active workspace cache: %v", err)
+		}
+		var cache activeWorkspaceCache
+		if err := json.Unmarshal(raw, &cache); err != nil {
+			t.Fatalf("parse active workspace cache: %v", err)
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatalf("resolve repository root: %v", err)
+		}
+		if cache.Schema != activeWorkspaceCacheSchema ||
+			cache.Workspace != "sample" ||
+			cache.WorkspaceUID != "workspace-uid" ||
+			cache.ContextName != "aks-ai-runtime-flex" ||
+			cache.Namespace != "catalog-namespace" ||
+			cache.LocalQueue != "jobqueue" ||
+			cache.ClusterQueue != "gpu-cq" ||
+			cache.RepositoryRoot != canonicalRoot ||
+			cache.DescriptorPath != filepath.Join(canonicalRoot, "connections", "shared.yaml") ||
+			cache.DescriptorDigest == "" ||
+			cache.ResolvedAt.IsZero() {
+			t.Fatalf("active workspace cache = %+v", cache)
+		}
+		if _, err := os.Stat(filepath.Join(root, "tau", activeWorkspaceCacheFilename)); !os.IsNotExist(err) {
+			t.Fatalf("repository-local active workspace cache exists: %v", err)
+		}
+		kubeconfigPath := activeRoutingKubeconfigPath(t, configDir)
+		kubeconfigRaw, err := os.ReadFile(kubeconfigPath)
+		if err != nil {
+			t.Fatalf("read isolated workspace kubeconfig: %v", err)
+		}
+		kubeconfig, err := clientcmd.Load(kubeconfigRaw)
+		if err != nil {
+			t.Fatalf("parse isolated workspace kubeconfig: %v", err)
+		}
+		kubeContext := kubeconfig.Contexts["aks-ai-runtime-flex"]
+		var server string
+		if kubeContext != nil && kubeconfig.Clusters[kubeContext.Cluster] != nil {
+			server = kubeconfig.Clusters[kubeContext.Cluster].Server
+		}
+		if kubeconfig.CurrentContext != "aks-ai-runtime-flex" ||
+			kubeContext == nil ||
+			server != "https://aks-ai-runtime-flex.test.invalid" ||
+			kubeconfig.Contexts["aks-ai-runtime-eastus2"] != nil {
+			t.Fatalf("isolated workspace kubeconfig selected wrong cluster: %+v", kubeconfig)
+		}
+	})
+	t.Run("connected client dry-run rejects output root prefix escape", func(t *testing.T) {
+		result := runTauRoutingSubprocess(
+			t,
+			root,
+			"run",
+			"--project",
+			"alpha",
+			"--config",
+			escapedOutput,
+			"--dry-run=client",
+		)
+		if result.err == nil ||
+			!strings.Contains(result.stderr, `storage.output "/data/projects/sample/runs-escape/attempt-1"`) ||
+			!strings.Contains(result.stderr, `output root "/data/projects/sample/runs"`) {
+			t.Fatalf("output prefix escape err=%v\nstderr:\n%s", result.err, result.stderr)
 		}
 	})
 	t.Run("explicit project health config", func(t *testing.T) {
@@ -420,7 +516,16 @@ func installFakeRoutingKubectl(t *testing.T, namespace string) {
 	script := fmt.Sprintf(`#!/bin/sh
 case " $* " in
   *" get workspace.tau.azure.com sample "*|*" get workspaces.tau.azure.com sample "*)
-    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue"}}}'
+    case " $* " in
+      *" --kubeconfig "*) ;;
+      *)
+        if [ -z "$KUBECONFIG" ] || [ "$KUBECONFIG" = "$TAU_ROUTING_AMBIENT_KUBECONFIG" ]; then
+          printf '%%s\n' "workspace lookup used ambient kubeconfig: $KUBECONFIG" >&2
+          exit 97
+        fi
+        ;;
+    esac
+    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1","defaults":{"outputRoot":"/data/projects/sample/runs"}},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"gpu-cq"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
     printf '%%s\n' 'localqueue.kueue.x-k8s.io/jobqueue'
@@ -439,9 +544,14 @@ esac
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func installCachedRoutingConnection(t *testing.T, root, namespace string) {
+func installCachedRoutingConnection(t *testing.T, root, namespace string) string {
 	t.Helper()
-	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	descriptorPath := filepath.Join(root, "connections", "shared.yaml")
+	descriptorRaw, err := os.ReadFile(descriptorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := workspaceconnection.Parse(descriptorRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,35 +561,35 @@ func installCachedRoutingConnection(t *testing.T, root, namespace string) {
 	}
 	configDir := t.TempDir()
 	kubeconfigPath := filepath.Join(configDir, "kubeconfig.yaml")
-	kubeconfig := `apiVersion: v1
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
 kind: Config
 clusters:
-- name: cluster
+- name: flex
   cluster:
-    server: https://routing.test.invalid
+    server: https://aks-ai-runtime-flex.test.invalid
 contexts:
-- name: taugrid-flex
+- name: %s
   context:
-    cluster: cluster
+    cluster: flex
     user: researcher
-current-context: taugrid-flex
+current-context: %s
 users:
 - name: researcher
   user:
     token: test-token
-`
+`, descriptor.Cluster.ContextName, descriptor.Cluster.ContextName)
 	writeRunRoutingFile(t, kubeconfigPath, kubeconfig)
 	parsedKubeconfig, err := clientcmd.Load([]byte(kubeconfig))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawCluster, err := json.Marshal(parsedKubeconfig.Clusters["cluster"])
+	rawCluster, err := json.Marshal(parsedKubeconfig.Clusters[parsedKubeconfig.Contexts[descriptor.Cluster.ContextName].Cluster])
 	if err != nil {
 		t.Fatal(err)
 	}
 	fingerprintSum := sha256.Sum256(rawCluster)
 	accessFingerprint := "sha256:" + hex.EncodeToString(fingerprintSum[:])
-	descriptorPath, err := filepath.EvalSymlinks(filepath.Join(root, "connections", "shared.yaml"))
+	descriptorPath, err = filepath.EvalSymlinks(descriptorPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,6 +630,66 @@ users:
 		Digest:         digest,
 	})+".json")
 	writeRunRoutingFile(t, statePath, string(raw))
+	ambientKubeconfigPath := filepath.Join(configDir, "ambient-kubeconfig.yaml")
+	ambientKubeconfig := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: flex
+  cluster:
+    server: https://aks-ai-runtime-flex.test.invalid
+- name: eastus2
+  cluster:
+    server: https://aks-ai-runtime-eastus2.test.invalid
+contexts:
+- name: %s
+  context:
+    cluster: flex
+    user: researcher
+- name: aks-ai-runtime-eastus2
+  context:
+    cluster: eastus2
+    user: researcher
+current-context: ""
+users:
+- name: researcher
+  user:
+    token: test-token
+`, descriptor.Cluster.ContextName)
+	writeRunRoutingFile(t, ambientKubeconfigPath, ambientKubeconfig)
 	t.Setenv("TAU_CONFIG_DIR", configDir)
-	t.Setenv("KUBECONFIG", kubeconfigPath)
+	t.Setenv("KUBECONFIG", ambientKubeconfigPath)
+	t.Setenv("TAU_ROUTING_AMBIENT_KUBECONFIG", ambientKubeconfigPath)
+	return configDir
+}
+
+func activeRoutingKubeconfigPath(t *testing.T, configDir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(configDir, "connections"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(configDir, "connections", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state struct {
+			Workspace      string `json:"workspace"`
+			KubeconfigPath string `json:"kubeconfig_path"`
+		}
+		if err := json.Unmarshal(raw, &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.Workspace == "sample" && state.KubeconfigPath != "" {
+			paths = append(paths, state.KubeconfigPath)
+		}
+	}
+	if len(paths) != 1 {
+		t.Fatalf("active sample workspace kubeconfigs = %v", paths)
+	}
+	return paths[0]
 }

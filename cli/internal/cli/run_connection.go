@@ -211,7 +211,40 @@ func applyLiveRunConnection(
 	source runConnectionSource,
 	ensurer runConnectionEnsurer,
 ) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
-	return applyActivatedRunConnection(ctx, options, source, true, ensurer)
+	discovery := descriptorFor(source)
+	if options.workspaceExplicit || options.kubeContextExplicit {
+		return applyActivatedRunConnection(ctx, options, source, true, ensurer)
+	}
+	if !source.Catalog && discovery == nil && (options.workspace != "" || options.kubeContext != "") {
+		return options, workspaceconnection.ActiveConnection{}, nil
+	}
+	if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, discovery); err != nil {
+		return options, workspaceconnection.ActiveConnection{}, err
+	}
+	if err := checkCatalogWorkspaceConflict(options, source, source.Discovery); err != nil {
+		return options, workspaceconnection.ActiveConnection{}, err
+	}
+	connection, err := ensureRunConnection(ctx, ensurer, source)
+	if err != nil {
+		return options, workspaceconnection.ActiveConnection{}, err
+	}
+	if requested, connected := strings.TrimSpace(options.workspace), strings.TrimSpace(connection.Workspace); requested != "" && requested != connected {
+		return options, workspaceconnection.ActiveConnection{}, fmt.Errorf(
+			"run workspace %q conflicts with active repository workspace connection %q",
+			requested,
+			connected,
+		)
+	}
+	if requested, connected := strings.TrimSpace(options.kubeContext), strings.TrimSpace(connection.ContextName); requested != "" && connected != "" && requested != connected {
+		return options, workspaceconnection.ActiveConnection{}, fmt.Errorf(
+			"run context %q conflicts with active repository workspace connection context %q",
+			requested,
+			connected,
+		)
+	}
+	options.workspace = connection.Workspace
+	options.kubeContext = connection.ContextName
+	return options, connection, nil
 }
 
 func applyActivatedRunConnection(

@@ -6,12 +6,13 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"testing"
 
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
@@ -42,25 +43,6 @@ func (r *connectedServeTestRunner) Raw(_ context.Context, args []string, _ []byt
 		clusterQueue = "gpu-cq"
 	}
 	switch {
-	case len(args) >= 2 && args[0] == "get" && args[1] == "namespaces":
-		namespaces := []string{namespace, "tau", "team-namespace", "alpha"}
-		seen := map[string]bool{}
-		var items []map[string]any
-		for _, ns := range namespaces {
-			if seen[ns] {
-				continue
-			}
-			seen[ns] = true
-			items = append(items, map[string]any{"metadata": map[string]any{
-				"name": ns,
-				"labels": map[string]string{
-					"kueue.x-k8s.io/default-local-queue": queue,
-					"kueue.x-k8s.io/team":                "research",
-				},
-			}})
-		}
-		data, _ := json.Marshal(map[string]any{"items": items})
-		return string(data), nil
 	case len(args) >= 2 && args[0] == "auth" && args[1] == "can-i":
 		return "yes\n", nil
 	case len(args) >= 4 && args[0] == "-n" && args[2] == "get":
@@ -90,11 +72,61 @@ func stubServeDependencies(t *testing.T, runner kubeRawRunner, client dynamic.In
 	t.Helper()
 	originalRunner := newServeRunner
 	originalClient := newClusterProfileClient
+	originalConnectionEnsurer := newServeConnectionEnsurer
+	originalWorkspaceFetcher := fetchServeWorkspace
+	namespace := "tau"
+	queue := "jobqueue"
+	clusterQueue := "gpu-cq"
+	if connected, ok := runner.(*connectedServeTestRunner); ok {
+		if connected.namespace != "" {
+			namespace = connected.namespace
+		}
+		if connected.queue != "" {
+			queue = connected.queue
+		}
+		if connected.clusterQueue != "" {
+			clusterQueue = connected.clusterQueue
+		}
+	}
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:    "sample",
+		WorkspaceUID: "workspace-uid",
+		ContextName:  "connected-context",
+		Namespace:    namespace,
+		Queue:        queue,
+	}
 	newServeRunner = func(string) kubeRawRunner { return runner }
 	newClusterProfileClient = func(string) (dynamic.Interface, error) { return client, nil }
+	newServeConnectionEnsurer = func(*cobra.Command) runConnectionEnsurer {
+		return &fakeRunConnectionEnsurer{connection: connection}
+	}
+	fetchServeWorkspace = func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
+		return tauworkspace.Workspace{
+			Metadata: tauworkspace.ObjectMeta{
+				Name:       connection.Workspace,
+				UID:        connection.WorkspaceUID,
+				Generation: 1,
+			},
+			Spec: tauworkspace.WorkspaceSpec{
+				Target: tauworkspace.WorkspaceTarget{Namespace: namespace},
+				Queue:  queue,
+			},
+			Status: tauworkspace.WorkspaceStatus{
+				Phase:              "Ready",
+				ObservedGeneration: 1,
+				Target:             tauworkspace.WorkspaceTargetStatus{ResolvedNamespace: namespace},
+				Queue: tauworkspace.WorkspaceQueueStatus{
+					LocalQueue:   queue,
+					ClusterQueue: clusterQueue,
+				},
+			},
+		}, nil
+	}
 	t.Cleanup(func() {
 		newServeRunner = originalRunner
 		newClusterProfileClient = originalClient
+		newServeConnectionEnsurer = originalConnectionEnsurer
+		fetchServeWorkspace = originalWorkspaceFetcher
 	})
 }
 
@@ -156,6 +188,26 @@ func executeAuthoritativeServe(t *testing.T, p profile.ResolvedWorkloadProfile, 
 func serveArgs(base []string, extras ...string) []string {
 	out := append([]string{}, base...)
 	return append(out, extras...)
+}
+
+func TestServeDeployRejectsAmbientContextConflict(t *testing.T) {
+	t.Setenv(tauContextEnv, "ambient-context")
+	root := newConnectedServeTestRoot(t)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{
+		"serve", "deploy", "endpoint",
+		"--profile", "model-serve",
+		"--image", "example.invalid/serve:v1",
+		"--dry-run=client",
+	})
+
+	err := root.Execute()
+	if err == nil ||
+		!strings.Contains(err.Error(), `context "ambient-context" conflicts`) ||
+		!strings.Contains(err.Error(), `connection context "connected-context"`) {
+		t.Fatalf("ambient context conflict error = %v", err)
+	}
 }
 
 func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
@@ -220,12 +272,20 @@ func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 		}
 	})
 
-	t.Run("applicability denial", func(t *testing.T) {
+	t.Run("ambiguous team applicability", func(t *testing.T) {
 		denied := ordinary
-		denied.Applicability.Teams = []string{"other"}
+		denied.Applicability.Teams = []string{"research", "experimental"}
 		_, err := executeAuthoritativeServe(t, denied, base...)
-		if err == nil || !strings.Contains(err.Error(), `does not authorize team "research"`) {
+		if err == nil || !strings.Contains(err.Error(), "authorizes multiple teams") {
 			t.Fatalf("applicability error = %v", err)
+		}
+	})
+
+	t.Run("another profile team in the same workspace", func(t *testing.T) {
+		experimental := ordinary
+		experimental.Applicability.Teams = []string{"experimental"}
+		if _, err := executeAuthoritativeServe(t, experimental, base...); err != nil {
+			t.Fatalf("experimental profile in the same workspace: %v", err)
 		}
 	})
 
@@ -280,11 +340,18 @@ func TestServeDeployMultiKueueAndRevisionMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			rootAnnotations := nestedStringMap(t, doc, "metadata", "annotations")
+			rootLabels := nestedStringMap(t, doc, "metadata", "labels")
 			var podAnnotations map[string]string
+			var podLabels map[string]string
 			if kind == "deployment" {
 				podAnnotations = nestedStringMap(t, doc, "spec", "template", "metadata", "annotations")
+				podLabels = nestedStringMap(t, doc, "spec", "template", "metadata", "labels")
 			} else {
 				podAnnotations = nestedStringMap(t, doc, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "annotations")
+				podLabels = nestedStringMap(t, doc, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "labels")
+			}
+			if rootLabels[workloadmeta.LabelWorkspace] != "sample" || podLabels[workloadmeta.LabelWorkspace] != "sample" {
+				t.Fatalf("workspace metadata root=%q pod=%q:\n%s", rootLabels[workloadmeta.LabelWorkspace], podLabels[workloadmeta.LabelWorkspace], rendered)
 			}
 			for key, value := range map[string]string{
 				workloadmeta.AnnotationTauClusterGeneration: strconv.FormatInt(23, 10),
