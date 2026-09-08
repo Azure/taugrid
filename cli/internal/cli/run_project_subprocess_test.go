@@ -72,6 +72,22 @@ compute:
   gpus: 0
 runtime:
   image: busybox:1.36
+storage:
+  output: /data/projects/sample/runs/health
+policy:
+  profile: test-routing
+  queue: jobqueue
+`)
+	escapedOutput := filepath.Join(root, "alpha", "tau", "escaped-output.yaml")
+	writeRunRoutingFile(t, escapedOutput, `name: alpha-escaped-output
+engine: job
+entrypoint: ../train.sh
+compute:
+  gpus: 0
+runtime:
+  image: busybox:1.36
+storage:
+  output: /data/projects/sample/runs-escape/attempt-1
 policy:
   profile: test-routing
   queue: jobqueue
@@ -188,6 +204,23 @@ policy:
 			server != "https://aks-ai-runtime-flex.test.invalid" ||
 			kubeconfig.Contexts["aks-ai-runtime-eastus2"] != nil {
 			t.Fatalf("isolated workspace kubeconfig selected wrong cluster: %+v", kubeconfig)
+		}
+	})
+	t.Run("connected client dry-run rejects output root prefix escape", func(t *testing.T) {
+		result := runTauRoutingSubprocess(
+			t,
+			root,
+			"run",
+			"--project",
+			"alpha",
+			"--config",
+			escapedOutput,
+			"--dry-run=client",
+		)
+		if result.err == nil ||
+			!strings.Contains(result.stderr, `storage.output "/data/projects/sample/runs-escape/attempt-1"`) ||
+			!strings.Contains(result.stderr, `output root "/data/projects/sample/runs"`) {
+			t.Fatalf("output prefix escape err=%v\nstderr:\n%s", result.err, result.stderr)
 		}
 	})
 	t.Run("explicit project health config", func(t *testing.T) {
@@ -493,7 +526,7 @@ case " $* " in
         fi
         ;;
     esac
-    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"gpu-cq"}}}'
+    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1","defaults":{"outputRoot":"/data/projects/sample/runs"}},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"gpu-cq"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
     printf '%%s\n' 'localqueue.kueue.x-k8s.io/jobqueue'

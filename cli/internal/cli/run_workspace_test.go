@@ -238,6 +238,32 @@ func TestApplyWorkspaceDefaultsRejectsForeignOutputScope(t *testing.T) {
 	}
 }
 
+func TestValidateRunOutputScopeBoundaries(t *testing.T) {
+	const root = "/data/projects/sample/runs"
+	tests := []struct {
+		name   string
+		output string
+		scope  string
+		wantOK bool
+	}{
+		{name: "exact root", output: root, scope: root, wantOK: true},
+		{name: "descendant", output: root + "/training/attempt-1", scope: root, wantOK: true},
+		{name: "normalized descendant", output: root + "/training/../attempt-1", scope: root + "/", wantOK: true},
+		{name: "sibling prefix", output: root + "-escape/attempt-1", scope: root},
+		{name: "parent traversal", output: root + "/../../other/attempt-1", scope: root},
+		{name: "relative output", output: "training/attempt-1", scope: root},
+		{name: "missing scope", output: root + "/attempt-1", scope: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRunOutputScope(tt.output, tt.scope)
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("validateRunOutputScope(%q, %q) error = %v, wantOK=%t", tt.output, tt.scope, err, tt.wantOK)
+			}
+		})
+	}
+}
+
 func TestWorkspaceServiceAccountRendersDirectJobAndRayJobPods(t *testing.T) {
 	zeroGPUs := 0
 	dir := t.TempDir()
