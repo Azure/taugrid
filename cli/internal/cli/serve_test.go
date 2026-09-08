@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -108,6 +109,88 @@ func serveTestPodSpec(t *testing.T, manifest []byte, kind string) corev1.PodSpec
 		t.Fatal("rendered manifest has no serving container")
 	}
 	return pod
+}
+
+func TestServeDeployContainerCommand(t *testing.T) {
+	script := "pip install 'foo[serve]==1.2' &&\nexec python serve.py --label \"hello, world\""
+	for _, tt := range []struct {
+		name    string
+		flags   []string
+		command []string
+		args    []string
+	}{
+		{name: "image defaults"},
+		{name: "explicit shell", flags: []string{"--command", "/bin/sh", "--command", "-c", "--arg", script},
+			command: []string{"/bin/sh", "-c"}, args: []string{script}},
+		{name: "literal arguments", flags: []string{"--arg=hello, world", "--arg=", "--arg=$(id); echo nope"},
+			args: []string{"hello, world", "", "$(id); echo nope"}},
+		{name: "command only", flags: []string{"--command=/app/server"}, command: []string{"/app/server"}},
+		{name: "legacy with command", flags: []string{"--command=python", "--args=serve.py --port 8080"},
+			command: []string{"python"}, args: []string{"serve.py", "--port", "8080"}},
+		{name: "legacy shell remains literal", flags: []string{"--args=pip install foo && python serve.py"},
+			args: []string{"pip", "install", "foo", "&&", "python", "serve.py"}},
+		{name: "legacy quote behavior", flags: []string{"--args=--label 'hello world'"},
+			args: []string{"--label", "'hello", "world'"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newConnectedServeTestRoot(t)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			flags := []string{"serve", "deploy", "custom-server", "--kind=deployment",
+				"--profile=model-serve", "--image=test:v1", "--dry-run=client", "-n", "tau"}
+			cmd.SetArgs(append(flags, tt.flags...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			container := serveTestPodSpec(t, out.Bytes(), "deployment").Containers[0]
+			if !reflect.DeepEqual(container.Command, tt.command) || !reflect.DeepEqual(container.Args, tt.args) {
+				t.Fatalf("command=%q args=%q, want command=%q args=%q", container.Command, container.Args, tt.command, tt.args)
+			}
+		})
+	}
+}
+
+func TestServeDeployRayLegacyArgsPreserveStartup(t *testing.T) {
+	cmd := newConnectedServeTestRoot(t)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"serve", "deploy", "ray-server", "--kind=rayservice",
+		"--profile=model-serve", "--image=test:v1", "--dry-run=client", "-n", "tau",
+		"--args=--model /ckpt --label 'hello world'"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	container := serveTestPodSpec(t, out.Bytes(), "rayservice").Containers[0]
+	want := []string{"--model", "/ckpt", "--label", "'hello", "world'"}
+	if len(container.Command) != 0 || !reflect.DeepEqual(container.Args, want) {
+		t.Fatalf("legacy Ray head command/args changed: command=%q args=%q", container.Command, container.Args)
+	}
+}
+
+func TestServeDeployRejectsInvalidCommandFlags(t *testing.T) {
+	for _, tt := range []struct {
+		name, wantErr string
+		flags         []string
+	}{
+		{"mixed args", "--arg conflicts with --args", []string{"--kind=deployment", "--args=one", "--arg=two"}},
+		{"explicit empty legacy args", "--arg conflicts with --args", []string{"--kind=deployment", "--args=", "--arg=two"}},
+		{"empty command", "--command requires a non-empty executable", []string{"--kind=deployment", "--command="}},
+		{"blank command", "--command requires a non-empty executable", []string{"--kind=deployment", "--command= "}},
+		{"default Ray command", "require --kind=deployment", []string{"--command=sh"}},
+		{"Ray command", "require --kind=deployment", []string{"--kind=rayservice", "--command=sh"}},
+		{"Ray args", "require --kind=deployment", []string{"--kind=rayservice", "--arg=hello"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newServeDeployCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs(append([]string{"custom-server", "--profile=model-serve", "--dry-run=client"}, tt.flags...))
+			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error=%v, want %q", err, tt.wantErr)
+			}
+		})
+	}
 }
 
 func TestApplyCheckpointMount(t *testing.T) {

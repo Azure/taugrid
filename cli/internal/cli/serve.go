@@ -69,6 +69,8 @@ func newServeDeployCmd() *cobra.Command {
 		port          int
 		rayVersion    string
 		argsStr       string
+		command       []string
+		containerArgs []string
 		namespace     string
 		dryRun        string
 		kubeContext   string
@@ -119,7 +121,9 @@ func newServeDeployCmd() *cobra.Command {
       --image sampleprojectcr.azurecr.io/llm:v1 --dry-run=client
   tau serve deploy tts --kind=deployment --profile model-serve --image my-reg/tts-api:v1 \
       --deployment-port 8080 --readiness-path /health --service-port 8080 \
-      --env MODEL_DIR=/models --replicas 1`,
+      --env MODEL_DIR=/models --replicas 1
+  tau serve deploy custom --kind=deployment --profile model-serve --image my-reg/server:v1 \
+      --command /bin/sh --command -c --arg 'pip install foo && exec python serve.py'`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -134,6 +138,15 @@ func newServeDeployCmd() *cobra.Command {
 			}
 			if kind != "rayservice" && kind != "deployment" {
 				return fmt.Errorf("--kind must be one of: rayservice, deployment")
+			}
+			if cmd.Flags().Changed("arg") && cmd.Flags().Changed("args") {
+				return fmt.Errorf("--arg conflicts with --args; use repeated --arg values for literal arguments")
+			}
+			if kind != "deployment" && (cmd.Flags().Changed("command") || cmd.Flags().Changed("arg")) {
+				return fmt.Errorf("--command and --arg require --kind=deployment; KubeRay owns RayService startup, use --import-path and --runtime-pip for Ray Serve apps")
+			}
+			if cmd.Flags().Changed("command") && (len(command) == 0 || strings.TrimSpace(command[0]) == "") {
+				return fmt.Errorf("--command requires a non-empty executable as its first value")
 			}
 			if cmd.Flags().Changed("gpus") && gpus < 0 {
 				return fmt.Errorf("--gpus must be >= 0")
@@ -299,12 +312,17 @@ func newServeDeployCmd() *cobra.Command {
 				if serr != nil {
 					return serr
 				}
+				deploymentArgs := splitShellish(argsStr)
+				if cmd.Flags().Changed("arg") {
+					deploymentArgs = containerArgs
+				}
 				manifest, err = serve.RenderDeployment(p, serve.DeploymentOptions{
 					Name:              name,
 					Namespace:         ns,
 					Image:             image,
 					Replicas:          deployReplicas(replicas, autoscaling),
-					Args:              splitShellish(argsStr),
+					Command:           command,
+					Args:              deploymentArgs,
 					Env:               env,
 					EnvVars:           envSecrets,
 					RuntimePip:        runtimePip,
@@ -378,7 +396,9 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&servicePort, "service-port", 0, "ClusterIP Service port to render for --kind=deployment (0 disables Service)")
 	cmd.Flags().IntVar(&serviceTarget, "service-target-port", 0, "ClusterIP Service targetPort for --kind=deployment (default: first --deployment-port or --service-port)")
 	cmd.Flags().StringVar(&rayVersion, "ray-version", "", "Ray version (default: 2.40.0)")
-	cmd.Flags().StringVar(&argsStr, "args", "", "extra container args (space-separated; e.g. \"--model /ckpt --quantize awq\")")
+	cmd.Flags().StringVar(&argsStr, "args", "", "legacy container args split on whitespace, without shell quoting; conflicts with --arg")
+	cmd.Flags().StringArrayVar(&command, "command", nil, "literal container command element (--kind=deployment only; repeat for each element; no shell parsing)")
+	cmd.Flags().StringArrayVar(&containerArgs, "arg", nil, "literal container argument (--kind=deployment only; repeatable; preserves spaces and commas; conflicts with --args)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
 	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count per serving pod; defaults to the selected TauCluster workload profile and must match it when set")
