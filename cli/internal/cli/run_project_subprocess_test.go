@@ -72,8 +72,6 @@ compute:
   gpus: 0
 runtime:
   image: busybox:1.36
-storage:
-  output: /data/projects/sample/runs/health
 policy:
   profile: test-routing
   queue: jobqueue
@@ -87,6 +85,7 @@ compute:
 runtime:
   image: busybox:1.36
 storage:
+  data_pvc: research-workspace
   output: /data/projects/sample/runs-escape/attempt-1
 policy:
   profile: test-routing
