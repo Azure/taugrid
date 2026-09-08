@@ -114,7 +114,7 @@ func buildKQL(opts Options) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("GpuHealth()\n")
+	b.WriteString("let samples = materialize(\nGpuHealth()\n")
 	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", seconds)
 	fmt.Fprintf(&b, "| where metric in (%s)\n", strings.Join(metrics, ", "))
 	if opts.Cluster != "" {
@@ -129,8 +129,14 @@ func buildKQL(opts Options) string {
 	if opts.Model != "" {
 		fmt.Fprintf(&b, "| where modelName == %s\n", kustoquery.QuoteString(opts.Model))
 	}
-	b.WriteString("| summarize arg_max(Timestamp, Value) by Cluster, instance, gpu, modelName, namespace, pod, metric\n")
-	b.WriteString("| evaluate pivot(metric, take_any(Value), Cluster, instance, gpu, modelName, namespace, pod)\n")
+	b.WriteString(");\n")
+	b.WriteString("let latest_attribution = samples\n")
+	b.WriteString("| summarize arg_max(Timestamp, namespace, pod, modelName) by Cluster, instance, gpu\n")
+	b.WriteString("| project Cluster, instance, gpu, namespace, pod, modelName;\n")
+	b.WriteString("samples\n")
+	b.WriteString("| summarize arg_max(Timestamp, Value) by Cluster, instance, gpu, metric\n")
+	b.WriteString("| evaluate pivot(metric, take_any(Value), Cluster, instance, gpu)\n")
+	b.WriteString("| join kind=leftouter latest_attribution on Cluster, instance, gpu\n")
 	b.WriteString("| order by Cluster asc, instance asc, gpu asc")
 	return b.String()
 }

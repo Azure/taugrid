@@ -26,12 +26,6 @@ metadata:
 spec:
   database: {{ $.Values.adx.metricsDatabase | quote }}
   body: |
-    // Pre-create metrics tables to avoid 429 throttling on first deploy.
-    // Batch {{ add1 $batchIdx }} of {{ len $batches }} ({{ len $batch }} tables).
-    // Schema: standard metrics tables include the default metrics schema plus
-    // lifted identity columns from collector lift-labels. .create-merge also
-    // adds these columns to existing tables during upgrades.
-    // ExperimentMetrics uses the normalized Prometheus remote-write schema.
     .create-merge tables
     {{- range $i, $table := $batch }}
       {{- if eq $table "ExperimentMetrics" }}

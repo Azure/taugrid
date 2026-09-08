@@ -322,6 +322,10 @@ spec:
             - --kusto-database
             - {{ . | quote }}
             {{- end }}
+            {{- with $kusto.costDatabase }}
+            - --kusto-cost-database
+            - {{ . | quote }}
+            {{- end }}
             {{- with $kusto.ingestion }}
             - --kusto-ingestion
             - {{ . | quote }}

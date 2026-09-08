@@ -262,7 +262,8 @@ helm upgrade --install taugrid-core ./taugrid-core \
   --set portal.rbac.create=true \
   --set portal.kusto.queryCommand=/usr/local/bin/query-kusto \
   --set portal.kusto.endpoint=<adx-endpoint> \
-  --set portal.kusto.database=Metrics
+  --set portal.kusto.database=Metrics \
+  --set portal.kusto.costDatabase=CostTracking
 ```
 
 For a direct standalone `taugrid-core` installation, Portal is disabled by default and, when enabled, runs in the Helm release namespace behind a ClusterIP-only `svc/tau-portal`. The TauGrid umbrella distribution additionally enables Portal with a dedicated ServiceAccount and read-only RBAC. Portal has no application-level login, so the chart rejects `LoadBalancer` and requires a platform-owned authenticated HTTPS proxy for researcher browser access. Each board degrades independently, so a partial install still serves the rest:
@@ -272,7 +273,10 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
   `DefaultAzureCredential` path, or set `portal.kusto.queryCommand` only when a
   platform intentionally supplies an adapter executable. Without either a
   reachable endpoint or adapter, Kusto-backed board APIs return 503 while the
-  Kubernetes-backed boards continue to serve.
+  Kubernetes-backed boards continue to serve. Cluster Health reads
+  `portal.kusto.database`; Cost reads allocation-based GPU-hours and estimated
+  charges by TauWorkspace from `portal.kusto.costDatabase` (default
+  `CostTracking`).
 - **Jobs / Queue, Ray, and Cluster Nodes** read the Kubernetes API directly with
   the pod's ServiceAccount. The computed Jobs board is disabled by default; use
   `portal.jobs.scopeMode=workspace` with an authenticated workspace directory,
@@ -300,7 +304,8 @@ It does not authorize the Jobs board. Viewer-authorized Jobs access requires
 trusted authentication proxy supplying the configured identity headers.
 Trusted test-cluster operator deployments can instead use `operator` mode with
 explicit scopes. The chart mounts only metadata; it never mounts remote
-kubeconfigs. Grant the portal's ServiceAccount the ADX database viewer role.
+kubeconfigs. Grant the portal's workload identity the ADX database viewer role
+on both the metrics and cost-tracking databases.
 For Azure Workload Identity, set
 `portal.serviceAccount.annotations.azure.workload.identity/client-id`; the
 chart derives the required Pod label from that annotation.

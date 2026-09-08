@@ -10,8 +10,6 @@ metadata:
 spec:
   database: {{ .Values.adx.metricsDatabase | quote }}
   body: |
-    // Ingestion batching policy for Metrics database.
-    // 15s batching → <30s source-to-queryable latency.
     .alter-merge database {{ .Values.adx.metricsDatabase }} policy ingestionbatching ```
     {
       "MaximumBatchingTimeSpan" : "{{ .Values.managementCommands.ingestionBatching.metrics.maxBatchingTimeSpan }}",
@@ -31,8 +29,6 @@ metadata:
 spec:
   database: {{ .Values.adx.logsDatabase | quote }}
   body: |
-    // Ingestion batching policy for Logs database.
-    // 30s batching → <45s source-to-queryable latency.
     .alter-merge database {{ .Values.adx.logsDatabase }} policy ingestionbatching ```
     {
       "MaximumBatchingTimeSpan" : "{{ .Values.managementCommands.ingestionBatching.logs.maxBatchingTimeSpan }}",

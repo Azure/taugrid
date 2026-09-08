@@ -8,6 +8,9 @@ aliases:
   - "/docs/tasks/contributor/"
 ---
 
+Join the [TauGrid Discord community](https://discord.gg/nwbb6hBvds) to meet
+other users, discuss workloads, and get help.
+
 - [Contributing](contributing/)
 - [Make a compatible change](change/)
 - [Run the Kind smoke test](kind-smoke-test/)

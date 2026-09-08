@@ -516,12 +516,15 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires storage.output backed by a writable PVC")
 	}
 
-	var policy metricsoffload.Options
+	policy := metricsoffload.Options{
+		Image: strings.TrimSpace(o.metricsOffloadImage),
+		Out:   strings.TrimSpace(o.metricsOffloadOut),
+	}
 	if err := applyDirectMetricsOffloadEnvPolicy(&policy); err != nil {
 		return metricsoffload.Runtime{}, err
 	}
 	if strings.TrimSpace(policy.Image) == "" {
-		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires TAU_METRICS_OFFLOAD_IMAGE")
+		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires metrics.offload.image or TAU_METRICS_OFFLOAD_IMAGE")
 	}
 	if err := metricsoffload.ValidatePinnedImage(policy.Image); err != nil {
 		return metricsoffload.Runtime{}, err
@@ -565,10 +568,12 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	// BlobFuse-backed /data does not provide them, so SQLite fails schema init
 	// with SQLITE_BUSY there. Root Store under the sidecar's /var/run/tau
 	// emptyDir instead. The spool (Out) is written with WriteFileAtomic and
-	// needs no locks, so it stays on durable /data — its JSONL checkpoint must
-	// survive an ungraceful pod death so a retry (resilience.max_retries or
-	// tau run resume) resumes from attempt 1's undrained rows instead of
-	// re-baselining to end-of-file and silently dropping them.
+	// needs no locks, so it defaults to durable /data. That lets a retry
+	// (resilience.max_retries or tau run resume) resume from attempt 1's
+	// undrained rows instead of re-baselining to end-of-file and silently
+	// dropping them. Platforms whose PVCs cannot support the atomic checkpoint
+	// write may override Out to the shared /var/run/tau emptyDir and accept
+	// pod-local checkpoint durability.
 	runtimeRoot := path.Join(metricsoffload.RuntimeMountPath, "metrics", o.metricsSessionID)
 	durableRoot := path.Join(outputDir, ".tau", "metrics", o.metricsSessionID)
 
@@ -581,7 +586,7 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 		Tags:                    tags,
 		Source:                  source,
 		Store:                   path.Join(runtimeRoot, "expstore"),
-		Out:                     path.Join(durableRoot, "offload"),
+		Out:                     firstNonEmpty(policy.Out, path.Join(durableRoot, "offload")),
 		History:                 history,
 		CompletionFile:          "/var/run/tau/metrics-completion.json",
 		RemoteWriteEndpoint:     endpoint,
@@ -616,6 +621,7 @@ func applyDirectMetricsOffloadEnvPolicy(opts *metricsoffload.Options) error {
 	for env, target := range map[string]*string{
 		"TAU_METRICS_OFFLOAD_IMAGE":                 &opts.Image,
 		"TAU_METRICS_OFFLOAD_SOURCE":                &opts.Source,
+		"TAU_METRICS_OFFLOAD_OUT":                   &opts.Out,
 		"TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT": &opts.RemoteWriteEndpoint,
 	} {
 		if value := strings.TrimSpace(os.Getenv(env)); value != "" {

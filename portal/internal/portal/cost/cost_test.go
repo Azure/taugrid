@@ -35,9 +35,9 @@ func (s *scriptedQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row
 	return nil, nil
 }
 
-var namespaceRows = []kustoquery.Row{
-	{"namespace": "research", "GpuHours": 120.5, "Gpus": 8.0, "AvgUtil": 71.0},
-	{"namespace": "infra", "GpuHours": 12.0, "Gpus": 2.0, "AvgUtil": 15.0},
+var workspaceRows = []kustoquery.Row{
+	{"workspace": "research-lab", "namespace": "research", "GpuHours": 120.5, "EstimatedCostUSD": 442.24, "PeakGpus": 8.0, "AvgUtil": 71.0},
+	{"workspace": "infra-lab", "namespace": "infra", "GpuHours": 12.0, "EstimatedCostUSD": 44.04, "PeakGpus": 2.0, "AvgUtil": 15.0},
 }
 
 var idleRows = []kustoquery.Row{
@@ -48,7 +48,7 @@ var idleRows = []kustoquery.Row{
 }
 
 func TestBoardAssemblesBothQueries(t *testing.T) {
-	q := &scriptedQuerier{results: [][]kustoquery.Row{namespaceRows, idleRows}}
+	q := &scriptedQuerier{results: [][]kustoquery.Row{workspaceRows, idleRows}}
 	snap, err := Board(context.Background(), q, Options{})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
@@ -61,18 +61,22 @@ func TestBoardAssemblesBothQueries(t *testing.T) {
 		t.Fatalf("window = %q, want %q", snap.Window, DefaultWindow.String())
 	}
 
-	// Namespaces sorted by GPU-hours desc; total is the rounded sum.
-	if len(snap.Namespaces) != 2 {
-		t.Fatalf("namespaces = %d, want 2", len(snap.Namespaces))
+	// Workspaces sorted by GPU-hours desc; totals are rounded sums.
+	if len(snap.Workspaces) != 2 {
+		t.Fatalf("workspaces = %d, want 2", len(snap.Workspaces))
 	}
-	if snap.Namespaces[0].Namespace != "research" || snap.Namespaces[0].GPUHours != 120.5 || snap.Namespaces[0].GPUs != 8 {
-		t.Fatalf("ns[0] = %#v, want research 120.5h/8gpu", snap.Namespaces[0])
+	if snap.Workspaces[0].Workspace != "research-lab" || snap.Workspaces[0].Namespace != "research" ||
+		snap.Workspaces[0].GPUHours != 120.5 || snap.Workspaces[0].PeakGPUs != 8 {
+		t.Fatalf("workspace[0] = %#v, want research-lab 120.5h/8gpu", snap.Workspaces[0])
 	}
-	if snap.Namespaces[0].AvgUtilPct != 71 {
-		t.Fatalf("ns[0] avgUtil = %v, want 71", snap.Namespaces[0].AvgUtilPct)
+	if snap.Workspaces[0].AvgUtilPct != 71 || snap.Workspaces[0].EstimatedCostUSD != 442.24 {
+		t.Fatalf("workspace[0] metrics = %#v", snap.Workspaces[0])
 	}
 	if snap.TotalGPUHours != 132.5 {
 		t.Fatalf("total gpu-hours = %v, want 132.5", snap.TotalGPUHours)
+	}
+	if snap.TotalEstimatedCostUSD != 486.28 {
+		t.Fatalf("total estimated cost = %v, want 486.28", snap.TotalEstimatedCostUSD)
 	}
 
 	// Idle GPUs sorted by avg util asc; numeric-string values parse.
@@ -93,12 +97,29 @@ func TestBoardEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
-	if snap.TotalGPUHours != 0 || len(snap.Namespaces) != 0 || len(snap.IdleGPUs) != 0 {
+	if snap.TotalGPUHours != 0 || snap.TotalEstimatedCostUSD != 0 || len(snap.Workspaces) != 0 || len(snap.IdleGPUs) != 0 {
 		t.Fatalf("empty snapshot = %#v", snap)
 	}
 	// Slices must be non-nil so they serialize as [] not null.
-	if snap.Namespaces == nil || snap.IdleGPUs == nil {
+	if snap.Workspaces == nil || snap.IdleGPUs == nil {
 		t.Fatal("empty slices are nil, want non-nil")
+	}
+}
+
+func TestBoardPreservesFractionalMIGPeak(t *testing.T) {
+	q := &scriptedQuerier{results: [][]kustoquery.Row{
+		{{
+			"workspace": "mig-lab", "namespace": "mig", "GpuHours": 0.1,
+			"EstimatedCostUSD": 0.52, "PeakGpus": 0.14, "AvgUtil": 60.0,
+		}},
+		nil,
+	}}
+	snap, err := Board(context.Background(), q, Options{})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if got := snap.Workspaces[0].PeakGPUs; got != 0.14 {
+		t.Fatalf("fractional peak = %v, want 0.14", got)
 	}
 }
 
@@ -111,15 +132,21 @@ func TestBoardPropagatesError(t *testing.T) {
 	}
 }
 
-func TestBuildNamespaceKQL(t *testing.T) {
-	kql := buildNamespaceKQL(DefaultWindow, "research", "")
+func TestBuildWorkspaceKQL(t *testing.T) {
+	kql := buildWorkspaceKQL(DefaultWindow, "", "research", "")
 	for _, want := range []string{
-		"GpuHealth()",
+		"database(@'CostTracking').GpuCostHourly",
 		"| where Timestamp > ago(604800s)", // 7d
-		"metric == 'gpu_utilization'",
-		"isnotempty(namespace)",
 		"namespace == @'research'",
-		"GpuHours=round(datetime_diff('second', MaxT, MinT) / 3600.0 * Gpus, 1)",
+		"workspace=iff(isempty(workspace), namespace, workspace)",
+		"schema_version == 4",
+		"ClusterGpuHours=sum(gpu_count)",
+		"HourlyGpuHours=sum(ClusterGpuHours)",
+		"ClusterPeakGpus=max(reported_peak_gpu_count)",
+		"HourlyPeakGpus=sum(ClusterPeakGpus)",
+		"GpuHours=round(sum(HourlyGpuHours), 1)",
+		"EstimatedCostUSD=round(sum(HourlyCost), 2)",
+		"PeakGpus=round(max(HourlyPeakGpus), 2)",
 		"order by GpuHours desc",
 	} {
 		if !strings.Contains(kql, want) {
@@ -128,13 +155,30 @@ func TestBuildNamespaceKQL(t *testing.T) {
 	}
 }
 
-func TestBuildNamespaceKQLNoFilter(t *testing.T) {
-	kql := buildNamespaceKQL(DefaultWindow, "", "")
+func TestBuildWorkspaceKQLNoFilter(t *testing.T) {
+	kql := buildWorkspaceKQL(DefaultWindow, "", "", "")
 	if strings.Contains(kql, "namespace ==") {
 		t.Fatalf("unfiltered namespace KQL should have no equality filter:\n%s", kql)
 	}
+
 	if strings.Contains(kql, "Cluster ==") {
 		t.Fatalf("unscoped namespace KQL should have no cluster filter:\n%s", kql)
+	}
+}
+
+func TestBuildWorkspaceKQLClusterScopeExcludesUnattributableLegacyRows(t *testing.T) {
+	kql := buildWorkspaceKQL(DefaultWindow, "", "", "cluster-a")
+	for _, want := range []string{
+		"column_ifexists('peak_gpu_count'",
+		"schema_version == 4",
+		"Cluster == @'cluster-a'",
+	} {
+		if !strings.Contains(kql, want) {
+			t.Fatalf("cluster-scoped KQL missing %q:\n%s", want, kql)
+		}
+	}
+	if strings.Contains(kql, "isnull(schema_version)") {
+		t.Fatalf("cluster-scoped KQL must not include unattributable legacy rows:\n%s", kql)
 	}
 }
 
@@ -164,7 +208,7 @@ func TestBoardCustomThreshold(t *testing.T) {
 // TestBuildNamespaceKQLInjection verifies a namespace filter with an embedded
 // quote is escaped, not able to break out of the KQL literal.
 func TestBuildNamespaceKQLInjection(t *testing.T) {
-	kql := buildNamespaceKQL(DefaultWindow, "ns' | project", "")
+	kql := buildWorkspaceKQL(DefaultWindow, "", "ns' | project", "")
 	if !strings.Contains(kql, "namespace == @'ns'' | project'") {
 		t.Fatalf("injection not escaped:\n%s", kql)
 	}
@@ -173,7 +217,7 @@ func TestBuildNamespaceKQLInjection(t *testing.T) {
 // TestBuildKQLClusterScope verifies a cluster value scopes both queries and is
 // escaped as a safe KQL literal.
 func TestBuildKQLClusterScope(t *testing.T) {
-	nsKQL := buildNamespaceKQL(DefaultWindow, "", "taugrid-flex")
+	nsKQL := buildWorkspaceKQL(DefaultWindow, "", "", "taugrid-flex")
 	if !strings.Contains(nsKQL, "Cluster == @'taugrid-flex'") {
 		t.Fatalf("namespace KQL missing cluster scope:\n%s", nsKQL)
 	}
@@ -182,9 +226,16 @@ func TestBuildKQLClusterScope(t *testing.T) {
 		t.Fatalf("idle KQL missing cluster scope:\n%s", idleKQL)
 	}
 	// Injection through the cluster value is escaped, not able to break out.
-	inj := buildNamespaceKQL(DefaultWindow, "", "c' | project")
+	inj := buildWorkspaceKQL(DefaultWindow, "", "", "c' | project")
 	if !strings.Contains(inj, "Cluster == @'c'' | project'") {
 		t.Fatalf("cluster injection not escaped:\n%s", inj)
+	}
+}
+
+func TestBuildWorkspaceKQLQuotesDatabase(t *testing.T) {
+	kql := buildWorkspaceKQL(DefaultWindow, "Cost'Tracking", "", "")
+	if !strings.Contains(kql, "database(@'Cost''Tracking').GpuCostHourly") {
+		t.Fatalf("database is not safely quoted:\n%s", kql)
 	}
 }
 
@@ -208,8 +259,8 @@ func TestBoardThreadsCluster(t *testing.T) {
 func TestBoardEnforcesNamespaceOnEveryQueryAndResult(t *testing.T) {
 	q := &scriptedQuerier{results: [][]kustoquery.Row{
 		{
-			{"namespace": "team-alpha", "GpuHours": 10.0, "Gpus": 1.0, "AvgUtil": 50.0},
-			{"namespace": "team-beta", "GpuHours": 99.0, "Gpus": 8.0, "AvgUtil": 90.0},
+			{"workspace": "alpha", "namespace": "team-alpha", "GpuHours": 10.0, "PeakGpus": 1.0, "AvgUtil": 50.0},
+			{"workspace": "beta", "namespace": "team-beta", "GpuHours": 99.0, "PeakGpus": 8.0, "AvgUtil": 90.0},
 		},
 		{
 			{"instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "alpha-pod", "AvgUtil": 4.0, "Samples": 20.0},
@@ -230,8 +281,8 @@ func TestBoardEnforcesNamespaceOnEveryQueryAndResult(t *testing.T) {
 			}
 		}
 	}
-	if len(snap.Namespaces) != 1 || snap.Namespaces[0].Namespace != "team-alpha" {
-		t.Fatalf("namespaces = %+v, want only team-alpha", snap.Namespaces)
+	if len(snap.Workspaces) != 1 || snap.Workspaces[0].Workspace != "alpha" {
+		t.Fatalf("workspaces = %+v, want only alpha", snap.Workspaces)
 	}
 	if len(snap.IdleGPUs) != 1 || snap.IdleGPUs[0].Pod != "alpha-pod" {
 		t.Fatalf("idle GPUs = %+v, want only alpha-pod", snap.IdleGPUs)

@@ -35,6 +35,10 @@ disableKinds = ["taxonomy", "term"]
     weight = 50
     pageRef = "/blog"
   [[menu.main]]
+    name = "Discord"
+    weight = 90
+    url = "https://discord.gg/nwbb6hBvds"
+  [[menu.main]]
     name = "GitHub"
     weight = 100
     url = "https://github.com/Azure/taugrid"
@@ -57,6 +61,7 @@ disableKinds = ["taxonomy", "term"]
 
 [params]
   description = "Cloud-native AI infrastructure for GPU workloads on Kubernetes, from data preparation to distributed training, fine-tuning, and inference"
+  discord_url = "https://discord.gg/nwbb6hBvds"
   github_repo = "https://github.com/Azure/taugrid"
   github_project_repo = "https://github.com/Azure/taugrid"
   github_subdir = "site"

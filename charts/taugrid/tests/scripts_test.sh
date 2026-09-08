@@ -199,6 +199,9 @@ for required in \
   grep -Fq -- "$required" "$default_manifest" ||
     fail "default render is missing the MultiKueue capability: $required"
 done
+retained_crd_count="$(grep -c 'helm.sh/resource-policy: keep' "$default_manifest")"
+[[ "$retained_crd_count" -eq 11 ]] ||
+  fail "expected all 11 Kueue CRDs to retain the Helm keep policy, got $retained_crd_count"
 if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$default_manifest"); then
   fail "default render created operator-owned MultiKueue routing objects implicitly"
 fi

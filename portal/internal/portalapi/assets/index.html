@@ -1000,8 +1000,8 @@
   async function renderCost(view) {
     view.append(el("h1", { style: "margin:0 0 4px;font-size:20px;" }, "Cost"));
     view.append(el("p", { style: "margin:0 0 8px;color:var(--muted);" },
-      "GPU-hours by namespace and idle GPUs, derived from GpuHealth() utilization, via /api/portal/cost. " +
-      "Per-user/team attribution and budgets will be available in a future update."));
+      "Allocation-based GPU-hours and estimated cost by TauGrid workspace, via /api/portal/cost. " +
+      "Utilization is shown as an efficiency signal and does not determine cost."));
     let snap;
     try {
       snap = await fetchJSON("/api/portal/cost");
@@ -1012,25 +1012,30 @@
       return;
     }
     view.append(el("p", { class: "note", style: "margin-top:0;" },
-      "window: " + (snap.window || "—") + " · total GPU-hours: " + (snap.totalGPUHours ?? 0)));
+      "window: " + (snap.window || "—") +
+      " · total GPU-hours: " + (snap.totalGPUHours ?? 0) +
+      " · estimated cost: $" + Number(snap.totalEstimatedCostUSD ?? 0).toFixed(2)));
 
     const n1 = x => (Math.round((x ?? 0) * 10) / 10);
-    const namespaces = snap.namespaces || [];
-    if (namespaces.length === 0) {
-      view.append(el("div", { class: "empty" }, "No namespaced GPU usage in the window."));
+    const workspaces = snap.workspaces || [];
+    if (workspaces.length === 0) {
+      view.append(el("div", { class: "empty" }, "No workspace GPU allocations in the window."));
     } else {
-      view.append(el("h3", { style: "margin:18px 0 0;font-size:14px;" }, "GPU-hours by namespace"));
+      view.append(el("h3", { style: "margin:18px 0 0;font-size:14px;" }, "Cost by workspace"));
       const nt = el("table", { class: "jobs" });
       nt.append(el("thead", {}, el("tr", {},
-        el("th", {}, "Namespace"), el("th", { class: "num" }, "GPU-hours"),
-        el("th", { class: "num" }, "GPUs"), el("th", { class: "num" }, "Avg util %"))));
+        el("th", {}, "Workspace"), el("th", {}, "Namespace"),
+        el("th", { class: "num" }, "GPU-hours"), el("th", { class: "num" }, "Est. cost"),
+        el("th", { class: "num" }, "Peak GPUs"), el("th", { class: "num" }, "Avg util %"))));
       const ntb = el("tbody");
-      for (const ns of namespaces) {
+      for (const ws of workspaces) {
         ntb.append(el("tr", {},
-          el("td", {}, ns.namespace || "—"),
-          el("td", { class: "num" }, String(n1(ns.gpuHours))),
-          el("td", { class: "num" }, String(ns.gpus ?? 0)),
-          el("td", { class: "num" }, String(n1(ns.avgUtilPct)))));
+          el("td", {}, ws.workspace || "—"),
+          el("td", {}, ws.namespace || "—"),
+          el("td", { class: "num" }, String(n1(ws.gpuHours))),
+          el("td", { class: "num" }, "$" + Number(ws.estimatedCostUSD ?? 0).toFixed(2)),
+          el("td", { class: "num" }, Number(ws.peakGPUs ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })),
+          el("td", { class: "num" }, String(n1(ws.avgUtilPct)))));
       }
       nt.append(ntb);
       view.append(nt);
