@@ -1,5 +1,13 @@
 # taugrid-core defaults. Override per cluster.
 
+# Historical Ray driver log discovery. These must match the actual adx-mon
+# destination and telemetry source; never copy the Portal Metrics database.
+logging:
+  enabled: false
+  endpoint: ""
+  database: Logs
+  cluster: ""
+
 # Optional Kueue ResourceFlavors. Most clusters manage these with their lane
 # manifests/GitOps, so the chart leaves generation off by default. A
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class

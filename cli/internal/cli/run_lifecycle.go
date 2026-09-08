@@ -392,6 +392,11 @@ Use --workspace, or --context and --namespace, to select an exact target.
 
 For RayJobs with local worker access, fetches the actual job execution logs via
 the Ray Dashboard API (ray job logs) instead of the head pod container logs.
+After a terminal RayJob's pods are cleaned up, reads centrally offloaded logs
+using the tau-log-connection ConfigMap in the selected cluster's system namespace.
+The --kusto-* flags override individual discovered values. Fully explicit flags
+work without ConfigMap access. Older installations need the platform administrator
+to configure taugrid-core logging, or all three --kusto-* flags.
 For manager-side MultiKueue RayJobs, reads centrally offloaded driver logs from
 ADX Logs.ContainerLogs and requires --kusto-endpoint plus --kusto-database once
 the selected worker is known. For batch/v1 Jobs, streams pod logs via the
@@ -403,16 +408,17 @@ Kubernetes job-name=<name> label selector.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			opts := runLogsOptions{
-				Follow:        follow,
-				Tail:          tail,
-				Container:     container,
-				AllContainers: allContainers,
-				Previous:      previous,
-				Timestamps:    timestamps,
-				Prefix:        prefix,
-				KustoCluster:  kustoCluster,
-				KustoEndpoint: kustoEndpoint,
-				KustoDatabase: kustoDatabase,
+				SystemNamespace: systemNamespaceFromCommand(cmd),
+				Follow:          follow,
+				Tail:            tail,
+				Container:       container,
+				AllContainers:   allContainers,
+				Previous:        previous,
+				Timestamps:      timestamps,
+				Prefix:          prefix,
+				KustoCluster:    kustoCluster,
+				KustoEndpoint:   kustoEndpoint,
+				KustoDatabase:   kustoDatabase,
 			}
 			explicitRoute := runContextExplicit(cmd) || cmd.Flags().Changed("namespace")
 			if discover && !explicitRoute && cmd.Flags().Changed("workspace") {
@@ -443,6 +449,7 @@ Kubernetes job-name=<name> label selector.`,
 			defer restore()
 			r := kube.New(resolvedContext)
 			opts.Namespace = ns
+			opts.SystemNamespace = connection.systemNamespace
 			return runLogsCommandWithHooks(cmd.Context(), cmd.OutOrStdout(), r, name, opts, runLogsHooks{})
 		},
 	}
@@ -453,9 +460,9 @@ Kubernetes job-name=<name> label selector.`,
 	cmd.Flags().BoolVar(&previous, "previous", false, "show logs for the previous container instance (batch Jobs only)")
 	cmd.Flags().BoolVar(&timestamps, "timestamps", false, "include timestamps on each line (batch Jobs only)")
 	cmd.Flags().BoolVar(&prefix, "prefix", false, "prefix each line with pod and container names (batch Jobs only)")
-	cmd.Flags().StringVar(&kustoCluster, "kusto-cluster", "", "cluster identifier in ADX Logs.ContainerLogs for terminal local RayJob logs")
-	cmd.Flags().StringVar(&kustoEndpoint, "kusto-endpoint", "", "ADX endpoint for centrally offloaded RayJob logs")
-	cmd.Flags().StringVar(&kustoDatabase, "kusto-database", "", "ADX database for centrally offloaded RayJob logs")
+	cmd.Flags().StringVar(&kustoCluster, "kusto-cluster", "", "override telemetry source Cluster in ADX ContainerLogs (not the Azure ADX resource name; terminal local RayJobs only)")
+	cmd.Flags().StringVar(&kustoEndpoint, "kusto-endpoint", "", "override ADX query endpoint for centrally offloaded RayJob logs")
+	cmd.Flags().StringVar(&kustoDatabase, "kusto-database", "", "override ADX database for centrally offloaded RayJob logs")
 	connection.add(cmd)
 	return cmd
 }

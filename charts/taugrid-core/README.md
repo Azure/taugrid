@@ -92,6 +92,54 @@ Prewarm, Stellar, Portal, and the lifecycle recorder run in the Helm release nam
 
 `lifecycleRecorder.targetNamespace` is never created here. It is the observed workload namespace, owned by `tau-core-controller` through a `TauWorkspace` or by external queue policy. Enabling the recorder against a namespace that does not exist fails with a message naming the value and those owners, instead of surfacing later as `namespaces "<name>" not found` on the recorder's Role.
 
+### Historical RayJob logs
+
+Enable discovery for `tau run logs` and `tau logs` after a completed RayJob's
+head pod is deleted. Set these values in the existing release's canonical
+Helm/GitOps configuration (under `taugrid-core:` for the umbrella chart):
+
+```yaml
+logging:
+  enabled: true
+  endpoint: https://actual-adx.westus2.kusto.windows.net
+  database: Logs
+  cluster: source-kubernetes-cluster
+```
+
+`endpoint` must be the actual ADX query URI used by adx-mon, not a URL guessed
+from a Kubernetes context or Azure resource name. `cluster` must equal
+adx-mon's `global.clusterName` / the ingested `ContainerLogs.Cluster` value.
+The Ray driver sidecar writes `Logs:ContainerLogs`; use `Logs` unless the
+workload's offload destination and ingestion routing were explicitly changed.
+Do not copy the Portal's `Metrics` database. Terraform's AKS deployment
+populates this block from the same ADX URI and source-cluster inputs as adx-mon.
+Changing this block only publishes query metadata; it does not enable ingestion.
+
+The chart owns one fixed `tau-log-connection` ConfigMap in its release
+namespace, which must be the workspace connection's system namespace. Its
+`data["connection.json"]` is a JSON object with schema `tau.logs.connection.v1`
+and string `endpoint`, `database`, and `cluster` fields. One record describes
+the local cluster, never a list of worker destinations. Keep this record and
+adx-mon configuration consistent when changing destinations.
+
+Roll out the updated CLI, controller, and configured chart together. The
+controller's workspace-reader Role grants only `get` on this named ConfigMap;
+it does not grant access to arbitrary system ConfigMaps. Cluster-wide
+authorization installs must supply this permission through their existing
+authorization policy. ADX login and database query authorization are separate
+requirements, unchanged by discovery.
+
+Discovery uses the selected/verified workspace route, including its custom
+system namespace, only after local terminal RayJob logs become unavailable.
+Individual `--kusto-endpoint`, `--kusto-database`, and `--kusto-cluster` flags
+override the record. Fully specified flags bypass discovery, including on
+older installations without the ConfigMap or permission to read it.
+Missing, malformed, or forbidden records produce actionable errors rather
+than guesses. Manager-side MultiKueue logs still require explicit endpoint
+and database plus the selected worker's telemetry annotation; the manager's
+local record is never used for a remote worker. The RayJob must still exist
+with its recorded RayCluster name, and central `--follow` is not supported.
+
 ### Upgrading existing releases
 
 Releases created before namespace unification may have first-party services and Tau system objects in different legacy namespaces. Moving release-owned Deployments, Services, RBAC, and identities recreates namespaced resources and can cause downtime. Helm does not move `TauWorkspace`, `TauQuotaRequest`, PVC, or Workload Identity state. Back up and migrate those objects explicitly before removing any legacy namespace.

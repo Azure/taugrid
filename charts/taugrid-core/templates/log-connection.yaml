@@ -1,0 +1,14 @@
+{{- if .Values.logging.enabled }}
+{{- $endpoint := required "logging.endpoint is required when logging.enabled=true" (.Values.logging.endpoint | trim) }}
+{{- $database := required "logging.database is required when logging.enabled=true" (.Values.logging.database | trim) }}
+{{- $cluster := required "logging.cluster must match the telemetry source Cluster when logging.enabled=true" (.Values.logging.cluster | trim) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tau-log-connection
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+data:
+  connection.json: {{ dict "schema" "tau.logs.connection.v1" "endpoint" $endpoint "database" $database "cluster" $cluster | toJson | quote }}
+{{- end }}
