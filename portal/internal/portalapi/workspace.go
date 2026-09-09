@@ -657,7 +657,7 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			return
 		}
 		if isAPI && (scope.Availability != workspaceAvailabilityAvailable ||
-			(scope.ExperimentsURL != "" && !strings.HasPrefix(scope.ExperimentsURL, "/"))) {
+			(scope.ExperimentsURL != "" && !isSafeLocalAbsolutePath(scope.ExperimentsURL))) {
 			writeScopedJSON(w, http.StatusConflict, map[string]string{
 				"reason": "native experiments are unavailable: configure a trusted experimentsBackend connection",
 			}, scope, "unavailable")

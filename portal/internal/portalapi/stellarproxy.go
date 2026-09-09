@@ -70,7 +70,7 @@ func (s *Server) nativeExperiments(scope WorkspaceScope) NativeExperiments {
 	if scope.ExperimentsURL == "" {
 		return NativeExperiments{State: "untracked", Reason: "Experiment tracking is not configured for this workspace."}
 	}
-	if scope.Availability != workspaceAvailabilityAvailable || !strings.HasPrefix(scope.ExperimentsURL, "/") {
+	if scope.Availability != workspaceAvailabilityAvailable || !isSafeLocalAbsolutePath(scope.ExperimentsURL) {
 		return NativeExperiments{State: "unavailable", Reason: "Configure a trusted experimentsBackend connection to use native experiments."}
 	}
 	if strings.Contains(strings.ToLower(scope.Source), "kusto") && !s.stellarKustoAvailable {
@@ -210,18 +210,50 @@ func (s *Server) proxyStellar(w http.ResponseWriter, r *http.Request, scope Work
 	}
 }
 
+func trustedStellarProbe(request *http.Request, scope WorkspaceScope, route string, query url.Values) (*http.Request, error) {
+	if scope.experimentsBackend == nil {
+		return nil, errors.New("trusted experiment backend is not configured")
+	}
+	if err := validateExperimentsBackend(*scope.experimentsBackend); err != nil {
+		return nil, err
+	}
+	target, _ := url.Parse(scope.experimentsBackend.URL)
+	base := strings.TrimRight(target.Path, "/")
+	prefix := strings.TrimPrefix(path.Dir(request.URL.Path), base)
+	switch prefix {
+	case "/api/v2/stellar", "/api/v1/stellar", "/api/stellar":
+	default:
+		return nil, errors.New("trusted experiment probe requires a canonical API path")
+	}
+	switch route {
+	case "/snapshot", "/runs", "/artifacts":
+	default:
+		return nil, errors.New("trusted experiment probe route is not supported")
+	}
+	// Rebuild from configured authority, never from a request's URL or Host.
+	target.Path = base + prefix + route
+	target.RawQuery = query.Encode()
+	probe, err := http.NewRequestWithContext(request.Context(), http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	probe.Header.Set("Accept", "application/json")
+	if token := request.Header.Get("Authorization"); token != "" {
+		probe.Header.Set("Authorization", token)
+	}
+	return probe, nil
+}
+
 func trustedStellarArtifacts(client *http.Client, request *http.Request, scope WorkspaceScope) ([]expcockpit.ArtifactView, int) {
-	probe := request.Clone(request.Context())
-	probe.Method = http.MethodGet
-	target := *request.URL
-	target.Path = path.Dir(target.Path) + "/snapshot"
-	query := target.Query()
+	query := request.URL.Query()
 	query.Del("mode")
 	query.Del("artifact")
 	query.Del("run")
 	query.Set("include_static", "true")
-	target.RawQuery = query.Encode()
-	probe.URL = &target
+	probe, err := trustedStellarProbe(request, scope, "/snapshot", query)
+	if err != nil {
+		return nil, http.StatusBadGateway
+	}
 	response, err := client.Do(probe)
 	if err != nil {
 		return nil, http.StatusBadGateway

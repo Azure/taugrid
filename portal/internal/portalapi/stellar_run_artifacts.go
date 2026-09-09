@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 
 	"github.com/Azure/taugrid/portal/internal/expcockpit"
 )
@@ -25,12 +24,10 @@ func trustedExactRunArtifacts(client *http.Client, request *http.Request, scope 
 		query.Set("project", project)
 	}
 	read := func(route string, limit int64, value any) int {
-		probe := request.Clone(request.Context())
-		probe.Method = http.MethodGet
-		address := *request.URL
-		address.Path = path.Dir(address.Path) + route
-		address.RawQuery = query.Encode()
-		probe.URL = &address
+		probe, err := trustedStellarProbe(request, scope, route, query)
+		if err != nil {
+			return http.StatusBadGateway
+		}
 		response, err := client.Do(probe)
 		if err != nil {
 			return http.StatusBadGateway
