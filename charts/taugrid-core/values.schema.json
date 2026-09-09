@@ -3,6 +3,16 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "endpoint": { "type": "string" },
+        "database": { "type": "string" },
+        "cluster": { "type": "string" }
+      }
+    },
     "global": {
       "type": "object",
       "additionalProperties": true
