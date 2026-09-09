@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -79,6 +80,9 @@ func resolveTerminalLogConnection(ctx context.Context, opts runLogsOptions, hook
 		if strings.TrimSpace(opts.KustoCluster) == "" {
 			opts.KustoCluster = connection.Cluster
 		}
+	}
+	if strings.IndexFunc(opts.KustoDatabase, unicode.IsControl) >= 0 {
+		return opts, fmt.Errorf("historical log connection database must not contain control characters; correct logging.database or --kusto-database")
 	}
 	if missing := missingLogConnectionFlags(opts); len(missing) > 0 {
 		return opts, fmt.Errorf("historical log connection is incomplete; configure taugrid-core logging in the selected cluster's system namespace or supply %s", strings.Join(missing, ", "))
