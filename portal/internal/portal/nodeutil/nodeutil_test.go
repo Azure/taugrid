@@ -6,6 +6,7 @@ package nodeutil
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,27 +26,35 @@ func (f *fakeQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row, er
 	return f.rows, f.err
 }
 
-// joinedRows is the shape the final projection produces: one row per node
-// (keyed by instance = Host) with the CPU util, core count, and memory columns
-// already computed in KQL. Values arrive as JSON numbers/strings exactly like
-// the shell-out parser yields.
-var joinedRows = []kustoquery.Row{
-	{
-		"Cluster": "cluster-a", "instance": "node-0",
-		"cpuUtilPct": 82.5, "cpuCores": 64.0,
-		"memTotalBytes": 200.0, "memAvailBytes": 50.0, "memUsedPct": 75.0,
-	},
-	{
-		"Cluster": "cluster-a", "instance": "node-1",
-		"cpuUtilPct": "12.5", // numeric string (Kusto tostring())
-		"cpuCores":   16.0,
-		// memory-only fields present too.
-		"memTotalBytes": 100.0, "memAvailBytes": 90.0, "memUsedPct": 10.0,
-	},
-}
-
 func TestBoardAggregatesJoinedRows(t *testing.T) {
-	q := &fakeQuerier{rows: joinedRows}
+	// CPU rates are now reduced from per-core samples in Go rather than KQL.
+	var rows []kustoquery.Row
+	for _, node := range []struct {
+		instance string
+		cores    int
+		idle     float64
+		total    float64
+		avail    float64
+	}{
+		{"node-0", 64, 10.5, 200, 50},
+		{"node-1", 16, 52.5, 100, 90},
+	} {
+		for cpu := 0; cpu < node.cores; cpu++ {
+			rows = append(rows, kustoquery.Row{
+				"Cluster": "cluster-a", "instance": node.instance, "kind": "cpu",
+				"cpu": fmt.Sprint(cpu), "sampleCount": 2.0,
+				"samples": []any{
+					map[string]any{"timestamp": "2026-09-01T00:00:00Z", "value": 0.0},
+					map[string]any{"timestamp": "2026-09-01T00:01:00Z", "value": node.idle},
+				},
+			})
+		}
+		rows = append(rows,
+			kustoquery.Row{"Cluster": "cluster-a", "instance": node.instance, "kind": "memory_total", "memoryValue": node.total, "memoryTimestamp": "2026-09-01T00:01:00Z"},
+			kustoquery.Row{"Cluster": "cluster-a", "instance": node.instance, "kind": "memory_available", "memoryValue": node.avail, "memoryTimestamp": "2026-09-01T00:01:00Z"},
+		)
+	}
+	q := &fakeQuerier{rows: rows}
 	snap, err := Board(context.Background(), q, Options{})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
@@ -59,17 +68,18 @@ func TestBoardAggregatesJoinedRows(t *testing.T) {
 
 	// Ordered hottest-CPU-first: node-0 (82.5) before node-1 (12.5).
 	n0 := snap.Nodes[0]
-	if n0.Instance != "node-0" || n0.CPUUtilPct != 82.5 || n0.CPUCores != 64 {
+	if n0.Instance != "node-0" || n0.CPUUtilPct == nil || *n0.CPUUtilPct != 82.5 || n0.CPUCores != 64 {
 		t.Fatalf("node0 = %#v, want node-0 82.5%% / 64 cores", n0)
 	}
-	if n0.MemTotalBytes != 200 || n0.MemAvailBytes != 50 || n0.MemUsedPct != 75 {
+	if n0.MemTotalBytes == nil || *n0.MemTotalBytes != 200 ||
+		n0.MemAvailBytes == nil || *n0.MemAvailBytes != 50 ||
+		n0.MemUsedPct == nil || *n0.MemUsedPct != 75 {
 		t.Fatalf("node0 memory = %#v", n0)
 	}
 
-	// Numeric-string CPU util parsed through Row.Num.
 	n1 := snap.Nodes[1]
-	if n1.Instance != "node-1" || n1.CPUUtilPct != 12.5 {
-		t.Fatalf("node1 = %#v, want node-1 12.5%% (from string)", n1)
+	if n1.Instance != "node-1" || n1.CPUUtilPct == nil || *n1.CPUUtilPct != 12.5 {
+		t.Fatalf("node1 = %#v, want node-1 12.5%%", n1)
 	}
 }
 
@@ -111,12 +121,9 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		"NodeMemoryMemTotalBytes",
 		"NodeMemoryMemAvailableBytes",
 		"ago(900s)", // DefaultWindow = 15m
-		"cpuCores * 900.0",
 		"Cluster == @'prod-eastus'",
 		"Host == @'node-7'",
-		"join kind=leftouter memTotal on Cluster, Host",
 		"instance = Host",
-		"order by cpuUtilPct desc",
 	} {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("KQL missing %q:\n%s", want, kql)
@@ -144,13 +151,14 @@ func TestBuildKQLQuotesInjection(t *testing.T) {
 	}
 }
 
-// TestWindowOverrideChangesDenominator confirms a custom window flows into both
-// the ago() literal and the CPU denominator.
+// The window now bounds observations; CPU denominators use observed intervals.
 func TestWindowOverrideChangesDenominator(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
-	_, _ = Board(context.Background(), q, Options{Window: 5 * 60 * 1e9}) // 5m in ns
-	kql := q.lastKQL
-	if !strings.Contains(kql, "ago(300s)") || !strings.Contains(kql, "cpuCores * 300.0") {
-		t.Fatalf("5m window not applied to ago()/denominator:\n%s", kql)
+	snap, err := Board(context.Background(), q, Options{Window: 5 * 60 * 1e9}) // 5m in ns
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if !strings.Contains(q.lastKQL, "ago(300s)") || snap.Window != "5m0s" {
+		t.Fatalf("5m window not applied: %q:\n%s", snap.Window, q.lastKQL)
 	}
 }

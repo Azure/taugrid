@@ -13,6 +13,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/Azure/taugrid/portal/internal/expapi"
 )
 
 const (
@@ -599,7 +601,7 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			}, scope, "untracked")
 			return
 		}
-		if !managedStellarRouteAllowed(r) {
+		if !expapi.WorkspaceRouteAllowed(r.Method, r.URL.Path) {
 			writeScopedJSON(w, http.StatusForbidden, map[string]string{
 				"reason": "this Stellar route is not workspace-scoped in managed Portal mode",
 			}, scope, "forbidden")
@@ -613,40 +615,11 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			return
 		}
 		if target.Host == "" {
-			next.ServeHTTP(w, workspaceScopedRequest(r, target.Query(), scope.WorkspaceID, scope.Source))
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, target.Query(), scope.WorkspaceID, scope.Source)))
 			return
 		}
 		http.Redirect(w, r, workspaceExperimentRedirectURL(target, r, scope.WorkspaceID, scope.Source), http.StatusTemporaryRedirect)
 	})
-}
-
-func managedStellarRouteAllowed(r *http.Request) bool {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		return false
-	}
-	if r.URL.Path == "/stellar" || r.URL.Path == "/stellar/" || strings.HasPrefix(r.URL.Path, "/stellar/assets/") {
-		return true
-	}
-	switch r.URL.Path {
-	case "/api/stellar/capabilities",
-		"/api/v1/stellar/capabilities",
-		"/api/v2/stellar/capabilities",
-		"/api/stellar/experiments",
-		"/api/v1/stellar/experiments",
-		"/api/v2/stellar/experiments",
-		"/api/stellar/runs",
-		"/api/v1/stellar/runs",
-		"/api/v2/stellar/runs",
-		"/api/stellar/snapshot",
-		"/api/v1/stellar/snapshot",
-		"/api/v2/stellar/snapshot",
-		"/api/stellar/series",
-		"/api/v1/stellar/series",
-		"/api/v2/stellar/series":
-		return true
-	default:
-		return false
-	}
 }
 
 func workspaceScopedRequest(r *http.Request, defaults url.Values, workspaceID, source string) *http.Request {

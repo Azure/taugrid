@@ -377,7 +377,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.capabilities(capabilitiesDebugEnabled(r)))
+	capabilities := s.capabilities(capabilitiesDebugEnabled(r))
+	capabilities.applyRoutePolicy(r)
+	writeJSON(w, http.StatusOK, capabilities)
 }
 
 func capabilitiesDebugEnabled(r *http.Request) bool {
@@ -683,28 +685,16 @@ func (s *Server) searchExperiments(ctx context.Context, source string, opts exps
 	case "kusto":
 		return s.baseKustoSource().SearchExperiments(ctx, opts)
 	case "auto":
-		local, err := s.searchLocalExperiments(ctx, opts)
-		if err != nil {
-			if !s.hasKustoSource() {
-				return expstore.ExperimentSearchResult{}, err
-			}
-			kusto, kustoErr := s.baseKustoSource().SearchExperiments(ctx, opts)
-			if kustoErr != nil {
-				return expstore.ExperimentSearchResult{}, err
-			}
-			kusto.Warnings = append(kusto.Warnings, fmt.Sprintf("source=auto fell back to Kusto because local experiment search failed: %v", err))
-			return kusto, nil
-		}
-		if !s.hasKustoSource() {
-			return local, nil
-		}
-		kusto, err := s.baseKustoSource().SearchExperiments(ctx, opts)
-		if err != nil {
-			local.Warnings = append(local.Warnings, fmt.Sprintf("source=auto skipped Kusto experiment search because it failed: %v", err))
-			return local, nil
-		}
-
-		return mergeExperimentSearchResults(local, kusto, opts.Limit), nil
+		result, warnings, err := searchAutoSources(ctx, s.hasKustoSource(), "experiment",
+			func() (expstore.ExperimentSearchResult, error) { return s.searchLocalExperiments(ctx, opts) },
+			func() (expstore.ExperimentSearchResult, error) {
+				return s.baseKustoSource().SearchExperiments(ctx, opts)
+			},
+			func(local, kusto expstore.ExperimentSearchResult) expstore.ExperimentSearchResult {
+				return mergeExperimentSearchResults(local, kusto, opts.Limit)
+			})
+		result.Warnings = append(result.Warnings, warnings...)
+		return result, err
 	default:
 		return expstore.ExperimentSearchResult{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
@@ -939,22 +929,7 @@ func (s *Server) handleRunSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	if source == "kusto" {
-		result, err := s.baseKustoSource().SearchRuns(ctx, opts)
-		if err != nil {
-			writeError(w, statusCode(err), err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, result)
-		return
-	}
-	store, err := expstore.Open(ctx, s.storeRoot)
-	if err != nil {
-		writeError(w, statusCode(err), err.Error())
-		return
-	}
-	defer store.Close()
-	result, err := store.SearchRuns(ctx, opts)
+	result, err := s.searchRuns(ctx, source, opts)
 	if err != nil {
 		writeError(w, statusCode(err), err.Error())
 		return
