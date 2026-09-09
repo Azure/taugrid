@@ -185,6 +185,10 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 }
 
 func defaultRunConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
+	return defaultRunConnectionManager(cmd)
+}
+
+func defaultRunConnectionManager(cmd *cobra.Command) workspaceconnection.Manager {
 	authMode := strings.TrimSpace(os.Getenv("TAU_AUTH_MODE"))
 	credentialFactory := clusteraccess.UserCredentialFactory{
 		Mode:   authMode,
