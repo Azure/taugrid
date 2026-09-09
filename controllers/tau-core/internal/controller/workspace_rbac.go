@@ -134,6 +134,7 @@ func (r *TauWorkspaceReconciler) reconcileSystemReaderRBAC(ctx context.Context, 
 		role.Rules = []rbacv1.PolicyRule{
 			{APIGroups: []string{"tau.azure.com"}, Resources: []string{"workspaces", "workspaces/status"}, ResourceNames: []string{workspace.Name}, Verbs: []string{"get"}},
 			{APIGroups: []string{"tau.azure.com"}, Resources: []string{"quotarequests"}, Verbs: []string{"create", "get"}},
+			{APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{"tau-log-connection"}, Verbs: []string{"get"}},
 		}
 		return nil
 	})
