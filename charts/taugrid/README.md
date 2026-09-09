@@ -5,7 +5,7 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 ## Install
 
 ```bash
-tau cluster install --version 0.4.1 --values taugrid-values.yaml
+tau cluster install --version 0.4.2 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -13,7 +13,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.1 \
+  --version 0.4.2 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -199,7 +199,7 @@ the controller image:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `kueue.controllerManager.manager.image.repository` | string | `mcr.microsoft.com/oss/v2/kueue/kueue` | Kueue controller image |
-| `kueue.controllerManager.manager.image.tag` | string | `v0.19.0` | Kueue image tag |
+| `kueue.controllerManager.manager.image.tag` | string | `v0.19.2` | Kueue image tag |
 | `kueue.managerConfig.controllerManagerConfigYaml` | string | (embedded) | Full Kueue Configuration YAML |
 
 Refer to the [upstream Kueue chart values](https://kueue.sigs.k8s.io/docs/installation/)
@@ -266,7 +266,7 @@ Services chart. The TauGrid distribution overrides the standalone child chart so
 | `taugrid-core.portal.serviceAccount.create` | bool | `true` | Create the dedicated Portal ServiceAccount |
 | `taugrid-core.portal.rbac.create` | bool | `true` | Create cluster-wide read-only Kubernetes RBAC for Portal |
 
-All enabled system workloads and Services follow the Helm release namespace. Use `tau cluster install --namespace <name>` for a non-default system namespace on a fresh installation. Administrative workspace commands use the same value through `--system-namespace <name>`, and generated workspace connection descriptors persist it as `cluster.systemNamespace`. The deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+All enabled system workloads and Services follow the Helm release namespace. Use `tau cluster install --namespace <name>` for a non-default system namespace on a fresh installation. Administrative workspace commands use the same value through `--system-namespace <name>`, and generated workspace connection descriptors persist it as `cluster.systemNamespace`. The gpu-monitoring 0.1.8 subchart rejects a non-empty deprecated `gpu-monitoring.namespace` override and directs operators to the release namespace instead. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 
 Do not change the namespace of an existing Helm release in place. Releases from before namespace unification can also contain `TauWorkspace` and `TauQuotaRequest` objects in a legacy namespace. This chart does not migrate those objects automatically; use an explicit reviewed migration before a direct Helm upgrade, or use `tau cluster install` and keep the existing release version when its preflight reports legacy objects.
 
@@ -287,7 +287,7 @@ gets DaemonSets that schedule nothing, so bundling is safe on CPU-only clusters.
 | `gpu-monitoring.gpuSkus.<profile>.dcgmHealth.source` | string | global `dcgmHealth.source` | Per-profile DCGM health provider (`host-dcgmi` or `exporter`) |
 | `gpu-monitoring.gpuSkus.<profile>.dcgmHealth.exporterUrl` | string | global `dcgmHealth.exporterUrl` | Per-profile DCGM exporter endpoint for mixed managed and GPU Operator clusters |
 | `gpu-monitoring.daemonset.requireAcceleratorLabel` | bool | `false` | Also require `kubernetes.azure.com/accelerator=nvidia`. Externally-joined GPU nodes never receive that label, so requiring it leaves them unmonitored |
-| `gpu-monitoring.namespace` | string | `""` (deprecated) | Must remain empty; use Helm `--namespace` for all TauGrid system components |
+| `gpu-monitoring.namespace` | string | `""` (deprecated) | Must remain empty; gpu-monitoring 0.1.8 rejects overrides and requires Helm `--namespace` for all TauGrid system components |
 
 See `charts/gpu-monitoring/README.md` for the full reference.
 
