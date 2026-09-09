@@ -138,13 +138,25 @@ func TestActiveWorkspaceResolverCentralizesConnectionAndPlacement(t *testing.T) 
 	}
 }
 
-func TestActiveWorkspaceResolverPreservesExplicitUnconnectedRun(t *testing.T) {
+func TestActiveWorkspaceResolverResolvesExplicitDirectTarget(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/tmp/operator-kubeconfig")
 	ensurer := &fakeRunConnectionEnsurer{err: workspaceconnection.ErrDescriptorNotFound}
+	fetched := false
 	resolver := newActiveWorkspaceResolver(
 		func(*cobra.Command) runConnectionEnsurer { return ensurer },
-		func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
-			t.Fatal("explicit unconnected run must not fetch a TauWorkspace")
-			return tauworkspace.Workspace{}, nil
+		func(_ *cobra.Command, context, _, name string) (tauworkspace.Workspace, error) {
+			fetched = true
+			if context != "operator-context" || name != "operator-workspace" {
+				t.Fatalf("fetch context=%q workspace=%q", context, name)
+			}
+			if got := os.Getenv("KUBECONFIG"); got != "/tmp/operator-kubeconfig" {
+				t.Fatalf("direct target changed KUBECONFIG to %q", got)
+			}
+			workspace := readyWorkspace()
+			workspace.Metadata.Name = name
+			workspace.Status.Target.ResolvedNamespace = "operator-namespace"
+			workspace.Status.Queue.LocalQueue = "operator-queue"
+			return workspace, nil
 		},
 	)
 
@@ -157,8 +169,14 @@ func TestActiveWorkspaceResolverPreservesExplicitUnconnectedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Connected || ensurer.calls != 0 || resolution.Context != "operator-context" {
+	defer resolution.Restore()
+	if !fetched || !resolution.Connected || ensurer.calls != 0 || resolution.Context != "operator-context" {
 		t.Fatalf("connection calls=%d resolution=%+v", ensurer.calls, resolution)
+	}
+	if resolution.Placement.Workspace != "operator-workspace" ||
+		resolution.Placement.Namespace != "operator-namespace" ||
+		resolution.Placement.LocalQueue != "operator-queue" {
+		t.Fatalf("placement=%+v", resolution.Placement)
 	}
 }
 

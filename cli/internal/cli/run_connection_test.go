@@ -140,6 +140,53 @@ func TestLiveRunConnectionTreatsConfiguredWorkspaceAsAssertion(t *testing.T) {
 	}
 }
 
+func TestLiveRunConnectionVerifiesExplicitRepositoryTarget(t *testing.T) {
+	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery := workspaceconnection.Discovery{Descriptor: descriptor}
+	options := defaultRunDispatchOptions()
+	options.workspace = "sample"
+	options.workspaceExplicit = true
+	options.kubeContext = "taugrid-flex"
+	options.kubeContextExplicit = true
+	options.kubeContextFromFlag = true
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace: "sample", ContextName: "taugrid-flex", KubeconfigPath: "/tmp/tau-kubeconfig",
+	}}
+
+	got, connection, err := applyLiveRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{Discovery: &discovery},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 1 ||
+		got.workspace != connection.Workspace ||
+		got.kubeContext != connection.ContextName ||
+		connection.KubeconfigPath == "" {
+		t.Fatalf("calls=%d options=%#v connection=%#v", ensurer.calls, got, connection)
+	}
+
+	options.workspace = "other"
+	_, _, err = applyLiveRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{Discovery: &discovery},
+		ensurer,
+	)
+	if err == nil || !strings.Contains(err.Error(), `run workspace "other" conflicts with active repository workspace connection "sample"`) {
+		t.Fatalf("workspace conflict error = %v", err)
+	}
+	if ensurer.calls != 2 {
+		t.Fatalf("workspace assertion bypassed verified connection: calls=%d", ensurer.calls)
+	}
+}
+
 func TestCatalogClientDryRunUsesParsedDescriptorWithoutActivation(t *testing.T) {
 	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
 	if err != nil {
