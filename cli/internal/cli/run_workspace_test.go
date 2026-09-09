@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -38,6 +39,7 @@ func TestApplyWorkspaceDefaultsFillsPolicyFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyWorkspaceDefaults: %v", err)
 	}
+
 	if got.namespace != "sample" || got.queue != "sample" || got.priorityTier != "default" {
 		t.Fatalf("policy defaults = namespace %q queue %q priority %q", got.namespace, got.queue, got.priorityTier)
 	}
@@ -58,6 +60,85 @@ func TestApplyWorkspaceDefaultsFillsPolicyFields(t *testing.T) {
 	}
 	if got.experiment.Workspace != "sample" {
 		t.Fatalf("experiment workspace = %q, want sample", got.experiment.Workspace)
+	}
+}
+
+func TestResolveWorkspacePlacementUsesLiveStatusAndValidatesConnection(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Metadata.UID = "workspace-uid"
+	workspace.Spec.Target.Namespace = "spec-namespace"
+	workspace.Spec.Queue = "spec-queue"
+	workspace.Status.Target.ResolvedNamespace = "status-namespace"
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "status-queue",
+		ClusterQueue: "status-cluster-queue",
+	}
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:    workspace.Metadata.Name,
+		WorkspaceUID: workspace.Metadata.UID,
+		Namespace:    "status-namespace",
+		Queue:        "status-queue",
+	}
+
+	placement, err := resolveWorkspacePlacement(workspace, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.Workspace != workspace.Metadata.Name ||
+		placement.Namespace != "status-namespace" ||
+		placement.LocalQueue != "status-queue" ||
+		placement.ClusterQueue != "status-cluster-queue" {
+		t.Fatalf("placement = %+v", placement)
+	}
+}
+
+func TestResolveWorkspacePlacementRejectsStaleConnectionIdentity(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Metadata.UID = "current-uid"
+	tests := []struct {
+		name       string
+		connection workspaceconnection.ActiveConnection
+		want       string
+	}{
+		{
+			name: "workspace name",
+			connection: workspaceconnection.ActiveConnection{
+				Workspace: "other",
+			},
+			want: "conflicts with TauWorkspace",
+		},
+		{
+			name: "workspace UID",
+			connection: workspaceconnection.ActiveConnection{
+				Workspace:    workspace.Metadata.Name,
+				WorkspaceUID: "stale-uid",
+			},
+			want: "workspace UID",
+		},
+		{
+			name: "namespace cache",
+			connection: workspaceconnection.ActiveConnection{
+				Workspace: workspace.Metadata.Name,
+				Namespace: "stale-namespace",
+			},
+			want: "active connection namespace",
+		},
+		{
+			name: "queue cache",
+			connection: workspaceconnection.ActiveConnection{
+				Workspace: workspace.Metadata.Name,
+				Queue:     "stale-queue",
+			},
+			want: "active connection LocalQueue",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveWorkspacePlacement(workspace, tt.connection)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -154,6 +235,32 @@ func TestApplyWorkspaceDefaultsRejectsForeignOutputScope(t *testing.T) {
 	_, err := applyWorkspaceDefaults(o, readyWorkspace(), "foreign-output")
 	if err == nil || !strings.Contains(err.Error(), "outside TauWorkspace") {
 		t.Fatalf("foreign output error = %v", err)
+	}
+}
+
+func TestValidateRunOutputScopeBoundaries(t *testing.T) {
+	const root = "/data/projects/sample/runs"
+	tests := []struct {
+		name   string
+		output string
+		scope  string
+		wantOK bool
+	}{
+		{name: "exact root", output: root, scope: root, wantOK: true},
+		{name: "descendant", output: root + "/training/attempt-1", scope: root, wantOK: true},
+		{name: "normalized descendant", output: root + "/training/../attempt-1", scope: root + "/", wantOK: true},
+		{name: "sibling prefix", output: root + "-escape/attempt-1", scope: root},
+		{name: "parent traversal", output: root + "/../../other/attempt-1", scope: root},
+		{name: "relative output", output: "training/attempt-1", scope: root},
+		{name: "missing scope", output: root + "/attempt-1", scope: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRunOutputScope(tt.output, tt.scope)
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("validateRunOutputScope(%q, %q) error = %v, wantOK=%t", tt.output, tt.scope, err, tt.wantOK)
+			}
+		})
 	}
 }
 

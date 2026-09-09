@@ -9,21 +9,89 @@ import (
 	"strings"
 
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
 
-func applyWorkspaceDefaults(o unresolvedRunOptions, w tauworkspace.Workspace, runName string) (unresolvedRunOptions, error) {
+type workspacePlacement struct {
+	Workspace    string
+	Namespace    string
+	LocalQueue   string
+	ClusterQueue string
+}
+
+func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspaceconnection.ActiveConnection) (workspacePlacement, error) {
 	if !tauworkspace.Ready(w) {
-		return o, fmt.Errorf("workspace %q is not Ready (phase=%s)", w.Metadata.Name, w.Status.Phase)
+		return workspacePlacement{}, fmt.Errorf("workspace %q is not Ready (phase=%s)", w.Metadata.Name, w.Status.Phase)
 	}
-	o.experiment.Workspace = w.Metadata.Name
-	o.workspace = w.Metadata.Name
+	if expected := strings.TrimSpace(connection.Workspace); expected != "" && expected != strings.TrimSpace(w.Metadata.Name) {
+		return workspacePlacement{}, fmt.Errorf("active connection workspace %q conflicts with TauWorkspace %q", expected, w.Metadata.Name)
+	}
+	if expected, actual := strings.TrimSpace(connection.WorkspaceUID), strings.TrimSpace(w.Metadata.UID); expected != "" && actual != expected {
+		return workspacePlacement{}, fmt.Errorf(
+			"active connection workspace UID %q conflicts with TauWorkspace %q UID %q; reconnect the repository workspace",
+			expected,
+			w.Metadata.Name,
+			actual,
+		)
+	}
+
+	placement := workspacePlacement{
+		Workspace:    strings.TrimSpace(w.Metadata.Name),
+		Namespace:    firstNonEmpty(w.Status.Target.ResolvedNamespace, w.Spec.Target.Namespace, w.Metadata.Name),
+		LocalQueue:   firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue),
+		ClusterQueue: strings.TrimSpace(w.Status.Queue.ClusterQueue),
+	}
+	if placement.Namespace == "" {
+		return workspacePlacement{}, fmt.Errorf("workspace %q has no resolved target namespace", w.Metadata.Name)
+	}
+	if placement.LocalQueue == "" {
+		return workspacePlacement{}, fmt.Errorf("workspace %q has no resolved LocalQueue", w.Metadata.Name)
+	}
+	for _, cached := range []struct {
+		field  string
+		value  string
+		actual string
+	}{
+		{field: "namespace", value: connection.Namespace, actual: placement.Namespace},
+		{field: "LocalQueue", value: connection.Queue, actual: placement.LocalQueue},
+	} {
+		if value := strings.TrimSpace(cached.value); value != "" && value != cached.actual {
+			return workspacePlacement{}, fmt.Errorf(
+				"active connection %s %q conflicts with TauWorkspace %q %s %q; reconnect the repository workspace",
+				cached.field,
+				value,
+				w.Metadata.Name,
+				cached.field,
+				cached.actual,
+			)
+		}
+	}
+	return placement, nil
+}
+
+func applyWorkspaceDefaults(o unresolvedRunOptions, w tauworkspace.Workspace, runName string) (unresolvedRunOptions, error) {
+	return applyWorkspaceDefaultsWithConnection(o, w, runName, workspaceconnection.ActiveConnection{})
+}
+
+func applyWorkspaceDefaultsWithConnection(
+	o unresolvedRunOptions,
+	w tauworkspace.Workspace,
+	runName string,
+	connection workspaceconnection.ActiveConnection,
+) (unresolvedRunOptions, error) {
+	placement, err := resolveWorkspacePlacement(w, connection)
+	if err != nil {
+		return o, err
+	}
+	o.experiment.Workspace = placement.Workspace
+	o.workspace = placement.Workspace
 	o.workspaceResultScope = w.Spec.Defaults.OutputRoot
-	workspaceNamespace := firstNonEmpty(w.Status.Target.ResolvedNamespace, w.Spec.Target.Namespace, w.Metadata.Name)
+	workspaceNamespace := placement.Namespace
 	if o.namespace != "" && o.namespace != workspaceNamespace {
 		return o, fmt.Errorf("namespace %q conflicts with TauWorkspace %q target namespace %q", o.namespace, w.Metadata.Name, workspaceNamespace)
 	}
 	o.namespace = workspaceNamespace
-	workspaceQueue := firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue)
+	workspaceQueue := placement.LocalQueue
 	queueAuto := strings.EqualFold(strings.TrimSpace(o.queue), "auto")
 	if o.queue != "" && !queueAuto && o.queue != workspaceQueue {
 		return o, fmt.Errorf("queue %q conflicts with TauWorkspace %q LocalQueue %q", o.queue, w.Metadata.Name, workspaceQueue)

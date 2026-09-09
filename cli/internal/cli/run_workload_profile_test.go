@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -74,9 +75,31 @@ policy:
 	}
 
 	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
-		ContextName: "connected-context",
-		Namespace:   "alpha",
+		Workspace:    "sample",
+		WorkspaceUID: "workspace-uid",
+		ContextName:  "connected-context",
+		Namespace:    "alpha",
+		Queue:        "jobqueue",
 	}}
+	originalWorkspaceFetcher := fetchRunWorkspace
+	fetchRunWorkspace = func(_ *cobra.Command, kubeContext, systemNamespace, name string) (tauworkspace.Workspace, error) {
+		if kubeContext != "connected-context" || systemNamespace != tauworkspace.SystemNamespace || name != "sample" {
+			t.Fatalf(
+				"workspace fetch context=%q systemNamespace=%q name=%q",
+				kubeContext,
+				systemNamespace,
+				name,
+			)
+		}
+		workspace := readyWorkspace()
+		workspace.Metadata.UID = "workspace-uid"
+		workspace.Spec.Target.Namespace = "alpha"
+		workspace.Spec.Queue = "jobqueue"
+		workspace.Status.Target.ResolvedNamespace = "alpha"
+		workspace.Status.Queue.LocalQueue = "jobqueue"
+		return workspace, nil
+	}
+	t.Cleanup(func() { fetchRunWorkspace = originalWorkspaceFetcher })
 	clientCalls := 0
 	originalClient := newClusterProfileClient
 	newClusterProfileClient = func(kubeContext string) (dynamic.Interface, error) {
@@ -107,6 +130,24 @@ policy:
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("render missing %q:\n%s", want, stdout.String())
 		}
+	}
+
+	fetchRunWorkspace = func(_ *cobra.Command, _, _, _ string) (tauworkspace.Workspace, error) {
+		workspace := readyWorkspace()
+		workspace.Metadata.UID = "replacement-uid"
+		workspace.Spec.Target.Namespace = "alpha"
+		workspace.Spec.Queue = "jobqueue"
+		workspace.Status.Target.ResolvedNamespace = "alpha"
+		workspace.Status.Queue.LocalQueue = "jobqueue"
+		return workspace, nil
+	}
+	recreated := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer { return ensurer })
+	recreated.SetOut(&bytes.Buffer{})
+	recreated.SetErr(&bytes.Buffer{})
+	recreated.SetArgs([]string{"--config", config, "--dry-run=client"})
+	recreatedErr := recreated.Execute()
+	if recreatedErr == nil || !strings.Contains(recreatedErr.Error(), "workspace UID") {
+		t.Fatalf("recreated workspace error = %v", recreatedErr)
 	}
 }
 
