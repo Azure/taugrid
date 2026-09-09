@@ -42,7 +42,7 @@ func (f fakeReader) ListServices(context.Context, string) ([]byte, error) {
 	return f.services, f.svcErr
 }
 
-// fakeQuerier returns fixed rows (or an error) for the lifecycle query.
+// fakeQuerier returns fixed rows (or an error) for the indexed tracking query.
 type fakeQuerier struct {
 	rows []kustoquery.Row
 	err  error
@@ -518,7 +518,7 @@ func TestDetailToleratesBadListJSON(t *testing.T) {
 // `tau run` stamps is surfaced on the snapshot, and — deliberately — that it
 // does NOT leak into the deep-link scope. The row's project and the annotation's
 // project are different knobs (offload sidecar --project vs the run config's
-// experiment.project), so a row with no project must keep the unscoped link.
+// experiment.project), so a row with no project must not borrow the annotation.
 func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -531,8 +531,7 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
             "` + workloadmeta.AnnotationStellarGroup + `":"safe-stack-h200"}},
         "status":{"conditions":[{"type":"Complete","status":"True"}]}}`),
 	}
-	// A lifecycle row with no project_id: the marker proves durability, the
-	// annotation supplies the scope.
+	// A marker without project_id cannot prove a renderable scoped identity.
 	q := fakeQuerier{rows: []kustoquery.Row{{
 		"metric_name": "tau/run_status",
 		"value":       1.0,
@@ -551,10 +550,8 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 		snap.Experiment.Group != "safe-stack-h200" {
 		t.Fatalf("Experiment = %+v, want the exact annotation values", *snap.Experiment)
 	}
-	// The annotation must not become the link scope: the rows behind this run
-	// carry no project, so filtering them by one would match nothing.
-	if snap.Links.StellarPath != "/stellar?target=run-1" {
-		t.Fatalf("StellarPath = %q, want an unscoped link when the row has no project", snap.Links.StellarPath)
+	if snap.Links.StellarPath != "" {
+		t.Fatalf("StellarPath = %q, want no link with unresolved project", snap.Links.StellarPath)
 	}
 }
 

@@ -1,5 +1,13 @@
 # taugrid-core defaults. Override per cluster.
 
+# Historical Ray driver log discovery. These must match the actual adx-mon
+# destination and telemetry source; never copy the Portal Metrics database.
+logging:
+  enabled: false
+  endpoint: ""
+  database: Logs
+  cluster: ""
+
 # Optional Kueue ResourceFlavors. Most clusters manage these with their lane
 # manifests/GitOps, so the chart leaves generation off by default. A
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class
@@ -97,7 +105,7 @@ stellar:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
     # Release image tags follow this chart's version.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: "0.4.1"
+    tag: "0.4.2"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   deploymentAnnotations: {}
@@ -216,7 +224,7 @@ lifecycleRecorder:
     # Release image tags follow this chart's version. Set tag to "" when
     # overriding digest with an immutable sha256 reference.
     repository: mcr.microsoft.com/aks/ai-runtime/tau
-    tag: "0.4.1"
+    tag: "0.4.2"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -369,7 +377,7 @@ portal:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     # Release image tags follow this chart's version.
-    tag: "0.4.1"
+    tag: "0.4.2"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []

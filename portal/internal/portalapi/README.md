@@ -10,9 +10,11 @@ internal load balancer. It follows the persona-centered UI direction proposed in
 
 ## Shape
 
-- **Shell** — `assets/index.html` is a hand-written SPA (no build step). It paints
-  a persona sidebar (ML Engineer / Platform) and dispatches by `location.pathname`
-  to per-board render functions, each of which fetches one `/api/portal/*` board.
+- **Shell** — `assets/index.html` is a hand-written SPA (no build step). It groups
+  pages under Workloads, Platform, and Experiments. Workspace and overview
+  persona are URL-addressable; nested routes retain their parent navigation.
+  Independent source panels expose loading, refresh, last-success time, and
+  explicitly stale retained data when a refresh fails.
 - **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
@@ -98,18 +100,60 @@ board. The three Fleet boards share one page via in-page sub-tabs (Health |
 Utilization | Compute); the legacy `/portal/{cluster,gpu,nodes}` paths still
 resolve to the matching Fleet sub-tab so existing deep-links keep working.
 
+## Data interpretation and recovery
+
+`GET /api/portal/overview?view=workloads` returns profiles, queue counters, and
+admitted-workload links without querying optional fleet, GPU, cost, or Ray
+sources. The unqualified overview API retains its complete response.
+Admission is quota reservation, not proof that pods are running.
+
+Job details expose `diagnostics` for workloads, pods, events, and tracking:
+`ready`, `empty`, `unavailable`, or `not_configured`. Indexed metrics can enable
+a scoped Stellar link while a job is active; a terminal lifecycle marker is not
+required. Retried source failures do not silently erase previously displayed
+evidence or label it fresh.
+
+Missing GPU and node measurements are JSON `null`, not measured zero. GPU
+health requires observed error counters. Node CPU rates use actual observed
+per-core intervals, exclude resets, and report sample/time coverage. Bounded
+sample-transfer limits fail explicitly instead of computing a rate from a
+silently truncated series. `queriedAt` records query completion, not the age of
+every underlying sample.
+
+Cost remains allocation-based, using schema-v4 `GpuCostHourly` rows.
+`costAvailable` and `gpuHoursAvailable` distinguish unknown totals from measured
+zero; their coverage counters expose partial sums. Raw GPU utilization is a
+separate efficiency signal. `idleAvailable` requires enough valid readings to
+assess at least one GPU. An empty idle list is not an all-clear for unobserved
+hardware.
+
+## Ray dashboard proxy
+
+Every dashboard request carries its namespace and cluster in the target-prefixed
+URL. Managed entries redirect to a prefix that also encodes the authorized
+workspace. No origin-wide selected-target cookie routes traffic between tabs.
+Only a target-specific Ray authentication cookie is forwarded to its upstream.
+
+The proxy follows the relative-URL contract of official Ray 2.54/2.56 dashboard
+builds: it rewrites structural HTML URL attributes and the document base, not
+JavaScript source. Relative APIs, assets, and log-tail WebSockets retain their
+target. Custom builds with incompatible absolute URLs are not supported.
+
+Portal permits passive dashboard reads and the native authentication exchange.
+Mutation, active profiling/traceback/JVM diagnostics, and dataset routes that
+create a stats actor are unavailable through this read-only proxy. Unsupported
+routes return an explicit response instead of selecting another dashboard or
+redirecting users into an authentication loop.
+
 ## Deferred backends (③)
 
 Each of these is a page or field the proposal draws but the portal has **no data
 source for today**. They are listed here — not implemented — so the gap between
 "the mock renders it" and "the runtime emits it" stays explicit.
 
-1. **Cost per-user/team + budgets.** `cost.Board` aggregates GPU-hours by
-   *namespace* only, from `GpuHealth()` utilization samples. Per-user/team
-   attribution and budget burn need a CostTracking store (e.g. `GpuCostDaily` /
-   `NamespaceCostMonthly` as adx-mon SummaryRules), a second querier, and a
-   user/team dimension that does not exist in the current schema. No such Go code
-   exists yet.
+1. **Cost per-user/team + budgets.** Workspace/namespace allocation chargeback
+   exists. Per-user attribution and budget burn still need their own identity,
+   budget, and reporting contracts; utilization alone cannot supply them.
 
 2. **Fleet Health depth — InfiniBand / NPD / AlertRule.** Today's Fleet Health is
    per-GPU DCGM health. The proposal's richer signals are not portal-readable:

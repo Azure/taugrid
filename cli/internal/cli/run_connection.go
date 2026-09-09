@@ -32,9 +32,10 @@ type exactRunConnectionEnsurer interface {
 type runConnectionEnsurerFactory func(*cobra.Command) runConnectionEnsurer
 
 type runLifecycleConnectionFlags struct {
-	namespace   string
-	workspace   string
-	kubeContext string
+	namespace       string
+	workspace       string
+	kubeContext     string
+	systemNamespace string
 }
 
 func (f *runLifecycleConnectionFlags) add(cmd *cobra.Command) {
@@ -52,7 +53,18 @@ func lifecycleFlagsContextExplicit(cmd *cobra.Command) bool {
 }
 
 func (f *runLifecycleConnectionFlags) resolve(cmd *cobra.Command) (string, string, func(), error) {
-	return resolveRunLifecycleConnectionWithWorkspace(
+	return f.resolveWithEnsurer(cmd, defaultRunConnectionEnsurer(cmd))
+}
+
+func (f *runLifecycleConnectionFlags) resolveWithEnsurer(cmd *cobra.Command, underlying runConnectionEnsurer) (string, string, func(), error) {
+	f.systemNamespace = systemNamespaceFromCommand(cmd)
+	ensurer := &observedRunConnectionEnsurer{
+		underlying: underlying,
+		connected: func(connection workspaceconnection.ActiveConnection) {
+			f.systemNamespace = systemNamespaceForConnection(cmd, connection)
+		},
+	}
+	return resolveRunLifecycleConnectionWithWorkspaceUsing(
 		cmd,
 		f.kubeContext,
 		f.namespace,
@@ -60,7 +72,34 @@ func (f *runLifecycleConnectionFlags) resolve(cmd *cobra.Command) (string, strin
 		lifecycleFlagsContextExplicit(cmd),
 		cmd.Flags().Changed("namespace"),
 		cmd.Flags().Changed("workspace"),
+		func(cmd *cobra.Command, kubeContext, namespace string, contextExplicit, namespaceExplicit bool) (string, string, func(), error) {
+			return resolveRunLifecycleConnectionUsing(cmd, kubeContext, namespace, contextExplicit, namespaceExplicit, ensurer)
+		},
+		func(cmd *cobra.Command, kubeContext, _ string, name string) (tauworkspace.Workspace, error) {
+			return fetchWorkspace(cmd, kubeContext, f.systemNamespace, name)
+		},
 	)
+}
+
+type observedRunConnectionEnsurer struct {
+	underlying runConnectionEnsurer
+	connected  func(workspaceconnection.ActiveConnection)
+}
+
+func (e *observedRunConnectionEnsurer) Ensure(ctx context.Context, startDir string) (workspaceconnection.ActiveConnection, error) {
+	connection, err := e.underlying.Ensure(ctx, startDir)
+	if err == nil {
+		e.connected(connection)
+	}
+	return connection, err
+}
+
+func (e *observedRunConnectionEnsurer) EnsureDiscovery(ctx context.Context, discovery workspaceconnection.Discovery) (workspaceconnection.ActiveConnection, error) {
+	connection, err := ensureRunConnection(ctx, e.underlying, runConnectionSource{Discovery: &discovery})
+	if err == nil {
+		e.connected(connection)
+	}
+	return connection, err
 }
 
 type runLifecycleBaseResolver func(
@@ -77,24 +116,6 @@ type runLifecycleWorkspaceFetcher func(
 	string,
 	string,
 ) (tauworkspace.Workspace, error)
-
-func resolveRunLifecycleConnectionWithWorkspace(
-	cmd *cobra.Command,
-	kubeContext, namespace, workspace string,
-	contextExplicit, namespaceExplicit, workspaceExplicit bool,
-) (string, string, func(), error) {
-	return resolveRunLifecycleConnectionWithWorkspaceUsing(
-		cmd,
-		kubeContext,
-		namespace,
-		workspace,
-		contextExplicit,
-		namespaceExplicit,
-		workspaceExplicit,
-		resolveRunLifecycleConnection,
-		fetchWorkspace,
-	)
-}
 
 func resolveRunLifecycleConnectionWithWorkspaceUsing(
 	cmd *cobra.Command,
@@ -410,6 +431,15 @@ func resolveRunLifecycleConnection(
 	contextExplicit bool,
 	namespaceExplicit bool,
 ) (string, string, func(), error) {
+	return resolveRunLifecycleConnectionUsing(cmd, kubeContext, namespace, contextExplicit, namespaceExplicit, defaultRunConnectionEnsurer(cmd))
+}
+
+func resolveRunLifecycleConnectionUsing(
+	cmd *cobra.Command,
+	kubeContext, namespace string,
+	contextExplicit, namespaceExplicit bool,
+	ensurer runConnectionEnsurer,
+) (string, string, func(), error) {
 	projectName := ""
 	if cmd.Flags().Lookup("project") != nil {
 		var err error
@@ -425,7 +455,7 @@ func resolveRunLifecycleConnection(
 		contextExplicit,
 		namespaceExplicit,
 		projectName,
-		defaultRunConnectionEnsurer(cmd),
+		ensurer,
 	)
 }
 
