@@ -1,7 +1,7 @@
-github.com/NVIDIA/go-dcgm v1.4601.1 h1:qw4C7oljUOdNrJarvPQdL9keYssgadGgY9B7jfevCog=
-github.com/NVIDIA/go-dcgm v1.4601.1/go.mod h1:cA0Bv7+JtAd8sqCCZizhAQjj4+Z47x/d8KD60iYBT+g=
-github.com/bits-and-blooms/bitset v1.22.0 h1:Tquv9S8+SGaS3EhyA+up3FXzmkhxPGjQQCkcs2uw7w4=
-github.com/bits-and-blooms/bitset v1.22.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
+github.com/NVIDIA/go-dcgm v1.4611.0 h1:OtgEzmz9jK9n7pI7smTtwZDFxJGk7q7GXmadH6JM9U0=
+github.com/NVIDIA/go-dcgm v1.4611.0/go.mod h1:XXuxXUmG6SCUrbh1wOytmTWPPuHCS1KxwOeMHQnnHUE=
+github.com/bits-and-blooms/bitset v1.25.0 h1:0Ro0qF4abCkM6SqWPVj29sFhAbMPAZpaDD7xhJ10beM=
+github.com/bits-and-blooms/bitset v1.25.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=

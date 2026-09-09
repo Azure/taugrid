@@ -80,7 +80,7 @@ monitoring/gpu-metrics-collector/
 │   └── config/
 │       ├── config.go              # YAML config loader with validation
 │       └── config_test.go
-├── Dockerfile                     # Multi-stage: Microsoft Go 1.26.6 → distroless/static
+├── Dockerfile                     # Multi-stage: Microsoft Go 1.26.7 → distroless/static
 ├── Makefile
 ├── go.mod
 └── go.sum
