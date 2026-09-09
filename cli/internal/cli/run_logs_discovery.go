@@ -374,9 +374,9 @@ func defaultRunLogsDiscoveryHooks(cmd *cobra.Command, connection *runLifecycleCo
 		},
 		execute: func(ctx context.Context, out io.Writer, route runLogsRoute, name string, opts runLogsOptions) error {
 			opts.Namespace = route.Namespace
-			if strings.TrimSpace(route.SystemNamespace) != "" {
-				opts.SystemNamespace = route.SystemNamespace
-			}
+			opts.SystemNamespace = systemNamespaceForConnection(cmd, workspaceconnection.ActiveConnection{
+				SystemNamespace: route.SystemNamespace,
+			})
 			r := kube.NewWithKubeconfig(route.KubeContext, route.Kubeconfig)
 			if err := validateCachedRunLogsRoute(ctx, r, route); err != nil {
 				return err

@@ -356,7 +356,9 @@ func newRunLogsCmd() *cobra.Command {
 }
 
 func newRootLogsCmd() *cobra.Command {
-	return newLogsCmd(true)
+	cmd := newLogsCmd(true)
+	cmd.Flags().String("system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	return cmd
 }
 
 func newLogsCmd(discover bool) *cobra.Command {
