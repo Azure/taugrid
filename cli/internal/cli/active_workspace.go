@@ -129,15 +129,19 @@ func (r activeWorkspaceResolver) Resolve(cmd *cobra.Command, request activeWorks
 		Context:    kubeContext,
 		restore:    func() {},
 	}
-	if strings.TrimSpace(connection.Workspace) == "" {
+	connectionResolved := strings.TrimSpace(connection.Workspace) != ""
+	directTarget := workspaceName != "" && (request.WorkspaceExplicit || request.KubeContextExplicit)
+	if !connectionResolved && !directTarget {
 		return resolution, nil
 	}
 
-	restore, err := useKubeconfig(connection.KubeconfigPath)
-	if err != nil {
-		return activeWorkspaceResolution{}, err
+	if connectionResolved {
+		restore, err := useKubeconfig(connection.KubeconfigPath)
+		if err != nil {
+			return activeWorkspaceResolution{}, err
+		}
+		resolution.restore = restore
 	}
-	resolution.restore = restore
 	if r.fetchWorkspace == nil {
 		resolution.Restore()
 		return activeWorkspaceResolution{}, fmt.Errorf("TauWorkspace fetcher is required")
@@ -182,7 +186,7 @@ func (r activeWorkspaceResolver) Resolve(cmd *cobra.Command, request activeWorks
 	if r.now != nil {
 		now = r.now()
 	}
-	if provider, ok := ensurer.(workspaceConfigDirectoryProvider); ok {
+	if provider, ok := ensurer.(workspaceConfigDirectoryProvider); connectionResolved && ok {
 		configDir, err := provider.ConfigDirectory()
 		if err != nil {
 			resolution.Restore()

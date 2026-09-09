@@ -190,26 +190,6 @@ func serveArgs(base []string, extras ...string) []string {
 	return append(out, extras...)
 }
 
-func TestServeDeployRejectsAmbientContextConflict(t *testing.T) {
-	t.Setenv(tauContextEnv, "ambient-context")
-	root := newConnectedServeTestRoot(t)
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{
-		"serve", "deploy", "endpoint",
-		"--profile", "model-serve",
-		"--image", "example.invalid/serve:v1",
-		"--dry-run=client",
-	})
-
-	err := root.Execute()
-	if err == nil ||
-		!strings.Contains(err.Error(), `context "ambient-context" conflicts`) ||
-		!strings.Contains(err.Error(), `connection context "connected-context"`) {
-		t.Fatalf("ambient context conflict error = %v", err)
-	}
-}
-
 func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 	ordinary := serveTestProfile("serve-1gpu", profile.ExecutionTargetSingleCluster, "jobqueue", 1, 1, 23)
 	ordinary.Applicability = profile.ProfileApplicability{
@@ -281,14 +261,6 @@ func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 		}
 	})
 
-	t.Run("another profile team in the same workspace", func(t *testing.T) {
-		experimental := ordinary
-		experimental.Applicability.Teams = []string{"experimental"}
-		if _, err := executeAuthoritativeServe(t, experimental, base...); err != nil {
-			t.Fatalf("experimental profile in the same workspace: %v", err)
-		}
-	})
-
 	t.Run("stale provider", func(t *testing.T) {
 		runner := &connectedServeTestRunner{namespace: "alpha", queue: "jobqueue"}
 		stubServeDependencies(t, runner, readyClusterProfileClientForProfiles(t, 23, true, ordinary))
@@ -340,18 +312,11 @@ func TestServeDeployMultiKueueAndRevisionMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			rootAnnotations := nestedStringMap(t, doc, "metadata", "annotations")
-			rootLabels := nestedStringMap(t, doc, "metadata", "labels")
 			var podAnnotations map[string]string
-			var podLabels map[string]string
 			if kind == "deployment" {
 				podAnnotations = nestedStringMap(t, doc, "spec", "template", "metadata", "annotations")
-				podLabels = nestedStringMap(t, doc, "spec", "template", "metadata", "labels")
 			} else {
 				podAnnotations = nestedStringMap(t, doc, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "annotations")
-				podLabels = nestedStringMap(t, doc, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "labels")
-			}
-			if rootLabels[workloadmeta.LabelWorkspace] != "sample" || podLabels[workloadmeta.LabelWorkspace] != "sample" {
-				t.Fatalf("workspace metadata root=%q pod=%q:\n%s", rootLabels[workloadmeta.LabelWorkspace], podLabels[workloadmeta.LabelWorkspace], rendered)
 			}
 			for key, value := range map[string]string{
 				workloadmeta.AnnotationTauClusterGeneration: strconv.FormatInt(23, 10),

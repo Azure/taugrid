@@ -91,6 +91,21 @@ policy:
   profile: test-routing
   queue: jobqueue
 `)
+	validOutput := filepath.Join(root, "alpha", "tau", "valid-output.yaml")
+	writeRunRoutingFile(t, validOutput, `name: alpha-valid-output
+engine: job
+entrypoint: ../train.sh
+compute:
+  gpus: 0
+runtime:
+  image: busybox:1.36
+storage:
+  data_pvc: research-workspace
+  output: /data/projects/sample/runs/attempt-1
+policy:
+  profile: test-routing
+  queue: jobqueue
+`)
 	writeRunRoutingFile(t, filepath.Join(root, "alpha", "train.sh"), "#!/bin/sh\necho health\n")
 	projectHealth := filepath.Join(root, "alpha", "tau", "health.yaml")
 	writeRunRoutingFile(t, projectHealth, `name: alpha-project-health
@@ -120,7 +135,7 @@ policy:
 `, filepath.Join(root, "alpha", "train.sh")))
 
 	t.Run("unique target", func(t *testing.T) {
-		result := runTauRoutingSubprocess(t, root, "run", "eval", "--context", "explicit", "--dry-run=client")
+		result := runTauRoutingSubprocess(t, root, "run", "eval", "--context", "aks-ai-runtime-flex", "--dry-run=client")
 		if result.err != nil {
 			t.Fatalf("unique target: %v\nstderr:\n%s", result.err, result.stderr)
 		}
@@ -222,6 +237,55 @@ policy:
 			t.Fatalf("output prefix escape err=%v\nstderr:\n%s", result.err, result.stderr)
 		}
 	})
+	t.Run("explicit connected client dry-run rejects output root prefix escape", func(t *testing.T) {
+		result := runTauRoutingSubprocess(
+			t,
+			root,
+			"run",
+			"--project",
+			"alpha",
+			"--config",
+			escapedOutput,
+			"--workspace",
+			"sample",
+			"--context",
+			"aks-ai-runtime-flex",
+			"--dry-run=client",
+		)
+		if result.err == nil ||
+			!strings.Contains(result.stderr, `storage.output "/data/projects/sample/runs-escape/attempt-1"`) ||
+			!strings.Contains(result.stderr, `output root "/data/projects/sample/runs"`) {
+			t.Fatalf("explicit output prefix escape err=%v\nstderr:\n%s", result.err, result.stderr)
+		}
+	})
+	t.Run("explicit connected client dry-run resolves workspace placement", func(t *testing.T) {
+		result := runTauRoutingSubprocess(
+			t,
+			root,
+			"run",
+			"--project",
+			"alpha",
+			"--config",
+			validOutput,
+			"--workspace",
+			"sample",
+			"--context",
+			"aks-ai-runtime-flex",
+			"--dry-run=client",
+		)
+		if result.err != nil {
+			t.Fatalf("explicit valid output: %v\nstderr:\n%s", result.err, result.stderr)
+		}
+		for _, want := range []string{
+			"namespace: catalog-namespace",
+			"kueue.x-k8s.io/queue-name: jobqueue",
+			"tau.azure.com/result-path: /data/projects/sample/runs/attempt-1",
+		} {
+			if !strings.Contains(result.stdout, want) {
+				t.Fatalf("explicit workspace render missing %q:\n%s", want, result.stdout)
+			}
+		}
+	})
 	t.Run("explicit project health config", func(t *testing.T) {
 		result := runTauRoutingSubprocess(
 			t,
@@ -232,7 +296,7 @@ policy:
 			"--config",
 			projectHealth,
 			"--context",
-			"explicit",
+			"aks-ai-runtime-flex",
 			"--dry-run=client",
 		)
 		if result.err != nil {
@@ -292,7 +356,7 @@ policy:
 				"--config",
 				link,
 				"--context",
-				"explicit",
+				"aks-ai-runtime-flex",
 				"--dry-run=client",
 			)
 			if result.err != nil || !strings.Contains(result.stdout, "name: symlink-job") {

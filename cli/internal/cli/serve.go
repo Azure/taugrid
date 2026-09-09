@@ -25,8 +25,14 @@ var newServeRunner = func(kubeContext string) kubeRawRunner {
 	return kube.New(kubeContext)
 }
 
-var newServeConnectionEnsurer = defaultRunConnectionEnsurer
+var newServeConnectionEnsurer = defaultServeConnectionEnsurer
 var fetchServeWorkspace = fetchWorkspace
+
+func defaultServeConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
+	manager := defaultRunConnectionManager(cmd)
+	manager.Output = cmd.ErrOrStderr()
+	return manager
+}
 
 // newServeCmd: north-star §1 / §5 — deploy a model endpoint as a
 // KubeRay RayService.
@@ -201,7 +207,7 @@ func newServeDeployCmd() *cobra.Command {
 			placement := activeWorkspace.Placement
 
 			runner := newServeRunner(kubeContext)
-			target, err := resolveServeTarget(
+			target, err := resolveServeWorkspaceTarget(
 				cmd.Context(),
 				runner,
 				placement.Namespace,
