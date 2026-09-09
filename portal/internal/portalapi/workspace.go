@@ -80,17 +80,22 @@ type WorkspacePortalEndpoint struct {
 // WorkspaceRecord maps a globally unique Portal workspace ID to one immutable
 // cluster/namespace/queue/result scope and an explicit visibility policy.
 type WorkspaceRecord struct {
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name,omitempty"`
-	Cluster        string                 `json:"cluster"`
-	Team           string                 `json:"team,omitempty"`
-	Namespace      string                 `json:"namespace"`
-	LocalQueue     string                 `json:"localQueue,omitempty"`
-	ResultScope    string                 `json:"resultScope,omitempty"`
-	Source         string                 `json:"source"`
-	ExperimentsURL string                 `json:"experimentsUrl,omitempty"`
-	Default        bool                   `json:"default,omitempty"`
-	Authorization  WorkspaceAuthorization `json:"authorization"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Cluster     string `json:"cluster"`
+	Team        string `json:"team,omitempty"`
+	Namespace   string `json:"namespace"`
+	LocalQueue  string `json:"localQueue,omitempty"`
+	ResultScope string `json:"resultScope,omitempty"`
+	Source      string `json:"source"`
+	// ExperimentsURL selects the mounted /stellar surface or an independently
+	// authenticated HTTPS deployment. It is navigation configuration, not an
+	// authorization grant or a cross-origin iframe/CORS configuration. Remote
+	// deployments must enforce their own viewer and fixed-workspace boundary.
+	ExperimentsURL     string                 `json:"experimentsUrl,omitempty"`
+	ExperimentsBackend *ExperimentsBackend    `json:"experimentsBackend,omitempty"`
+	Default            bool                   `json:"default,omitempty"`
+	Authorization      WorkspaceAuthorization `json:"authorization"`
 }
 
 // WorkspaceAuthorization is an explicit Portal visibility policy. It mirrors
@@ -103,19 +108,21 @@ type WorkspaceAuthorization struct {
 
 // WorkspaceScope is the server-resolved scope attached to every Portal board.
 type WorkspaceScope struct {
-	WorkspaceID       string `json:"workspace"`
-	Name              string `json:"name"`
-	Cluster           string `json:"cluster"`
-	Team              string `json:"team,omitempty"`
-	Namespace         string `json:"namespace"`
-	LocalQueue        string `json:"localQueue,omitempty"`
-	ResultScope       string `json:"resultScope,omitempty"`
-	Source            string `json:"source"`
-	AuthorizationMode string `json:"authorizationMode"`
-	ExperimentsURL    string `json:"experimentsUrl,omitempty"`
-	PortalEndpoint    string `json:"portalEndpoint,omitempty"`
-	Availability      string `json:"availability"`
-	Managed           bool   `json:"managed"`
+	WorkspaceID        string `json:"workspace"`
+	Name               string `json:"name"`
+	Cluster            string `json:"cluster"`
+	Team               string `json:"team,omitempty"`
+	Namespace          string `json:"namespace"`
+	LocalQueue         string `json:"localQueue,omitempty"`
+	ResultScope        string `json:"resultScope,omitempty"`
+	Source             string `json:"source"`
+	AuthorizationMode  string `json:"authorizationMode"`
+	ExperimentsURL     string `json:"experimentsUrl,omitempty"`
+	experimentsBackend *ExperimentsBackend
+	ExperimentsNative  NativeExperiments `json:"experimentsNative"`
+	PortalEndpoint     string            `json:"portalEndpoint,omitempty"`
+	Availability       string            `json:"availability"`
+	Managed            bool              `json:"managed"`
 }
 
 type staticWorkspaceDirectory struct {
@@ -225,6 +232,16 @@ func NewWorkspaceDirectory(cfg WorkspaceDirectoryConfig) (WorkspaceDirectory, er
 				return nil, fmt.Errorf("workspace directory workspace %q: %w", ws.ID, err)
 			}
 		}
+		if ws.ExperimentsBackend != nil {
+			backend := *ws.ExperimentsBackend
+			if err := validateExperimentsBackend(backend); err != nil {
+				return nil, fmt.Errorf("workspace directory workspace %q: %w", ws.ID, err)
+			}
+			if !strings.Contains(strings.ToLower(ws.Source), "kusto") {
+				return nil, fmt.Errorf("workspace directory workspace %q: experimentsBackend requires a Kusto-backed source", ws.ID)
+			}
+			ws.ExperimentsBackend = &backend
+		}
 		workspaces[i] = ws
 	}
 	if len(workspaces) == 0 {
@@ -287,18 +304,19 @@ func (d *staticWorkspaceDirectory) scope(ws WorkspaceRecord) WorkspaceScope {
 		name = ws.ID
 	}
 	scope := WorkspaceScope{
-		WorkspaceID:       ws.ID,
-		Name:              name,
-		Cluster:           ws.Cluster,
-		Team:              ws.Team,
-		Namespace:         ws.Namespace,
-		LocalQueue:        ws.LocalQueue,
-		ResultScope:       ws.ResultScope,
-		Source:            ws.Source,
-		AuthorizationMode: ws.Authorization.Mode,
-		ExperimentsURL:    ws.ExperimentsURL,
-		Availability:      workspaceAvailabilityAvailable,
-		Managed:           true,
+		WorkspaceID:        ws.ID,
+		Name:               name,
+		Cluster:            ws.Cluster,
+		Team:               ws.Team,
+		Namespace:          ws.Namespace,
+		LocalQueue:         ws.LocalQueue,
+		ResultScope:        ws.ResultScope,
+		Source:             ws.Source,
+		AuthorizationMode:  ws.Authorization.Mode,
+		ExperimentsURL:     ws.ExperimentsURL,
+		experimentsBackend: ws.ExperimentsBackend,
+		Availability:       workspaceAvailabilityAvailable,
+		Managed:            true,
 	}
 	if ws.Cluster == d.localCluster {
 		return scope
@@ -386,7 +404,7 @@ func validateExperimentsURL(raw string, local bool) error {
 	if local && isSafeLocalAbsolutePath(raw) && u.Host == "" {
 		return nil
 	}
-	if u.Scheme != "https" || u.Host == "" || u.User != nil {
+	if u.Scheme != "https" || u.Host == "" || u.User != nil || strings.Contains(raw, `\`) {
 		return fmt.Errorf("experimentsUrl %q must be a local absolute path or HTTPS URL", raw)
 	}
 	return nil
@@ -475,8 +493,15 @@ func (s *Server) resolveWorkspaceScope(r *http.Request) (WorkspaceScope, error) 
 		"team":      scope.Team,
 		"queue":     scope.LocalQueue,
 	} {
-		if values, ok := r.URL.Query()[key]; ok && len(values) > 0 && values[0] != expected {
-			return WorkspaceScope{}, fmt.Errorf("%s query conflicts with resolved workspace scope", key)
+		for _, value := range r.URL.Query()[key] {
+			if value != expected {
+				return WorkspaceScope{}, fmt.Errorf("%s query conflicts with resolved workspace scope", key)
+			}
+		}
+	}
+	for _, value := range r.URL.Query()["workspace"] {
+		if value != scope.WorkspaceID {
+			return WorkspaceScope{}, errors.New("workspace query conflicts with resolved workspace scope")
 		}
 	}
 	return scope, nil
@@ -535,6 +560,7 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.workspaceDirectory == nil {
 		scope, _ := s.resolveWorkspaceScope(r)
+		scope.ExperimentsNative = s.nativeExperiments(scope)
 		writeJSON(w, http.StatusOK, workspaceDirectoryResponse{
 			Workspaces: []WorkspaceScope{scope},
 			Selected:   &scope,
@@ -552,6 +578,9 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scopes := s.workspaceDirectory.List(r.Context(), viewer)
+	for i := range scopes {
+		scopes[i].ExperimentsNative = s.nativeExperiments(scopes[i])
+	}
 	resp := workspaceDirectoryResponse{Workspaces: scopes, Managed: true}
 	if requested := strings.TrimSpace(r.URL.Query().Get("workspace")); requested != "" {
 		scope, err := s.workspaceDirectory.Resolve(r.Context(), viewer, requested)
@@ -559,18 +588,46 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusNotFound, errWorkspaceNotFound.Error())
 			return
 		}
+		scope.ExperimentsNative = s.nativeExperiments(scope)
 		resp.Selected = &scope
 	} else if scope, err := s.workspaceDirectory.Resolve(r.Context(), viewer, ""); err == nil {
+		scope.ExperimentsNative = s.nativeExperiments(scope)
 		resp.Selected = &scope
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
-	if s.workspaceDirectory == nil {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isAPI := strings.HasPrefix(r.URL.Path, "/api/")
+		routeAllowed := expapi.WorkspaceRouteAllowed(r.Method, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/artifacts") || strings.HasSuffix(r.URL.Path, "/artifact") {
+			target := strings.TrimSpace(r.URL.Query().Get("target"))
+			routeAllowed = routeAllowed && target != ""
+			for _, value := range r.URL.Query()["target"] {
+				routeAllowed = routeAllowed && strings.TrimSpace(value) == target
+			}
+			for _, value := range r.URL.Query()["run"] {
+				routeAllowed = routeAllowed && (value == "" || strings.TrimSpace(value) == target)
+			}
+			for _, value := range r.URL.Query()["artifact"] {
+				routeAllowed = routeAllowed && value == r.URL.Query().Get("artifact")
+			}
+		}
+		if s.workspaceDirectory == nil {
+			if isAPI && !routeAllowed {
+				writeJSONError(w, http.StatusForbidden, "this Stellar route is not available in Portal")
+				return
+			}
+			for _, workspace := range r.URL.Query()["workspace"] {
+				if workspace != "" && workspace != s.singleWorkspaceScope.WorkspaceID {
+					writeJSONError(w, http.StatusForbidden, "workspace query conflicts with configured workspace")
+					return
+				}
+			}
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, s.singleWorkspaceScope.WorkspaceID, s.singleWorkspaceScope.Source)))
+			return
+		}
 		scope, err := s.resolveWorkspaceScope(r)
 		if err != nil {
 			switch {
@@ -583,6 +640,27 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			default:
 				writeJSONError(w, http.StatusBadRequest, err.Error())
 			}
+			return
+		}
+		if !routeAllowed {
+			writeScopedJSON(w, http.StatusForbidden, map[string]string{
+				"reason": "this Stellar route is not workspace-scoped in managed Portal mode",
+			}, scope, "forbidden")
+			return
+		}
+		if isAPI && scope.experimentsBackend != nil {
+			s.proxyStellar(w, r, scope)
+			return
+		}
+		if !isAPI && scope.experimentsBackend != nil {
+			http.Redirect(w, r, "/portal/experiments?"+workspaceQuery(nil, r.URL.Query(), scope.WorkspaceID, scope.Source).Encode(), http.StatusTemporaryRedirect)
+			return
+		}
+		if isAPI && (scope.Availability != workspaceAvailabilityAvailable ||
+			(scope.ExperimentsURL != "" && !strings.HasPrefix(scope.ExperimentsURL, "/"))) {
+			writeScopedJSON(w, http.StatusConflict, map[string]string{
+				"reason": "native experiments are unavailable: configure a trusted experimentsBackend connection",
+			}, scope, "unavailable")
 			return
 		}
 		if scope.Availability == workspaceAvailabilityRedirect {
@@ -599,12 +677,6 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			writeScopedJSON(w, http.StatusConflict, map[string]string{
 				"reason": "experiment tracking is untracked for this workspace",
 			}, scope, "untracked")
-			return
-		}
-		if !expapi.WorkspaceRouteAllowed(r.Method, r.URL.Path) {
-			writeScopedJSON(w, http.StatusForbidden, map[string]string{
-				"reason": "this Stellar route is not workspace-scoped in managed Portal mode",
-			}, scope, "forbidden")
 			return
 		}
 		target, err := url.Parse(scope.ExperimentsURL)
@@ -633,8 +705,19 @@ func workspaceScopedRequest(r *http.Request, defaults url.Values, workspaceID, s
 func workspaceExperimentRedirectURL(target *url.URL, r *http.Request, workspaceID, source string) string {
 	redirect := *target
 	if r.URL.Path != "/stellar" && r.URL.Path != "/stellar/" {
-		redirect.Path = r.URL.Path
+		// A deployment may expose Stellar under a reverse-proxy base path.
+		// Keep its sibling API and asset routes under that same prefix, rather
+		// than sending them to an unrelated handler at the destination root.
+		base := strings.TrimRight(target.Path, "/")
+		if strings.HasSuffix(base, "/stellar") {
+			base = strings.TrimSuffix(base, "/stellar")
+		} else {
+			base = ""
+		}
+		redirect.Path = base + r.URL.Path
 		redirect.RawPath = ""
+		redirect.Fragment = ""
+		redirect.RawFragment = ""
 	}
 	redirect.RawQuery = workspaceQuery(target.Query(), r.URL.Query(), workspaceID, source).Encode()
 	return redirect.String()
@@ -648,9 +731,13 @@ func workspaceQuery(defaults, request url.Values, workspaceID, source string) ur
 	for key, values := range request {
 		out[key] = append([]string(nil), values...)
 	}
+	// Native viewers must never opt into backend configuration diagnostics.
+	out.Del("debug")
 	out.Set("workspace", workspaceID)
 	if strings.Contains(strings.ToLower(source), "kusto") {
 		out.Set("source", "kusto")
+	} else {
+		out.Set("source", firstNonEmpty(source, "local"))
 	}
 	return out
 }

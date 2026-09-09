@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: build install test test-stellar-adx-e2e lint clean
+.PHONY: build install test test-stellar-adx-e2e lint clean frontend-build frontend-typecheck frontend-dev
 
 BINARY := taugrid-portal
 PKG := ./cmd/taugrid-portal
@@ -16,17 +16,29 @@ BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 # deliberately, in a PR that also fixes whatever the new version finds.
 STATICCHECK_VERSION := v0.7.0
 
-build:
+frontend/node_modules/.package-lock.json: frontend/package.json frontend/package-lock.json
+	cd frontend && npm ci
+
+frontend-build: frontend/node_modules/.package-lock.json
+	cd frontend && npm run build
+
+frontend-typecheck: frontend/node_modules/.package-lock.json
+	cd frontend && npm run typecheck
+
+frontend-dev: frontend/node_modules/.package-lock.json
+	cd frontend && npm run dev
+
+build: frontend-build
 	go build $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) $(PKG)
 
-install:
+install: frontend-build
 	go install $(BUILD_FLAGS) -ldflags "$(LDFLAGS)" $(PKG)
 
 test:
 	go test ./...
 
 
-lint:
+lint: frontend-typecheck
 	go vet ./...
 	gofmt -l . | tee /dev/stderr | (! read -r _)
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...

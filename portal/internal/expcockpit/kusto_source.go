@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/expkusto"
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kustoquery"
@@ -2122,6 +2123,12 @@ func kustoRunView(runID string, rows []KustoMetricRow, now time.Time, staleAfter
 	}
 	classification := classifyKustoRun(rows, now, staleAfter)
 	tags := kustoMergedTags(rows)
+	launch := experiment.ParseLaunch(tags[experiment.LaunchTag])
+	if launch != nil {
+		tags[experiment.LaunchTag] = launch.Tag()
+	} else {
+		delete(tags, experiment.LaunchTag)
+	}
 	view := RunView{
 		RunID:          runID,
 		Source:         "kusto",
@@ -2139,6 +2146,7 @@ func kustoRunView(runID string, rows []KustoMetricRow, now time.Time, staleAfter
 		CompletedAt:    classification.CompletedAt,
 		ResultURI:      firstNonEmptyString(tags[expkusto.RunStatusArtifactURITag], tags[expkusto.RunStatusCheckpointURITag]),
 		Tags:           tags,
+		Launch:         launch,
 		MetricNames:    kustoMetricNames(rows),
 		ObserveCLI:     "",
 	}

@@ -1,6 +1,14 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/azurelinux/base/nodejs:24.20.0-1-azl3.0.20260825 AS frontend
+
+WORKDIR /app/portal/frontend
+COPY portal/frontend/package.json portal/frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY portal/frontend ./
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1-azurelinux3.0 AS builder
 
 ARG TARGETOS
@@ -17,6 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 WORKDIR /app
 COPY core ./core
 COPY portal ./portal
+COPY --from=frontend /app/portal/internal/portalapi/assets ./portal/internal/portalapi/assets
 
 WORKDIR /app/portal
 ARG VERSION=dev

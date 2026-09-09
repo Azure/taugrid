@@ -1,18 +1,20 @@
 # portalapi — unified observability portal
 
 `portalapi` serves the runtime's single read-only web surface: the `/portal`
-frontend shell and the `/api/portal/*` board APIs. In single-workspace
-mode it also reuses the mounted Stellar experience (`/stellar*`,
-`/api/*stellar*`) unchanged for Experiments.
+native React frontend and the `/api/portal/*` board APIs. Experiments use the
+canonical `/api/v2/stellar` API on the same origin rather than embedding another
+application.
 It is started by `taugrid-portal portal serve` and, in-cluster, by a Deployment behind an
-internal load balancer. It follows the persona-centered UI direction proposed in
+internal ClusterIP Service. It follows the persona-centered UI direction proposed in
 [PR #827](https://github.com/Azure/taugrid/pull/827).
 
 ## Shape
 
-- **Shell** — `assets/index.html` is a hand-written SPA (no build step). It groups
-  pages under Workloads, Platform, and Experiments. Workspace and overview
-  persona are URL-addressable; nested routes retain their parent navigation.
+- **Shell** — `assets/` is generated from `portal/frontend/` by `npm run build`.
+  The Experiments tab opens directly on its native dashboard, without an
+  overview or sidebar; Workloads and Platform retain their boards.
+  Workspace, project, experiment, and run selection are
+  URL-addressable.
   Independent source panels expose loading, refresh, last-success time, and
   explicitly stale retained data when a refresh fails.
 - **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
@@ -34,14 +36,29 @@ internal load balancer. It follows the persona-centered UI direction proposed in
   Kusto workspace boundary. Local scopes use local readers; remote scopes
   redirect only to a registered per-cluster Portal or return an explicit
   unavailable state.
-- **Experiments embed** — single-workspace mode keeps the persona sidebar visible and
-  loads the mounted Stellar SPA in a same-origin `<iframe src="/stellar">`.
+- **Native experiments** — experiments, charts, launch metadata, and media use
+  the same React application; there is no experiment iframe or persona sidebar.
   Managed workspaces may use a local `/stellar` path or an explicit HTTPS
   experiment endpoint, but `experimentsUrl` requires a Kusto-backed source.
-  Portal permits only workspace-aware read routes (experiment/run discovery,
-  snapshots, series, capabilities, page assets) and blocks mutation, artifact,
-  label, saved-workspace, and perf-harness routes until those contracts carry
-  workspace-qualified ownership. Stellar's handler hard-codes `X-Frame-Options:
+  Portal permits only canonical workspace-aware read routes (experiment/run
+  discovery, snapshots, series, capabilities, page assets, and exact-run
+  artifact reads). `GET`/`HEAD` on `/api/v2/stellar/artifacts` and
+  `/api/v2/stellar/artifact` (including the existing API aliases) require an
+  explicit `target` resolving to one exact run in the authorized scope.
+  Native previews and download links use the artifact's attributed `run_id`,
+  not the experiment or group currently open in the dashboard. Missing or
+  ambiguous ownership leaves metadata visible with an unavailable notice and
+  makes no artifact request or download link.
+  Experiment/group targets, conflicting target/run/artifact hints, foreign
+  artifact IDs, mutations, status, and `/artifact/bundle/*` remain denied.
+  The central `expapi.WorkspaceRouteAllowed` policy and
+  `WithWorkspaceRoutePolicy` context remain authoritative for the local mount;
+  standalone experiment API behavior is not restricted by this Portal policy.
+  An optional trusted `experimentsBackend` serves remote native reads with
+  server-pinned workspace/source, no browser credentials, no upstream redirects,
+  and no local fallback. Its artifact reads enforce the same exact-run ownership.
+  Native evidence does not show report cards, counts, or links.
+  Stellar's handler hard-codes `X-Frame-Options:
   DENY`; the mount relaxes that blanket `DENY` to `SAMEORIGIN` while leaving
   stricter per-route headers untouched.
 
@@ -71,10 +88,10 @@ ServiceAccount. Local expstore and `source=auto` remain single-store tools rathe
 than multi-tenant boundaries; managed workspace experiment views force
 `source=kusto`.
 
-## Tab UI roadmap
+## Navigation and board APIs
 
-The shell groups today's boards under three top-level tabs — **Workloads**,
-**Platform**, **Experiments** — evolving the persona direction from PR #827.
+The shell exposes **Experiments**, **Workloads**, and **Platform**. Selecting
+Experiments opens its native dashboard directly.
 "Tier" records how much of each proposal page is actually backed by data:
 
 - **①** — frontend-only reuse of an existing board/API.
@@ -92,11 +109,12 @@ The shell groups today's boards under three top-level tabs — **Workloads**,
 | Platform | Ray | `/portal/ray` | `ray.Board` (dashboard Services, K8s) | ① |
 | Platform | Observability | `/portal/observability` | none — placeholder | ③ |
 | Platform | Cost | `/portal/cost` | `cost.Board` (namespace GPU-hours, Kusto) | ① (per-user/team = ③) |
-| Experiments | Stellar | `/portal/experiments` | mounted Stellar SPA, embedded in a same-origin iframe | ① |
+| Experiments | Native workspace | `/portal/experiments` | canonical `/api/v2/stellar` reads | ① |
 
-`Overview` (`/portal`) is retained as each tab's landing: Workloads and Platform
-render their own headline cards; Experiments links into the embedded Stellar
-board. The three Fleet boards share one page via in-page sub-tabs (Health |
+Workloads and Platform retain their `/portal` overview landings; Experiments
+goes directly to `/portal/experiments`, without a separate overview page.
+The overview API remains available for existing board consumers.
+The three Fleet boards share one page via in-page sub-tabs (Health |
 Utilization | Compute); the legacy `/portal/{cluster,gpu,nodes}` paths still
 resolve to the matching Fleet sub-tab so existing deep-links keep working.
 
@@ -111,7 +129,14 @@ Job details expose `diagnostics` for workloads, pods, events, and tracking:
 `ready`, `empty`, `unavailable`, or `not_configured`. Indexed metrics can enable
 a scoped Stellar link while a job is active; a terminal lifecycle marker is not
 required. Retried source failures do not silently erase previously displayed
-evidence or label it fresh.
+evidence or label it fresh. Explicit client/access rejections (including 401,
+403, and authorization-masked 404) hide cached board and native experiment data,
+including derived selections and media previews, even during retries; only
+transient/network and server failures retain data with a last-success stale warning.
+Rejected cached payloads are discarded; later failures or cancellation cannot
+restore them. Only a subsequent successful fetch restores readable data.
+A failed workspace
+directory refresh never displays a cached authorized directory or workspace.
 
 Missing GPU and node measurements are JSON `null`, not measured zero. GPU
 health requires observed error counters. Node CPU rates use actual observed

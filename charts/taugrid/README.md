@@ -21,6 +21,57 @@ helm upgrade --install taugrid \
 
 Use `tau cluster explain-values` to print the full field reference.
 
+### Cluster-level ADX query connection
+
+Record the existing cluster's **query** connection once in `taugrid-values.yaml`:
+
+```yaml
+global:
+  adx:
+    queryConnection:
+      endpoint: https://my-cluster.eastus2.kusto.windows.net
+      database: Metrics
+      clientID: 11111111-2222-3333-4444-555555555555
+```
+
+Pass this file to the install/upgrade command above. Helm persists these
+nonsecret values in the release; `tau cluster install --values` forwards them
+without a separate CLI registration step. With the default umbrella settings,
+Portal inherits the endpoint/database, annotates its `tau-portal` ServiceAccount,
+and labels its pod for Azure Workload Identity. Its native React Experiments UI
+and same-service `/api/v2/stellar/*` JSON API use the in-process ADX backend:
+no query adapter, separate Stellar deployment, or `experimentsBackend` is needed.
+
+Before installation, the platform must separately provision the reader identity,
+grant **ADX database Viewer only**, and federate it to the cluster OIDC issuer
+with audience `api://AzureADTokenExchange` and subject
+`system:serviceaccount:tau-system:tau-portal`. Adjust that subject if the release
+namespace or ServiceAccount name changes. Enable Azure Workload Identity on the
+cluster and ensure the pod can reach ADX. Never supply adx-mon's ingestion/admin
+identity. Installation creates no Azure resources or federation and grants no
+Azure/ADX permissions; it cannot verify the supplied identity's role assignments.
+Existing experiment ingestion and tables are also prerequisites. The Cost board
+still uses `taugrid-core.portal.kusto.costDatabase` (`CostTracking` by default)
+and needs Viewer permission there if used.
+
+Nonempty `taugrid-core.portal.kusto.endpoint` and `.database` override the shared
+values independently. An explicit
+`taugrid-core.portal.serviceAccount.annotations.azure.workload.identity/client-id`
+overrides the shared client ID; an explicitly empty annotation is rejected.
+Other `portal.kusto.*` settings, including an intentional `queryCommand`, remain
+unchanged. Shared identity inheritance requires a chart-created ServiceAccount
+(the umbrella default). For an externally managed ServiceAccount, configure its
+name and explicit client-ID annotation in the chart to match the existing object;
+the chart does not modify it.
+
+Set all three connection fields together or leave all empty. A partial connection
+fails rendering when Kusto Portal is enabled, rather than selecting an unintended
+identity. An absent connection retains degraded Kusto APIs; `source=local/auto`
+ignores the shared connection and retains its existing store requirements.
+The fixed workspace remains `taugrid-default`, the Service remains ClusterIP,
+and workspace-directory routing stays disabled. This connection is backend
+authentication, not viewer authentication or permission to expose Portal.
+
 ## MultiKueue
 
 The supported TauGrid install enables Kueue's MultiKueue capability by default,

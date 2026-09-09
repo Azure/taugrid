@@ -296,10 +296,52 @@ see [Tau run lifecycle recorder](../../../../docs/tau/tau-run-lifecycle-recorder
 ## Tau portal
 
 The portal is a single read-only web entry point that aggregates and
-cross-links the runtime's dashboards. It is the same `tau` binary and image as
-Stellar, run as `taugrid-portal portal serve`, and embeds Stellar unchanged as the
-Experiments board under `/stellar`. It is disabled by default; enable it
-alongside or instead of the standalone Stellar Deployment.
+cross-links the runtime's dashboards. It runs as `taugrid-portal portal serve`
+and serves the native React Experiments board and canonical `/api/v2/stellar/*`
+JSON API using the same in-process backend. It is disabled by default in this
+standalone chart; a separate Stellar Deployment is not required.
+
+### Inherit the cluster's read-only ADX connection
+
+The shared `global.adx.queryConnection` Helm contract is identical for the
+standalone chart and the [TauGrid umbrella](../taugrid/README.md#cluster-level-adx-query-connection):
+
+```yaml
+global:
+  adx:
+    queryConnection:
+      endpoint: https://my-cluster.eastus2.kusto.windows.net
+      database: Metrics
+      clientID: 11111111-2222-3333-4444-555555555555
+portal:
+  enabled: true
+  serviceAccount:
+    create: true
+    name: tau-portal
+```
+
+Install in `tau-system` (or federate to the actual release namespace). The
+identity must already exist, have ADX database Viewer permissions only, and be
+federated to `system:serviceaccount:tau-system:tau-portal` for this cluster's OIDC
+issuer and audience `api://AzureADTokenExchange`. The cluster must support Azure
+Workload Identity. Never reuse adx-mon's admin/ingestion identity. Helm stores the
+nonsecret connection and configures the pod/ServiceAccount, but creates no Azure
+resources, federation, role assignments, tables, or data.
+
+With `portal.source=kusto`, nonempty `portal.kusto.endpoint` and `.database`
+override shared values per field; an explicit ServiceAccount client-ID annotation
+overrides the shared identity. Empty explicit client-ID annotations and partial
+shared connections fail rendering. Inheriting the identity requires
+`portal.serviceAccount.create=true`; for an existing ServiceAccount, explicitly
+set its name and client-ID annotation to match the externally managed object.
+The chart derives `azure.workload.identity/use: "true"` on the pod.
+`portal.kusto.queryCommand` remains an optional adapter override, and
+`portal.kusto.costDatabase` remains independent (Viewer access there is needed
+for Cost). Empty shared values preserve existing degraded behavior; local/auto
+sources do not inherit them. Workspace scope, ClusterIP exposure, and disabled
+workspace-directory defaults are unchanged.
+
+### Explicit Portal-only configuration
 
 ```bash
 helm upgrade --install taugrid-core ./taugrid-core \
@@ -344,7 +386,7 @@ ClusterQueue binding matches each live LocalQueue; mismatches fail unavailable
 instead of showing zero quota.
 
 With `portal.workspaceDirectory.enabled=false` (the default), `portal.workspace`
-(default `default`) scopes the embedded Stellar board. The legacy Ray/Runs
+(default `taugrid-default`) scopes the native experiment workspace. The legacy Ray/Runs
 boards read cluster-wide unless `portal.workloadNamespace` is set; the
 deprecated `portal.jobs.namespace` remains an explicit compatibility fallback.
 It does not authorize the Jobs board. Viewer-authorized Jobs access requires
@@ -357,6 +399,14 @@ on both the metrics and cost-tracking databases.
 For Azure Workload Identity, set
 `portal.serviceAccount.annotations.azure.workload.identity/client-id`; the
 chart derives the required Pod label from that annotation.
+
+The experiment UI is native React within Portal, not an iframe. A workspace
+record can set `experimentsBackend.url` to a trusted separate Stellar API origin
+or base path. Use `portal.extraVolumes` and `portal.extraVolumeMounts` to mount an
+optional `experimentsBackend.bearerTokenFile` from a Secret; the workspace
+ConfigMap contains only its path. The browser never receives the backend
+authority or credential. See [trusted backend configuration](../../portal/README.md#separately-deployed-stellar-backends)
+for source, authentication, network, and report-document constraints.
 
 ### Researcher browser access
 

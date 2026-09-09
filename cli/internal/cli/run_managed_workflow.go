@@ -364,6 +364,13 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	explicitAuto, implicitAuto := prepareAutoQueueRender(&topologyHolder, allowImplicitAuto, dryRun)
 	capture := buildManagedWorkflowCaptureMetadata(ctx, captureCommand, m, raw, namespace, workloadKind, o.configHash)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
+	capture = addLaunchMetadata(capture, topologyHolder.GPUClass, resolvedProfileName, o.mainScript, "", max(1, m.Compute.Workers), m.Compute.GPUs)
+	if workloadKind == manifest.WorkloadKindRayJobEval {
+		capture = addLaunchMetadata(capture, topologyHolder.GPUClass, resolvedProfileName, o.mainScript, "", 1, m.Compute.GPUs)
+		capture.Launch.CPUWorkers = &m.Eval.CPUWorkers
+	}
+	capture = addLaunchGPUResources(capture, gpuResourceMode, o.migProfile)
+	metricsOffloadOptions.Tags = addLaunchTag(metricsOffloadOptions.Tags, capture)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
 	if o.submissionID != "" {

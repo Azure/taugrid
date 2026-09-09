@@ -23,8 +23,8 @@ var capabilityRoutes = map[string]capabilityRoute{
 	"run_search":          {"/runs", http.MethodGet, true},
 	"experiment_search":   {"/experiments", http.MethodGet, true},
 	"experiment_mutation": {"/experiments", http.MethodPost, false},
-	"artifact_index":      {"/artifacts", http.MethodGet, false},
-	"artifact_content":    {"/artifact", http.MethodGet, false},
+	"artifact_index":      {"/artifacts", http.MethodGet, true},
+	"artifact_content":    {"/artifact", http.MethodGet, true},
 	"status":              {"/status", http.MethodGet, false},
 }
 
@@ -80,6 +80,6 @@ func (c *capabilitiesResponse) applyRoutePolicy(r *http.Request) {
 	}
 	c.Degradations = append(c.Degradations, capabilityDegradation{
 		Code:   "MANAGED_PORTAL_ROUTE_POLICY",
-		Detail: workspaceRouteReason + "; mutations, artifact access, and status are unavailable.",
+		Detail: workspaceRouteReason + "; mutations, artifact bundles, and status are unavailable; artifact reads require an exact run target.",
 	})
 }

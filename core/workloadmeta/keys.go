@@ -44,6 +44,7 @@ const (
 	LabelDataset      = "tau.azure.com/dataset"
 
 	AnnotationNamespace = "tau.azure.com/namespace"
+	AnnotationLaunch    = "tau.azure.com/launch"
 
 	// These identify the workload that owns a generated Secret.
 	AnnotationOwnerName = "tau.azure.com/owner-name"

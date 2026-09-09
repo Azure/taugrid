@@ -15,6 +15,22 @@
     },
     "global": {
       "type": "object",
+      "properties": {
+        "adx": {
+          "type": "object",
+          "properties": {
+            "queryConnection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "endpoint": { "type": "string" },
+                "database": { "type": "string" },
+                "clientID": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
       "additionalProperties": true
     }
   }
