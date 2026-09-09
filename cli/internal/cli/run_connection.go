@@ -233,17 +233,16 @@ func applyLiveRunConnection(
 	ensurer runConnectionEnsurer,
 ) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
 	discovery := descriptorFor(source)
-	if options.workspaceExplicit || options.kubeContextExplicit {
-		return applyActivatedRunConnection(ctx, options, source, true, ensurer)
-	}
 	if !source.Catalog && discovery == nil && (options.workspace != "" || options.kubeContext != "") {
 		return options, workspaceconnection.ActiveConnection{}, nil
 	}
 	if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, discovery); err != nil {
 		return options, workspaceconnection.ActiveConnection{}, err
 	}
-	if err := checkCatalogWorkspaceConflict(options, source, source.Discovery); err != nil {
-		return options, workspaceconnection.ActiveConnection{}, err
+	if !options.workspaceExplicit {
+		if err := checkCatalogWorkspaceConflict(options, source, source.Discovery); err != nil {
+			return options, workspaceconnection.ActiveConnection{}, err
+		}
 	}
 	connection, err := ensureRunConnection(ctx, ensurer, source)
 	if err != nil {
