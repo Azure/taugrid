@@ -8,7 +8,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 |-----------|---------|
 | **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
-| **Ray** | 2.56.0 — `ray[default]`, `ray[data]`, `ray[serve]` |
+| **Ray** | 2.58.0 — `ray[default]`, `ray[data]`, `ray[serve]` |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
 | **NCCL** | NVIDIA Collective Communications Library — multi-GPU all-reduce, broadcast; uses RDMA/IB transport when available |
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
@@ -39,7 +39,9 @@ Version combinations are defined in [`versions.json`](versions.json):
 
 ```json
 [
-  { "python": "3.12", "ray": "2.56.0", "cuda": "13.0", "default": true }
+  { "python": "3.12", "ray": "2.56.1", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.57.0", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.58.0", "cuda": "13.0", "default": true }
 ]
 ```
 
@@ -51,8 +53,9 @@ Add a new entry to `versions.json`:
 
 ```json
 [
-  { "python": "3.12", "ray": "2.54.0", "cuda": "13.0" },
-  { "python": "3.12", "ray": "2.56.0", "cuda": "13.0", "default": true }
+  { "python": "3.12", "ray": "2.57.0", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.58.0", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.59.0", "cuda": "13.0", "default": true }
 ]
 ```
 
@@ -67,7 +70,7 @@ Version defaults are defined in the `Makefile` and can be overridden:
 make docker-build
 
 # Build with custom versions
-make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.56.0 CUDA_VERSION=13.0
+make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.58.0 CUDA_VERSION=13.0
 
 # Run smoke tests (verifies Python, Ray, and wget versions)
 make test
@@ -88,17 +91,17 @@ builds:
 
 ```bash
 # On an amd64 runner: build + push the amd64 image natively
-make docker-push-arch ARCH=amd64 IMG=<registry>/ray:py3.12-ray2.56.0-cuda13.0
+make docker-push-arch ARCH=amd64 IMG=<registry>/ray:py3.12-ray2.58.0-cuda13.0
 
 # On an arm64 runner: build + push the arm64 image natively
-make docker-push-arch ARCH=arm64 IMG=<registry>/ray:py3.12-ray2.56.0-cuda13.0
+make docker-push-arch ARCH=arm64 IMG=<registry>/ray:py3.12-ray2.58.0-cuda13.0
 
 # On any runner, after both of the above succeed: combine into one multi-arch
 # manifest at the canonical tag (pure registry metadata op — no build)
-make docker-push-manifest IMG=<registry>/ray:py3.12-ray2.56.0-cuda13.0
+make docker-push-manifest IMG=<registry>/ray:py3.12-ray2.58.0-cuda13.0
 ```
 
-`docker-push-arch` pushes to `$(IMG)-$(ARCH)` (e.g. `...:py3.12-ray2.56.0-cuda13.0-amd64`);
+`docker-push-arch` pushes to `$(IMG)-$(ARCH)` (e.g. `...:py3.12-ray2.58.0-cuda13.0-amd64`);
 `docker-push-manifest` reads those two arch-suffixed tags and publishes the
 combined manifest list at `$(IMG)` itself.
 
@@ -107,7 +110,7 @@ combined manifest list at `$(IMG)` itself.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PYTHON_VERSION` | `3.12` | Python version for the base image |
-| `RAY_VERSION` | `2.56.0` | Ray version to install via pip |
+| `RAY_VERSION` | `2.58.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
 | `ACR_REGISTRY` | *(required for `docker-push`)* | Backing ACR hostname for producer-side multi-arch pushes; consumers use MCR |
@@ -121,7 +124,7 @@ The local producer tag includes the source SHA. The corresponding stable public
 consumer tag omits that suffix, for example:
 
 ```
-mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
+mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0
 ```
 
 ## CI/CD
