@@ -196,7 +196,7 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 
 ## Conventions
 
-- Go toolchain: 1.26.6 (see `.go-version`); modules require Go 1.26.5
+- Go toolchain: 1.26.7 (see `.go-version`); modules require Go 1.26.5
 - Linting: staticcheck v0.7.0 for cli/core/portal; golangci-lint for monitoring modules
 - `staticcheck.conf` at repo root disables specific style checks (ST1000, ST1003, ST1005, ST1016, ST1020-ST1023, S1016) — do not re-enable without fixing all findings
 - Python: requires 3.10+, lint with ruff

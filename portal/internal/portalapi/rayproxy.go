@@ -5,6 +5,7 @@ package portalapi
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -19,24 +20,16 @@ import (
 // reverse-proxied: /api/portal/ray/proxy/{ns}/{cluster}/...
 const rayProxyPrefix = "/api/portal/ray/proxy/"
 
-// rayTargetCookie scopes root-absolute Ray dashboard asset requests (which carry
-// no proxy prefix) to a {ns}/{cluster} focused target. handleRayProxy sets it;
-// handleRayAsset reads it.
-const rayTargetCookie = "ray_target"
+// Workspace identity must survive relative asset/API requests, which do not
+// inherit a document's query string. The first segment is raw base64url.
+const rayWorkspaceProxyPrefix = "/api/portal/ray/workspaces/"
 
 // rayDashboardPort is the Ray dashboard port every KubeRay head Service exposes.
 const rayDashboardPort = "8265"
 
-// rayAssetPrefixes are the origin-root paths the Ray dashboard SPA fetches without
-// a proxy prefix (its JS uses absolute URLs). They are routed to handleRayAsset,
-// which resolves the upstream from the ray_target cookie. More specific portal
-// routes (e.g. /api/portal/ray) still win via ServeMux longest-prefix matching.
-//
-// NOTE: "/api/" is a subtree pattern — any future portal route under /api/...
-// that is NOT registered as a more-specific handler will fall through here
-// (returning 400 when no ray_target cookie is set). Always register new
-// /api/portal/... routes explicitly on the mux before these catch-alls.
-var rayAssetPrefixes = []string{
+// Old origin-root requests contain no reliable target. Keep explicit failures
+// rather than selecting a cluster from a cookie or a Referer.
+var rayUnscopedPrefixes = []string{
 	"/api/",
 	"/static/",
 	"/nodes",
@@ -109,8 +102,8 @@ func (c *rayTargetCache) set(key, service string) {
 
 // validateRayTarget confirms {ns}/{cluster} names a currently-discovered Ray head
 // Service before the proxy dials it. This is the SSRF guard: without it a client
-// could steer the in-cluster proxy at an arbitrary host by crafting the path or
-// cookie. It re-runs head-svc discovery (the same source of truth the board uses)
+// could steer the in-cluster proxy at an arbitrary host by crafting the path.
+// It re-runs head-svc discovery (the same source of truth the board uses)
 // rather than trusting the request.
 //
 // When s.ray.Namespace is configured, only that namespace is allowed — preventing
@@ -147,8 +140,11 @@ func (s *Server) validateRayTarget(ctx context.Context, ns, cluster, allowedName
 // rewriting the outgoing path to upstreamPath. svcName is the exact discovered
 // Service name (not derived). It handles websocket Upgrade natively
 // (httputil.ReverseProxy on Go 1.20+).
-func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName, upstreamPath string) {
-	target := &url.URL{Scheme: "http", Host: serviceHost(ns, svcName)}
+func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName, upstreamPath, prefix string) {
+	target := &url.URL{Scheme: "http", Host: serviceHost(ns, svcName), Path: upstreamPath}
+	query := r.URL.Query()
+	query.Del("workspace")
+	target.RawQuery = query.Encode()
 	proxy := &httputil.ReverseProxy{
 		Transport: s.rayTransport(),
 		Director: func(req *http.Request) {
@@ -156,19 +152,68 @@ func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName
 			req.URL.Host = target.Host
 			req.Host = target.Host
 			req.URL.Path = upstreamPath
+			req.URL.RawPath = ""
+			req.URL.RawQuery = target.RawQuery
+			// Portal credentials must not be sent to a workload-controlled head.
+			token, _ := req.Cookie(rayAuthCookieName(prefix))
+			req.Header.Del("Cookie")
+			// Ray's login dialog explicitly exchanges its user-entered bearer
+			// token here. Never forward a Portal bearer on passive requests.
+			if req.Method != http.MethodPost || upstreamPath != "/api/authenticate" {
+				req.Header.Del("Authorization")
+			}
+			for _, header := range []string{
+				defaultViewerUserHeader, defaultViewerGroupsHeader,
+				s.identity.UserHeader, s.identity.GroupsHeader,
+			} {
+				if header != "" {
+					req.Header.Del(header)
+				}
+			}
+			if token != nil {
+				req.AddCookie(&http.Cookie{Name: rayUpstreamAuthCookie, Value: token.Value})
+			}
+			req.Header.Set("Accept-Encoding", "identity")
+			req.Header.Del("If-None-Match")
+			req.Header.Del("If-Modified-Since")
+			if upstreamPath == "/" {
+				req.Header.Del("Range")
+			}
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
-			http.Error(w, "ray dashboard unreachable: the RayCluster may have been deleted", http.StatusBadGateway)
+		ModifyResponse: func(resp *http.Response) error {
+			return rewriteRayResponse(resp, target, prefix, r.Method)
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			http.Error(w, "ray dashboard proxy failed: "+err.Error(), http.StatusBadGateway)
 		},
 	}
 	proxy.ServeHTTP(w, r)
 }
 
 // handleRayProxy serves the Ray dashboard under
-// /api/portal/ray/proxy/{ns}/{cluster}/... It validates the target, sets the
-// ray_target cookie so the SPA's root-absolute asset fetches route back to the
-// same head Service, strips the prefix, and reverse-proxies to :8265.
+// /api/portal/ray/proxy/{ns}/{cluster}/... and the workspace-qualified canonical
+// form. Ray 2.54/2.56 use PUBLIC_URL=".", HashRouter and relative API URLs.
+// https://docs.ray.io/en/latest/cluster/configure-manage-dashboard.html#running-behind-a-reverse-proxy
 func (s *Server) handleRayProxy(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, rayProxyPrefix)
+	scopedPath := strings.HasPrefix(r.URL.Path, rayWorkspaceProxyPrefix)
+	if scopedPath {
+		encoded, suffix, found := strings.Cut(strings.TrimPrefix(r.URL.Path, rayWorkspaceProxyPrefix), "/")
+		workspace, err := base64.RawURLEncoding.DecodeString(encoded)
+		if !found || err != nil || len(workspace) == 0 || s.workspaceDirectory == nil {
+			http.Error(w, "invalid workspace-qualified Ray target", http.StatusBadRequest)
+			return
+		}
+		q := r.URL.Query()
+		if requested := q.Get("workspace"); requested != "" && requested != string(workspace) {
+			http.Error(w, "Ray path and query workspace must match", http.StatusBadRequest)
+			return
+		}
+		r = r.Clone(r.Context())
+		q.Set("workspace", string(workspace))
+		r.URL.RawQuery = q.Encode()
+		rest = suffix
+	}
 	scope, ok := s.localWorkspaceScope(w, r)
 	if !ok {
 		return
@@ -177,7 +222,6 @@ func (s *Server) handleRayProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ray board unavailable: portal started without Kubernetes access", http.StatusServiceUnavailable)
 		return
 	}
-	rest := strings.TrimPrefix(r.URL.Path, rayProxyPrefix)
 	parts := strings.SplitN(rest, "/", 3)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		http.Error(w, "ray proxy path must be /api/portal/ray/proxy/{namespace}/{cluster}/", http.StatusBadRequest)
@@ -197,76 +241,42 @@ func (s *Server) handleRayProxy(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 3 {
 		upstreamPath = "/" + parts[2]
 	}
-	cookieValue := ns + "/" + cluster
+	prefix := rayProxyPrefix + ns + "/" + cluster + "/"
 	if scope.Managed {
-		cookieValue = scope.WorkspaceID + "|" + ns + "|" + cluster
+		prefix = rayWorkspaceProxyPrefix + base64.RawURLEncoding.EncodeToString([]byte(scope.WorkspaceID)) + "/" + ns + "/" + cluster + "/"
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     rayTargetCookie,
-		Value:    cookieValue,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	s.proxyToHead(w, r, ns, svcName, upstreamPath)
+	if upgrade := r.Header.Get("Upgrade"); upgrade != "" && !isRayWebsocket(r) {
+		http.Error(w, "unsupported Ray protocol upgrade", http.StatusNotImplemented)
+		return
+	}
+	if !rayReadRouteAllowed(r.Method, upstreamPath, isRayWebsocket(r)) {
+		// Ray treats 401/403 as a token-login challenge. A policy limitation is
+		// not an authentication failure and must not trap the UI in a login loop.
+		http.Error(w, "unsupported Ray route: Portal permits only passive dashboard reads and Ray authentication", http.StatusNotImplemented)
+		return
+	}
+	if (r.Method == http.MethodPost || isRayWebsocket(r)) && !raySameOrigin(r) {
+		http.Error(w, "cross-origin Ray authentication and WebSockets are forbidden", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if (scope.Managed && !scopedPath) || len(parts) == 2 {
+		target := *r.URL
+		target.Path = prefix + strings.TrimPrefix(upstreamPath, "/")
+		target.RawPath = ""
+		q := target.Query()
+		q.Del("workspace")
+		target.RawQuery = q.Encode()
+		http.Redirect(w, r, target.RequestURI(), http.StatusTemporaryRedirect)
+		return
+	}
+	if upstreamPath == "/api/profiling_enabled" {
+		handleRayProfilingDisabled(w, r)
+		return
+	}
+	s.proxyToHead(w, r, ns, svcName, upstreamPath, prefix)
 }
 
-// handleRayAsset serves the Ray dashboard's root-absolute assets (no proxy
-// prefix). It resolves the focused target from the ray_target cookie, validates
-// it, and proxies the request through with its original path unchanged.
-func (s *Server) handleRayAsset(w http.ResponseWriter, r *http.Request) {
-	if s.ray.Reader == nil {
-		http.Error(w, "ray board unavailable: portal started without Kubernetes access", http.StatusServiceUnavailable)
-		return
-	}
-	cookie, err := r.Cookie(rayTargetCookie)
-	if err != nil {
-		http.Error(w, "no Ray dashboard selected: open a cluster from the Ray board first", http.StatusBadRequest)
-		return
-	}
-	var workspaceID, ns, cluster string
-	if s.workspaceDirectory != nil {
-		parts := strings.SplitN(cookie.Value, "|", 3)
-		if len(parts) != 3 {
-			http.Error(w, "invalid Ray target cookie", http.StatusBadRequest)
-			return
-		}
-		workspaceID, ns, cluster = parts[0], parts[1], parts[2]
-	} else {
-		var ok bool
-		ns, cluster, ok = strings.Cut(cookie.Value, "/")
-		if !ok {
-			http.Error(w, "invalid Ray target cookie", http.StatusBadRequest)
-			return
-		}
-	}
-	if ns == "" || cluster == "" {
-		http.Error(w, "invalid Ray target cookie", http.StatusBadRequest)
-		return
-	}
-	req := r
-	if workspaceID != "" {
-		clone := r.Clone(r.Context())
-		clonedURL := *r.URL
-		q := clonedURL.Query()
-		q.Set("workspace", workspaceID)
-		clonedURL.RawQuery = q.Encode()
-		clone.URL = &clonedURL
-		req = clone
-	}
-	scope, ok := s.localWorkspaceScope(w, req)
-	if !ok {
-		return
-	}
-	allowedNamespace := s.ray.Namespace
-	if scope.Managed {
-		allowedNamespace = scope.Namespace
-	}
-	svcName, valid := s.validateRayTarget(r.Context(), ns, cluster, allowedNamespace)
-	if !valid {
-		http.Error(w, "unknown Ray cluster: no matching head Service discovered", http.StatusNotFound)
-		return
-	}
-	s.proxyToHead(w, r, ns, svcName, r.URL.Path)
+func handleRayUnscoped(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "ambiguous Ray request: use a target-prefixed dashboard URL; cookie routing is unsupported", http.StatusBadRequest)
 }

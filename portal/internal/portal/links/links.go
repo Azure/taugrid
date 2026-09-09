@@ -107,6 +107,9 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return nil, fmt.Errorf("parse workloads: %w", err)
 	}
+	if list.Items == nil {
+		return nil, fmt.Errorf("parse workloads: response has no items array")
+	}
 	out := make([]Workload, 0, len(list.Items))
 	for _, it := range list.Items {
 		admitted, finished := admissionState(it.Status.Conditions)
