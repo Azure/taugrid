@@ -117,24 +117,6 @@ type runLifecycleWorkspaceFetcher func(
 	string,
 ) (tauworkspace.Workspace, error)
 
-func resolveRunLifecycleConnectionWithWorkspace(
-	cmd *cobra.Command,
-	kubeContext, namespace, workspace string,
-	contextExplicit, namespaceExplicit, workspaceExplicit bool,
-) (string, string, func(), error) {
-	return resolveRunLifecycleConnectionWithWorkspaceUsing(
-		cmd,
-		kubeContext,
-		namespace,
-		workspace,
-		contextExplicit,
-		namespaceExplicit,
-		workspaceExplicit,
-		resolveRunLifecycleConnection,
-		fetchWorkspace,
-	)
-}
-
 func resolveRunLifecycleConnectionWithWorkspaceUsing(
 	cmd *cobra.Command,
 	kubeContext, namespace, workspace string,
