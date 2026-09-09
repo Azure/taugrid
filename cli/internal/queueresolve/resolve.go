@@ -40,6 +40,73 @@ type AccessibleQueue struct {
 	Team         string
 }
 
+// ResolveExactQueue verifies one workspace-assigned LocalQueue without using
+// namespace labels for discovery or authorization.
+func ResolveExactQueue(ctx context.Context, r RawRunner, opts ResolveAccessibleQueueOptions) (AccessibleQueue, error) {
+	opts = normalizeOptions(opts)
+	if r == nil {
+		return AccessibleQueue{}, fmt.Errorf("Kubernetes runner is required")
+	}
+	if opts.Namespace == "" {
+		return AccessibleQueue{}, fmt.Errorf("workspace namespace is required")
+	}
+	if opts.QueueName == "" || strings.EqualFold(opts.QueueName, "auto") {
+		return AccessibleQueue{}, fmt.Errorf("workspace LocalQueue is required")
+	}
+	for _, auth := range [...]authorizationCheck{
+		{verb: "create", resource: opts.WorkloadResource},
+		{verb: "get", resource: "localqueues.kueue.x-k8s.io"},
+	} {
+		allowed, err := canI(ctx, r, auth.verb, auth.resource, opts.Namespace)
+		if err != nil {
+			return AccessibleQueue{}, fmt.Errorf(
+				"authorization check for %s %s in namespace %q: %w",
+				auth.verb,
+				auth.resource,
+				opts.Namespace,
+				err,
+			)
+		}
+		if !allowed {
+			return AccessibleQueue{}, fmt.Errorf(
+				"not authorized to %s %s in workspace namespace %q (RBAC)",
+				auth.verb,
+				auth.resource,
+				opts.Namespace,
+			)
+		}
+	}
+	localQueue, err := getLocalQueue(ctx, r, opts.Namespace, opts.QueueName)
+	if err != nil {
+		if isNotFoundError(err) {
+			return AccessibleQueue{}, fmt.Errorf(
+				"workspace LocalQueue %q not found in namespace %q",
+				opts.QueueName,
+				opts.Namespace,
+			)
+		}
+		return AccessibleQueue{}, fmt.Errorf(
+			"read workspace LocalQueue %q in namespace %q: %w",
+			opts.QueueName,
+			opts.Namespace,
+			err,
+		)
+	}
+	clusterQueue := strings.TrimSpace(localQueue.Spec.ClusterQueue)
+	if clusterQueue == "" {
+		return AccessibleQueue{}, fmt.Errorf(
+			"workspace LocalQueue %q in namespace %q has no ClusterQueue",
+			opts.QueueName,
+			opts.Namespace,
+		)
+	}
+	return AccessibleQueue{
+		Namespace:    opts.Namespace,
+		QueueName:    opts.QueueName,
+		ClusterQueue: clusterQueue,
+	}, nil
+}
+
 // rejection records why a labelled namespace was not usable, so the failure
 // message can name the specific onboarding step that is missing instead of
 // collapsing every cause into "no authorized queue namespace".

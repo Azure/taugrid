@@ -16,19 +16,22 @@ aliases:
 - `--kind=deployment` for a plain Kubernetes Deployment such as a raw vLLM,
   TGI, Triton, or custom HTTP server.
 
-You need a platform-provided serving profile, a pinned image, the target
-namespace/context, and a checkpoint visible from the serving PVC when the
-endpoint loads model state.
+You need an active repository workspace connection, a platform-provided
+serving profile, a pinned image, and a checkpoint visible from the serving
+PVC when the endpoint loads model state.
 
-Served workloads are admitted through Kueue. `tau serve` resolves the
-platform-managed default LocalQueue from the target namespace and stamps it on
-the workload automatically, handling queue selection on the researcher's behalf. If the namespace has no usable
-default LocalQueue, deployment fails with an onboarding error rather than
-creating pods Kueue never admits.
+Served workloads are admitted through Kueue. `tau serve deploy` resolves the
+active repository connection and its live TauWorkspace, then uses that
+workspace's namespace and LocalQueue. It verifies queue access, ClusterQueue
+bindings, and serving-profile applicability before rendering or applying the
+workload. Namespace team/default-queue labels are not the source of workspace
+identity or placement.
 
 ## Render before deployment
 
-Use a resolved checkpoint path for an offline client dry-run:
+Use a resolved checkpoint path for a client dry-run. This still requires a
+connected workspace to resolve placement and authorization; it does not apply
+the rendered workload:
 
 ```bash
 tau serve deploy <service-name> \
@@ -125,6 +128,9 @@ tau serve delete <service-name> \
   --context <context>
 ```
 
-Serving reads the namespace and context you pass explicitly, sourced from the
-platform handoff, rather than from `tau/workspace.connection.yaml`. The project image must
-provide the configured import path and all runtime dependencies.
+Deploy uses the active repository workspace connection, including
+`tau/workspace.connection.yaml` when present. Explicit `--namespace` and
+`--context` must agree with that connection's resolved target; they cannot
+redirect a deploy into a different workspace. Status, scale, and delete still
+use their explicit namespace/context flags. The project image must provide
+the configured import path and all runtime dependencies.
