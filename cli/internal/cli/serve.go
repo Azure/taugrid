@@ -193,7 +193,7 @@ func newServeDeployCmd() *cobra.Command {
 			placement := activeWorkspace.Placement
 
 			runner := newServeRunner(kubeContext)
-			target, err := resolveServeTarget(
+			target, err := resolveServeWorkspaceTarget(
 				cmd.Context(),
 				runner,
 				placement.Namespace,

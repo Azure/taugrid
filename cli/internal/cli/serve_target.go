@@ -23,10 +23,43 @@ type serveTarget struct {
 	ClusterQueue string
 }
 
-// resolveServeTarget verifies the exact namespace-local queue assigned by the
-// active TauWorkspace. Client and server dry-runs use the same connected path
-// as apply; namespace labels are not trusted as workspace identity.
+// resolveServeTarget resolves the platform-managed default LocalQueue for
+// callers that do not have an active repository workspace placement.
 func resolveServeTarget(
+	ctx context.Context,
+	r queueresolve.RawRunner,
+	namespace, workloadResource string,
+) (serveTarget, string, error) {
+	target := serveTarget{
+		Namespace: strings.TrimSpace(namespace),
+	}
+	if r == nil {
+		return serveTarget{}, "", fmt.Errorf("resolve default Kueue LocalQueue: Kubernetes runner is required")
+	}
+	selected, candidates, err := queueresolve.ResolveAccessibleQueue(ctx, r, queueresolve.ResolveAccessibleQueueOptions{
+		Namespace:        target.Namespace,
+		WorkloadResource: workloadResource,
+	})
+	if err != nil {
+		if len(candidates) > 1 {
+			return serveTarget{}, "", fmt.Errorf(
+				"multiple authorized Kueue queue namespaces found; pass --namespace to select one%s",
+				formatAccessibleQueueCandidates(candidates),
+			)
+		}
+		return serveTarget{}, "", fmt.Errorf("resolve default Kueue LocalQueue: %w", err)
+	}
+	return serveTarget{
+		Namespace:    selected.Namespace,
+		Queue:        selected.QueueName,
+		ClusterQueue: selected.ClusterQueue,
+	}, "", nil
+}
+
+// resolveServeWorkspaceTarget verifies the exact namespace-local queue assigned
+// by the active TauWorkspace. Client and server dry-runs use the same connected
+// path as apply; namespace labels are not trusted as workspace identity.
+func resolveServeWorkspaceTarget(
 	ctx context.Context,
 	r queueresolve.RawRunner,
 	namespace, queue, expectedClusterQueue, workloadResource string,
