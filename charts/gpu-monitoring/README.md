@@ -187,6 +187,65 @@ but removes the matching temporary event rule. The check returns NPD's
 Unknown exit status rather than incorrectly publishing `DcgmHealthOk`; the
 detailed rollout semantics are documented below.
 
+### Continuous GPU metric coverage
+
+`DcgmExporterUnavailable=False` proves HTTP reachability, not that every
+physical GPU supplied the health fields used by the rules. NVIDIA's default
+`dcp-metrics-included.csv` can omit ECC, NVLink error, and throttling counters
+while still exposing utilization and row-remapping metrics.
+
+After publishing a collector built with the metric-coverage contract, pin its
+immutable digest and set:
+
+```yaml
+metricsCollector:
+  requireMetricCoverage: true
+dcgmExporterMetrics:
+  enabled: true
+  namespace: gpu-operator
+  name: gpu-monitoring-dcgm-metrics
+```
+
+The ten default continuous GPU rules marked `perGpu: true` then require
+`num_gpus` distinct `UUID` values for their profile. The marker is chart-only;
+the rendered rule fields are `minSamples` and `sampleLabel`. Sparse XID event
+selectors remain optional. Missing or incomplete continuous readings become
+Kubernetes `Unknown`, not `False/...Ok`; rate baselines also need consecutive
+observations. Known faults remain `True` even if another device lacks data.
+
+Coverage defaults **off** because the currently pinned public collector digest
+predates this support. Enabling it adds `--require-metric-coverage`: old images
+reject the flag instead of silently ignoring coverage fields, and the new image
+rejects a config containing no coverage rules. Do not enable it against the
+legacy image. Source merge, approved image publication, digest pinning, and
+coverage activation are separate rollout steps.
+
+The optional ConfigMap contains `dcgm-metrics.csv`, retaining the existing fleet
+signals while enabling the continuous GPU health inputs. It does **not** change
+another release's exporter or a GPU Operator `ClusterPolicy`. The owner of that
+exporter must separately reference it, for example:
+
+```yaml
+spec:
+  dcgmExporter:
+    config:
+      name: gpu-monitoring-dcgm-metrics
+    service:
+      internalTrafficPolicy: Local
+```
+
+The ConfigMap must be in the exporter's namespace. For a standalone NVIDIA
+exporter chart, use its corresponding custom-metrics ConfigMap setting.
+Confirm the running exporter loaded the file and emits finite samples for
+every physical GPU; a field's presence in CSV is not proof of hardware/DCGM
+support. Unsupported fields must remain visibly unknown, not be replaced with
+fabricated zeros. This is continuous telemetry, not a burn-in or bandwidth test.
+
+Profiles on hosts without `dcgmi`, including GPU Operator-backed H100 NVL nodes,
+must use their existing profile-specific `dcgmHealth.source: exporter` override
+and a node-local exporter URL. Do not globally disable host diagnostics on
+profiles that actually provide them.
+
 ### Host DCGM health-watch ownership
 
 Profiles whose effective `dcgmHealth.source` is `host-dcgmi` own the

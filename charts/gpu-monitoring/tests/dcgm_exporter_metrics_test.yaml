@@ -1,0 +1,33 @@
+suite: externally owned DCGM exporter metric configuration
+templates:
+  - dcgm-exporter-metrics-configmap.yaml
+tests:
+  - it: does not alter external exporter configuration by default
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: renders health counters together with existing fleet signals when explicitly enabled
+    set:
+      dcgmExporterMetrics.enabled: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: gpu-operator
+      - equal:
+          path: metadata.name
+          value: gpu-monitoring-dcgm-metrics
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_ECC_DBE_VOL_TOTAL, counter,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL, counter,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_THERMAL_VIOLATION, counter,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_PROF_DRAM_ACTIVE, gauge,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_ROW_REMAP_FAILURE, gauge,'

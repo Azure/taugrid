@@ -588,7 +588,32 @@ target and keeps every DCGM_* collector rule.
 {{- if hasKey $sku "nodeExporterScrape" }}
 {{- $nodeExporterScrapeEnabled = $sku.nodeExporterScrape }}
 {{- end }}
-{{- $rules := $root.Values.metricsCollector.rules }}
+{{- $coverage := $root.Values.metricsCollector.requireMetricCoverage }}
+{{- if not (kindIs "bool" $coverage) }}
+{{- fail "metricsCollector.requireMetricCoverage must be a boolean" }}
+{{- end }}
+{{- $rules := list }}
+{{- $covered := 0 }}
+{{- range $rule := $root.Values.metricsCollector.rules }}
+{{- if and (hasKey $rule "perGpu") (not (kindIs "bool" $rule.perGpu)) }}
+{{- fail "metricsCollector.rules perGpu must be a boolean" }}
+{{- end }}
+{{- $rendered := omit (deepCopy $rule) "perGpu" }}
+{{- if and $coverage $rule.perGpu }}
+{{- if le (int $sku.num_gpus) 0 }}
+{{- fail (printf "gpuSkus.%s.num_gpus must be positive for per-GPU metric coverage" $skuName) }}
+{{- end }}
+{{- $_ := set $rendered "minSamples" (int $sku.num_gpus) }}
+{{- $_ := set $rendered "sampleLabel" "UUID" }}
+{{- end }}
+{{- if and $coverage (hasKey $rendered "minSamples") (gt (int $rendered.minSamples) 0) }}
+{{- $covered = add1 $covered }}
+{{- end }}
+{{- $rules = append $rules $rendered }}
+{{- end }}
+{{- if and $coverage (eq (int $covered) 0) }}
+{{- fail "metricsCollector.requireMetricCoverage requires at least one perGpu or minSamples rule" }}
+{{- end }}
 {{- include "gpu-monitoring.validateDcgmExporterUnavailableGuard" (dict "root" $root "sku" $sku "skuName" $skuName) }}
 scrapeTargets:
   - name: "dcgm-exporter"

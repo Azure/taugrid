@@ -1,0 +1,63 @@
+suite: continuous GPU metric coverage
+templates:
+  - metrics-collector-configmap.yaml
+  - daemonset.yaml
+tests:
+  - it: leaves the legacy image contract unchanged by default
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+    asserts:
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'minSamples:|sampleLabel:|perGpu:'
+  - it: requires eight distinct physical GPU samples for H200 continuous rules
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL\s+minSamples: 8'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: ecc-dbe-volatile\s+sampleLabel: UUID'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_XID_ERRORS\s+minSamples:'
+  - it: derives the physical count from the two-GPU H100 profile
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h100-nvl-2g]
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL\s+minSamples: 2'
+  - it: passes a capability flag that old images cannot silently ignore
+    template: daemonset.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[2].args
+          content: --require-metric-coverage
+  - it: rejects zero physical GPUs when per-GPU coverage is enabled
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      gpuSkus.h200.num_gpus: 0
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.num_gpus must be positive for per-GPU metric coverage
+  - it: rejects string-valued coverage settings
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: metricsCollector.requireMetricCoverage must be a boolean

@@ -1,0 +1,10 @@
+{{- if .Values.dcgmExporterMetrics.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ required "dcgmExporterMetrics.name is required" .Values.dcgmExporterMetrics.name }}
+  namespace: {{ required "dcgmExporterMetrics.namespace is required" .Values.dcgmExporterMetrics.namespace }}
+data:
+  dcgm-metrics.csv: |
+{{ .Files.Get "configs/dcgm-metrics.csv" | indent 4 }}
+{{- end }}
