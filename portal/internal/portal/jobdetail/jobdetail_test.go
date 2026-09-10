@@ -430,6 +430,56 @@ func TestDetailRayJobDoesNotClaimComputeReusableWhenRayClusterOwnershipIsUnresol
 	}
 }
 
+func TestDetailEventsUnavailableWhenUIDOwnershipCannotBeCompleted(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestName string
+		reader      fakeReader
+	}{
+		{
+			name:        "job pods unreadable",
+			requestName: "train",
+			reader: fakeReader{
+				rayErr: apierrors.NewNotFound(schema.GroupResource{Group: "ray.io", Resource: "rayjobs"}, "train"),
+				job: []byte(`{"metadata":{"name":"train","namespace":"tau","uid":"job-current",
+					"labels":{"batch.kubernetes.io/job-name":"train"}},"status":{"active":1}}`),
+				podErr: errors.New("pods forbidden"),
+				events: []byte(`{"items":[
+					{"reason":"JobEvent","involvedObject":{"kind":"Job","name":"train","uid":"job-current"}},
+					{"reason":"PodEvent","involvedObject":{"kind":"Pod","name":"train-current","uid":"pod-current"}}
+				]}`),
+			},
+		},
+		{
+			name:        "raycluster ownership unreadable",
+			requestName: "ray-train",
+			reader: fakeReader{
+				rayJob: []byte(`{"metadata":{"name":"ray-train","namespace":"tau","uid":"rayjob-current"},
+					"status":{"jobDeploymentStatus":"Running","rayClusterName":"ray-train-cluster"}}`),
+				rayClusterErr: errors.New("raycluster forbidden"),
+				events: []byte(`{"items":[
+					{"reason":"RayJobEvent","involvedObject":{"kind":"RayJob","name":"ray-train","uid":"rayjob-current"}}
+				]}`),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap, err := Detail(context.Background(), tt.reader, nil, Options{Namespace: "tau", Name: tt.requestName})
+			if err != nil {
+				t.Fatalf("Detail() error = %v", err)
+			}
+			if snap.Events != nil {
+				t.Fatalf("Events = %+v, want nil when the UID ownership set is incomplete", snap.Events)
+			}
+			if snap.Diagnostics.Events.State != "unavailable" {
+				t.Fatalf("Events diagnostic = %+v, want unavailable", snap.Diagnostics.Events)
+			}
+		})
+	}
+}
+
 func TestDetailRayJobDoesNotClaimComputeReusableWithoutRayClusterIdentity(t *testing.T) {
 	r := fakeReader{
 		rayJob: []byte(`{"metadata":{"name":"ray-complete","namespace":"tau","uid":"rayjob-current"},

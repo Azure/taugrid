@@ -349,6 +349,12 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 
 	// Tier 1b: recent Events (best-effort).
 	rawEvents, eventErr := r.ListEvents(ctx, opts.Namespace)
+	if eventErr == nil && obj.uid != "" && podErr != nil {
+		// UID-fenced Pod Events depend on a complete ownership set. Treat a
+		// failed Pod or RayCluster ownership read as an Event-section outage so
+		// the frontend can retain the last complete same-incarnation evidence.
+		eventErr = fmt.Errorf("resolve event ownership: %w", podErr)
+	}
 	if eventErr == nil {
 		if podUIDs == nil {
 			podUIDs = map[string]string{}
