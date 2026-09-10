@@ -113,6 +113,49 @@ func TestImportJSONLWritesResearchMetricHistory(t *testing.T) {
 	}
 }
 
+func TestImportJSONLNoScalarsOnlyForValidHistory(t *testing.T) {
+	ctx := context.Background()
+	store, _, err := expstore.Init(ctx, filepath.Join(t.TempDir(), "store"), expstore.InitOptions{
+		Name: "jsonl-no-scalars",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tt := range []struct {
+		name      string
+		raw       string
+		noScalars bool
+	}{
+		{name: "empty", noScalars: true},
+		{name: "whitespace", raw: " \n\t\n", noScalars: true},
+		{name: "metadata", raw: `{"_step":0,"_timestamp":1770000000,"phase":"starting","ready":false,"loss":null,"shape":[1,2],"config":{"lr":0.1}}`, noScalars: true},
+		{name: "invalid JSON", raw: `{"phase":`},
+		{name: "trailing garbage", raw: `{"phase":"starting"} garbage`},
+		{name: "multiple objects", raw: `{"phase":"starting"} {"loss":1}`},
+		{name: "null row", raw: `null`},
+		{name: "array row", raw: `[]`},
+		{name: "positive overflow", raw: `{"loss":1e309}`},
+		{name: "negative overflow", raw: `{"loss":-1e309}`},
+		{name: "overflow alongside scalar", raw: `{"loss":1e309,"accuracy":0.5}`},
+		{name: "malformed after metadata", raw: "{\"phase\":\"starting\"}\n{\"loss\":"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			history := filepath.Join(t.TempDir(), "history.jsonl")
+			if err := os.WriteFile(history, []byte(tt.raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			result, err := ImportJSONL(ctx, store, JSONLImportOptions{RunID: "no-scalars", History: []string{history}})
+			if err == nil || errors.Is(err, ErrNoJSONLScalarMetrics) != tt.noScalars {
+				t.Fatalf("import error = %v, want no-scalars condition %t", err, tt.noScalars)
+			}
+			if result.Rows != 0 || result.MetricFile != nil || len(result.Artifacts) != 0 {
+				t.Fatalf("empty or invalid history produced data: %+v", result)
+			}
+		})
+	}
+}
+
 func TestJSONLRequestHashIgnoresProjectedFileIdentity(t *testing.T) {
 	historyFiles := []JSONLHistoryFile{{
 		Path:       "metrics-history.jsonl",

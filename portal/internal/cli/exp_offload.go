@@ -552,18 +552,24 @@ func runMetricsOnlineOffloadOnce(ctx context.Context, store *expstore.Store, opt
 			}
 			return metricsOffloadResult{}, err
 		}
+		if jsonlutil.HasJSONL(chunk) {
+			chunkResult, err := processMetricsHistoryChunk(ctx, store, out, opts, chunk)
+			if err != nil {
+				return metricsOffloadResult{}, err
+			}
+			result.addOnlineChunk(chunkResult)
+		}
 		if fileCheckpoint.Offset > 0 && chunk.StartOffset == 0 {
 			checkpoint.Files[retainedMetricsCheckpointKey(fileCheckpoint)] = fileCheckpoint
 		}
 		checkpoint.Files[path] = jsonlutil.CheckpointForChunk(chunk)
-		if !jsonlutil.HasJSONL(chunk) {
-			continue
+		if chunk.EndOffset > chunk.StartOffset {
+			// A later file may fail after this chunk was exported. Persist its
+			// offset now so appended rows cannot cause a different retry chunk.
+			if err := jsonlutil.WriteFileCheckpointSet(checkpointFile, metricsJSONLCheckpointSchemaVersion, checkpoint); err != nil {
+				return metricsOffloadResult{}, err
+			}
 		}
-		chunkResult, err := processMetricsHistoryChunk(ctx, store, out, opts, chunk)
-		if err != nil {
-			return metricsOffloadResult{}, err
-		}
-		result.addOnlineChunk(chunkResult)
 	}
 	if err := jsonlutil.WriteFileCheckpointSet(checkpointFile, metricsJSONLCheckpointSchemaVersion, checkpoint); err != nil {
 		return metricsOffloadResult{}, err

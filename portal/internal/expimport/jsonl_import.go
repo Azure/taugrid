@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,8 @@ import (
 
 const JSONLImporterVersion = "tau.jsonl.import.v1"
 
+// ErrNoJSONLScalarMetrics identifies valid history with nothing to import.
+// Online tailers may checkpoint it and continue waiting for scalar rows.
 var ErrNoJSONLScalarMetrics = errors.New("JSONL history files contain no scalar metrics")
 
 type JSONLImportOptions struct {
@@ -294,6 +297,10 @@ func readJSONLScalars(path string, opts JSONLImportOptions) ([]jsonlScalar, erro
 		if err := dec.Decode(&payload); err != nil {
 			return nil, fmt.Errorf("line %d: %w", line, err)
 		}
+		var trailing any
+		if err := dec.Decode(&trailing); err != io.EOF || payload == nil {
+			return nil, fmt.Errorf("line %d: row must contain exactly one JSON object", line)
+		}
 		step := jsonlStep(payload, opts.StepField)
 		wallTime := jsonlWallTime(payload, opts.TimeField)
 		for key, value := range payload {
@@ -302,6 +309,9 @@ func readJSONLScalars(path string, opts JSONLImportOptions) ([]jsonlScalar, erro
 			}
 			numeric, ok := jsonNumber(value)
 			if !ok {
+				if _, isNumber := value.(json.Number); isNumber {
+					return nil, fmt.Errorf("line %d: metric %q must be a finite number", line, key)
+				}
 				continue
 			}
 			metricName := strings.TrimSpace(key)
