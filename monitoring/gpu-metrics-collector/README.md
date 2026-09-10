@@ -46,6 +46,7 @@ A lightweight, config-driven sidecar that replaces Prometheus + AlertManager in 
 - **Per-node jitter offset** — heartbeat cycles are offset randomly so API patches are distributed evenly across the fleet
 - **Graceful degradation** — unavailable optional scrape targets are logged and skipped (e.g., no GPU = no DCGM)
 - **Required-target availability** — a required target's sustained loss is published as its own Node condition, so a silenced exporter cannot look like a healthy GPU
+- **Continuous metric coverage** — required finite samples are counted per physical GPU; missing, partial, stale, and insufficient rate input becomes `Unknown`, not an error-free reading
 - **Strategic merge patch** — writes only changed conditions; coexists safely with NPD's own conditions
 
 ## Scale Characteristics (20K nodes)
@@ -122,9 +123,9 @@ Rules are defined in the Helm `values.yaml` under `metricsCollector.rules` and r
 
 ### DCGM endpoints
 
-Use `metricsCollector.scrapeTargets` as the default and
-`gpuSkus.<profile>.scrapeTargets` to select a different endpoint for one GPU
-monitoring DaemonSet:
+Use the chart's `dcgmHealth.source` and `dcgmHealth.exporterUrl` defaults, or
+`gpuSkus.<profile>.dcgmHealth` to select a different health source and endpoint
+for one GPU monitoring DaemonSet:
 
 - AKS managed GPU experience:
   `http://localhost:19400/metrics`
@@ -148,6 +149,9 @@ exporter.
 ### Helm Values
 
 ```yaml
+dcgmHealth:
+  source: host-dcgmi
+  exporterUrl: http://localhost:19400/metrics
 metricsCollector:
   enabled: true
   image:
@@ -161,15 +165,6 @@ metricsCollector:
     limits:
       cpu: "100m"
       memory: "64Mi"
-  scrapeTargets:
-    - name: dcgm-exporter
-      url: http://localhost:19400/metrics
-      required: true
-      availabilityCondition: DcgmExporterUnavailable
-      unavailableFor: 2m
-      availableFor: 1m
-    - name: node-exporter
-      url: http://localhost:9100/metrics
   rules:
     - name: ecc-dbe-retired
       metricName: DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
@@ -181,17 +176,17 @@ metricsCollector:
     # ... more rules
 ```
 
-For a GPU Operator-backed profile, set its `gpuSkus.<profile>.scrapeTargets` to
-the node-local Service URL shown above while managed profiles inherit the global
-port-19400 target. Apply the `ClusterPolicy` setting above before enabling
-Node-condition writes.
+For a GPU Operator-backed profile, set its `dcgmHealth.source` to `exporter`
+and its `dcgmHealth.exporterUrl` to the node-local Service URL shown above.
+Managed profiles can retain the global host-dcgmi settings. Apply the
+`ClusterPolicy` locality setting above before enabling Node-condition writes.
 
 ### Scrape Target Schema
 
 The collector accepts these fields in the `scrapeTargets` entries of its config.
-The bundled `gpu-monitoring` chart does not render the availability fields yet,
-so on a chart that omits them the collector behaves exactly as before; wiring
-them into rendered chart values is a separate change.
+The bundled `gpu-monitoring` chart owns its DCGM target and fixed availability
+condition; configure that chart through `dcgmHealth` rather than overriding its
+raw `scrapeTargets`. The schema below also supports standalone collector configs.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -242,12 +237,67 @@ which is indistinguishable from a healthy node. Required targets close that gap:
   targets that claim the same condition type and rejects a target that claims a
   condition type also owned by a rule.
 
-Validation is scoped to the availability contract. Configuration shapes that
+Validation is scoped to explicit availability and metric-coverage contracts. Configuration shapes that
 earlier versions accepted — a target with no name, a target with no URL, a
 duplicate target name, or two rules sharing a condition type — still load and
 are only logged as warnings. Refusing to start would restart-loop the collector
 and freeze every condition it owns, which is worse than the degraded-but-running
-behavior it replaces.
+behavior it replaces. A rule declaring `minSamples` must have a valid mode,
+condition, finite threshold, positive rate window, and valid coverage settings.
+Its condition cannot be shared with another rule.
+
+### Continuous Metric Coverage
+
+Exporter reachability is not proof that its CSV enables every required field.
+Use `minSamples` to require continuous readings, and `sampleLabel` to count
+distinct physical identities rather than duplicate series:
+
+```yaml
+rules:
+  - name: ecc-dbe-volatile
+    metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
+    conditionType: GPUECCDoubleVolatile
+    mode: rate
+    threshold: 0
+    window: 1m
+    minSamples: 8
+    sampleLabel: UUID
+    maxSampleAge: 2m
+```
+
+Fewer valid identities, missing identity labels, non-finite values, or expired
+explicit Prometheus timestamps produce `Unknown/MetricCoverageUnavailable`.
+Untimestamped exporters use the current successful scrape as their observation
+time; unchanged counter values alone do not establish staleness. The default
+maximum sample age is two minutes, including the maximum tolerated future
+clock offset.
+
+Rate rules require two consecutive observations within their window. Missing
+series, invalid readings, excessive observation gaps, and collector restarts
+break that baseline instead of interpreting the unobserved interval as healthy.
+Unknown input resets a pending `for` timer when no known violation remains.
+A known threshold violation still takes precedence over incomplete coverage:
+missing another GPU must not hide an observed fault.
+
+`minSamples: 0` retains optional/sparse-event behavior. In particular, a missing
+`err_code="48"` XID event is not a missing continuous GPU reading. Do not require
+one such error event per GPU merely to establish health. Required exporter
+availability remains a separate signal, with its existing debounce windows.
+
+The writer preserves `Unknown` through Node patches, status transitions, and
+state persistence. Consumers must not interpret either `Unknown` or a missing
+condition as an explicit `False`/healthy verdict. These Node conditions are
+distinct from the Portal's metrics-backed row-remapping health summary.
+
+For the chart, see `metricsCollector.requireMetricCoverage` in
+[`charts/gpu-monitoring`](../../charts/gpu-monitoring/README.md). It expands
+the chart-only `perGpu: true` rule marker into `minSamples` from the profile's
+physical `num_gpus`, plus `sampleLabel: UUID`. The default published image is
+older than this contract: build and publish the updated collector through the
+approved image pipeline, pin its immutable digest, then enable coverage.
+Enabling `--require-metric-coverage` on an old image fails startup rather than
+silently ignoring the new contract; the updated binary also rejects that flag
+when its config contains no coverage rule.
 
 ### Rule Schema
 
@@ -255,12 +305,15 @@ behavior it replaces.
 |-------|------|-------------|
 | `name` | string | Human-readable rule name |
 | `metricName` | string | Prometheus metric name to match |
-| `labels` | map | Optional label selectors (e.g., `xid: "48"`) |
+| `labels` | map | Optional label selectors (e.g., `err_code: "48"`) |
 | `conditionType` | string | Node condition type to write (e.g., `GPUECCDoubleRetired`) |
 | `mode` | `rate` or `instant` | `rate`: fires when increase over `window` > `threshold`. `instant`: fires when current value > `threshold` |
 | `threshold` | float | Threshold value |
 | `window` | duration | Time window for rate calculation (only for `rate` mode) |
 | `for` | duration | Condition must persist this long before firing |
+| `minSamples` | integer | Required valid samples; zero preserves optional/sparse behavior |
+| `sampleLabel` | string | Count distinct nonempty label values instead of raw samples; requires `minSamples` |
+| `maxSampleAge` | duration | Maximum explicit sample age and rate-observation gap; default `2m` for coverage rules |
 
 ### Default Rules (20)
 
@@ -268,7 +321,7 @@ behavior it replaces.
 |----------|-----------|------|--------|
 | **ECC Double-Bit** | `GPUECCDoubleRetired`, `GPUECCDoubleVolatile` | rate 1m | drain |
 | **NVLink Errors** | `GPUNVLinkCRCFlitErrors`, `GPUNVLinkCRCDataErrors`, `GPUNVLinkReplayErrors` | rate 1m | drain |
-| **XID Errors** | `XIDError48`, `XIDError63`, `XIDError64`, `XIDError79`, `XIDError94`, `XIDError95` | rate 1m | drain |
+| **XID Errors** | `XIDError48`, `XIDError63`, `XIDError64`, `XIDError79`, `XIDError94`, `XIDError95` | instant | drain |
 | **Thermal/Power** | `GPUThermalViolation`, `GPUPowerViolation` | rate 1m | taint |
 | **InfiniBand** | `IBLinkDown`, `IBSymbolError` | rate 1m | taint |
 | **Correctable ECC** | `GPUECCSingleVolatileRate` (>10/10m), `GPUECCSingleRetired` | rate | taint |
@@ -302,6 +355,7 @@ To add a new rule for a specific SKU, add it to the overlay's `metricsCollector.
 | `--config` | `/etc/gpu-metrics-collector/rules.yaml` | Path to rules config file |
 | `--node-name` | `$NODE_NAME` env var | Kubernetes node name |
 | `--scrape-interval` | `15s` | How often to scrape metrics |
+| `--require-metric-coverage` | `false` | Refuse startup unless the config declares at least one coverage rule |
 
 ## Integration with UNO
 

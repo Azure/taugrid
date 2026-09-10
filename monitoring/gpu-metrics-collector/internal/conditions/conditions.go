@@ -55,10 +55,7 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 	changed := false
 
 	for _, r := range results {
-		status := corev1.ConditionFalse
-		if r.Firing {
-			status = corev1.ConditionTrue
-		}
+		status := resultStatus(r)
 
 		cond := corev1.NodeCondition{
 			Type:              corev1.NodeConditionType(r.ConditionType),
@@ -105,11 +102,7 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 
 	// Update last-known status after successful patch.
 	for _, r := range results {
-		status := corev1.ConditionFalse
-		if r.Firing {
-			status = corev1.ConditionTrue
-		}
-		w.lastStatus[r.ConditionType] = status
+		w.lastStatus[r.ConditionType] = resultStatus(r)
 	}
 
 	firingCount := 0
@@ -122,6 +115,16 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 	slog.Debug("conditions written", "total", len(results), "firing", firingCount)
 
 	return nil
+}
+
+func resultStatus(r rules.Result) corev1.ConditionStatus {
+	if r.Firing {
+		return corev1.ConditionTrue
+	}
+	if r.Unknown {
+		return corev1.ConditionUnknown
+	}
+	return corev1.ConditionFalse
 }
 
 type nodeConditionsPatch struct {
