@@ -3,7 +3,7 @@
 
 def nonempty_string: type == "string" and length > 0;
 def dns_label: type == "string" and length <= 63 and test("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$");
-def dns_name: type == "string" and length <= 253 and (split(".") | all(dns_label));
+def dns_name: type == "string" and length <= 253 and test("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$");
 def positive_integer: type == "number" and . > 0 and floor == .;
 def identity: "\(.metadata.namespace)/\(.metadata.name)";
 def owned:

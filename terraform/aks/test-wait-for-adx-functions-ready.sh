@@ -148,5 +148,7 @@ while IFS= read -r test_case; do
 done < <(jq -c '.[]' "$script_directory/adx-function-waiter-cases.json")
 
 echo "Bash: $cases cases, $failures failures."
-[[ "$cases" -gt 0 && "$failures" -eq 0 ]]
+if [[ "$cases" -eq 0 || "$failures" -ne 0 ]]; then
+  exit 1
+fi
 python3 "$script_directory/test-adx-function-delete.py"

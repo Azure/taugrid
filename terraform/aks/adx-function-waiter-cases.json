@@ -164,6 +164,39 @@
     "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
   },
   {
+    "name": "DNS subdomain long rendered Function name",
+    "values": {"fullnameOverride":"abcdefghijklmnopqrstuvwxyzabcdef"},
+    "responses": ["."],
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "DNS subdomain unrelated 253-character Function",
+    "preflight": ". + [.[0] | .metadata.name = (\"a\" * 253) | .metadata.annotations = {} | .status.status = \"PermanentFailure\" | .status.error = \"throttling\"]",
+    "responses": [". + [.[0] | .metadata.name = (\"a\" * 253) | .metadata.annotations = {} | .status.status = \"PermanentFailure\" | .status.error = \"throttling\"]"],
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "DNS subdomain dotted Function with long segments",
+    "responses": [". + [.[0] | .metadata.name = ((\"a\" * 125) + \".\" + (\"b\" * 127)) | .metadata.annotations = {}]"],
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "DNS subdomain rejects 254-character Function",
+    "responses": [". + [.[0] | .metadata.name = (\"a\" * 254)]"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Malformed Function identity"
+  },
+  {
+    "name": "DNS subdomain rejects empty segments",
+    "responses": [". + [.[0] | .metadata.name = \"foreign..function\"]"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Malformed Function identity"
+  },
+  {
+    "name": "DNS subdomain does not relax namespace length",
+    "values": {"global":{"namespace":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl"}},
+    "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "Cannot establish intended Function identity"
+  },
+  {
     "name": "disabled item not required", "values": {"functions":{"items":{"gpuHealth":{"enabled":false}}}},
     "responses": ["."], "expectedCount": 8,
     "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
