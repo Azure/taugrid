@@ -260,6 +260,13 @@ resource "azurerm_kusto_database_principal_assignment" "portal_cost_tracking" {
   tenant_id           = azurerm_user_assigned_identity.portal[0].tenant_id
 }
 
+# AzAPI's cross-provider state mover retains the existing ARM grant. Keep this
+# block for deployments upgrading from the AzureRM-managed assignment.
+moved {
+  from = azurerm_kusto_database_principal_assignment.lifecycle_recorder[0]
+  to   = azapi_resource.lifecycle_recorder_principal_assignment[0]
+}
+
 resource "azapi_resource" "lifecycle_recorder_principal_assignment" {
   count     = var.enable_lifecycle_recorder ? 1 : 0
   type      = "Microsoft.Kusto/clusters/databases/principalAssignments@2024-04-13"
@@ -274,8 +281,6 @@ resource "azapi_resource" "lifecycle_recorder_principal_assignment" {
       tenantId      = azurerm_user_assigned_identity.lifecycle_recorder[0].tenant_id
     }
   }
-
-  schema_validation_enabled = false
 
   retry = {
     error_message_regex  = ["(?i)AAD principal was not found"]

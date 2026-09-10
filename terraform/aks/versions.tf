@@ -8,7 +8,7 @@ terraform {
     }
     azapi = {
       source  = "Azure/azapi"
-      version = ">= 2.3.0, < 3.0.0"
+      version = ">= 2.12.0, < 3.0.0"
     }
     local = {
       source  = "hashicorp/local"

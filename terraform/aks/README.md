@@ -12,7 +12,7 @@ supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
 ## Prerequisites
 
 - Terraform 1.9 or later
-- Azure credentials usable by the AzureRM provider
+- Approved Azure credentials usable by both the AzureRM and AzAPI providers
 - `tau`, `helm`, and `kubectl` on PATH. Install the matching released `tau`
   binary for Linux or macOS with `install.sh`. On Windows amd64, download the
   release `install.ps1`, run it, and add `%LOCALAPPDATA%\TauGrid\bin` to PATH;
@@ -279,13 +279,99 @@ namespace if needed so the TauGrid chart can install the lifecycle recorder.
 It does not create a TauWorkspace or add workload policy to that namespace
 unless `bootstrap_workspace` is configured.
 
-The lifecycle recorder ADX `Ingestor` assignment retries only the transient
-`AAD principal was not found` response, which can occur while a newly created
-managed identity propagates from Entra to ADX. Retries use exponential backoff
-for at most 60 minutes. Any other assignment error fails immediately. If the
-60 minute bound is reached, inspect the reported managed identity and ADX
-diagnostic, then rerun the same `terraform apply` command after resolving the
-underlying Azure configuration issue.
+The lifecycle recorder ADX `Ingestor` assignment uses AzAPI with a custom retry
+rule for HTTP errors containing `AAD principal was not found` (case-insensitive),
+which can occur while a new managed identity propagates from Entra to ADX.
+It preserves `principalType = App` and the identity's **client ID**, not its
+object/principal ID. The locked AzAPI 2.12.0 provider uses exponential backoff
+with jitter, a 10-second base interval, and a 180-second maximum delay. Azure SDK
+retries for 408, 429, 500, 502, 503, and 504 also still apply; a nonmatching
+permanent HTTP error is not retried by the custom rule.
+
+The create operation has a 60-minute budget. On deadline/cancellation AzAPI can
+spend up to another five minutes reading the resource to retain its ID in state.
+The HTTP retry rule does **not** resubmit creation when a long-running operation
+returns HTTP 200 with a terminal `Failed` status, even if its error mentions the
+principal. That failure is surfaced, not silently treated as success. A matching
+HTTP error from a poll retries that poll, not the original create. Consequently,
+successful configuration or mock-plan tests are not proof of fresh-install
+recovery: qualification must identify which response path Azure actually uses.
+An assignment reaching `Succeeded` is also not full-install acceptance: verify
+recorder readiness and durable Portal history separately. As tracked in #190,
+Helm readiness and Kusto `skipvalidation` do not establish that the lifecycle
+schema exists before the first workload.
+
+On failure, retain the Terraform diagnostic (including the last retryable HTTP
+error when available), elapsed time, assignment ARM ID, and the identity's
+client and tenant IDs from
+`terraform state show 'azurerm_user_assigned_identity.lifecycle_recorder[0]'`.
+Use the Azure Activity Log for the identity creation timestamp; Terraform does
+not expose it on this resource. Check the approved tenant/subscription and ADX
+diagnostics without changing the identity or granting access outside Terraform.
+After resolving the cause, create and review a new plan with the same inputs
+before retrying. If Azure created a grant that is absent from state, stop for an
+explicit, approved import recovery instead of deleting or recreating it.
+
+### Upgrade an existing lifecycle recorder grant
+
+Keep lifecycle recording enabled, use the same backend/workspace and input
+files as the existing deployment, and retain the checked-in provider lock file.
+Run `terraform init` without `-upgrade`. AzAPI 2.12.0 implements Terraform's
+cross-provider state-move protocol, supported by this module's Terraform 1.9
+minimum. The checked-in `moved` block transfers
+`azurerm_kusto_database_principal_assignment.lifecycle_recorder[0]` to
+`azapi_resource.lifecycle_recorder_principal_assignment[0]` while preserving its
+ARM ID. Do **not** run `state rm`, hand-edit state, create a second grant, or
+substitute an object ID. Back up state using the deployment's approved process.
+Before planning, record the existing grant's `id`, `principal_id` (client ID),
+and `tenant_id` from
+`terraform state show 'azurerm_kusto_database_principal_assignment.lifecycle_recorder[0]'`.
+The plan's `prior_state` is already moved/refreshed and is not an independent
+copy of the original AzureRM values.
+
+AzAPI first refreshes moved state using its latest indexed Kusto API version
+(`2025-02-14` in 2.12.0), then compares it with the configured `2024-04-13` API
+body. This needs authorized ARM read access and must be qualified against the
+actual deployment. A syntactically valid `moved` block alone is not sufficient
+evidence. If the body matches, AzAPI can retain the moved API version in state.
+
+Create a **normal refreshed plan**, not a targeted or `-refresh=false` plan,
+and inspect it before any apply:
+
+```bash
+terraform plan -out=lifecycle-upgrade.tfplan
+pwsh -NoProfile -File ./Test-LifecycleRecorderUpgradePlan.ps1 \
+  -PlanPath ./lifecycle-upgrade.tfplan \
+  -ExpectedAssignmentId '<assignment ARM ID recorded before planning>' \
+  -ExpectedClientId '<client ID recorded before planning>' \
+  -ExpectedTenantId '<tenant ID recorded before planning>'
+terraform show -no-color lifecycle-upgrade.tfplan
+```
+
+In PowerShell, put the checker command on one line instead of using the Bash
+line continuation. The checker requires exactly the expected move and a
+`no-op` action or a state-only `update`, with the same ARM ID, name, parent,
+client ID, tenant, `App` type, and `Ingestor` role. Only `retry` and `timeouts`
+may differ: the locked AzAPI 2.12.0 provider marks these as state-only updates
+and skips its external request when no other attributes change. This records
+the new retry policy without recreating or modifying the Azure grant. Unknown
+values, any other attribute differences (including body, API type, and export
+settings), create/delete/replacement, missing move, or incomplete plans stop
+the upgrade for investigation. A checker pass is a guard, not a substitute for
+qualification of an actual refreshed existing-state plan.
+Review **all** other changes too; this checker only guards the grant.
+Only apply that saved plan through the normal approved deployment process.
+Saved plans and state can contain secrets; keep them local and clean them up
+through that process.
+
+An absent old address makes the move a no-op on fresh installations and on
+already-migrated deployments. The upgrade checker is intentionally for the
+**first** AzureRM-to-AzAPI migration, not these cases. If both feature flags
+were already disabled, no identity or grant is created. Disabling an existing
+recorder still removes its resources as before; do not combine that intentional
+decommissioning with this grant-retention upgrade. If both assignment addresses
+already exist in state, stop and reconcile ownership with an authorized
+operator rather than overriding either state entry.
 
 ## Optional workspace bootstrap
 

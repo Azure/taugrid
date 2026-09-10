@@ -33,6 +33,15 @@ foreach ($pattern in $requiredPatterns) {
     }
 }
 
+if ([regex]::IsMatch($resource, 'schema_validation_enabled\s*=\s*false')) {
+    throw "Retain AzAPI's default schema validation: changing this non-state-only setting can write the grant during migration."
+}
+
 if ([regex]::IsMatch($contents, 'azurerm_kusto_database_principal_assignment"\s+"lifecycle_recorder"')) {
     throw "Lifecycle recorder principal assignment must not use the non-retrying AzureRM resource."
+}
+
+$movePattern = '(?s)moved\s*\{\s*from\s*=\s*azurerm_kusto_database_principal_assignment\.lifecycle_recorder\[0\]\s+to\s*=\s*azapi_resource\.lifecycle_recorder_principal_assignment\[0\]\s*\}'
+if (-not [regex]::IsMatch($contents, $movePattern)) {
+    throw "Existing lifecycle recorder grants require the cross-provider state move; do not replace it with forget/import."
 }
