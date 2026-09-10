@@ -13,3 +13,7 @@ cluster-overlays/dashboards/
 
 # Bundled prometheus-community kube-state-metrics chart.
 charts/adx-mon/charts/
+
+# Generated portal bundles contain third-party JavaScript; licenses are shipped
+# alongside them in assets/THIRD_PARTY_LICENSES.txt. Check first-party source.
+portal/internal/portalapi/assets/assets/

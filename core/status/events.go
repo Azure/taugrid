@@ -38,26 +38,25 @@ type eventList struct {
 	} `json:"items"`
 }
 
-func fetchEvents(ctx context.Context, r *kube.Runner, namespace string, names []string) []Event {
-	if len(names) == 0 {
+func fetchEvents(ctx context.Context, r *kube.Runner, namespace string, objects map[string]bool) []Event {
+	if len(objects) == 0 {
 		return nil
 	}
 	raw, err := r.Raw(ctx, []string{"-n", namespace, "get", "events", "-o", "json"}, nil)
 	if err != nil {
 		return nil
 	}
-	namesSet := stringSet(names)
-	events := filterEvents(hydrateEvents([]byte(raw)), namesSet)
+	events := filterEvents(hydrateEvents([]byte(raw)), objects)
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].LastSeen.Before(events[j].LastSeen)
 	})
 	return events
 }
 
-func filterEvents(events []Event, names map[string]bool) []Event {
+func filterEvents(events []Event, objects map[string]bool) []Event {
 	out := make([]Event, 0, len(events))
 	for _, event := range events {
-		if names[event.InvolvedName] {
+		if objects[eventObjectKey(event.InvolvedKind, event.InvolvedName)] {
 			out = append(out, event)
 		}
 	}
@@ -89,31 +88,34 @@ func hydrateEvents(data []byte) []Event {
 	return out
 }
 
-func eventObjectNames(s Snapshot) []string {
-	rj := snapshotRayJob(s)
-	seen := map[string]bool{}
-	add := func(name string) {
-		if name != "" {
-			seen[name] = true
+func eventObjects(s Snapshot) map[string]bool {
+	rj := primaryRayJob(s)
+	objects := map[string]bool{}
+	add := func(kind, name string) {
+		if kind != "" && name != "" {
+			objects[eventObjectKey(kind, name)] = true
 		}
 	}
-	add(s.Name)
-	add(rj.RayClusterName)
+	if s.JobFound {
+		add("Job", s.Name)
+	} else {
+		add("RayJob", s.Name)
+		add("RayCluster", rj.RayClusterName)
+	}
 	for _, w := range s.Workloads {
-		add(w.Name)
+		add("Workload", w.Name)
 	}
 	for _, p := range s.Pods {
-		add(p.Name)
+		add("Pod", p.Name)
 	}
 	for _, c := range s.ResourceClaims {
-		add(c.Name)
+		add("ResourceClaim", c.Name)
 	}
-	names := make([]string, 0, len(seen))
-	for name := range seen {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return objects
+}
+
+func eventObjectKey(kind, name string) string {
+	return kind + "\x00" + name
 }
 
 func firstTime(values ...time.Time) time.Time {

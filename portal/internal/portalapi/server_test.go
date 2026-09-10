@@ -249,11 +249,12 @@ func TestOverviewJobsHintsNameTheirCause(t *testing.T) {
 // overview handler summarizes each into a headline card (reusing the same stubs
 // the per-board handler tests use), with no card marked unavailable.
 func TestOverviewCardsAllAvailable(t *testing.T) {
+	costQuerier := &stubCostQuerier{}
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
 		Jobs:    testOperatorJobs(t, stubJobsReader{}),
 		Cluster: ClusterOptions{Querier: &stubClusterQuerier{}},
-		Cost:    CostOptions{Querier: &stubCostQuerier{}},
+		Cost:    CostOptions{Querier: costQuerier, CostDatabase: "Chargeback"},
 		Ray:     RayOptions{Reader: &stubRayReader{}, Namespace: "ray"},
 		Nodes:   NodesOptions{Reader: stubNodesReader{}},
 	})
@@ -288,6 +289,9 @@ func TestOverviewCardsAllAvailable(t *testing.T) {
 	// Cost: from stubCostQuerier (48 GPU-hours, 1 idle GPU).
 	if c.Cost == nil || c.Cost.TotalGPUHours != 48 || c.Cost.IdleGPUs != 1 {
 		t.Fatalf("cost card = %+v, want 48 gpu-hours / 1 idle", c.Cost)
+	}
+	if len(costQuerier.kqls) == 0 || !strings.Contains(costQuerier.kqls[0], "database(@'Chargeback').GpuCostHourly") {
+		t.Fatalf("overview cost query did not use configured database: %v", costQuerier.kqls)
 	}
 	// Ray: from stubRayReader (1 discovered dashboard).
 	if c.Ray == nil || c.Ray.Clusters != 1 {
@@ -757,9 +761,9 @@ func (s *stubCostQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row
 	s.calls++
 	switch s.calls {
 	case 1:
-		return []kustoquery.Row{{"namespace": "research", "GpuHours": 48.0, "Gpus": 4.0, "AvgUtil": 66.0}}, nil
+		return []kustoquery.Row{{"workspace": "research-lab", "namespace": "research", "GpuHours": 48.0, "EstimatedCostUSD": 176.16, "PeakGpus": 4.0, "AvgUtil": 66.0, "ObservedSamples": 12.0, "GPUHoursSamples": 12.0, "CostSamples": 12.0, "UtilizationSamples": 99.0}}, nil
 	default:
-		return []kustoquery.Row{{"instance": "node-1", "gpu": "0", "namespace": "research", "AvgUtil": 3.0, "Samples": 99.0}}, nil
+		return []kustoquery.Row{{"instance": "node-1", "gpu": "0", "namespace": "research", "AvgUtil": 3.0, "Samples": 99.0, "ObservedSamples": 99.0}}, nil
 	}
 }
 
@@ -780,10 +784,11 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 	}
 	var got struct {
 		TotalGPUHours float64 `json:"totalGPUHours"`
-		Namespaces    []struct {
+		Workspaces    []struct {
+			Workspace string  `json:"workspace"`
 			Namespace string  `json:"namespace"`
 			GPUHours  float64 `json:"gpuHours"`
-		} `json:"namespaces"`
+		} `json:"workspaces"`
 		IdleGPUs []struct {
 			Instance string `json:"instance"`
 		} `json:"idleGPUs"`
@@ -791,8 +796,9 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode snapshot: %v\n%s", err, rec.Body.String())
 	}
-	if got.TotalGPUHours != 48 || len(got.Namespaces) != 1 || got.Namespaces[0].Namespace != "research" {
-		t.Fatalf("snapshot namespaces = %+v, want research 48h", got.Namespaces)
+	if got.TotalGPUHours != 48 || len(got.Workspaces) != 1 ||
+		got.Workspaces[0].Workspace != "research-lab" || got.Workspaces[0].Namespace != "research" {
+		t.Fatalf("snapshot workspaces = %+v, want research-lab 48h", got.Workspaces)
 	}
 	if len(got.IdleGPUs) != 1 || got.IdleGPUs[0].Instance != "node-1" {
 		t.Fatalf("idle gpus = %+v, want [node-1]", got.IdleGPUs)
@@ -2152,11 +2158,11 @@ func TestManagedWorkspaceAdversarialIsolationMatrix(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
 		req.Header.Set(defaultViewerUserHeader, "alpha@example.com")
 		req.Header.Set(defaultViewerGroupsHeader, "group-alpha")
-		req.AddCookie(&http.Cookie{Name: rayTargetCookie, Value: cookie})
+		req.AddCookie(&http.Cookie{Name: "ray_target", Value: cookie})
 		rec := httptest.NewRecorder()
 		server.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("forged Ray cookie %q status = %d, want 404: %s", cookie, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("obsolete Ray cookie %q status = %d, want explicit 400: %s", cookie, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -2339,33 +2345,13 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	}
 }
 
-func TestPortalShellContainsWorkspaceScopeContract(t *testing.T) {
+func TestPortalShellLoadsCompiledFrontend(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/portal", nil))
 	body := rec.Body.String()
-	for _, want := range []string{
-		`id="workspace-select"`,
-		`function currentWorkspace()`,
-		`fetch(withWorkspace(path)`,
-		`field("cluster", activeScope.cluster)`,
-		`field("namespace", activeScope.namespace)`,
-		`field("queue", activeScope.localQueue)`,
-		`field("result scope", activeScope.resultScope)`,
-		`if (requested !== currentWorkspace()) return false;`,
-		`if (data.scope && requested === currentWorkspace())`,
-		`fetchJSON(withWorkspace("/api/stellar/experiments"))`,
-		`e.state === "setup_required"`,
-		`Jobs board setup required`,
-		`Portal is running normally.`,
-		`const view = el("div");`,
-		`host.replaceChildren(view);`,
-		`No local fallback was used.`,
-		`profile selection is not available in Portal`,
-		`Execution target`,
-		`Existing workloads and queues remain observable`,
-	} {
+	for _, want := range []string{`id="root"`, `type="module"`, `<noscript>`} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("portal shell missing workspace UI contract %q", want)
+			t.Fatalf("compiled portal shell missing %q", want)
 		}
 	}
 }

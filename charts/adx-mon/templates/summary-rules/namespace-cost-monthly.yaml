@@ -11,6 +11,9 @@ spec:
   database: {{ .Values.summaryRules.items.namespaceCostMonthly.database | quote }}
   table: {{ .Values.summaryRules.items.namespaceCostMonthly.table | quote }}
   interval: {{ .Values.summaryRules.items.namespaceCostMonthly.interval | quote }}
+  {{- with .Values.summaryRules.items.namespaceCostMonthly.ingestionDelay }}
+  ingestionDelay: {{ . | quote }}
+  {{- end }}
   {{- with .Values.summaryRules.items.namespaceCostMonthly.criteria }}
   criteria:
     {{- toYaml . | nindent 4 }}
@@ -19,20 +22,18 @@ spec:
     // Monthly namespace cost for chargeback: aggregates daily cost by namespace.
     // Reads from GpuCostDaily (output of gpu-cost-daily SummaryRule).
     // Runs daily but appends to a monthly table, building up the month incrementally.
-    // NOTE: pod_day_count is sum of daily dcount(pod) — overcounts pods spanning
-    // multiple days. For true monthly distinct pods, query GpuCostHourly directly.
     GpuCostDaily
     | where Timestamp between (_startTime .. _endTime)
+    | extend workspace = coalesce(workspace, namespace)
     | summarize
         total_gpu_hours = sum(total_gpu_hours),
         total_cost = sum(total_cost),
-        avg_utilization = avg(avg_utilization),
-        pod_day_count = sum(distinct_pods),
-        max_daily_nodes = max(distinct_nodes)
-        by namespace, sku
+        avg_utilization = avg(avg_utilization)
+        by Cluster, workspace, namespace, sku
+    | extend pod_day_count = long(null), max_daily_nodes = long(null)
     | extend month = format_datetime(_startTime, "yyyy-MM")
     | extend Timestamp = bin(_startTime, 1d)
     | project Timestamp, month, namespace, sku,
         total_gpu_hours, total_cost, avg_utilization,
-        pod_day_count, max_daily_nodes
+        pod_day_count, max_daily_nodes, Cluster, workspace
 {{- end }}

@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars. Do not commit kubeconfig files or local tfvars.
+
+kube_context = "aks-ai-runtime-flex"
+
+# Flex owns the host NVIDIA driver. Set this only after completing the driver
+# preflight in README.md on every target Flex GPU node.
+host_drivers_preinstalled = true
+
+# Set toolkit_enabled=false if the Flex node image already installs and owns
+# NVIDIA Container Toolkit and the nvidia containerd runtime configuration.
+toolkit_enabled            = true
+toolkit_ownership_reviewed = true
+
+# Keep the chart pinned and review NVIDIA release notes before changing it.
+gpu_operator_version = "v26.3.0"
+mig_strategy         = "none"
+mig_manager_enabled  = false

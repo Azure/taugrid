@@ -76,7 +76,7 @@ func TestValidateRayTargetEnforcesNamespace(t *testing.T) {
 	}
 }
 
-func TestHandleRayProxySetsCookie(t *testing.T) {
+func TestHandleRayProxyDoesNotSetTargetCookie(t *testing.T) {
 	var dialedPath string
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		dialedPath = r.URL.Path
@@ -95,14 +95,8 @@ func TestHandleRayProxySetsCookie(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var target string
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == rayTargetCookie {
-			target = c.Value
-		}
-	}
-	if target != "ray/alpha" {
-		t.Fatalf("ray_target cookie = %q, want ray/alpha", target)
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("proxy set shared cookies: %+v", cookies)
 	}
 	if dialedPath != "/nodes" {
 		t.Fatalf("upstream path = %q, want /nodes", dialedPath)
@@ -126,52 +120,6 @@ func TestHandleRayProxyRejectsBadPath(t *testing.T) {
 	s.handleRayProxy(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for incomplete path", rec.Code)
-	}
-}
-
-func TestHandleRayAssetRequiresCookie(t *testing.T) {
-	s := newRayTestServer(nil)
-	req := httptest.NewRequest(http.MethodGet, "/static/js/main.js", nil)
-	rec := httptest.NewRecorder()
-	s.handleRayAsset(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 without ray_target cookie", rec.Code)
-	}
-}
-
-func TestHandleRayAssetRejectsUnknownCookie(t *testing.T) {
-	s := newRayTestServer(nil)
-	req := httptest.NewRequest(http.MethodGet, "/static/js/main.js", nil)
-	req.AddCookie(&http.Cookie{Name: rayTargetCookie, Value: "ray/ghost"})
-	rec := httptest.NewRecorder()
-	s.handleRayAsset(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 for unknown cluster in cookie", rec.Code)
-	}
-}
-
-func TestHandleRayAssetProxiesWithCookie(t *testing.T) {
-	var dialedPath string
-	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		dialedPath = r.URL.Path
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       http.NoBody,
-			Header:     make(http.Header),
-		}, nil
-	})
-	s := newRayTestServer(rt)
-
-	req := httptest.NewRequest(http.MethodGet, "/static/js/main.js", nil)
-	req.AddCookie(&http.Cookie{Name: rayTargetCookie, Value: "ray/alpha"})
-	rec := httptest.NewRecorder()
-	s.handleRayAsset(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if dialedPath != "/static/js/main.js" {
-		t.Fatalf("upstream path = %q, want original /static/js/main.js", dialedPath)
 	}
 }
 

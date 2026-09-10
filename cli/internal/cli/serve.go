@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -16,10 +18,20 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/kube"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 var newServeRunner = func(kubeContext string) kubeRawRunner {
 	return kube.New(kubeContext)
+}
+
+var newServeConnectionEnsurer = defaultServeConnectionEnsurer
+var fetchServeWorkspace = fetchWorkspace
+
+func defaultServeConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
+	manager := defaultRunConnectionManager(cmd)
+	manager.Output = cmd.ErrOrStderr()
+	return manager
 }
 
 // newServeCmd: north-star §1 / §5 — deploy a model endpoint as a
@@ -68,6 +80,8 @@ func newServeDeployCmd() *cobra.Command {
 		port          int
 		rayVersion    string
 		argsStr       string
+		command       []string
+		containerArgs []string
 		namespace     string
 		dryRun        string
 		kubeContext   string
@@ -118,7 +132,9 @@ func newServeDeployCmd() *cobra.Command {
       --image sampleprojectcr.azurecr.io/llm:v1 --dry-run=client
   tau serve deploy tts --kind=deployment --profile model-serve --image my-reg/tts-api:v1 \
       --deployment-port 8080 --readiness-path /health --service-port 8080 \
-      --env MODEL_DIR=/models --replicas 1`,
+      --env MODEL_DIR=/models --replicas 1
+  tau serve deploy custom --kind=deployment --profile model-serve --image my-reg/server:v1 \
+      --command /bin/sh --command -c --arg 'pip install foo && exec python serve.py'`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -133,6 +149,15 @@ func newServeDeployCmd() *cobra.Command {
 			}
 			if kind != "rayservice" && kind != "deployment" {
 				return fmt.Errorf("--kind must be one of: rayservice, deployment")
+			}
+			if cmd.Flags().Changed("arg") && cmd.Flags().Changed("args") {
+				return fmt.Errorf("--arg conflicts with --args; use repeated --arg values for literal arguments")
+			}
+			if kind != "deployment" && (cmd.Flags().Changed("command") || cmd.Flags().Changed("arg")) {
+				return fmt.Errorf("--command and --arg require --kind=deployment; KubeRay owns RayService startup, use --import-path and --runtime-pip for Ray Serve apps")
+			}
+			if cmd.Flags().Changed("command") && (len(command) == 0 || strings.TrimSpace(command[0]) == "") {
+				return fmt.Errorf("--command requires a non-empty executable as its first value")
 			}
 			if cmd.Flags().Changed("gpus") && gpus < 0 {
 				return fmt.Errorf("--gpus must be >= 0")
@@ -161,9 +186,34 @@ func newServeDeployCmd() *cobra.Command {
 				}
 			}
 
+			workingDirectory, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("resolve current repository: %w", err)
+			}
+			workspaceResolver := newActiveWorkspaceResolver(newServeConnectionEnsurer, fetchServeWorkspace)
+			activeWorkspace, err := workspaceResolver.Resolve(cmd, activeWorkspaceRequest{
+				Source:                  runConnectionSource{StartDir: workingDirectory},
+				KubeContext:             kubeContext,
+				KubeContextExplicit:     runContextExplicit(cmd),
+				KubeContextFromFlag:     cmd.Flags().Changed("context"),
+				Namespace:               namespace,
+				RequireRepositoryTarget: true,
+			})
+			if err != nil {
+				return err
+			}
+			defer activeWorkspace.Restore()
+			kubeContext = activeWorkspace.Context
+			placement := activeWorkspace.Placement
+
 			runner := newServeRunner(kubeContext)
-			target, _, err := resolveServeTarget(
-				cmd.Context(), runner, namespace, serveWorkloadResource(kind),
+			target, err := resolveServeWorkspaceTarget(
+				cmd.Context(),
+				runner,
+				placement.Namespace,
+				placement.LocalQueue,
+				placement.ClusterQueue,
+				serveWorkloadResource(kind),
 			)
 			if err != nil {
 				return err
@@ -183,7 +233,6 @@ func newServeDeployCmd() *cobra.Command {
 				profile.NewClusterProvider(client),
 				profileName,
 				ns,
-				target.Team,
 				target.Queue,
 				target.ClusterQueue,
 				explicitGPUs,
@@ -195,6 +244,7 @@ func newServeDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			labels = workloadmeta.StampWorkspace(labels, placement.Workspace)
 			env, envErr := parseEnvKV(envKV)
 			if envErr != nil {
 				return envErr
@@ -298,12 +348,17 @@ func newServeDeployCmd() *cobra.Command {
 				if serr != nil {
 					return serr
 				}
+				deploymentArgs := splitShellish(argsStr)
+				if cmd.Flags().Changed("arg") {
+					deploymentArgs = containerArgs
+				}
 				manifest, err = serve.RenderDeployment(p, serve.DeploymentOptions{
 					Name:              name,
 					Namespace:         ns,
 					Image:             image,
 					Replicas:          deployReplicas(replicas, autoscaling),
-					Args:              splitShellish(argsStr),
+					Command:           command,
+					Args:              deploymentArgs,
 					Env:               env,
 					EnvVars:           envSecrets,
 					RuntimePip:        runtimePip,
@@ -364,7 +419,7 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&sideSpecs, "sidecar", nil, "sidecar container NAME=IMAGE for --kind=deployment (repeatable)")
 	cmd.Flags().StringArrayVar(&volSpecs, "volume", nil, "volume NAME=KIND[:src] for the serve pod (repeatable). KIND ∈ pvc|emptyDir|configMap|secret. e.g. --volume data=pvc:blob-training, --volume shm=emptyDir, --volume creds=secret:hf-token")
 	cmd.Flags().StringArrayVar(&mountSpecs, "mount", nil, "mount NAME:PATH[:ro] on the serve container (repeatable). NAME must match a --volume.")
-	cmd.Flags().StringVar(&checkpoint, "checkpoint", "", "checkpoint path to serve; relative paths resolve under /data/checkpoints and set TAU_MODEL_PATH")
+	cmd.Flags().StringVar(&checkpoint, "checkpoint", "", "checkpoint path setting TAU_MODEL_PATH; projects/... resolves under /data, other relative paths under /data/checkpoints; absolute paths preserved; '..' components rejected")
 	cmd.Flags().StringVar(&checkpointPVC, "checkpoint-pvc", "blob-training", "PVC mounted at /data when --checkpoint is set")
 	cmd.Flags().StringVar(&fromFinetune, "from-finetune", "", "completed finetune run whose ready checkpoint artifact should be served")
 	cmd.Flags().StringVar(&checkpointRef, "checkpoint-ref", "", "checkpoint reference to serve, e.g. finetune/RUN[:artifact]")
@@ -377,7 +432,9 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&servicePort, "service-port", 0, "ClusterIP Service port to render for --kind=deployment (0 disables Service)")
 	cmd.Flags().IntVar(&serviceTarget, "service-target-port", 0, "ClusterIP Service targetPort for --kind=deployment (default: first --deployment-port or --service-port)")
 	cmd.Flags().StringVar(&rayVersion, "ray-version", "", "Ray version (default: 2.40.0)")
-	cmd.Flags().StringVar(&argsStr, "args", "", "extra container args (space-separated; e.g. \"--model /ckpt --quantize awq\")")
+	cmd.Flags().StringVar(&argsStr, "args", "", "legacy container args split on whitespace, without shell quoting; conflicts with --arg")
+	cmd.Flags().StringArrayVar(&command, "command", nil, "literal container command element (--kind=deployment only; repeat for each element; no shell parsing)")
+	cmd.Flags().StringArrayVar(&containerArgs, "arg", nil, "literal container argument (--kind=deployment only; repeatable; preserves spaces and commas; conflicts with --args)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
 	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count per serving pod; defaults to the selected TauCluster workload profile and must match it when set")
@@ -392,14 +449,14 @@ func newServeDeployCmd() *cobra.Command {
 func selectServeWorkloadProfile(
 	ctx context.Context,
 	provider *profile.Provider,
-	profileName, namespace, team, resolvedQueue, resolvedClusterQueue string,
+	profileName, namespace, resolvedQueue, resolvedClusterQueue string,
 	explicitGPUs *int,
 ) (profile.Profile, *selectedWorkloadProfile, error) {
 	set, err := provider.ProfileSet(ctx)
 	if err != nil {
 		return profile.Profile{}, nil, err
 	}
-	lane, err := serveProfileLane(set, profileName)
+	team, lane, err := serveProfileApplicability(set, profileName)
 	if err != nil {
 		return profile.Profile{}, nil, err
 	}
@@ -460,26 +517,38 @@ func selectServeWorkloadProfile(
 	return renderProfile, selected, nil
 }
 
-func serveProfileLane(set profile.ProfileSet, profileName string) (string, error) {
+func serveProfileApplicability(set profile.ProfileSet, profileName string) (string, string, error) {
 	name := strings.TrimSpace(profileName)
 	for _, candidate := range set.Profiles {
 		if candidate.Name != name {
 			continue
 		}
+		team := ""
+		switch len(candidate.Applicability.Teams) {
+		case 0:
+		case 1:
+			team = candidate.Applicability.Teams[0]
+		default:
+			return "", "", fmt.Errorf(
+				"workload profile %q authorizes multiple teams (%s); serving requires a profile with at most one team",
+				candidate.Name,
+				strings.Join(candidate.Applicability.Teams, ", "),
+			)
+		}
 		switch len(candidate.Applicability.Lanes) {
 		case 0:
-			return "", nil
+			return team, "", nil
 		case 1:
-			return candidate.Applicability.Lanes[0], nil
+			return team, candidate.Applicability.Lanes[0], nil
 		default:
-			return "", fmt.Errorf(
+			return "", "", fmt.Errorf(
 				"workload profile %q authorizes multiple lanes (%s); serving requires a profile with exactly one lane",
 				candidate.Name,
 				strings.Join(candidate.Applicability.Lanes, ", "),
 			)
 		}
 	}
-	return "", fmt.Errorf("workload profile %q is unavailable", name)
+	return "", "", fmt.Errorf("workload profile %q is unavailable", name)
 }
 
 type serveCheckpointRef struct {
@@ -605,7 +674,24 @@ func applyCheckpointMount(env map[string]string, volumes []serve.Volume, mounts 
 	if checkpointPVC == "" {
 		return nil, nil, nil, fmt.Errorf("--checkpoint-pvc is required when --checkpoint is set")
 	}
-	normalizedCheckpointPath := storage.NormalizeCheckpointPath(checkpointPath)
+	if strings.ContainsRune(checkpointPath, '\x00') {
+		return nil, nil, nil, fmt.Errorf("--checkpoint must not contain NUL bytes")
+	}
+	for _, component := range strings.Split(checkpointPath, "/") {
+		if component == ".." {
+			return nil, nil, nil, fmt.Errorf("--checkpoint must not contain '..' path components")
+		}
+	}
+	normalizedCheckpointPath := checkpointPath
+	if !path.IsAbs(checkpointPath) {
+		relativePath := path.Clean(checkpointPath)
+		// Workspace outputs live directly on the PVC, alongside legacy checkpoints.
+		if strings.HasPrefix(relativePath, "projects/") {
+			normalizedCheckpointPath = path.Join(storage.DurableRoot, relativePath)
+		} else {
+			normalizedCheckpointPath = storage.NormalizeCheckpointPath(relativePath)
+		}
+	}
 	if existing, ok := env["TAU_MODEL_PATH"]; ok && existing != "" && existing != normalizedCheckpointPath {
 		return nil, nil, nil, fmt.Errorf("--checkpoint conflicts with --env TAU_MODEL_PATH=%s", existing)
 	}

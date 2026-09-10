@@ -514,6 +514,12 @@ func (m Manager) configDir() (string, error) {
 	return DefaultConfigDir()
 }
 
+// ConfigDirectory returns the per-user Tau state directory used by this
+// manager. Workspace consumers use it for adjacent non-secret runtime caches.
+func (m Manager) ConfigDirectory() (string, error) {
+	return m.configDir()
+}
+
 func (m Manager) confirmContractChange(state connectionState, verification Verification, changes []string) (bool, error) {
 	output := m.Output
 	if output == nil {

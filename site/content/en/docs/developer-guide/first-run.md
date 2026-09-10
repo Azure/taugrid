@@ -44,6 +44,7 @@ record it for the rest of this walkthrough.
 
 ```bash
 tau run status <run-name> --watch
+tau run status <run-name> --output json
 tau logs <run-name>
 tau run get <run-name>
 ```
@@ -55,6 +56,13 @@ interrupt it. For RayJobs, `logs` streams the Ray
 driver's execution output rather than head-pod logs; for batch Jobs it streams
 the Job pod logs. `get` fetches durable run results and artifacts once the run
 has produced them.
+
+Agents and automation can use `status --output json` for a versioned,
+point-in-time document containing lifecycle phases, workload and pod state,
+events, next actions, and actionable diagnostics. The default human view renders
+that same document as progress, resources, attention, and next-action sections.
+Add `--run-profile` to include live run-scoped GPU metrics. Poll JSON status
+rather than combining it with `--watch`.
 
 The `status` and `logs` subcommands also work for a batch Job submitted outside TauGrid. Such
 Jobs are hidden from the default TauGrid-owned list; opt in when investigating a

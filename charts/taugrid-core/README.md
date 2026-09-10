@@ -92,6 +92,54 @@ Prewarm, Stellar, Portal, and the lifecycle recorder run in the Helm release nam
 
 `lifecycleRecorder.targetNamespace` is never created here. It is the observed workload namespace, owned by `tau-core-controller` through a `TauWorkspace` or by external queue policy. Enabling the recorder against a namespace that does not exist fails with a message naming the value and those owners, instead of surfacing later as `namespaces "<name>" not found` on the recorder's Role.
 
+### Historical RayJob logs
+
+Enable discovery for `tau run logs` and `tau logs` after a completed RayJob's
+head pod is deleted. Set these values in the existing release's canonical
+Helm/GitOps configuration (under `taugrid-core:` for the umbrella chart):
+
+```yaml
+logging:
+  enabled: true
+  endpoint: https://actual-adx.westus2.kusto.windows.net
+  database: Logs
+  cluster: source-kubernetes-cluster
+```
+
+`endpoint` must be the actual ADX query URI used by adx-mon, not a URL guessed
+from a Kubernetes context or Azure resource name. `cluster` must equal
+adx-mon's `global.clusterName` / the ingested `ContainerLogs.Cluster` value.
+The Ray driver sidecar writes `Logs:ContainerLogs`; use `Logs` unless the
+workload's offload destination and ingestion routing were explicitly changed.
+Do not copy the Portal's `Metrics` database. Terraform's AKS deployment
+populates this block from the same ADX URI and source-cluster inputs as adx-mon.
+Changing this block only publishes query metadata; it does not enable ingestion.
+
+The chart owns one fixed `tau-log-connection` ConfigMap in its release
+namespace, which must be the workspace connection's system namespace. Its
+`data["connection.json"]` is a JSON object with schema `tau.logs.connection.v1`
+and string `endpoint`, `database`, and `cluster` fields. One record describes
+the local cluster, never a list of worker destinations. Keep this record and
+adx-mon configuration consistent when changing destinations.
+
+Roll out the updated CLI, controller, and configured chart together. The
+controller's workspace-reader Role grants only `get` on this named ConfigMap;
+it does not grant access to arbitrary system ConfigMaps. Cluster-wide
+authorization installs must supply this permission through their existing
+authorization policy. ADX login and database query authorization are separate
+requirements, unchanged by discovery.
+
+Discovery uses the selected/verified workspace route, including its custom
+system namespace, only after local terminal RayJob logs become unavailable.
+Individual `--kusto-endpoint`, `--kusto-database`, and `--kusto-cluster` flags
+override the record. Fully specified flags bypass discovery, including on
+older installations without the ConfigMap or permission to read it.
+Missing, malformed, or forbidden records produce actionable errors rather
+than guesses. Manager-side MultiKueue logs still require explicit endpoint
+and database plus the selected worker's telemetry annotation; the manager's
+local record is never used for a remote worker. The RayJob must still exist
+with its recorded RayCluster name, and central `--follow` is not supported.
+
 ### Upgrading existing releases
 
 Releases created before namespace unification may have first-party services and Tau system objects in different legacy namespaces. Moving release-owned Deployments, Services, RBAC, and identities recreates namespaced resources and can cause downtime. Helm does not move `TauWorkspace`, `TauQuotaRequest`, PVC, or Workload Identity state. Back up and migrate those objects explicitly before removing any legacy namespace.
@@ -248,10 +296,52 @@ see [Tau run lifecycle recorder](../../../../docs/tau/tau-run-lifecycle-recorder
 ## Tau portal
 
 The portal is a single read-only web entry point that aggregates and
-cross-links the runtime's dashboards. It is the same `tau` binary and image as
-Stellar, run as `taugrid-portal portal serve`, and embeds Stellar unchanged as the
-Experiments board under `/stellar`. It is disabled by default; enable it
-alongside or instead of the standalone Stellar Deployment.
+cross-links the runtime's dashboards. It runs as `taugrid-portal portal serve`
+and serves the native React Experiments board and canonical `/api/v2/stellar/*`
+JSON API using the same in-process backend. It is disabled by default in this
+standalone chart; a separate Stellar Deployment is not required.
+
+### Inherit the cluster's read-only ADX connection
+
+The shared `global.adx.queryConnection` Helm contract is identical for the
+standalone chart and the [TauGrid umbrella](../taugrid/README.md#cluster-level-adx-query-connection):
+
+```yaml
+global:
+  adx:
+    queryConnection:
+      endpoint: https://my-cluster.eastus2.kusto.windows.net
+      database: Metrics
+      clientID: 11111111-2222-3333-4444-555555555555
+portal:
+  enabled: true
+  serviceAccount:
+    create: true
+    name: tau-portal
+```
+
+Install in `tau-system` (or federate to the actual release namespace). The
+identity must already exist, have ADX database Viewer permissions only, and be
+federated to `system:serviceaccount:tau-system:tau-portal` for this cluster's OIDC
+issuer and audience `api://AzureADTokenExchange`. The cluster must support Azure
+Workload Identity. Never reuse adx-mon's admin/ingestion identity. Helm stores the
+nonsecret connection and configures the pod/ServiceAccount, but creates no Azure
+resources, federation, role assignments, tables, or data.
+
+With `portal.source=kusto`, nonempty `portal.kusto.endpoint` and `.database`
+override shared values per field; an explicit ServiceAccount client-ID annotation
+overrides the shared identity. Empty explicit client-ID annotations and partial
+shared connections fail rendering. Inheriting the identity requires
+`portal.serviceAccount.create=true`; for an existing ServiceAccount, explicitly
+set its name and client-ID annotation to match the externally managed object.
+The chart derives `azure.workload.identity/use: "true"` on the pod.
+`portal.kusto.queryCommand` remains an optional adapter override, and
+`portal.kusto.costDatabase` remains independent (Viewer access there is needed
+for Cost). Empty shared values preserve existing degraded behavior; local/auto
+sources do not inherit them. Workspace scope, ClusterIP exposure, and disabled
+workspace-directory defaults are unchanged.
+
+### Explicit Portal-only configuration
 
 ```bash
 helm upgrade --install taugrid-core ./taugrid-core \
@@ -262,7 +352,8 @@ helm upgrade --install taugrid-core ./taugrid-core \
   --set portal.rbac.create=true \
   --set portal.kusto.queryCommand=/usr/local/bin/query-kusto \
   --set portal.kusto.endpoint=<adx-endpoint> \
-  --set portal.kusto.database=Metrics
+  --set portal.kusto.database=Metrics \
+  --set portal.kusto.costDatabase=CostTracking
 ```
 
 For a direct standalone `taugrid-core` installation, Portal is disabled by default and, when enabled, runs in the Helm release namespace behind a ClusterIP-only `svc/tau-portal`. The TauGrid umbrella distribution additionally enables Portal with a dedicated ServiceAccount and read-only RBAC. Portal has no application-level login, so the chart rejects `LoadBalancer` and requires a platform-owned authenticated HTTPS proxy for researcher browser access. Each board degrades independently, so a partial install still serves the rest:
@@ -272,7 +363,10 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
   `DefaultAzureCredential` path, or set `portal.kusto.queryCommand` only when a
   platform intentionally supplies an adapter executable. Without either a
   reachable endpoint or adapter, Kusto-backed board APIs return 503 while the
-  Kubernetes-backed boards continue to serve.
+  Kubernetes-backed boards continue to serve. Cluster Health reads
+  `portal.kusto.database`; Cost reads allocation-based GPU-hours and estimated
+  charges by TauWorkspace from `portal.kusto.costDatabase` (default
+  `CostTracking`).
 - **Jobs / Queue, Ray, and Cluster Nodes** read the Kubernetes API directly with
   the pod's ServiceAccount. The computed Jobs board is disabled by default; use
   `portal.jobs.scopeMode=workspace` with an authenticated workspace directory,
@@ -292,7 +386,7 @@ ClusterQueue binding matches each live LocalQueue; mismatches fail unavailable
 instead of showing zero quota.
 
 With `portal.workspaceDirectory.enabled=false` (the default), `portal.workspace`
-(default `default`) scopes the embedded Stellar board. The legacy Ray/Runs
+(default `taugrid-default`) scopes the native experiment workspace. The legacy Ray/Runs
 boards read cluster-wide unless `portal.workloadNamespace` is set; the
 deprecated `portal.jobs.namespace` remains an explicit compatibility fallback.
 It does not authorize the Jobs board. Viewer-authorized Jobs access requires
@@ -300,10 +394,19 @@ It does not authorize the Jobs board. Viewer-authorized Jobs access requires
 trusted authentication proxy supplying the configured identity headers.
 Trusted test-cluster operator deployments can instead use `operator` mode with
 explicit scopes. The chart mounts only metadata; it never mounts remote
-kubeconfigs. Grant the portal's ServiceAccount the ADX database viewer role.
+kubeconfigs. Grant the portal's workload identity the ADX database viewer role
+on both the metrics and cost-tracking databases.
 For Azure Workload Identity, set
 `portal.serviceAccount.annotations.azure.workload.identity/client-id`; the
 chart derives the required Pod label from that annotation.
+
+The experiment UI is native React within Portal, not an iframe. A workspace
+record can set `experimentsBackend.url` to a trusted separate Stellar API origin
+or base path. Use `portal.extraVolumes` and `portal.extraVolumeMounts` to mount an
+optional `experimentsBackend.bearerTokenFile` from a Secret; the workspace
+ConfigMap contains only its path. The browser never receives the backend
+authority or credential. See [trusted backend configuration](../../portal/README.md#separately-deployed-stellar-backends)
+for source, authentication, network, and report-document constraints.
 
 ### Researcher browser access
 

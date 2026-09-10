@@ -9,6 +9,7 @@
 package expcapture
 
 import (
+	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/status"
 	"github.com/Azure/taugrid/portal/internal/expstore"
 )
@@ -58,12 +59,18 @@ func FromRunProfile(p status.RunProfileRecord) expstore.RecordRunDataOptions {
 		GPUHours:         p.GPUHours,
 		EstimatedCost:    p.EstimatedCost,
 	}
+	tags := []expstore.TagRecord{
+		{ScopeType: "run", ScopeID: p.RunID, Key: "tau.capture.source", Value: p.CaptureSource},
+	}
+	if p.Launch != nil {
+		if value := p.Launch.Tag(); value != "" {
+			tags = append(tags, expstore.TagRecord{ScopeType: "run", ScopeID: p.RunID, Key: experiment.LaunchTag, Value: value})
+		}
+	}
 	return expstore.RecordRunDataOptions{
 		Run:        run,
 		RunContext: runContext,
-		Tags: []expstore.TagRecord{
-			{ScopeType: "run", ScopeID: p.RunID, Key: "tau.capture.source", Value: p.CaptureSource},
-		},
-		Command: "exp capture run-profile",
+		Tags:       tags,
+		Command:    "exp capture run-profile",
 	}
 }
