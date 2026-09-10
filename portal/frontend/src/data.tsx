@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { createContext, useContext, type ReactNode } from 'react';
-import { QueryCache, QueryClient, useQuery, type Query, type UseQueryResult } from '@tanstack/react-query';
+import { QueryCache, QueryClient, useQuery, useQueryClient, type Query, type UseQueryResult } from '@tanstack/react-query';
 import type { Directory, WorkspaceScope } from './types';
 
 export class APIError extends Error {
@@ -130,13 +130,18 @@ export function useDirectory(workspace: string) {
     staleTime: 0,
   });
 }
-export function useBoard<T>(path: string, enabled = true) {
+export function useBoard<T>(path: string, enabled = true, merge?: (previous: T | undefined, next: T) => T) {
   const { scope, managed } = useWorkspace();
+  const client = useQueryClient();
   const url = scopedURL(path, scope.workspace, managed, scope.source);
+  const queryKey = [...boardScopeKey(scope, managed), url];
   return useQuery({
     // Include resolved authorization/data-source identity, not just a board name.
-    queryKey: [...boardScopeKey(scope, managed), url],
-    queryFn: ({ signal }) => fetchJSON<T>(url, signal),
+    queryKey,
+    queryFn: async ({ signal }) => {
+      const next = await fetchJSON<T>(url, signal);
+      return merge ? merge(client.getQueryData<T>(queryKey), next) : next;
+    },
     enabled,
     refetchOnWindowFocus: !path.startsWith('/api/v2/stellar/'),
     refetchOnReconnect: !path.startsWith('/api/v2/stellar/'),

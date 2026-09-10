@@ -17,8 +17,10 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   URL-addressable.
   Shared overview links use `/portal?persona=platform` or `persona=workloads`;
   absent or invalid personas default to Workloads, independent of browser storage.
-  Independent source panels expose loading, refresh, last-success time, and
-  explicitly stale retained data when a refresh fails.
+  Independent source panels expose Refresh/Retry, in-flight state, the last
+  successful response time, and snapshot freshness. The 15-second stale time
+  marks snapshots stale; it does not poll. Live embedded dashboards manage
+  freshness inside their own UI instead of using snapshot controls.
 - **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
@@ -125,13 +127,23 @@ resolve to the matching Fleet sub-tab so existing deep-links keep working.
 `GET /api/portal/overview?view=workloads` returns profiles, queue counters, and
 admitted-workload links without querying optional fleet, GPU, cost, or Ray
 sources. The unqualified overview API retains its complete response.
-Admission is quota reservation, not proof that pods are running.
+Both overview personas use the admission-only request. Platform loads inventory
+from `/api/portal/nodes`, health from `/api/portal/cluster`, and allocation cost
+from `/api/portal/cost` in independent panels; slow telemetry cannot block
+inventory or admission, and the UI does not duplicate aggregate overview reads.
+Admission is quota reservation, not proof that pods are running: the workload
+list and GPU reservations are explicitly admission-qualified.
 
 Job details expose `diagnostics` for workloads, pods, events, and tracking:
 `ready`, `empty`, `unavailable`, or `not_configured`. Indexed metrics can enable
 a scoped Stellar link while a job is active; a terminal lifecycle marker is not
-required. Retried source failures do not silently erase previously displayed
-evidence or label it fresh. Explicit client/access rejections (including 401,
+required. HTTP 200 responses with unavailable workloads, pods, or events retain
+the last successful section within the same authorized query and job incarnation,
+with a stale warning and its original section-success time. A successful empty
+section clears old rows. Tracking, lifecycle, and links always come from the
+latest response; they are not merged from previous snapshots. Retried source
+failures do not silently erase retained evidence or label it fresh.
+Explicit client/access rejections (including 401,
 403, and authorization-masked 404) hide cached board and native experiment data,
 including derived selections and media previews, even during retries; only
 transient/network and server failures retain data with a last-success stale warning.

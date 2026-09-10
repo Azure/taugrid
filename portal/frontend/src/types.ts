@@ -93,6 +93,7 @@ export interface HistoryEvent extends Lifecycle {
 export interface RayHistory extends Scoped { events: HistoryEvent[] }
 export interface SourceDiagnostic {
   state: 'ready' | 'empty' | 'unavailable' | 'not_configured'; message?: string;
+  stale?: boolean; lastSuccessAt?: number;
 }
 export interface JobDetail extends Scoped {
   name: string; namespace: string; kind: string; status: string; runId?: string;

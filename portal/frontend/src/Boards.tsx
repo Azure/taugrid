@@ -4,48 +4,62 @@ import { useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { APIError, useBoard, useScopedURL, useWorkspace } from './data';
 import { BoardResult, Empty, Note, PageTitle, ProfileReadiness, ScopedLink, Stat, Subtabs, Table, TrackingLink, measured, n1, text, utilizationSummary } from './components';
-import type { Cluster, Cost, CostCoverage, Jobs, Overview as OverviewData } from './types';
+import type { Cluster, Cost, CostCoverage, Jobs, Nodes, Overview as OverviewData } from './types';
 import { StellarWorkspace } from './stellar/Workspace';
 
 export function Overview({ persona }: { persona: string }) {
   return <InfrastructureOverview platform={persona === 'platform'}/>;
 }
 function InfrastructureOverview({ platform }: { platform: boolean }) {
-  const query = useBoard<OverviewData>('/api/portal/overview' + (platform ? '' : '?view=workloads'));
+  const query = useBoard<OverviewData>('/api/portal/overview?view=workloads');
+  const nodes = useBoard<Nodes>('/api/portal/nodes', platform);
   const cluster = useBoard<Cluster>('/api/portal/cluster');
   const costs = useBoard<Cost>('/api/portal/cost', platform);
-  const gpus = cluster.data?.gpus || [];
-  const summary = utilizationSummary(gpus);
-  const health = gpus.filter(g => typeof g.healthy === 'boolean');
-  const errors = health.filter(g => g.healthy === false).length;
-  const cost = costs.data;
   return <><PageTitle title="Overview">{platform ? 'Fleet health & capacity at a glance.' : 'Your training workloads at a glance.'}</PageTitle>
-    <BoardResult query={query} label="Overview">{data => {
-      const c = data.cards, f = c.fleet, q = c.queue;
+    {platform && <BoardResult query={nodes} label="Fleet inventory">{f => <div className="stats">
+      <Stat href="/portal/fleet?view=compute" label="Total nodes" value={f.readyNodes} of={f.totalNodes} sub="ready / total"/>
+      <Stat href="/portal/fleet?view=compute" label="Total GPUs" value={f.totalGPUs} sub={`${f.gpuNodes} GPU nodes`}/>
+    </div>}</BoardResult>}
+    <BoardResult query={query} label={platform ? 'Queue capacity' : 'Workload admission'}
+      partial={!!query.data?.cards.queueUnavailable || !!query.data?.runningUnavailable}>{data => {
+      const q = data.cards.queue;
       const capacity = q ? q.gpuUsed + q.gpuHeadroom : 0;
-      return <><ProfileReadiness state={data.workloadProfiles}/><div className="stats">
-        {platform ? <>
-          <Stat href="/portal/fleet?view=compute" label="Total nodes" value={f?.readyNodes ?? 0} of={f?.totalNodes} sub={f && 'ready / total'} unavailable={c.fleetUnavailable}/>
-          <Stat href="/portal/fleet?view=compute" label="Total GPUs" value={f?.totalGPUs ?? 0} sub={f && `${f.gpuNodes} GPU nodes`} unavailable={c.fleetUnavailable}/>
-          <Stat href="/portal/fleet?view=health" label="Unhealthy observed GPUs" value={errors} tone={errors > 0 ? 'bad' : undefined} dot={errors > 0 ? 'red' : undefined}
-            sub={`${health.length} / ${gpus.length} returned GPUs have health observations · window ${cluster.data?.window || '—'}`}
-            unavailable={cluster.error?.message || (!health.length ? (cluster.isPending ? 'loading GPU telemetry' : 'No GPU health observations; health is unknown.') : undefined)}/>
-          <Stat href="/portal/jobs" label="Headroom" value={q?.gpuHeadroom ?? 0} sub={q && `GPUs free · ${q.gpuUsed} in use`} unavailable={c.queueUnavailable}/>
-          <Stat href="/portal/cost" label="GPU-hours" value={n1(cost?.gpuHoursAvailable ? cost.totalGPUHours : null)} sub={cost && `${allocationCoverage(cost.costCoverage, 'gpuHoursSamples')} · window ${cost.window || '—'}`}
-            unavailable={costs.error?.message || (costs.isPending ? 'loading allocation cost' : undefined)}/>
-          <Stat href="/portal/cost" label="Observed idle GPUs" value={cost?.idleAvailable ? cost.idleGPUs.length : '—'} tone={cost?.idleAvailable && cost.idleGPUs.length > 0 ? 'warn' : undefined} sub={cost && idleCoverage(cost)}
-            unavailable={costs.error?.message || (costs.isPending ? 'loading idle telemetry' : undefined)}/>
-        </> : <>
-          <Stat href="/portal/runs" label="Active jobs" value={q?.admitted ?? 0} dot={q && q.admitted > 0 ? 'green' : undefined} unavailable={c.queueUnavailable}/>
-          <Stat href="/portal/runs" label="Queued" value={q?.pending ?? 0} unavailable={c.queueUnavailable}/>
-          <Stat href="/portal/jobs" label="GPUs in use" value={q?.gpuUsed ?? 0} of={q ? capacity : undefined} bar={q && capacity > 0 ? q.gpuUsed / capacity : undefined} unavailable={c.queueUnavailable}/>
-          <Stat href="/portal/fleet?view=util" label="Avg measured utilization" value={summary.average === null ? '—' : `${n1(summary.average)}%`}
-            sub={`${summary.observed} / ${summary.total} returned GPUs measured · window ${cluster.data?.window || '—'}`}
-            unavailable={cluster.error?.message || (!summary.observed ? (cluster.isPending ? 'loading GPU telemetry' : 'No GPU utilization observations in this window.') : undefined)}/>
-        </>}
-      </div>{!platform && <><h3>Running now</h3>{data.runningUnavailable ? <Empty>Running jobs unavailable: {data.runningUnavailable} — start the portal with Kubernetes access to cross-link jobs to experiments.</Empty> : !data.running?.length ? <Empty>No admitted workloads right now.</Empty>
-        : <Table headers={['Job', 'Namespace', 'Queue', 'Cluster queue', 'Experiment']} rows={data.running.map(r => [r.job || r.name || '—', text(r.namespace), text(r.queue), text(r.clusterQueue), <TrackingLink run={r} label={(r.experiment || r.project || r.runId || 'open') + ' ↗'}/>])}/>}</>}</>;
-    }}</BoardResult></>;
+      const unavailable = data.cards.queueUnavailable || (!q ? 'Queue data unavailable' : undefined);
+      return <><div className="stats">{platform
+        ? <Stat href="/portal/jobs" label="Headroom" value={q?.gpuHeadroom} sub={q && `GPUs free · ${q.gpuUsed} reserved`} unavailable={unavailable}/>
+        : <>
+          <Stat href="/portal/runs" label="Admitted workloads" value={q?.admitted} sub="Admission reserves quota; pods may not be running." unavailable={unavailable}/>
+          <Stat href="/portal/runs" label="Pending admission" value={q?.pending} unavailable={unavailable}/>
+          <Stat href="/portal/jobs" label="GPUs reserved" value={q?.gpuUsed} of={q ? capacity : undefined} bar={q && capacity > 0 ? q.gpuUsed / capacity : undefined} unavailable={unavailable}/>
+        </>}</div>
+        {!platform && <><h3>Admitted workloads</h3><Note>Quota is admitted. Admission does not confirm that pods are executing.</Note>
+          {data.runningUnavailable ? <Empty>Admitted workloads unavailable: {data.runningUnavailable} — start the portal with Kubernetes access to cross-link jobs to experiments.</Empty>
+            : !data.running?.length ? <Empty>No admitted workloads right now.</Empty>
+              : <Table headers={['Job', 'Namespace', 'Queue', 'Cluster queue', 'Experiment']} rows={data.running.map(r => [r.job || r.name || '—', text(r.namespace), text(r.queue), text(r.clusterQueue), <TrackingLink run={r} label={(r.experiment || r.project || r.runId || 'open') + ' ↗'}/>])}/>}</>}
+        <ProfileReadiness state={data.workloadProfiles}/>
+      </>;
+    }}</BoardResult>
+    <BoardResult query={cluster} label={platform ? 'GPU health' : 'GPU utilization'}>{snap => {
+      const gpus = snap.gpus || [];
+      const summary = utilizationSummary(gpus);
+      const health = gpus.filter(g => typeof g.healthy === 'boolean');
+      const errors = health.filter(g => g.healthy === false).length;
+      return <div className="stats">{platform
+        ? <Stat href="/portal/fleet?view=health" label="Unhealthy observed GPUs" value={errors} tone={errors > 0 ? 'bad' : undefined}
+          sub={`${health.length} / ${gpus.length} returned GPUs have health observations · window ${snap.window || '—'}`}
+          unavailable={!health.length ? 'No GPU health observations; health is unknown.' : undefined}/>
+        : <Stat href="/portal/fleet?view=util" label="Avg measured utilization" value={summary.average === null ? '—' : `${n1(summary.average)}%`}
+          sub={`${summary.observed} / ${summary.total} returned GPUs measured · window ${snap.window || '—'}`}
+          unavailable={!summary.observed ? 'No GPU utilization observations in this window.' : undefined}/>}
+      </div>;
+    }}</BoardResult>
+    {platform && <BoardResult query={costs} label="GPU cost">{cost => <div className="stats">
+      <Stat href="/portal/cost" label="GPU-hours" value={n1(cost.gpuHoursAvailable ? cost.totalGPUHours : null)}
+        sub={`${allocationCoverage(cost.costCoverage, 'gpuHoursSamples')} · window ${cost.window || '—'}`}/>
+      <Stat href="/portal/cost" label="Observed idle GPUs" value={cost.idleAvailable ? cost.idleGPUs.length : '—'}
+        tone={cost.idleAvailable && cost.idleGPUs.length > 0 ? 'warn' : undefined} sub={idleCoverage(cost)}/>
+    </div>}</BoardResult>}
+  </>;
 }
 export function ExperimentsBoard() {
   return <StellarWorkspace/>;
@@ -60,13 +74,13 @@ export function Kueue() {
 function Scheduler() {
   const query = useBoard<Jobs>('/api/portal/jobs');
   return <><p className="muted">Computed GPU quota and queue pressure for the authorized workspace or configured operator scopes. Use Kueue (Live) for raw cluster-wide scheduler state.</p>
-    {query.error instanceof APIError && query.error.status === 503 && query.error.state === 'setup_required' ? <Empty><strong>Jobs board setup required</strong><p>Portal is running normally. Configure an authorized workspace scope or explicit operator scopes before enabling this computed board.</p><Note>Helm: portal.jobs.scopeMode=workspace or operator.</Note></Empty>
-      : <BoardResult query={query} label="Jobs board">{snap => <><Note>scope: {snap.namespace || 'configured namespaces'}</Note><ProfileReadiness state={snap.workloadProfiles}/>
+    {query.error instanceof APIError && query.error.status === 503 && query.error.state === 'setup_required' && <Empty><strong>Jobs board setup required</strong><p>Portal is running normally. Configure an authorized workspace scope or explicit operator scopes before enabling this computed board.</p><Note>Helm: portal.jobs.scopeMode=workspace or operator.</Note></Empty>}
+    <BoardResult query={query} label="Jobs board">{snap => <><Note>scope: {snap.namespace || 'configured namespaces'}</Note><ProfileReadiness state={snap.workloadProfiles}/>
         {snap.hints?.map(h => <div key={h} className="warn">⚠ {h}</div>)}
         {!snap.groups?.length ? <Empty>No queue groups match. The cluster may have no Kueue queues configured.</Empty>
           : <Table headers={['Namespace', 'Team', 'Lane', 'GPU class', 'Queue', '#Pending', '#Admitted', '#GPU used', '#GPU nominal', '#Headroom']}
             rows={snap.groups.map(g => [text(g.namespace), text(g.team), text(g.lane), text(g.gpuClass), text(g.queue), g.pending, g.admitted, g.gpuUsed, g.gpuNominal,
-              <span className={g.queueFound && g.quotaFound && g.pending > 0 && g.gpuHeadroom === 0 ? 'warn' : ''}>{g.gpuHeadroom}</span>])}/>}</>}</BoardResult>}
+              <span className={g.queueFound && g.quotaFound && g.pending > 0 && g.gpuHeadroom === 0 ? 'warn' : ''}>{g.gpuHeadroom}</span>])}/>}</>}</BoardResult>
   </>;
 }
 function KueueLive() {
@@ -77,12 +91,12 @@ function KueueLive() {
     queryFn: async ({ signal }) => {
       const response = await fetch(url, { signal });
       if (response.status === 503) throw new Error('this portal was started without --kueueviz. Enable the KueueViz reverse proxy to use this board.');
-      if (!response.ok) throw new Error('The KueueViz backend/frontend Services may not be deployed.');
+      if (!response.ok) throw new APIError(response.status, '', 'The KueueViz backend/frontend Services may not be deployed.');
       return true;
     },
   });
   return <><p className="muted">Live KueueViz dashboard — real-time queues, workloads, cluster-queues over WebSocket.</p><Note>Live KueueViz dashboard, reverse-proxied through the portal — <ScopedLink to="/api/portal/kueueviz/" external>open in a full page ↗</ScopedLink> for more room.</Note>
-    <BoardResult query={query} label="The Kueue (Live) board">{() => <iframe className="stellar" src={url} title="Kueue (Live) — KueueViz"/>}</BoardResult></>;
+    <BoardResult query={query} label="The Kueue (Live) board" live>{() => <iframe className="stellar" src={url} title="Kueue (Live) — KueueViz"/>}</BoardResult></>;
 }
 function allocationCoverage(coverage: CostCoverage | undefined, field: 'gpuHoursSamples' | 'costSamples') {
   if (!coverage || !measured(coverage.observedSamples) || !measured(coverage[field])) return 'Coverage not reported';

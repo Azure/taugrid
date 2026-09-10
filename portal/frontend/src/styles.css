@@ -110,6 +110,12 @@
   }
   .btn-primary:hover { background: #1d4fd7; }
   .btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+  .data-panel { min-width: 0; overflow-wrap: break-word; }
+  .data-panel + .data-panel { margin-top: 24px; }
+  .panel-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
+  .btn { border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--accent); padding: 6px 10px; font: inherit; cursor: pointer; }
+  .btn:hover { background: var(--hover); }
+  .btn:disabled { color: var(--muted); cursor: wait; }
   .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .note { color: var(--muted); font-size: 13px; }
   code { background: #eef1f6; padding: 1px 5px; border-radius: 4px; }

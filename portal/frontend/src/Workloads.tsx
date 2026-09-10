@@ -15,7 +15,29 @@ function Status({ value, tone = '' }: { value?: string; tone?: string }) { retur
 function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiagnostic; label: string; children: ReactNode }) {
   if (!diagnostic) return <Note warn>{label}: source status not reported by this portal version.</Note>;
   if (diagnostic.state === 'ready' || diagnostic.state === 'empty') return <>{children}</>;
-  return <Note warn={diagnostic.state !== 'not_configured'}>{label} {diagnostic.state === 'not_configured' ? 'not configured' : 'unavailable'}: {diagnostic.message || 'This source could not be read. Retry this detail view.'}</Note>;
+  return <><Note warn={diagnostic.state !== 'not_configured'}>{label} {diagnostic.state === 'not_configured' ? 'not configured' : 'unavailable'}: {diagnostic.message || 'This source could not be read. Retry this detail view.'}
+    {diagnostic.stale && <> Showing stale data from the last successful section read{diagnostic.lastSuccessAt ? ' at ' + new Date(diagnostic.lastSuccessAt).toLocaleString() : ''}.</>}</Note>
+    {diagnostic.stale && children}</>;
+}
+function retainJobSections(previous: JobDetail | undefined, next: JobDetail): JobDetail {
+  const sameJob = previous && previous.name === next.name && previous.namespace === next.namespace &&
+    previous.kind === next.kind && previous.runId === next.runId &&
+    !!next.object?.created && previous.object?.created === next.object.created;
+  let result = next;
+  for (const key of ['workloads', 'pods', 'events'] as const) {
+    const diagnostic = next.diagnostics?.[key];
+    if (!diagnostic) continue;
+    const prior = sameJob ? previous.diagnostics?.[key] : undefined;
+    if (diagnostic.state === 'ready' || diagnostic.state === 'empty') {
+      result = { ...result, diagnostics: { ...result.diagnostics, [key]: { ...diagnostic, stale: false, lastSuccessAt: Date.now() } } };
+    } else if (diagnostic.state === 'unavailable' && prior?.lastSuccessAt &&
+      (prior.state === 'ready' || prior.state === 'empty' || prior.stale)) {
+      // Previous data comes only from this authorized query cache; 4xx errors purge it.
+      result = { ...result, [key]: previous?.[key], diagnostics: { ...result.diagnostics,
+        [key]: { ...diagnostic, stale: true, lastSuccessAt: prior.lastSuccessAt } } };
+    }
+  }
+  return result;
 }
 function HistoryDiagnostic({ state, diagnostic, ray = false }: { state?: string; diagnostic?: string; ray?: boolean }) {
   return state === 'history-unavailable' ? <Note warn>{diagnostic || `Durable ${ray ? 'RayJob' : 'run'} history is temporarily unavailable; showing live ${ray ? 'dashboards' : 'Kubernetes workloads'} only.`}</Note> : null;
@@ -44,11 +66,12 @@ export function RunsBoard() {
 }
 export function JobDetailBoard() {
   const { namespace = '', name = '' } = useParams();
-  const query = useBoard<JobDetail>('/api/portal/runs/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(name), !!namespace && !!name);
+  const query = useBoard<JobDetail>('/api/portal/runs/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(name), !!namespace && !!name, retainJobSections);
+  const partial = Object.values(query.data?.diagnostics || {}).some(diagnostic => diagnostic.state === 'unavailable');
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
   const active = ['overview', 'pods', 'events', 'results'].includes(requested) ? requested : 'overview';
   return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to="/portal/runs" className="back">← Back to Jobs</ScopedLink></div>
-    {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
+    {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
       <div className="detail-meta"><Status value={snap.kind} tone="kind"/><Status value={snap.status}/>
         {snap.resourceRelease && <span className={'badge' + (snap.resourceRelease.computeState === 'reusable' ? '' : ' warn')} title={snap.resourceRelease.message}>quota {snap.resourceRelease.quotaState || 'unknown'} · compute {snap.resourceRelease.computeState || 'unknown'}</span>}
         {snap.object?.age && <span>age {snap.object.age}</span>}{snap.runId && <span className="muted">run-id {snap.runId}</span>}
