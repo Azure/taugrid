@@ -18,14 +18,26 @@ const (
 	phaseDone    PhaseStatus = "done"
 	phaseWarning PhaseStatus = "warning"
 	phaseSkipped PhaseStatus = "skipped"
+
+	PhasePending = phasePending
+	PhaseActive  = phaseActive
+	PhaseDone    = phaseDone
+	PhaseWarning = phaseWarning
+	PhaseSkipped = phaseSkipped
 )
 
 type Phase struct {
-	Name      string
-	Status    PhaseStatus
-	Detail    string
-	Hint      string
-	StartedAt time.Time
+	Name      string      `json:"name"`
+	Status    PhaseStatus `json:"status"`
+	Detail    string      `json:"detail"`
+	Hint      string      `json:"hint,omitempty"`
+	StartedAt time.Time   `json:"startedAt,omitempty,omitzero"`
+}
+
+// StartupPhases returns the structured lifecycle phases used by the human
+// renderer. Machine consumers should use this instead of parsing Render.
+func StartupPhases(s Snapshot) []Phase {
+	return startupPhasesAt(s, time.Now())
 }
 
 func renderStartupPhasesAt(s Snapshot, now time.Time) string {
@@ -46,7 +58,7 @@ func renderStartupPhasesAt(s Snapshot, now time.Time) string {
 }
 
 func startupPhasesAt(s Snapshot, now time.Time) []Phase {
-	rj := snapshotRayJob(s)
+	rj := primaryRayJob(s)
 	phases := []Phase{
 		submittedPhase(s),
 		kueuePhase(s),
@@ -78,7 +90,7 @@ func podLifecyclePhases(s Snapshot) []Phase {
 		containerStartPhase(s),
 		readyPhase(s),
 	}
-	rj := snapshotRayJob(s)
+	rj := primaryRayJob(s)
 	if rayJobStatusFailed(rj) && len(s.Pods) == 0 {
 		detail := "pod state unavailable after terminal RayJob failure"
 		if s.PodsObserved {
@@ -109,7 +121,7 @@ func podLifecyclePhases(s Snapshot) []Phase {
 }
 
 func StartupComplete(s Snapshot) bool {
-	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
+	if primaryWorkloadSucceeded(s) {
 		return true
 	}
 	if s.ManagerOnlyMultiKueueView() {
@@ -124,15 +136,10 @@ func StartupComplete(s Snapshot) bool {
 }
 
 func StartupFailed(s Snapshot) bool {
-	for _, c := range s.JobConditions {
-		if c.Type == "Failed" && c.Status == "True" {
-			return true
-		}
-	}
-	if rayJobStatusFailed(snapshotRayJob(s)) {
+	if primaryWorkloadFailed(s) {
 		return true
 	}
-	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
+	if primaryWorkloadSucceeded(s) {
 		return false
 	}
 	if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
@@ -171,17 +178,20 @@ func StartupFailed(s Snapshot) bool {
 }
 
 func WatchComplete(s Snapshot) bool {
-	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
+	if primaryWorkloadFailed(s) {
+		return false
+	}
+	if primaryWorkloadSucceeded(s) {
 		return true
 	}
 	if s.ManagerOnlyMultiKueueView() {
-		if firstNonEmpty(snapshotRayJob(s).JobDeploymentStatus, snapshotRayJob(s).JobStatus) == "Suspended" {
+		if rj := primaryRayJob(s); firstNonEmpty(rj.JobDeploymentStatus, rj.JobStatus) == "Suspended" {
 			return false
 		}
 		if state, ok := managerMultiKueueJobState(s); ok && state == "Running" {
 			return true
 		}
-		if state, ok := managerMultiKueueRayJobState(snapshotRayJob(s)); ok && state == "Running" {
+		if state, ok := managerMultiKueueRayJobState(primaryRayJob(s)); ok && state == "Running" {
 			return true
 		}
 		return s.AllAdmissionChecksReady()
@@ -190,11 +200,11 @@ func WatchComplete(s Snapshot) bool {
 }
 
 func WatchFailed(s Snapshot) bool {
-	if jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s)) {
-		return false
-	}
-	if WorkloadFailed(s) {
+	if primaryWorkloadFailed(s) {
 		return true
+	}
+	if primaryWorkloadSucceeded(s) {
+		return false
 	}
 	if s.ManagerOnlyMultiKueueView() {
 		return s.AnyAdmissionCheckRejected()
@@ -763,6 +773,13 @@ func snapshotRayJob(s Snapshot) RayJob {
 	}
 }
 
+func primaryRayJob(s Snapshot) RayJob {
+	if s.JobFound {
+		return RayJob{}
+	}
+	return snapshotRayJob(s)
+}
+
 func sortedJoinMapKeys(values map[string]bool) string {
 	if len(values) == 0 {
 		return ""
@@ -1075,17 +1092,26 @@ func rayJobStatusComplete(rj RayJob) bool {
 }
 
 func WorkloadSucceeded(s Snapshot) bool {
-	return jobStatusSucceeded(s) || rayJobStatusSucceeded(snapshotRayJob(s))
+	return primaryWorkloadSucceeded(s)
+}
+
+func primaryWorkloadSucceeded(s Snapshot) bool {
+	if s.JobFound {
+		return jobStatusSucceeded(s)
+	}
+	return rayJobStatusSucceeded(snapshotRayJob(s))
 }
 
 func WorkloadFailed(s Snapshot) bool {
-	for _, c := range s.JobConditions {
-		if c.Type == "Failed" && c.Status == "True" {
-			return true
-		}
-	}
-	if s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected() {
+	if primaryWorkloadFailed(s) {
 		return true
+	}
+	return s.ManagerOnlyMultiKueueView() && s.AnyAdmissionCheckRejected()
+}
+
+func primaryWorkloadFailed(s Snapshot) bool {
+	if s.JobFound {
+		return jobStatusFailed(s)
 	}
 	return rayJobStatusFailed(snapshotRayJob(s))
 }
@@ -1099,22 +1125,45 @@ func jobStatusSucceeded(s Snapshot) bool {
 	return false
 }
 
-func rayJobStatusSucceeded(rj RayJob) bool {
-	jobStatus := strings.ToLower(strings.TrimSpace(rj.JobStatus))
-	if jobStatus != "" {
-		return strings.Contains(jobStatus, "succeed")
+func jobStatusFailed(s Snapshot) bool {
+	for _, c := range s.JobConditions {
+		if c.Type == "Failed" && c.Status == "True" {
+			return true
+		}
 	}
-	deploymentStatus := strings.ToLower(strings.TrimSpace(rj.JobDeploymentStatus))
-	return strings.Contains(deploymentStatus, "succeed") || strings.Contains(deploymentStatus, "complete")
+	return false
+}
+
+func rayJobStatusSucceeded(rj RayJob) bool {
+	if rayJobStatusFailed(rj) {
+		return false
+	}
+	for _, value := range []string{rj.JobStatus, rj.JobDeploymentStatus} {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if strings.Contains(value, "succeed") || strings.Contains(value, "complete") {
+			return true
+		}
+	}
+	return false
 }
 
 func rayJobStatusFailed(rj RayJob) bool {
-	jobStatus := strings.ToLower(strings.TrimSpace(rj.JobStatus))
-	if jobStatus != "" {
-		return strings.Contains(jobStatus, "fail") || strings.Contains(jobStatus, "error") || strings.Contains(jobStatus, "stop") || strings.Contains(jobStatus, "cancel")
+	for _, value := range []string{rj.JobStatus, rj.JobDeploymentStatus, rj.Reason} {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if strings.Contains(value, "fail") ||
+			strings.Contains(value, "error") ||
+			strings.Contains(value, "stop") ||
+			strings.Contains(value, "cancel") {
+			return true
+		}
 	}
-	status := strings.ToLower(firstNonEmpty(rj.JobDeploymentStatus, rj.Reason))
-	return strings.Contains(status, "fail") || strings.Contains(status, "error") || strings.Contains(status, "stop") || strings.Contains(status, "cancel")
+	return false
+}
+
+// RayJobFailed reports whether any authoritative RayJob status field contains
+// a terminal failure marker.
+func RayJobFailed(rj RayJob) bool {
+	return rayJobStatusFailed(rj)
 }
 
 // singleLine collapses all whitespace runs into single spaces. Kubernetes

@@ -342,3 +342,28 @@ ignored_metric{pod="run-a"} 1
 		t.Fatalf("value = %v", samples[0].Value)
 	}
 }
+
+func TestRunFinishedUsesPrimaryJob(t *testing.T) {
+	snap := Snapshot{
+		JobFound:  true,
+		JobActive: 1,
+		RayJob: RayJob{
+			Found:               true,
+			JobDeploymentStatus: "Complete",
+			FinishedAt:          time.Now(),
+		},
+		RayJobFinishedAt: time.Now(),
+	}
+	if runFinished(snap) {
+		t.Fatal("stale same-name RayJob must not mark an active primary Job finished")
+	}
+	if !runFinished(Snapshot{
+		RayJob: RayJob{
+			Found:               true,
+			JobStatus:           "FAILED",
+			JobDeploymentStatus: "Running",
+		},
+	}) {
+		t.Fatal("RayJob failure must mark the run finished even when deployment status says running")
+	}
+}

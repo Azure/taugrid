@@ -29,17 +29,19 @@ type CostProfile struct {
 	Error      string
 }
 
-// RenderRunProfile appends the researcher-facing "what happened to my run?"
-// view: queue wait, runtime, shape, cost, artifact hints, and explicit gaps.
-func RenderRunProfile(s Snapshot, c CostProfile) string {
-	var b strings.Builder
-	b.WriteString("\nRun profile:\n")
+// ProfileField is one stable run-profile observation.
+type ProfileField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
 
-	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	row := func(k, v string) {
-		fmt.Fprintf(tw, "  %s\t%s\n", k, v)
+// RunProfileFields returns the complete run profile shared by human and
+// machine renderers.
+func RunProfileFields(s Snapshot, c CostProfile) []ProfileField {
+	fields := make([]ProfileField, 0, 55)
+	row := func(name, value string) {
+		fields = append(fields, ProfileField{Name: name, Value: value})
 	}
-
 	row("queue_wait", queueWait(s))
 	row("queue_wait_seconds", secondsOrUnavailable(queueWaitSeconds(s)))
 	row("admission", admissionSummary(s))
@@ -95,12 +97,24 @@ func RenderRunProfile(s Snapshot, c CostProfile) string {
 	if v := annotationOrDefault(s, workloadmeta.AnnotationResultArtifacts, ""); v != "" {
 		row("artifacts", v)
 	}
-
 	if v := annotationOrDefault(s, workloadmeta.AnnotationResultNote, ""); v != "" {
 		row("note", v)
 	}
 	if v := annotationOrDefault(s, workloadmeta.AnnotationPresetExplain, ""); v != "" {
 		row("preset_explain", v)
+	}
+	return fields
+}
+
+// RenderRunProfile appends the researcher-facing "what happened to my run?"
+// view: queue wait, runtime, shape, cost, artifact hints, and explicit gaps.
+func RenderRunProfile(s Snapshot, c CostProfile) string {
+	var b strings.Builder
+	b.WriteString("\nRun profile:\n")
+
+	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	for _, field := range RunProfileFields(s, c) {
+		fmt.Fprintf(tw, "  %s\t%s\n", field.Name, field.Value)
 	}
 	_ = tw.Flush()
 	return b.String()

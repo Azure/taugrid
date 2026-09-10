@@ -2,7 +2,7 @@
 {{- $portal := .Values.portal -}}
 {{- $systemNamespace := .Release.Namespace -}}
 {{- $source := lower (default "kusto" $portal.source) -}}
-{{- $kusto := default dict $portal.kusto -}}
+{{- $kusto := deepCopy (default dict $portal.kusto) -}}
 {{- $runHistory := default dict $portal.runHistory -}}
 {{- $jobs := default dict $portal.jobs -}}
 {{- $jobsScopeModeConfigured := ne (trim (default "" $jobs.scopeMode)) "" -}}
@@ -21,7 +21,30 @@
 {{- $externalURLParts = urlParse $externalURL -}}
 {{- end -}}
 {{- $rbac := default dict $portal.rbac -}}
-{{- $serviceAccount := default dict $portal.serviceAccount -}}
+{{- $serviceAccount := deepCopy (default dict $portal.serviceAccount) -}}
+{{- if eq $source "kusto" -}}
+{{- $connection := include "taugrid-core.adxQueryConnection" . | fromJson -}}
+{{- if $connection.endpoint -}}
+{{- $_ := set $kusto "endpoint" (default $connection.endpoint $kusto.endpoint) -}}
+{{- $_ := set $kusto "database" (default $connection.database $kusto.database) -}}
+{{- $annotations := default dict $serviceAccount.annotations -}}
+{{- $clientIDKey := "azure.workload.identity/client-id" -}}
+{{- if hasKey $annotations $clientIDKey -}}
+{{- if not (trim (default "" (index $annotations $clientIDKey))) -}}
+{{- fail "portal.serviceAccount.annotations.azure.workload.identity/client-id must not be empty when global.adx.queryConnection is configured" -}}
+{{- end -}}
+{{- if and (not $serviceAccount.create) (not $serviceAccount.name) -}}
+{{- fail "global.adx.queryConnection requires a dedicated Portal serviceAccount: enable portal.serviceAccount.create or name an existing annotated serviceAccount" -}}
+{{- end -}}
+{{- else -}}
+{{- if not $serviceAccount.create -}}
+{{- fail "inheriting global.adx.queryConnection.clientID requires portal.serviceAccount.create=true; for an existing serviceAccount, set its name and explicit portal.serviceAccount.annotations.azure.workload.identity/client-id to match the provisioned annotation" -}}
+{{- end -}}
+{{- $_ := set $annotations $clientIDKey $connection.clientID -}}
+{{- end -}}
+{{- $_ := set $serviceAccount "annotations" $annotations -}}
+{{- end -}}
+{{- end -}}
 {{- $resourceName := default "tau-portal" $portal.resourceName -}}
 {{- $serviceName := default $resourceName $portal.serviceName -}}
 {{- $serviceAccountName := default $resourceName $serviceAccount.name -}}

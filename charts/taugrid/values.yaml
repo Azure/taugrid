@@ -1,3 +1,15 @@
+# Shared cluster connection recorded once in the Helm release. Portal inherits
+# this read-only query identity, never the adx-mon ingestion/admin identity.
+global:
+  adx:
+    queryConnection:
+      # Configure all three together; installation creates no Azure resources.
+      endpoint: ""
+      database: ""
+      # Externally provisioned ADX Viewer identity federated to
+      # system:serviceaccount:tau-system:tau-portal with the default installation.
+      clientID: ""
+
 components:
   kueue:
     enabled: true
@@ -81,7 +93,7 @@ kueue:
     manager:
       image:
         repository: mcr.microsoft.com/oss/v2/kueue/kueue
-        tag: v0.18.2
+        tag: v0.19.2
         pullPolicy: IfNotPresent
   # Keep the active upstream configuration when replacing this embedded YAML
   # string, and include the AKS DRA device-class mapping used by the published

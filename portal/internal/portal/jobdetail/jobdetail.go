@@ -12,9 +12,8 @@
 //     admitted for it (queue/admission state), its Pods (phase/node/restarts),
 //     and recent Events. Sourced from the client-go reads in
 //     internal/portal/kubeclient.
-//   - Tier 2 (cross-links): pure URLs — an "Open in Stellar" deep-link built from
-//     the run-id (links.ExperimentPath) and a per-pod Cluster board link
-//     (links.ClusterInstancePath). No new data is fetched.
+//   - Tier 2 (cross-links): an "Open in Stellar" deep-link backed by indexed
+//     metrics and a per-pod Cluster board link (links.ClusterInstancePath).
 //   - Tier 3 (durable Kusto): optional. When a Querier is configured, the run's
 //     terminal lifecycle is derived from the `tau/run_status` marker row the
 //     metrics-offload sidecar remote-writes into the ExperimentMetrics table
@@ -31,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -84,23 +84,28 @@ type Reader interface {
 type Options struct {
 	Namespace string
 	Name      string
+	// WorkspaceID is the authoritative selected workspace, not a normalized
+	// object label. Empty retains legacy cross-workspace discovery.
+	WorkspaceID string
+	Cluster     string
 }
 
 // Snapshot is the job detail payload, designed for the page rather than reusing
 // a board shape. Optional tiers are omitted when empty so the frontend can
 // render each independently.
 type Snapshot struct {
-	Namespace string           `json:"namespace"`
-	Name      string           `json:"name"`
-	Kind      string           `json:"kind"` // Job | RayJob
-	Status    string           `json:"status"`
-	RunID     string           `json:"runId,omitempty"`
-	Object    ObjectDetail     `json:"object"`
-	Workloads []links.Workload `json:"workloads,omitempty"`
-	Pods      []PodDetail      `json:"pods,omitempty"`
-	Events    []EventDetail    `json:"events,omitempty"`
-	Links     DetailLinks      `json:"links"`
-	Lifecycle *LifecycleRow    `json:"lifecycle,omitempty"`
+	Namespace   string           `json:"namespace"`
+	Name        string           `json:"name"`
+	Kind        string           `json:"kind"` // Job | RayJob
+	ResourceUID string           `json:"resourceUid,omitempty"`
+	Status      string           `json:"status"`
+	RunID       string           `json:"runId,omitempty"`
+	Object      ObjectDetail     `json:"object"`
+	Workloads   []links.Workload `json:"workloads,omitempty"`
+	Pods        []PodDetail      `json:"pods,omitempty"`
+	Events      []EventDetail    `json:"events,omitempty"`
+	Links       DetailLinks      `json:"links"`
+	Lifecycle   *LifecycleRow    `json:"lifecycle,omitempty"`
 	// ResourceRelease distinguishes scheduler quota accounting from physical
 	// Ray pod teardown. It is populated for RayJobs after Workloads and Pods are
 	// read so the UI never treats "Finished" as proof that GPUs are reusable.
@@ -108,7 +113,31 @@ type Snapshot struct {
 	// Experiment is the Stellar identity `tau run` stamped on this object. It is
 	// omitted for a workload that carries none (a bare Job, or a run submitted
 	// without experiment metadata).
-	Experiment *ExperimentIdentity `json:"experiment,omitempty"`
+	Experiment  *ExperimentIdentity `json:"experiment,omitempty"`
+	Diagnostics Diagnostics         `json:"diagnostics"`
+}
+
+// Diagnostics keeps source failures distinct from successful empty reads.
+type Diagnostics struct {
+	Workloads SourceDiagnostic `json:"workloads"`
+	Pods      SourceDiagnostic `json:"pods"`
+	Events    SourceDiagnostic `json:"events"`
+	Tracking  SourceDiagnostic `json:"tracking"`
+}
+
+type SourceDiagnostic struct {
+	State   string `json:"state"` // ready | empty | unavailable | not_configured
+	Message string `json:"message,omitempty"`
+}
+
+func sourceDiagnostic(source string, count int, err error) SourceDiagnostic {
+	if err != nil {
+		return SourceDiagnostic{State: "unavailable", Message: source + " could not be read. Retry this detail view."}
+	}
+	if count == 0 {
+		return SourceDiagnostic{State: "empty", Message: "No matching " + source + " were found."}
+	}
+	return SourceDiagnostic{State: "ready"}
 }
 
 // ExperimentIdentity is the Stellar identity every Tau run path stamps on its
@@ -198,9 +227,8 @@ type EventDetail struct {
 	Last    *time.Time `json:"last,omitempty"`
 }
 
-// DetailLinks holds the tier-2 cross-links. StellarPath is empty unless the run
-// has a durable Kusto lifecycle row (proof it was mirrored to Stellar), so the
-// frontend omits the button rather than emitting a dead "record not found" link.
+// DetailLinks holds the tier-2 cross-links. StellarPath requires indexed metrics
+// or a terminal lifecycle marker with an unambiguous project/workspace identity.
 // RayDashboardPath is set only for a RayJob that has a named RayCluster: it
 // reverse-proxies that cluster's own Ray dashboard (tasks/actors/logs) and is
 // only reachable while the cluster is running.
@@ -250,95 +278,90 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	}
 
 	snap := Snapshot{
-		Namespace: opts.Namespace,
-		Name:      opts.Name,
-		Kind:      obj.kind,
-		Status:    obj.status,
-		RunID:     obj.runID,
-		Object:    obj.detail,
+		Namespace:   opts.Namespace,
+		Name:        opts.Name,
+		Kind:        obj.kind,
+		ResourceUID: obj.uid,
+		Status:      obj.status,
+		RunID:       obj.runID,
+		Object:      obj.detail,
 	}
 	if !obj.experiment.empty() {
 		identity := obj.experiment
 		snap.Experiment = &identity
 	}
 
-	// Tier 2: per-job Ray dashboard deep-link. Only a RayJob with a named
-	// RayCluster has one — the link reverse-proxies that cluster's head Service
-	// (:8265) and is reachable only while the cluster runs. RayDashboardPath
-	// returns "" for a plain Job or a RayJob whose cluster is not yet named, so
-	// the frontend omits the button.
-	snap.Links.RayDashboardPath = links.RayDashboardPath(opts.Namespace, obj.rayClusterName)
-	// Reachability is judged by the SAME head-Service discovery the portal's Ray
-	// proxy uses (ray.Board): the link only works if validateRayTarget can resolve
-	// <ns>/<rayClusterName> to a discoverable head Service. Judging reachability by
-	// head-pod readiness alone is wrong — a finished/GC'd RayJob can leave a head
-	// Service whose name/labels no longer match rayClusterName (KubeRay names it
-	// after the RayJob, e.g. "<rayjob>-head-svc" with an empty ray.io/cluster
-	// label), so the proxy 404s even though a stale head pod might look Ready.
-	// Aligning "button lit" with "proxy resolves" removes the clickable-but-404 gap.
-	if obj.rayClusterName != "" {
-		snap.Links.RayDashboardReachable = rayClusterDiscoverable(ctx, r, opts.Namespace, obj.rayClusterName)
-	}
-
 	// Tier 1b: Workloads admitted for this job (best-effort).
-	if wls, err := links.ListWorkloads(ctx, r, opts.Namespace); err == nil {
+	wls, workloadErr := links.ListWorkloads(ctx, r, opts.Namespace)
+	if workloadErr == nil {
 		snap.Workloads = filterWorkloads(wls, obj)
+	}
+	snap.Diagnostics.Workloads = sourceDiagnostic("workloads", len(snap.Workloads), workloadErr)
+	if apierrors.IsNotFound(workloadErr) {
+		snap.Diagnostics.Workloads = SourceDiagnostic{State: "not_configured", Message: "Kueue workloads are not available in this cluster."}
 	}
 
 	podOwnerUID := obj.uid
 	rayClusterUID := ""
-	if obj.kind == "RayJob" && obj.uid != "" && obj.rayClusterName != "" {
-		if raw, err := r.GetRayCluster(ctx, opts.Namespace, obj.rayClusterName); err == nil {
-			rayClusterUID = parseOwnedObjectUID(raw, obj.uid)
+	var rayOwnershipErr error
+	if obj.kind == "RayJob" && obj.uid != "" {
+		podOwnerUID = ""
+		if obj.rayClusterName == "" {
+			rayOwnershipErr = errors.New("RayCluster identity is not available")
+		} else {
+			raw, err := r.GetRayCluster(ctx, opts.Namespace, obj.rayClusterName)
+			if err != nil {
+				rayOwnershipErr = fmt.Errorf("read RayCluster ownership: %w", err)
+			} else {
+				rayClusterUID, rayOwnershipErr = parseOwnedObjectUID(raw, obj.uid)
+			}
+			podOwnerUID = rayClusterUID
 		}
-		podOwnerUID = rayClusterUID
+	}
+
+	// Tier 2: per-job Ray dashboard deep-link. UID-bearing RayJobs only expose
+	// the link after proving the named RayCluster belongs to this incarnation.
+	// Legacy UID-less payloads retain name-based compatibility behavior.
+	if obj.rayClusterName != "" && (obj.uid == "" || rayOwnershipErr == nil && rayClusterUID != "") {
+		snap.Links.RayDashboardPath = links.RayDashboardPath(opts.Namespace, obj.rayClusterName)
+		// Reachability uses the same head-Service discovery as the Ray proxy.
+		snap.Links.RayDashboardReachable = rayClusterDiscoverable(ctx, r, opts.Namespace, obj.rayClusterName)
 	}
 
 	// Tier 1b: Pods backing the run (best-effort). Labels discover compatible
 	// candidates; owner UID proves they belong to this object incarnation.
-	podsVisible := false
-	podUIDs := map[string]struct{}{}
-	if raw, err := r.ListPods(ctx, opts.Namespace); err == nil {
-		snap.Pods, podUIDs, podsVisible = parsePodsWithStatus(raw, podOwnerUID, obj.uid != "", obj.podSelectors)
+	podUIDs := map[string]string{}
+	var podErr error
+	if rayOwnershipErr != nil {
+		podErr = rayOwnershipErr
+	} else {
+		rawPods, err := r.ListPods(ctx, opts.Namespace)
+		podErr = err
+		if podErr == nil {
+			snap.Pods, podUIDs, podErr = parsePodsWithStatus(rawPods, podOwnerUID, obj.uid != "", obj.podSelectors)
+		}
 	}
+	snap.Diagnostics.Pods = sourceDiagnostic("pods", len(snap.Pods), podErr)
+	podsVisible := podErr == nil && (podOwnerUID != "" || obj.uid == "" && hasUsablePodSelector(obj.podSelectors))
 	if obj.kind == "RayJob" {
 		snap.ResourceRelease = rayResourceRelease(obj.detail, snap.Workloads, snap.Pods, podsVisible)
 	}
 
 	// Tier 1b: recent Events (best-effort).
-	if raw, err := r.ListEvents(ctx, opts.Namespace); err == nil {
+	rawEvents, eventErr := r.ListEvents(ctx, opts.Namespace)
+	if eventErr == nil {
 		if podUIDs == nil {
-			podUIDs = map[string]struct{}{}
+			podUIDs = map[string]string{}
 		}
-		eventUIDs := podUIDs
-		eventUIDs[obj.uid] = struct{}{}
-		eventUIDs[rayClusterUID] = struct{}{}
-		delete(eventUIDs, "")
-		snap.Events = parseEvents(raw, eventUIDs, obj.uid != "", opts.Name, obj.rayClusterName)
+		eventObjects := podUIDs
+		eventObjects[obj.uid] = obj.kind
+		eventObjects[rayClusterUID] = "RayCluster"
+		delete(eventObjects, "")
+		snap.Events, eventErr = parseEvents(rawEvents, eventObjects, obj.uid != "", opts.Name, obj.rayClusterName)
 	}
+	snap.Diagnostics.Events = sourceDiagnostic("events", len(snap.Events), eventErr)
 
-	// Tier 3: durable Kusto lifecycle (optional, best-effort). The Stellar
-	// deep-link is emitted only when this lookup succeeds: a run-id alone does not
-	// prove the run was ever mirrored to Kusto (a bare Job / `tau ray submit`
-	// without metric offload never writes ExperimentMetrics), and linking on run-id
-	// alone yields a dead "experiment store record not found" page. The lifecycle
-	// row is the one signal that the run is durably indexed and Stellar can render.
-	if q != nil && obj.runID != "" {
-		if row, ok := lifecycle(ctx, q, obj.runID); ok {
-			snap.Lifecycle = row
-			// Scope the link with the Kusto row's project ONLY, never with the
-			// project stamped on the object. metricsoffload.Runtime.Validate
-			// rejects an empty project, so a run whose marker row exists always
-			// has one; row.Project == "" therefore means the projection did not
-			// carry it, not that the run has no project, and substituting the
-			// annotation would filter a working unscoped link down to rows that
-			// do not match. The two values are also not interchangeable in
-			// general: the direct `tau run --config` path passes
-			// experiment.project straight through, but the manifest path
-			// defaults the offload project to "tau-finetune" independently.
-			snap.Links.StellarPath = links.ExperimentProjectPath(obj.runID, row.Project)
-		}
-	}
+	snap.Links.StellarPath, snap.Lifecycle, snap.Diagnostics.Tracking = tracking(ctx, q, obj.runID, opts)
 
 	return snap, nil
 }
@@ -607,17 +630,23 @@ type ownedObject struct {
 	} `json:"metadata"`
 }
 
-func parseOwnedObjectUID(data []byte, ownerUID string) string {
+func parseOwnedObjectUID(data []byte, ownerUID string) (string, error) {
 	var obj ownedObject
-	if ownerUID == "" || json.Unmarshal(data, &obj) != nil || obj.Metadata.UID == "" {
-		return ""
+	if ownerUID == "" {
+		return "", errors.New("owner UID is empty")
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return "", fmt.Errorf("parse owned object: %w", err)
+	}
+	if obj.Metadata.UID == "" {
+		return "", errors.New("owned object UID is empty")
 	}
 	for _, owner := range obj.Metadata.OwnerReferences {
 		if owner.UID == ownerUID && owner.Controller != nil && *owner.Controller {
-			return obj.Metadata.UID
+			return obj.Metadata.UID, nil
 		}
 	}
-	return ""
+	return "", errors.New("object is not controlled by the resolved owner UID")
 }
 
 // podList is the subset of the core v1 Pod list the detail page reads.
@@ -651,16 +680,19 @@ type podLabelSelector struct {
 
 // parsePodsWithStatus uses labels to discover candidates, then validates the
 // controller owner UID whenever the resolved Job/RayJob carries a UID.
-func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, selectors []podLabelSelector) ([]PodDetail, map[string]struct{}, bool) {
+func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, selectors []podLabelSelector) ([]PodDetail, map[string]string, error) {
 	if requireOwnerUID && ownerUID == "" || !requireOwnerUID && !hasUsablePodSelector(selectors) {
-		return nil, nil, false
+		return nil, nil, nil
 	}
 	var list podList
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, nil, false
+		return nil, nil, err
+	}
+	if list.Items == nil {
+		return nil, nil, errors.New("pod response has no items array")
 	}
 	var out []PodDetail
-	uids := map[string]struct{}{}
+	uids := map[string]string{}
 	for _, it := range list.Items {
 		if !podLabelsMatch(it.Metadata.Labels, selectors) {
 			continue
@@ -680,10 +712,10 @@ func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, sel
 			NodePath: links.ClusterInstancePath(it.Spec.NodeName),
 		})
 		if it.Metadata.UID != "" {
-			uids[it.Metadata.UID] = struct{}{}
+			uids[it.Metadata.UID] = "Pod"
 		}
 	}
-	return out, uids, true
+	return out, uids, nil
 }
 
 func hasUsablePodSelector(selectors []podLabelSelector) bool {
@@ -818,15 +850,18 @@ type eventList struct {
 // parseEvents matches involvedObject.uid against the resolved workload,
 // RayCluster, and Pod UID set. Name-prefix matching remains only for UID-less
 // compatibility payloads. Newest last-timestamp first.
-func parseEvents(data []byte, objectUIDs map[string]struct{}, requireUID bool, jobName, rayClusterName string) []EventDetail {
+func parseEvents(data []byte, objectKinds map[string]string, requireUID bool, jobName, rayClusterName string) ([]EventDetail, error) {
 	var list eventList
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil
+		return nil, err
+	}
+	if list.Items == nil {
+		return nil, errors.New("event response has no items array")
 	}
 	var out []EventDetail
 	for _, it := range list.Items {
-		_, uidMatches := objectUIDs[it.InvolvedObject.UID]
-		if requireUID && !uidMatches {
+		expectedKind, uidMatches := objectKinds[it.InvolvedObject.UID]
+		if requireUID && (!uidMatches || it.InvolvedObject.Kind != expectedKind) {
 			continue
 		}
 		if !requireUID && !eventBelongsTo(it.InvolvedObject.Name, jobName) && !eventBelongsTo(it.InvolvedObject.Name, rayClusterName) {
@@ -841,10 +876,10 @@ func parseEvents(data []byte, objectUIDs map[string]struct{}, requireUID bool, j
 		})
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
 	sortEventsNewestFirst(out)
-	return out
+	return out, nil
 }
 
 // eventBelongsTo reports whether an event's involved-object name belongs to the
@@ -859,19 +894,52 @@ func eventBelongsTo(name, owner string) bool {
 	return name == owner || strings.HasPrefix(name, owner+"-")
 }
 
-// lifecycle derives the run's durable lifecycle from the metrics table's
-// tau/run_status terminal marker — the same signal Stellar's cockpit reads —
-// rather than the writer-less TauExpRunLifecycle projection. The metrics-offload
-// sidecar remote-writes ExperimentMetrics (including a step-less tau/run_status
-// row whose value sign and tags encode the terminal state); querying that table
-// is what actually lights up tier 3 for offloaded runs. Any error (including
-// ErrNoQueryCommand) or the absence of a terminal marker yields ok=false so tier
-// 3 is simply omitted (and, with it, the Stellar deep-link).
-func lifecycle(ctx context.Context, q kustoquery.Querier, runID string) (*LifecycleRow, bool) {
-	rows, err := q.Query(ctx, runStatusQuery(runID))
-	if err != nil {
-		return nil, false
+func tracking(ctx context.Context, q kustoquery.Querier, runID string, opts Options) (string, *LifecycleRow, SourceDiagnostic) {
+	if q == nil {
+		return "", nil, SourceDiagnostic{State: "not_configured", Message: "Experiment tracking lookup is not configured."}
 	}
+	if runID == "" {
+		return "", nil, SourceDiagnostic{State: "not_configured", Message: "This workload has no experiment run identity."}
+	}
+	rows, err := q.Query(ctx, trackingQuery(runID, opts.WorkspaceID, opts.Cluster))
+	if err != nil {
+		if errors.Is(err, kustoquery.ErrNoQueryCommand) {
+			return "", nil, SourceDiagnostic{State: "not_configured", Message: "Experiment tracking lookup is not configured."}
+		}
+		return "", nil, sourceDiagnostic("Experiment tracking", 0, err)
+	}
+	var scoped []kustoquery.Row
+	project, workspace, cluster := "", "", ""
+	hasMetrics := false
+	for _, row := range rows {
+		if opts.WorkspaceID != "" && row.Str("workspace_id") != opts.WorkspaceID {
+			continue
+		}
+		if opts.Cluster != "" && row.Str("cluster") != opts.Cluster {
+			continue
+		}
+		p := strings.TrimSpace(row.Str("project_id"))
+		w := strings.TrimSpace(row.Str("workspace_id"))
+		c := strings.TrimSpace(row.Str("cluster"))
+		if p == "" || (len(scoped) > 0 && (p != project || w != workspace || c != cluster)) {
+			return "", nil, SourceDiagnostic{State: "unavailable", Message: "Indexed tracking identity is missing or ambiguous; a scoped Stellar link cannot be resolved."}
+		}
+		project, workspace, cluster = p, w, c
+		scoped = append(scoped, row)
+		_, hasStep := row.Num("step")
+		value, hasValue := row.Num("value")
+		hasValue = hasValue && !math.IsNaN(value) && !math.IsInf(value, 0)
+		hasMetrics = hasMetrics || (row.Str("metric_name") != "" && row.Str("metric_name") != expkusto.RunStatusMetricName && hasStep && hasValue)
+	}
+	lifecycleRow, _ := lifecycle(scoped)
+	if !hasMetrics && lifecycleRow == nil {
+		return "", nil, SourceDiagnostic{State: "empty", Message: "No indexed metrics were found; metric offload may be disabled or indexing may still be pending."}
+	}
+	return links.ExperimentProjectPath(runID, project, workspace), lifecycleRow, SourceDiagnostic{State: "ready"}
+}
+
+// lifecycle derives only final status, independently of tracking existence.
+func lifecycle(rows []kustoquery.Row) (*LifecycleRow, bool) {
 	row, ok := latestRunStatusRow(rows)
 	if !ok {
 		return nil, false
@@ -879,7 +947,7 @@ func lifecycle(ctx context.Context, q kustoquery.Querier, runID string) (*Lifecy
 	tags := runStatusTags(row)
 	state := runStatusState(row, tags)
 	if state != "succeeded" && state != "failed" && state != "cancelled" {
-		// No terminal marker yet: don't emit a lifecycle row or the Stellar link.
+		// A running marker is not a final lifecycle result.
 		return nil, false
 	}
 	return &LifecycleRow{
@@ -894,32 +962,41 @@ func lifecycle(ctx context.Context, q kustoquery.Querier, runID string) (*Lifecy
 	}, true
 }
 
-// runStatusQuery builds a step-less KQL over the remote-write metrics table for
-// the run's tau/run_status marker rows, newest first. A dedicated query is
-// required because the standard metrics query drops step-less rows (the marker
-// carries no step).
-func runStatusQuery(runID string) string {
+// trackingQuery uses the same step/value eligibility as Stellar metrics while
+// retaining step-less lifecycle markers. Two row kinds per identity suffice;
+// three returned rows are enough to detect ambiguous projects/workspaces.
+func trackingQuery(runID, workspaceID, cluster string) string {
 	var b strings.Builder
 	b.WriteString(expkusto.DefaultRemoteWriteTable + "\n")
 	// Labels['project'] uses bracket notation because `project` is a KQL reserved
 	// keyword; the dotted form Labels.project fails to parse (HTTP 400).
-	b.WriteString("| extend run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), tags=tostring(Labels.tags), project_id=tostring(Labels['project']), value=todouble(Value), wall_time=Timestamp\n")
+	b.WriteString("| extend run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), tags=tostring(Labels.tags), project_id=tostring(Labels['project']), workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), step=tolong(Labels.step), value=todouble(Value), wall_time=Timestamp\n")
 	b.WriteString("| where run_id == " + kustoquery.QuoteString(runID) + "\n")
-	b.WriteString("| where metric_name == " + kustoquery.QuoteString(expkusto.RunStatusMetricName) + "\n")
-	b.WriteString("| project run_id, metric_name, value, wall_time, tags, project_id\n")
-	b.WriteString("| order by wall_time desc\n")
+	if workspaceID != "" {
+		b.WriteString("| where workspace_id == " + kustoquery.QuoteString(workspaceID) + "\n")
+	}
+	if cluster != "" {
+		b.WriteString("| where cluster == " + kustoquery.QuoteString(cluster) + "\n")
+	}
+	b.WriteString("| where isnotempty(metric_name) and isnotnull(value) and isfinite(value)\n")
+	b.WriteString("| where isnotnull(step) or metric_name == " + kustoquery.QuoteString(expkusto.RunStatusMetricName) + "\n")
+	b.WriteString("| extend row_kind = iff(metric_name == " + kustoquery.QuoteString(expkusto.RunStatusMetricName) + ", 'lifecycle', 'metrics')\n")
+	b.WriteString("| summarize arg_max(wall_time, *) by project_id, workspace_id, cluster, row_kind\n")
+	b.WriteString("| project run_id, metric_name, step, value, wall_time, tags, project_id, workspace_id, cluster\n")
+	b.WriteString("| take 3\n")
 	return b.String()
 }
 
-// latestRunStatusRow returns the newest tau/run_status row. The query already
-// orders by wall_time desc, but tolerate unordered input by scanning. wall_time
-// is compared as a parsed timestamp (falling back to lexical order only when it
-// does not parse) so mixed offsets/precisions don't misorder the marker.
+// latestRunStatusRow returns the newest tau/run_status row without treating
+// ordinary positive-valued training metrics as completion markers.
 func latestRunStatusRow(rows []kustoquery.Row) (kustoquery.Row, bool) {
 	var latest kustoquery.Row
 	var latestWall time.Time
 	ok := false
 	for _, row := range rows {
+		if row.Str("metric_name") != expkusto.RunStatusMetricName {
+			continue
+		}
 		wall := parseRunStatusWallTime(row.Str("wall_time"))
 		if !ok || wall.After(latestWall) {
 			latest = row
@@ -1046,12 +1123,10 @@ func eventLater(a, b *time.Time) bool {
 	return a.After(*b)
 }
 
-// rayClusterDiscoverable reports whether <namespace>/<cluster> resolves to a
-// head Service the portal's Ray proxy can dial. It runs the same head-Service
-// scan (ray.Board) that validateRayTarget uses, so the Job-detail link is
-// marked reachable exactly when the proxy would resolve it — no clickable link
-// that 404s. A list error or an absent cluster yields false (grey the link)
-// rather than a default-true guess, because the proxy would itself fail closed.
+// rayClusterDiscoverable reports whether <namespace>/<cluster> has a
+// discoverable head Service and a reachable dashboard according to ray.Board.
+// A list error or absent cluster yields false rather than guessing that a stale
+// Service still has a ready head Pod.
 func rayClusterDiscoverable(ctx context.Context, r ray.Reader, namespace, cluster string) bool {
 	snap, err := ray.Board(ctx, r, ray.Options{Namespace: namespace})
 	if err != nil {
@@ -1059,7 +1134,7 @@ func rayClusterDiscoverable(ctx context.Context, r ray.Reader, namespace, cluste
 	}
 	for _, c := range snap.Clusters {
 		if c.Namespace == namespace && c.Name == cluster {
-			return true
+			return c.Available
 		}
 	}
 	return false

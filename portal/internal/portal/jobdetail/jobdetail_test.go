@@ -45,7 +45,7 @@ func (f fakeReader) ListServices(context.Context, string) ([]byte, error) {
 	return f.services, f.svcErr
 }
 
-// fakeQuerier returns fixed rows (or an error) for the lifecycle query.
+// fakeQuerier returns fixed rows (or an error) for the indexed tracking query.
 type fakeQuerier struct {
 	rows []kustoquery.Row
 	err  error
@@ -204,6 +204,7 @@ func TestDetailJobUsesUIDToRejectStaleIncarnationMetadata(t *testing.T) {
 			{"reason":"CurrentPod","involvedObject":{"kind":"Pod","name":"train-new","uid":"pod-new"}},
 			{"reason":"OldJob","involvedObject":{"kind":"Job","name":"train","uid":"job-old"}},
 			{"reason":"OldPod","involvedObject":{"kind":"Pod","name":"train-old","uid":"pod-old"}},
+			{"reason":"WrongKind","involvedObject":{"kind":"Job","name":"train-new","uid":"pod-new"}},
 			{"reason":"Sibling","involvedObject":{"kind":"Pod","name":"train-big-abc","uid":"pod-sibling"}}
 		]}`),
 	}
@@ -399,6 +400,9 @@ func TestDetailRayJobDoesNotClaimComputeReusableWhenPodsUnreadable(t *testing.T)
 	if snap.ResourceRelease == nil || snap.ResourceRelease.ComputeState != "unknown" {
 		t.Fatalf("ResourceRelease = %+v, want unknown compute state", snap.ResourceRelease)
 	}
+	if snap.Diagnostics.Pods.State != "unavailable" {
+		t.Fatalf("Pods diagnostic = %+v, want unavailable", snap.Diagnostics.Pods)
+	}
 	if !strings.Contains(snap.ResourceRelease.Message, "cannot be confirmed") {
 		t.Fatalf("ResourceRelease.Message = %q", snap.ResourceRelease.Message)
 	}
@@ -417,6 +421,30 @@ func TestDetailRayJobDoesNotClaimComputeReusableWhenRayClusterOwnershipIsUnresol
 	}
 	if snap.ResourceRelease == nil || snap.ResourceRelease.ComputeState != "unknown" {
 		t.Fatalf("ResourceRelease = %+v, want unknown compute state", snap.ResourceRelease)
+	}
+	if snap.Diagnostics.Pods.State != "unavailable" {
+		t.Fatalf("Pods diagnostic = %+v, want unavailable", snap.Diagnostics.Pods)
+	}
+	if snap.Links.RayDashboardPath != "" || snap.Links.RayDashboardReachable {
+		t.Fatalf("Ray dashboard link = %+v, want hidden without validated RayCluster ownership", snap.Links)
+	}
+}
+
+func TestDetailRayJobDoesNotClaimComputeReusableWithoutRayClusterIdentity(t *testing.T) {
+	r := fakeReader{
+		rayJob: []byte(`{"metadata":{"name":"ray-complete","namespace":"tau","uid":"rayjob-current"},
+			"status":{"jobDeploymentStatus":"Complete","jobStatus":"SUCCEEDED"}}`),
+		pods: []byte(`{"items":[]}`),
+	}
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "tau", Name: "ray-complete"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if snap.ResourceRelease == nil || snap.ResourceRelease.ComputeState != "unknown" {
+		t.Fatalf("ResourceRelease = %+v, want unknown compute state", snap.ResourceRelease)
+	}
+	if snap.Diagnostics.Pods.State != "unavailable" {
+		t.Fatalf("Pods diagnostic = %+v, want unavailable", snap.Diagnostics.Pods)
 	}
 }
 
@@ -512,6 +540,30 @@ func TestDetailRayJobWithLifecyclePreservesBothLinks(t *testing.T) {
 	}
 	if snap.Links.StellarPath == "" {
 		t.Fatal("StellarPath empty, want the Stellar deep-link preserved alongside the Ray link")
+	}
+}
+
+func TestDetailRayDashboardIsUnavailableWithoutReadyHeadPod(t *testing.T) {
+	r := fakeReader{
+		rayJob: []byte(`{"metadata":{"name":"ray-train","namespace":"ray"},
+			"status":{"jobDeploymentStatus":"Running","rayClusterName":"ray-train-raycluster"}}`),
+		pods: []byte(`{"items":[
+			{"metadata":{"name":"head","namespace":"ray","labels":{"ray.io/cluster":"ray-train-raycluster","ray.io/node-type":"head"}},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}}
+		]}`),
+		services: []byte(`{"items":[
+			{"metadata":{"name":"ray-train-raycluster-head-svc","namespace":"ray","labels":{"ray.io/cluster":"ray-train-raycluster","ray.io/node-type":"head"}},"spec":{"type":"ClusterIP"}}
+		]}`),
+	}
+
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "ray-train"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if snap.Links.RayDashboardPath == "" {
+		t.Fatal("RayDashboardPath empty, want the known dashboard path")
+	}
+	if snap.Links.RayDashboardReachable {
+		t.Fatal("RayDashboardReachable = true, want false without a ready head pod")
 	}
 }
 
@@ -636,13 +688,41 @@ func TestDetailToleratesBadListJSON(t *testing.T) {
 	if snap.Pods != nil || snap.Events != nil {
 		t.Fatalf("Pods/Events = %+v/%+v, want nil on bad JSON", snap.Pods, snap.Events)
 	}
+	if snap.Diagnostics.Pods.State != "unavailable" || snap.Diagnostics.Events.State != "unavailable" {
+		t.Fatalf("diagnostics = %+v, want malformed sources unavailable", snap.Diagnostics)
+	}
+}
+
+func TestDetailRejectsMalformedListEnvelopes(t *testing.T) {
+	r := fakeReader{
+		rayJob: []byte(`{"metadata":{"name":"ray-complete","namespace":"ray","uid":"rayjob-current"},
+			"status":{"jobDeploymentStatus":"Complete","jobStatus":"SUCCEEDED","rayClusterName":"ray-current"}}`),
+		rayCluster: []byte(`{"metadata":{"name":"ray-current","uid":"cluster-current",
+			"ownerReferences":[{"uid":"rayjob-current","controller":true}]}}`),
+		workloads: []byte(`{}`),
+		pods:      []byte(`{}`),
+		events:    []byte(`{}`),
+	}
+
+	snap, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "ray-complete"})
+	if err != nil {
+		t.Fatalf("Detail() error = %v", err)
+	}
+	if snap.Diagnostics.Workloads.State != "unavailable" ||
+		snap.Diagnostics.Pods.State != "unavailable" ||
+		snap.Diagnostics.Events.State != "unavailable" {
+		t.Fatalf("diagnostics = %+v, want malformed list envelopes unavailable", snap.Diagnostics)
+	}
+	if snap.ResourceRelease == nil || snap.ResourceRelease.ComputeState != "unknown" {
+		t.Fatalf("ResourceRelease = %+v, want unknown compute state", snap.ResourceRelease)
+	}
 }
 
 // TestDetailSurfacesStampedStellarIdentity checks that the Stellar identity
 // `tau run` stamps is surfaced on the snapshot, and — deliberately — that it
 // does NOT leak into the deep-link scope. The row's project and the annotation's
 // project are different knobs (offload sidecar --project vs the run config's
-// experiment.project), so a row with no project must keep the unscoped link.
+// experiment.project), so a row with no project must not borrow the annotation.
 func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -655,8 +735,7 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
             "` + workloadmeta.AnnotationStellarGroup + `":"safe-stack-h200"}},
         "status":{"conditions":[{"type":"Complete","status":"True"}]}}`),
 	}
-	// A lifecycle row with no project_id: the marker proves durability, the
-	// annotation supplies the scope.
+	// A marker without project_id cannot prove a renderable scoped identity.
 	q := fakeQuerier{rows: []kustoquery.Row{{
 		"metric_name": "tau/run_status",
 		"value":       1.0,
@@ -675,10 +754,8 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 		snap.Experiment.Group != "safe-stack-h200" {
 		t.Fatalf("Experiment = %+v, want the exact annotation values", *snap.Experiment)
 	}
-	// The annotation must not become the link scope: the rows behind this run
-	// carry no project, so filtering them by one would match nothing.
-	if snap.Links.StellarPath != "/stellar?target=run-1" {
-		t.Fatalf("StellarPath = %q, want an unscoped link when the row has no project", snap.Links.StellarPath)
+	if snap.Links.StellarPath != "" {
+		t.Fatalf("StellarPath = %q, want no link with unresolved project", snap.Links.StellarPath)
 	}
 }
 

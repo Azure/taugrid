@@ -199,6 +199,9 @@ for required in \
   grep -Fq -- "$required" "$default_manifest" ||
     fail "default render is missing the MultiKueue capability: $required"
 done
+retained_crd_count="$(grep -c 'helm.sh/resource-policy: keep' "$default_manifest")"
+[[ "$retained_crd_count" -eq 11 ]] ||
+  fail "expected all 11 Kueue CRDs to retain the Helm keep policy, got $retained_crd_count"
 if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$default_manifest"); then
   fail "default render created operator-owned MultiKueue routing objects implicitly"
 fi
@@ -223,7 +226,7 @@ if helm template namespace-check "$TEST_CHART_DIR" \
   --set gpu-monitoring.namespace=other-system >"$TEST_ROOT/invalid-namespace.yaml" 2>"$namespace_error"; then
   fail "gpu-monitoring rendered outside the TauGrid release namespace"
 fi
-grep -Fq 'gpu-monitoring.namespace is no longer supported; use --namespace to move every TauGrid system component together' "$namespace_error" ||
+grep -Fq 'gpu-monitoring.namespace is no longer supported; install the release with --namespace to move TauGrid system components together' "$namespace_error" ||
   fail "gpu-monitoring namespace refusal did not explain the single-namespace contract"
 
 optional_manifest="$TEST_ROOT/optional-custom-namespace.yaml"

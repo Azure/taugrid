@@ -5,7 +5,7 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 ## Install
 
 ```bash
-tau cluster install --version 0.4.0 --values taugrid-values.yaml
+tau cluster install --version 0.4.2 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -13,13 +13,64 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.0 \
+  --version 0.4.2 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
 ```
 
 Use `tau cluster explain-values` to print the full field reference.
+
+### Cluster-level ADX query connection
+
+Record the existing cluster's **query** connection once in `taugrid-values.yaml`:
+
+```yaml
+global:
+  adx:
+    queryConnection:
+      endpoint: https://my-cluster.eastus2.kusto.windows.net
+      database: Metrics
+      clientID: 11111111-2222-3333-4444-555555555555
+```
+
+Pass this file to the install/upgrade command above. Helm persists these
+nonsecret values in the release; `tau cluster install --values` forwards them
+without a separate CLI registration step. With the default umbrella settings,
+Portal inherits the endpoint/database, annotates its `tau-portal` ServiceAccount,
+and labels its pod for Azure Workload Identity. Its native React Experiments UI
+and same-service `/api/v2/stellar/*` JSON API use the in-process ADX backend:
+no query adapter, separate Stellar deployment, or `experimentsBackend` is needed.
+
+Before installation, the platform must separately provision the reader identity,
+grant **ADX database Viewer only**, and federate it to the cluster OIDC issuer
+with audience `api://AzureADTokenExchange` and subject
+`system:serviceaccount:tau-system:tau-portal`. Adjust that subject if the release
+namespace or ServiceAccount name changes. Enable Azure Workload Identity on the
+cluster and ensure the pod can reach ADX. Never supply adx-mon's ingestion/admin
+identity. Installation creates no Azure resources or federation and grants no
+Azure/ADX permissions; it cannot verify the supplied identity's role assignments.
+Existing experiment ingestion and tables are also prerequisites. The Cost board
+still uses `taugrid-core.portal.kusto.costDatabase` (`CostTracking` by default)
+and needs Viewer permission there if used.
+
+Nonempty `taugrid-core.portal.kusto.endpoint` and `.database` override the shared
+values independently. An explicit
+`taugrid-core.portal.serviceAccount.annotations.azure.workload.identity/client-id`
+overrides the shared client ID; an explicitly empty annotation is rejected.
+Other `portal.kusto.*` settings, including an intentional `queryCommand`, remain
+unchanged. Shared identity inheritance requires a chart-created ServiceAccount
+(the umbrella default). For an externally managed ServiceAccount, configure its
+name and explicit client-ID annotation in the chart to match the existing object;
+the chart does not modify it.
+
+Set all three connection fields together or leave all empty. A partial connection
+fails rendering when Kusto Portal is enabled, rather than selecting an unintended
+identity. An absent connection retains degraded Kusto APIs; `source=local/auto`
+ignores the shared connection and retains its existing store requirements.
+The fixed workspace remains `taugrid-default`, the Service remains ClusterIP,
+and workspace-directory routing stays disabled. This connection is backend
+authentication, not viewer authentication or permission to expose Portal.
 
 ## MultiKueue
 
@@ -199,7 +250,7 @@ the controller image:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `kueue.controllerManager.manager.image.repository` | string | `mcr.microsoft.com/oss/v2/kueue/kueue` | Kueue controller image |
-| `kueue.controllerManager.manager.image.tag` | string | `v0.18.2` | Kueue image tag |
+| `kueue.controllerManager.manager.image.tag` | string | `v0.19.2` | Kueue image tag |
 | `kueue.managerConfig.controllerManagerConfigYaml` | string | (embedded) | Full Kueue Configuration YAML |
 
 Refer to the [upstream Kueue chart values](https://kueue.sigs.k8s.io/docs/installation/)
@@ -266,7 +317,7 @@ Services chart. The TauGrid distribution overrides the standalone child chart so
 | `taugrid-core.portal.serviceAccount.create` | bool | `true` | Create the dedicated Portal ServiceAccount |
 | `taugrid-core.portal.rbac.create` | bool | `true` | Create cluster-wide read-only Kubernetes RBAC for Portal |
 
-All enabled system workloads and Services follow the Helm release namespace. Use `tau cluster install --namespace <name>` for a non-default system namespace on a fresh installation. Administrative workspace commands use the same value through `--system-namespace <name>`, and generated workspace connection descriptors persist it as `cluster.systemNamespace`. The deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+All enabled system workloads and Services follow the Helm release namespace. Use `tau cluster install --namespace <name>` for a non-default system namespace on a fresh installation. Administrative workspace commands use the same value through `--system-namespace <name>`, and generated workspace connection descriptors persist it as `cluster.systemNamespace`. The gpu-monitoring 0.1.8 subchart rejects a non-empty deprecated `gpu-monitoring.namespace` override and directs operators to the release namespace instead. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 
 Do not change the namespace of an existing Helm release in place. Releases from before namespace unification can also contain `TauWorkspace` and `TauQuotaRequest` objects in a legacy namespace. This chart does not migrate those objects automatically; use an explicit reviewed migration before a direct Helm upgrade, or use `tau cluster install` and keep the existing release version when its preflight reports legacy objects.
 
@@ -284,9 +335,10 @@ gets DaemonSets that schedule nothing, so bundling is safe on CPU-only clusters.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `gpu-monitoring.gpuSkus` | map | 13 profiles covering A10, A100, H100, H200, GB200, and GB300 | Per-SKU DaemonSet definitions |
-| `gpu-monitoring.gpuSkus.<profile>.scrapeTargets` | list | global collector targets | Per-profile DCGM/node-exporter endpoints for mixed managed and GPU Operator clusters |
+| `gpu-monitoring.gpuSkus.<profile>.dcgmHealth.source` | string | global `dcgmHealth.source` | Per-profile DCGM health provider (`host-dcgmi` or `exporter`) |
+| `gpu-monitoring.gpuSkus.<profile>.dcgmHealth.exporterUrl` | string | global `dcgmHealth.exporterUrl` | Per-profile DCGM exporter endpoint for mixed managed and GPU Operator clusters |
 | `gpu-monitoring.daemonset.requireAcceleratorLabel` | bool | `false` | Also require `kubernetes.azure.com/accelerator=nvidia`. Externally-joined GPU nodes never receive that label, so requiring it leaves them unmonitored |
-| `gpu-monitoring.namespace` | string | `""` (deprecated) | Must remain empty; use Helm `--namespace` for all TauGrid system components |
+| `gpu-monitoring.namespace` | string | `""` (deprecated) | Must remain empty; gpu-monitoring 0.1.8 rejects overrides and requires Helm `--namespace` for all TauGrid system components |
 
 See `charts/gpu-monitoring/README.md` for the full reference.
 

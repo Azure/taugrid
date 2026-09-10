@@ -79,23 +79,25 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 
 	// First GPU: healthy, values mapped through.
 	g0 := snap.GPUs[0]
-	if g0.Instance != "node-0" || g0.GPU != "0" || !g0.Healthy {
+	if g0.Instance != "node-0" || g0.GPU != "0" || g0.Healthy == nil || !*g0.Healthy {
 		t.Fatalf("gpu0 = %#v, want node-0/0 healthy", g0)
 	}
-	if g0.UtilizationPct != 91 || g0.TemperatureCelsius != 63 || g0.MemoryUsedMB != 70000 {
+	if g0.UtilizationPct == nil || *g0.UtilizationPct != 91 ||
+		g0.TemperatureCelsius == nil || *g0.TemperatureCelsius != 63 ||
+		g0.MemoryUsedMB == nil || *g0.MemoryUsedMB != 70000 {
 		t.Fatalf("gpu0 metrics = %#v", g0)
 	}
-	if g0.CorrectableRemappedRows != 2 {
+	if g0.CorrectableRemappedRows == nil || *g0.CorrectableRemappedRows != 2 {
 		t.Fatalf("gpu0 correctable = %v, want 2", g0.CorrectableRemappedRows)
 	}
 
 	// Third GPU: numeric-string utilization parsed, unhealthy via row_remap_failure.
 	g2 := snap.GPUs[2]
-	if g2.UtilizationPct != 77 {
+	if g2.UtilizationPct == nil || *g2.UtilizationPct != 77 {
 		t.Fatalf("gpu2 utilization = %v, want 77 (from string)", g2.UtilizationPct)
 	}
-	if g2.Healthy {
-		t.Fatal("gpu2 healthy = true, want false (row_remap_failure > 0)")
+	if g2.Healthy == nil || *g2.Healthy {
+		t.Fatal("gpu2 healthy must be false (row_remap_failure > 0)")
 	}
 }
 
