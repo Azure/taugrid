@@ -4,7 +4,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $scriptPath = Join-Path $PSScriptRoot "Wait-ForAdxFunctionsReady.ps1"
-$helmPath = (Get-Command helm -CommandType Application).Source
+$helmPath = (Get-Command helm -CommandType Application | Select-Object -First 1).Source
 $cases = Get-Content -Raw (Join-Path $PSScriptRoot "adx-function-waiter-cases.json") | ConvertFrom-Json -AsHashtable
 $failures = 0
 $count = 0

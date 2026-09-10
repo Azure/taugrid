@@ -50,6 +50,12 @@ jobs:
           yq --version
           python3 --version
 
+      - name: Exercise multiple Helm applications on PATH
+        run: |
+          secondary_helm="$(mktemp -d "$RUNNER_TEMP/adx-waiter-helm.XXXXXX")"
+          ln -s "$(command -v helm)" "$secondary_helm/helm"
+          echo "$secondary_helm" >> "$GITHUB_PATH"
+
       - name: Validate AKS Terraform module
         run: |
           terraform -chdir=terraform/aks fmt -check -recursive
