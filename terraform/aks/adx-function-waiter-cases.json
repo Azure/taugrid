@@ -1,0 +1,243 @@
+[
+  {
+    "name": "current success",
+    "responses": ["."],
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0,
+    "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "foreign-only success",
+    "responses": ["[.[0] | .metadata.name = \"foreign\" | .metadata.annotations[\"meta.helm.sh/release-name\"] = \"other\"]"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0,
+    "diagnostic": "did not reach Success"
+  },
+  {
+    "name": "missing GpuHealth",
+    "responses": ["map(select(.metadata.name | endswith(\"-gpu-health\") | not))"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0,
+    "diagnostic": "gpu-health"
+  },
+  {
+    "name": "foreign throttle",
+    "responses": [". + [.[0] | .metadata.name = \"foreign\" | .metadata.annotations[\"meta.helm.sh/release-name\"] = \"other\" | .status.status = \"PermanentFailure\" | .status.error = \"RequestRateLimitPolicy throttling\"]"],
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0,
+    "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "empty list", "responses": ["[]"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0, "diagnostic": "missing"
+  },
+  {
+    "name": "missing status", "responses": ["map(del(.status))"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0, "diagnostic": "did not reach Success"
+  },
+  {
+    "name": "stale success", "responses": ["map(.status.observedGeneration = 1)"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0, "diagnostic": "observedGeneration=1"
+  },
+  {
+    "name": "eventual current success", "responses": ["map(.status.observedGeneration = 1)", "."],
+    "exit": 0, "reads": 2, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "stale throttle", "responses": ["map(.status = {observedGeneration:1,status:\"PermanentFailure\",error:\"throttling\"})"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0, "diagnostic": "did not reach Success"
+  },
+  {
+    "name": "invalid KQL", "responses": ["map(.status.status = \"PermanentFailure\" | .status.error = \"invalid KQL\")"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "terminal failure"
+  },
+  {
+    "name": "permanent failure without error", "responses": ["map(.status.status = \"PermanentFailure\")"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "terminal failure"
+  },
+  {
+    "name": "bounded throttle recovery",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"RequestRateLimitPolicy throttling\" else . end)", "."],
+    "exit": 0, "reads": 2, "upgrades": 2, "deletes": 1, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "throttle exhaustion",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"TooManyRequests\" else . end)"],
+    "exit": 1, "reads": 6, "upgrades": 6, "deletes": 5, "diagnostic": "after 6 attempts"
+  },
+  {
+    "name": "multiple required throttle targets",
+    "responses": ["map(.status.status = \"PermanentFailure\" | .status.error = \"throttling\")", "."],
+    "exit": 0, "reads": 2, "upgrades": 2, "deletes": 9, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "permanent error wins over throttle",
+    "responses": ["map(.status.status = \"PermanentFailure\" | .status.error = \"throttling\") | .[0].status.error = \"invalid KQL\""],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "invalid KQL"
+  },
+  {
+    "name": "foreign permanent error ignored",
+    "responses": [". + [.[0] | .metadata.name = \"foreign\" | .metadata.annotations = {} | .status.status = \"PermanentFailure\" | .status.error = \"invalid KQL\"]"],
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "expected name owned by another release",
+    "preflight": "map(.metadata.annotations[\"meta.helm.sh/release-name\"] = \"other\")", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "ownership conflict"
+  },
+  {
+    "name": "expected name missing ownership",
+    "preflight": "map(del(.metadata.annotations))", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "ownership conflict"
+  },
+  {
+    "name": "release namespace conflict",
+    "preflight": "map(.metadata.annotations[\"meta.helm.sh/release-namespace\"] = \"elsewhere\")", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "ownership conflict"
+  },
+  {
+    "name": "missing managed-by label",
+    "preflight": "map(del(.metadata.labels[\"app.kubernetes.io/managed-by\"]))", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "ownership conflict"
+  },
+  {
+    "name": "ownership changed during upgrade",
+    "responses": ["map(.metadata.annotations[\"meta.helm.sh/release-name\"] = \"other\")"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "ownership conflict"
+  },
+  {
+    "name": "duplicate live identity", "responses": [". + [.[0]]"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Duplicate Function identity"
+  },
+  {
+    "name": "malformed live object", "responses": [". + [{}]"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Malformed Function identity"
+  },
+  {
+    "name": "wrong object namespace", "responses": ["map(.metadata.namespace = \"wrong\")"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Malformed Function identity"
+  },
+  {
+    "name": "missing UID", "responses": ["map(del(.metadata.uid))"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "UID/resourceVersion/generation"
+  },
+  {
+    "name": "missing resourceVersion", "responses": ["map(del(.metadata.resourceVersion))"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "UID/resourceVersion/generation"
+  },
+  {
+    "name": "both generations absent", "responses": ["map(del(.metadata.generation, .status.observedGeneration))"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "UID/resourceVersion/generation"
+  },
+  {
+    "name": "malformed observed generation", "responses": ["map(.status.observedGeneration = \"2\")"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Malformed Function status"
+  },
+  {
+    "name": "terminating success", "responses": ["map(.metadata.deletionTimestamp = \"2026-01-01T00:00:00Z\")"],
+    "exit": 1, "reads": 4, "upgrades": 1, "deletes": 0, "diagnostic": "did not reach Success"
+  },
+  {
+    "name": "read error", "responses": ["."], "failure": "read",
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "mock read failure"
+  },
+  {
+    "name": "preflight read error", "responses": ["."], "failure": "preflight",
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "mock preflight failure"
+  },
+  {
+    "name": "empty read source", "responses": ["."], "rawResponse": "",
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "complete JSON source"
+  },
+  {
+    "name": "truncated JSON", "responses": ["."], "rawResponse": "{\"items\":[",
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "parse error"
+  },
+  {
+    "name": "partial paginated source", "responses": ["."], "listFilter": ".metadata.continue = \"next-page\"",
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Incomplete or malformed Function list"
+  },
+  {
+    "name": "missing items", "responses": ["."], "listFilter": "del(.items)",
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Incomplete or malformed Function list"
+  },
+  {
+    "name": "custom release namespace and fullname", "release": "telemetry", "namespace": "release-ns",
+    "values": {"fullnameOverride":"custom-functions", "global":{"namespace":"function-ns"}},
+    "responses": ["."], "expectedCount": 9,
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "disabled item not required", "values": {"functions":{"items":{"gpuHealth":{"enabled":false}}}},
+    "responses": ["."], "expectedCount": 8,
+    "exit": 0, "reads": 1, "upgrades": 1, "deletes": 0, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "empty expected set rejected", "values": {"functions":{"enabled":false}},
+    "responses": ["."], "expectedCount": 0,
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "No required Functions rendered"
+  },
+  {
+    "name": "intentionally Function-free", "values": {"functions":{"enabled":false}}, "allowNoFunctions": true,
+    "responses": ["."], "expectedCount": 0,
+    "exit": 0, "reads": 0, "upgrades": 1, "deletes": 0, "diagnostic": "readiness was explicitly disabled"
+  },
+  {
+    "name": "empty render is not intentional disablement", "render": "", "allowNoFunctions": true,
+    "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "Empty or malformed rendered manifest"
+  },
+  {
+    "name": "malformed render", "render": "kind: [",
+    "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "did not find expected"
+  },
+  {
+    "name": "duplicate rendered identity", "duplicateRender": true, "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "Duplicate rendered Function identity"
+  },
+  {
+    "name": "unknown intended identity",
+    "render": "{\"apiVersion\":\"adx-mon.azure.com/v1\",\"kind\":\"Function\",\"metadata\":{\"name\":\"test\"}}", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "Cannot establish intended Function identity"
+  },
+  {
+    "name": "render command failure", "failure": "render", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "mock render failure"
+  },
+  {
+    "name": "credential command failure", "failure": "az", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 0, "deletes": 0, "diagnostic": "mock az failure"
+  },
+  {
+    "name": "upgrade command failure", "failure": "upgrade", "responses": ["."],
+    "exit": 1, "reads": 0, "upgrades": 1, "deletes": 0, "diagnostic": "mock upgrade failure"
+  },
+  {
+    "name": "delete command failure", "failure": "delete",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"throttling\" else . end)"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 1, "diagnostic": "Conditional Function deletion failed"
+  },
+  {
+    "name": "recreated same name UID conflict", "failure": "conflict",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"throttling\" else . end)", "map(.metadata.uid += \"-replacement\")"],
+    "exit": 0, "reads": 2, "upgrades": 2, "deletes": 1, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "updated same UID resourceVersion conflict", "failure": "conflict",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"throttling\" else . end)", "map(.metadata.resourceVersion = \"11\")"],
+    "exit": 0, "reads": 2, "upgrades": 2, "deletes": 1, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "recreated foreign name is fenced before next upgrade", "failure": "conflict",
+    "preflightAfterRetry": "map(.metadata.uid += \"-foreign\" | .metadata.annotations[\"meta.helm.sh/release-name\"] = \"other\")",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"throttling\" else . end)"],
+    "exit": 1, "reads": 1, "upgrades": 1, "deletes": 1, "diagnostic": "ownership conflict"
+  },
+  {
+    "name": "delete NotFound re-observes", "failure": "notfound",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"throttling\" else . end)", "."],
+    "exit": 0, "reads": 2, "upgrades": 2, "deletes": 1, "diagnostic": "Functions reached Success."
+  },
+  {
+    "name": "persistent conflict exhausts budget", "failure": "conflict",
+    "responses": ["map(if .metadata.name | endswith(\"-gpu-health\") then .status.status = \"PermanentFailure\" | .status.error = \"throttling\" else . end)"],
+    "exit": 1, "reads": 6, "upgrades": 6, "deletes": 5, "diagnostic": "after 6 attempts"
+  }
+]

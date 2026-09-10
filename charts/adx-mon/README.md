@@ -471,6 +471,19 @@ The audit database name is configured via `adx.auditDatabase` (default: `Audit`)
 
 ## Troubleshooting
 
+### Function reconciliation and installation scope
+
+Helm workload readiness does not wait for Function CR reconciliation. The
+[TauGrid AKS Terraform installer](../../terraform/aks/README.md#function-readiness-and-bounded-installation-recovery)
+adds a required-set/Helm-ownership-aware Function waiter with bounded,
+UID/resourceVersion-preconditioned compensation for ADX throttling. Direct Helm
+installations do **not** run that mitigation. Do not delete namespace-wide
+Function inventories or adopt a conflicting release's resources to recover an
+installation. Controller retry without deletion remains separate upstream work
+([#162](https://github.com/Azure/taugrid/issues/162)); `skipvalidation` Function
+success also does not prove dependent schemas are ready
+([#190](https://github.com/Azure/taugrid/issues/190)).
+
 ### Pods not starting
 
 ```bash
