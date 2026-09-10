@@ -12,10 +12,9 @@ import (
 	"strings"
 )
 
-// assetsFS holds the portal frontend build. For the skeleton this is a
-// hand-written placeholder index.html; a later increment replaces the contents
-// of assets/ with the Vite build output (dist/). The Go backend does not care
-// which produced the files — it serves whatever is embedded.
+// assetsFS holds the checked-in Vite production build from portal/frontend.
+// Regenerate it with `make frontend-build` from portal/ after source changes.
+// Keeping the build in git also supports direct Go builds without Node.js.
 //
 //go:embed all:assets
 var assetsFS embed.FS
@@ -69,8 +68,7 @@ func serveAsset(w http.ResponseWriter, name string) bool {
 		ctype = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ctype)
-	// Vite emits content-hashed filenames, so built assets are immutable. The
-	// placeholder has no such files; the header is harmless for it.
+	// Vite emits content-hashed filenames, so built assets are immutable.
 	if strings.HasPrefix(clean, "assets/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {

@@ -1,5 +1,16 @@
 # taugrid-core defaults. Override per cluster.
 
+# Cluster-owned query connection, recorded in Helm release values. Only Portal
+# source=kusto inherits it; ingestion/admin components never consume this identity.
+global:
+  adx:
+    queryConnection:
+      # Set all three together, or leave all empty for the existing degraded mode.
+      endpoint: ""
+      database: ""
+      # Externally provisioned ADX Viewer identity, federated to Portal's SA.
+      clientID: ""
+
 # Historical Ray driver log discovery. These must match the actual adx-mon
 # destination and telemetry source; never copy the Portal Metrics database.
 logging:
@@ -292,7 +303,7 @@ portal:
   # report only this cluster's GPUs; leave empty to aggregate every cluster. A
   # per-request ?cluster= query param always overrides.
   cluster: ""
-  # TauWorkspace identity used by the embedded Stellar board. This is a fixed
+  # TauWorkspace identity used by the native experiment workspace. This is a fixed
   # deployment scope, not a browser-selectable workspace. Multi-workspace
   # routing remains disabled unless workspaceDirectory is explicitly enabled.
   # "default" was a placeholder that matched no real runs; this tracks the
@@ -307,6 +318,10 @@ portal:
     enabled: false
     localCluster: ""
     endpoints: []
+    # Workspace records may opt into experimentsBackend: {url, bearerTokenFile}
+    # for a trusted same-origin API connection to separately deployed Stellar.
+    # Mount any service-token file with extraVolumes/extraVolumeMounts; never
+    # put credential values in this metadata.
     workspaces: []
     auth:
       userHeader: X-MS-CLIENT-PRINCIPAL-NAME
@@ -322,6 +337,7 @@ portal:
     mode: cluster-internal
     externalURL: ""
   kusto:
+    # Nonempty endpoint/database override global.adx.queryConnection per field.
     endpoint: ""
     database: ""
     costDatabase: CostTracking
@@ -383,9 +399,10 @@ portal:
   imagePullSecrets: []
   podLabels: {}
   serviceAccount:
-    # Enable together with rbac.create for the Jobs/Ray/Nodes boards. A dedicated
-    # identity here (plus podLabels) also carries Azure Workload Identity for the
-    # Kusto query command.
+    # Enable together with rbac.create for the Jobs/Ray/Nodes boards. Required to
+    # inherit global.adx.queryConnection.clientID (enabled by the umbrella).
+    # An explicit azure.workload.identity/client-id annotation takes precedence;
+    # the chart derives the Workload Identity pod label automatically.
     create: false
     name: ""
     annotations: {}

@@ -146,6 +146,25 @@ jobs:
         with:
           python-version: 3.x
 
+      - name: Set up Node for portal
+        if: matrix.module == 'portal'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: portal/frontend/package-lock.json
+
+      - name: Build portal frontend
+        if: matrix.module == 'portal'
+        run: |
+          npm ci --prefix frontend
+          make frontend-build
+          if [[ -n "$(git status --porcelain -- internal/portalapi/assets)" ]]; then
+            echo "Embedded portal assets are stale; run make -C portal frontend-build and include the output." >&2
+            git diff --stat -- internal/portalapi/assets
+            exit 1
+          fi
+
       - name: Verify module dependencies
         run: go mod verify
 

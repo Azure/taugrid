@@ -44,10 +44,16 @@ go vet ./...
 ### Portal (`portal/`)
 ```bash
 cd portal
-make build    # produces bin/taugrid-portal
-make test
-make lint     # go vet + gofmt + staticcheck v0.7.0
+make build    # builds React assets and bin/taugrid-portal; requires Node.js 22 + npm
+make test     # Go tests
+make lint     # frontend typecheck + go vet + gofmt + staticcheck v0.7.0
+make frontend-dev    # Vite development server
+make frontend-build  # regenerate checked-in internal/portalapi/assets
 ```
+
+Portal frontend source is in `portal/frontend/` (React, TypeScript, React Router,
+TanStack Query). Include rebuilt embedded assets with frontend source changes;
+CI checks for stale output. Direct Go commands use the checked-in assets.
 
 ### Tau core controller (`controllers/tau-core/`)
 ```bash
@@ -203,4 +209,5 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 - Never edit generated CRDs manually — use `make manifests` in the controller
 - AI agents must run `python3 scripts/check-license-headers.py` before committing source changes. Use `./scripts/add-license-headers.py` only for Microsoft-authored files, preserve all existing copyright notices, and never add a Microsoft copyright notice to third-party code.
 - Container images go through MCR; never publish from a contributor PR
+- Prefer MCR-hosted base images for Docker builds. Verify the tag exists and supports the required runtime and architectures; document exceptions when no compatible MCR base is available.
 - Integration tests must not require Azure subscriptions or private network access unless explicitly marked maintainer-only

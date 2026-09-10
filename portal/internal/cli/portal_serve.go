@@ -6,7 +6,10 @@ package cli
 import (
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -229,6 +232,11 @@ func parseJobsOperatorScopes(values []string) ([]jobs.Scope, error) {
 }
 
 func servePortalServer(cmd *cobra.Command, server *portalapi.Server, opts expServeOptions) error {
+	// Scope cancellation to serving: metrics offload handles the same signals
+	// separately and needs its command context alive for the final flush.
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	addr := strings.TrimSpace(opts.addr)
 	if addr == "" {
 		addr = portalapi.DefaultAddr
@@ -239,5 +247,5 @@ func servePortalServer(cmd *cobra.Command, server *portalapi.Server, opts expSer
 	}
 	actualAddr := listener.Addr().String()
 	fmt.Fprintf(cmd.ErrOrStderr(), "serving taugrid-portal portal at http://%s/portal\n", actualAddr)
-	return server.Serve(cmd.Context(), listener)
+	return server.Serve(ctx, listener)
 }

@@ -67,6 +67,7 @@ type Metadata struct {
 	CodeSHA          string
 	ConfigHash       string
 	GPUCount         int
+	Launch           *Launch
 	DRAClaimTemplate string
 	StorageMounts    []StorageMount
 	Stellar          StellarMetadata
@@ -106,6 +107,9 @@ func (m Metadata) KubernetesMetadata() (map[string]string, map[string]string) {
 	addAnnotation(annotations, AnnotationImageDigest, imageDigest(m.Image))
 	addAnnotation(annotations, AnnotationCodeSHA, m.CodeSHA)
 	addAnnotation(annotations, AnnotationConfigHash, m.ConfigHash)
+	if m.Launch != nil {
+		addAnnotation(annotations, workloadmeta.AnnotationLaunch, m.Launch.JSON())
+	}
 	if m.GPUCount > 0 {
 		addAnnotation(annotations, AnnotationGPUCount, strconv.Itoa(m.GPUCount))
 	}

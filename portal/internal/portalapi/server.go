@@ -5,9 +5,9 @@
 // surface that aggregates and cross-links the runtime's existing dashboards.
 //
 // The portal owns the /portal frontend shell and the /api/portal/* board APIs.
-// In single-workspace mode it mounts the existing Stellar server
-// (internal/expapi) unchanged. Managed workspace mode fails closed unless the
-// workspace points to an explicit HTTPS experiment endpoint.
+// In single-workspace mode it reuses the fixed-workspace Stellar backend
+// (internal/expapi). Managed workspace mode fails closed unless the
+// workspace has an explicitly configured experiment source or trusted backend.
 package portalapi
 
 import (
@@ -175,6 +175,7 @@ type Server struct {
 	mux                   *http.ServeMux
 	stellar               *expapi.Server
 	stellarKustoAvailable bool
+	stellarBackendTimeout time.Duration
 	jobs                  JobsOptions
 	cluster               ClusterOptions
 	cost                  CostOptions
@@ -234,7 +235,7 @@ func NewServer(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	singleWorkspace := firstNonEmpty(opts.Stellar.Workspace, "default")
+	singleWorkspace := stellar.Workspace()
 	singleWorkspaceCluster := firstNonEmpty(opts.Cluster.Cluster, opts.Cost.Cluster, opts.NodeUtil.Cluster)
 	if opts.Runs.History != nil && opts.WorkspaceDirectory == nil && singleWorkspaceCluster == "" {
 		return nil, fmt.Errorf("durable run history requires an explicit cluster scope when no workspace directory is configured")
@@ -275,6 +276,9 @@ func kustoStellarAvailable(opts expapi.Options) bool {
 }
 
 func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceState {
+	if scope.experimentsBackend != nil {
+		return runs.ExperimentSurfaceAvailable
+	}
 	experimentsURL := strings.TrimSpace(scope.ExperimentsURL)
 	if experimentsURL == "" {
 		return runs.ExperimentSurfaceUnconfigured
@@ -301,17 +305,27 @@ func (s *Server) Handler() http.Handler {
 // Serve runs the portal HTTP server on the listener until ctx is cancelled.
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	httpServer := &http.Server{Handler: s.Handler()}
+	serveErr := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
+		serveErr <- httpServer.Serve(listener)
+	}()
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
-	}()
-	err := httpServer.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+		// Serve returns as soon as Shutdown closes the listener, before active
+		// requests have drained. Wait for Shutdown itself before returning.
+		err := httpServer.Shutdown(shutdownCtx)
+		if err != nil {
+			err = fmt.Errorf("shut down portal HTTP server: %w", errors.Join(err, httpServer.Close()))
+		}
+		if serveErr := <-serveErr; !errors.Is(serveErr, http.ErrServerClosed) {
+			err = errors.Join(err, serveErr)
+		}
+		return err
 	}
-	return err
 }
 
 // ListenAndServe binds addr and serves until ctx is cancelled.

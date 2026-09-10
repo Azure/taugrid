@@ -2345,27 +2345,13 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	}
 }
 
-func TestPortalShellContainsWorkspaceScopeContract(t *testing.T) {
+func TestPortalShellLoadsCompiledFrontend(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/portal", nil))
 	body := rec.Body.String()
-	for _, want := range []string{
-		`id="workspace-select"`,
-		`function currentWorkspace()`,
-		`field("cluster", activeScope.cluster)`,
-		`field("namespace", activeScope.namespace)`,
-		`field("queue", activeScope.localQueue)`,
-		`field("result scope", activeScope.resultScope)`,
-		`e.state === "setup_required"`,
-		`Jobs board setup required`,
-		`Portal is running normally.`,
-		`No local fallback was used.`,
-		`profile selection is not available in Portal`,
-		`Execution target`,
-		`Existing workloads and queues remain observable`,
-	} {
+	for _, want := range []string{`id="root"`, `type="module"`, `<noscript>`} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("portal shell missing workspace UI contract %q", want)
+			t.Fatalf("compiled portal shell missing %q", want)
 		}
 	}
 }
