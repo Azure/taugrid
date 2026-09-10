@@ -232,6 +232,10 @@ func (s *Server) StoreRoot() string {
 	return s.storeRoot
 }
 
+func (s *Server) Workspace() string {
+	return s.workspace
+}
+
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if strings.TrimSpace(addr) == "" {
 		addr = DefaultAddr
@@ -377,7 +381,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.capabilities(capabilitiesDebugEnabled(r)))
+	capabilities := s.capabilities(capabilitiesDebugEnabled(r))
+	capabilities.applyRoutePolicy(r)
+	writeJSON(w, http.StatusOK, capabilities)
 }
 
 func capabilitiesDebugEnabled(r *http.Request) bool {
@@ -683,28 +689,16 @@ func (s *Server) searchExperiments(ctx context.Context, source string, opts exps
 	case "kusto":
 		return s.baseKustoSource().SearchExperiments(ctx, opts)
 	case "auto":
-		local, err := s.searchLocalExperiments(ctx, opts)
-		if err != nil {
-			if !s.hasKustoSource() {
-				return expstore.ExperimentSearchResult{}, err
-			}
-			kusto, kustoErr := s.baseKustoSource().SearchExperiments(ctx, opts)
-			if kustoErr != nil {
-				return expstore.ExperimentSearchResult{}, err
-			}
-			kusto.Warnings = append(kusto.Warnings, fmt.Sprintf("source=auto fell back to Kusto because local experiment search failed: %v", err))
-			return kusto, nil
-		}
-		if !s.hasKustoSource() {
-			return local, nil
-		}
-		kusto, err := s.baseKustoSource().SearchExperiments(ctx, opts)
-		if err != nil {
-			local.Warnings = append(local.Warnings, fmt.Sprintf("source=auto skipped Kusto experiment search because it failed: %v", err))
-			return local, nil
-		}
-
-		return mergeExperimentSearchResults(local, kusto, opts.Limit), nil
+		result, warnings, err := searchAutoSources(ctx, s.hasKustoSource(), "experiment",
+			func() (expstore.ExperimentSearchResult, error) { return s.searchLocalExperiments(ctx, opts) },
+			func() (expstore.ExperimentSearchResult, error) {
+				return s.baseKustoSource().SearchExperiments(ctx, opts)
+			},
+			func(local, kusto expstore.ExperimentSearchResult) expstore.ExperimentSearchResult {
+				return mergeExperimentSearchResults(local, kusto, opts.Limit)
+			})
+		result.Warnings = append(result.Warnings, warnings...)
+		return result, err
 	default:
 		return expstore.ExperimentSearchResult{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
@@ -939,22 +933,7 @@ func (s *Server) handleRunSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	if source == "kusto" {
-		result, err := s.baseKustoSource().SearchRuns(ctx, opts)
-		if err != nil {
-			writeError(w, statusCode(err), err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, result)
-		return
-	}
-	store, err := expstore.Open(ctx, s.storeRoot)
-	if err != nil {
-		writeError(w, statusCode(err), err.Error())
-		return
-	}
-	defer store.Close()
-	result, err := store.SearchRuns(ctx, opts)
+	result, err := s.searchRuns(ctx, source, opts)
 	if err != nil {
 		writeError(w, statusCode(err), err.Error())
 		return
@@ -1060,7 +1039,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -1076,41 +1055,47 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	var artifacts []expcockpit.ArtifactView
-	if runID != "" {
-		if source == "kusto" {
-			writeError(w, http.StatusBadRequest, "run-scoped artifact listing requires the local expstore index")
-			return
-		}
-		store, err := expstore.Open(ctx, s.storeRoot)
-		if err != nil {
-			writeError(w, statusCode(err), err.Error())
-			return
-		}
-		defer store.Close()
-		records, err := store.ArtifactsForRun(ctx, runID)
-		if err != nil {
-			writeError(w, statusCode(err), err.Error())
-			return
-		}
-		artifacts = artifactRecordsToViews(records)
-		if target == "" {
-			target = runID
-		}
-	} else {
+	if runID != "" && source == "kusto" {
+		writeError(w, http.StatusBadRequest, "run-scoped artifact listing requires the local expstore index")
+		return
+	}
+	if target == "" {
+		target = runID
 		if target == "" {
 			target = s.defaultTarget
 		}
-		if target == "" {
-			writeError(w, http.StatusBadRequest, "target or run query parameter is required")
+	}
+	if target == "" {
+		writeError(w, http.StatusBadRequest, "target or run query parameter is required")
+		return
+	}
+	// Only a target-bound, workspace-filtered snapshot can authorize artifact
+	// access. A globally unique run ID is not proof of workspace ownership.
+	snapshot, err := s.buildArtifactSnapshot(ctx, r, target)
+	if err != nil {
+		writeError(w, statusCode(err), err.Error())
+		return
+	}
+	artifacts := snapshot.Artifacts
+	if runID != "" {
+		found := false
+		for _, run := range snapshot.Runs {
+			if run.RunID == runID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "run was not found for target")
 			return
 		}
-		snapshot, err := s.buildSnapshot(ctx, r, target, "")
-		if err != nil {
-			writeError(w, statusCode(err), err.Error())
-			return
+		filtered := artifacts[:0]
+		for _, artifact := range artifacts {
+			if artifact.RunID == runID {
+				filtered = append(filtered, artifact)
+			}
 		}
-		artifacts = snapshot.Artifacts
+		artifacts = filtered
 	}
 	artifacts = filterArtifacts(artifacts, r.URL.Query())
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1145,7 +1130,7 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	snapshot, err := s.buildSnapshot(ctx, r, target, "")
+	snapshot, err := s.buildArtifactSnapshot(ctx, r, target)
 	if err != nil {
 		writeError(w, statusCode(err), err.Error())
 		return
@@ -1249,37 +1234,6 @@ func apiArtifacts(artifacts []expcockpit.ArtifactView, target string) []apiArtif
 			ExternalRef: artifact.ExternalRef,
 			FetchURL:    "/api/stellar/artifact?target=" + url.QueryEscape(fetchTarget) + "&artifact=" + url.QueryEscape(artifact.ArtifactID),
 		})
-	}
-	return out
-}
-
-func artifactRecordsToViews(records []expstore.ArtifactRecord) []expcockpit.ArtifactView {
-	out := make([]expcockpit.ArtifactView, 0, len(records))
-	for _, record := range records {
-		view := expcockpit.ArtifactView{
-			ArtifactID:  record.ArtifactID,
-			RunID:       record.RunID,
-			Type:        record.Type,
-			URI:         record.URI,
-			Name:        record.Name,
-			DurableRef:  record.DurableRef,
-			ContentType: record.ContentType,
-			Digest:      record.Digest,
-			Tags:        record.Tags,
-			CreatedAt:   record.CreatedAt,
-			Preview:     record.Preview,
-			ExternalRef: record.ExternalRef,
-		}
-		if record.SizeBytes != nil {
-			view.SizeBytes = strconv.FormatInt(*record.SizeBytes, 10)
-		}
-		if record.Step != nil {
-			view.Step = strconv.FormatInt(*record.Step, 10)
-		}
-		if record.Rank != nil {
-			view.Rank = strconv.FormatInt(*record.Rank, 10)
-		}
-		out = append(out, view)
 	}
 	return out
 }
@@ -1388,6 +1342,9 @@ func durableArtifactPath(ctx context.Context, artifact expcockpit.ArtifactView) 
 	if parsed.Scheme != "file" {
 		return durableArtifactTempPath(ctx, artifact, ref, parsed.Scheme)
 	}
+	if parsed.Host != "" {
+		return "", false, func() {}, fmt.Errorf("remote file artifact authorities are not supported")
+	}
 	artifactPath := filepath.Clean(filepath.FromSlash(parsed.Path))
 	info, err := os.Stat(artifactPath)
 	if err != nil {
@@ -1443,8 +1400,8 @@ func (s *Server) resolveStoreFile(ref string) (string, bool, error) {
 	if ref == "" || strings.HasPrefix(ref, "data:") {
 		return "", false, nil
 	}
-	if parsed, err := url.Parse(ref); err == nil && parsed.Scheme != "" {
-		if parsed.Scheme != "file" {
+	if parsed, err := url.Parse(ref); err == nil && (parsed.Scheme != "" || parsed.Host != "") {
+		if parsed.Host != "" || parsed.Scheme != "file" {
 			return "", false, nil
 		}
 		ref = parsed.Path

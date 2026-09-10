@@ -127,17 +127,18 @@ const state = {
   experimentsLoading: false,
   experimentsError: "",
   experimentsLastCompletedAt: 0,
+  experimentRequestID: 0,
   expandedExperimentIDs: initialExpandedExperiments(),
-  search: "",
+  search: text(initialURL.searchParams.get("run_q"), ""),
   lifecycleFilter: normalizeLifecycleFilter(initialURL.searchParams.get("lifecycle")),
   runUpdatedFilter: normalizeRunUpdatedFilter(initialURL.searchParams.get("updated")),
   runUpdatedSort: normalizeRunUpdatedSort(initialURL.searchParams.get("updated_sort")),
   metricSearch: "",
   activeMetricFamily: "",
-  group: "",
+  group: text(initialURL.searchParams.get("group"), ""),
   selectedMetrics: initialPinnedMetrics(),
-  metricSelectionInitialized: false,
-  hiddenRuns: new Set(),
+  metricSelectionInitialized: hasInitialPinnedParam,
+  hiddenRuns: hiddenRunsFromURL(initialURL),
   additionalRuns: [],
   runSearchLimit: runPageSize,
   runSearchTruncated: false,
@@ -156,6 +157,7 @@ const state = {
   focusedSeriesLoading: false,
   focusedSeriesError: "",
   focusedSeriesControls: initialFocusedSeriesControls(),
+  focusedSeriesDraft: null,
   metricSnapshotLoads: new Map(),
   outputMediaTag: text(initialURL.searchParams.get("media_tag"), ""),
   outputMediaRunID: text(initialURL.searchParams.get("media_run"), ""),
@@ -165,6 +167,7 @@ const state = {
   metricCatalogOpen: false,
   showAllPinnedCharts: false,
   autoRefresh: initialAutoRefreshState(),
+  routeVersion: 0,
 };
 
 publishVisualState("booting");
@@ -826,15 +829,15 @@ function initialPinnedMetrics() {
   return [];
 }
 
-function initialFocusedSeriesControls() {
-  const stepInterval = normalizeStepIntervalControl(initialURL.searchParams.get("step_interval"));
+function initialFocusedSeriesControls(url = initialURL) {
+  const stepInterval = normalizeStepIntervalControl(url.searchParams.get("step_interval"));
   return {
-    runID: text(initialURL.searchParams.get("run_id"), ""),
-    startStep: text(initialURL.searchParams.get("start_step"), ""),
-    endStep: text(initialURL.searchParams.get("end_step"), ""),
+    runID: text(url.searchParams.get("run_id"), ""),
+    startStep: text(url.searchParams.get("start_step"), ""),
+    endStep: text(url.searchParams.get("end_step"), ""),
     stepInterval,
     customStepInterval: customStepIntervalValue(stepInterval),
-    maxPoints: text(initialURL.searchParams.get("max_points"), ""),
+    maxPoints: text(url.searchParams.get("max_points"), ""),
   };
 }
 
@@ -862,16 +865,27 @@ function normalizeMetricList(value) {
 }
 
 function pinnedStorageKey(target) {
-  return `${pinnedStoragePrefix}${text(target, "default")}`;
+  return `${pinnedStoragePrefix}${preferenceScope(target)}`;
 }
 
 function dashboardSectionStorageKey(target) {
-  return `${dashboardSectionStoragePrefix}${text(target, "default")}`;
+  return `${dashboardSectionStoragePrefix}${preferenceScope(target)}`;
+}
+
+function preferenceScope(target) {
+  return JSON.stringify([config.workspace, config.project, config.source, text(target, "default")]);
+}
+
+function hiddenRunsFromURL(url) {
+  const runs = url.searchParams.getAll("hidden_run");
+  if (runs.length > maxLoadedRuns) console.warn(`Stellar ignores hidden runs beyond the ${maxLoadedRuns} loaded-run limit.`);
+  return new Set(runs.slice(0, maxLoadedRuns));
 }
 
 function loadPinnedMetrics(target) {
   try {
-    return normalizeMetricList(JSON.parse(window.localStorage.getItem(pinnedStorageKey(target)) || "[]"));
+    return normalizeMetricList(JSON.parse(window.localStorage.getItem(pinnedStorageKey(target))
+      ?? window.localStorage.getItem(`${pinnedStoragePrefix}${text(target, "default")}`) ?? "[]"));
   } catch {
     return [];
   }
@@ -922,7 +936,8 @@ function dashboardSectionsFromURL(url, target) {
 
 function loadDashboardSections(target) {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(dashboardSectionStorageKey(target)) || "{}");
+    const saved = JSON.parse(window.localStorage.getItem(dashboardSectionStorageKey(target))
+      ?? window.localStorage.getItem(`${dashboardSectionStoragePrefix}${text(target, "default")}`) ?? "{}");
     return saved && typeof saved === "object" ? saved : {};
   } catch {
     return {};
@@ -1051,6 +1066,10 @@ function h(tag, attrs = {}, ...children) {
       continue;
     }
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  // A select's value is a DOM property, and only resolves after its options exist.
+  if (Object.prototype.hasOwnProperty.call(attrs, "value")) {
+    node.value = String(attrs.value ?? "");
   }
   return node;
 }
@@ -1205,22 +1224,24 @@ async function fetchRuns(limit) {
 }
 
 async function refreshExperiments(options = {}) {
-  if (state.experimentsLoading) {
-    return;
-  }
+  const requestID = ++state.experimentRequestID;
+  const routeVersion = state.routeVersion;
+  const currentRequest = () => requestID === state.experimentRequestID && routeVersion === state.routeVersion;
   state.experimentsLoading = true;
   state.experimentsError = "";
   try {
     const result = await fetchExperiments(options);
+    if (!currentRequest()) return;
     state.experiments = list(result.experiments);
     state.experimentsLastCompletedAt = Date.now();
   } catch (error) {
+    if (!currentRequest()) return;
     state.experimentsError = error.message || String(error);
   } finally {
-    state.experimentsLoading = false;
-    if (options.render && state.snapshot) {
+    if (currentRequest()) state.experimentsLoading = false;
+    if (currentRequest() && options.render && state.snapshot) {
       render({ focusExperimentSearch: options.focusExperimentSearch });
-    } else if (options.render && !state.target) {
+    } else if (currentRequest() && options.render && !state.target) {
       updateURL();
       renderLanding({ focusExperimentSearch: options.focusExperimentSearch });
     }
@@ -1236,7 +1257,7 @@ function updateURL(options = {}) {
     setOptionalSearchParam(url, "experiment_project", state.landingProjectFilter);
     setOptionalSearchParam(url, "experiment_tag", state.landingTagFilter);
     setOptionalSearchParam(url, "experiments", Array.from(state.expandedExperimentIDs).join(","));
-    for (const param of ["metric", "pinned", "run_id", "lifecycle", "updated", "updated_sort", "start_step", "end_step", "step_interval", "media_tag", "media_run", "media_step", "max_points"]) {
+    for (const param of ["metric", "pinned", "run_id", "run_q", "group", "hidden_run", "lifecycle", "updated", "updated_sort", "start_step", "end_step", "step_interval", "media_tag", "media_run", "media_step", "max_points"]) {
       url.searchParams.delete(param);
     }
     for (const param of Array.from(url.searchParams.keys())) {
@@ -1258,12 +1279,14 @@ function updateURL(options = {}) {
   } else {
     url.searchParams.delete("metric");
   }
-  if (state.selectedMetrics.length) {
-    url.searchParams.set("pinned", state.selectedMetrics.join(","));
-  } else {
-    url.searchParams.delete("pinned");
-  }
+  url.searchParams.set("pinned", state.selectedMetrics.join(","));
   setOptionalSearchParam(url, "run_id", state.focusedSeriesControls.runID);
+  setOptionalSearchParam(url, "run_q", state.search);
+  setOptionalSearchParam(url, "group", state.group);
+  url.searchParams.delete("hidden_run");
+  for (const runID of state.hiddenRuns) {
+    url.searchParams.append("hidden_run", runID);
+  }
   setOptionalSearchParam(url, "lifecycle", state.lifecycleFilter);
   setOptionalSearchParam(url, "updated", state.runUpdatedFilter);
   setOptionalSearchParam(url, "updated_sort", state.runUpdatedSort);
@@ -1327,6 +1350,8 @@ async function fetchSeriesFor(metric, options = {}) {
 }
 
 async function fetchSnapshot(options = {}) {
+  const routeVersion = state.routeVersion;
+  const currentRoute = () => routeVersion === state.routeVersion;
   const autoRefresh = options.autoRefresh === true;
   const shouldRender = options.render !== false;
   const overallMark = traceMark("stellar.fetchSnapshot.total");
@@ -1352,7 +1377,11 @@ async function fetchSnapshot(options = {}) {
 
   const focusedMetric = state.metric;
   const summaryMark = traceMark("stellar.fetchSnapshot.summary");
-  const primary = await fetchSnapshotFor(focusedMetric, { mode: "summary" });
+  const primary = await fetchSnapshotFor(focusedMetric, { mode: "summary" }).catch((error) => {
+    if (currentRoute()) throw error;
+    return null;
+  });
+  if (!currentRoute()) return;
   traceMeasure("stellar.fetchSnapshot.summary", summaryMark);
   const highMetricCatalog = list(primary.metric_options).length > compactMetricCatalogThreshold;
   const metricMode = highMetricCatalog || autoRefresh ? "metric" : "";
@@ -1363,6 +1392,7 @@ async function fetchSnapshot(options = {}) {
   }
   state.summarySnapshot = primary;
   state.snapshot = primary;
+  reconcileRunControls(primary);
   if (!autoRefresh) {
     state.runSearchLimit = Math.max(runPageSize, list(primary.runs).length);
     state.runSearchTruncated = list(primary.runs).length >= runPageSize;
@@ -1395,6 +1425,7 @@ async function fetchSnapshot(options = {}) {
     includeStatic: !autoRefresh && !highMetricCatalog,
     force: autoRefresh,
   });
+  if (!currentRoute()) return;
   traceMeasure("stellar.fetchSnapshot.metricSnapshots", metricsMark);
   const panelMetric = state.metric || state.selectedMetrics[0] || primaryMetric;
   setPanelSnapshotForMetric(panelMetric, primary);
@@ -1404,6 +1435,7 @@ async function fetchSnapshot(options = {}) {
 
   updateURL();
   await refreshExperiments({ query: state.experimentSearch, render: false });
+  if (!currentRoute()) return;
   if (autoRefresh) {
     await refreshAdditionalRuns();
   }
@@ -1422,9 +1454,13 @@ async function fetchSnapshot(options = {}) {
       loadMetricSnapshotsInBackground(backgroundMetricNames, loadOptions);
     }
   }
-  if (options.loadAutoSeriesDetail !== false && autoSeriesDetail && state.metric) {
+  if (!currentRoute()) return;
+  const controls = state.focusedSeriesControls;
+  const hasDetailQuery = controls.runID || controls.startStep || controls.endStep || controls.maxPoints || controls.stepInterval !== "auto";
+  if (options.loadAutoSeriesDetail !== false && (autoSeriesDetail || hasDetailQuery) && state.metric) {
     await loadFocusedSeriesDetail();
   }
+  if (!currentRoute()) return;
   if (!autoRefresh) {
     state.autoRefresh.lastError = criticalRefreshError();
     if (!state.autoRefresh.lastError) {
@@ -1471,19 +1507,21 @@ function loadMetricSnapshotsInBackground(metricNames, options = {}) {
     return;
   }
   const target = state.target;
+  const routeVersion = state.routeVersion;
   Promise.all(names.map((name) => loadMetricSnapshot(name, options))).then(() => {
-    if (options.render !== false && state.target === target && state.snapshot) {
+    if (options.render !== false && routeVersion === state.routeVersion && state.target === target && state.snapshot) {
       render();
     }
   }).catch((error) => {
     console.error("Stellar metric snapshots failed to load", error);
-    if (options.render !== false && state.target === target && state.snapshot) {
+    if (options.render !== false && routeVersion === state.routeVersion && state.target === target && state.snapshot) {
       render();
     }
   });
 }
 
 async function loadMetricSnapshot(metricName, options = {}) {
+  const routeVersion = state.routeVersion;
   metricName = text(metricName, "").trim();
   if (!metricName) {
     return;
@@ -1517,7 +1555,7 @@ async function loadMetricSnapshot(metricName, options = {}) {
     state.presetMetricErrors.delete(metricName);
     try {
       const snapshot = await fetchSnapshotFor(metricName, request);
-      if (state.target !== requestTarget) {
+      if (state.target !== requestTarget || routeVersion !== state.routeVersion) {
         return;
       }
       const hydratedSnapshot = snapshotWithSummaryDefaults(snapshot, summary);
@@ -1533,7 +1571,7 @@ async function loadMetricSnapshot(metricName, options = {}) {
         setPanelSnapshotForMetric(loadedMetric, summary);
       }
     } catch (error) {
-      errors.set(metricName, error.message || String(error));
+      if (routeVersion === state.routeVersion) errors.set(metricName, error.message || String(error));
     }
   })();
   const loadEntry = { promise: loadPromise, metricName };
@@ -1545,6 +1583,7 @@ async function loadMetricSnapshot(metricName, options = {}) {
 }
 
 async function retryMetricSnapshot(metricName) {
+  const routeVersion = state.routeVersion;
   const summary = state.summarySnapshot || state.snapshot;
   const load = loadMetricSnapshot(metricName, {
     force: true,
@@ -1555,7 +1594,7 @@ async function retryMetricSnapshot(metricName) {
   });
   render();
   await load;
-  render();
+  if (routeVersion === state.routeVersion && state.snapshot) render();
 }
 
 function loadVisibleMetricSnapshots() {
@@ -1655,6 +1694,7 @@ function handleAutoRefreshVisibilityChange() {
 }
 
 async function refreshNow(options = {}) {
+  const routeVersion = state.routeVersion;
   if (!state.autoRefresh.enabled && !options.manual) {
     return;
   }
@@ -1684,7 +1724,20 @@ async function refreshNow(options = {}) {
   let shouldRender = false;
   try {
     await fetchSnapshot({ autoRefresh: true, silent: true, render: false, loadAutoSeriesDetail: false });
+    if (routeVersion !== state.routeVersion) return;
+    if (state.fullSnapshot) {
+      try {
+        const details = await fetchSnapshotFor(state.metric);
+        if (routeVersion !== state.routeVersion) return;
+        state.fullSnapshot = details;
+        state.fullSnapshotError = "";
+      } catch (error) {
+        if (routeVersion !== state.routeVersion) return;
+        state.fullSnapshotError = error.message || String(error);
+      }
+    }
     const seriesError = await refreshFocusedSeriesAfterSnapshot();
+    if (routeVersion !== state.routeVersion) return;
     const refreshError = criticalRefreshError(seriesError);
     if (refreshError) {
       throw new Error(refreshError);
@@ -1692,11 +1745,13 @@ async function refreshNow(options = {}) {
     state.autoRefresh.lastCompletedAt = Date.now();
     shouldRender = true;
   } catch (error) {
-    state.autoRefresh.lastError = error.message || String(error);
-    shouldRender = true;
+    if (routeVersion === state.routeVersion) {
+      state.autoRefresh.lastError = error.message || String(error);
+      shouldRender = true;
+    }
   } finally {
-    state.autoRefresh.inFlight = false;
-    if (shouldRender) {
+    if (routeVersion === state.routeVersion) state.autoRefresh.inFlight = false;
+    if (routeVersion === state.routeVersion && shouldRender) {
       render();
     }
     scheduleAutoRefresh();
@@ -1704,11 +1759,14 @@ async function refreshNow(options = {}) {
 }
 
 function criticalRefreshError(seriesError = state.focusedSeriesError) {
-  return state.experimentsError
-    || seriesError
-    || state.featuredErrors.values().next().value
-    || state.presetMetricErrors.values().next().value
-    || "";
+  const errors = [
+    state.experimentsError,
+    state.fullSnapshotError,
+    seriesError,
+    ...state.featuredErrors.values(),
+    ...state.presetMetricErrors.values(),
+  ].filter(Boolean);
+  return [...new Set(errors)].join("; ");
 }
 
 function dashboardHasActiveControl() {
@@ -1766,18 +1824,14 @@ function focusedSeriesCacheKey(metricName, queryOptions = {}) {
     text(controls.startStep, "").trim(),
     text(controls.endStep, "").trim(),
     text(controls.stepInterval, "auto").trim() || "auto",
+    text(controls.maxPoints, "").trim(),
     String(budget),
   ].join("|");
 }
 
 function visibleChartSeries(chart, options = {}) {
-  const runIDs = options.runIDs;
-  return list(chart?.series).filter((series) => {
-    if (runIDs) {
-      return runIDs.has(series.run_id);
-    }
-    return !state.hiddenRuns.has(series.run_id);
-  });
+  const runIDs = options.runIDs || filteredRunIDSetForChart(chart);
+  return list(chart?.series).filter((series) => runIDs.has(series.run_id));
 }
 
 function totalRawChartPoints(chart, options = {}) {
@@ -1901,6 +1955,7 @@ function applyFocusedSeriesDetail(detail) {
 }
 
 async function loadFocusedSeriesDetail(options = {}) {
+  const routeVersion = state.routeVersion;
   const metricName = state.metric || state.snapshot?.chart?.metric_name;
   if (!metricName || state.focusedSeriesLoading) {
     return;
@@ -1930,15 +1985,16 @@ async function loadFocusedSeriesDetail(options = {}) {
   }
   try {
     const detail = await fetchSeriesFor(metricName, queryOptions);
+    if (routeVersion !== state.routeVersion) return;
     if (cacheKey) {
       state.focusedSeriesCache.set(cacheKey, detail);
     }
-    applyFocusedSeriesDetail(detail);
+    if (focusedSeriesCacheKey(state.metric, queryOptions) === cacheKey) applyFocusedSeriesDetail(detail);
   } catch (error) {
-    state.focusedSeriesError = error.message || String(error);
+    if (routeVersion === state.routeVersion) state.focusedSeriesError = error.message || String(error);
   } finally {
-    state.focusedSeriesLoading = false;
-    if (!options.silent) {
+    if (routeVersion === state.routeVersion) state.focusedSeriesLoading = false;
+    if (routeVersion === state.routeVersion && !options.silent) {
       render();
     }
   }
@@ -2024,6 +2080,7 @@ function renderError(error) {
 }
 
 function renderLanding(options = {}) {
+  const interaction = captureInteraction(root);
   const projectOptions = landingProjectOptions(state.experiments);
   const visibleExperiments = landingVisibleExperiments(state.experiments);
   clear(root);
@@ -2047,6 +2104,7 @@ function renderLanding(options = {}) {
       ),
     ),
   );
+  restoreInteraction(root, interaction);
   if (options.focusExperimentSearch) {
     focusInput("[data-experiment-search-input]");
   }
@@ -2083,6 +2141,7 @@ function renderLandingProjectSelect(projectOptions, totalCount) {
     h("span", {}, "Project"),
     h("select", {
       value: state.landingProjectFilter,
+      "aria-label": "Experiment project filter",
       onchange: (event) => {
         state.landingProjectFilter = event.target.value;
         updateURL();
@@ -2101,6 +2160,7 @@ function renderLandingTagFilter() {
     h("input", {
       type: "search",
       value: state.landingTagFilter,
+      "aria-label": "Experiment tag filter",
       placeholder: "key=value",
       oninput: (event) => {
         state.landingTagFilter = event.target.value;
@@ -2249,7 +2309,7 @@ function landingLifecycleStatusData(counts) {
 
 function focusInput(selector) {
   const input = root.querySelector(selector);
-  if (!input) {
+  if (!input || document.activeElement === input) {
     return;
   }
   input.focus();
@@ -2258,24 +2318,170 @@ function focusInput(selector) {
   }
 }
 
+let dashboardView = null;
+
+// Slots are component boundaries, not a DOM diff. Unchanged components are never
+// detached (notably report iframes and playing media); changed components restore
+// their small interaction state. The shell and run-selection controls stay live.
+function updateSlot(slot, inputs, build) {
+  const signature = JSON.stringify(inputs);
+  if (Object.prototype.hasOwnProperty.call(slot, "signature") && slot.signature === signature) return;
+  const interaction = captureInteraction(slot);
+  slot.replaceChildren(...[build()].flat().filter(Boolean));
+  slot.signature = signature;
+  restoreInteraction(slot, interaction);
+}
+
+function interactionKey(node) {
+  return node.dataset?.interactionKey || node.getAttribute("name") || node.getAttribute("aria-label")
+    || node.getAttribute("title") || node.getAttribute("placeholder") || node.textContent;
+}
+
+function captureInteraction(node) {
+  const active = node.contains(document.activeElement) ? document.activeElement : null;
+  return {
+    focus: active ? interactionKey(active) : null,
+    start: active?.selectionStart,
+    end: active?.selectionEnd,
+    disclosures: new Map([...node.querySelectorAll("details")].map((detail) => [detail.dataset.interactionKey || detail.querySelector("summary")?.textContent, detail.open])),
+    scroll: [...node.querySelectorAll(".table-scroll, .evidence-list, .output-media-grid")].map((item) => [item.className, item.scrollTop, item.scrollLeft]),
+  };
+}
+
+function restoreInteraction(node, saved) {
+  for (const detail of node.querySelectorAll("details")) {
+    const key = detail.dataset.interactionKey || detail.querySelector("summary")?.textContent;
+    if (saved.disclosures.has(key)) detail.open = saved.disclosures.get(key);
+  }
+  for (const [className, top, left] of saved.scroll) {
+    const item = [...node.querySelectorAll(".table-scroll, .evidence-list, .output-media-grid")].find((candidate) => candidate.className === className);
+    if (item) { item.scrollTop = top; item.scrollLeft = left; }
+  }
+  if (saved.focus === null) return;
+  const active = [...node.querySelectorAll("input, select, button, summary, a, textarea")].find((item) => interactionKey(item) === saved.focus);
+  if (active) {
+    active.focus({ preventScroll: true });
+    if (saved.start !== null && saved.start !== undefined && typeof active.setSelectionRange === "function") {
+      active.setSelectionRange(saved.start, saved.end);
+    }
+  }
+}
+
+function createDashboardView(snapshot) {
+  const topbar = h("div");
+  const rail = renderVariablesRail(snapshot);
+  const summary = h("div");
+  const panels = h("section", { class: "panel-grid" });
+  const main = h("main", { class: "report-canvas" }, summary, panels);
+  const shell = h("div", { class: "app-shell" }, topbar, h("div", { class: "workspace" }, rail, main));
+  root.replaceChildren(shell);
+  return { target: state.target, shell, topbar, rail, summary, panels, slots: new Map(), rows: new Map() };
+}
+
+function updateRunRail(view, snapshot) {
+  const rail = view.rail;
+  const listed = filteredRuns(snapshot, { includeHidden: true });
+  const runList = rail.querySelector(".run-list");
+  const keep = new Set(listed.map((run) => run.run_id));
+  for (const [id, row] of view.rows) {
+    if (!keep.has(id)) { row.remove(); view.rows.delete(id); }
+  }
+  // Initial rows are discarded only when the rail is first mounted.
+  if (!runList.dataset.keyed) { runList.replaceChildren(); runList.dataset.keyed = "true"; }
+  listed.forEach((run, index) => {
+    let row = view.rows.get(run.run_id);
+    if (!row) { row = renderRunRailRow(run); view.rows.set(run.run_id, row); }
+    const hidden = state.hiddenRuns.has(run.run_id);
+    row.classList.toggle("run-row-hidden", hidden);
+    const checkbox = row.querySelector("input");
+    checkbox.checked = !hidden;
+    checkbox.title = hidden ? "Show run" : "Hide run";
+    updateSlot(row.querySelector(".run-row-main"), [run, state.metric, metricValueForRun(state.metric, run), metricErrorForName(state.metric)], () =>
+      [...renderRunRailRow(run).querySelector(".run-row-main").childNodes]);
+    if (runList.children[index] !== row) runList.insertBefore(row, runList.children[index] || null);
+  });
+  rail.querySelector(".rail-top > .rail-label").textContent = `${allRuns(snapshot).length} loaded of ${canonicalRunCount(snapshot, allRuns(snapshot).length)} · ${filteredRuns(snapshot).length} visible`;
+  updateSlot(rail.querySelector("[data-rail-slot=experiments]"), [state.experiments, state.experimentsLoading, state.experimentsError, [...state.expandedExperimentIDs]], () => renderExperimentRail(snapshot));
+  updateSlot(rail.querySelector("[data-rail-slot=lifecycle]"), [lifecycleCounts(snapshot), state.lifecycleFilter], () => renderLifecycleFilters(snapshot));
+  updateSlot(rail.querySelector("[data-rail-slot=load]"), [state.runsError, state.runsLoading, state.runSearchTruncated, state.runSearchLimit], renderRunLoadMore);
+  const drawer = rail.querySelector(".controls-drawer");
+  const selects = drawer.querySelectorAll("select");
+  updateSelectOptions(selects[0], list(snapshot.metric_options).map((option) => [option.name, `${option.card} / ${option.name}`]), state.metric);
+  updateSelectOptions(selects[1], [["", "All groups"], ...list(snapshot.run_groups).map((group) => [group.run_group_id, group.name || group.run_group_id])], state.group);
+  updateSlot(drawer.querySelector(".query-card"), [state.target, state.group, state.metric], () => [
+    h("code", {}, `target == "${state.target}"`),
+    h("code", {}, state.group ? `run_group == "${state.group}"` : "run_group == *"),
+    h("code", {}, `metric == "${state.metric}"`),
+  ]);
+  updateSlot(drawer.querySelector("[data-rail-slot=selected]"), [state.selectedMetrics, [...state.featuredErrors]], () =>
+    renderSelectedMetricControls(snapshot));
+  updateSlot(drawer.querySelector("[data-rail-slot=layout]"), [state.dashboardSections.order, [...state.dashboardSections.hidden]], renderDashboardSectionControls);
+  for (const id of state.dashboardSections.order) {
+    const input = drawer.querySelector(`[data-section-title="${id}"]`);
+    if (input && input !== document.activeElement) input.value = dashboardSectionTitle(id);
+  }
+}
+
+function updateSelectOptions(select, options, value) {
+  const signature = JSON.stringify(options);
+  if (select.dataset.options !== signature) {
+    select.replaceChildren(...options.map(([id, label]) => h("option", { value: id }, label)));
+    select.dataset.options = signature;
+  }
+  select.value = value;
+}
+
+function sectionInputs(id, snapshot) {
+  const detail = state.fullSnapshot || snapshot;
+  const common = [filteredRuns(snapshot)];
+  if (["media", "evidence", "repro"].includes(id)) {
+    return [filteredRuns(detail).map((run) => id === "media" ? run.run_id : [run.run_id, run.systems, run.metric_names, runLifecycle(run)]),
+      isCompactPayload(snapshot), state.fullSnapshotLoading, state.fullSnapshotError,
+      (id === "media" ? ["artifacts"] : ["configs", "artifacts", "events", "observations"]).map((key) => allRunEvidence(detail, key)),
+      id === "media" ? [state.outputMediaTag, state.outputMediaRunID, state.outputMediaStep] : null];
+  }
+  return [...common, snapshot, state.metric, state.selectedMetrics, [...state.featuredSnapshots], [...state.presetMetricSnapshots],
+    [...state.featuredErrors], [...state.presetMetricErrors], [...state.metricSnapshotLoads.keys()], state.focusedSeriesLoading,
+    state.focusedSeriesError, state.focusedSeriesControls, state.metricSearch, state.activeMetricFamily,
+    [...state.expandedMetricFamilies], state.showAllPinnedCharts];
+}
+
 function render(options = {}) {
   const renderMark = traceMark("stellar.render");
   const snapshot = state.snapshot;
   const visibleRuns = filteredRuns(snapshot);
-  clear(root);
   root.className = "stellar-app";
-  root.append(
-    h("div", { class: "app-shell" },
-      renderTopbar(snapshot),
-      h("div", { class: "workspace" },
-        renderVariablesRail(snapshot),
-        h("main", { class: "report-canvas" },
-          renderOperationalSummary(snapshot),
-          h("section", { class: "panel-grid" }, ...renderDashboardSections(snapshot)),
-        ),
-      ),
-    ),
-  );
+  if (!dashboardView || dashboardView.target !== state.target || !root.contains(dashboardView.shell)) {
+    dashboardView = createDashboardView(snapshot);
+  }
+  const view = dashboardView;
+  if (!view.topbar.firstChild) view.topbar.append(renderTopbar(snapshot));
+  updateSlot(view.topbar.querySelector(".topbar-actions"), [snapshot.status, allRuns(snapshot).length, state.autoRefresh.inFlight, state.autoRefresh.lastCompletedAt, state.autoRefresh.lastError], () => [
+    renderSourceStatus(), statPill("loaded runs", allRuns(snapshot).length), statPill("metric files", snapshot.status?.metric_files), renderRefreshStatus(),
+  ]);
+  updateRunRail(view, snapshot);
+  updateSlot(view.summary, [snapshot.summary, allRuns(snapshot), [...state.featuredErrors], [...state.presetMetricErrors], state.focusedSeriesError, state.fullSnapshotError], () => renderOperationalSummary(snapshot));
+  const visible = visibleDashboardSectionIDs();
+  for (const [id, slot] of view.slots) {
+    if (!visible.includes(id)) { slot.remove(); view.slots.delete(id); }
+  }
+  visible.forEach((id, index) => {
+    let slot = view.slots.get(id);
+    if (!slot) { slot = h("div", { class: "dashboard-slot" }); view.slots.set(id, slot); }
+    const mediaView = id === "media" ? slot.firstChild : null;
+    if (mediaView?.updateMedia && (!isCompactPayload(snapshot) || state.fullSnapshot)) {
+      mediaView.updateMedia(snapshot);
+    } else {
+      updateSlot(slot, sectionInputs(id, snapshot), () => dashboardSectionByID(id).render(snapshot));
+    }
+    const panel = slot.querySelector(".panel");
+    if (panel) {
+      panel.setAttribute("aria-label", dashboardSectionTitle(id));
+      panel.dataset.sectionTitle = dashboardSectionTitle(id);
+    }
+    if (view.panels.children[index] !== slot) view.panels.insertBefore(slot, view.panels.children[index] || null);
+  });
+  updateURL();
   if (options.focusSearch) {
     focusInput("[data-search-input]");
   }
@@ -2362,12 +2568,6 @@ function publishVisualState(status, detail = {}) {
   };
 }
 
-function renderDashboardSections(snapshot) {
-  return visibleDashboardSectionIDs()
-    .map((id) => dashboardSectionByID(id)?.render(snapshot))
-    .filter(Boolean);
-}
-
 function activeRunFilterLabels(snapshot) {
   const labels = [];
   if (state.search.trim()) {
@@ -2379,6 +2579,7 @@ function activeRunFilterLabels(snapshot) {
   if (state.group) {
     labels.push(`Group: ${state.group}`);
   }
+  if (state.runUpdatedFilter) labels.push(`Updated: ${state.runUpdatedFilter}`);
   if (state.hiddenRuns.size) {
     labels.push(`${state.hiddenRuns.size} hidden`);
   }
@@ -2547,6 +2748,7 @@ function renderVariablesRail(snapshot) {
   const groupSelect = h("select", {
     onchange: (event) => {
       state.group = event.target.value;
+      updateURL();
       render();
     },
   }, h("option", { value: "" }, "All groups"));
@@ -2555,12 +2757,12 @@ function renderVariablesRail(snapshot) {
   }
 
   return h("aside", { class: "variables-rail" },
-    renderExperimentRail(snapshot),
+    h("div", { "data-rail-slot": "experiments" }, renderExperimentRail(snapshot)),
     h("div", { class: "rail-top" },
       h("p", { class: "rail-label" }, `${loadedRuns} loaded of ${canonicalRuns} · ${visibleRuns.length} visible`),
       h("div", { class: "run-toolbar" },
         h("button", { type: "button", class: "icon-button", title: "Show all runs", onclick: showAllRuns }, "Show all"),
-        h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(listedRuns) }, "Hide listed"),
+        h("button", { type: "button", class: "icon-button", title: "Hide listed runs", onclick: () => hideRuns(filteredRuns(state.snapshot, { includeHidden: true })) }, "Hide listed"),
       ),
       h("input", {
         type: "search",
@@ -2569,15 +2771,16 @@ function renderVariablesRail(snapshot) {
         "data-search-input": true,
         oninput: (event) => {
           state.search = event.target.value;
+          updateURL();
           render({ focusSearch: true });
         },
       }),
-      renderLifecycleFilters(snapshot),
+      h("div", { "data-rail-slot": "lifecycle" }, renderLifecycleFilters(snapshot)),
       renderRunUpdatedControls(),
       h("div", { class: "run-list" },
         ...listedRuns.map((run) => renderRunRailRow(run)),
       ),
-      renderRunLoadMore(),
+      h("div", { "data-rail-slot": "load" }, renderRunLoadMore()),
     ),
     renderControlsDrawer(snapshot, metricSelect, groupSelect),
   );
@@ -2600,11 +2803,16 @@ function renderControlsDrawer(snapshot, metricSelect, groupSelect) {
           h("code", {}, `metric == "${text(snapshot.chart?.metric_name, state.metric)}"`),
         ),
       ),
-      renderControlGroup("Selected metrics",
-        ...featuredMetricSpecs(snapshot).map((spec) => checkboxLine(`${spec.family}: ${spec.title}`, !state.featuredErrors.has(spec.name))),
-      ),
-      renderDashboardSectionControls(),
+      h("div", { "data-rail-slot": "selected" }, renderSelectedMetricControls(snapshot)),
+      h("div", { "data-rail-slot": "layout" }, renderDashboardSectionControls()),
     ),
+  );
+}
+
+function renderSelectedMetricControls(snapshot) {
+  return renderControlGroup("Selected metrics",
+    ...featuredMetricSpecs(snapshot).map((spec) => h("span", { class: "check-row" },
+      `${spec.family}: ${spec.title}${state.featuredErrors.has(spec.name) ? " (query failed)" : ""}`)),
   );
 }
 
@@ -2691,32 +2899,18 @@ function renderExperimentRow(experiment, selectedID, older) {
 }
 
 function returnToLanding() {
+  state.routeVersion++;
+  const routeVersion = state.routeVersion;
   stopAutoRefresh();
   state.autoRefresh.started = false;
   state.target = "";
   state.metric = "";
   state.selectedMetrics = [];
   state.metricSelectionInitialized = false;
-  state.snapshot = null;
-  state.summarySnapshot = null;
-  state.fullSnapshot = null;
-  state.fullSnapshotLoading = false;
-  state.fullSnapshotError = "";
-  state.additionalRuns = [];
-  state.runSearchLimit = runPageSize;
-  state.runSearchTruncated = false;
-  state.runsLoading = false;
-  state.runsError = "";
-  state.hiddenRuns.clear();
-  state.focusedSeriesCache.clear();
-  state.featuredSnapshots.clear();
-  state.featuredErrors.clear();
-  state.presetMetricSnapshots.clear();
-  state.presetMetricErrors.clear();
-  state.metricSnapshotLoads.clear();
+  clearDashboardRuntimeState();
   updateURL({ history: "push" });
   return refreshExperiments({ query: state.experimentSearch, render: false }).then(() => {
-    renderLanding();
+    if (routeVersion === state.routeVersion) renderLanding();
   });
 }
 
@@ -2724,20 +2918,10 @@ function selectExperiment(experimentID) {
   if (!experimentID || experimentID === state.target) {
     return;
   }
-  const fromLanding = !state.target;
+  state.routeVersion++;
+  clearDashboardRuntimeState();
   state.target = experimentID;
-  state.metric = "";
-  if (fromLanding) {
-    state.selectedMetrics = [];
-  }
-  state.metricSelectionInitialized = false;
-  state.hiddenRuns.clear();
-  state.focusedSeriesCache.clear();
-  state.featuredSnapshots.clear();
-  state.featuredErrors.clear();
-  state.presetMetricSnapshots.clear();
-  state.presetMetricErrors.clear();
-  state.metricSnapshotLoads.clear();
+  restoreTargetPreferences(new URL(window.location.pathname, window.location.origin), experimentID);
   updateURL({ history: "push" });
   fetchSnapshot().catch(renderError);
   startAutoRefresh();
@@ -2745,6 +2929,9 @@ function selectExperiment(experimentID) {
 
 async function restoreRouteFromLocation() {
   const url = new URL(window.location.href);
+  state.routeVersion++;
+  const routeVersion = state.routeVersion;
+  clearDashboardRuntimeState();
   const nextTarget = text(url.searchParams.get("target"), "");
   state.experimentSearch = text(url.searchParams.get("experiment_q"), "");
   state.landingProjectFilter = text(url.searchParams.get("experiment_project"), "");
@@ -2757,14 +2944,20 @@ async function restoreRouteFromLocation() {
     state.metric = "";
     state.selectedMetrics = [];
     state.metricSelectionInitialized = false;
-    clearDashboardRuntimeState();
     await refreshExperiments({ query: state.experimentSearch, render: false });
-    renderLanding({ focusExperimentSearch: true });
+    if (routeVersion === state.routeVersion) renderLanding({ focusExperimentSearch: true });
     return;
   }
 
-  const targetChanged = state.target !== nextTarget;
   state.target = nextTarget;
+  restoreTargetPreferences(url, nextTarget);
+  await fetchSnapshot();
+  startAutoRefresh();
+}
+
+// Discovery and refresh settings are global. Everything defining a comparison
+// is target-scoped and restored from this route, not the experiment we left.
+function restoreTargetPreferences(url, nextTarget) {
   const hasMetricParam = url.searchParams.has("metric");
   const hasPinnedParam = url.searchParams.has("pinned");
   state.metric = hasMetricParam ? text(url.searchParams.get("metric"), "") : "";
@@ -2774,24 +2967,31 @@ async function restoreRouteFromLocation() {
   state.lifecycleFilter = normalizeLifecycleFilter(url.searchParams.get("lifecycle"));
   state.runUpdatedFilter = normalizeRunUpdatedFilter(url.searchParams.get("updated"));
   state.runUpdatedSort = normalizeRunUpdatedSort(url.searchParams.get("updated_sort"));
-  state.focusedSeriesControls = {
-    runID: text(url.searchParams.get("run_id"), ""),
-    startStep: text(url.searchParams.get("start_step"), ""),
-    endStep: text(url.searchParams.get("end_step"), ""),
-    stepInterval: normalizeStepIntervalControl(url.searchParams.get("step_interval")),
-    customStepInterval: customStepIntervalValue(normalizeStepIntervalControl(url.searchParams.get("step_interval"))),
-    maxPoints: text(url.searchParams.get("max_points"), ""),
-  };
+  state.search = text(url.searchParams.get("run_q"), "");
+  state.group = text(url.searchParams.get("group"), "");
+  state.hiddenRuns = hiddenRunsFromURL(url);
+  state.focusedSeriesControls = initialFocusedSeriesControls(url);
+  state.focusedSeriesDraft = null;
+  state.metricSearch = "";
+  state.activeMetricFamily = "";
+  state.expandedMetricFamilies.clear();
+  state.metricCatalogOpen = false;
+  state.metricSelectionInitialized = url.searchParams.has("pinned");
   state.outputMediaTag = text(url.searchParams.get("media_tag"), "");
   state.outputMediaRunID = text(url.searchParams.get("media_run"), "");
   state.outputMediaStep = text(url.searchParams.get("media_step"), "");
   state.dashboardSections = dashboardSectionsFromURL(url, nextTarget);
-  if (targetChanged) {
-    state.metricSelectionInitialized = false;
-    clearDashboardRuntimeState();
+}
+
+function reconcileRunControls(snapshot) {
+  const runs = allRuns(snapshot);
+  const groups = new Set([...list(snapshot.run_groups).map((group) => group.run_group_id), ...runs.map((run) => run.run_group_id)]);
+  if (state.group && !groups.has(state.group)) state.group = "";
+  // A summary can be paged: absence is not proof that an explicitly chosen run
+  // is invalid until the full run catalog is loaded.
+  if (runs.length < runPageSize && state.focusedSeriesControls.runID && !runs.some((run) => run.run_id === state.focusedSeriesControls.runID)) {
+    state.focusedSeriesControls.runID = "";
   }
-  await fetchSnapshot();
-  startAutoRefresh();
 }
 
 function clearDashboardRuntimeState() {
@@ -2808,6 +3008,18 @@ function clearDashboardRuntimeState() {
   state.presetMetricErrors.clear();
   state.metricSnapshotLoads.clear();
   state.showAllPinnedCharts = false;
+  state.additionalRuns = [];
+  state.runSearchLimit = runPageSize;
+  state.runSearchTruncated = false;
+  state.runsLoading = false;
+  state.runsError = "";
+  state.focusedSeriesLoading = false;
+  state.focusedSeriesError = "";
+  state.focusedSeriesDraft = null;
+  state.autoRefresh.inFlight = false;
+  state.autoRefresh.lastCompletedAt = 0;
+  state.autoRefresh.lastError = "";
+  recordPages.clear();
 }
 
 function toggleExpandedExperiment(experimentID) {
@@ -2934,6 +3146,7 @@ function renderDashboardSectionControl(id, index) {
         h("input", {
           type: "checkbox",
           checked: !hidden,
+          "aria-label": `Show section ${id}`,
           onchange: () => toggleDashboardSection(id),
         }),
         h("span", {}, section.id),
@@ -2943,6 +3156,7 @@ function renderDashboardSectionControl(id, index) {
           type: "button",
           class: "icon-button",
           title: "Move section up",
+          "data-interaction-key": `move-up:${id}`,
           disabled: index === 0,
           onclick: () => moveDashboardSection(id, -1),
         }, "up"),
@@ -2950,6 +3164,7 @@ function renderDashboardSectionControl(id, index) {
           type: "button",
           class: "icon-button",
           title: "Move section down",
+          "data-interaction-key": `move-down:${id}`,
           disabled: index === state.dashboardSections.order.length - 1,
           onclick: () => moveDashboardSection(id, 1),
         }, "down"),
@@ -2957,6 +3172,7 @@ function renderDashboardSectionControl(id, index) {
     ),
     h("input", {
       type: "text",
+      "data-section-title": id,
       value: dashboardSectionTitle(id),
       placeholder: section.defaultTitle,
       title: `Rename ${section.defaultTitle}`,
@@ -3015,6 +3231,7 @@ function renderRunRailRow(run) {
     h("input", {
       type: "checkbox",
       checked: !hidden,
+      "aria-label": `Include run ${run.run_id}`,
       title: hidden ? "Show run" : "Hide run",
       onchange: () => toggleRunVisibility(run.run_id),
     }),
@@ -3057,24 +3274,25 @@ async function loadMoreRuns() {
     return;
   }
   const requestTarget = state.target;
+  const routeVersion = state.routeVersion;
   const limit = Math.min(maxLoadedRuns, state.runSearchLimit + runPageSize);
   state.runsLoading = true;
   state.runsError = "";
   render();
   try {
     const result = await fetchRuns(limit);
-    if (state.target !== requestTarget) {
+    if (state.target !== requestTarget || routeVersion !== state.routeVersion) {
       return;
     }
     state.additionalRuns = list(result.runs);
     state.runSearchLimit = limit;
     state.runSearchTruncated = result.truncated === true;
   } catch (error) {
-    if (state.target === requestTarget) {
+    if (state.target === requestTarget && routeVersion === state.routeVersion) {
       state.runsError = error.message || String(error);
     }
   } finally {
-    if (state.target === requestTarget) {
+    if (state.target === requestTarget && routeVersion === state.routeVersion) {
       state.runsLoading = false;
       render();
     }
@@ -3086,18 +3304,19 @@ async function refreshAdditionalRuns() {
     return;
   }
   const requestTarget = state.target;
+  const routeVersion = state.routeVersion;
   const limit = state.runSearchLimit;
   state.runsLoading = true;
   try {
     const result = await fetchRuns(limit);
-    if (state.target !== requestTarget) {
+    if (state.target !== requestTarget || routeVersion !== state.routeVersion) {
       return;
     }
     state.additionalRuns = list(result.runs);
     state.runSearchTruncated = result.truncated === true;
     state.runsError = "";
   } finally {
-    if (state.target === requestTarget) {
+    if (state.target === requestTarget && routeVersion === state.routeVersion) {
       state.runsLoading = false;
     }
   }
@@ -3109,11 +3328,13 @@ function toggleRunVisibility(runID) {
   } else {
     state.hiddenRuns.add(runID);
   }
+  updateURL();
   render();
 }
 
 function showAllRuns() {
   state.hiddenRuns.clear();
+  updateURL();
   render();
 }
 
@@ -3121,14 +3342,8 @@ function hideRuns(runs) {
   for (const run of runs) {
     state.hiddenRuns.add(run.run_id);
   }
+  updateURL();
   render();
-}
-
-function checkboxLine(label, checked) {
-  return h("label", { class: "check-row" },
-    h("input", { type: "checkbox", checked }),
-    h("span", {}, label),
-  );
 }
 
 function configuredPanel(sectionID, fallbackTitle, fallbackSubtitle, body, className = "") {
@@ -3169,46 +3384,8 @@ const commonMedicalLabelDisplayNames = new Map([
   ["pleural effusion", "Pleural Effusion"],
 ]);
 
-function renderTrainingHealthPanel(snapshot) {
-  const metrics = trainingHealthMetricNames(snapshot).slice(0, 6);
-  const warnings = list(snapshot.warnings).slice(0, 2);
-  const body = h("div", { class: "researcher-preset" },
-    h("div", { class: "section-summary" },
-      h("strong", {}, metrics.length ? "Training metrics are available" : "Training health is not instrumented yet"),
-      h("span", {}, metrics.length ? "Loss, LR, throughput, and status signals are grouped here automatically." : "Import train/* or status/* scalar metrics to populate this section."),
-    ),
-    metrics.length
-      ? h("div", { class: "research-metric-grid" }, metrics.map((metricName) => renderResearchMetricTile(metricName, {
-          mode: isLossLikeMetric(metricName) || isStatusProblemMetric(metricName) ? "latest" : "latest",
-        })))
-      : h("p", { class: "empty" }, "No train/*, status/*, throughput, skipped, or invalid-label metrics were found."),
-    warnings.length ? h("div", { class: "warning-list" }, warnings.map((warning) => h("span", {}, warning))) : null,
-  );
-  return panel("Training health", "Dense train/loss keeps EMA smoothing and raw hover detail; sparse metrics stay literal.", body, "half researcher-panel");
-}
-
-function renderValidationQualityPanel(snapshot) {
-  const metrics = validationQualityMetricNames(snapshot).slice(0, 8);
-  const labels = labelMetricGroups(snapshot).slice(0, 5);
-  const body = h("div", { class: "researcher-preset" },
-    metrics.length
-      ? h("div", { class: "research-metric-grid validation-grid" }, metrics.map((metricName) => renderResearchMetricTile(metricName, { mode: metricGoal(metricName) === "minimize" ? "best" : "best" })))
-      : h("p", { class: "empty" }, "No eval/* or final/* quality metrics were found. Import validation scalars such as macro AUPRC, AUROC, F1, Brier, or ECE."),
-    h("section", { class: "label-card-section" },
-      h("div", { class: "evidence-section-head" },
-        h("h3", {}, "Per-label quality"),
-        h("span", {}, labels.length ? "compact label cards" : "no label-scoped metrics found"),
-      ),
-      labels.length
-        ? h("div", { class: "label-card-grid" }, labels.map(renderLabelMetricCard))
-        : h("p", { class: "empty" }, "Label-scoped metrics are optional. When Atelectasis, Cardiomegaly, Consolidation, Edema, Pleural Effusion, or other label metrics exist, they appear here."),
-    ),
-  );
-  return panel("Validation quality", "Primary AUPRC first, then AUROC/F1/calibration and label-level signals.", body, "half researcher-panel validation-quality-panel");
-}
-
 function renderPerLabelQualityPanel(snapshot) {
-  const labels = labelMetricGroups(snapshot).slice(0, 5);
+  const labels = labelMetricGroups(snapshot);
   if (!labels.length) {
     return null;
   }
@@ -3262,8 +3439,8 @@ function renderReproducibilityPanel(snapshot) {
   const artifacts = allRunEvidence(detailSnapshot, "artifacts");
   const body = h("div", { class: "researcher-preset" },
     h("div", { class: "repro-grid" },
-      researcherFact("Configs", counts.configs || snapshot.status?.configs || 0, isCompactPayload(snapshot) && !state.fullSnapshot ? "details deferred" : "normalized configs"),
-      researcherFact("Artifacts", counts.artifacts || snapshot.status?.artifacts || 0, "checkpoints, reports, media"),
+      researcherFact("Configs", counts.configs, isCompactPayload(snapshot) && !state.fullSnapshot ? "details deferred" : "normalized configs"),
+      researcherFact("Artifacts", counts.artifacts, "checkpoints, reports, media"),
       researcherFact("Logs/events", counts.events || 0, isCompactPayload(snapshot) && !state.fullSnapshot ? "load details for logs" : "imported event rows"),
       researcherFact("Environment", environmentSummary(detailSnapshot), "run context"),
       researcherFact("Data manifest", dataManifestSummary(detailSnapshot), "data/* metrics or artifacts"),
@@ -3286,15 +3463,6 @@ function renderResearchMetricTile(metricName, options = {}) {
   );
 }
 
-function renderEmptyResearchTile(title, detail) {
-  return h("article", { class: "research-metric-tile muted" },
-    h("span", { class: "state-pill" }, "not available"),
-    h("h4", {}, title),
-    h("strong", {}, "--"),
-    h("p", {}, detail),
-  );
-}
-
 function researcherFact(label, value, note) {
   return h("article", { class: "researcher-fact" },
     h("span", {}, label),
@@ -3307,11 +3475,12 @@ function renderLabelMetricCard(group) {
   return h("article", { class: "label-card" },
     h("h4", {}, group.label),
     h("div", { class: "label-metric-list" },
-      group.metrics.slice(0, 3).map((metricName) => {
-        const summary = metricValueSummary(metricName, { mode: metricGoal(metricName) === "minimize" ? "best" : "best" });
+      group.metrics.map((metricName) => {
+        const summary = metricValueSummary(metricName, { mode: "best" });
         return h("span", { title: metricName },
           h("em", {}, metricMeasureLabel(metricName)),
           h("b", {}, summary.value),
+          h("small", {}, summary.detail),
         );
       }),
     ),
@@ -3341,7 +3510,7 @@ function renderPredictionSummaryState(snapshot) {
         h("h3", {}, "Prediction summaries"),
         h("span", {}, `${artifacts.length} imported artifacts`),
       ),
-      h("div", { class: "evidence-list" }, artifacts.slice(0, 5).map(renderArtifactEvidenceItem)),
+      pagedRecords(artifacts, renderArtifactEvidenceItem, { pageSize: 5, className: "evidence-list" }),
     );
   }
   if (!hasErrorMetrics) {
@@ -3380,6 +3549,9 @@ function renderLoadDetailsButton(label) {
 
 function metricValueSummary(metricName, options = {}) {
   const spec = metricSpecForName(metricName);
+  if (!filteredRuns(state.summarySnapshot || state.snapshot).length) {
+    return { spec, value: "No selected runs", detail: "Change the run filters or show hidden runs." };
+  }
   const snapshot = metricSnapshotForName(metricName, state.snapshot);
   const error = metricErrorForName(metricName);
   if (error && !snapshot) {
@@ -3387,19 +3559,21 @@ function metricValueSummary(metricName, options = {}) {
     return { spec, value: missing.label, detail: missing.detail, error: true };
   }
   if (!snapshot) {
-    const summarySignal = metricSummarySignal(state.fullSnapshot || state.summarySnapshot || state.snapshot, spec);
-    if (summarySignal) {
-      return metricSignalSummary(spec, summarySignal);
-    }
     const missing = missingMetricState(metricName, { snapshot: state.summarySnapshot || state.snapshot });
     return { spec, value: missing.label, detail: missing.detail, error: missing.error };
   }
   const signal = options.mode === "latest" ? latestSignal(snapshot, spec) : bestSignal(snapshot, spec);
   if (!signal) {
+    if (!filteredRuns(snapshot).length) {
+      return { spec, value: "No selected runs", detail: "Change the run filters or show hidden runs." };
+    }
     const missing = missingMetricState(metricName, { snapshot });
     return { spec, value: missing.label, detail: missing.detail, error: missing.error };
   }
-  return metricSignalSummary(spec, signal);
+  return metricSignalSummary(spec, {
+    ...signal,
+    source: `${options.mode === "latest" ? "latest step" : spec.goal === "minimize" ? "minimum" : "maximum"} sampled raw value`,
+  });
 }
 
 function metricSignalSummary(spec, signal) {
@@ -3407,10 +3581,10 @@ function metricSignalSummary(spec, signal) {
   const detail = [
     signal.run_id ? `run ${signal.run_id}` : "",
     signal.run_group_id ? `group ${signal.run_group_id}` : "",
-    signal.step ? `step ${signal.step}` : "",
+    signal.step !== undefined && signal.step !== null ? `step ${signal.step}` : "",
     signal.source ? signal.source : "",
   ].filter(Boolean).join(" / ") || text(signal.value, "scalar metric");
-  return { spec, value, detail, runID: signal.run_id || "", step: signal.step || "" };
+  return { spec, value, detail, runID: signal.run_id || "", step: signal.step ?? "" };
 }
 
 function metricSpecForName(metricName) {
@@ -3447,48 +3621,22 @@ function metricAvailable(metricName) {
 }
 
 function latestSignal(snapshot, spec) {
-  const chart = snapshot?.chart;
-  if (!chart?.has_data) {
-    return null;
-  }
-  const candidates = [];
-  for (const series of list(chart.series)) {
-    if (state.hiddenRuns.has(series.run_id)) {
-      continue;
-    }
-    const values = chartSeriesPointValues(series, "values");
-    if (!values.length) {
-      continue;
-    }
-    const latest = values.reduce((best, point) => point.step >= best.step ? point : best, values[0]);
-    candidates.push({
-      run_id: series.run_id,
-      run_group_id: series.run_group_id,
-      metric_name: chart.metric_name,
-      value: latest.value,
-      raw_value: latest.value,
-      step: latest.step,
-    });
-  }
-  if (!candidates.length) {
-    return null;
-  }
+  const candidates = cohortSignals(snapshot);
   candidates.sort((left, right) => right.step - left.step || compareMetricValues(left.raw_value, right.raw_value, spec.goal));
-  return candidates[0];
+  return candidates[0] || null;
 }
 
-function metricSummarySignal(snapshot, spec) {
-  const summary = metricSummary(snapshot, spec.name);
-  if (!summary?.group) {
-    return null;
-  }
-  return {
-    run_group_id: summary.group.run_group_id,
-    metric_name: spec.name,
-    value: summary.group.best,
-    raw_value: numberValue(summary.group.best),
-    source: "summary",
-  };
+function cohortSignals(snapshot) {
+  return visibleChartSeries(snapshot?.chart).flatMap((series) =>
+    chartSeriesPointValues(series, "values").map((point) => ({
+      run_id: series.run_id,
+      run_group_id: series.run_group_id,
+      metric_name: snapshot.chart.metric_name,
+      value: point.value,
+      raw_value: point.value,
+      step: point.step,
+      source: "sampled raw value",
+    })));
 }
 
 function compareMetricValues(left, right, goal) {
@@ -3581,14 +3729,14 @@ function labelMetricGroups(snapshot) {
 }
 
 function environmentSummary(snapshot) {
-  const systems = list(snapshot.runs).flatMap((run) => collectedSystems(run));
+  const systems = filteredRuns(snapshot).flatMap((run) => collectedSystems(run));
   const gpu = systems.find((field) => /gpu/i.test(field.name));
   const cluster = systems.find((field) => /cluster/i.test(field.name));
   return gpu?.value || cluster?.value || (isCompactPayload(snapshot) && !state.fullSnapshot ? "details deferred" : "not collected");
 }
 
 function dataManifestSummary(snapshot) {
-  const dataMetric = [...availableMetricNames(snapshot)].find((name) => /^data\//i.test(name));
+  const dataMetric = filteredRuns(snapshot).flatMap((run) => list(run.metric_names)).find((name) => /^data\//i.test(name));
   if (dataMetric) {
     return shortMetricName(dataMetric);
   }
@@ -3832,13 +3980,14 @@ function ensureSelectedMetrics(snapshot, options = {}) {
     return;
   }
   const current = normalizeMetricList(state.selectedMetrics).filter((name) => available.has(name));
-  if (!hadSelection && !state.metricSelectionInitialized) {
+  if (state.metric && !available.has(state.metric)) state.metric = "";
+  if ((!hadSelection && !state.metricSelectionInitialized) || (hadSelection && !current.length)) {
     const defaults = normalizeMetricList([
       state.metric && available.has(state.metric) ? state.metric : "",
       ...defaultMetricSpecs(snapshot).map((spec) => spec.name),
     ]);
     state.selectedMetrics = defaults;
-    if (!hasInitialMetricParam && defaults.length && (!state.metric || shouldPromoteResearchMetric(state.metric, defaults))) {
+    if (!state.metric && defaults.length) {
       state.metric = defaults[0];
     }
     state.metricSelectionInitialized = true;
@@ -3852,14 +4001,8 @@ function ensureSelectedMetrics(snapshot, options = {}) {
     current.unshift(state.metric);
   }
   state.selectedMetrics = current.length ? normalizeMetricList(current) : normalizeMetricList(state.selectedMetrics);
+  if (!state.metric) state.metric = state.selectedMetrics[0] || "";
   state.metricSelectionInitialized = true;
-}
-
-function shouldPromoteResearchMetric(metricName, defaults) {
-  if (!defaults.length) {
-    return false;
-  }
-  return ["eval/mean_episode_return", "eval/score", "persona_composite"].includes(metricName) && defaults[0] !== metricName;
 }
 
 function hasMeanAlternative(metricName, available) {
@@ -4013,6 +4156,7 @@ function isCompactPayload(snapshot) {
 }
 
 async function loadFullSnapshotDetails() {
+  const routeVersion = state.routeVersion;
   if (state.fullSnapshotLoading) {
     return;
   }
@@ -4022,63 +4166,25 @@ async function loadFullSnapshotDetails() {
   try {
     const metric = state.metric || state.selectedMetrics[0] || "";
     const snapshot = await fetchSnapshotFor(metric);
+    if (routeVersion !== state.routeVersion) return;
     state.fullSnapshot = snapshot;
     if (snapshot.chart?.metric_name) {
       state.featuredSnapshots.set(snapshot.chart.metric_name, snapshot);
     }
   } catch (error) {
-    state.fullSnapshotError = error.message || String(error);
+    if (routeVersion === state.routeVersion) state.fullSnapshotError = error.message || String(error);
   } finally {
-    state.fullSnapshotLoading = false;
-    render();
-  }
-}
-
-function metricSummary(snapshot, metricName) {
-  if (!snapshot) {
-    return null;
-  }
-  for (const card of snapshot.cards || []) {
-    for (const metric of card.metrics || []) {
-      if (metric.name !== metricName) {
-        continue;
-      }
-      const groups = [...(metric.groups || [])].sort((left, right) => (right.best_value || 0) - (left.best_value || 0));
-      return { card: card.name, metric, group: groups[0] };
+    if (routeVersion === state.routeVersion) {
+      state.fullSnapshotLoading = false;
+      render();
     }
   }
-  return null;
 }
 
 function bestSignal(snapshot, spec) {
-  if (!snapshot) {
-    return null;
-  }
-  const runs = (snapshot.sweep?.runs || [])
-    .filter((run) => (!state.group || run.run_group_id === state.group) && !state.hiddenRuns.has(run.run_id))
-    .map((run) => ({ run, value: numberValue(run.metric) }))
-    .filter((entry) => entry.value !== null);
-  if (runs.length) {
-    runs.sort((left, right) => spec.goal === "minimize" ? left.value - right.value : right.value - left.value);
-    const best = runs[0];
-    return {
-      run_id: best.run.run_id,
-      run_group_id: best.run.run_group_id,
-      metric_name: spec.name,
-      value: best.run.metric,
-      raw_value: best.value,
-    };
-  }
-  const summary = metricSummary(snapshot, spec.name);
-  if (summary?.group) {
-    return {
-      run_group_id: summary.group.run_group_id,
-      metric_name: spec.name,
-      value: summary.group.best,
-      raw_value: numberValue(summary.group.best),
-    };
-  }
-  return snapshot.sweep?.best_run || null;
+  const candidates = cohortSignals(snapshot);
+  candidates.sort((left, right) => compareMetricValues(left.raw_value, right.raw_value, spec.goal) || right.step - left.step);
+  return candidates[0] || null;
 }
 
 function metricValueForRun(metricName, run) {
@@ -4289,7 +4395,7 @@ function formatSignalValue(value, spec) {
 
 function filteredRuns(snapshot, options = {}) {
   const query = state.search.trim().toLowerCase();
-  const runs = allRuns(snapshot).filter((run) => {
+  const runs = allRuns(state.summarySnapshot || snapshot).filter((run) => {
     if (state.group && run.run_group_id !== state.group) {
       return false;
     }
@@ -4307,7 +4413,11 @@ function filteredRuns(snapshot, options = {}) {
     }
     return searchableRunParts(run).some((part) => text(part, "").toLowerCase().includes(query));
   });
-  return sortRunsByUpdated(runs);
+  const detailRuns = new Map(list(snapshot?.runs).map((run) => [run.run_id, run]));
+  return sortRunsByUpdated(runs).map((run) => {
+    const detail = detailRuns.get(run.run_id);
+    return detail && list(detail.systems).length ? { ...run, systems: detail.systems } : run;
+  });
 }
 
 function allRuns(snapshot) {
@@ -4328,8 +4438,7 @@ function filteredRunIDs(snapshot, options = {}) {
 }
 
 function filteredRunIDSetForChart(chart) {
-  const snapshot = snapshotForMetric(chart?.metric_name) || state.snapshot;
-  return filteredRunIDs(snapshot);
+  return filteredRunIDs(state.summarySnapshot || state.snapshot || snapshotForMetric(chart?.metric_name));
 }
 
 function searchableRunParts(run) {
@@ -4664,12 +4773,7 @@ function renderMetricCardBody(spec, snapshot, dataset, singlePoint, options = {}
     return h("p", { class: "metric-card-state", title: missing.title }, missing.label);
   }
   if (singlePoint) {
-    const points = dataset.flatMap((series) => series.points.map((point) => ({ series, point })));
-    const latest = points.sort((left, right) => right.point.step - left.point.step)[0];
-    return h("div", { class: "metric-value-tile" },
-      h("strong", {}, formatSignalValue(latest.point.value, spec)),
-      h("span", {}, `${latest.series.runID} at step ${formatAxisValue(latest.point.step)}`),
-    );
+    return renderSampleTable(dataset, spec.name, { singlePoint: true });
   }
   const fullChart = Boolean(options.large || options.uniform);
   return renderMetricChart(snapshot.chart, {
@@ -4746,11 +4850,7 @@ function renderLinePanel(snapshot) {
   if (!focusedMetric) {
     return configuredPanel("timeline", "Selected metric timeline", "Pick a metric from the dashboard to focus this chart.", h("p", { class: "empty" }, "Dashboard mode starts without a focused metric so multiple pinned metrics are visible first."), "wide");
   }
-  const chart = focusedSnapshot?.chart || {};
-  if (!chart.has_data || !(chart.series || []).length) {
-    const missing = missingMetricState(focusedMetric, { snapshot: focusedSnapshot || snapshot });
-    return configuredPanel("timeline", "Selected metric timeline", text(chart.metric_name, focusedMetric), h("p", { class: "empty", title: missing.title }, missing.label), "wide");
-  }
+  const chart = { ...focusedSnapshot?.chart, metric_name: focusedMetric };
   return configuredPanel("timeline", "Selected metric timeline", `TimeSeries ${text(chart.metric_name)}`,
     h("div", { class: "focused-chart-stack" },
       renderFocusedSeriesToolbar(chart),
@@ -4768,7 +4868,6 @@ function renderLinePanel(snapshot) {
 }
 
 function renderFocusedSeriesToolbar(chart) {
-  const rawPoints = totalRawChartPoints(chart);
   const renderedPoints = totalRenderedChartPoints(chart);
   const cacheHit = Boolean(cachedFocusedSeries(chart.metric_name));
   const detailLoaded = renderedPoints > defaultChartRenderedPointBudget;
@@ -4778,7 +4877,7 @@ function renderFocusedSeriesToolbar(chart) {
     renderChartZoomPill(),
     renderRawMetricQueryAction(chart),
     state.focusedSeriesError ? h("span", { class: "error-text" }, state.focusedSeriesError) : null,
-    rawPoints ? renderFocusedSeriesControls(chart, { cacheHit, detailLoaded }) : null,
+    renderFocusedSeriesControls(chart, { cacheHit, detailLoaded }),
   );
 }
 
@@ -4817,15 +4916,23 @@ function renderChartSmoothingPill(chart) {
 }
 
 function renderFocusedSeriesControls(chart, stateInfo) {
-  const controls = state.focusedSeriesControls;
-  const selectedResolution = focusedSeriesResolutionSelectValue(controls.stepInterval);
-  const runIDs = list(chart.series)
-    .map((series) => series.run_id)
-    .filter((runID, index, values) => runID && values.indexOf(runID) === index)
-    .sort();
+  const controls = state.focusedSeriesDraft || {
+    ...state.focusedSeriesControls,
+    stepInterval: focusedSeriesResolutionSelectValue(state.focusedSeriesControls.stepInterval),
+  };
+  const selectedResolution = controls.stepInterval;
+  const runIDs = [...new Set([...filteredRunIDs(state.snapshot), controls.runID].filter(Boolean))].sort();
+  const customInput = h("input", { name: "customStepInterval", inputmode: "numeric", value: controls.customStepInterval, placeholder: "25" });
+  const customLabel = h("label", { hidden: selectedResolution !== "custom" }, "Custom steps", customInput);
+  const error = h("p", { id: "series-control-error", class: "error-text", role: "alert" }, state.focusedSeriesError);
   return h("form", {
     class: "focused-series-controls",
     onsubmit: submitFocusedSeriesControls,
+    "aria-describedby": "series-control-error",
+    oninput: (event) => {
+      const form = event.currentTarget;
+      state.focusedSeriesDraft = Object.fromEntries(new FormData(form));
+    },
   },
     h("label", {}, "Run",
       h("select", { name: "runID" },
@@ -4840,13 +4947,15 @@ function renderFocusedSeriesControls(chart, stateInfo) {
       h("input", { name: "endStep", inputmode: "numeric", value: controls.endStep, placeholder: text(chart.x_max, "latest") }),
     ),
     h("label", {}, "Resolution",
-      h("select", { name: "stepInterval" },
+      h("select", { name: "stepInterval", onchange: (event) => {
+        customLabel.hidden = event.target.value !== "custom";
+        state.focusedSeriesDraft = Object.fromEntries(new FormData(event.target.form));
+        if (!customLabel.hidden) customInput.focus();
+      } },
         ...focusedSeriesResolutionOptions.map((option) => h("option", { value: option.value, selected: selectedResolution === option.value }, option.label)),
       ),
     ),
-    selectedResolution === "custom" ? h("label", {}, "Custom steps",
-      h("input", { name: "customStepInterval", inputmode: "numeric", value: controls.customStepInterval, placeholder: "25" }),
-    ) : null,
+    customLabel,
     h("label", { title: "Optional compatibility override. Blank derives 600-1500 points per series from the rendered chart width." }, "Point cap",
       h("input", { name: "maxPoints", inputmode: "numeric", value: controls.maxPoints, placeholder: "Auto (600-1500)" }),
     ),
@@ -4856,28 +4965,31 @@ function renderFocusedSeriesControls(chart, stateInfo) {
       disabled: state.focusedSeriesLoading,
       title: `Load up to ${Intl.NumberFormat().format(focusedSeriesMaxPointLimit)} hoverable points for ${chart.metric_name}`,
     }, state.focusedSeriesLoading ? "Loading detail..." : stateInfo.cacheHit || stateInfo.detailLoaded ? "Apply detail" : "Load detail"),
+    error,
   );
 }
 
 function submitFocusedSeriesControls(event) {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
-  let stepInterval;
+  state.focusedSeriesDraft = Object.fromEntries(data);
+  const previous = state.focusedSeriesControls;
   try {
-    stepInterval = normalizeSubmittedStepInterval(data.get("stepInterval"), data.get("customStepInterval"));
+    state.focusedSeriesControls = {
+      ...state.focusedSeriesDraft,
+      stepInterval: normalizeSubmittedStepInterval(data.get("stepInterval"), data.get("customStepInterval")),
+    };
+    focusedSeriesQueryOptions();
   } catch (error) {
+    state.focusedSeriesControls = previous;
     state.focusedSeriesError = error.message || String(error);
-    render();
+    const errorNode = event.currentTarget.querySelector("#series-control-error");
+    errorNode.textContent = state.focusedSeriesError;
+    event.currentTarget.setAttribute("aria-invalid", "true");
     return;
   }
-  state.focusedSeriesControls = {
-    runID: text(data.get("runID"), "").trim(),
-    startStep: text(data.get("startStep"), "").trim(),
-    endStep: text(data.get("endStep"), "").trim(),
-    stepInterval,
-    customStepInterval: text(data.get("customStepInterval"), "").trim(),
-    maxPoints: text(data.get("maxPoints"), "").trim(),
-  };
+  state.focusedSeriesDraft = null;
+  state.focusedSeriesError = "";
   updateURL();
   loadFocusedSeriesDetail().catch(renderError);
 }
@@ -4916,7 +5028,9 @@ function parseIntegerControl(value, label) {
   if (!/^-?\d+$/.test(raw)) {
     throw new Error(`${label} must be an integer`);
   }
-  return Number.parseInt(raw, 10);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${label} must be a safe integer`);
+  return parsed;
 }
 
 function normalizeStepIntervalControl(value) {
@@ -4992,7 +5106,7 @@ function chartResolutionLabel(chart) {
 }
 
 function renderResearchRunTablePanel(snapshot) {
-  const metricColumns = featuredMetricSpecs(snapshot).slice(0, 6);
+  const metricColumns = featuredMetricSpecs(snapshot);
   const rows = filteredRuns(snapshot);
   return configuredPanel("runs", "Run comparison", "Metric values by run",
     h("div", { class: "table-scroll" },
@@ -5027,38 +5141,43 @@ function renderResearchRunTablePanel(snapshot) {
 }
 
 function renderOutputMediaPanel(snapshot) {
-  const detailSnapshot = state.fullSnapshot || snapshot;
   if (isCompactPayload(snapshot) && !state.fullSnapshot) {
     return renderDeferredOutputMediaPanel(snapshot);
   }
-  const media = outputMediaSummaries(detailSnapshot);
-  if (!media.length) {
-    return configuredPanel("media", "Output media", "Media artifacts for the visible run set.", renderCompactStatusRow(
-      [
-        evidenceStatePill("no media summaries"),
-        evidenceCountPill("artifact candidates", researchOutputArtifacts(detailSnapshot).filter(isVisualArtifact).length),
-      ],
-      "No output media matched the visible run set.",
-    ), "full output-media-panel compact-status-panel");
-  }
-
-  const selection = outputMediaSelection(media);
-  const visibleItems = selection.items.slice(0, 8);
-  const hero = visibleItems.find((item) => artifactPreviewSource(item.artifact)) || visibleItems[0];
+  const summary = h("div", { class: "evidence-summary-strip" });
+  const controls = h("div");
+  const heroSlot = h("div");
+  const records = pagedRecords([], renderOutputMediaCard, {
+    pageSize: 8, className: "output-media-grid", key: "media",
+    itemKey: (item) => evidenceID(item.artifact, "artifacts"),
+  });
   const body = h("div", { class: "output-media-browser" },
-    h("div", { class: "evidence-summary-strip" },
-      evidenceCountPill("media", media.length),
-      evidenceCountPill("tags", selection.tags.length),
+    summary, controls, heroSlot, records,
+  );
+  const panel = configuredPanel("media", "Output media", "Model outputs as summary streams: browse by tag, run, and step when indexed metadata is available.", body, "full output-media-panel");
+  let activeHeroID = "";
+  let activeSelection = "";
+  panel.updateMedia = (nextSnapshot) => {
+    const media = outputMediaSummaries(state.fullSnapshot || nextSnapshot);
+    const selection = outputMediaSelection(media);
+    const selectionKey = JSON.stringify([state.outputMediaTag, state.outputMediaRunID, state.outputMediaStep]);
+    const retainedHero = selectionKey === activeSelection
+      ? selection.items.find((item) => evidenceID(item.artifact, "artifacts") === activeHeroID) : null;
+    const hero = retainedHero || selection.items.find((item) => artifactPreviewSource(item.artifact)) || selection.items[0];
+    activeSelection = selectionKey;
+    activeHeroID = hero ? evidenceID(hero.artifact, "artifacts") : "";
+    updateSlot(summary, [media.length, selection.tags, selection.runs, selection.steps], () => [
+      evidenceCountPill("media", media.length), evidenceCountPill("tags", selection.tags.length),
       evidenceCountPill("runs", new Set(media.map((item) => item.run_id).filter(Boolean)).size),
       selection.steps.length ? evidenceCountPill("steps", selection.steps.length) : evidenceStatePill("step metadata pending"),
       evidenceStatePill("artifact-derived compatibility view"),
-    ),
-    renderOutputMediaControls(selection),
-    hero ? renderOutputMediaHero(hero, selection) : h("p", { class: "empty" }, "No media matched the selected tag, run, and step."),
-    visibleItems.length ? h("div", { class: "output-media-grid" }, visibleItems.map(renderOutputMediaCard)) : null,
-    selection.items.length > visibleItems.length ? h("p", { class: "more" }, `+${selection.items.length - visibleItems.length} more media records for this selection`) : null,
-  );
-  return configuredPanel("media", "Output media", "Model outputs as summary streams: browse by tag, run, and step when indexed metadata is available.", body, "full output-media-panel");
+    ]);
+    updateSlot(controls, [selection.tags, selection.runs, selection.steps, selectionKey], () => media.length ? renderOutputMediaControls(selection) : null);
+    updateSlot(heroSlot, hero, () => hero ? renderOutputMediaHero(hero) : h("p", { class: "empty" }, "No media matched the selected tag, run, and step."));
+    records.updateRecords(selection.items);
+  };
+  panel.updateMedia(snapshot);
+  return panel;
 }
 
 function renderDeferredOutputMediaPanel(snapshot) {
@@ -5134,6 +5253,7 @@ function renderOutputMediaControls(selection) {
     h("label", {}, "Tag",
       h("select", {
         value: selection.selectedTag,
+        "aria-label": "Output media tag",
         onchange: (event) => {
           state.outputMediaTag = event.target.value;
           state.outputMediaRunID = "";
@@ -5148,6 +5268,7 @@ function renderOutputMediaControls(selection) {
     controls.push(h("label", {}, "Run",
       h("select", {
         value: state.outputMediaRunID,
+        "aria-label": "Output media run",
         onchange: (event) => {
           state.outputMediaRunID = event.target.value;
           state.outputMediaStep = "";
@@ -5164,6 +5285,7 @@ function renderOutputMediaControls(selection) {
     controls.push(h("label", {}, "Step",
       h("select", {
         value: state.outputMediaStep,
+        "aria-label": "Output media step",
         onchange: (event) => {
           state.outputMediaStep = event.target.value;
           updateURL();
@@ -5178,18 +5300,18 @@ function renderOutputMediaControls(selection) {
   return h("div", { class: "output-media-controls" }, controls);
 }
 
-function renderOutputMediaHero(item, selection) {
+function renderOutputMediaHero(item) {
   return h("article", { class: "output-media-hero" },
     h("div", { class: "output-media-preview" }, renderArtifactPreview(item.artifact, artifactPreviewSource(item.artifact))),
     h("div", { class: "output-media-details" },
       h("span", { class: "state-pill" }, item.kind),
       h("h3", {}, item.tag),
       h("p", {}, item.caption || "Model output media summary"),
+      renderArtifactAction(item.artifact),
       h("div", { class: "runtime-chip-list" },
         h("span", {}, h("em", {}, "run"), h("b", {}, item.run_id || "all")),
         item.step ? h("span", {}, h("em", {}, "step"), h("b", {}, item.step)) : h("span", {}, h("em", {}, "step"), h("b", {}, "not indexed")),
         h("span", {}, h("em", {}, "time"), h("b", {}, item.wall_time || "--")),
-        h("span", {}, h("em", {}, "records"), h("b", {}, String(selection.items.length))),
       ),
     ),
   );
@@ -5202,6 +5324,8 @@ function renderOutputMediaCard(item) {
       h("b", { title: item.tag }, item.tag),
       h("span", {}, `${item.run_id || "run"} / ${item.kind}${item.step ? ` / step ${item.step}` : ""}`),
       h("code", { title: item.artifact.external_ref || item.artifact.uri || "" }, item.wall_time || item.artifact.external_ref || item.artifact.created_at || "--"),
+      renderArtifactAction(item.artifact),
+      renderFullRecord(item.artifact),
     ),
   );
 }
@@ -5363,6 +5487,7 @@ function artifactPreviewSource(artifact) {
     const url = new URL("/api/stellar/artifact", window.location.origin);
     url.searchParams.set("target", state.target);
     url.searchParams.set("artifact", artifact.artifact_id);
+    applySourceParam(url);
     return url.toString();
   }
   return "";
@@ -5411,6 +5536,7 @@ function artifactScopedSource(artifact, options = {}) {
   if (options.frame) {
     url.searchParams.set("frame", "1");
   }
+  applySourceParam(url);
   return url.toString();
 }
 
@@ -5438,20 +5564,19 @@ function renderArtifactPreview(artifact, source) {
 
   function renderTableArtifactPreview(artifact) {
     const table = artifact.table || {};
-    const columns = list(table.columns).slice(0, 6);
-    const rows = list(table.rows).slice(0, 6);
+    const columns = list(table.columns);
+    const rows = list(table.rows);
     if (!columns.length) {
       return h("div", { class: "research-output-placeholder" },
         h("strong", {}, "table"),
         h("span", {}, table.caption || artifact.caption || "table artifact"),
       );
     }
-    return h("div", { class: "research-output-preview table-preview" },
+    return h("div", { class: "table-preview" },
       table.caption || artifact.caption ? h("strong", {}, table.caption || artifact.caption) : null,
-      h("table", {},
-        h("thead", {}, h("tr", {}, columns.map((column) => h("th", {}, column)))),
-        h("tbody", {}, rows.map((row) => h("tr", {}, columns.map((column) => h("td", {}, text(row[column], "")))))),
-      ),
+      pagedRecords(rows, (row) => h("tr", {}, columns.map((column, index) => h("td", {}, recordText(Array.isArray(row) ? row[index] : row[column])))), {
+        key: `table:${evidenceID(artifact, "artifacts")}`, pageSize: 25, columns,
+      }),
     );
   }
   if (source && /image|plot|chart|graph|rollout|render|episode|frame|pixel|embedding|projection|retrieval|nearest|neighbor|attention|saliency|heatmap|gradcam|png|jpe?g|gif|webp|svg/.test(kind)) {
@@ -5483,10 +5608,8 @@ function renderArtifactReportPreview(artifact) {
 }
 
 function renderArtifactAction(artifact) {
-  if (!isReportArtifact(artifact)) {
-    return null;
-  }
-  const href = artifactReportSource(artifact);
+  const report = isReportArtifact(artifact);
+  const href = report ? artifactReportSource(artifact) : artifactPreviewSource(artifact);
   if (!href) {
     return null;
   }
@@ -5495,7 +5618,7 @@ function renderArtifactAction(artifact) {
     href,
     target: "_blank",
     rel: "noopener noreferrer",
-  }, "Open report");
+  }, report ? "Open report" : "Open full artifact");
 }
 
 function shortArtifactType(artifact) {
@@ -5539,6 +5662,7 @@ function renderResearchEvidencePanel(snapshot) {
     ["Observations / decisions", "human notes and durable experiment decisions", allRunEvidence(detailSnapshot, "observations", { runIDs }), renderObservationEvidenceItem],
   ];
   const body = h("div", { class: "evidence-browser" },
+    state.fullSnapshotError ? h("p", { class: "error-text", role: "status" }, `Evidence refresh failed; showing retained records: ${state.fullSnapshotError}`) : null,
     h("div", { class: "evidence-summary-strip" },
       evidenceCountPill("runs", runs.length),
       evidenceCountPill("metric files", detailSnapshot.status?.metric_files || 0),
@@ -5664,9 +5788,7 @@ function evidenceID(item, key) {
 }
 
 function renderRuntimeDiffSection(snapshot, runs = filteredRuns(snapshot)) {
-  const diffs = activeRunFilterLabels(snapshot).length
-    ? runtimeDiffsForVisibleRuns(runs)
-    : list(snapshot.compare?.runtime_diffs);
+  const diffs = runtimeDiffsForVisibleRuns(runs);
   const body = diffs.length
     ? h("div", { class: "runtime-diff-list" }, diffs.map((diff) => h("div", { class: "runtime-diff-row" },
       h("b", {}, diff.field),
@@ -5726,7 +5848,7 @@ function renderEvidenceListSection(title, subtitle, items, renderItem) {
       h("span", {}, `${items.length} ${subtitle}`),
     ),
     items.length
-      ? h("div", { class: "evidence-list" }, items.slice(0, 40).map(renderItem), items.length > 40 ? h("p", { class: "more" }, `+${items.length - 40} more`) : null)
+      ? pagedRecords(items, renderItem, { className: "evidence-list", key: title })
       : h("p", { class: "empty" }, `No ${title.toLowerCase()} imported for this store yet.`),
   );
 }
@@ -5736,6 +5858,7 @@ function renderConfigEvidenceItem(item) {
     h("b", {}, item.run_id || "run config"),
     h("span", {}, item.format || "config"),
     h("code", {}, compactConfig(item)),
+    renderFullRecord(item, "Full config record"),
   );
 }
 
@@ -5746,6 +5869,8 @@ function renderArtifactEvidenceItem(item) {
     h("span", {}, `${item.run_id || "run"} / ${item.type || "artifact"}`),
     h("code", {}, item.external_ref || item.uri || item.digest || item.created_at || "--"),
     action,
+    item.table ? renderArtifactPreview(item, "") : null,
+    renderFullRecord(item),
   );
 }
 
@@ -5754,6 +5879,7 @@ function renderEventEvidenceItem(item) {
     h("b", {}, item.message || item.type || "event"),
     h("span", {}, `${item.run_id || "run"} / ${item.severity || item.source || "event"}`),
     h("code", {}, item.time || item.payload || "--"),
+    renderFullRecord(item),
   );
 }
 
@@ -5762,6 +5888,7 @@ function renderObservationEvidenceItem(item) {
     h("b", {}, item.type || "observation"),
     h("span", {}, `${item.author || item.source || "author"} / ${item.scope_type || "scope"}:${item.scope_id || ""}`),
     h("code", {}, item.text || item.evidence || item.created_at || "--"),
+    renderFullRecord(item),
   );
 }
 
@@ -5776,6 +5903,104 @@ function compactConfig(item) {
   } catch {
     return text(raw).slice(0, 220);
   }
+}
+
+function recordText(value) {
+  return value && typeof value === "object" ? JSON.stringify(value, null, 2) : text(value, "");
+}
+
+function renderFullRecord(item, label = "Full record") {
+  const config = parseConfigPayload(item);
+  return h("details", { class: "full-record", "data-interaction-key": `record:${evidenceID(item, "record")}` },
+    h("summary", {}, label),
+    h("pre", { tabindex: "0" }, JSON.stringify(config ? { ...item, parsed_config: config } : item, null, 2)),
+  );
+}
+
+const recordPages = new Map();
+
+function pagedRecords(items, renderItem, options = {}) {
+  const size = options.pageSize || 40;
+  const key = `${state.target}:${options.key || options.className || "records"}`;
+  let pageCount = Math.max(1, Math.ceil(items.length / size));
+  let page = Math.min(recordPages.get(key) || 0, pageCount - 1);
+  const records = new Map();
+  const content = options.columns ? h("tbody") : h("div", { class: options.className || "evidence-list" });
+  const status = h("span", { role: "status" });
+  const previous = h("button", { type: "button", onclick: () => { page--; update(); } }, "Previous");
+  const next = h("button", { type: "button", onclick: () => { page++; update(); } }, "Next");
+  function update() {
+    recordPages.set(key, page);
+    const visible = items.slice(page * size, (page + 1) * size);
+    if (options.itemKey) {
+      const keep = new Set(visible.map(options.itemKey));
+      for (const [id, record] of records) {
+        if (!keep.has(id)) { record.node.remove(); records.delete(id); }
+      }
+      visible.forEach((item, index) => {
+        const id = options.itemKey(item);
+        const signature = JSON.stringify(item);
+        let record = records.get(id);
+        if (!record || record.signature !== signature) {
+          record?.node.remove();
+          record = { signature, node: renderItem(item) };
+          records.set(id, record);
+        }
+        if (content.children[index] !== record.node) content.insertBefore(record.node, content.children[index] || null);
+      });
+    } else {
+      content.replaceChildren(...visible.map(renderItem));
+    }
+    status.textContent = `${items.length ? page * size + 1 : 0}-${Math.min(items.length, (page + 1) * size)} of ${items.length}`;
+    previous.disabled = page === 0;
+    next.disabled = page + 1 === pageCount;
+  }
+  update();
+  const browser = h("div", { class: "record-browser" },
+    options.columns ? h("div", { class: "table-scroll", tabindex: "0", "aria-label": "Scrollable data table" },
+      h("table", { class: "run-table" }, h("thead", {}, h("tr", {}, options.columns.map((column) => h("th", { scope: "col" }, column)))), content),
+    ) : content,
+    h("div", { class: "record-pagination", "aria-label": "Record pages" }, previous, status, next),
+  );
+  let signature = JSON.stringify(items);
+  browser.updateRecords = (nextItems) => {
+    const nextSignature = JSON.stringify(nextItems);
+    if (signature === nextSignature) return;
+    signature = nextSignature;
+    items = nextItems;
+    pageCount = Math.max(1, Math.ceil(items.length / size));
+    page = Math.min(page, pageCount - 1);
+    update();
+  };
+  return browser;
+}
+
+function renderSampleTable(dataset, metricName, options = {}) {
+  if (!options.singlePoint && !options.expanded) {
+    const body = h("div");
+    let loaded = false;
+    return h("details", {
+      class: "sample-data",
+      ontoggle: (event) => {
+        if (event.currentTarget.open && !loaded) {
+          loaded = true;
+          body.append(renderSampleTable(dataset, metricName, { ...options, expanded: true }));
+        }
+      },
+    }, h("summary", {}, `Inspect sampled data: ${metricName}`), body);
+  }
+  const rows = dataset.flatMap((series) => {
+    const smoothed = new Map(series.smoothedPoints.map((point) => [point.step, point.value]));
+    const raw = new Map(series.points.map((point) => [point.step, point.value]));
+    return [...new Set([...raw.keys(), ...smoothed.keys()])].sort((a, b) => a - b).map((step) =>
+      [series.runID, series.runGroupID, step, raw.get(step) ?? "Not sampled", smoothed.get(step) ?? "Not smoothed"]);
+  });
+  const table = pagedRecords(rows, (row) => h("tr", {}, row.map((value) => h("td", {}, String(value)))), {
+    key: `samples:${metricName}:${options.singlePoint ? "scalar" : "chart"}`,
+    pageSize: 50, columns: ["Run", "Group", "Step", "Raw value", "EMA value"],
+  });
+  const note = h("p", {}, `${metricName}: ${options.singlePoint ? "One raw sample per run; no cross-run reduction." : "All sampled raw and EMA values. Sampling can omit steps; use detail controls for a smaller range."}`);
+  return h("div", { class: "sample-data" }, note, table);
 }
 
 function renderMetricChart(chart, options = {}) {
@@ -5900,6 +6125,7 @@ function renderMetricChart(chart, options = {}) {
     svg,
     tooltip,
     options.showLegend ? chartLegend(dataset) : null,
+    renderSampleTable(dataset, metricName),
   );
 
   let pendingHoverEvent = null;
@@ -6087,21 +6313,28 @@ function attachChartBrush(brush) {
   });
 }
 
+function setFocusedSeriesRange(startStep, endStep) {
+  const range = {
+    startStep,
+    endStep,
+    stepInterval: "auto",
+    customStepInterval: "",
+  };
+  state.focusedSeriesControls = { ...state.focusedSeriesControls, ...range };
+  if (state.focusedSeriesDraft) {
+    state.focusedSeriesDraft = { ...state.focusedSeriesDraft, ...range };
+  }
+  state.focusedSeriesError = "";
+  updateURL();
+  loadFocusedSeriesDetail().catch(renderError);
+}
+
 // applyBrushRange writes a brushed [lo, hi] step window into the focused-series
 // controls and reloads detail at that window. Resolution is reset to auto so
 // the narrower window is re-sampled finely (autoFocusedSeriesStepInterval picks
 // 20 for <=2000-step spans), which is the whole point of zooming in.
 function applyBrushRange(lo, hi) {
-  state.focusedSeriesControls = {
-    ...state.focusedSeriesControls,
-    startStep: String(lo),
-    endStep: String(hi),
-    stepInterval: "auto",
-    customStepInterval: "",
-  };
-  state.focusedSeriesError = "";
-  updateURL();
-  loadFocusedSeriesDetail().catch(renderError);
+  setFocusedSeriesRange(String(lo), String(hi));
 }
 
 // clearBrushRange resets the brushed window (reset zoom) and reloads the full
@@ -6111,16 +6344,7 @@ function clearBrushRange() {
   if (!text(controls.startStep, "").trim() && !text(controls.endStep, "").trim()) {
     return; // already full-range; nothing to reset
   }
-  state.focusedSeriesControls = {
-    ...controls,
-    startStep: "",
-    endStep: "",
-    stepInterval: "auto",
-    customStepInterval: "",
-  };
-  state.focusedSeriesError = "";
-  updateURL();
-  loadFocusedSeriesDetail().catch(renderError);
+  setFocusedSeriesRange("", "");
 }
 
 function hideChartHover(context) {
@@ -6138,14 +6362,7 @@ function chartPointerFromEvent(event) {
 }
 
 function chartDataset(chart, options = {}) {
-  const runIDs = options.runIDs;
-  return (chart?.series || []).map((series) => {
-    if (runIDs && !runIDs.has(series.run_id)) {
-      return null;
-    }
-    if (!runIDs && state.hiddenRuns.has(series.run_id)) {
-      return null;
-    }
+  return visibleChartSeries(chart, options).map((series) => {
     const points = chartSeriesPointValues(series, "values");
     const smoothedPoints = chartSeriesPointValues(series, "smoothed_values");
     return {
@@ -6159,11 +6376,8 @@ function chartDataset(chart, options = {}) {
 }
 
 function chartSeriesPointValues(series, key) {
-  const values = Array.isArray(series?.[key]) && series[key].length
-    ? series[key]
-    : key === "values"
-      ? parsePointPairs(series.points).map(([x, y]) => ({ step: x, value: y }))
-      : [];
+  // Legacy SVG coordinates are presentation pixels, never metric samples.
+  const values = list(series?.[key]);
   return values
     .map((point) => ({
       step: numberValue(point.step),

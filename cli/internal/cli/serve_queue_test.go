@@ -57,7 +57,6 @@ func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 		"--profile", "model-serve",
 		"--image", "example.invalid/infer:v1",
 		"--gpus", "1",
-		"-n", "team-namespace",
 		"--dry-run=client",
 	)
 	if err != nil {
