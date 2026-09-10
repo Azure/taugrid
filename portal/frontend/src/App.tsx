@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-import { Component, useEffect, useState, type ReactNode } from 'react';
+import { Component, useEffect, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { WorkspaceProvider, nativeExperimentURL, remoteWorkspaceURL, scopedURL, useDirectory } from './data';
 import { Empty } from './components';
@@ -21,10 +21,6 @@ export function tabForPath(path: string): string | undefined {
   if (path.startsWith('/portal/runs/')) return 'workloads';
   return tabs.find(t => t.items.some(([, p]) => p !== '/portal' && p === path))?.id;
 }
-function storedPersona() {
-  try { const stored = window.localStorage.getItem('portalTab'); return tabs.some(t => t.id === stored) ? stored! : 'workloads'; }
-  catch { return 'workloads'; }
-}
 class BoardBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
   state: { error?: Error } = {};
   static getDerivedStateFromError(error: Error) { return { error }; }
@@ -40,27 +36,21 @@ export function ScopeBanner({ scope }: { scope?: WorkspaceScope }) {
 }
 export function App() {
   const location = useLocation(), navigate = useNavigate();
-  const workspace = new URLSearchParams(location.search).get('workspace') || '';
+  const params = new URLSearchParams(location.search);
+  const workspace = params.get('workspace') || '';
   const directory = useDirectory(workspace);
   // Never display a cached authorized scope after a failed directory refresh.
   const data = directory.isError ? undefined : directory.data;
   const scope = data?.selected, managed = data?.managed === true;
-  const [selectedPersona, setPersona] = useState(storedPersona);
-  const persona = tabForPath(location.pathname) || selectedPersona;
+  const requestedPersona = params.get('persona');
+  const persona = tabForPath(location.pathname) || tabs.find(tab => tab.id === requestedPersona)?.id || 'workloads';
   const experimentView = location.pathname === '/portal/experiments' || location.pathname === '/stellar' || location.pathname.startsWith('/stellar/');
   const experimentSurface = !!scope && persona === 'experiments' &&
     ['/portal', '/portal/experiments', '/stellar'].some(path => location.pathname === path || path === '/stellar' && location.pathname.startsWith('/stellar/')) &&
     ['available', 'redirect', 'unreachable', 'unsupported'].includes(scope.availability);
   const activeTab = tabs.find(t => t.id === persona)!;
-  const href = (path: string) => scopedURL(path, scope?.workspace || workspace, managed);
+  const href = (path: string) => scopedURL(path === '/portal' ? `/portal?persona=${persona}` : path, scope?.workspace || workspace, managed);
   const needsSelection = !!(managed && scope && !workspace);
-  useEffect(() => {
-    const owner = tabForPath(location.pathname);
-    if (owner) {
-      setPersona(owner);
-      try { window.localStorage.setItem('portalTab', owner); } catch { /* Persona still persists for this mounted shell. */ }
-    }
-  }, [location.pathname]);
   useEffect(() => {
     if (needsSelection && scope) navigate(scopedURL(location.pathname + location.search + location.hash, scope.workspace, true), { replace: true });
   }, [needsSelection, scope, location.pathname, location.search, location.hash, navigate]);
@@ -76,11 +66,8 @@ export function App() {
     }
   }, [scope, location.pathname, location.search, location.hash, experimentSurface]);
   function selectPersona(id: string) {
-    setPersona(id);
-    try { window.localStorage.setItem('portalTab', id); } catch { /* URL navigation remains usable when browser storage is disabled. */ }
-    if (id === 'experiments') {
-      if (tabForPath(location.pathname) !== id) navigate(href('/portal/experiments'));
-    } else if (tabForPath(location.pathname) && tabForPath(location.pathname) !== id) navigate(href('/portal'));
+    if (id === persona) return;
+    navigate(href(id === 'experiments' ? '/portal/experiments' : `/portal?persona=${id}`));
   }
   const workspacePicker = <label className="workspace-picker">Workspace <select id="workspace-select" aria-label="Workspace" value={scope?.workspace || workspace} disabled={!data || data.workspaces.length < 2} onChange={e => {
       const params = new URLSearchParams(location.search);

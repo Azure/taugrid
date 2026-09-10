@@ -15,6 +15,8 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   overview or sidebar; Workloads and Platform retain their boards.
   Workspace, project, experiment, and run selection are
   URL-addressable.
+  Shared overview links use `/portal?persona=platform` or `persona=workloads`;
+  absent or invalid personas default to Workloads, independent of browser storage.
   Independent source panels expose loading, refresh, last-success time, and
   explicitly stale retained data when a refresh fails.
 - **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
