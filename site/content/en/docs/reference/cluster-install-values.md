@@ -14,7 +14,43 @@ Print this reference from your terminal:
 tau cluster explain-values
 ```
 
-The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. `tau cluster install` defaults it to `tau-system`; `--namespace <name>` moves the Kueue, KubeRay, Tau controller, Portal, GPU monitoring, and other enabled first-party workloads together. The first-party charts follow their Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+The Helm release namespace defaults to `tau-system`; `--namespace <name>` selects the namespace for enabled system workloads and Services. An existing controller and its TauWorkspace objects can remain in a separate namespace through `tau-core-controller.namespaceOverride`. The installer checks the rendered controller namespace against existing TauWorkspace and TauQuotaRequest objects before either Helm installation pass. Readiness keeps Portal in the release namespace and checks the controller in its configured namespace. The deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+
+## Externally managed control-plane resources
+
+These opt-outs are intended for a reviewed transition into a **new** Helm
+release while another owner retains the named resources. They do not adopt,
+back up, or transfer ownership. Turning creation off in an existing release
+can cause Helm to delete resources it previously owned; do not use these
+switches as a release-removal procedure.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `tau-core-controller.namespaceOverride` | string | `""` | Existing controller/TauWorkspace namespace; empty uses the release namespace |
+| `tau-core-controller.serviceAccount.create` | bool | `true` | Create the controller ServiceAccount |
+| `tau-core-controller.rbac.create` | bool | `true` | Create controller, researcher and namespace RBAC |
+| `tau-core-controller.quotaApprovalPolicy.create` | bool | `true` | Create the quota admission policy and binding |
+| `tau-core-controller.tauCluster.create` | bool | `true` | Create the singleton TauCluster and its complete catalog; false omits the object |
+| `taugrid-core.portal.service.create` | bool | `true` | Create Portal's Service; an external Service must select the rendered pod labels |
+
+Disable Portal ServiceAccount/RBAC creation separately when they remain external.
+Disable existing Kueue, KubeRay, GPU monitoring and baseline queue components
+explicitly rather than asking a new release to own them. Retained resources
+must already satisfy the controller's access, catalog and readiness contract.
+
+`tau cluster install --skip-crds` skips installation of Helm `crds/` directories
+and omits them from `--dry-run`. Like Helm's flag, it does not suppress CRDs
+rendered from templates: disable those through the owning component's values.
+The bootstrap wait and component-aware readiness checks remain enabled; no
+readiness bypass is needed for a separately namespaced controller.
+Readiness requires readable coalesced Helm release values; it fails explicitly
+instead of guessing the namespace or disabled components when that read fails.
+
+Values supplied through a single `--values -` are buffered in memory and replayed
+unchanged for the preflight render and both installation passes. Tau does not
+write that input to a temporary file. An actual Helm install still persists
+release values and manifests in Helm's configured storage, normally Kubernetes
+Secrets; stdin is not a way to avoid that retention.
 
 ## MultiKueue capability
 

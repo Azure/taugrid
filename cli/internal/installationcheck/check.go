@@ -36,8 +36,11 @@ type Runner interface {
 type Options struct {
 	Release         string
 	SystemNamespace string
-	Timeout         time.Duration
-	PollInterval    time.Duration
+	// ControllerNamespace defaults to SystemNamespace. A release may retain
+	// the controller and TauWorkspace objects in a separate system namespace.
+	ControllerNamespace string
+	Timeout             time.Duration
+	PollInterval        time.Duration
 	// QueryTimeout bounds one kubectl call. Zero uses the default timeout.
 	// This prevents a stalled API request from consuming the full readiness
 	// timeout and lets the next polling interval retry it.
@@ -77,11 +80,20 @@ var componentSwitches = []chartComponent{
 	{name: ComponentTauCore, valuesKey: "tauCoreController"},
 }
 
-// DisabledComponents reports which validated components a release turned off,
-// given the release's coalesced Helm values as JSON.
-func DisabledComponents(helmValues []byte) ([]Component, error) {
+// ReleaseSettings describes readiness-relevant coalesced Helm values.
+type ReleaseSettings struct {
+	DisabledComponents  []Component
+	ControllerNamespace string
+}
+
+// SettingsFromValues reads component switches and the controller namespace
+// without retaining unrelated release values such as identity configuration.
+func SettingsFromValues(helmValues []byte) (ReleaseSettings, error) {
 	var values struct {
-		Components  map[string]any `json:"components"`
+		Components        map[string]any `json:"components"`
+		TauCoreController struct {
+			NamespaceOverride string `json:"namespaceOverride"`
+		} `json:"tau-core-controller"`
 		TauGridCore struct {
 			Portal struct {
 				Enabled *bool `json:"enabled"`
@@ -89,7 +101,7 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 		} `json:"taugrid-core"`
 	}
 	if err := json.Unmarshal(helmValues, &values); err != nil {
-		return nil, fmt.Errorf("decode Helm release values: %w", err)
+		return ReleaseSettings{}, fmt.Errorf("decode Helm release values: %w", err)
 	}
 	var disabled []Component
 	for _, component := range componentSwitches {
@@ -109,7 +121,16 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 	if !tauGridCoreEnabled || (values.TauGridCore.Portal.Enabled != nil && !*values.TauGridCore.Portal.Enabled) {
 		disabled = append(disabled, ComponentPortal)
 	}
-	return disabled, nil
+	return ReleaseSettings{
+		DisabledComponents:  disabled,
+		ControllerNamespace: values.TauCoreController.NamespaceOverride,
+	}, nil
+}
+
+// DisabledComponents reports which validated components a release turned off.
+func DisabledComponents(helmValues []byte) ([]Component, error) {
+	settings, err := SettingsFromValues(helmValues)
+	return settings.DisabledComponents, err
 }
 
 // Status is the outcome of one readiness check.
@@ -269,8 +290,12 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 			skip("TauCluster", detail),
 		)
 	} else {
+		controllerNamespace := opts.ControllerNamespace
+		if controllerNamespace == "" {
+			controllerNamespace = opts.SystemNamespace
+		}
 		results = append(results,
-			checkTauController(ctx, runner, opts.SystemNamespace),
+			checkTauController(ctx, runner, controllerNamespace),
 			checkTauCluster(ctx, runner),
 		)
 	}

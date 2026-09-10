@@ -7,6 +7,20 @@
       "type": "object",
       "additionalProperties": true
     },
+    "namespaceOverride": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "serviceAccount": {
+      "$ref": "#/definitions/resourceCreation"
+    },
+    "rbac": {
+      "$ref": "#/definitions/resourceCreation"
+    },
+    "quotaApprovalPolicy": {
+      "$ref": "#/definitions/resourceCreation"
+    },
     "tauCluster": {
       "type": "object",
       "additionalProperties": false,
@@ -17,6 +31,9 @@
         "workloadProfiles"
       ],
       "properties": {
+        "create": {
+          "type": "boolean"
+        },
         "managementMode": {
           "type": "string",
           "enum": [
@@ -102,6 +119,16 @@
     "tauCluster"
   ],
   "definitions": {
+    "resourceCreation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create"],
+      "properties": {
+        "create": {
+          "type": "boolean"
+        }
+      }
+    },
     "ownership": {
       "type": "object",
       "additionalProperties": false,

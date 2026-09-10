@@ -5,10 +5,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +43,8 @@ type clusterInstallSpec struct {
 	Atomic       bool
 	DryRun       bool
 	DependencyUp bool
+	SkipCRDs     bool
+	valuesInput  []byte
 }
 
 func newClusterInstallCmd() *cobra.Command {
@@ -88,6 +92,12 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			if validationTimeout <= 0 {
 				return fmt.Errorf("invalid --timeout: must be greater than zero")
 			}
+			if slices.Contains(spec.ValuesFiles, "-") {
+				spec.valuesInput, err = io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return fmt.Errorf("read Helm values from stdin: %w", err)
+				}
+			}
 			printClusterInstallPlan(cmd, spec)
 			if spec.DryRun {
 				var rendered bytes.Buffer
@@ -105,8 +115,19 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 				return err
 			}
 			installationRunner := newInstallationCheckRunner(spec.KubeContext)
-			if releaseExists {
-				if err := ensureSystemNamespaceMigrationSafe(cmd.Context(), installationRunner, spec.Namespace); err != nil {
+			var rendered bytes.Buffer
+			if err := runClusterInstallHelm(cmd, spec, &rendered, clusterInstallRenderArgs(spec)); err != nil {
+				return fmt.Errorf("render TauGrid before installation: %w", err)
+			}
+			controllerNamespace, err := renderedControllerNamespace(rendered.Bytes())
+			if err != nil {
+				return err
+			}
+			if controllerNamespace != "" {
+				preflightCtx, cancel := context.WithTimeout(cmd.Context(), validationTimeout)
+				err := ensureSystemNamespaceMigrationSafe(preflightCtx, installationRunner, controllerNamespace)
+				cancel()
+				if err != nil {
 					return err
 				}
 				if err := upgradeTauGridCRDs(cmd, installationRunner, spec); err != nil {
@@ -121,20 +142,27 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			if err := runClusterInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallArgs(spec)); err != nil {
 				return err
 			}
-			disabled := disabledTauGridComponents(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+			settings, err := tauGridReadinessSettings(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+			if err != nil {
+				return err
+			}
 			if err := runTauGridInstallationValidation(
 				cmd.Context(),
 				installationRunner,
 				installationcheck.Options{
-					Release:            spec.Release,
-					SystemNamespace:    spec.Namespace,
-					Timeout:            validationTimeout,
-					PollInterval:       defaultInstallationValidationPollInterval,
-					DisabledComponents: disabled,
+					Release:             spec.Release,
+					SystemNamespace:     spec.Namespace,
+					ControllerNamespace: controllerNamespace,
+					Timeout:             validationTimeout,
+					PollInterval:        defaultInstallationValidationPollInterval,
+					DisabledComponents:  settings.DisabledComponents,
 				},
 				cmd.OutOrStdout(),
 			); err != nil {
 				return err
+			}
+			if controllerNamespace == "" {
+				controllerNamespace = spec.Namespace
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), `
 TauGrid is installed and ready as Helm release %s in namespace %s.
@@ -145,14 +173,14 @@ Next:
   3. Before storage-backed runs, pre-provision a Bound PVC in the workspace namespace.
   4. Generate its repository with: tau workspace init-repo
   5. Give the repository to the researcher; they can run its checked-in target with: tau run train
-`, spec.Release, spec.Namespace, spec.Namespace, spec.Namespace)
+`, spec.Release, spec.Namespace, controllerNamespace, controllerNamespace)
 			return nil
 		},
 	}
 	flags := cmd.Flags()
 	flags.StringVar(&spec.KubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	flags.StringVar(&spec.Release, "release", spec.Release, "Helm release name")
-	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "namespace for all TauGrid system workloads and TauWorkspace objects")
+	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "Helm release namespace (controller defaults here unless tau-core-controller.namespaceOverride is set)")
 	flags.StringVar(&spec.Chart, "chart", spec.Chart, "TauGrid chart reference or local chart path")
 	flags.StringVar(&spec.Version, "version", spec.Version, "TauGrid chart version")
 	flags.StringVar(&spec.Timeout, "timeout", spec.Timeout, "timeout for each Helm operation and the readiness wait")
@@ -164,10 +192,20 @@ Next:
 	flags.BoolVar(&spec.Atomic, "atomic", spec.Atomic, "roll back on Helm failure (also enables Helm's generic watcher wait)")
 	flags.BoolVar(&spec.DryRun, "dry-run", false, "summarize the chart manifests offline without contacting the cluster")
 	flags.BoolVar(&spec.DependencyUp, "dependency-update", spec.DependencyUp, "update missing chart dependencies")
+	flags.BoolVar(&spec.SkipCRDs, "skip-crds", false, "skip Helm CRD-directory installation and omit those CRDs from the offline preview")
 	return cmd
 }
 
 func validateClusterInstallSpec(spec clusterInstallSpec) error {
+	stdinFiles := 0
+	for _, file := range spec.ValuesFiles {
+		if file == "-" {
+			stdinFiles++
+		}
+	}
+	if stdinFiles > 1 {
+		return errors.New("--values - may only be specified once")
+	}
 	for name, value := range map[string]string{
 		"--release":   spec.Release,
 		"--namespace": spec.Namespace,
@@ -191,6 +229,10 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
 	if spec.Atomic {
 		rollback = "enabled (implies Helm watcher wait)"
 	}
+	crds := "included"
+	if spec.SkipCRDs {
+		crds = "Helm CRD directories skipped (templated CRDs require separate component settings)"
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), `TauGrid installation plan
   Release:    %s
   Namespace:  %s
@@ -199,14 +241,22 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Helm wait:  %s
   Rollback:   %s
   Tau CRDs:   update from the selected chart before an existing-release upgrade; not rolled back by Helm
+  Chart CRDs: %s
   Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal
   Opt-in:     Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
 
-`, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
+`, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback, crds)
 }
 
 func runClusterInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.Writer, args []string) error {
+	if slices.Contains(spec.ValuesFiles, "-") {
+		// Preview, bootstrap and final install must receive identical stdin
+		// values without writing private configuration to a temporary file.
+		input := cmd.InOrStdin()
+		cmd.SetIn(bytes.NewReader(spec.valuesInput))
+		defer cmd.SetIn(input)
+	}
 	return runTauGridHelmCommand(cmd, spec.Chart, spec.Version, out, args)
 }
 
@@ -280,7 +330,9 @@ func clusterInstallRenderArgs(spec clusterInstallSpec) []string {
 		"template", spec.Release, spec.Chart,
 		"--namespace", spec.Namespace,
 		"--version", spec.Version,
-		"--include-crds",
+	}
+	if !spec.SkipCRDs {
+		args = append(args, "--include-crds")
 	}
 	if spec.KubeContext != "" {
 		args = append(args, "--kube-context", spec.KubeContext)
@@ -289,6 +341,45 @@ func clusterInstallRenderArgs(spec clusterInstallSpec) []string {
 		args = append(args, "--dependency-update")
 	}
 	return appendHelmValueArgs(args, spec)
+}
+
+func renderedControllerNamespace(manifest []byte) (string, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(manifest))
+	var namespace string
+	for {
+		var doc yaml.Node
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return namespace, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("parse rendered controller namespace: %w", err)
+		}
+		// Helm dependency progress may precede the first manifest document.
+		if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+			continue
+		}
+		var obj struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name      string `yaml:"name"`
+				Namespace string `yaml:"namespace"`
+			} `yaml:"metadata"`
+		}
+		if err := doc.Decode(&obj); err != nil {
+			return "", fmt.Errorf("parse rendered controller namespace: %w", err)
+		}
+		if obj.Kind != "Deployment" || obj.Metadata.Name != "tau-core-controller" {
+			continue
+		}
+		if namespace != "" {
+			return "", errors.New("rendered chart contains multiple tau-core-controller Deployments")
+		}
+		namespace = strings.TrimSpace(obj.Metadata.Namespace)
+		if namespace == "" {
+			return "", errors.New("rendered tau-core-controller Deployment must specify its system namespace")
+		}
+	}
 }
 
 func printRenderedKindSummary(out io.Writer, manifest []byte) error {
@@ -361,6 +452,9 @@ func clusterInstallArgs(spec clusterInstallSpec) []string {
 	}
 	if spec.Wait {
 		args = append(args, "--wait")
+	}
+	if spec.SkipCRDs {
+		args = append(args, "--skip-crds")
 	}
 	if spec.Atomic {
 		args = appendRollbackOnFailure(args)
