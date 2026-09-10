@@ -47,7 +47,11 @@ import (
 
 // rayClusterLabel is the label KubeRay stamps on a RayJob's pods (value is the
 // owning RayCluster's name). Used to select a RayJob's pods.
-const rayClusterLabel = "ray.io/cluster"
+const (
+	rayClusterLabel       = "ray.io/cluster"
+	jobNameLabel          = "job-name"
+	qualifiedJobNameLabel = "batch.kubernetes.io/job-name"
+)
 
 // ErrNotFound signals the requested job (Job and RayJob) does not exist, so the
 // handler can return 404 rather than a soft-degraded empty page.
@@ -64,6 +68,7 @@ var errDecode = errors.New("jobdetail: object read succeeded but payload could n
 type Reader interface {
 	GetJob(ctx context.Context, namespace, name string) ([]byte, error)
 	GetRayJob(ctx context.Context, namespace, name string) ([]byte, error)
+	GetRayCluster(ctx context.Context, namespace, name string) ([]byte, error)
 	ListPods(ctx context.Context, namespace string) ([]byte, error)
 	ListEvents(ctx context.Context, namespace string) ([]byte, error)
 	ListWorkloads(ctx context.Context, namespace string) ([]byte, error)
@@ -89,17 +94,18 @@ type Options struct {
 // a board shape. Optional tiers are omitted when empty so the frontend can
 // render each independently.
 type Snapshot struct {
-	Namespace string           `json:"namespace"`
-	Name      string           `json:"name"`
-	Kind      string           `json:"kind"` // Job | RayJob
-	Status    string           `json:"status"`
-	RunID     string           `json:"runId,omitempty"`
-	Object    ObjectDetail     `json:"object"`
-	Workloads []links.Workload `json:"workloads,omitempty"`
-	Pods      []PodDetail      `json:"pods,omitempty"`
-	Events    []EventDetail    `json:"events,omitempty"`
-	Links     DetailLinks      `json:"links"`
-	Lifecycle *LifecycleRow    `json:"lifecycle,omitempty"`
+	Namespace   string           `json:"namespace"`
+	Name        string           `json:"name"`
+	Kind        string           `json:"kind"` // Job | RayJob
+	ResourceUID string           `json:"resourceUid,omitempty"`
+	Status      string           `json:"status"`
+	RunID       string           `json:"runId,omitempty"`
+	Object      ObjectDetail     `json:"object"`
+	Workloads   []links.Workload `json:"workloads,omitempty"`
+	Pods        []PodDetail      `json:"pods,omitempty"`
+	Events      []EventDetail    `json:"events,omitempty"`
+	Links       DetailLinks      `json:"links"`
+	Lifecycle   *LifecycleRow    `json:"lifecycle,omitempty"`
 	// ResourceRelease distinguishes scheduler quota accounting from physical
 	// Ray pod teardown. It is populated for RayJobs after Workloads and Pods are
 	// read so the UI never treats "Finished" as proof that GPUs are reusable.
@@ -272,62 +278,92 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	}
 
 	snap := Snapshot{
-		Namespace: opts.Namespace,
-		Name:      opts.Name,
-		Kind:      obj.kind,
-		Status:    obj.status,
-		RunID:     obj.runID,
-		Object:    obj.detail,
+		Namespace:   opts.Namespace,
+		Name:        opts.Name,
+		Kind:        obj.kind,
+		ResourceUID: obj.uid,
+		Status:      obj.status,
+		RunID:       obj.runID,
+		Object:      obj.detail,
 	}
 	if !obj.experiment.empty() {
 		identity := obj.experiment
 		snap.Experiment = &identity
 	}
 
-	// Tier 2: per-job Ray dashboard deep-link. Only a RayJob with a named
-	// RayCluster has one — the link reverse-proxies that cluster's head Service
-	// (:8265) and is reachable only while the cluster runs. RayDashboardPath
-	// returns "" for a plain Job or a RayJob whose cluster is not yet named, so
-	// the frontend omits the button.
-	snap.Links.RayDashboardPath = links.RayDashboardPath(opts.Namespace, obj.rayClusterName)
-	// Reachability is judged by the SAME head-Service discovery the portal's Ray
-	// proxy uses (ray.Board): the link only works if validateRayTarget can resolve
-	// <ns>/<rayClusterName> to a discoverable head Service. Judging reachability by
-	// head-pod readiness alone is wrong — a finished/GC'd RayJob can leave a head
-	// Service whose name/labels no longer match rayClusterName (KubeRay names it
-	// after the RayJob, e.g. "<rayjob>-head-svc" with an empty ray.io/cluster
-	// label), so the proxy 404s even though a stale head pod might look Ready.
-	// Aligning "button lit" with "proxy resolves" removes the clickable-but-404 gap.
-	if obj.rayClusterName != "" {
-		snap.Links.RayDashboardReachable = rayClusterDiscoverable(ctx, r, opts.Namespace, obj.rayClusterName)
-	}
-
 	// Tier 1b: Workloads admitted for this job (best-effort).
 	wls, workloadErr := links.ListWorkloads(ctx, r, opts.Namespace)
 	if workloadErr == nil {
-		snap.Workloads = filterWorkloads(wls, opts.Name, opts.Name, obj.runID)
+		snap.Workloads = filterWorkloads(wls, obj)
 	}
 	snap.Diagnostics.Workloads = sourceDiagnostic("workloads", len(snap.Workloads), workloadErr)
 	if apierrors.IsNotFound(workloadErr) {
 		snap.Diagnostics.Workloads = SourceDiagnostic{State: "not_configured", Message: "Kueue workloads are not available in this cluster."}
 	}
 
-	// Tier 1b: Pods backing the run (best-effort). Filter by RayCluster (RayJob)
-	// or job label (Job).
-	rawPods, podErr := r.ListPods(ctx, opts.Namespace)
-	if podErr == nil {
-		snap.Pods, podErr = parsePods(rawPods, obj.podSelectorKey, obj.podSelectorValue)
+	podOwnerUID := obj.uid
+	rayClusterUID := ""
+	var rayOwnershipErr error
+	if obj.kind == "RayJob" && obj.uid != "" {
+		podOwnerUID = ""
+		if obj.rayClusterName == "" {
+			rayOwnershipErr = errors.New("RayCluster identity is not available")
+		} else {
+			raw, err := r.GetRayCluster(ctx, opts.Namespace, obj.rayClusterName)
+			if err != nil {
+				rayOwnershipErr = fmt.Errorf("read RayCluster ownership: %w", err)
+			} else {
+				rayClusterUID, rayOwnershipErr = parseOwnedObjectUID(raw, obj.uid)
+			}
+			podOwnerUID = rayClusterUID
+		}
+	}
+
+	// Tier 2: per-job Ray dashboard deep-link. UID-bearing RayJobs only expose
+	// the link after proving the named RayCluster belongs to this incarnation.
+	// Legacy UID-less payloads retain name-based compatibility behavior.
+	if obj.rayClusterName != "" && (obj.uid == "" || rayOwnershipErr == nil && rayClusterUID != "") {
+		snap.Links.RayDashboardPath = links.RayDashboardPath(opts.Namespace, obj.rayClusterName)
+		// Reachability uses the same head-Service discovery as the Ray proxy.
+		snap.Links.RayDashboardReachable = rayClusterDiscoverable(ctx, r, opts.Namespace, obj.rayClusterName)
+	}
+
+	// Tier 1b: Pods backing the run (best-effort). Labels discover compatible
+	// candidates; owner UID proves they belong to this object incarnation.
+	podUIDs := map[string]string{}
+	var podErr error
+	if rayOwnershipErr != nil {
+		podErr = rayOwnershipErr
+	} else {
+		rawPods, err := r.ListPods(ctx, opts.Namespace)
+		podErr = err
+		if podErr == nil {
+			snap.Pods, podUIDs, podErr = parsePodsWithStatus(rawPods, podOwnerUID, obj.uid != "", obj.podSelectors)
+		}
 	}
 	snap.Diagnostics.Pods = sourceDiagnostic("pods", len(snap.Pods), podErr)
-	podsVisible := podErr == nil && obj.podSelectorValue != ""
+	podsVisible := podErr == nil && (podOwnerUID != "" || obj.uid == "" && hasUsablePodSelector(obj.podSelectors))
 	if obj.kind == "RayJob" {
 		snap.ResourceRelease = rayResourceRelease(obj.detail, snap.Workloads, snap.Pods, podsVisible)
 	}
 
 	// Tier 1b: recent Events (best-effort).
 	rawEvents, eventErr := r.ListEvents(ctx, opts.Namespace)
+	if eventErr == nil && obj.uid != "" && podErr != nil {
+		// UID-fenced Pod Events depend on a complete ownership set. Treat a
+		// failed Pod or RayCluster ownership read as an Event-section outage so
+		// the frontend can retain the last complete same-incarnation evidence.
+		eventErr = fmt.Errorf("resolve event ownership: %w", podErr)
+	}
 	if eventErr == nil {
-		snap.Events, eventErr = parseEvents(rawEvents, opts.Name, obj.rayClusterName)
+		if podUIDs == nil {
+			podUIDs = map[string]string{}
+		}
+		eventObjects := podUIDs
+		eventObjects[obj.uid] = obj.kind
+		eventObjects[rayClusterUID] = "RayCluster"
+		delete(eventObjects, "")
+		snap.Events, eventErr = parseEvents(rawEvents, eventObjects, obj.uid != "", opts.Name, obj.rayClusterName)
 	}
 	snap.Diagnostics.Events = sourceDiagnostic("events", len(snap.Events), eventErr)
 
@@ -338,14 +374,15 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 
 // resolved carries the fields extracted from whichever object was found.
 type resolved struct {
-	kind             string
-	status           string
-	runID            string
-	experiment       ExperimentIdentity
-	detail           ObjectDetail
-	rayClusterName   string
-	podSelectorKey   string
-	podSelectorValue string
+	kind           string
+	name           string
+	uid            string
+	status         string
+	runID          string
+	experiment     ExperimentIdentity
+	detail         ObjectDetail
+	rayClusterName string
+	podSelectors   []podLabelSelector
 }
 
 // resolveObject tries the RayJob first (its pods and native status are richer),
@@ -398,6 +435,7 @@ func resolveObject(ctx context.Context, r Reader, opts Options) (resolved, error
 type objectMeta struct {
 	Name              string            `json:"name"`
 	Namespace         string            `json:"namespace"`
+	UID               string            `json:"uid"`
 	CreationTimestamp string            `json:"creationTimestamp"`
 	Labels            map[string]string `json:"labels"`
 	Annotations       map[string]string `json:"annotations"`
@@ -455,6 +493,8 @@ func parseJob(data []byte) (resolved, bool) {
 	executionTarget := objectExecutionTarget(o.Spec.ManagedBy)
 	return resolved{
 		kind:   "Job",
+		name:   o.Metadata.Name,
+		uid:    o.Metadata.UID,
 		status: runs.JobStatus(conds, o.Status.Active, o.Status.Succeeded, o.Status.Failed),
 		runID:  o.Metadata.Labels[workloadmeta.LabelRunID],
 
@@ -469,8 +509,15 @@ func parseJob(data []byte) (resolved, bool) {
 			ManagedBy:       o.Spec.ManagedBy,
 			ExecutionTarget: executionTarget,
 		},
-		podSelectorKey:   workloadmeta.LabelJob,
-		podSelectorValue: o.Metadata.Name,
+		// Kubernetes Job controller labels are canonical pod ownership. run-id is
+		// Tau's run identity; tau.azure.com/job remains a reader-only compatibility
+		// selector for workloads produced by older or custom clients.
+		podSelectors: []podLabelSelector{
+			{key: jobNameLabel, value: o.Metadata.Name},
+			{key: qualifiedJobNameLabel, value: o.Metadata.Name},
+			{key: workloadmeta.LabelRunID, value: o.Metadata.Labels[workloadmeta.LabelRunID]},
+			{key: workloadmeta.LabelJob, value: o.Metadata.Name},
+		},
 	}, true
 }
 
@@ -499,6 +546,8 @@ func parseRayJob(data []byte) (resolved, bool) {
 	executionTarget := objectExecutionTarget(o.Spec.ManagedBy)
 	return resolved{
 		kind:   "RayJob",
+		name:   o.Metadata.Name,
+		uid:    o.Metadata.UID,
 		status: runs.RayJobStatus(o.Status.JobDeploymentStatus, o.Status.JobStatus),
 		runID:  o.Metadata.Labels[workloadmeta.LabelRunID],
 
@@ -516,9 +565,10 @@ func parseRayJob(data []byte) (resolved, bool) {
 			Reason:              o.Status.Reason,
 			Message:             o.Status.Message,
 		},
-		rayClusterName:   o.Status.RayClusterName,
-		podSelectorKey:   rayClusterLabel,
-		podSelectorValue: o.Status.RayClusterName,
+		rayClusterName: o.Status.RayClusterName,
+		podSelectors: []podLabelSelector{
+			{key: rayClusterLabel, value: o.Status.RayClusterName},
+		},
 	}, true
 }
 
@@ -529,18 +579,22 @@ func objectExecutionTarget(managedBy string) string {
 	return ""
 }
 
-// filterWorkloads keeps only Workloads that belong to this job. Kueue copies the
-// job's tau.azure.com/{job,run-id} labels onto the Workload it admits, so those
-// are the primary match. But that copy only happens when tau stamps the labels
-// on the Job/RayJob (the finetune `tau run --config` path); Workloads admitted
-// for objects tau did not label carry neither. As a fallback we match the
-// Workload's ownerReference name against the K8s object name (objName): Kueue
-// always sets an ownerReference back to the admitting Job/RayJob, so this scopes
-// the namespace-wide list to the one run even when the join labels are absent.
-func filterWorkloads(all []links.Workload, objName, jobName, runID string) []links.Workload {
+// filterWorkloads uses Kueue's owner UID as proof of the exact Job/RayJob
+// incarnation. Name and Tau-label matching is retained only for legacy test or
+// imported payloads that omit the Kubernetes-assigned object UID.
+func filterWorkloads(all []links.Workload, obj resolved) []links.Workload {
 	out := make([]links.Workload, 0, len(all))
 	for _, w := range all {
-		if w.Job == jobName || (runID != "" && w.RunID == runID) || ownedBy(w, objName) {
+		if obj.uid != "" {
+			if ownedByUID(w, obj.uid) {
+				out = append(out, w)
+			}
+			continue
+		}
+		legacyJobName := obj.detail.Labels[workloadmeta.LabelJob]
+		if (legacyJobName != "" && w.Job == legacyJobName) ||
+			(obj.runID != "" && w.RunID == obj.runID) ||
+			ownedByName(w, obj.name) {
 			out = append(out, w)
 		}
 	}
@@ -550,9 +604,8 @@ func filterWorkloads(all []links.Workload, objName, jobName, runID string) []lin
 	return out
 }
 
-// ownedBy reports whether objName (the RayJob/Job K8s object name) is one of the
-// Workload's ownerReferences. An empty objName never matches.
-func ownedBy(w links.Workload, objName string) bool {
+// ownedByName is the compatibility path for UID-less payloads.
+func ownedByName(w links.Workload, objName string) bool {
 	if objName == "" {
 		return false
 	}
@@ -564,12 +617,55 @@ func ownedBy(w links.Workload, objName string) bool {
 	return false
 }
 
+func ownedByUID(w links.Workload, uid string) bool {
+	for _, ownerUID := range w.OwnerUIDs {
+		if ownerUID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+type ownedObject struct {
+	Metadata struct {
+		UID             string `json:"uid"`
+		OwnerReferences []struct {
+			UID        string `json:"uid"`
+			Controller *bool  `json:"controller"`
+		} `json:"ownerReferences"`
+	} `json:"metadata"`
+}
+
+func parseOwnedObjectUID(data []byte, ownerUID string) (string, error) {
+	var obj ownedObject
+	if ownerUID == "" {
+		return "", errors.New("owner UID is empty")
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return "", fmt.Errorf("parse owned object: %w", err)
+	}
+	if obj.Metadata.UID == "" {
+		return "", errors.New("owned object UID is empty")
+	}
+	for _, owner := range obj.Metadata.OwnerReferences {
+		if owner.UID == ownerUID && owner.Controller != nil && *owner.Controller {
+			return obj.Metadata.UID, nil
+		}
+	}
+	return "", errors.New("object is not controlled by the resolved owner UID")
+}
+
 // podList is the subset of the core v1 Pod list the detail page reads.
 type podList struct {
 	Items []struct {
 		Metadata struct {
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
+			Name            string            `json:"name"`
+			UID             string            `json:"uid"`
+			Labels          map[string]string `json:"labels"`
+			OwnerReferences []struct {
+				UID        string `json:"uid"`
+				Controller *bool  `json:"controller"`
+			} `json:"ownerReferences"`
 		} `json:"metadata"`
 		Spec struct {
 			NodeName string `json:"nodeName"`
@@ -583,22 +679,31 @@ type podList struct {
 	} `json:"items"`
 }
 
-// parsePods keeps pods whose selectorKey label equals selectorValue.
-// An empty selectorValue matches nothing until the RayCluster exists.
-func parsePods(data []byte, selectorKey, selectorValue string) ([]PodDetail, error) {
+type podLabelSelector struct {
+	key   string
+	value string
+}
+
+// parsePodsWithStatus uses labels to discover candidates, then validates the
+// controller owner UID whenever the resolved Job/RayJob carries a UID.
+func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, selectors []podLabelSelector) ([]PodDetail, map[string]string, error) {
+	if requireOwnerUID && ownerUID == "" || !requireOwnerUID && !hasUsablePodSelector(selectors) {
+		return nil, nil, nil
+	}
 	var list podList
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if list.Items == nil {
-		return nil, errors.New("pod response has no items array")
-	}
-	if selectorValue == "" {
-		return nil, nil
+		return nil, nil, errors.New("pod response has no items array")
 	}
 	var out []PodDetail
+	uids := map[string]string{}
 	for _, it := range list.Items {
-		if it.Metadata.Labels[selectorKey] != selectorValue {
+		if !podLabelsMatch(it.Metadata.Labels, selectors) {
+			continue
+		}
+		if requireOwnerUID && !metadataControlledByUID(it.Metadata.OwnerReferences, ownerUID) {
 			continue
 		}
 		restarts := 0
@@ -612,8 +717,44 @@ func parsePods(data []byte, selectorKey, selectorValue string) ([]PodDetail, err
 			Restarts: restarts,
 			NodePath: links.ClusterInstancePath(it.Spec.NodeName),
 		})
+		if it.Metadata.UID != "" {
+			uids[it.Metadata.UID] = "Pod"
+		}
 	}
-	return out, nil
+	return out, uids, nil
+}
+
+func hasUsablePodSelector(selectors []podLabelSelector) bool {
+	for _, selector := range selectors {
+		if selector.key != "" && selector.value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func podLabelsMatch(labels map[string]string, selectors []podLabelSelector) bool {
+	for _, selector := range selectors {
+		if selector.value != "" && labels[selector.key] == selector.value {
+			return true
+		}
+	}
+	return false
+}
+
+func metadataControlledByUID(owners []struct {
+	UID        string `json:"uid"`
+	Controller *bool  `json:"controller"`
+}, uid string) bool {
+	if uid == "" {
+		return false
+	}
+	for _, owner := range owners {
+		if owner.UID == uid && owner.Controller != nil && *owner.Controller {
+			return true
+		}
+	}
+	return false
 }
 
 func rayResourceRelease(object ObjectDetail, workloads []links.Workload, pods []PodDetail, podsVisible bool) *ResourceReleaseDetail {
@@ -707,18 +848,15 @@ type eventList struct {
 		InvolvedObject struct {
 			Kind string `json:"kind"`
 			Name string `json:"name"`
+			UID  string `json:"uid"`
 		} `json:"involvedObject"`
 	} `json:"items"`
 }
 
-// parseEvents keeps events relevant to the run: those emitted against the
-// Job/RayJob object itself, and — crucially — those emitted against its Pods
-// (OOMKilled, FailedScheduling, image-pull failures land on the Pod, not the
-// Job). Pods are named <owner>-<suffix>, so an exact match or an owner+"-"
-// prefix match catches both without attributing a sibling whose name merely
-// starts with the same string (e.g. "train" must not match "train-big"'s
-// events). Newest last-timestamp first.
-func parseEvents(data []byte, jobName, rayClusterName string) ([]EventDetail, error) {
+// parseEvents matches involvedObject.uid against the resolved workload,
+// RayCluster, and Pod UID set. Name-prefix matching remains only for UID-less
+// compatibility payloads. Newest last-timestamp first.
+func parseEvents(data []byte, objectKinds map[string]string, requireUID bool, jobName, rayClusterName string) ([]EventDetail, error) {
 	var list eventList
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, err
@@ -728,8 +866,11 @@ func parseEvents(data []byte, jobName, rayClusterName string) ([]EventDetail, er
 	}
 	var out []EventDetail
 	for _, it := range list.Items {
-		name := it.InvolvedObject.Name
-		if !eventBelongsTo(name, jobName) && !eventBelongsTo(name, rayClusterName) {
+		expectedKind, uidMatches := objectKinds[it.InvolvedObject.UID]
+		if requireUID && (!uidMatches || it.InvolvedObject.Kind != expectedKind) {
+			continue
+		}
+		if !requireUID && !eventBelongsTo(it.InvolvedObject.Name, jobName) && !eventBelongsTo(it.InvolvedObject.Name, rayClusterName) {
 			continue
 		}
 		out = append(out, EventDetail{
@@ -988,12 +1129,10 @@ func eventLater(a, b *time.Time) bool {
 	return a.After(*b)
 }
 
-// rayClusterDiscoverable reports whether <namespace>/<cluster> resolves to a
-// head Service the portal's Ray proxy can dial. It runs the same head-Service
-// scan (ray.Board) that validateRayTarget uses, so the Job-detail link is
-// marked reachable exactly when the proxy would resolve it — no clickable link
-// that 404s. A list error or an absent cluster yields false (grey the link)
-// rather than a default-true guess, because the proxy would itself fail closed.
+// rayClusterDiscoverable reports whether <namespace>/<cluster> has a
+// discoverable head Service and a reachable dashboard according to ray.Board.
+// A list error or absent cluster yields false rather than guessing that a stale
+// Service still has a ready head Pod.
 func rayClusterDiscoverable(ctx context.Context, r ray.Reader, namespace, cluster string) bool {
 	snap, err := ray.Board(ctx, r, ray.Options{Namespace: namespace})
 	if err != nil {
@@ -1001,7 +1140,7 @@ func rayClusterDiscoverable(ctx context.Context, r ray.Reader, namespace, cluste
 	}
 	for _, c := range snap.Clusters {
 		if c.Namespace == namespace && c.Name == cluster {
-			return true
+			return c.Available
 		}
 	}
 	return false

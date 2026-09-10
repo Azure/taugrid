@@ -96,7 +96,7 @@ export interface SourceDiagnostic {
   stale?: boolean; lastSuccessAt?: number;
 }
 export interface JobDetail extends Scoped {
-  name: string; namespace: string; kind: string; status: string; runId?: string;
+  name: string; namespace: string; kind: string; resourceUid?: string; status: string; runId?: string;
   object: { age: string; created?: string; jobDeploymentStatus?: string; rayClusterName?: string; jobId?: string; executionTarget?: string; reason?: string; message?: string };
   resourceRelease?: { computeState: string; quotaState: string; message: string; activePods: number; nodes?: string[] };
   links: { stellarPath?: string; rayDashboardPath?: string; rayDashboardReachable: boolean };

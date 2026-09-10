@@ -55,6 +55,9 @@ var (
 	rayJobGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayjobs",
 	}
+	rayClusterGVR = schema.GroupVersionResource{
+		Group: "ray.io", Version: "v1", Resource: "rayclusters",
+	}
 	podGVR = schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "pods",
 	}
@@ -169,9 +172,8 @@ func (c *Client) ListRayJobs(ctx context.Context, namespace string) ([]byte, err
 	return c.listRaw(ctx, rayJobGVR, namespace)
 }
 
-// ListPods returns the namespaced core Pods list as raw JSON. The job detail
-// page filters these to a run's pods (by ray.io/cluster or tau.azure.com/job) to
-// report per-pod phase, node placement, and restart counts.
+// ListPods returns the namespaced core Pods list as raw JSON. Job detail uses
+// labels to discover candidates and controller owner UIDs to prove ownership.
 func (c *Client) ListPods(ctx context.Context, namespace string) ([]byte, error) {
 	return c.listRaw(ctx, podGVR, namespace)
 }
@@ -192,6 +194,12 @@ func (c *Client) GetJob(ctx context.Context, namespace, name string) ([]byte, er
 // not installed) surfaces as a get error, which the detail page tolerates.
 func (c *Client) GetRayJob(ctx context.Context, namespace, name string) ([]byte, error) {
 	return c.getRaw(ctx, rayJobGVR, namespace, name)
+}
+
+// GetRayCluster returns one RayCluster so Job detail can verify that the
+// cluster and its Pods belong to the current RayJob incarnation.
+func (c *Client) GetRayCluster(ctx context.Context, namespace, name string) ([]byte, error) {
+	return c.getRaw(ctx, rayClusterGVR, namespace, name)
 }
 
 // getRaw fetches a single namespaced object by name and returns its JSON bytes.

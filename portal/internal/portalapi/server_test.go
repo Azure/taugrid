@@ -1191,6 +1191,95 @@ func (s *stubRunsReader) ListRayJobs(_ context.Context, _ string) ([]byte, error
     ]}`), nil
 }
 
+type jobDetailAPIReader struct{ stubRunsReader }
+
+func (*jobDetailAPIReader) GetJob(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"train","namespace":"ray","uid":"job-current",
+		"labels":{"batch.kubernetes.io/job-name":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}`), nil
+}
+
+func (*jobDetailAPIReader) GetRayJob(context.Context, string, string) ([]byte, error) {
+	return nil, errors.New("no RayJob")
+}
+
+func (*jobDetailAPIReader) GetRayCluster(context.Context, string, string) ([]byte, error) {
+	return nil, errors.New("not used for batch Job")
+}
+
+func (*jobDetailAPIReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},"status":{"phase":"Running"}},
+		{"metadata":{"name":"train-stale","uid":"pod-stale","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-stale","controller":true}]},"status":{"phase":"Failed"}}
+	]}`), nil
+}
+
+func (*jobDetailAPIReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"reason":"CurrentJob","involvedObject":{"kind":"Job","name":"train","uid":"job-current"}},
+		{"reason":"CurrentPod","involvedObject":{"kind":"Pod","name":"train-current","uid":"pod-current"}},
+		{"reason":"StalePod","involvedObject":{"kind":"Pod","name":"train-stale","uid":"pod-stale"}}
+	]}`), nil
+}
+
+func (*jobDetailAPIReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"job-train-current","ownerReferences":[{"name":"train","uid":"job-current","controller":true}]}},
+		{"metadata":{"name":"job-train-stale","ownerReferences":[{"name":"train","uid":"job-stale","controller":true}]}}
+	]}`), nil
+}
+
+func (*jobDetailAPIReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
+	reader := &jobDetailAPIReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs/ray/train", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		ResourceUID string                    `json:"resourceUid"`
+		Pods        []struct{ Name string }   `json:"pods"`
+		Workloads   []struct{ Name string }   `json:"workloads"`
+		Events      []struct{ Reason string } `json:"events"`
+		Diagnostics struct {
+			Pods      struct{ State string } `json:"pods"`
+			Workloads struct{ State string } `json:"workloads"`
+			Events    struct{ State string } `json:"events"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode Job detail: %v\n%s", err, rec.Body.String())
+	}
+	if len(got.Pods) != 1 || got.Pods[0].Name != "train-current" {
+		t.Fatalf("pods = %+v, want only current incarnation", got.Pods)
+	}
+	if got.ResourceUID != "job-current" {
+		t.Fatalf("resourceUid = %q, want current Job UID for React cache identity", got.ResourceUID)
+	}
+	if len(got.Workloads) != 1 || got.Workloads[0].Name != "job-train-current" {
+		t.Fatalf("workloads = %+v, want only current incarnation", got.Workloads)
+	}
+	if len(got.Events) != 2 {
+		t.Fatalf("events = %+v, want current Job and Pod events", got.Events)
+	}
+	if got.Diagnostics.Pods.State != "ready" ||
+		got.Diagnostics.Workloads.State != "ready" ||
+		got.Diagnostics.Events.State != "ready" {
+		t.Fatalf("diagnostics = %+v, want React sections ready", got.Diagnostics)
+	}
+}
+
 func TestRunsBoardServesSnapshot(t *testing.T) {
 	reader := &stubRunsReader{}
 	server, err := NewServer(Options{

@@ -21,8 +21,7 @@ function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiag
 }
 function retainJobSections(previous: JobDetail | undefined, next: JobDetail): JobDetail {
   const sameJob = previous && previous.name === next.name && previous.namespace === next.namespace &&
-    previous.kind === next.kind && previous.runId === next.runId &&
-    !!next.object?.created && previous.object?.created === next.object.created;
+    previous.kind === next.kind && !!next.resourceUid && previous.resourceUid === next.resourceUid;
   let result = next;
   for (const key of ['workloads', 'pods', 'events'] as const) {
     const diagnostic = next.diagnostics?.[key];
