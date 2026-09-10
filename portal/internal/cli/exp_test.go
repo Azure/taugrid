@@ -1399,6 +1399,7 @@ func TestMetricsOffloadOnlineRejectsRowsWithoutHostedFields(t *testing.T) {
 		{name: "timestamp wrong type", row: `{"_step":7,"_timestamp":"1770000000","train/loss":1.25}`, wantError: "_timestamp must be numeric"},
 		{name: "non-finite timestamp", row: `{"_step":7,"_timestamp":1e309,"train/loss":1.25}`, wantError: "_timestamp must be a finite number"},
 		{name: "invalid timestamp", row: `{"_step":7,"_timestamp":0,"train/loss":1.25}`, wantError: "_timestamp must be a valid positive Unix epoch-seconds value"},
+		{name: "non-finite metric", row: `{"_step":7,"_timestamp":1770000000,"train/loss":1e309}`, wantError: `metric "train/loss" must be a finite number`},
 		{name: "trailing invalid JSON", row: `{"_step":7,"_timestamp":1770000000,"train/loss":1.25} garbage`, wantError: "row must contain exactly one JSON object"},
 	}
 	for _, tt := range tests {
@@ -1433,6 +1434,78 @@ func TestMetricsOffloadOnlineRejectsRowsWithoutHostedFields(t *testing.T) {
 				t.Fatalf("invalid row produced telemetry: result=%+v requests=%d", result, requests)
 			}
 		})
+	}
+}
+
+func TestMetricsOffloadWatchSkipsEmptyAndNonScalarHistoryUntilScalarsArrive(t *testing.T) {
+	historyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(historyDir, "empty.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	history := filepath.Join(historyDir, "history.jsonl")
+	if err := os.WriteFile(history, []byte(`{"_step":0,"_timestamp":1770000000,"phase":"starting"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out")
+	completionFile := filepath.Join(t.TempDir(), "done")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	published := make(chan error, 1)
+	go func() {
+		checkpoint := filepath.Join(out, "metrics_jsonl_checkpoint.json")
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if _, err := os.Stat(checkpoint); err == nil {
+				f, err := os.OpenFile(history, os.O_APPEND|os.O_WRONLY, 0)
+				if err == nil {
+					_, err = f.WriteString(`{"_step":1,"_timestamp":1770000001,"train/loss":1.25}` + "\n")
+					if closeErr := f.Close(); err == nil {
+						err = closeErr
+					}
+				}
+				if err == nil {
+					err = os.WriteFile(completionFile, nil, 0o644)
+				}
+				published <- err
+				return
+			}
+			select {
+			case <-ctx.Done():
+				published <- ctx.Err()
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+
+	results, err := runMetricsOffloadWatch(ctx, newTestMetricsOffloadStore(t, "transient-empty-history"), metricsOffloadOptions{
+		History:        []string{filepath.Join(historyDir, "*.jsonl")},
+		RunID:          "transient-empty-history",
+		Project:        "pretraining",
+		RunGroupID:     "bounded",
+		Source:         "stellar-online",
+		Out:            out,
+		CompletionFile: completionFile,
+	}, 10*time.Millisecond, 100, nil)
+	cancel()
+	publishErr := <-published
+	if err != nil {
+		t.Fatalf("watch exited on non-scalar history: %v", err)
+	}
+	if publishErr != nil {
+		t.Fatal(publishErr)
+	}
+	if len(results) < 2 || results[0].ImportRows != 0 {
+		t.Fatalf("non-scalar history was not treated as an empty iteration: %+v", results)
+	}
+	var imported int
+	for _, result := range results {
+		imported += result.ImportRows
+	}
+	if imported != 1 || !results[len(results)-1].Completed {
+		t.Fatalf("later scalar history was not offloaded on completion: %+v", results)
 	}
 }
 

@@ -47,6 +47,28 @@ CLI.
 - Secret values belong in Kubernetes Secret or Key Vault references, never in
   checked-in configs, ConfigMaps, annotations, logs, metrics, or screenshots.
 
+## Online metrics history
+
+`taugrid-portal experiment offload metrics --history <path-or-glob> --watch`
+tails complete JSONL rows. Empty iterations and valid rows containing only
+metadata or non-scalar values do not stop the watcher. Their consumed bytes
+are checkpointed so later scalar rows can be imported and exported without
+replaying earlier history after a restart.
+
+Online rows still require numeric `_step` and `_timestamp` fields. Malformed
+JSONL and non-finite numeric metrics are fatal; the failing chunk is not
+checkpointed, but successfully handled earlier chunks retain their offsets.
+Standalone `experiment import jsonl` also rejects malformed
+rows and non-finite numeric metrics, and still reports an error when a valid
+history contains no scalar metrics.
+
+The completion sentinel drains the final row even without a newline and
+publishes terminal status. Without that sentinel, shutdown leaves an
+unterminated row unread so a partial write is not mistaken for complete data.
+Status retries use the same store identity and the sentinel's `completed_at`
+timestamp (or its modification time when omitted), avoiding duplicate terminal
+markers when no new scalars arrive.
+
 ## Build
 
 Frontend development and Make-based builds require Node.js 22.20 or newer and npm in
