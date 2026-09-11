@@ -65,23 +65,31 @@ func (c *Config) RuleConditionTypes() []string {
 // validate fails closed on any configuration that would leave a required target
 // unmonitored or leave two writers contending for one Node condition.
 //
-// Hard failures are limited to the availability contract, which no existing
-// config uses. Shapes that a previous version accepted stay accepted and are
+// Hard failures are limited to explicit availability and coverage contracts.
+// Legacy shapes that a previous version accepted stay accepted and are
 // only warned about: refusing to start would turn an image bump into a
 // CrashLoopBackOff that freezes every condition this collector owns, which is
 // strictly worse than the degraded-but-running behavior it replaces.
 func (c *Config) validate() error {
 	owners := make(map[string]string, len(c.Rules)+len(c.ScrapeTargets))
+	coverageOwners := make(map[string]bool)
 	for _, r := range c.Rules {
+		if err := validateCoverage(r); err != nil {
+			return err
+		}
 		if r.ConditionType == "" {
 			continue
 		}
 		if prev, ok := owners[r.ConditionType]; ok {
+			if r.MinSamples > 0 || coverageOwners[r.ConditionType] {
+				return fmt.Errorf("condition type %q has multiple rule owners with a metric coverage contract", r.ConditionType)
+			}
 			slog.Warn("duplicate rule condition type; the last evaluated rule wins",
 				"conditionType", r.ConditionType, "owner", prev, "rule", r.Name)
 			continue
 		}
 		owners[r.ConditionType] = fmt.Sprintf("rule %q", r.Name)
+		coverageOwners[r.ConditionType] = r.MinSamples > 0
 	}
 
 	seenNames := make(map[string]bool, len(c.ScrapeTargets))

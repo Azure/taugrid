@@ -1,0 +1,142 @@
+suite: continuous GPU metric coverage
+templates:
+  - metrics-collector-configmap.yaml
+  - daemonset.yaml
+tests:
+  - it: leaves the legacy image contract unchanged by default
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+    asserts:
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'minSamples:|sampleLabel:|perGpu:'
+  - it: requires eight distinct physical GPU samples for H200 continuous rules
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL\s+minSamples: 8'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: ecc-dbe-volatile\s+sampleLabel: UUID'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_XID_ERRORS\s+minSamples:'
+  - it: derives the physical count from the two-GPU H100 profile
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h100-nvl-2g]
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL\s+minSamples: 2'
+  - it: passes a capability flag that old images cannot silently ignore
+    template: daemonset.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[2].args
+          content: --require-metric-coverage
+  - it: rejects zero physical GPUs when per-GPU coverage is enabled
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      gpuSkus.h200.num_gpus: 0
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.num_gpus must be positive for per-GPU metric coverage
+  - it: rejects string-valued coverage settings
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: metricsCollector.requireMetricCoverage must be a boolean
+  - it: requires all eighteen H200 links on the same eight GPU identities
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+      gpuSkus.h200.nvlinkMetricLinkIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricNames:\s+- DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L0'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L17\s+minSamples: 8'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L17\s+minSamples: 8'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_NVLINK_.*_TOTAL'
+  - it: keeps link selection isolated to the explicitly configured profile
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200, h100-nvl-2g]
+      metricsCollector.requireMetricCoverage: true
+      gpuSkus.h200.nvlinkMetricLinkIds: [0, 1, 2]
+    documentSelector:
+      path: metadata.labels["gpu-sku"]
+      value: h100-nvl-2g
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricNames:'
+  - it: refuses link selection without an enabled coverage contract
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      gpuSkus.h200.nvlinkMetricLinkIds: [0]
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.nvlinkMetricLinkIds requires metricsCollector.requireMetricCoverage=true
+  - it: refuses empty link topology rather than removing the NVLink checks
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+      gpuSkus.h200.nvlinkMetricLinkIds: []
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17
+  - it: refuses duplicate link identifiers
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+      gpuSkus.h200.nvlinkMetricLinkIds: [0, 0]
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17
+  - it: refuses link identifiers outside the available exporter field catalog
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+      gpuSkus.h200.nvlinkMetricLinkIds: [18]
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17
+  - it: refuses noninteger link identifiers
+    template: metrics-collector-configmap.yaml
+    set:
+      enabledGpuSkus: [h200]
+      metricsCollector.requireMetricCoverage: true
+      gpuSkus.h200.nvlinkMetricLinkIds: [1.5]
+    asserts:
+      - failedTemplate:
+          errorMessage: gpuSkus.h200.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17

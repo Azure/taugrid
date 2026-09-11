@@ -116,6 +116,14 @@ dcgmHealth:
   source: host-dcgmi
   exporterUrl: http://localhost:19400/metrics
 
+# Optional metrics ConfigMap for an externally owned NVIDIA DCGM exporter.
+# Point that exporter's configuration at this object separately; the chart
+# does not modify GPU Operator ClusterPolicy or another release's DaemonSet.
+dcgmExporterMetrics:
+  enabled: false
+  name: gpu-monitoring-dcgm-metrics
+  namespace: gpu-operator
+
 # Lightweight metrics collector — replaces Prometheus sidecar.
 # Scrapes DCGM + node-exporter, evaluates threshold/rate rules,
 # and patches Kubernetes Node conditions directly.
@@ -140,6 +148,9 @@ metricsCollector:
     tag: ""
     digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
   scrapeInterval: "15s"
+  # Enable only with a collector image built with --require-metric-coverage
+  # support. The legacy default digest does not contain that support.
+  requireMetricCoverage: false
   resources:
     requests:
       cpu: "2m"
@@ -162,6 +173,7 @@ metricsCollector:
   rules:
     # Critical: ECC Double-Bit Errors (any increase over 1m → drain)
     - name: ecc-dbe-retired
+      perGpu: true
       metricName: DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
       conditionType: GPUECCDoubleRetired
       mode: rate
@@ -169,6 +181,7 @@ metricsCollector:
       window: 1m
       for: 1m
     - name: ecc-dbe-volatile
+      perGpu: true
       metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
       conditionType: GPUECCDoubleVolatile
       mode: rate
@@ -177,6 +190,7 @@ metricsCollector:
       for: 1m
     # Critical: NVLink Errors (any increase over 1m → drain)
     - name: nvlink-crc-flit
+      perGpu: true
       metricName: DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
       conditionType: GPUNVLinkCRCFlitErrors
       mode: rate
@@ -184,6 +198,7 @@ metricsCollector:
       window: 1m
       for: 1m
     - name: nvlink-crc-data
+      perGpu: true
       metricName: DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL
       conditionType: GPUNVLinkCRCDataErrors
       mode: rate
@@ -191,6 +206,7 @@ metricsCollector:
       window: 1m
       for: 1m
     - name: nvlink-replay
+      perGpu: true
       metricName: DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
       conditionType: GPUNVLinkReplayErrors
       mode: rate
@@ -199,6 +215,7 @@ metricsCollector:
       for: 1m
     # Critical: Thermal/Power Violations (any increase over 1m → taint)
     - name: thermal-violation
+      perGpu: true
       metricName: DCGM_FI_DEV_THERMAL_VIOLATION
       conditionType: GPUThermalViolation
       mode: rate
@@ -206,6 +223,7 @@ metricsCollector:
       window: 1m
       for: 1m
     - name: power-violation
+      perGpu: true
       metricName: DCGM_FI_DEV_POWER_VIOLATION
       conditionType: GPUPowerViolation
       mode: rate
@@ -272,6 +290,7 @@ metricsCollector:
       for: 1m
     # Warning: Correctable ECC (rate >10 in 10m → taint)
     - name: ecc-sbe-volatile-rate
+      perGpu: true
       metricName: DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
       conditionType: GPUECCSingleVolatileRate
       mode: rate
@@ -279,6 +298,7 @@ metricsCollector:
       window: 10m
       for: 5m
     - name: ecc-sbe-retired
+      perGpu: true
       metricName: DCGM_FI_DEV_ECC_SBE_AGG_TOTAL
       conditionType: GPUECCSingleRetired
       mode: rate
@@ -287,6 +307,7 @@ metricsCollector:
       for: 5m
     # Warning: PCIe Replay (rate >5 in 5m → taint)
     - name: pcie-replay
+      perGpu: true
       metricName: DCGM_FI_DEV_PCIE_REPLAY_COUNTER
       conditionType: GPUPCIeReplayErrors
       mode: rate
@@ -331,6 +352,9 @@ enabledGpuSkus: []
 # nodes use the default host-dcgmi source and GPU Operator nodes use a
 # node-local exporter Service instead. A non-loopback DCGM Service must use
 # internalTrafficPolicy: Local.
+# nvlinkMetricLinkIds optionally replaces the three legacy NVLink total-counter
+# rules with explicit per-link metricNames. Requires coverage and a compatible
+# collector image. Set only verified links; do not infer topology from GPU count.
 # --------------------------------------------------------------------------
 gpuSkus:
   a100:

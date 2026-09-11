@@ -5,10 +5,10 @@
 // Node conditions.
 //
 // The rule engine can only report on metrics it received. When a required
-// exporter disappears, every rule that reads its metrics evaluates to "not
-// firing", which is indistinguishable from a healthy node. This package closes
-// that gap by tracking each required target's reachability directly and
-// emitting a dedicated condition for it.
+// exporter disappears, optional rules cannot distinguish missing data from no
+// matching event. Continuous coverage rules report Unknown for missing inputs;
+// this package independently tracks required-target reachability and emits a
+// dedicated condition for it.
 //
 // The condition reports endpoint reachability only. It is deliberately distinct
 // from DCGM diagnostic health (NPD's dcgmi checks): a reachable exporter can
