@@ -241,6 +241,35 @@ every physical GPU; a field's presence in CSV is not proof of hardware/DCGM
 support. Unsupported fields must remain visibly unknown, not be replaced with
 fabricated zeros. This is continuous telemetry, not a burn-in or bandwidth test.
 
+On newer drivers, the legacy NVLink aggregate field-query API can return
+unsupported even when per-link counters are available. DCGM routes per-link
+fields through a different, supported NVML API on R520+ drivers. The optional
+CSV includes the flit-CRC, data-CRC and replay fields for links 0 through 17.
+For a verified topology, a profile can explicitly select these instead of
+the three legacy total-counter rules:
+
+```yaml
+metricsCollector:
+  requireMetricCoverage: true
+gpuSkus:
+  h200:
+    nvlinkMetricLinkIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+```
+
+This requires a collector image supporting `metricNames`, not just the initial
+coverage feature. The chart preserves the rules' conditions, thresholds,
+windows and debounce periods, but requires **every selected link on the same
+`num_gpus` UUIDs**. Missing one of 144 GPU/link observations for an eight-GPU
+H200 profile makes the corresponding condition Unknown. Each counter's increase
+is evaluated independently so a reset on one link cannot mask another's fault.
+
+Link selection is opt-in per profile, requires coverage enabled, and must be a
+nonempty list of distinct integers from 0 through 17. Other profiles retain
+their existing rules. Only configure physically verified expected links;
+do not copy the 18-link H200 topology to single-GPU or partially connected VMs.
+An empty list is rejected rather than silently removing NVLink health checks.
+Exporter field coverage must be established before the collector is activated.
+
 Profiles on hosts without `dcgmi`, including GPU Operator-backed H100 NVL nodes,
 must use their existing profile-specific `dcgmHealth.source: exporter` override
 and a node-local exporter URL. Do not globally disable host diagnostics on

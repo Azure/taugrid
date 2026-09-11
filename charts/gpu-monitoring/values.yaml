@@ -352,6 +352,9 @@ enabledGpuSkus: []
 # nodes use the default host-dcgmi source and GPU Operator nodes use a
 # node-local exporter Service instead. A non-loopback DCGM Service must use
 # internalTrafficPolicy: Local.
+# nvlinkMetricLinkIds optionally replaces the three legacy NVLink total-counter
+# rules with explicit per-link metricNames. Requires coverage and a compatible
+# collector image. Set only verified links; do not infer topology from GPU count.
 # --------------------------------------------------------------------------
 gpuSkus:
   a100:

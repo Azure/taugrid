@@ -28,12 +28,19 @@ func TestCollectPublishesActualCoverage(t *testing.T) {
 		code   int
 		body   string
 		status corev1.ConditionStatus
+		names  []string
 	}{
-		{"reachable but empty exporter", 200, "", corev1.ConditionUnknown},
-		{"partial device coverage", 200, "gpu_errors{UUID=\"a\"} 0\n", corev1.ConditionUnknown},
-		{"unreachable exporter", 503, "", corev1.ConditionUnknown},
-		{"complete zero readings", 200, "gpu_errors{UUID=\"a\"} 0\ngpu_errors{UUID=\"b\"} 0\n", corev1.ConditionFalse},
-		{"known fault despite missing other GPU", 200, "gpu_errors{UUID=\"a\"} 1\n", corev1.ConditionTrue},
+		{"reachable but empty exporter", 200, "", corev1.ConditionUnknown, nil},
+		{"partial device coverage", 200, "gpu_errors{UUID=\"a\"} 0\n", corev1.ConditionUnknown, nil},
+		{"unreachable exporter", 503, "", corev1.ConditionUnknown, nil},
+		{"complete zero readings", 200, "gpu_errors{UUID=\"a\"} 0\ngpu_errors{UUID=\"b\"} 0\n", corev1.ConditionFalse, nil},
+		{"known fault despite missing other GPU", 200, "gpu_errors{UUID=\"a\"} 1\n", corev1.ConditionTrue, nil},
+		{"missing one link family", 200, "link_0{UUID=\"a\"} 0\nlink_0{UUID=\"b\"} 0\n",
+			corev1.ConditionUnknown, []string{"link_0", "link_1"}},
+		{"all links on both GPUs", 200, "link_0{UUID=\"a\"} 0\nlink_0{UUID=\"b\"} 0\nlink_1{UUID=\"a\"} 0\nlink_1{UUID=\"b\"} 0\n",
+			corev1.ConditionFalse, []string{"link_0", "link_1"}},
+		{"observed link fault despite partial coverage", 200, "link_1{UUID=\"a\"} 1\n",
+			corev1.ConditionTrue, []string{"link_0", "link_1"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,10 +54,14 @@ func TestCollectPublishesActualCoverage(t *testing.T) {
 				Name: "dcgm", URL: server.URL, Required: true,
 				AvailabilityCondition: "DcgmExporterUnavailable",
 			}}
-			engine := rules.NewEngine([]rules.Rule{{
+			rule := rules.Rule{
 				Name: "errors", MetricName: "gpu_errors", ConditionType: "GPUError",
 				Mode: "instant", MinSamples: 2, SampleLabel: "UUID",
-			}})
+			}
+			if len(tt.names) > 0 {
+				rule.MetricName, rule.MetricNames = "", tt.names
+			}
+			engine := rules.NewEngine([]rules.Rule{rule})
 			client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "gpu-node"}})
 			writer := conditions.NewWriter(client, "gpu-node")
 			tracker := availability.New(targets, []string{"GPUError"})

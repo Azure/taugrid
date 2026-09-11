@@ -12,6 +12,7 @@ import (
 )
 
 var labelNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+var metricNamePattern = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 
 // RequireMetricCoverage rejects a missing contract during a coverage-enabled rollout.
 // The corresponding CLI flag is deliberately unknown to old images.
@@ -28,14 +29,29 @@ func validateCoverage(r rules.Rule) error {
 	if r.MinSamples < 0 || r.MaxSampleAge < 0 {
 		return fmt.Errorf("rule %q has negative minSamples or maxSampleAge", r.Name)
 	}
+	if r.MetricNames != nil {
+		if r.MetricName != "" || len(r.MetricNames) == 0 {
+			return fmt.Errorf("rule %q requires exactly one of metricName or nonempty metricNames", r.Name)
+		}
+		if r.MinSamples == 0 || r.SampleLabel == "" {
+			return fmt.Errorf("rule %q metricNames requires positive minSamples and sampleLabel", r.Name)
+		}
+		seen := make(map[string]bool, len(r.MetricNames))
+		for _, name := range r.MetricNames {
+			if !metricNamePattern.MatchString(name) || seen[name] {
+				return fmt.Errorf("rule %q metricNames must contain distinct valid Prometheus metric names", r.Name)
+			}
+			seen[name] = true
+		}
+	}
 	if r.MinSamples == 0 {
 		if r.SampleLabel != "" || r.MaxSampleAge != 0 {
 			return fmt.Errorf("rule %q requires minSamples when sampleLabel or maxSampleAge is set", r.Name)
 		}
 		return nil
 	}
-	if r.Name == "" || r.MetricName == "" || r.ConditionType == "" {
-		return fmt.Errorf("metric coverage rule requires name, metricName, and conditionType")
+	if r.Name == "" || (r.MetricName == "" && len(r.MetricNames) == 0) || r.ConditionType == "" {
+		return fmt.Errorf("metric coverage rule requires name, metricName or metricNames, and conditionType")
 	}
 	if _, reserved := kubernetesCoreConditionTypes[r.ConditionType]; reserved {
 		return fmt.Errorf("rule %q condition %q is owned by Kubernetes", r.Name, r.ConditionType)

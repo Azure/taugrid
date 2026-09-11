@@ -31,3 +31,12 @@ tests:
       - matchRegex:
           path: data["dcgm-metrics.csv"]
           pattern: '(?m)^DCGM_FI_DEV_ROW_REMAP_FAILURE, gauge,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L17, counter,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L17, counter,'
+      - matchRegex:
+          path: data["dcgm-metrics.csv"]
+          pattern: '(?m)^DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L17, counter,'

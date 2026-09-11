@@ -279,6 +279,37 @@ Unknown input resets a pending `for` timer when no known violation remains.
 A known threshold violation still takes precedence over incomplete coverage:
 missing another GPU must not hide an observed fault.
 
+For a signal split into several metric families, use `metricNames` instead
+of `metricName`. Every named family must have valid observations on at least
+`minSamples` **of the same identities**. For example, an eight-GPU profile with
+18 required NVLink fields needs all 144 GPU/link combinations, not 144 arbitrary
+samples or eight samples from link zero. A missing, stale or warming-up link
+remains Unknown; a measured fault still takes precedence.
+
+```yaml
+rules:
+  - name: nvlink-replay
+    metricNames:
+      - DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L0
+      - DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L1
+    conditionType: GPUNVLinkReplayErrors
+    mode: rate
+    threshold: 0
+    window: 1m
+    for: 1m
+    minSamples: 8
+    sampleLabel: UUID
+```
+
+This abbreviated example covers **two links only**; enumerate every expected
+link for the actual topology. A metric set must be nonempty, contain distinct
+literal names, and declare both positive `minSamples` and `sampleLabel`.
+Thresholds apply independently to each series. With an any-increase threshold
+of zero this detects an increase on any link without letting another link's
+counter reset cancel it out. Accumulated nonzero counters alone are not a new
+rate violation. Older coverage-enabled binaries reject the missing single
+`metricName`; deploy a binary supporting metric sets before using this shape.
+
 `minSamples: 0` retains optional/sparse-event behavior. In particular, a missing
 `err_code="48"` XID event is not a missing continuous GPU reading. Do not require
 one such error event per GPU merely to establish health. Required exporter
@@ -304,7 +335,8 @@ when its config contains no coverage rule.
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Human-readable rule name |
-| `metricName` | string | Prometheus metric name to match |
+| `metricName` | string | One Prometheus metric name; mutually exclusive with `metricNames` |
+| `metricNames` | string list | Explicit families required on the same identities; requires positive `minSamples` and `sampleLabel` |
 | `labels` | map | Optional label selectors (e.g., `err_code: "48"`) |
 | `conditionType` | string | Node condition type to write (e.g., `GPUECCDoubleRetired`) |
 | `mode` | `rate` or `instant` | `rate`: fires when increase over `window` > `threshold`. `instant`: fires when current value > `threshold` |

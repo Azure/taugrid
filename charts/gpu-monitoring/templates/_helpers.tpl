@@ -592,6 +592,36 @@ target and keeps every DCGM_* collector rule.
 {{- if not (kindIs "bool" $coverage) }}
 {{- fail "metricsCollector.requireMetricCoverage must be a boolean" }}
 {{- end }}
+{{- $linkIds := list }}
+{{- $linkConfigured := hasKey $sku "nvlinkMetricLinkIds" }}
+{{- if $linkConfigured }}
+{{- if not $coverage }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds requires metricsCollector.requireMetricCoverage=true" $skuName) }}
+{{- end }}
+{{- if not (kindIs "slice" $sku.nvlinkMetricLinkIds) }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17" $skuName) }}
+{{- end }}
+{{- if empty $sku.nvlinkMetricLinkIds }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17" $skuName) }}
+{{- end }}
+{{- $seenLinks := dict }}
+{{- range $link := $sku.nvlinkMetricLinkIds }}
+{{- if not (or (kindIs "int" $link) (kindIs "int64" $link) (kindIs "float64" $link)) }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17" $skuName) }}
+{{- end }}
+{{- $id := int $link }}
+{{- if or (lt $id 0) (gt $id 17) (ne (float64 $id) (float64 $link)) (hasKey $seenLinks (toString $id)) }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds must be a nonempty list of distinct integers from 0 through 17" $skuName) }}
+{{- end }}
+{{- $_ := set $seenLinks (toString $id) true }}
+{{- $linkIds = append $linkIds $id }}
+{{- end }}
+{{- end }}
+{{- $linkPrefixes := dict
+  "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL" "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L"
+  "DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL" "DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L"
+  "DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL" "DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L" }}
+{{- $linkRules := 0 }}
 {{- $rules := list }}
 {{- $covered := 0 }}
 {{- range $rule := $root.Values.metricsCollector.rules }}
@@ -606,10 +636,26 @@ target and keeps every DCGM_* collector rule.
 {{- $_ := set $rendered "minSamples" (int $sku.num_gpus) }}
 {{- $_ := set $rendered "sampleLabel" "UUID" }}
 {{- end }}
+{{- $metricName := default "" $rule.metricName }}
+{{- if and $linkConfigured (hasKey $linkPrefixes $metricName) }}
+{{- if not $rule.perGpu }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds requires three perGpu NVLink total-counter rules" $skuName) }}
+{{- end }}
+{{- $metricNames := list }}
+{{- range $link := $linkIds }}
+{{- $metricNames = append $metricNames (printf "%s%d" (index $linkPrefixes $metricName) $link) }}
+{{- end }}
+{{- $_ := unset $rendered "metricName" }}
+{{- $_ := set $rendered "metricNames" $metricNames }}
+{{- $linkRules = add1 $linkRules }}
+{{- end }}
 {{- if and $coverage (hasKey $rendered "minSamples") (gt (int $rendered.minSamples) 0) }}
 {{- $covered = add1 $covered }}
 {{- end }}
 {{- $rules = append $rules $rendered }}
+{{- end }}
+{{- if and $linkConfigured (ne (int $linkRules) 3) }}
+{{- fail (printf "gpuSkus.%s.nvlinkMetricLinkIds requires three perGpu NVLink total-counter rules" $skuName) }}
 {{- end }}
 {{- if and $coverage (eq (int $covered) 0) }}
 {{- fail "metricsCollector.requireMetricCoverage requires at least one perGpu or minSamples rule" }}

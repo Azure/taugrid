@@ -27,6 +27,61 @@ DCGM_FI_DEV_ECC_DBE_AGG_TOTAL, counter, Aggregate double-bit ECC error count.
 DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL, counter, NVLink flit CRC error count.
 DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL, counter, NVLink data CRC error count.
 DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL, counter, NVLink replay count.
+# Per-link fields use the supported direct NVML path on R520+ drivers.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L0, counter, NVLink 0 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L1, counter, NVLink 1 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L2, counter, NVLink 2 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L3, counter, NVLink 3 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L4, counter, NVLink 4 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L5, counter, NVLink 5 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L6, counter, NVLink 6 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L7, counter, NVLink 7 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L8, counter, NVLink 8 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L9, counter, NVLink 9 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L10, counter, NVLink 10 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L11, counter, NVLink 11 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L12, counter, NVLink 12 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L13, counter, NVLink 13 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L14, counter, NVLink 14 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L15, counter, NVLink 15 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L16, counter, NVLink 16 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_L17, counter, NVLink 17 flit CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L0, counter, NVLink 0 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L1, counter, NVLink 1 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L2, counter, NVLink 2 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L3, counter, NVLink 3 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L4, counter, NVLink 4 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L5, counter, NVLink 5 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L6, counter, NVLink 6 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L7, counter, NVLink 7 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L8, counter, NVLink 8 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L9, counter, NVLink 9 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L10, counter, NVLink 10 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L11, counter, NVLink 11 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L12, counter, NVLink 12 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L13, counter, NVLink 13 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L14, counter, NVLink 14 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L15, counter, NVLink 15 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L16, counter, NVLink 16 data CRC error count.
+DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_L17, counter, NVLink 17 data CRC error count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L0, counter, NVLink 0 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L1, counter, NVLink 1 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L2, counter, NVLink 2 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L3, counter, NVLink 3 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L4, counter, NVLink 4 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L5, counter, NVLink 5 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L6, counter, NVLink 6 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L7, counter, NVLink 7 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L8, counter, NVLink 8 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L9, counter, NVLink 9 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L10, counter, NVLink 10 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L11, counter, NVLink 11 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L12, counter, NVLink 12 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L13, counter, NVLink 13 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L14, counter, NVLink 14 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L15, counter, NVLink 15 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L16, counter, NVLink 16 replay count.
+DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_L17, counter, NVLink 17 replay count.
 DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL, counter, NVLink bandwidth counter across links.
 DCGM_FI_DEV_VGPU_LICENSE_STATUS, gauge, Virtual GPU license state.
 DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS, counter, Rows remapped after uncorrectable errors.

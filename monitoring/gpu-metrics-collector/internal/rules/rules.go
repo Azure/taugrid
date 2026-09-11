@@ -18,8 +18,11 @@ import (
 
 // Rule defines a threshold check against a scraped metric.
 type Rule struct {
-	Name          string            `yaml:"name"`
-	MetricName    string            `yaml:"metricName"`
+	Name       string `yaml:"name"`
+	MetricName string `yaml:"metricName,omitempty"`
+	// MetricNames checks every listed family on the same physical identities.
+	// Thresholds apply to each series, not to a sum that could hide counter resets.
+	MetricNames   []string          `yaml:"metricNames,omitempty"`
 	Labels        map[string]string `yaml:"labels,omitempty"`
 	ConditionType string            `yaml:"conditionType"`
 	// Threshold evaluation mode.
@@ -35,6 +38,14 @@ type Rule struct {
 	MinSamples   int           `yaml:"minSamples,omitempty"`
 	SampleLabel  string        `yaml:"sampleLabel,omitempty"`
 	MaxSampleAge time.Duration `yaml:"maxSampleAge,omitempty"`
+}
+
+// MetricSources returns the rule's explicit input families.
+func (r Rule) MetricSources() []string {
+	if len(r.MetricNames) > 0 {
+		return r.MetricNames
+	}
+	return []string{r.MetricName}
 }
 
 // Result is the evaluation outcome of a single rule.
@@ -121,41 +132,63 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 		Message:       "",
 	}
 
-	matched := matchMetrics(idx, rule.MetricName, rule.Labels)
-	valid := make([]scraper.Metric, 0, len(matched))
-	identities := make(map[string]struct{}, len(matched))
+	var valid []scraper.Metric
+	var commonIdentities map[string]struct{}
+	matchedCount := 0
 	maxAge := rule.MaxSampleAge
 	if maxAge == 0 {
 		maxAge = DefaultMaxSampleAge
 	}
-	for _, m := range matched {
-		if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
-			continue
-		}
-		if rule.MinSamples > 0 && !m.Timestamp.IsZero() &&
-			(m.Timestamp.Before(now.Add(-maxAge)) || m.Timestamp.After(now.Add(maxAge))) {
-			continue
-		}
-		if rule.SampleLabel != "" {
-			identity := m.Labels[rule.SampleLabel]
-			if identity == "" {
+	for sourceIndex, name := range rule.MetricSources() {
+		matched := matchMetrics(idx, name, rule.Labels)
+		matchedCount += len(matched)
+		identities := make(map[string]struct{}, len(matched))
+		validCount := 0
+		for _, m := range matched {
+			if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
 				continue
 			}
-			identities[identity] = struct{}{}
+			if rule.MinSamples > 0 && !m.Timestamp.IsZero() &&
+				(m.Timestamp.Before(now.Add(-maxAge)) || m.Timestamp.After(now.Add(maxAge))) {
+				continue
+			}
+			if rule.SampleLabel != "" {
+				identity := m.Labels[rule.SampleLabel]
+				if identity == "" {
+					continue
+				}
+				identities[identity] = struct{}{}
+			}
+			validCount++
+			valid = append(valid, m)
 		}
-		valid = append(valid, m)
+		observed := validCount
+		if rule.SampleLabel != "" {
+			observed = len(identities)
+			if sourceIndex == 0 {
+				commonIdentities = identities
+			} else {
+				for identity := range commonIdentities {
+					if _, exists := identities[identity]; !exists {
+						delete(commonIdentities, identity)
+					}
+				}
+			}
+		}
+		if rule.MinSamples > 0 && (observed < rule.MinSamples || validCount != len(matched)) {
+			result.Unknown = true
+			result.Reason = "MetricCoverageUnavailable"
+			result.Message = fmt.Sprintf("metric %q has %d valid samples/identities; requires at least %d; missing, invalid, or stale input is not healthy",
+				name, observed, rule.MinSamples)
+		}
 	}
-	observed := len(valid)
-	if rule.SampleLabel != "" {
-		observed = len(identities)
-	}
-	if rule.MinSamples > 0 && (observed < rule.MinSamples || len(valid) != len(matched)) {
+	if !result.Unknown && len(rule.MetricNames) > 1 && len(commonIdentities) < rule.MinSamples {
 		result.Unknown = true
 		result.Reason = "MetricCoverageUnavailable"
-		result.Message = fmt.Sprintf("metric %q has %d valid samples/identities; requires at least %d; missing, invalid, or stale input is not healthy",
-			rule.MetricName, observed, rule.MinSamples)
+		result.Message = fmt.Sprintf("all %d metric families must cover the same %d identities; only %d identities have every required family",
+			len(rule.MetricNames), rule.MinSamples, len(commonIdentities))
 	}
-	if len(matched) == 0 {
+	if matchedCount == 0 {
 		delete(e.pending, rule.ConditionType)
 		return result
 	}
@@ -177,7 +210,7 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 			if !known && rule.MinSamples > 0 {
 				result.Unknown = true
 				result.Reason = "MetricHistoryUnavailable"
-				result.Message = fmt.Sprintf("metric %q requires two current, consecutive counter observations; an interrupted baseline is not healthy", rule.MetricName)
+				result.Message = fmt.Sprintf("metric %q requires two current, consecutive counter observations; an interrupted baseline is not healthy", m.Name)
 				continue
 			}
 			if increase > rule.Threshold {
@@ -395,8 +428,15 @@ func (e *Engine) RestoreState(history map[string][]state.Sample, pending map[str
 	for k, samples := range history {
 		required := false
 		for _, rule := range e.rules {
-			if rule.MinSamples > 0 && (k == rule.MetricName || strings.HasPrefix(k, rule.MetricName+"|")) {
-				required = true
+			if rule.MinSamples > 0 {
+				for _, name := range rule.MetricSources() {
+					if k == name || strings.HasPrefix(k, name+"|") {
+						required = true
+						break
+					}
+				}
+			}
+			if required {
 				break
 			}
 		}
