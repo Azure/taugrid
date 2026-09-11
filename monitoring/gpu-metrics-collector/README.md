@@ -316,7 +316,8 @@ one such error event per GPU merely to establish health. Required exporter
 availability remains a separate signal, with its existing debounce windows.
 
 The writer preserves `Unknown` through Node patches, status transitions, and
-state persistence. Consumers must not interpret either `Unknown` or a missing
+state persistence. Recovery clears obsolete diagnostic messages, while ordinary
+heartbeats preserve the server's last transition time. Consumers must not interpret either `Unknown` or a missing
 condition as an explicit `False`/healthy verdict. These Node conditions are
 distinct from the Portal's metrics-backed row-remapping health summary.
 

@@ -135,6 +135,33 @@ type nodeStatusPatch struct {
 	Conditions []corev1.NodeCondition `json:"conditions"`
 }
 
+// Merge patches must clear empty diagnostics but omit unchanged transition times.
+func (p nodeStatusPatch) MarshalJSON() ([]byte, error) {
+	type conditionPatch struct {
+		Type               corev1.NodeConditionType `json:"type"`
+		Status             corev1.ConditionStatus   `json:"status"`
+		LastHeartbeatTime  metav1.Time              `json:"lastHeartbeatTime"`
+		LastTransitionTime *metav1.Time             `json:"lastTransitionTime,omitempty"`
+		Reason             string                   `json:"reason"`
+		Message            string                   `json:"message"`
+	}
+	conditions := make([]conditionPatch, 0, len(p.Conditions))
+	for _, condition := range p.Conditions {
+		patch := conditionPatch{
+			Type: condition.Type, Status: condition.Status,
+			LastHeartbeatTime: condition.LastHeartbeatTime,
+			Reason:            condition.Reason, Message: condition.Message,
+		}
+		if !condition.LastTransitionTime.IsZero() {
+			patch.LastTransitionTime = &condition.LastTransitionTime
+		}
+		conditions = append(conditions, patch)
+	}
+	return json.Marshal(struct {
+		Conditions []conditionPatch `json:"conditions"`
+	}{Conditions: conditions})
+}
+
 // ExportLastStatus returns the last-known condition statuses for persistence.
 func (w *Writer) ExportLastStatus() map[string]string {
 	out := make(map[string]string, len(w.lastStatus))
