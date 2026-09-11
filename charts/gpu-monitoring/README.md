@@ -270,6 +270,12 @@ do not copy the 18-link H200 topology to single-GPU or partially connected VMs.
 An empty list is rejected rather than silently removing NVLink health checks.
 Exporter field coverage must be established before the collector is activated.
 
+For the two-GPU H100 NVL topology, the NVLink check accepts NVIDIA's indented
+output and only excludes the six explicitly expected inactive links. Unexpected
+inactive links still fail. A successful empty topology query on the explicit
+single-GPU H100 NVL profile returns Unknown, not a hardware-link fault or a
+fabricated healthy result. Query failures and empty multi-GPU topology still fail.
+
 Profiles on hosts without `dcgmi`, including GPU Operator-backed H100 NVL nodes,
 must use their existing profile-specific `dcgmHealth.source: exporter` override
 and a node-local exporter URL. Do not globally disable host diagnostics on

@@ -26,7 +26,7 @@ fi
 readonly GPU_TYPE_VAL="${GPU_TYPE:-}"
 expected_inactive_pattern=""
 if [ "$GPU_TYPE_VAL" = "h100-nvl" ]; then
-  expected_inactive_pattern="^Link (4|5|10|11|16|17):"
+  expected_inactive_pattern="^[[:space:]]*Link (4|5|10|11|16|17):"
 fi
 
 # Check if nvlink is enabled
@@ -40,6 +40,10 @@ else
   exit $NONOK
 fi
 if [ -z "$nvlink_status" ]; then
+  if [ "$GPU_TYPE_VAL" = "h100-nvl" ] && [ "$_NUM_GPU_ENV" -eq 1 ]; then
+    echo "NVLink topology is not exposed for the single-GPU H100 NVL profile"
+    exit $UNKNOWN
+  fi
   echo "NVLINK is not enabled"
   exit $NONOK
 fi

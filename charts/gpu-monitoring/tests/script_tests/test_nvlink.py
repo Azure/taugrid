@@ -47,6 +47,45 @@ class NvlinkTests(ScriptTestCase):
         )
         self.assertIn("Not a Blackwell node", output)
 
+    def test_h100_nvl_expected_inactive_links_with_real_indentation(self):
+        for prefix in (" ", "\t "):
+            with self.subTest(prefix=repr(prefix)):
+                links = "\n".join(
+                    f"{prefix}Link {link}: "
+                    + ("<inactive>" if link in (4, 5, 10, 11, 16, 17) else "26.562 GB/s")
+                    for link in range(18)
+                )
+                output = self.run_script(
+                    "check_gpu_nvlink.sh",
+                    env={"GPU_TYPE": "h100-nvl", "EXPECTED_NUM_GPU": "2",
+                         "NVIDIA_SMI_NVLINK_OUTPUT": links},
+                )
+                self.assertIn("All GPUs have nvlinks active", output)
+                output = self.run_script(
+                    "check_gpu_nvlink.sh", expected=1,
+                    env={"GPU_TYPE": "h100-nvl", "EXPECTED_NUM_GPU": "2",
+                         "NVIDIA_SMI_NVLINK_OUTPUT": links.replace("Link 0: 26.562 GB/s", "Link 0: <inactive>")},
+                )
+                self.assertIn("Link 0: Inactive", output)
+
+    def test_single_gpu_h100_nvl_empty_topology_is_unknown(self):
+        output = self.run_script(
+            "check_gpu_nvlink.sh", expected=2,
+            env={"GPU_TYPE": "h100-nvl", "EXPECTED_NUM_GPU": "1",
+                 "NVIDIA_SMI_EMPTY_NVLINK_STATUS": "1"},
+        )
+        self.assertIn("not exposed for the single-GPU H100 NVL profile", output)
+        self.run_script(
+            "check_gpu_nvlink.sh", expected=1,
+            env={"GPU_TYPE": "h100-nvl", "EXPECTED_NUM_GPU": "2",
+                 "NVIDIA_SMI_EMPTY_NVLINK_STATUS": "1"},
+        )
+        self.run_script(
+            "check_gpu_nvlink.sh", expected=1,
+            env={"GPU_TYPE": "h100-nvl", "EXPECTED_NUM_GPU": "1",
+                 "NVIDIA_SMI_NVLINK_STATUS_FAIL": "1"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

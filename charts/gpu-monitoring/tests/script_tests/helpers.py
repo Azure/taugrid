@@ -29,12 +29,14 @@ if name == "nvidia-smi":
             sys.exit(1)
         if os.environ.get("NVIDIA_SMI_EMPTY_NVLINK_STATUS") == "1":
             sys.exit(0)
-        print("Link 0: 50 GB/s")
-    elif args in ("nvlink -s -i 0", "nvlink --id=0 --status"):
+        print(os.environ.get("NVIDIA_SMI_NVLINK_OUTPUT", "Link 0: 50 GB/s"))
+    elif args == "nvlink --id=0 --status" or (
+        len(sys.argv) == 5 and sys.argv[1:4] == ["nvlink", "-s", "-i"] and sys.argv[4].isdigit()
+    ):
         if os.environ.get("NVIDIA_SMI_NVLINK_DETAIL_FAIL") == "1":
             print("nvlink detail query failed", file=sys.stderr)
             sys.exit(1)
-        print("Link 0: 50 GB/s")
+        print(os.environ.get("NVIDIA_SMI_NVLINK_OUTPUT", "Link 0: 50 GB/s"))
     elif args == "c2c --id=0 --status":
         if os.environ.get("NVIDIA_SMI_C2C_FAIL") == "1":
             print("c2c status query failed", file=sys.stderr)
