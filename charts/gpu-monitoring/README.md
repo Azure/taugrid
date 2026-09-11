@@ -281,6 +281,52 @@ must use their existing profile-specific `dcgmHealth.source: exporter` override
 and a node-local exporter URL. Do not globally disable host diagnostics on
 profiles that actually provide them.
 
+### AKS-managed exporter counters on port 19400
+
+AKS driver installation alone does not install host DCGM. The
+[managed GPU profile](https://learn.microsoft.com/azure/aks/aks-managed-gpu-nodes)
+also provides DCGM, its host engine, and the exporter on **19400**. A GPU
+Operator exporter running in a container does not imply that `/usr/bin/dcgmi`
+exists on the host. Check the actual node-pool install profile, host packages,
+and service state before choosing `host-dcgmi`; do not install a second GPU
+stack to satisfy a mismatched monitoring profile.
+
+The managed exporter can be reachable while its package-provided
+`/etc/dcgm-exporter/default-counters.csv` omits the continuous health inputs.
+Changing the scrape port does not fix missing fields. Where the node owner
+authorizes a host customization, the opt-in
+[`configure-managed-dcgm-exporter.py`](operations/configure-managed-dcgm-exporter.py)
+helper preserves every existing CSV field and adds the health counters:
+
+```bash
+# Run on the intended host with Python 3.10+, systemd, and the existing AKS stack.
+sudo python3 charts/gpu-monitoring/operations/configure-managed-dcgm-exporter.py plan \
+  --metrics-file charts/gpu-monitoring/configs/dcgm-metrics.csv
+sudo python3 charts/gpu-monitoring/operations/configure-managed-dcgm-exporter.py apply \
+  --metrics-file charts/gpu-monitoring/configs/dcgm-metrics.csv
+# To restore the original AKS invocation:
+sudo python3 charts/gpu-monitoring/operations/configure-managed-dcgm-exporter.py rollback
+```
+
+It writes a content-addressed CSV under `/etc/taugrid/dcgm-exporter/` and an
+owned `90-taugrid-metrics.conf` systemd drop-in. It does not overwrite the
+package CSV, service unit, or AKS `10-aks-override.conf`; it restarts only the
+exporter, retaining port 19400. It verifies the original files, host-engine
+process, physical GPU identities, and exporter recovery, and rolls back a
+failed apply. Foreign or changed configurations are rejected rather than
+overwritten. Independently verify finite samples for all required UUID/field
+pairs before enabling the coverage-aware collector; HTTP recovery alone is
+not that proof.
+
+This is an explicit node-owner customization, **not an AKS API setting or an
+automatic Helm action**. It survives a normal reboot but not node replacement
+or reimage. Integrate reapplication into the node owner's approved provisioning
+workflow before treating it as a fleet-wide production fix. A changed host
+engine or vendor configuration requires fresh review; the helper refuses stale
+rollback assumptions. Remove the owned override before retiring the integration.
+For an A100 topology verified to have links 0 through 11 on every GPU, use those
+12 IDs with `gpuSkus.a100.nvlinkMetricLinkIds`, not the H200 18-link example.
+
 ### Host DCGM health-watch ownership
 
 Profiles whose effective `dcgmHealth.source` is `host-dcgmi` own the
