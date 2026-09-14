@@ -6,14 +6,20 @@ package rdmavalidation
 import "time"
 
 const (
-	SchemaVersion            = "rdma-validation.v1"
-	Kind                     = "tau.rdma_validation"
-	ArtifactType             = "rdma-validation"
-	ArtifactContentType      = "application/vnd.tau.rdma-validation.v1+json"
-	RunKindTag               = "tau.validation.kind"
-	MetricArtifactURITag     = "tau.rdma_validation.artifact_uri"
-	MetricArtifactSHA256Tag  = "tau.rdma_validation.artifact_sha256"
-	DefaultStaleAfterSeconds = int64(24 * time.Hour / time.Second)
+	SchemaVersion             = "rdma-validation.v1"
+	Kind                      = "tau.rdma_validation"
+	ArtifactType              = "rdma-validation"
+	ArtifactContentType       = "application/vnd.tau.rdma-validation.v1+json"
+	RunKindTag                = "tau.validation.kind"
+	MetricValidationIDTag     = "tau.rdma_validation.validation_id"
+	MetricSchemaTag           = "tau.rdma_validation.schema"
+	MetricKindTag             = "tau.rdma_validation.kind"
+	MetricLifecycleStateTag   = "tau.rdma_validation.lifecycle_state"
+	MetricValidationStatusTag = "tau.rdma_validation.status"
+	MetricValidationReasonTag = "tau.rdma_validation.reason"
+	MetricArtifactURITag      = "tau.rdma_validation.artifact_uri"
+	MetricArtifactSHA256Tag   = "tau.rdma_validation.artifact_sha256"
+	DefaultStaleAfterSeconds  = int64(24 * time.Hour / time.Second)
 )
 
 const (

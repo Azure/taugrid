@@ -55,6 +55,15 @@ func (result Result) Lifecycle(link *ArtifactLink) (RunLifecycle, error) {
 	if err := exptelemetry.ValidateID("run_id", result.RunID); err != nil {
 		return RunLifecycle{}, err
 	}
+	for kind, value := range map[string]string{
+		"workspace_id": result.WorkspaceID,
+		"cluster":      result.Cluster,
+		"namespace":    result.Namespace,
+	} {
+		if err := exptelemetry.ValidateID(kind, value); err != nil {
+			return RunLifecycle{}, err
+		}
+	}
 	if result.Attempt < 1 {
 		return RunLifecycle{}, fmt.Errorf("attempt must be positive")
 	}

@@ -84,10 +84,11 @@ func (result Result) SummaryMetricsForArtifact(link ArtifactLink) ([]SummaryMetr
 
 func (result Result) summaryMetric(name string, value float64) SummaryMetric {
 	tags := map[string]string{
-		"schema": SchemaVersion,
-		"kind":   Kind,
-		"status": string(result.Status),
-		"reason": string(result.Reason),
+		MetricValidationIDTag:     result.ValidationID,
+		MetricSchemaTag:           SchemaVersion,
+		MetricKindTag:             Kind,
+		MetricValidationStatusTag: string(result.Status),
+		MetricValidationReasonTag: string(result.Reason),
 	}
 	if result.NCCL.Operation != "" {
 		tags["operation"] = result.NCCL.Operation

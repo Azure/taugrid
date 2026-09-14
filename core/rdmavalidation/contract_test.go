@@ -346,8 +346,19 @@ func TestSummaryMetricsAreBoundedAndOmitUnknownMeasurements(t *testing.T) {
 		t.Fatalf("status metric = %+v", metrics[0])
 	}
 	for _, metric := range metrics {
-		if len(metric.Tags) > 6 {
+		if len(metric.Tags) > 7 {
 			t.Fatalf("metric %s has unbounded tags: %v", metric.Name, metric.Tags)
+		}
+		for key, want := range map[string]string{
+			MetricValidationIDTag:     result.ValidationID,
+			MetricSchemaTag:           SchemaVersion,
+			MetricKindTag:             Kind,
+			MetricValidationStatusTag: string(result.Status),
+			MetricValidationReasonTag: string(result.Reason),
+		} {
+			if metric.Tags[key] != want {
+				t.Fatalf("metric %s tag %s = %q, want %q", metric.Name, key, metric.Tags[key], want)
+			}
 		}
 		for _, forbidden := range []string{"node", "gpu", "interface"} {
 			if _, exists := metric.Tags[forbidden]; exists {

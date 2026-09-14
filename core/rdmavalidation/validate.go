@@ -209,6 +209,7 @@ func Validate(result Result) error {
 	for kind, value := range map[string]string{
 		"run_id": result.RunID, "workspace_id": result.WorkspaceID, "project_id": result.ProjectID,
 		"experiment_id": result.ExperimentID, "run_group_id": result.RunGroupID,
+		"cluster": result.Cluster, "namespace": result.Namespace,
 	} {
 		if value != "" {
 			if err := exptelemetry.ValidateID(kind, value); err != nil {
