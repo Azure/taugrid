@@ -63,7 +63,8 @@ const DefaultMaxSampleAge = 2 * time.Minute
 type Engine struct {
 	rules       []Rule
 	mu          sync.Mutex
-	history     map[string][]sample  // metric key → time series for rate calculations
+	history     map[string][]sample // metric key → time series for rate calculations
+	rateBreaks  map[int]map[string]int
 	pending     map[string]time.Time // conditionType → first time condition was met (for "for" duration)
 	evalCounter int                  // tracks cycles for periodic cleanup
 	retention   time.Duration        // how long to keep history samples
@@ -72,6 +73,7 @@ type Engine struct {
 type sample struct {
 	time  time.Time
 	value float64
+	cycle int
 }
 
 // NewEngine creates a rule engine.
@@ -90,10 +92,11 @@ func NewEngine(rules []Rule) *Engine {
 	}
 
 	return &Engine{
-		rules:     rules,
-		history:   make(map[string][]sample),
-		pending:   make(map[string]time.Time),
-		retention: retention,
+		rules:      rules,
+		history:    make(map[string][]sample),
+		rateBreaks: make(map[int]map[string]int),
+		pending:    make(map[string]time.Time),
+		retention:  retention,
 	}
 }
 
@@ -103,11 +106,11 @@ func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 	defer e.mu.Unlock()
 
 	now := time.Now()
+	e.evalCounter++
 	e.removeMissingHistory(metrics)
-	e.recordMetrics(metrics, now)
+	e.recordMetrics(metrics, now, e.evalCounter)
 
 	// Cleanup stale history every ~60 cycles (~15min at 15s interval).
-	e.evalCounter++
 	if e.evalCounter%60 == 0 {
 		e.cleanupStaleHistory(now, 1*time.Hour)
 	}
@@ -116,15 +119,15 @@ func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 	idx := indexMetrics(metrics)
 
 	var results []Result
-	for _, rule := range e.rules {
-		r := e.evaluateRule(rule, idx, now)
+	for ruleIndex, rule := range e.rules {
+		r := e.evaluateRule(ruleIndex, rule, idx, now)
 		results = append(results, r)
 	}
 
 	return results
 }
 
-func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now time.Time) Result {
+func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper.Metric, now time.Time) Result {
 	result := Result{
 		ConditionType: rule.ConditionType,
 		Firing:        false,
@@ -145,16 +148,20 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 		identities := make(map[string]struct{}, len(matched))
 		validCount := 0
 		for _, m := range matched {
+			key := metricKey(m.Name, m.Labels)
 			if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
+				e.breakRateContinuity(ruleIndex, rule, key)
 				continue
 			}
 			if rule.MinSamples > 0 && !m.Timestamp.IsZero() &&
 				(m.Timestamp.Before(now.Add(-maxAge)) || m.Timestamp.After(now.Add(maxAge))) {
+				e.breakRateContinuity(ruleIndex, rule, key)
 				continue
 			}
 			if rule.SampleLabel != "" {
 				identity := m.Labels[rule.SampleLabel]
 				if identity == "" {
+					e.breakRateContinuity(ruleIndex, rule, key)
 					continue
 				}
 				identities[identity] = struct{}{}
@@ -206,7 +213,7 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 	case "rate":
 		for _, m := range valid {
 			key := metricKey(m.Name, m.Labels)
-			increase, known := e.computeRate(key, rule.Window, now, rule.MinSamples > 0, maxAge)
+			increase, known := e.computeRate(ruleIndex, key, rule.Window, now, rule.MinSamples > 0, maxAge)
 			if !known && rule.MinSamples > 0 {
 				result.Unknown = true
 				result.Reason = "MetricHistoryUnavailable"
@@ -254,7 +261,7 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 	return result
 }
 
-func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time) {
+func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time, cycle int) {
 	for _, m := range metrics {
 		key := metricKey(m.Name, m.Labels)
 		if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
@@ -272,7 +279,7 @@ func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time) {
 			}
 			delete(e.history, key)
 		}
-		e.history[key] = append(e.history[key], sample{time: observedAt, value: m.Value})
+		e.history[key] = append(e.history[key], sample{time: observedAt, value: m.Value, cycle: cycle})
 		e.pruneHistory(key, now, e.retention)
 	}
 }
@@ -285,6 +292,12 @@ func (e *Engine) removeMissingHistory(metrics []scraper.Metric) {
 	for key := range e.history {
 		if _, ok := present[key]; !ok {
 			delete(e.history, key)
+			for ruleIndex, breaks := range e.rateBreaks {
+				delete(breaks, key)
+				if len(breaks) == 0 {
+					delete(e.rateBreaks, ruleIndex)
+				}
+			}
 		}
 	}
 }
@@ -301,34 +314,48 @@ func (e *Engine) pruneHistory(key string, now time.Time, maxAge time.Duration) {
 	}
 }
 
-func (e *Engine) computeRate(key string, window time.Duration, now time.Time, requireCoverage bool, maxAge time.Duration) (float64, bool) {
+func (e *Engine) breakRateContinuity(ruleIndex int, rule Rule, key string) {
+	if rule.Mode != "rate" || rule.MinSamples == 0 {
+		return
+	}
+	if e.rateBreaks[ruleIndex] == nil {
+		e.rateBreaks[ruleIndex] = make(map[string]int)
+	}
+	e.rateBreaks[ruleIndex][key] = e.evalCounter
+}
+
+func (e *Engine) computeRate(ruleIndex int, key string, window time.Duration, now time.Time, requireCoverage bool, maxAge time.Duration) (float64, bool) {
 	samples := e.history[key]
+	if requireCoverage {
+		start := 0
+		if breaks := e.rateBreaks[ruleIndex]; breaks != nil {
+			breakCycle := breaks[key]
+			for start < len(samples) && samples[start].cycle <= breakCycle {
+				start++
+			}
+		}
+		for i := start + 1; i < len(samples); i++ {
+			if samples[i].time.Sub(samples[i-1].time) > maxAge {
+				start = i
+			}
+		}
+		samples = samples[start:]
+	}
 	if len(samples) < 2 {
 		return 0, false
 	}
 
 	cutoff := now.Add(-window)
-	var oldest *sample
-	for i := range samples {
-		if !samples[i].time.Before(cutoff) {
-			oldest = &samples[i]
-			break
-		}
-	}
-	if oldest == nil {
+	oldestIndex := sort.Search(len(samples), func(i int) bool {
+		return !samples[i].time.Before(cutoff)
+	})
+	if oldestIndex == len(samples) {
 		return 0, false
 	}
-
+	oldest := samples[oldestIndex]
 	latest := samples[len(samples)-1]
 	if !latest.time.After(oldest.time) {
 		return 0, false
-	}
-	if requireCoverage {
-		previous := samples[len(samples)-2]
-		if latest.time.Sub(previous.time) > maxAge || previous.time.After(now.Add(maxAge)) {
-			e.history[key] = samples[len(samples)-1:]
-			return 0, false
-		}
 	}
 	increase := latest.value - oldest.value
 	if increase < 0 {

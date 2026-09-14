@@ -111,6 +111,85 @@ func TestContinuousRateDoesNotBridgeLongCollectionGap(t *testing.T) {
 	}
 }
 
+func TestContinuousRateRequiresTwoAcceptedSamplesAfterStaleInput(t *testing.T) {
+	t.Parallel()
+	rule := continuousRule()
+	rule.MinSamples, rule.Mode, rule.Window = 1, "rate", 10*time.Minute
+	rule.MaxSampleAge = 2 * time.Minute
+	engine := NewEngine([]Rule{rule})
+	now := time.Now()
+
+	if result := engine.Evaluate([]scraper.Metric{gpuSample("a", 0, now.Add(-130*time.Second))})[0]; !result.Unknown {
+		t.Fatalf("stale observation established a rate baseline: %+v", result)
+	}
+	if result := engine.Evaluate([]scraper.Metric{gpuSample("a", 0, now.Add(-115*time.Second))})[0]; !result.Unknown {
+		t.Fatalf("first accepted observation after stale input established a rate: %+v", result)
+	}
+	if result := engine.Evaluate([]scraper.Metric{gpuSample("a", 0, now.Add(-100*time.Second))})[0]; result.Unknown || result.Firing {
+		t.Fatalf("second consecutive accepted observation did not establish a healthy rate: %+v", result)
+	}
+}
+
+func TestContinuousRateRequiresTwoAcceptedSamplesAfterFutureInput(t *testing.T) {
+	t.Parallel()
+	rule := continuousRule()
+	rule.MinSamples, rule.Mode, rule.Window = 1, "rate", 10*time.Minute
+	rule.MaxSampleAge = 2 * time.Minute
+	engine := NewEngine([]Rule{rule})
+	now := time.Now()
+
+	if result := engine.Evaluate([]scraper.Metric{gpuSample("a", 0, now.Add(130*time.Second))})[0]; !result.Unknown {
+		t.Fatalf("future observation established a rate baseline: %+v", result)
+	}
+	if result := engine.Evaluate([]scraper.Metric{gpuSample("a", 0, now)})[0]; !result.Unknown {
+		t.Fatalf("first accepted observation after future input established a rate: %+v", result)
+	}
+	if result := engine.Evaluate([]scraper.Metric{gpuSample("a", 0, now.Add(time.Second))})[0]; result.Unknown || result.Firing {
+		t.Fatalf("second consecutive accepted observation did not establish a healthy rate: %+v", result)
+	}
+}
+
+func TestOverlappingContinuousRateRulesAreOrderIndependent(t *testing.T) {
+	t.Parallel()
+	strict := continuousRule()
+	strict.Name = "strict"
+	strict.ConditionType = "StrictGPUError"
+	strict.MinSamples, strict.Mode, strict.Window = 1, "rate", 10*time.Minute
+	strict.MaxSampleAge = time.Minute
+	broad := strict
+	broad.Name = "broad"
+	broad.ConditionType = "BroadGPUError"
+	broad.MaxSampleAge = 2 * time.Minute
+
+	for _, rules := range [][]Rule{{strict, broad}, {broad, strict}} {
+		engine := NewEngine(rules)
+		engine.Evaluate([]scraper.Metric{gpuSample("a", 0, time.Time{})})
+
+		key := metricKey("gpu_errors", map[string]string{"UUID": "a"})
+		engine.history[key][0].time = time.Now().Add(-90 * time.Second)
+		results := engine.Evaluate([]scraper.Metric{gpuSample("a", 1, time.Time{})})
+
+		byCondition := make(map[string]Result, len(results))
+		for _, result := range results {
+			byCondition[result.ConditionType] = result
+		}
+		if result := byCondition[strict.ConditionType]; !result.Unknown || result.Firing {
+			t.Fatalf("strict rule bridged a 90-second gap with order %v: %+v", conditionTypes(rules), result)
+		}
+		if result := byCondition[broad.ConditionType]; result.Unknown || !result.Firing {
+			t.Fatalf("broad rule lost shared evidence with order %v: %+v", conditionTypes(rules), result)
+		}
+	}
+}
+
+func conditionTypes(rules []Rule) []string {
+	types := make([]string, len(rules))
+	for i, rule := range rules {
+		types[i] = rule.ConditionType
+	}
+	return types
+}
+
 func TestMissingInputBreaksPendingDuration(t *testing.T) {
 	t.Parallel()
 	rule := continuousRule()
