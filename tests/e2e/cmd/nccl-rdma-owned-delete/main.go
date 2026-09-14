@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,32 +19,34 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-const mpiJobName = "e2e-nccl-rdma-2x8xh200"
 const defaultDeleteTimeout = 20 * time.Second
 const maxRESTRequestTimeout = 10 * time.Second
-
-var mpiJobGVR = schema.GroupVersionResource{
-	Group:    "kubeflow.org",
-	Version:  "v2beta1",
-	Resource: "mpijobs",
-}
 
 func main() {
 	var kubeconfig string
 	var contextName string
 	var namespace string
+	var group string
+	var version string
+	var resource string
+	var name string
 	var uid string
 	var timeout time.Duration
 
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "explicit kubeconfig path")
 	flag.StringVar(&contextName, "context", "", "explicit kubeconfig context")
-	flag.StringVar(&namespace, "namespace", "", "MPIJob namespace")
-	flag.StringVar(&uid, "uid", "", "owned MPIJob UID precondition")
+	flag.StringVar(&namespace, "namespace", "", "resource namespace")
+	flag.StringVar(&group, "group", "", "API group; empty selects the core API")
+	flag.StringVar(&version, "version", "", "API version")
+	flag.StringVar(&resource, "resource", "", "plural API resource")
+	flag.StringVar(&name, "name", "", "fixed resource name")
+	flag.StringVar(&uid, "uid", "", "owned resource UID precondition")
 	flag.DurationVar(&timeout, "timeout", defaultDeleteTimeout, "overall delete deadline")
 	flag.Parse()
 
-	if kubeconfig == "" || contextName == "" || namespace == "" || uid == "" || timeout <= 0 {
-		fmt.Fprintln(os.Stderr, "--kubeconfig, --context, --namespace, --uid, and a positive --timeout are required")
+	if kubeconfig == "" || contextName == "" || namespace == "" ||
+		version == "" || resource == "" || name == "" || uid == "" || timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "--kubeconfig, --context, --namespace, --version, --resource, --name, --uid, and a positive --timeout are required")
 		os.Exit(2)
 	}
 
@@ -62,15 +65,26 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := deleteOwnedMPIJob(ctx, client, namespace, types.UID(uid), timeout); err != nil {
-		fmt.Fprintf(os.Stderr, "delete owned MPIJob: %v\n", err)
+	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
+	if err := deleteOwnedResource(ctx, client, gvr, namespace, name, types.UID(uid), timeout); err != nil {
+		fmt.Fprintf(os.Stderr, "delete owned resource: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func deleteOwnedMPIJob(ctx context.Context, client dynamic.Interface, namespace string, uid types.UID, timeout time.Duration) error {
-	if namespace == "" {
-		return errors.New("namespace is required")
+func deleteOwnedResource(
+	ctx context.Context,
+	client dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespace, name string,
+	uid types.UID,
+	timeout time.Duration,
+) error {
+	if gvr.Version == "" || gvr.Resource == "" {
+		return errors.New("resource version and plural resource are required")
+	}
+	if namespace == "" || name == "" {
+		return errors.New("namespace and name are required")
 	}
 	if uid == "" {
 		return errors.New("UID precondition is required")
@@ -81,10 +95,14 @@ func deleteOwnedMPIJob(ctx context.Context, client dynamic.Interface, namespace 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	foreground := metav1.DeletePropagationForeground
-	return client.Resource(mpiJobGVR).Namespace(namespace).Delete(ctx, mpiJobName, metav1.DeleteOptions{
+	err := client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{
 		PropagationPolicy: &foreground,
 		Preconditions:     &metav1.Preconditions{UID: &uid},
 	})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func boundedRESTTimeout(timeout time.Duration) time.Duration {

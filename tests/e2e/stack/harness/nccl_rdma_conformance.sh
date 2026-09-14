@@ -8,14 +8,20 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 E2E_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly E2E_ROOT
-readonly MPIJOB_NAME="e2e-nccl-rdma-2x8xh200"
-readonly DIAGNOSTIC_SELECTOR="e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x8xh200"
-readonly INVOCATION_LABEL="e2e.taugrid.azure.com/invocation"
+readonly JOB_NAME="e2e-nccl-rdma-2x1xh200"
+readonly DIAGNOSTIC_SELECTOR="e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x1xh200"
 readonly RDMA_RESOURCE="rdma/rdma_shared_device_a"
-readonly CONFIRMATION="apply-fixed-nccl-rdma-mpijob"
-readonly MPIJOB_FIXTURE="${E2E_ROOT}/stack/fixtures/nccl-rdma-mpijob-2x8xh200.yaml"
+readonly CONFIRMATION="create-fixed-nccl-rdma-indexed-job"
+readonly JOB_FIXTURE="${E2E_ROOT}/stack/fixtures/nccl-rdma-indexed-job-2x1xh200.yaml"
+readonly SECURITY_BOUNDARY_FIXTURE="${E2E_ROOT}/stack/fixtures/nccl-rdma-security-boundary.yaml"
 readonly CLEANUP_OVERALL_SECONDS=180
 readonly CLEANUP_REQUEST_TIMEOUT_SECONDS=10
+readonly TEST_STOP_TIMEOUT_SECONDS=30
+readonly IMAGE="nvcr.io/nvidia/pytorch@sha256:e14cf0da7ca0d878d0874eb81062b77df275491d4a8d030a2a7463a4e8b07f01"
+readonly IMAGE_REPOSITORY="nvcr.io/nvidia/pytorch"
+readonly IMAGE_INDEX_DIGEST="sha256:417cbf33f87b5378849df37983552cd1f8bc8b62fe1ceabe004de816a55dff21"
+readonly IMAGE_LINUX_AMD64_DIGEST="sha256:e14cf0da7ca0d878d0874eb81062b77df275491d4a8d030a2a7463a4e8b07f01"
+readonly IMAGE_CONFIG_DIGEST="sha256:06faed719d1bbd31d7053c96d0c94fce4f2b5f92fd95f07d60ec323c9744f118"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -56,17 +62,33 @@ cleanup_kube() {
 run_owned_delete_bounded() {
   local deadline="$1"
   local namespace="$2"
-  local object_uid="$3"
+  local group="$3"
+  local version="$4"
+  local resource="$5"
+  local name="$6"
+  local object_uid="$7"
   local remaining=$((deadline - SECONDS))
   ((remaining > 1)) || return 124
 
-  python3 - "$remaining" "$E2E_ROOT" "$NCCL_RDMA_KUBECONFIG" "$NCCL_RDMA_KUBE_CONTEXT" "$namespace" "$object_uid" <<'PY'
+  python3 - "$remaining" "$E2E_ROOT" "$NCCL_RDMA_KUBECONFIG" "$NCCL_RDMA_KUBE_CONTEXT" \
+    "$namespace" "$group" "$version" "$resource" "$name" "$object_uid" <<'PY'
 import os
 import signal
 import subprocess
 import sys
 
-timeout, cwd, kubeconfig, context, namespace, uid = sys.argv[1:]
+(
+    timeout,
+    cwd,
+    kubeconfig,
+    context,
+    namespace,
+    group,
+    version,
+    resource,
+    name,
+    uid,
+) = sys.argv[1:]
 timeout_seconds = int(timeout)
 operation_timeout = timeout_seconds - 1
 command = [
@@ -74,6 +96,10 @@ command = [
     "--kubeconfig", kubeconfig,
     "--context", context,
     "--namespace", namespace,
+    "--group", group,
+    "--version", version,
+    "--resource", resource,
+    "--name", name,
     "--uid", uid,
     "--timeout", f"{operation_timeout}s",
 ]
@@ -87,11 +113,16 @@ except subprocess.TimeoutExpired:
 PY
 }
 
-require_digest_image() {
-  local image
-  image="$(require_env NCCL_RDMA_E2E_IMAGE)"
-  [[ "$image" =~ ^mcr\.microsoft\.com/aks/ai-runtime/nccl-tests@sha256:[a-f0-9]{64}$ ]] \
-    || fail "NCCL_RDMA_E2E_IMAGE must be mcr.microsoft.com/aks/ai-runtime/nccl-tests@sha256:<64 lowercase hex>"
+require_qualified_image() {
+  (
+    cd "$E2E_ROOT"
+    go run ./cmd/nccl-rdma-image-ref \
+      --image "$IMAGE" \
+      --repository "$IMAGE_REPOSITORY" \
+      --index-digest "$IMAGE_INDEX_DIGEST" \
+      --linux-amd64-digest "$IMAGE_LINUX_AMD64_DIGEST" \
+      --config-digest "$IMAGE_CONFIG_DIGEST"
+  ) || fail "NCCL/RDMA image reference does not match the qualified NVIDIA PyTorch linux/amd64 child"
 }
 
 ensure_invocation_marker() {
@@ -103,8 +134,8 @@ ensure_invocation_marker() {
     || fail "NCCL_RDMA_INVOCATION must be nccl-rdma- followed by 32 lowercase hex characters"
 }
 
-render_mpijob() {
-  python3 - "$MPIJOB_FIXTURE" <<'PY'
+render_job() {
+  python3 - "$JOB_FIXTURE" <<'PY'
 import os
 import pathlib
 import sys
@@ -113,7 +144,6 @@ text = pathlib.Path(sys.argv[1]).read_text()
 replacements = {
     "{{STACK_NAMESPACE}}": os.environ["E2E_STACK_NAMESPACE"],
     "{{STACK_LARGE_GPU_QUEUE}}": os.environ["E2E_STACK_LARGE_GPU_QUEUE"],
-    "{{NCCL_RDMA_IMAGE}}": os.environ["NCCL_RDMA_E2E_IMAGE"],
     "{{NCCL_RDMA_INVOCATION}}": os.environ["NCCL_RDMA_INVOCATION"],
     "{{GPU_NODE_SELECTOR_KEY}}": os.environ["GPU_NODE_SELECTOR_KEY"],
     "{{GPU_NODE_SELECTOR_VALUE}}": os.environ["GPU_NODE_SELECTOR_VALUE"],
@@ -121,19 +151,19 @@ replacements = {
 for placeholder, value in replacements.items():
     text = text.replace(placeholder, value)
 if "{{" in text or "}}" in text:
-    raise SystemExit("unresolved placeholder remains in MPIJob fixture")
+    raise SystemExit("unresolved placeholder remains in Job fixture")
 sys.stdout.write(text)
 PY
 }
 
 render_admission_probe() {
-  render_mpijob | python3 -c '
+  render_job | python3 -c '
 import sys
 text = sys.stdin.read()
-needle = "  runPolicy:\n    suspend: true\n"
+needle = "  suspend: true\n"
 if text.count(needle) != 1:
-    raise SystemExit("persisted MPIJob fixture must contain exactly one spec.runPolicy.suspend=true")
-sys.stdout.write(text.replace(needle, "  runPolicy:\n", 1))
+    raise SystemExit("persisted Job fixture must contain exactly one spec.suspend=true")
+sys.stdout.write(text.replace(needle, "", 1))
 '
 }
 
@@ -155,175 +185,202 @@ raise SystemExit(0 if usable else "context does not resolve one cluster and user
 }
 
 validate_namespace_accommodation() {
-  local namespace enforce approval
+  local namespace
   namespace="$(require_env E2E_STACK_NAMESPACE)"
-  kube get namespace "$namespace" >/dev/null
-  enforce="$(kube get namespace "$namespace" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')"
-  approval="$(kube get namespace "$namespace" -o jsonpath='{.metadata.annotations.tau\.azure\.com/nccl-rdma-diagnostic-approved}')"
-  [[ "$enforce" == "privileged" ]] \
-    || fail "namespace $namespace lacks the pre-existing approved Pod Security accommodation (enforce=privileged); this harness will not modify namespace labels"
-  [[ "$approval" == "true" ]] \
-    || fail "namespace $namespace lacks annotation tau.azure.com/nccl-rdma-diagnostic-approved=true"
+  [[ "$namespace" == "taugrid-rdma-diagnostic" ]] \
+    || fail "the approved security boundary is fixed to namespace taugrid-rdma-diagnostic"
+  kube get namespace "$namespace" -o json | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+labels = doc.get("metadata", {}).get("labels", {})
+annotations = doc.get("metadata", {}).get("annotations", {})
+required_labels = {
+    "pod-security.kubernetes.io/enforce": "restricted",
+    "pod-security.kubernetes.io/enforce-version": "latest",
+    "pod-security.kubernetes.io/warn": "restricted",
+    "pod-security.kubernetes.io/warn-version": "latest",
+    "pod-security.kubernetes.io/audit": "restricted",
+    "pod-security.kubernetes.io/audit-version": "latest",
+    "tau.azure.com/nccl-rdma-security-boundary": "v3",
+}
+required_annotations = {
+    "tau.azure.com/nccl-rdma-diagnostic-approved": "true",
+    "tau.azure.com/owner-role": "tau-platform-admins",
+}
+for key, value in required_labels.items():
+    if labels.get(key) != value:
+        raise SystemExit(f"namespace label {key} must equal {value}")
+for key, value in required_annotations.items():
+    if annotations.get(key) != value:
+        raise SystemExit(f"namespace annotation {key} must equal {value}")
+' || fail "namespace $namespace does not match the exact approved Restricted security boundary"
 }
 
 validate_api_and_queue() {
-  local namespace queue controller_selector config_reference config_map config_key
+  local namespace queue cluster_queue
   namespace="$(require_env E2E_STACK_NAMESPACE)"
   queue="$(require_env E2E_STACK_LARGE_GPU_QUEUE)"
+  kube get --raw /apis/batch/v1 >/dev/null || fail "batch/v1 is not served"
 
-  kube get --raw /apis/kubeflow.org/v2beta1 >/dev/null \
-    || fail "kubeflow.org/v2beta1 is not served"
-  kube get customresourcedefinition mpijobs.kubeflow.org -o json |
-    python3 -c '
-import json, sys
-doc = json.load(sys.stdin)
-served = any(v.get("name") == "v2beta1" and v.get("served") for v in doc["spec"]["versions"])
-raise SystemExit(0 if served else "MPIJob CRD does not serve v2beta1")
-'
-
-  kube get localqueue.kueue.x-k8s.io "$queue" -n "$namespace" -o json |
+  cluster_queue="$(kube get localqueue.kueue.x-k8s.io "$queue" -n "$namespace" -o json |
     python3 -c '
 import json, sys
 doc = json.load(sys.stdin)
 conditions = doc.get("status", {}).get("conditions", [])
-active = any(c.get("type") == "Active" and c.get("status") == "True" for c in conditions)
-raise SystemExit(0 if active else "LocalQueue is not Active=True")
+if not any(c.get("type") == "Active" and c.get("status") == "True" for c in conditions):
+    raise SystemExit("LocalQueue is not Active=True")
+status = doc.get("status", {})
+for field in ("pendingWorkloads", "reservingWorkloads", "admittedWorkloads"):
+    if int(status.get(field, 0) or 0) != 0:
+        raise SystemExit(f"diagnostic LocalQueue is not idle: {field}={status.get(field)}")
+cluster_queue = doc.get("spec", {}).get("clusterQueue", "")
+if not cluster_queue:
+    raise SystemExit("LocalQueue has no spec.clusterQueue")
+print(cluster_queue)
+')"
+  NCCL_RDMA_CLUSTER_QUEUE="$cluster_queue"
+  export NCCL_RDMA_CLUSTER_QUEUE
+
+  kube get clusterqueue.kueue.x-k8s.io "$cluster_queue" -o json |
+    python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+spec = doc.get("spec", {})
+status = doc.get("status", {})
+for field in ("pendingWorkloads", "reservingWorkloads", "admittedWorkloads"):
+    if int(status.get(field, 0) or 0) != 0:
+        raise SystemExit(f"diagnostic ClusterQueue is not idle: {field}={status.get(field)}")
+if spec.get("admissionChecks"):
+    raise SystemExit("diagnostic ClusterQueue must not use admissionChecks")
+if spec.get("admissionChecksStrategy"):
+    raise SystemExit("diagnostic ClusterQueue must not use admissionChecksStrategy")
+preemption = spec.get("preemption", {})
+if preemption.get("withinClusterQueue") != "Never":
+    raise SystemExit("diagnostic ClusterQueue must set preemption.withinClusterQueue=Never")
+if preemption.get("reclaimWithinCohort") != "Never":
+    raise SystemExit("diagnostic ClusterQueue must set preemption.reclaimWithinCohort=Never")
+if preemption.get("borrowWithinCohort", {}).get("policy") != "Never":
+    raise SystemExit("diagnostic ClusterQueue must set preemption.borrowWithinCohort.policy=Never")
 '
-
-  controller_selector="$(kube get deployment kueue-controller-manager -n kueue-system -o json |
-    python3 -c '
-import json, sys
-doc = json.load(sys.stdin)
-labels = doc.get("spec", {}).get("selector", {}).get("matchLabels", {})
-if not labels:
-    raise SystemExit("Kueue controller Deployment has no matchLabels selector")
-print(",".join(f"{key}={value}" for key, value in sorted(labels.items())))
-')"
-
-  config_reference="$(kube get pods -n kueue-system -l "$controller_selector" -o json |
-    python3 -c '
-import json, pathlib, sys
-doc = json.load(sys.stdin)
-references = set()
-ready_pods = 0
-for pod in doc.get("items", []):
-    if pod.get("status", {}).get("phase") != "Running":
-        continue
-    conditions = pod.get("status", {}).get("conditions", [])
-    if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions):
-        continue
-    ready_pods += 1
-    spec = pod.get("spec", {})
-    pod_name = pod.get("metadata", {}).get("name", "<unknown>")
-    volumes = {v["name"]: v for v in spec.get("volumes", [])}
-    pod_reference = None
-    for container in spec.get("containers", []):
-        args = container.get("args", [])
-        config_path = None
-        for index, arg in enumerate(args):
-            if arg.startswith("--config="):
-                config_path = arg.split("=", 1)[1]
-                break
-            if arg == "--config" and index + 1 < len(args):
-                config_path = args[index + 1]
-                break
-        if not config_path:
-            continue
-        for mount in sorted(container.get("volumeMounts", []), key=lambda item: len(item["mountPath"]), reverse=True):
-            mount_path = mount["mountPath"].rstrip("/")
-            if config_path != mount_path and not config_path.startswith(mount_path + "/"):
-                continue
-            volume = volumes.get(mount["name"], {})
-            config_map = volume.get("configMap", {})
-            name = config_map.get("name")
-            if not name:
-                raise SystemExit(f"running Kueue controller config {config_path} is not mounted from a ConfigMap")
-            if mount.get("subPath"):
-                key = mount["subPath"]
-            else:
-                relative = pathlib.PurePosixPath(config_path).relative_to(pathlib.PurePosixPath(mount_path))
-                key = str(relative)
-                for item in config_map.get("items", []):
-                    if item.get("path") == key:
-                        key = item["key"]
-                        break
-            pod_reference = (name, key)
-            break
-        if pod_reference:
-            break
-    if not pod_reference:
-        raise SystemExit(f"Ready Kueue controller pod {pod_name} does not expose its --config ConfigMap reference")
-    references.add(pod_reference)
-if ready_pods == 0:
-    raise SystemExit("Kueue controller has no Ready pod")
-if not references:
-    raise SystemExit("no Ready Kueue controller pod exposes its --config ConfigMap reference")
-if len(references) != 1:
-    raise SystemExit(f"Ready Kueue controller pods use inconsistent config references: {sorted(references)}")
-name, key = references.pop()
-print(f"{name}\t{key}")
-')"
-  IFS=$'\t' read -r config_map config_key <<<"$config_reference"
-  [[ -n "$config_map" && -n "$config_key" ]] \
-    || fail "could not resolve the ConfigMap key mounted by the running Kueue controller"
-
-  kube get configmap "$config_map" -n kueue-system -o json |
-    python3 -c '
-import json, sys
-doc = json.load(sys.stdin)
-key = sys.argv[1]
-value = doc.get("data", {}).get(key)
-if value is None:
-    raise SystemExit(f"running Kueue controller ConfigMap lacks referenced key {key!r}")
-if "kubeflow.org/mpijob" not in value:
-    raise SystemExit("running Kueue controller config does not advertise kubeflow.org/mpijob integration")
-' "$config_key"
 }
 
-validate_server_side_admission() {
-  local response
-  response="$(render_admission_probe | kube create --dry-run=server -f - -o json)" \
-    || fail "server-side MPIJob admission dry-run failed"
-  python3 -c '
-import json, os, sys
-doc = json.load(sys.stdin)
-if doc.get("metadata", {}).get("name") != "e2e-nccl-rdma-2x8xh200":
-    raise SystemExit("admission dry-run returned an unexpected object")
-labels = doc.get("metadata", {}).get("labels", {})
-if labels.get("e2e.taugrid.azure.com/invocation") != os.environ["NCCL_RDMA_INVOCATION"]:
-    raise SystemExit("admission dry-run lost the unique invocation marker")
-if doc.get("spec", {}).get("runPolicy", {}).get("suspend") is not True:
-    raise SystemExit("Kueue admission dry-run did not set spec.runPolicy.suspend=true")
-' <<<"$response"
+validate_active_security_boundary() {
+  local operator kueue_controller job_controller untrusted
+  operator="$(require_env NCCL_RDMA_OPERATOR_USERNAME)"
+  kueue_controller="$(require_env NCCL_RDMA_KUEUE_CONTROLLER_USERNAME)"
+  job_controller="$(require_env NCCL_RDMA_JOB_CONTROLLER_USERNAME)"
+  untrusted="$(require_env NCCL_RDMA_UNTRUSTED_USERNAME)"
+  [[ "$operator" != APPROVED_* && "$kueue_controller" != APPROVED_* &&
+    "$job_controller" != APPROVED_* && "$untrusted" != APPROVED_* ]] \
+    || fail "all admission identities must be exact; unresolved APPROVED_* values are forbidden"
+
+  (
+    cd "$E2E_ROOT"
+    go run ./cmd/nccl-rdma-admission-check \
+      --kubeconfig "$NCCL_RDMA_KUBECONFIG" \
+      --context "$NCCL_RDMA_KUBE_CONTEXT" \
+      --boundary "$SECURITY_BOUNDARY_FIXTURE" \
+      --job "$JOB_FIXTURE" \
+      --probe "$E2E_ROOT/stack/scripts/torchrun-rdma-probe.py" \
+      --namespace "$E2E_STACK_NAMESPACE" \
+      --queue "$E2E_STACK_LARGE_GPU_QUEUE" \
+      --cluster-queue "$NCCL_RDMA_CLUSTER_QUEUE" \
+      --selector-key "$GPU_NODE_SELECTOR_KEY" \
+      --selector-value "$GPU_NODE_SELECTOR_VALUE" \
+      --invocation "$NCCL_RDMA_INVOCATION" \
+      --operator "$operator" \
+      --kueue-controller "$kueue_controller" \
+      --job-controller "$job_controller" \
+      --untrusted "$untrusted" \
+      --timeout 45s
+  ) || fail "active API-server-compiled NCCL/RDMA admission boundary or malicious dry-run probes failed"
 }
 
-validate_fixed_object_absent() {
-  local namespace object pods
+validate_delete_access_boundary() {
+  local namespace untrusted resource answer status
   namespace="$(require_env E2E_STACK_NAMESPACE)"
-  object="$(kube get mpijob.kubeflow.org "$MPIJOB_NAME" -n "$namespace" --ignore-not-found -o name)" \
-    || fail "cannot verify that fixed MPIJob $namespace/$MPIJOB_NAME is absent"
-  if [[ -n "$object" ]]; then
-    fail "fixed MPIJob $namespace/$MPIJOB_NAME already exists; refusing to replace or adopt it"
-  fi
+  untrusted="$(require_env NCCL_RDMA_UNTRUSTED_USERNAME)"
+  for resource in \
+    jobs.batch \
+    serviceaccounts \
+    configmaps \
+    secrets \
+    services \
+    networkpolicies.networking.k8s.io \
+    pods; do
+    if answer="$(kube auth can-i delete "$resource" -n "$namespace" --as="$untrusted" 2>&1)"; then
+      [[ "$answer" == "yes" ]] \
+        || fail "untrusted DELETE authorization query for $resource returned an unexpected successful response"
+      fail "untrusted identity $untrusted can delete protected $resource resources"
+    else
+      status=$?
+      [[ "$status" -eq 1 && "$answer" == "no" ]] \
+        || fail "cannot evaluate untrusted DELETE authority for $resource: $answer"
+    fi
+    answer="$(kube auth can-i delete "$resource" -n "$namespace" 2>&1)" \
+      || fail "cannot evaluate approved operator DELETE authority for $resource: $answer"
+    [[ "$answer" == "yes" ]] \
+      || fail "approved operator credential cannot delete UID-owned $resource resources during cleanup"
+  done
+}
+
+validate_fixed_objects_absent() {
+  local namespace type name existing pods workloads quota
+  namespace="$(require_env E2E_STACK_NAMESPACE)"
+  while IFS='|' read -r type name; do
+    existing="$(kube get "$type" "$name" -n "$namespace" --ignore-not-found -o name)" \
+      || fail "cannot verify that fixed $type $namespace/$name is absent"
+    [[ -z "$existing" ]] || fail "fixed $type $namespace/$name already exists; refusing to replace or adopt it"
+  done <<'EOF'
+jobs.batch|e2e-nccl-rdma-2x1xh200
+serviceaccounts|nccl-rdma-runner
+configmaps|nccl-rdma-probe
+secrets|nccl-rdma-auth
+services|e2e-nccl-rdma-rank0
+networkpolicies.networking.k8s.io|nccl-rdma-isolation
+EOF
   pods="$(kube get pods -n "$namespace" -l "$DIAGNOSTIC_SELECTOR" -o name)" \
     || fail "cannot check for stale diagnostic pods in $namespace"
-  if [[ -n "$pods" ]]; then
-    fail "stale diagnostic pods exist in $namespace; refusing to mutate until an operator investigates"
-  fi
+  [[ -z "$pods" ]] || fail "stale diagnostic pods exist in $namespace; refusing mutation"
+  workloads="$(kube get workloads.kueue.x-k8s.io -n "$namespace" -o name)" \
+    || fail "cannot check for stale Kueue Workloads in $namespace"
+  [[ -z "$workloads" ]] || fail "stale Kueue Workloads exist in $namespace; refusing mutation"
+  quota="$(kube get resourcequota nccl-rdma-shape -n "$namespace" -o json)" \
+    || fail "cannot read the diagnostic ResourceQuota"
+  python3 -c '
+import json
+import sys
+
+doc = json.load(sys.stdin)
+used = doc.get("status", {}).get("used", {})
+if int(used.get("count/workloads.kueue.x-k8s.io", "0")) != 0:
+    raise SystemExit("diagnostic ResourceQuota still accounts for a Kueue Workload")
+' <<<"$quota" || fail "diagnostic Workload quota is not fully free"
 }
 
 validate_capacity() {
-  local kubeconfig context selector
+  local kubeconfig context selector expected_site expected_pool expected_gpu_model
   kubeconfig="$(require_env NCCL_RDMA_KUBECONFIG)"
   context="$(require_env NCCL_RDMA_KUBE_CONTEXT)"
   selector="$(require_env NCCL_RDMA_H200_SELECTOR)"
+  expected_site="$(require_env NCCL_RDMA_EXPECTED_SITE)"
+  expected_pool="$(require_env NCCL_RDMA_EXPECTED_POOL)"
+  expected_gpu_model="$(require_env NCCL_RDMA_EXPECTED_GPU_MODEL)"
 
-  python3 - "$kubeconfig" "$context" "$selector" "$RDMA_RESOURCE" <<'PY'
+  python3 - "$kubeconfig" "$context" "$selector" "$RDMA_RESOURCE" \
+    "$expected_site" "$expected_pool" "$expected_gpu_model" <<'PY'
 import json
 import subprocess
 import sys
+from decimal import Decimal, InvalidOperation
 
-kubeconfig, context, selector, rdma_resource = sys.argv[1:]
+kubeconfig, context, selector, rdma_resource, expected_site, expected_pool, expected_gpu_model = sys.argv[1:]
+worker_requests = {
+    "cpu": 4000,
+    "memory": 16 * 1024**3,
+    "nvidia.com/gpu": 1,
+    rdma_resource: 1,
+}
 
 def kubectl(*args):
     command = ["kubectl", "--kubeconfig", kubeconfig, "--context", context, *args, "-o", "json"]
@@ -336,59 +393,150 @@ for node in nodes:
     is_ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
     if is_ready and not node.get("spec", {}).get("unschedulable", False):
         ready.append(node)
-
 if len(ready) != 2:
     raise SystemExit(f"selector {selector!r} must resolve to exactly two Ready schedulable H200 nodes; got {len(ready)}")
+for node in ready:
+    labels = node.get("metadata", {}).get("labels", {})
+    name = node.get("metadata", {}).get("name", "")
+    for taint in node.get("spec", {}).get("taints", []):
+        key = taint.get("key", "")
+        effect = taint.get("effect", "")
+        if (key, effect) not in {
+            ("nvidia.com/gpu", "NoSchedule"),
+            ("sku", "NoSchedule"),
+        }:
+            raise SystemExit(
+                f"node {name} has disallowed taint {key}={taint.get('value', '')}:{effect}"
+            )
+    if labels.get("topology.kubernetes.io/region") != expected_site:
+        raise SystemExit(f"node {name} is not in expected site {expected_site}")
+    if labels.get("kubernetes.azure.com/agentpool") != expected_pool:
+        raise SystemExit(f"node {name} is not in expected pool {expected_pool}")
+    product = labels.get("nvidia.com/gpu.product", "")
+    if product and expected_gpu_model.lower().replace(" ", "") not in product.lower().replace("-", "").replace("_", ""):
+        raise SystemExit(f"node {name} GPU product {product!r} does not match expected model {expected_gpu_model!r}")
 
 pods = kubectl("get", "pods", "--all-namespaces").get("items", [])
 
-def quantity(value):
+def quantity(value, resource):
     text = str(value or "0")
-    return int(text) if text.isdigit() else 0
+    try:
+        if resource == "cpu":
+            return int(Decimal(text[:-1])) if text.endswith("m") else int(Decimal(text) * 1000)
+        if resource == "memory":
+            suffixes = {
+                "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4,
+                "K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4,
+            }
+            for suffix, multiplier in suffixes.items():
+                if text.endswith(suffix):
+                    return int(Decimal(text[:-len(suffix)]) * multiplier)
+            return int(Decimal(text))
+        return int(Decimal(text))
+    except (InvalidOperation, ValueError):
+        raise SystemExit(f"cannot parse Kubernetes quantity {text!r} for {resource}")
+
+def container_request(container, resource):
+    resources = container.get("resources", {})
+    value = resources.get("requests", {}).get(resource)
+    if value is None and resource in {"cpu", "memory"}:
+        value = resources.get("limits", {}).get(resource)
+    return quantity(value, resource)
 
 def pod_request(pod, resource):
     containers = pod.get("spec", {}).get("containers", [])
     init_containers = pod.get("spec", {}).get("initContainers", [])
-    regular = sum(quantity(c.get("resources", {}).get("requests", {}).get(resource)) for c in containers)
-    init_max = max(
-        [quantity(c.get("resources", {}).get("requests", {}).get(resource)) for c in init_containers],
-        default=0,
-    )
-    return max(regular, init_max)
+    regular = sum(container_request(c, resource) for c in containers)
+    restartable_init = 0
+    init_peak = 0
+    for container in init_containers:
+        request = container_request(container, resource)
+        if container.get("restartPolicy") == "Always":
+            restartable_init += request
+            init_use = restartable_init
+        else:
+            init_use = restartable_init + request
+        init_peak = max(init_peak, init_use)
+    overhead = quantity(pod.get("spec", {}).get("overhead", {}).get(resource), resource)
+    return max(regular + restartable_init, init_peak) + overhead
+
+for pod in pods:
+    if pod.get("status", {}).get("phase") in {"Succeeded", "Failed"}:
+        continue
+    if pod.get("spec", {}).get("nodeName"):
+        continue
+    gpu = pod_request(pod, "nvidia.com/gpu")
+    rdma = pod_request(pod, rdma_resource)
+    if gpu or rdma:
+        raise SystemExit(
+            f'unassigned GPU/RDMA pod {pod["metadata"]["namespace"]}/{pod["metadata"]["name"]} '
+            f'could race diagnostic placement (gpu={gpu},rdma={rdma})'
+        )
 
 for node in ready:
     name = node["metadata"]["name"]
     allocatable = node.get("status", {}).get("allocatable", {})
-    gpu_total = quantity(allocatable.get("nvidia.com/gpu"))
-    rdma_total = quantity(allocatable.get(rdma_resource))
-    if gpu_total < 8 or rdma_total < 1:
-        raise SystemExit(
-            f"node {name} needs at least 8 GPUs and 1 {rdma_resource}; "
-            f"allocatable is gpu={gpu_total}, rdma={rdma_total}"
-        )
-
     consumers = []
-    gpu_used = 0
-    rdma_used = 0
+    used = {resource: 0 for resource in worker_requests}
     for pod in pods:
         if pod.get("spec", {}).get("nodeName") != name:
             continue
         if pod.get("status", {}).get("phase") in {"Succeeded", "Failed"}:
             continue
-        gpu = pod_request(pod, "nvidia.com/gpu")
-        rdma = pod_request(pod, rdma_resource)
-        gpu_used += gpu
-        rdma_used += rdma
-        if gpu or rdma:
-            consumers.append(f'{pod["metadata"]["namespace"]}/{pod["metadata"]["name"]}(gpu={gpu},rdma={rdma})')
+        requests = {resource: pod_request(pod, resource) for resource in worker_requests}
+        for resource, request in requests.items():
+            used[resource] += request
+        if any(requests.values()):
+            consumers.append(
+                f'{pod["metadata"]["namespace"]}/{pod["metadata"]["name"]}'
+                f'(cpu={requests["cpu"]}m,memory={requests["memory"]},'
+                f'gpu={requests["nvidia.com/gpu"]},rdma={requests[rdma_resource]})'
+            )
+    if used[rdma_resource]:
+        raise SystemExit(
+            f"node {name} has unrelated RDMA consumers; refusing transport validation: "
+            + ", ".join(consumers)
+        )
+    for resource, required in worker_requests.items():
+        total = quantity(allocatable.get(resource), resource)
+        free = total - used[resource]
+        if free < required:
+            raise SystemExit(
+                f"node {name} lacks requested headroom for {resource}: "
+                f"required={required}, allocatable={total}, used={used[resource]}, free={free}; "
+                f"consumers={', '.join(consumers) or 'none'}"
+            )
 
-    if consumers:
-        raise SystemExit(f"node {name} has unrelated GPU/RDMA consumers; refusing to run: {', '.join(consumers)}")
-    if gpu_total - gpu_used < 8 or rdma_total - rdma_used < 1:
-        raise SystemExit(f"node {name} lacks 8 free GPUs and one free {rdma_resource}")
-
-print("Capacity preflight passed for: " + ", ".join(node["metadata"]["name"] for node in ready))
+print(
+    "Request-based capacity preflight passed for one 4-CPU/16Gi/1-GPU/1-RDMA "
+    "pod on each of: " + ", ".join(node["metadata"]["name"] for node in ready)
+)
 PY
+}
+
+prepare_result_contract() {
+  local launch_dir source_revision
+  launch_dir="$PWD"
+  require_env NCCL_RDMA_WORKSPACE_ID >/dev/null
+  require_env NCCL_RDMA_CLUSTER >/dev/null
+  require_env NCCL_RDMA_EXPECTED_SITE >/dev/null
+  require_env NCCL_RDMA_EXPECTED_POOL >/dev/null
+  require_env NCCL_RDMA_EXPECTED_GPU_MODEL >/dev/null
+  [[ -z "$(git -C "$E2E_ROOT/../.." status --porcelain)" ]] \
+    || fail "the RDMA validation source tree must be clean so source_revision identifies the executed code"
+  source_revision="$(git -C "$E2E_ROOT/../.." rev-parse HEAD)"
+  [[ "$source_revision" =~ ^[a-f0-9]{40}$ ]] || fail "cannot resolve an exact lowercase Git source revision"
+  NCCL_RDMA_SOURCE_REVISION="$source_revision"
+  NCCL_RDMA_RUN_ID="${NCCL_RDMA_RUN_ID:-$NCCL_RDMA_INVOCATION}"
+  NCCL_RDMA_RUN_ATTEMPT="${NCCL_RDMA_RUN_ATTEMPT:-1}"
+  [[ "$NCCL_RDMA_RUN_ID" =~ ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$ ]] \
+    || fail "NCCL_RDMA_RUN_ID must satisfy the shared lowercase identifier contract"
+  [[ "$NCCL_RDMA_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] \
+    || fail "NCCL_RDMA_RUN_ATTEMPT must be a positive integer"
+  NCCL_RDMA_RESULT_PATH="${NCCL_RDMA_RESULT_PATH:-${launch_dir}/rdma-validation/${NCCL_RDMA_INVOCATION}.json}"
+  [[ ! -e "$NCCL_RDMA_RESULT_PATH" ]] \
+    || fail "immutable RDMA validation artifact already exists: $NCCL_RDMA_RESULT_PATH"
+  export NCCL_RDMA_SOURCE_REVISION NCCL_RDMA_RUN_ID NCCL_RDMA_RUN_ATTEMPT NCCL_RDMA_RESULT_PATH
 }
 
 preflight() {
@@ -396,25 +544,29 @@ preflight() {
   require_env E2E_STACK_LARGE_GPU_QUEUE >/dev/null
   require_env GPU_NODE_SELECTOR_KEY >/dev/null
   require_env GPU_NODE_SELECTOR_VALUE >/dev/null
+  require_env NCCL_RDMA_EXPECTED_SITE >/dev/null
+  require_env NCCL_RDMA_EXPECTED_POOL >/dev/null
+  require_env NCCL_RDMA_EXPECTED_GPU_MODEL >/dev/null
   [[ "$(require_env NCCL_RDMA_H200_SELECTOR)" == "$(require_env GPU_NODE_SELECTOR_KEY)=$(require_env GPU_NODE_SELECTOR_VALUE)" ]] \
     || fail "NCCL_RDMA_H200_SELECTOR must exactly match GPU_NODE_SELECTOR_KEY=GPU_NODE_SELECTOR_VALUE"
-  require_digest_image
+  require_qualified_image
   ensure_invocation_marker
   validate_access
   validate_namespace_accommodation
   validate_api_and_queue
-  validate_fixed_object_absent
-  validate_server_side_admission
+  validate_fixed_objects_absent
+  validate_active_security_boundary
+  validate_delete_access_boundary
   validate_capacity
-  echo "Read-only NCCL/RDMA preflight passed, including server-side admission dry-run. No cluster resources were persisted."
+  echo "Read-only NCCL/RDMA preflight passed, including exact active VAP/binding checks and allow/deny server-side dry-runs. No resources were persisted."
 }
 
 diagnostics() {
   local namespace
   local deadline=$((SECONDS + 60))
   namespace="$(require_env E2E_STACK_NAMESPACE)"
-  echo "=== MPIJob ===" >&2
-  cleanup_kube "$deadline" get mpijob.kubeflow.org "$MPIJOB_NAME" -n "$namespace" -o yaml >&2 || true
+  echo "=== Indexed Job ===" >&2
+  cleanup_kube "$deadline" get job.batch "$JOB_NAME" -n "$namespace" -o yaml >&2 || true
   echo "=== Kueue Workloads ===" >&2
   cleanup_kube "$deadline" get workloads.kueue.x-k8s.io -n "$namespace" -o wide >&2 || true
   echo "=== Diagnostic pods ===" >&2
@@ -423,70 +575,123 @@ diagnostics() {
   cleanup_kube "$deadline" get events -n "$namespace" --sort-by=.lastTimestamp >&2 || true
 }
 
-cleanup_owned_invocation() {
-  local namespace object ownership object_marker object_uid current_uid="" pods
+cleanup_owned_uids() {
+  local namespace entry group version resource type name object_uid object current_uid pods index cleanup_failed
+  local -a entries=()
+  local -a remaining_entries=()
   local deadline=$((SECONDS + CLEANUP_OVERALL_SECONDS))
+  cleanup_failed=0
   namespace="$(require_env E2E_STACK_NAMESPACE)"
-  object="$(cleanup_kube "$deadline" get mpijob.kubeflow.org "$MPIJOB_NAME" -n "$namespace" --ignore-not-found -o json)" \
-    || fail "cannot determine cleanup ownership for MPIJob $namespace/$MPIJOB_NAME"
-  if [[ -n "$object" ]]; then
-    ownership="$(python3 -c '
-import json, sys
-doc = json.load(sys.stdin)
-print(doc.get("metadata", {}).get("labels", {}).get("e2e.taugrid.azure.com/invocation", ""))
-print(doc.get("metadata", {}).get("uid", ""))
-' <<<"$object")"
-    object_marker="$(sed -n '1p' <<<"$ownership")"
-    object_uid="$(sed -n '2p' <<<"$ownership")"
-    if [[ "$object_marker" != "$NCCL_RDMA_INVOCATION" || -z "$object_uid" ]]; then
-      fail "MPIJob $namespace/$MPIJOB_NAME is not owned by invocation $NCCL_RDMA_INVOCATION; refusing cleanup"
-    fi
-
-    run_owned_delete_bounded "$deadline" "$namespace" "$object_uid" \
-      || fail "UID-precondition deletion failed for MPIJob $namespace/$MPIJOB_NAME UID $object_uid"
-
-    while ((SECONDS < deadline)); do
-      object="$(cleanup_kube "$deadline" get mpijob.kubeflow.org "$MPIJOB_NAME" -n "$namespace" --ignore-not-found -o json)" \
-        || fail "cannot verify cleanup for MPIJob $namespace/$MPIJOB_NAME"
-      if [[ -z "$object" ]]; then
-        break
-      fi
+  [[ -n "${NCCL_RDMA_OWNED_UID_FILE:-}" && -f "$NCCL_RDMA_OWNED_UID_FILE" ]] \
+    || fail "successful-create UID ledger is unavailable; refusing name or label based cleanup"
+  while IFS= read -r entry; do
+    entries+=("$entry")
+  done <"$NCCL_RDMA_OWNED_UID_FILE"
+  for ((index=${#entries[@]} - 1; index >= 0; index--)); do
+    entry="${entries[index]}"
+    IFS='|' read -r group version resource name object_uid <<<"$entry"
+    [[ -n "$version" && -n "$resource" && -n "$name" && -n "$object_uid" ]] \
+      || fail "malformed successful-create UID ledger entry; refusing cleanup"
+    type="$resource"
+    [[ -z "$group" ]] || type="$resource.$group"
+    run_owned_delete_bounded "$deadline" "$namespace" "$group" "$version" "$resource" "$name" "$object_uid" \
+      || {
+        echo "ERROR: UID-precondition deletion failed for $resource $namespace/$name UID $object_uid" >&2
+        cleanup_failed=1
+      }
+  done
+  remaining_entries=("${entries[@]}")
+  while ((SECONDS < deadline && ${#remaining_entries[@]} > 0)); do
+    entries=("${remaining_entries[@]}")
+    remaining_entries=()
+    for entry in "${entries[@]}"; do
+      IFS='|' read -r group version resource name object_uid <<<"$entry"
+      type="$resource"
+      [[ -z "$group" ]] || type="$resource.$group"
+      object="$(cleanup_kube "$deadline" get "$type" "$name" -n "$namespace" --ignore-not-found -o json)" \
+        || {
+          echo "ERROR: cannot verify cleanup for $resource $namespace/$name" >&2
+          remaining_entries+=("$entry")
+          cleanup_failed=1
+          continue
+        }
+      [[ -z "$object" ]] && continue
       current_uid="$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("metadata", {}).get("uid", ""))' <<<"$object")"
-      if [[ "$current_uid" != "$object_uid" ]]; then
-        break
-      fi
-      sleep 1
+      [[ "$current_uid" != "$object_uid" ]] && continue
+      remaining_entries+=("$entry")
     done
-    [[ "$current_uid" != "$object_uid" || -z "$object" ]] \
-      || fail "overall cleanup deadline expired for owned MPIJob $namespace/$MPIJOB_NAME UID $object_uid"
-  fi
-
+    ((${#remaining_entries[@]} == 0)) || sleep 1
+  done
+  for entry in "${remaining_entries[@]}"; do
+    IFS='|' read -r group version resource name object_uid <<<"$entry"
+    echo "ERROR: overall cleanup deadline expired for $resource $namespace/$name UID $object_uid" >&2
+    cleanup_failed=1
+  done
   while ((SECONDS < deadline)); do
-    pods="$(cleanup_kube "$deadline" get pods -n "$namespace" -l "$DIAGNOSTIC_SELECTOR,$INVOCATION_LABEL=$NCCL_RDMA_INVOCATION" -o name)" \
-      || fail "cannot verify pod cleanup for invocation $NCCL_RDMA_INVOCATION"
-    [[ -z "$pods" ]] && return 0
+    pods="$(cleanup_kube "$deadline" get pods -n "$namespace" -l "$DIAGNOSTIC_SELECTOR" -o name)" \
+      || {
+        echo "ERROR: cannot verify final diagnostic pod cleanup in $namespace" >&2
+        cleanup_failed=1
+        break
+      }
+    if [[ -z "$pods" ]]; then
+      ((cleanup_failed == 0))
+      return
+    fi
     sleep 1
   done
-  fail "overall cleanup deadline expired waiting for pods owned by invocation $NCCL_RDMA_INVOCATION"
+  [[ -z "${pods:-}" ]] || {
+    echo "ERROR: overall cleanup deadline expired with diagnostic pods still present in $namespace" >&2
+    cleanup_failed=1
+  }
+  ((cleanup_failed == 0))
+}
+
+NCCL_RDMA_TEST_PID=""
+
+stop_managed_test() {
+  local signal="$1"
+  local status="$2"
+  local deadline pid
+  trap - INT TERM
+  pid="${NCCL_RDMA_TEST_PID:-}"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -s "$signal" -- "-$pid" 2>/dev/null || kill -s "$signal" "$pid" 2>/dev/null || true
+    deadline=$((SECONDS + TEST_STOP_TIMEOUT_SECONDS))
+    while kill -0 "$pid" 2>/dev/null && ((SECONDS < deadline)); do
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+  fi
+  NCCL_RDMA_TEST_PID=""
+  exit "$status"
 }
 
 cleanup_on_exit() {
   local status=$?
   trap - EXIT INT TERM
-  if [[ -n "${NCCL_RDMA_INVOCATION:-}" ]] && ! cleanup_owned_invocation; then
+  if [[ -n "${NCCL_RDMA_OWNED_UID_FILE:-}" ]] && ! cleanup_owned_uids; then
     status=1
   fi
+  [[ -z "${NCCL_RDMA_OWNED_UID_FILE:-}" ]] || rm -f -- "$NCCL_RDMA_OWNED_UID_FILE"
   exit "$status"
 }
 
 run_diagnostic() {
   [[ "${NCCL_RDMA_CONFIRM:-}" == "$CONFIRMATION" ]] \
-    || fail "set NCCL_RDMA_CONFIRM=$CONFIRMATION to authorize creating only $MPIJOB_NAME"
+    || fail "set NCCL_RDMA_CONFIRM=$CONFIRMATION to authorize creating only the fixed diagnostic resources"
   ensure_invocation_marker
   preflight
+  prepare_result_contract
+  NCCL_RDMA_OWNED_UID_FILE="$(mktemp "${TMPDIR:-/tmp}/taugrid-nccl-rdma-owned.XXXXXX")"
+  chmod 600 "$NCCL_RDMA_OWNED_UID_FILE"
+  export NCCL_RDMA_OWNED_UID_FILE
   trap cleanup_on_exit EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'stop_managed_test INT 130' INT
+  trap 'stop_managed_test TERM 143' TERM
 
   export AI_RUNTIME_E2E=1
   export E2E_GPU=1
@@ -496,13 +701,41 @@ run_diagnostic() {
   export KUBECONFIG="$NCCL_RDMA_KUBECONFIG"
   export AI_RUNTIME_E2E_KUBE_CONTEXT="$NCCL_RDMA_KUBE_CONTEXT"
 
-  if ! (
-    cd "$E2E_ROOT"
-    go test -count=1 -v -timeout 15m -run '^TestNCCLRDMA2x8H200$' ./stack/
-  ); then
+  python3 - "$E2E_ROOT" <<'PY' &
+import os
+import sys
+
+os.chdir(sys.argv[1])
+os.setsid()
+os.execvp(
+    "go",
+    [
+        "go", "test", "-count=1", "-v", "-timeout", "15m",
+        "-run", "^TestNCCLRDMA2x1H200$", "./stack/",
+    ],
+)
+PY
+  NCCL_RDMA_TEST_PID=$!
+  if ! wait "$NCCL_RDMA_TEST_PID"; then
+    NCCL_RDMA_TEST_PID=""
     diagnostics
     fail "NCCL/RDMA diagnostic failed; no retry was attempted"
   fi
+  NCCL_RDMA_TEST_PID=""
+  [[ -f "$NCCL_RDMA_RESULT_PATH" ]] \
+    || fail "NCCL/RDMA test succeeded without writing the immutable validation artifact"
+  python3 - "$NCCL_RDMA_RESULT_PATH" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+if result.get("schema") != "rdma-validation.v1" or result.get("kind") != "tau.rdma_validation":
+    raise SystemExit("validation artifact schema or kind changed")
+if result.get("status") != "pass" or result.get("cleanup", {}).get("state") != "complete":
+    raise SystemExit("validation artifact is not a cleanup-complete pass")
+PY
+  echo "Immutable NCCL/RDMA validation artifact: $NCCL_RDMA_RESULT_PATH"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

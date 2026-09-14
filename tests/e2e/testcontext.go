@@ -222,8 +222,6 @@ func (tc *TestContext) OnFailure(fn func()) {
 //     Dataset URI/SHA256/token-count placeholders are required when the FineWeb
 //     fixture is used; model-shape, bounded-step, checkpoint, and IB NCCL
 //     placeholders default to the 1.716B / first-checkpoint conformance values.
-//   - {{NCCL_RDMA_IMAGE}}: immutable MCR image reference from
-//     NCCL_RDMA_E2E_IMAGE. Tags and non-MCR registries are rejected.
 //   - {{NCCL_RDMA_INVOCATION}}: unique harness-generated ownership marker used
 //     to make create and UID-precondition cleanup fail closed.
 //   - {{STACK_NAMESPACE}}, {{STACK_QUEUE}}, and {{STACK_LARGE_GPU_QUEUE}}:
@@ -274,13 +272,6 @@ func readFixture(name string) ([]byte, error) {
 			return nil, fmt.Errorf("fixture %s uses {{RAY_IMAGE}} but RAY_E2E_IMAGE env var is not set", name)
 		}
 		data = bytes.ReplaceAll(data, []byte("{{RAY_IMAGE}}"), []byte(img))
-	}
-	if bytes.Contains(data, []byte("{{NCCL_RDMA_IMAGE}}")) {
-		image := strings.TrimSpace(os.Getenv("NCCL_RDMA_E2E_IMAGE"))
-		if !digestPinnedMCRImageRE.MatchString(image) {
-			return nil, fmt.Errorf("fixture %s requires NCCL_RDMA_E2E_IMAGE as mcr.microsoft.com/aks/ai-runtime/nccl-tests@sha256:<64 lowercase hex>; other repositories, tags, and mutable references are rejected", name)
-		}
-		data = bytes.ReplaceAll(data, []byte("{{NCCL_RDMA_IMAGE}}"), []byte(image))
 	}
 	if bytes.Contains(data, []byte("{{NCCL_RDMA_INVOCATION}}")) {
 		invocation := strings.TrimSpace(os.Getenv("NCCL_RDMA_INVOCATION"))
@@ -377,7 +368,6 @@ func readFixture(name string) ([]byte, error) {
 	return data, nil
 }
 
-var digestPinnedMCRImageRE = regexp.MustCompile(`^mcr\.microsoft\.com/aks/ai-runtime/nccl-tests@sha256:[a-f0-9]{64}$`)
 var ncclRDMAInvocationRE = regexp.MustCompile(`^nccl-rdma-[a-f0-9]{32}$`)
 
 // ReadFixtureWithSubstitutions reads a YAML fixture and performs the exact
@@ -491,6 +481,7 @@ func findRepoFile(relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	for {
 		// Check for repo root markers.
 		for _, marker := range []string{".git", "go.work"} {
@@ -508,6 +499,16 @@ func findRepoFile(relPath string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// ReadRepoFile reads a repository-relative file without depending on the
+// current package working directory.
+func ReadRepoFile(relPath string) ([]byte, error) {
+	path, err := findRepoFile(relPath)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
 }
 
 // parseMakefileVars extracts simple "VAR ?= value" or "VAR := value" assignments from a Makefile.
