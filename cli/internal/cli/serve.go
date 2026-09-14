@@ -111,6 +111,7 @@ func newServeDeployCmd() *cobra.Command {
 		maxReplicas   int
 		targetQPS     int
 		scaleDownSec  int
+		schedulerName string
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy <name>",
@@ -158,6 +159,9 @@ func newServeDeployCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("command") && (len(command) == 0 || strings.TrimSpace(command[0]) == "") {
 				return fmt.Errorf("--command requires a non-empty executable as its first value")
+			}
+			if cmd.Flags().Changed("scheduler-name") && kind != "deployment" {
+				return fmt.Errorf("--scheduler-name requires --kind=deployment; KubeRay owns RayService pod scheduling")
 			}
 			if cmd.Flags().Changed("gpus") && gpus < 0 {
 				return fmt.Errorf("--gpus must be >= 0")
@@ -372,6 +376,7 @@ func newServeDeployCmd() *cobra.Command {
 					LivenessProbe:     serve.HTTPProbe{Path: livenessPath},
 					ServicePort:       servicePort,
 					ServiceTargetPort: serviceTarget,
+					SchedulerName:     schedulerName,
 					Autoscaling:       autoscaling,
 					Labels:            labels,
 					Annotations:       annotations,
@@ -431,6 +436,7 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&startupFails, "startup-failure-threshold", 0, "failureThreshold for --startup-path (default: Kubernetes default)")
 	cmd.Flags().IntVar(&servicePort, "service-port", 0, "ClusterIP Service port to render for --kind=deployment (0 disables Service)")
 	cmd.Flags().IntVar(&serviceTarget, "service-target-port", 0, "ClusterIP Service targetPort for --kind=deployment (default: first --deployment-port or --service-port)")
+	cmd.Flags().StringVar(&schedulerName, "scheduler-name", "", "custom scheduler for the serve pod spec (--kind=deployment; e.g. hami-scheduler for HAMi vGPU scheduling)")
 	cmd.Flags().StringVar(&rayVersion, "ray-version", "", "Ray version (default: 2.40.0)")
 	cmd.Flags().StringVar(&argsStr, "args", "", "legacy container args split on whitespace, without shell quoting; conflicts with --arg")
 	cmd.Flags().StringArrayVar(&command, "command", nil, "literal container command element (--kind=deployment only; repeat for each element; no shell parsing)")

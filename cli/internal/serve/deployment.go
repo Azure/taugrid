@@ -143,6 +143,12 @@ type DeploymentOptions struct {
 	StartupProbe   HTTPProbe
 	LivenessProbe  HTTPProbe
 
+	// SchedulerName, when non-empty, stamps spec.template.spec.schedulerName
+	// so pods are scheduled by a custom scheduler instead of default-scheduler.
+	// Use case: HAMi's hami-scheduler for vGPU slice scheduling (the Kueue
+	// pod-integration admission happens before scheduling, so both stack).
+	SchedulerName string
+
 	ServicePort       int
 	ServiceTargetPort int
 
@@ -290,6 +296,9 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	}
 	if len(o.Volumes) > 0 {
 		podSpec["volumes"] = volumesToAny(o.Volumes)
+	}
+	if o.SchedulerName != "" {
+		podSpec["schedulerName"] = o.SchedulerName
 	}
 	if gpu.Count > 0 {
 		podSpec["tolerations"] = []any{

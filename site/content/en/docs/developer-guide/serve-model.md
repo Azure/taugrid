@@ -116,6 +116,14 @@ when the container listens on a port, and `--readiness-path` /
 path needs a port from `--service-port`, `--service-target-port`, or
 `--deployment-port`.
 
+Pass `--scheduler-name` to stamp `spec.template.spec.schedulerName` when the
+cluster routes serving pods through a custom scheduler — for example
+`--scheduler-name hami-scheduler` on a cluster with
+[HAMi](https://github.com/Project-HAMi/HAMi) GPU virtualization, where the
+HAMi scheduler owns vGPU slice placement. Kueue admits the workload before
+scheduling, so queue management and the custom scheduler compose without
+extra configuration.
+
 ## Container commands and arguments
 
 For `--kind=deployment`, omit command/argument flags to keep the image's

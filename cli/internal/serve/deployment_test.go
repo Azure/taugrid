@@ -72,6 +72,29 @@ func getPath(t *testing.T, m map[string]any, keys ...string) any {
 	return cur
 }
 
+func TestRenderDeployment_SchedulerName(t *testing.T) {
+	p := deployBaseProfile()
+
+	b, err := RenderDeployment(p, DeploymentOptions{
+		Name: "qwen-serve", Namespace: "tau", SchedulerName: "hami-scheduler",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := getPath(t, decodeOne(t, b), "spec", "template", "spec", "schedulerName"); got != "hami-scheduler" {
+		t.Fatalf("schedulerName=%v want hami-scheduler", got)
+	}
+
+	// Default render must stay byte-compatible: no schedulerName key at all.
+	b, err = RenderDeployment(p, DeploymentOptions{Name: "qwen-serve", Namespace: "tau"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := getPath(t, decodeOne(t, b), "spec", "template", "spec").(map[string]any)["schedulerName"]; ok {
+		t.Fatalf("default render should omit schedulerName")
+	}
+}
+
 func TestRenderDeployment_LiteralCommandAndArgs(t *testing.T) {
 	script := "pip install foo &&\nexec python serve.py --label 'hello, world'"
 	b, err := RenderDeployment(deployBaseProfile(), DeploymentOptions{
