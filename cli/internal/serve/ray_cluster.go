@@ -121,8 +121,16 @@ func distributedRayCluster(p profile.Profile, o Options, image, rayVersion strin
 				annotations[key] = value
 			}
 		}
+		ports := []any{map[string]any{"containerPort": int64(port), "name": "serve"}}
+		if head {
+			ports = append(ports,
+				map[string]any{"containerPort": int64(DashboardPort), "name": "dashboard"},
+				map[string]any{"containerPort": 6379, "name": "gcs-server"},
+			)
+		}
 		container := map[string]any{
 			"name": name, "image": image, "env": envspec.K8sList(env),
+			"ports": ports,
 		}
 		if len(o.VolumeMounts) > 0 {
 			container["volumeMounts"] = volumeMountsToAny(o.VolumeMounts)
@@ -135,16 +143,14 @@ func distributedRayCluster(p profile.Profile, o Options, image, rayVersion strin
 			pod["priorityClassName"] = plan.PodPriorityClassName
 		}
 		if head {
-			container["ports"] = []any{
-				map[string]any{"containerPort": int64(port), "name": "serve"},
-				map[string]any{"containerPort": int64(DashboardPort), "name": "dashboard"},
-				map[string]any{"containerPort": 6379, "name": "gcs-server"},
-			}
 			container["resources"] = map[string]any{
 				"requests": map[string]any{"cpu": "1", "memory": "2Gi"},
 				"limits":   map[string]any{"cpu": "2", "memory": "4Gi"},
 			}
 			pod["affinity"] = topology.SystemNodeAffinity()
+			pod["tolerations"] = []any{
+				map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
+			}
 		} else {
 			requests, limits := copyResources(p.Resources.Requests), copyResources(p.Resources.Limits)
 			if requests["cpu"] == nil {

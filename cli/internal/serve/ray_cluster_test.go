@@ -65,8 +65,11 @@ func TestRenderDistributedRayService(t *testing.T) {
 	if start["num-cpus"] != "0" || start["num-gpus"] != "0" {
 		t.Fatalf("application actors must be scheduled on workers, not the CPU head: %#v", start)
 	}
-	if headPod["tolerations"] != nil {
-		t.Fatal("CPU head must not inherit GPU-only tolerations")
+	wantHeadTolerations := []any{
+		map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
+	}
+	if !reflect.DeepEqual(headPod["tolerations"], wantHeadTolerations) {
+		t.Fatalf("CPU head must tolerate the system pool but not GPU-only taints: %#v", headPod["tolerations"])
 	}
 	if getPath(t, headPod, "affinity", "nodeAffinity") == nil {
 		t.Fatal("CPU head must preserve the system-pool placement contract")
@@ -141,6 +144,49 @@ func TestRenderDistributedRayService(t *testing.T) {
 	}
 	if p.Resources.Requests["nvidia.com/gpu"] != nil {
 		t.Fatal("rendering mutated the caller's profile resource map")
+	}
+}
+
+func TestDistributedRayServicePorts(t *testing.T) {
+	for _, port := range []int{8000, 9000} {
+		t.Run(fmt.Sprint(port), func(t *testing.T) {
+			options := distributedRayOptions()
+			options.ServePort = port
+			raw, err := Render(distributedRayProfile(), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			object := decodeOne(t, raw)
+			cluster := getPath(t, object, "spec", "rayClusterConfig").(map[string]any)
+			head := getPath(t, cluster, "headGroupSpec", "template", "spec", "containers").([]any)[0].(map[string]any)
+			group := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)
+			worker := getPath(t, group, "template", "spec", "containers").([]any)[0].(map[string]any)
+			for _, container := range []map[string]any{head, worker} {
+				ports, _ := container["ports"].([]any)
+				namedPorts := map[string]any{}
+				for _, item := range ports {
+					value := item.(map[string]any)
+					namedPorts[value["name"].(string)] = value["containerPort"]
+				}
+				if namedPorts["serve"] != port {
+					t.Fatalf("%s Serve port = %v, want %d", container["name"], namedPorts["serve"], port)
+				}
+				if container["name"] == "ray-worker" && (namedPorts["dashboard"] != nil || namedPorts["gcs-server"] != nil) {
+					t.Fatalf("worker must not advertise head-only ports: %#v", namedPorts)
+				}
+			}
+			var config struct {
+				HTTPOptions struct {
+					Port int `yaml:"port"`
+				} `yaml:"http_options"`
+			}
+			if err := yaml.Unmarshal([]byte(getPath(t, object, "spec", "serveConfigV2").(string)), &config); err != nil {
+				t.Fatal(err)
+			}
+			if config.HTTPOptions.Port != port {
+				t.Fatalf("HTTP port = %d, want %d", config.HTTPOptions.Port, port)
+			}
+		})
 	}
 }
 

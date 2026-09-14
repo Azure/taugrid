@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +206,39 @@ func TestServeRayConnectedMultiWorkerProfile(t *testing.T) {
 	}
 	if strings.Contains(out, serveProfileSourceAnnotation) {
 		t.Fatal("a connected render was mislabeled as a snapshot")
+	}
+}
+
+func TestServeRayWorkloadPriority(t *testing.T) {
+	for _, workers := range []int32{1, 8} {
+		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
+			p := serveTestProfile("serve-priority", profile.ExecutionTargetSingleCluster, "jobqueue", 1, workers, 23)
+			p.Priorities.WorkloadPriorityClassName = "queue-serving"
+			p.Priorities.PodPriorityClassName = "pod-serving"
+			p.WorkloadPriorityClasses = []string{"queue-serving"}
+			p.PodPriorityClasses = []string{"pod-serving"}
+			out, err := executeAuthoritativeServe(t, p,
+				"model", "--kind=rayservice", "--profile=serve-priority",
+				"--image=example.invalid/ray:fixture", "--dry-run=client", "-n", "alpha",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var object struct {
+				Metadata struct {
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
+			}
+			if err := yaml.Unmarshal([]byte(out), &object); err != nil {
+				t.Fatal(err)
+			}
+			if got := object.Metadata.Labels["kueue.x-k8s.io/priority-class"]; got != "queue-serving" {
+				t.Fatalf("RayService workload priority = %q, want queue-serving:\n%s", got, out)
+			}
+			if !strings.Contains(out, "priorityClassName: pod-serving") {
+				t.Fatalf("Pod priority must remain separate from workload priority:\n%s", out)
+			}
+		})
 	}
 }
 

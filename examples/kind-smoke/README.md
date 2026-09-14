@@ -12,6 +12,19 @@ RayCluster, and checks the lifecycle through the Kubernetes, Kueue, and Ray CRDs
 Completion mode also runs one actor on each of two Ray workers and requires the
 RayJob and its Kueue Workload to finish successfully.
 
+The smoke then upgrades a legacy workspace CRD through `tau cluster install`,
+checks that the existing `tau-researcher-v1` workspace keeps its UID and role,
+and server-validates the new `researcher` alias. It also submits a generated
+RayService to real Kueue/KubeRay controllers and checks admission priority,
+both worker Pods' readiness probes on port 9000, memory-backed `/dev/shm`,
+and an HTTP response from the Serve service.
+
+The RayService fixture calls the distributed renderer, then replaces GPU
+requests with small CPU resources and removes worker cross-host anti-affinity
+so it fits the single-node Kind cluster. Its app places two CPU replicas on
+separate Ray workers. This tests operator integration, not GPU inference or
+multi-host scheduling; unit tests cover the unmodified GPU placement contract.
+
 From `cli`:
 
 ```bash
@@ -58,8 +71,8 @@ the local Ray control plane and driver, while the workers stay small enough to
 exercise both worker pods within the 8 GiB provider budget. Production configs
 should use platform presets or cluster-sized resource requests instead.
 
-`tau cluster install` exercises the same Helm-only distribution path used by a
-fresh cluster. The private-image-dependent Tau controller and optional TauGrid
-services are disabled for this local fixture; `kind-kueue-lanes.yaml` is applied
-as test data after installation. Kind has no GPU or durable CSI storage, so the
-workloads are ephemeral and CPU-only.
+`tau cluster install` exercises both the fresh Helm installation and the
+existing-release Tau CRD update path. The Tau controller image is built locally;
+optional TauGrid core services are disabled for this fixture.
+`kind-kueue-lanes.yaml` is applied as test data after installation. Kind has no
+GPU or durable CSI storage, so the workloads are ephemeral and CPU-only.

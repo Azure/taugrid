@@ -63,6 +63,9 @@ func newClusterInstallCmd() *cobra.Command {
 
 The chart owns cluster-scoped installation state: Kueue, KubeRay, Tau APIs,
 tau-core-controller, and the portable baseline queue.
+On upgrade, Tau updates its own CRDs from the selected chart before running
+Helm. Existing custom resources are retained; Helm rollback does not revert
+these CRD updates. Third-party CRD migrations remain platform-owned.
 Tau does not apply lane manifests, create PVCs, label nodes, or create workload
 identity resources directly. Create a TauWorkspace after installation; the
 controller reconciles its namespace, access, LocalQueue, and optional
@@ -104,6 +107,9 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			installationRunner := newInstallationCheckRunner(spec.KubeContext)
 			if releaseExists {
 				if err := ensureSystemNamespaceMigrationSafe(cmd.Context(), installationRunner, spec.Namespace); err != nil {
+					return err
+				}
+				if err := upgradeTauGridCRDs(cmd, installationRunner, spec); err != nil {
 					return err
 				}
 			}
@@ -192,6 +198,7 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Version:    %s
   Helm wait:  %s
   Rollback:   %s
+  Tau CRDs:   update from the selected chart before an existing-release upgrade; not rolled back by Helm
   Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal
   Opt-in:     Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready

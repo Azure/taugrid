@@ -35,7 +35,7 @@ type Options struct {
 	Replicas    int    // serve deployment replicas when ReplicasSet is true
 	ReplicasSet bool   // render a Ray Serve deployment override
 	ImportPath  string // Ray Serve import path (default serve:app)
-	ServePort   int    // head pod serve port (default 8000)
+	ServePort   int    // Serve HTTP port on head and workers (default 8000)
 	RayVersion  string // default 2.40.0
 	Args        []string
 	Env         map[string]string
@@ -130,11 +130,17 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render RayService topology: %w", err)
 	}
+	for k, v := range topoPlan.Labels {
+		labels[k] = v
+	}
 	for k, v := range topoPlan.Annotations {
 		headPodAnnotations[k] = v
 	}
 
 	headPodSpec := map[string]any{}
+	if topoPlan.PodPriorityClassName != "" {
+		headPodSpec["priorityClassName"] = topoPlan.PodPriorityClassName
+	}
 
 	headContainer := map[string]any{
 		"name":  "ray-head",

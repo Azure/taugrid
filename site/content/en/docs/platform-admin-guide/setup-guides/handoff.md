@@ -59,8 +59,11 @@ network:
 
 The logical role is `researcher`. The updated CLI and workspace CRD also accept
 `tau-researcher-v1` as a legacy alias; both use the same existing ClusterRole and
-permissions. Upgrade the workspace CRD before creating or patching workspaces
-with the new name. Older CLIs that compare role names literally need matching
+permissions. `tau cluster install` updates TauGrid's own CRDs from the selected
+chart before upgrading an existing release; the expanded role enum keeps old
+workspace CRs valid without renaming them. Direct Helm upgrades need an explicit
+CRD update first because Helm skips existing CRDs. CRDs are not rolled back by
+Helm's `--atomic` option. Older CLIs that compare role names literally need matching
 descriptor and workspace values.
 
 Update the researcher ClusterRole from the Helm or Kustomize RBAC manifests
