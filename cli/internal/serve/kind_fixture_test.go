@@ -34,9 +34,12 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 	}
 	object := decodeOne(t, raw)
 	cluster := getPath(t, object, "spec", "rayClusterConfig").(map[string]any)
+	headStart := getPath(t, cluster, "headGroupSpec", "rayStartParams").(map[string]any)
+	headStart["object-store-memory"] = "134217728"
 	head := getPath(t, cluster, "headGroupSpec", "template").(map[string]any)
 	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)
 	worker["rayStartParams"].(map[string]any)["num-gpus"] = "0"
+	worker["rayStartParams"].(map[string]any)["object-store-memory"] = "134217728"
 	workerTemplate := worker["template"].(map[string]any)
 	for _, template := range []map[string]any{head, workerTemplate} {
 		metadata := template["metadata"].(map[string]any)
@@ -49,9 +52,11 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 		pod := template["spec"].(map[string]any)
 		delete(pod, "nodeSelector")
 		container := pod["containers"].([]any)[0].(map[string]any)
-		container["resources"] = map[string]any{
-			"requests": map[string]any{"cpu": "50m", "memory": "512Mi"},
-			"limits":   map[string]any{"cpu": "1", "memory": "2Gi"},
+		if container["name"] == "ray-worker" {
+			container["resources"] = map[string]any{
+				"requests": map[string]any{"cpu": "50m", "memory": "512Mi"},
+				"limits":   map[string]any{"cpu": "1", "memory": "2Gi"},
+			}
 		}
 	}
 	// Kind has one host; leave system affinity and tolerations on the head.

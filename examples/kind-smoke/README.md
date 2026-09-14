@@ -21,7 +21,10 @@ and an HTTP response from the Serve service.
 
 The RayService fixture calls the distributed renderer, then replaces GPU
 requests with small CPU resources and removes worker cross-host anti-affinity
-so it fits the single-node Kind cluster. Its app places two CPU replicas on
+so it fits the single-node Kind cluster. The CPU head keeps its normal 4Gi
+memory limit for the dashboard and Serve controller; each Ray object store
+is capped at 128Mi to fit the fixture's 256Mi shared-memory mount.
+Its app places two CPU replicas on
 separate Ray workers. This tests operator integration, not GPU inference or
 multi-host scheduling; unit tests cover the unmodified GPU placement contract.
 
