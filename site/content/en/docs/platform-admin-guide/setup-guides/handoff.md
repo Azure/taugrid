@@ -63,6 +63,12 @@ permissions. Upgrade the workspace CRD before creating or patching workspaces
 with the new name. Older CLIs that compare role names literally need matching
 descriptor and workspace values.
 
+Update the researcher ClusterRole from the Helm or Kustomize RBAC manifests
+before connecting with this CLI. It now grants RayService lifecycle permissions
+through the existing namespace-scoped RoleBinding, and connection verification
+requires create/get/list/patch/delete access to RayServices as well as Jobs and
+RayJobs. Updating the CRD alone does not add these permissions.
+
 An AKS platform can replace only the access block:
 
 ```yaml

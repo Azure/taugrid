@@ -193,6 +193,11 @@ Without `--app-args`, existing deployment overrides remain available.
 
 ## Distributed model instances
 
+For workspace-RBAC connections, install the updated researcher ClusterRole.
+It grants RayService lifecycle permissions through the workspace's namespaced
+RoleBinding; both `researcher` and `tau-researcher-v1` use this role. The CLI
+checks create/get/list/patch/delete permissions when verifying the connection.
+
 For `--kind=rayservice`, a profile with `workerCount > 1` creates a CPU-only
 Ray head and that many GPU worker Pods. `workerCount` excludes the head, and
 `gpusPerWorker` is the GPU request for each worker. Optional `--nodes` and

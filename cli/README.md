@@ -107,6 +107,11 @@ The updated workspace CRD and CLI also accept the legacy `tau-researcher-v1`
 alias, with identical RBAC permissions. Install the updated workspace CRD before
 using the new name; compatible existing workspaces are not renamed by `create`.
 
+The updated researcher ClusterRole also grants RayService lifecycle permissions
+in the workspace namespace. Install the updated Helm or Kustomize RBAC before
+connecting with this CLI: workspace-RBAC verification now checks RayService
+create/get/list/patch/delete permissions in addition to Job and RayJob access.
+
 StorageClasses, durable PVCs, Azure identities, federation, and Azure role
 assignments remain platform-owned. `--service-account` plus
 `--workload-identity-client-id` asks the controller to reconcile only the

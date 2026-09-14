@@ -1,0 +1,17 @@
+suite: Researcher RayService permissions
+templates:
+  - templates/rbac.yaml
+tests:
+  - it: grants RayJob and RayService lifecycle permissions to the researcher role
+    documentSelector:
+      path: metadata.name
+      value: tau-researcher-v1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["ray.io"]
+            resources: ["rayjobs", "rayservices"]
+            verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
