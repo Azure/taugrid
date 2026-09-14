@@ -127,7 +127,7 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 		}
 	}
 	connection := readWorkspaceTestFile(t, filepath.Join(dir, "tau/workspace.connection.yaml"))
-	for _, want := range []string{"mode: workspace-rbac", "requiredRole: tau-researcher-v1"} {
+	for _, want := range []string{"mode: workspace-rbac", "requiredRole: researcher"} {
 		if !strings.Contains(connection, want) {
 			t.Fatalf("workspace connection missing %q:\n%s", want, connection)
 		}

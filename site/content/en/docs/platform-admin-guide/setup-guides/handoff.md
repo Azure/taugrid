@@ -50,12 +50,18 @@ access:
   method: kubeconfig
 authorization:
   mode: workspace-rbac
-  requiredRole: tau-researcher-v1
+  requiredRole: researcher
 requirements:
   minTauVersion: 0.3.0
 network:
   privateCluster: false
 ```
+
+The logical role is `researcher`. The updated CLI and workspace CRD also accept
+`tau-researcher-v1` as a legacy alias; both use the same existing ClusterRole and
+permissions. Upgrade the workspace CRD before creating or patching workspaces
+with the new name. Older CLIs that compare role names literally need matching
+descriptor and workspace values.
 
 An AKS platform can replace only the access block:
 

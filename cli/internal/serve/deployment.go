@@ -350,7 +350,7 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	}
 
 	var buf strings.Builder
-	enc := yaml.NewEncoder(&yamlWriter{b: &buf})
+	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(deployment); err != nil {
 		return nil, fmt.Errorf("marshal Deployment: %w", err)
@@ -479,18 +479,21 @@ func (o DeploymentOptions) serviceTargetPort() int {
 }
 
 func (o DeploymentOptions) serviceObject(p profile.Profile) map[string]any {
+	metadata := map[string]any{
+		"name": o.Name, "namespace": o.Namespace,
+		"labels": map[string]any{
+			"app":                     o.Name,
+			workloadmeta.LabelService: o.Name,
+			workloadmeta.LabelProfile: p.Name,
+		},
+	}
+	if len(o.Annotations) > 0 {
+		metadata["annotations"] = stringMapToAny(o.Annotations)
+	}
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
-		"metadata": map[string]any{
-			"name":      o.Name,
-			"namespace": o.Namespace,
-			"labels": map[string]any{
-				"app":                     o.Name,
-				workloadmeta.LabelService: o.Name,
-				workloadmeta.LabelProfile: p.Name,
-			},
-		},
+		"metadata":   metadata,
 		"spec": map[string]any{
 			"type":     "ClusterIP",
 			"selector": map[string]any{"app": o.Name},
@@ -532,13 +535,14 @@ func (o DeploymentOptions) hpaObject() map[string]any {
 			},
 		})
 	}
+	metadata := map[string]any{"name": o.Name, "namespace": o.Namespace}
+	if len(o.Annotations) > 0 {
+		metadata["annotations"] = stringMapToAny(o.Annotations)
+	}
 	return map[string]any{
 		"apiVersion": "autoscaling/v2",
 		"kind":       "HorizontalPodAutoscaler",
-		"metadata": map[string]any{
-			"name":      o.Name,
-			"namespace": o.Namespace,
-		},
+		"metadata":   metadata,
 		"spec": map[string]any{
 			"scaleTargetRef": map[string]any{
 				"apiVersion": "apps/v1",

@@ -65,7 +65,8 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		)
 	}
 	if workspaceAuthorizationMode == AuthorizationModeWorkspaceRBAC &&
-		strings.TrimSpace(workspace.Spec.Role) != descriptor.Authorization.RequiredRole {
+		(!tauworkspace.IsResearcherRole(strings.TrimSpace(workspace.Spec.Role)) ||
+			!tauworkspace.IsResearcherRole(descriptor.Authorization.RequiredRole)) {
 		return Verification{}, fmt.Errorf(
 			"workspace connection required role %q does not match TauWorkspace %q role %q",
 			descriptor.Authorization.RequiredRole,

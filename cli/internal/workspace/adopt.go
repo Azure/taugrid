@@ -508,6 +508,9 @@ func sameAdoptionIntent(existing, desired Workspace) bool {
 	if desiredSpec.Target.Namespace == "" {
 		desiredSpec.Target.Namespace = desired.Metadata.Name
 	}
+	if IsResearcherRole(existingSpec.Role) && IsResearcherRole(desiredSpec.Role) {
+		existingSpec.Role = desiredSpec.Role
+	}
 	return reflect.DeepEqual(existingSpec, desiredSpec)
 }
 

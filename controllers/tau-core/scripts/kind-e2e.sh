@@ -610,7 +610,7 @@ spec:
   kubernetesSubject:
     kind: Group
     name: ${WORKSPACE_GROUP}
-  role: tau-researcher-v1
+  role: researcher
   target:
     namespace: ${TARGET_NAMESPACE}
     createNamespace: true
@@ -814,7 +814,7 @@ access:
   method: kubeconfig
 authorization:
   mode: workspace-rbac
-  requiredRole: tau-researcher-v1
+  requiredRole: researcher
 requirements:
   minTauVersion: 0.3.0
 network:

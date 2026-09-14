@@ -53,7 +53,7 @@ func TestRenderCreationDeclaresResearcherReadyWorkspace(t *testing.T) {
 		"provider: entra",
 		"name: researchers",
 		"kind: Group",
-		"role: tau-researcher-v1",
+		"role: researcher",
 		"namespace: research",
 		"createNamespace: true",
 		"queue: jobqueue",
@@ -304,6 +304,26 @@ func TestPreflightCreationCompatibleWorkspaceIsNoOp(t *testing.T) {
 	}
 	if !strings.Contains(out, "no changes made") {
 		t.Fatalf("unexpected no-op output: %s", out)
+	}
+}
+
+func TestResearcherRoleCompatibility(t *testing.T) {
+	for _, actual := range []string{"researcher", "tau-researcher-v1", "admin", ""} {
+		for _, required := range []string{"researcher", "tau-researcher-v1"} {
+			t.Run(actual+"/"+required, func(t *testing.T) {
+				existing := newWorkspaceForCreate(defaultCreateOptions())
+				desired := newWorkspaceForCreate(defaultCreateOptions())
+				existing.Spec.Role = actual
+				desired.Spec.Role = required
+				want := actual == "researcher" || actual == "tau-researcher-v1"
+				if got := sameAdoptionIntent(existing, desired); got != want {
+					t.Fatalf("sameAdoptionIntent(%q, %q) = %v, want %v", actual, required, got, want)
+				}
+				if existing.Spec.Role != actual || desired.Spec.Role != required {
+					t.Fatal("intent comparison mutated the workspace")
+				}
+			})
+		}
 	}
 }
 

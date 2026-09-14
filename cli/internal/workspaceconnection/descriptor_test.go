@@ -81,6 +81,28 @@ func TestDescriptorDefaultsSystemNamespace(t *testing.T) {
 	}
 }
 
+func TestDescriptorResearcherRoleAliases(t *testing.T) {
+	for _, role := range []string{"researcher", "tau-researcher-v1", "admin"} {
+		t.Run(role, func(t *testing.T) {
+			raw := strings.Replace(validDescriptorYAML, "mode: cluster-wide",
+				"mode: workspace-rbac\n  requiredRole: "+role, 1)
+			descriptor, err := Parse([]byte(raw))
+			if role == "admin" {
+				if err == nil || !strings.Contains(err.Error(), "authorization.requiredRole must be") {
+					t.Fatalf("expected unsupported role error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if descriptor.Authorization.RequiredRole != role {
+				t.Fatal("parsing rewrote the role in the trusted descriptor")
+			}
+		})
+	}
+}
+
 func TestParseKubeconfigAccess(t *testing.T) {
 	raw := `schema: tau.workspace.connection.v1
 workspace: sample

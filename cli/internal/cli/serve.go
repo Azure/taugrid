@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
 	"strings"
 
@@ -34,27 +33,15 @@ func defaultServeConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
 	return manager
 }
 
-// newServeCmd: north-star §1 / §5 — deploy a model endpoint as a
-// KubeRay RayService.
-//
-// V0 implementation:
-//   - deploy: real. Renders RayService CR with Kueue queue label, DRA
-//     claim, profile scheduling, and Serve v2 config. Reuses submit's
-//     --dry-run=client contract for connected, authoritative inspection.
-//   - status: real thin wrapper around `kubectl get rayservice`.
-//   - delete: real thin wrapper around `kubectl delete rayservice`.
-//   - scale:  stub. num_replicas live-edit on a RayService requires
-//     careful CR patching (serveConfigV2 is a string, not structured)
-//     and is deferred until there's a real traffic reason to scale.
-//
-// Closes anti-pattern #6: five core commands, all load-bearing surfaces
-// now real (deploy is the load-bearing one; status/delete are hygiene).
+// RayService owns the Ray cluster and application lifecycle. Plain deployments
+// remain available for non-Ray serving.
 func newServeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Deploy a model endpoint",
 		Long: `Deploy a model as a RayService or plain Kubernetes Deployment, then
-inspect, scale, or delete it.`,
+inspect, scale, or delete it. Multi-node RayServices use a CPU head and the
+GPU workers declared by their workload profile.`,
 		Example: `  tau serve deploy my-7b --profile model-serve --image vllm/vllm-openai:v0.6.3 \
       --args "--model /data/checkpoints/my-7b --quantize awq"
   tau serve status my-7b
@@ -73,55 +60,63 @@ inspect, scale, or delete it.`,
 
 func newServeDeployCmd() *cobra.Command {
 	var (
-		profileName   string
-		image         string
-		replicas      int
-		importPath    string
-		port          int
-		rayVersion    string
-		argsStr       string
-		command       []string
-		containerArgs []string
-		namespace     string
-		dryRun        string
-		kubeContext   string
-		kind          string // rayservice | deployment
-		ports         []int
-		envKV         []string
-		initSpecs     []string // --init NAME=IMAGE (repeatable)
-		sideSpecs     []string // --sidecar NAME=IMAGE (repeatable)
-		volSpecs      []string // --volume NAME=KIND[:src] (repeatable)
-		mountSpecs    []string // --mount NAME:PATH[:ro] (repeatable)
-		envSecretKV   []string // --env-secret KEY=SECRET:KEY (repeatable)
-		runtimePip    []string // --runtime-pip package spec (repeatable)
-		checkpoint    string
-		checkpointPVC string
-		fromFinetune  string
-		checkpointRef string
-		fromModel     string
-		modelRef      string
-		readinessPath string
-		startupPath   string
-		livenessPath  string
-		startupFails  int
-		servicePort   int
-		serviceTarget int
-		gpus          int
-		minReplicas   int
-		maxReplicas   int
-		targetQPS     int
-		scaleDownSec  int
+		profileName     string
+		image           string
+		replicas        int
+		importPath      string
+		port            int
+		rayVersion      string
+		argsStr         string
+		command         []string
+		containerArgs   []string
+		namespace       string
+		dryRun          string
+		kubeContext     string
+		kind            string // rayservice | deployment
+		ports           []int
+		envKV           []string
+		initSpecs       []string // --init NAME=IMAGE (repeatable)
+		sideSpecs       []string // --sidecar NAME=IMAGE (repeatable)
+		volSpecs        []string // --volume NAME=KIND[:src] (repeatable)
+		mountSpecs      []string // --mount NAME:PATH[:ro] (repeatable)
+		envSecretKV     []string // --env-secret KEY=SECRET:KEY (repeatable)
+		runtimePip      []string // --runtime-pip package spec (repeatable)
+		checkpoint      string
+		checkpointPVC   string
+		fromFinetune    string
+		checkpointRef   string
+		fromModel       string
+		modelRef        string
+		readinessPath   string
+		startupPath     string
+		livenessPath    string
+		startupFails    int
+		servicePort     int
+		serviceTarget   int
+		gpus            int
+		nodes           int
+		minReplicas     int
+		maxReplicas     int
+		targetQPS       int
+		scaleDownSec    int
+		profileSnapshot string
+		shmSize         string
+		appArgsPath     string
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy <name>",
 		Short: "Deploy or update a serve endpoint",
-		Long: `Deploy a model endpoint. Two kinds supported:
+		Long: `Deploy a model endpoint. Supported kinds:
 
-  --kind=rayservice (default): KubeRay RayService. For Ray Serve apps.
+  --kind=rayservice (default): KubeRay RayService. Multi-worker profiles create
+                               a CPU head and a fixed pool of GPU worker Pods.
   --kind=deployment:           plain k8s Deployment with Kueue
                                pod-integration. For non-Ray serving
                                (vLLM raw, TGI, triton, custom HTTP servers,
-                               multi-container shapes like fish-speech-tts).`,
+                               multi-container shapes like fish-speech-tts).
+
+--workload-profile-snapshot enables offline client rendering only. It requires
+--namespace and --dry-run=client, and cannot authorize server dry-run or apply.`,
 		Example: `  tau serve deploy my-7b --profile model-serve --image vllm/vllm-openai:v0.6.3 \
       --args "--model /ckpt --quantize awq"
   tau serve deploy sample-compiled-demo --kind=rayservice --profile ai-serve-gpu-l \
@@ -147,13 +142,25 @@ func newServeDeployCmd() *cobra.Command {
 			if kind == "" {
 				kind = "rayservice"
 			}
-			if kind != "rayservice" && kind != "deployment" {
-				return fmt.Errorf("--kind must be one of: rayservice, deployment")
+			if err := validateServeKind(kind); err != nil {
+				return err
+			}
+			appArgs, err := resolveServeAppArgs(cmd, kind, importPath, appArgsPath)
+			if err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("workload-profile-snapshot") {
+				if strings.TrimSpace(profileSnapshot) == "" {
+					return fmt.Errorf("--workload-profile-snapshot requires a path")
+				}
+				if dryRun != "client" {
+					return fmt.Errorf("--workload-profile-snapshot requires --dry-run=client; snapshots cannot authorize server dry-run or apply")
+				}
 			}
 			if cmd.Flags().Changed("arg") && cmd.Flags().Changed("args") {
 				return fmt.Errorf("--arg conflicts with --args; use repeated --arg values for literal arguments")
 			}
-			if kind != "deployment" && (cmd.Flags().Changed("command") || cmd.Flags().Changed("arg")) {
+			if kind == "rayservice" && (cmd.Flags().Changed("command") || cmd.Flags().Changed("arg")) {
 				return fmt.Errorf("--command and --arg require --kind=deployment; KubeRay owns RayService startup, use --import-path and --runtime-pip for Ray Serve apps")
 			}
 			if cmd.Flags().Changed("command") && (len(command) == 0 || strings.TrimSpace(command[0]) == "") {
@@ -162,8 +169,14 @@ func newServeDeployCmd() *cobra.Command {
 			if cmd.Flags().Changed("gpus") && gpus < 0 {
 				return fmt.Errorf("--gpus must be >= 0")
 			}
+			if cmd.Flags().Changed("nodes") && (kind != "rayservice" || nodes < 2 || int64(nodes) > 2147483647) {
+				return fmt.Errorf("--nodes requires --kind=rayservice and a GPU worker count in 2..2147483647")
+			}
 			if maxReplicas < 0 {
 				return fmt.Errorf("--max-replicas must be >= 0")
+			}
+			if cmd.Flags().Changed("shm-size") && kind != "rayservice" {
+				return fmt.Errorf("--shm-size requires --kind=rayservice")
 			}
 			if maxReplicas > 0 && cmd.Flags().Changed("replicas") {
 				return fmt.Errorf("--max-replicas and --replicas are mutually exclusive; use --min-replicas to set a floor")
@@ -186,65 +199,33 @@ func newServeDeployCmd() *cobra.Command {
 				}
 			}
 
-			workingDirectory, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("resolve current repository: %w", err)
-			}
-			workspaceResolver := newActiveWorkspaceResolver(newServeConnectionEnsurer, fetchServeWorkspace)
-			activeWorkspace, err := workspaceResolver.Resolve(cmd, activeWorkspaceRequest{
-				Source:                  runConnectionSource{StartDir: workingDirectory},
-				KubeContext:             kubeContext,
-				KubeContextExplicit:     runContextExplicit(cmd),
-				KubeContextFromFlag:     cmd.Flags().Changed("context"),
-				Namespace:               namespace,
-				RequireRepositoryTarget: true,
-			})
-			if err != nil {
-				return err
-			}
-			defer activeWorkspace.Restore()
-			kubeContext = activeWorkspace.Context
-			placement := activeWorkspace.Placement
-
-			runner := newServeRunner(kubeContext)
-			target, err := resolveServeWorkspaceTarget(
-				cmd.Context(),
-				runner,
-				placement.Namespace,
-				placement.LocalQueue,
-				placement.ClusterQueue,
-				serveWorkloadResource(kind),
-			)
-			if err != nil {
-				return err
-			}
-			ns := target.Namespace
-
-			client, err := newClusterProfileClient(kubeContext)
-			if err != nil {
-				return err
-			}
 			var explicitGPUs *int
 			if cmd.Flags().Changed("gpus") {
 				explicitGPUs = &gpus
 			}
-			p, selected, err := selectServeWorkloadProfile(
-				cmd.Context(),
-				profile.NewClusterProvider(client),
-				profileName,
-				ns,
-				target.Queue,
-				target.ClusterQueue,
-				explicitGPUs,
-			)
+			var explicitNodes *int
+			if cmd.Flags().Changed("nodes") {
+				explicitNodes = &nodes
+			}
+			target, err := resolveServeProfileTarget(cmd, serveProfileOptions{
+				Kind: kind, Name: profileName, Namespace: namespace, Context: kubeContext,
+				Snapshot: profileSnapshot, DryRun: dryRun, ExplicitGPUs: explicitGPUs, ExplicitNodes: explicitNodes,
+			})
 			if err != nil {
 				return err
 			}
+			defer target.Restore()
+			p, selected, ns := target.Profile, target.Selected, target.Namespace
+			kubeContext = target.Context
+			runner := target.Runner
 			labels, annotations, err := stampSelectedWorkloadProfile(nil, nil, selected)
 			if err != nil {
 				return err
 			}
-			labels = workloadmeta.StampWorkspace(labels, placement.Workspace)
+			labels = workloadmeta.StampWorkspace(labels, target.Workspace)
+			if selected.Selection.Source == profile.ProfileSourceSnapshot {
+				annotations[serveProfileSourceAnnotation] = "snapshot"
+			}
 			env, envErr := parseEnvKV(envKV)
 			if envErr != nil {
 				return envErr
@@ -338,6 +319,9 @@ func newServeDeployCmd() *cobra.Command {
 					Autoscaling:  autoscaling,
 					Labels:       labels,
 					Annotations:  annotations,
+					Workers:      selected.Selection.Profile.WorkerCount,
+					ShmSize:      shmSize,
+					AppArgs:      appArgs,
 				})
 			case "deployment":
 				inits, ierr := parseContainerSpecs(initSpecs, "--init")
@@ -382,6 +366,9 @@ func newServeDeployCmd() *cobra.Command {
 			}
 
 			if dryRun == "client" {
+				if selected.Selection.Source == profile.ProfileSourceSnapshot {
+					fmt.Fprintln(cmd.ErrOrStderr(), "offline client dry-run: snapshot profile; workspace, cluster admission, storage, and runtime were not verified")
+				}
 				_, err := cmd.OutOrStdout().Write(manifest)
 				return err
 			}
@@ -408,8 +395,9 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&profileName, "profile", "", "ready TauCluster workload profile to authorize and render (required)")
 	cmd.Flags().StringVar(&kind, "kind", "rayservice", "serving kind: rayservice|deployment")
 	cmd.Flags().StringVar(&image, "image", "", "container image (overrides profile image)")
-	cmd.Flags().IntVar(&replicas, "replicas", 1, "override Ray Serve deployment replicas")
+	cmd.Flags().IntVar(&replicas, "replicas", 1, "serving application replicas; does not change Ray worker count")
 	cmd.Flags().StringVar(&importPath, "import-path", "", "Ray Serve import path (rayservice only; default: serve:app)")
+	cmd.Flags().StringVar(&appArgsPath, "app-args", "", "JSON/YAML argument object for an explicit Ray Serve application builder; conflicts with CLI replica/autoscaling overrides")
 	cmd.Flags().IntVar(&port, "port", 0, "serve HTTP port (rayservice: single port; default 8000)")
 	cmd.Flags().IntSliceVar(&ports, "deployment-port", nil, "container port(s) for --kind=deployment (repeatable)")
 	cmd.Flags().StringArrayVar(&envKV, "env", nil, "env var KEY=VAL for the serve container and Ray Serve runtime_env (repeatable)")
@@ -425,11 +413,11 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&checkpointRef, "checkpoint-ref", "", "checkpoint reference to serve, e.g. finetune/RUN[:artifact]")
 	cmd.Flags().StringVar(&fromModel, "from-model", "", "model registry ref to serve, e.g. MODEL:alias or MODEL@run")
 	cmd.Flags().StringVar(&modelRef, "model-ref", "", "alias for --from-model")
-	cmd.Flags().StringVar(&readinessPath, "readiness-path", "", "HTTP path for the main container readiness probe (--kind=deployment)")
-	cmd.Flags().StringVar(&startupPath, "startup-path", "", "HTTP path for the main container startup probe (--kind=deployment)")
-	cmd.Flags().StringVar(&livenessPath, "liveness-path", "", "HTTP path for the main container liveness probe (--kind=deployment)")
+	cmd.Flags().StringVar(&readinessPath, "readiness-path", "", "HTTP readiness path for --kind=deployment")
+	cmd.Flags().StringVar(&startupPath, "startup-path", "", "HTTP startup path for --kind=deployment")
+	cmd.Flags().StringVar(&livenessPath, "liveness-path", "", "HTTP liveness path for --kind=deployment")
 	cmd.Flags().IntVar(&startupFails, "startup-failure-threshold", 0, "failureThreshold for --startup-path (default: Kubernetes default)")
-	cmd.Flags().IntVar(&servicePort, "service-port", 0, "ClusterIP Service port to render for --kind=deployment (0 disables Service)")
+	cmd.Flags().IntVar(&servicePort, "service-port", 0, "ClusterIP Service port for --kind=deployment (0 disables Service)")
 	cmd.Flags().IntVar(&serviceTarget, "service-target-port", 0, "ClusterIP Service targetPort for --kind=deployment (default: first --deployment-port or --service-port)")
 	cmd.Flags().StringVar(&rayVersion, "ray-version", "", "Ray version (default: 2.40.0)")
 	cmd.Flags().StringVar(&argsStr, "args", "", "legacy container args split on whitespace, without shell quoting; conflicts with --arg")
@@ -437,7 +425,10 @@ func newServeDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&containerArgs, "arg", nil, "literal container argument (--kind=deployment only; repeatable; preserves spaces and commas; conflicts with --args)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", workloadNamespaceHelp)
 	cmd.Flags().StringVar(&dryRun, "dry-run", "", "client|server (default: actually apply)")
-	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count per serving pod; defaults to the selected TauCluster workload profile and must match it when set")
+	cmd.Flags().StringVar(&profileSnapshot, "workload-profile-snapshot", "", "validated TauWorkloadProfileSnapshot for offline --dry-run=client only; requires --namespace")
+	cmd.Flags().StringVar(&shmSize, "shm-size", "", "memory-backed /dev/shm capacity for Ray head and worker Pods, e.g. 32Gi")
+	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count per execution Pod (Ray worker for multi-node); must match the selected profile")
+	cmd.Flags().IntVar(&nodes, "nodes", 0, "expected Ray GPU worker count, excluding the CPU head; must match profile workerCount")
 	cmd.Flags().IntVar(&minReplicas, "min-replicas", 1, "minimum replica count for autoscaling (requires --max-replicas)")
 	cmd.Flags().IntVar(&maxReplicas, "max-replicas", 0, "maximum replica count; >0 enables autoscaling (mutually exclusive with --replicas)")
 	cmd.Flags().IntVar(&targetQPS, "target-qps", 0, "target QPS per replica for autoscaling (0 = CPU-utilization-only for deployment, default 5 for rayservice)")
@@ -450,7 +441,7 @@ func selectServeWorkloadProfile(
 	ctx context.Context,
 	provider *profile.Provider,
 	profileName, namespace, resolvedQueue, resolvedClusterQueue string,
-	explicitGPUs *int,
+	explicitGPUs, explicitNodes *int, kind string,
 ) (profile.Profile, *selectedWorkloadProfile, error) {
 	set, err := provider.ProfileSet(ctx)
 	if err != nil {
@@ -469,18 +460,29 @@ func selectServeWorkloadProfile(
 	if err != nil {
 		return profile.Profile{}, nil, err
 	}
-	if selection.Profile.WorkerCount != 1 {
+	if kind == "deployment" && selection.Profile.WorkerCount != 1 {
 		return profile.Profile{}, nil, fmt.Errorf(
 			"authoritative workload profile %q has workerCount=%d, but serving supports exactly one profile worker per serving pod",
 			selection.Profile.Name,
 			selection.Profile.WorkerCount,
 		)
 	}
+	if kind == "rayservice" && selection.Profile.WorkerCount > 1 &&
+		(selection.Profile.GPUsPerWorker < 1 ||
+			selection.Profile.Mode != profile.ModeFixed ||
+			selection.Profile.Placement != profile.PlacementMultiNodeNCCL ||
+			selection.Profile.ExecutionTarget != profile.ExecutionTargetSingleCluster) {
+		return profile.Profile{}, nil, fmt.Errorf(
+			"workload profile %q is incompatible with multi-node RayService: requires gpusPerWorker >= 1, mode=fixed, placement=multi-node-nccl, executionTarget=singleCluster",
+			selection.Profile.Name,
+		)
+	}
 	renderProfile, err := selection.Profile.RenderProfile(namespace, team, lane)
 	if err != nil {
 		return profile.Profile{}, nil, fmt.Errorf("convert workload profile %q for serving: %w", selection.Profile.Name, err)
 	}
-	if targetQueue := strings.TrimSpace(resolvedQueue); targetQueue != strings.TrimSpace(renderProfile.Queue) {
+	if targetQueue := strings.TrimSpace(resolvedQueue); selection.Source == profile.ProfileSourceCluster &&
+		targetQueue != strings.TrimSpace(renderProfile.Queue) {
 		return profile.Profile{}, nil, fmt.Errorf(
 			"resolved platform LocalQueue %q conflicts with authoritative workload profile %q queue %q",
 			targetQueue,
@@ -492,7 +494,7 @@ func selectServeWorkloadProfile(
 	if err != nil {
 		return profile.Profile{}, nil, fmt.Errorf("resolve authoritative serving queue binding: %w", err)
 	}
-	if actual := strings.TrimSpace(resolvedClusterQueue); actual != clusterQueue {
+	if actual := strings.TrimSpace(resolvedClusterQueue); selection.Source == profile.ProfileSourceCluster && actual != clusterQueue {
 		return profile.Profile{}, nil, fmt.Errorf(
 			"resolved platform LocalQueue %q points to ClusterQueue %q, but authoritative workload profile %q expects %q",
 			renderProfile.Queue,
@@ -507,6 +509,12 @@ func selectServeWorkloadProfile(
 			*explicitGPUs,
 			selection.Profile.Name,
 			selection.Profile.GPUsPerWorker,
+		)
+	}
+	if explicitNodes != nil && *explicitNodes != int(selection.Profile.WorkerCount) {
+		return profile.Profile{}, nil, fmt.Errorf(
+			"--nodes=%d conflicts with authoritative workload profile %q workerCount=%d",
+			*explicitNodes, selection.Profile.Name, selection.Profile.WorkerCount,
 		)
 	}
 	selected := &selectedWorkloadProfile{
@@ -845,9 +853,8 @@ func newServeStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status <name>",
 		Short: "Show serve endpoint status",
-		Long: `Show the live status of a deployed serve endpoint: RayService serve status
-and endpoint count for --kind=rayservice, or Deployment replica readiness for
---kind=deployment.`,
+		Long: `Show the live status of a deployed serve endpoint: RayService endpoints,
+or Deployment replica readiness.`,
 		Example: `  tau serve status my-7b
   tau serve status my-deployment --kind deployment`,
 		Args: cobra.ExactArgs(1),
@@ -859,7 +866,7 @@ and endpoint count for --kind=rayservice, or Deployment replica readiness for
 			if kind == "" {
 				kind = "rayservice"
 			}
-			r := kube.New(kubeContext)
+			r := newServeRunner(kubeContext)
 			var extra []string
 			switch kind {
 			case "rayservice":
@@ -869,7 +876,7 @@ and endpoint count for --kind=rayservice, or Deployment replica readiness for
 				extra = []string{"get", "deployment", args[0], "-n", ns,
 					"-o", "custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,DESIRED:.spec.replicas,AVAILABLE:.status.availableReplicas,AGE:.metadata.creationTimestamp"}
 			default:
-				return fmt.Errorf("--kind must be one of: rayservice, deployment")
+				return validateServeKind(kind)
 			}
 			out, err := r.Raw(cmd.Context(), extra, nil)
 			if out != "" {
@@ -894,9 +901,9 @@ func newServeScaleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scale <name>",
 		Short: "Scale serve endpoint replicas",
-		Long: `Scale a deployed serve endpoint to --replicas. Only --kind=deployment is
-implemented; --kind=rayservice is not yet supported because serveConfigV2 is
-an opaque string blob — redeploy with a new --replicas value instead.`,
+		Long: `Scale a deployed serve endpoint to --replicas. For RayService, redeploy
+with --replicas to update the application configuration; its worker pool remains
+defined by the workload profile.`,
 		Example: `  tau serve scale my-deployment --kind deployment --replicas 3`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -912,7 +919,7 @@ an opaque string blob — redeploy with a new --replicas value instead.`,
 			}
 			switch kind {
 			case "deployment":
-				r := kube.New(kubeContext)
+				r := newServeRunner(kubeContext)
 				out, err := r.Raw(cmd.Context(),
 					[]string{"scale", "deployment", args[0], "-n", ns,
 						fmt.Sprintf("--replicas=%d", replicas)}, nil)
@@ -924,7 +931,7 @@ an opaque string blob — redeploy with a new --replicas value instead.`,
 				return fmt.Errorf("serve scale --kind=rayservice: not yet implemented " +
 					"(serveConfigV2 is a string blob; redeploy with --replicas for now)")
 			default:
-				return fmt.Errorf("--kind must be one of: rayservice, deployment")
+				return validateServeKind(kind)
 			}
 		},
 	}
@@ -940,8 +947,8 @@ func newServeDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Delete a serve endpoint",
-		Long: `Delete a deployed serve endpoint (RayService or Deployment). The delete is
-idempotent: a missing endpoint is not an error.`,
+		Long: `Delete a deployed serve endpoint. The delete is idempotent:
+a missing endpoint is not an error.`,
 		Example: `  tau serve delete my-7b
   tau serve delete my-deployment --kind deployment`,
 		Args: cobra.ExactArgs(1),
@@ -949,14 +956,14 @@ idempotent: a missing endpoint is not an error.`,
 			if kind == "" {
 				kind = "rayservice"
 			}
-			if kind != "rayservice" && kind != "deployment" {
-				return fmt.Errorf("--kind must be one of: rayservice, deployment")
+			if err := validateServeKind(kind); err != nil {
+				return err
 			}
 			ns, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
 			if err != nil {
 				return err
 			}
-			r := kube.New(kubeContext)
+			r := newServeRunner(kubeContext)
 			out, err := r.Raw(cmd.Context(), []string{
 				"delete", kind, args[0], "-n", ns, "--ignore-not-found",
 			}, nil)

@@ -102,6 +102,11 @@ terminating workspace is refused. The controller also blocks extra workspace
 objects from activating if they bypass the CLI. A reviewed manifest delivered
 through Helm, Kustomize, or ArgoCD remains supported.
 
+New workspaces and connection descriptors use the logical role `researcher`.
+The updated workspace CRD and CLI also accept the legacy `tau-researcher-v1`
+alias, with identical RBAC permissions. Install the updated workspace CRD before
+using the new name; compatible existing workspaces are not renamed by `create`.
+
 StorageClasses, durable PVCs, Azure identities, federation, and Azure role
 assignments remain platform-owned. `--service-account` plus
 `--workload-identity-client-id` asks the controller to reconcile only the

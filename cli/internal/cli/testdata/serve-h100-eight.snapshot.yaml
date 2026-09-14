@@ -1,0 +1,40 @@
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkloadProfileSnapshot
+profileSetHash: ee32774f1376b6b8bf80703973d71f08f71e04511da40dd69852f9dfdd4d3cc9
+profiles:
+- applicability:
+    lanes:
+    - serving
+    namespaces:
+    - taugrid-default
+    teams:
+    - research
+  clusterQueues:
+  - example-gpu-cq
+  conditions:
+  - lastTransitionTime: null
+    message: ""
+    observedGeneration: 23
+    reason: Ready
+    status: "True"
+    type: Ready
+  defaultLocalQueue: jobqueue
+  description: Synthetic offline rendering fixture, not a live cluster export.
+  executionTarget: singleCluster
+  gpusPerWorker: 1
+  localQueues:
+  - clusterQueue: example-gpu-cq
+    name: jobqueue
+    namespace: taugrid-default
+  mode: fixed
+  name: h100-nvl-8node
+  placement: multi-node-nccl
+  podPriorityClasses:
+  - tau-default
+  priorities:
+    podPriorityClassName: tau-default
+    workloadPriorityClassName: tau-default
+  workerCount: 8
+  workloadPriorityClasses:
+  - tau-default
+tauClusterGeneration: 23
