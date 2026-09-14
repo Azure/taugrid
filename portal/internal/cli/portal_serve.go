@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/portal/jobs"
 	"github.com/Azure/taugrid/portal/internal/portal/kubeclient"
+	"github.com/Azure/taugrid/portal/internal/portal/rdmavalidation"
 	"github.com/Azure/taugrid/portal/internal/portalapi"
 )
 
@@ -118,6 +119,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			var clusterOpts portalapi.ClusterOptions
 			var costOpts portalapi.CostOptions
 			var nodeUtilOpts portalapi.NodeUtilOptions
+			var rdmaValidationOpts portalapi.RDMAValidationOptions
 			// Kusto transport selection: an explicit --kusto-query-command keeps
 			// the Stellar shell-out adapter; otherwise a bare --kusto-endpoint
 			// selects the native azure-kusto-go SDK path (DefaultAzureCredential),
@@ -144,13 +146,14 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				costOpts.CostDatabase = costDatabase
 				nodeUtilOpts.Querier = querier
 				nodeUtilOpts.Cluster = clusterName
+				rdmaValidationOpts.Reader = rdmavalidation.KustoReader{Querier: querier}
 				if historyEnabled {
 					runsOpts.History = runs.NewKustoHistoryReader(querier)
 				}
 				runsOpts.HistoryTable = historyTable
 				runsOpts.HistoryLimit = historyLimit
 			} else {
-				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Cluster Health, Cost, and Node Utilization boards disabled (set --kusto-endpoint, or --kusto-query-command for a custom adapter)")
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Cluster Health, Cost, Node Utilization, and InfiniBand validation boards disabled (set --kusto-endpoint, or --kusto-query-command for a custom adapter)")
 			}
 			// The Kueue (Live) board reverse-proxies the KueueViz dashboard's
 			// fixed backend/frontend Services. When --kueueviz is unset the board
@@ -172,6 +175,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				Nodes:              nodesOpts,
 				Runs:               runsOpts,
 				NodeUtil:           nodeUtilOpts,
+				RDMAValidations:    rdmaValidationOpts,
 				WorkspaceDirectory: workspaceDirectory,
 				Identity: portalapi.IdentityOptions{
 					UserHeader:   userHeader,

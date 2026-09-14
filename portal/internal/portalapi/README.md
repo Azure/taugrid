@@ -21,11 +21,11 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   successful response time, and snapshot freshness. The 15-second stale time
   marks snapshots stale; it does not poll. Live embedded dashboards manage
   freshness inside their own UI instead of using snapshot controls.
-- **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
+- **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs,rdmavalidation}` package
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
-  `kubeclient` reader) and Kusto (Cluster/Cost share a `kustoquery` shell-out
-  querier).
+  `kubeclient` reader) and Kusto (Cluster/Cost/InfiniBand validation share a
+  `kustoquery` querier).
 - **Soft-degrade contract** — a handler with a nil data source returns **503**;
   a `Board()` error returns **502**; an empty-but-successful result is a normal
   **200**. Boards light up together per source family, so a portal without
@@ -109,6 +109,7 @@ Experiments opens its native dashboard directly.
 | Platform | Fleet › Health | `/portal/fleet?view=health` | `cluster.Board` (per-GPU health, Kusto) | ① (IB/NPD/AlertRule = ③) |
 | Platform | Fleet › Utilization | `/portal/fleet?view=util` | reuses `/api/portal/cluster`, re-sorted by util%, + node CPU/mem (`nodeutil.Board` → `/api/portal/nodeutil`, Kusto) | ① (heatmap/per-team = ③) |
 | Platform | Fleet › Compute | `/portal/fleet?view=compute` | `nodes.Board` (hardware inventory, K8s) | ① |
+| Platform | Fleet › InfiniBand | `/portal/fleet?view=infiniband` | `rdmavalidation.KustoReader` → `/api/portal/rdma-validations*`, with exact detail through workspace-scoped Stellar artifacts | ② |
 | Platform | Kueue | `/portal/jobs` | `jobs.Board` (Kueue queue snapshot) | ① (PriorityClass = ③) |
 | Platform | Ray | `/portal/ray` | `ray.Board` (dashboard Services, K8s) | ① |
 | Platform | Observability | `/portal/observability` | none — placeholder | ③ |
@@ -118,9 +119,47 @@ Experiments opens its native dashboard directly.
 Workloads and Platform retain their `/portal` overview landings; Experiments
 goes directly to `/portal/experiments`, without a separate overview page.
 The overview API remains available for existing board consumers.
-The three Fleet boards share one page via in-page sub-tabs (Health |
-Utilization | Compute); the legacy `/portal/{cluster,gpu,nodes}` paths still
+The four Fleet boards share one page via in-page sub-tabs (Health |
+Utilization | Compute | InfiniBand); the legacy `/portal/{cluster,gpu,nodes}` paths still
 resolve to the matching Fleet sub-tab so existing deep-links keep working.
+
+## InfiniBand validation contract
+
+Fleet InfiniBand status is point-in-time, run-based evidence, not continuous
+network health. The summary card, cursor-paginated history, and
+`/portal/fleet/infiniband/<validation-id>` detail route expose only **Passed**,
+**Failed**, **Running**, **Unknown**, and **Stale**. Missing, partial, malformed,
+unsupported, or unverified data never becomes Passed.
+
+The existing `TauExpMetrics` projection is the searchable index. Each validation
+phase emits a workspace/cluster/namespace-scoped `tau/run_status` marker with a
+versioned validation ID, schema, kind, and lifecycle state. Terminal rows add the
+bounded `rdma_validation/*` scalars and exact artifact URI/SHA linkage. The
+Portal selects the newest marker for each validation by retry-safe
+attempt/phase step, orders validations by event time plus validation ID, then
+derives historical status only when the terminal status, lifecycle, reason,
+namespace, and artifact linkage are internally consistent. Pagination cursors
+are opaque and versioned. Workspace authorization and cluster scope are applied
+before the read. The recorded diagnostic namespace is evidence, not an
+authorization filter, because an authorized workspace validation can run in a
+dedicated namespace that differs from its workload namespace.
+
+The canonical `core/rdmavalidation.Result` JSON remains authoritative for
+technical detail. The Portal never dereferences the metric's artifact URI.
+After workspace authorization it lists the exact run's `rdma-validation`
+artifact through Stellar, selects the contract-defined artifact ID/type/name and
+digest, follows only Stellar's returned same-origin `fetch_url`, limits the
+payload to 8 MiB, verifies size and SHA-256, requires canonical JSON with the
+known schema, and runs the core fail-closed validation before returning detail.
+Unknown schemas stay Unknown in history and return an explicit detail error;
+malformed or integrity-failed artifacts also return typed errors rather than a
+success-shaped fallback.
+
+Historical pass/fail/unknown is immutable. Staleness is a separate presentation
+state at the exact `valid_until` boundary; a result is fresh at `valid_until`
+and stale only afterward. Message bytes are derived from element count only for
+recognized fixed-width data types. Unknown data types leave message size
+Unknown instead of guessing.
 
 ## Data interpretation and recovery
 
@@ -194,9 +233,11 @@ source for today**. They are listed here — not implemented — so the gap betw
    exists. Per-user attribution and budget burn still need their own identity,
    budget, and reporting contracts; utilization alone cannot supply them.
 
-2. **Fleet Health depth — InfiniBand / NPD / AlertRule.** Today's Fleet Health is
-   per-GPU DCGM health. The proposal's richer signals are not portal-readable:
-   - **InfiniBand port/flap** state lives in a node-local file written by
+2. **Fleet Health depth — continuous InfiniBand port/flap, NPD, and AlertRule.**
+   Today's Fleet Health is per-GPU DCGM health, while the InfiniBand sub-tab is
+   a separate run-based validation history. The proposal's richer continuous
+   health signals are not portal-readable:
+   - **Continuous InfiniBand port/flap** state lives in a node-local file written by
      `check_ib_flaps.sh`; it must first be surfaced as a node condition (via the
      collector) or pushed to ADX before a board can read it.
    - **NPD** DaemonSet health would need a Kubernetes read of NPD pods/conditions.

@@ -3,6 +3,7 @@
 import { useLocation } from 'react-router-dom';
 import { useBoard } from './data';
 import { BoardResult, Empty, Note, PageTitle, ScopedLink, Subtabs, Table, measured, n1, text, utilizationSummary } from './components';
+import { InfiniBandFleet } from './InfiniBand';
 import type { Cluster, Nodes, NodeUtil } from './types';
 
 const kustoHint = ' — start the portal with a --kusto-query-command.';
@@ -10,10 +11,10 @@ export function Fleet() {
   const location = useLocation();
   const requested = new URLSearchParams(location.search).get('view');
   const aliases: Record<string, string> = { '/portal/gpu': 'util', '/portal/nodes': 'compute', '/portal/cluster': 'health' };
-  const view = aliases[location.pathname] || (['health', 'util', 'compute'].includes(requested || '') ? requested : 'health');
-  return <><PageTitle title="Fleet">GPU health, utilization, and hardware inventory for the whole fleet.</PageTitle>
-    <Subtabs base="/portal/fleet" active={view || 'health'} items={[['health', 'Health'], ['util', 'Utilization'], ['compute', 'Compute']]}/>
-    {view === 'compute' ? <Compute/> : view === 'util' ? <Utilization/> : <Health/>}</>;
+  const view = aliases[location.pathname] || (['health', 'util', 'compute', 'infiniband'].includes(requested || '') ? requested : 'health');
+  return <><PageTitle title="Fleet">GPU health, utilization, hardware inventory, and run-based RDMA validation.</PageTitle>
+    <Subtabs base="/portal/fleet" active={view || 'health'} items={[['health', 'Health'], ['util', 'Utilization'], ['compute', 'Compute'], ['infiniband', 'InfiniBand']]}/>
+    {view === 'compute' ? <Compute/> : view === 'util' ? <Utilization/> : view === 'infiniband' ? <InfiniBandFleet/> : <Health/>}</>;
 }
 function Health() {
   const instance = new URLSearchParams(useLocation().search).get('instance') || '';

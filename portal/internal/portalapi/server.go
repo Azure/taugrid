@@ -33,6 +33,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/nodes"
 	"github.com/Azure/taugrid/portal/internal/portal/nodeutil"
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
+	"github.com/Azure/taugrid/portal/internal/portal/rdmavalidation"
 )
 
 // DefaultAddr is the portal's default listen address. It mirrors Stellar's
@@ -82,6 +83,9 @@ type Options struct {
 	// returns 503; it reuses the same Kusto querier as Cluster/Cost, so the
 	// Kusto-backed boards light up (or not) together.
 	NodeUtil NodeUtilOptions
+	// RDMAValidations configures the run-based InfiniBand validation surface.
+	// When Reader is nil its APIs return 503 without affecting other boards.
+	RDMAValidations RDMAValidationOptions
 	// WorkspaceDirectory enables authenticated, server-resolved multi-workspace
 	// mode. When it is unset, Stellar.Workspace configures the single workspace.
 	WorkspaceDirectory WorkspaceDirectory
@@ -169,6 +173,10 @@ type NodeUtilOptions struct {
 	Cluster string
 }
 
+type RDMAValidationOptions struct {
+	Reader rdmavalidation.Reader
+}
+
 // Server is the portal HTTP handler. It composes its own routes with a mounted
 // Stellar handler.
 type Server struct {
@@ -184,6 +192,7 @@ type Server struct {
 	nodes                 NodesOptions
 	runs                  RunsOptions
 	nodeUtil              NodeUtilOptions
+	rdmaValidations       RDMAValidationOptions
 	workspaceDirectory    WorkspaceDirectory
 	identity              IdentityOptions
 	singleWorkspaceScope  WorkspaceScope
@@ -251,6 +260,7 @@ func NewServer(opts Options) (*Server, error) {
 		nodes:                 opts.Nodes,
 		runs:                  opts.Runs,
 		nodeUtil:              opts.NodeUtil,
+		rdmaValidations:       opts.RDMAValidations,
 		workspaceDirectory:    opts.WorkspaceDirectory,
 		identity:              normalizeIdentityOptions(opts.Identity),
 		kueueViz:              opts.KueueViz,
@@ -367,6 +377,9 @@ func (s *Server) routes() {
 	// Trailing slash keeps the per-job detail route
 	// ("/api/portal/runs/{namespace}/{name}") distinct from the runs list above.
 	s.mux.HandleFunc("/api/portal/runs/", s.handleJobDetail)
+	s.mux.HandleFunc("/api/portal/rdma-validations/summary", s.handleRDMAValidationSummary)
+	s.mux.HandleFunc("/api/portal/rdma-validations", s.handleRDMAValidations)
+	s.mux.HandleFunc("/api/portal/rdma-validations/", s.handleRDMAValidationDetail)
 
 	// KueueViz "Kueue (Live)" board — reverse-proxied under
 	// /api/portal/kueueviz/. The frontend/env.js/asset routes are embedded in a

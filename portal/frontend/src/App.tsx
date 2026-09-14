@@ -7,6 +7,7 @@ import { Empty } from './components';
 import type { WorkspaceScope } from './types';
 import { CostBoard, ExperimentsBoard, Kueue, Observability, Overview, Services } from './Boards';
 import { Fleet } from './Fleet';
+import { InfiniBandValidationDetail } from './InfiniBand';
 import { JobDetailBoard, RayBoard, RayHistoryBoard, RunsBoard } from './Workloads';
 
 const tabs = [
@@ -17,7 +18,7 @@ const tabs = [
 const fleetPaths = ['/portal/fleet', '/portal/cluster', '/portal/gpu', '/portal/nodes'];
 export function tabForPath(path: string): string | undefined {
   if (path === '/stellar' || path.startsWith('/stellar/')) return 'experiments';
-  if (fleetPaths.includes(path) || path === '/portal/kueueviz' || path.startsWith('/portal/ray/')) return 'platform';
+  if (fleetPaths.includes(path) || path.startsWith('/portal/fleet/infiniband/') || path === '/portal/kueueviz' || path.startsWith('/portal/ray/')) return 'platform';
   if (path.startsWith('/portal/runs/')) return 'workloads';
   return tabs.find(t => t.items.some(([, p]) => p !== '/portal' && p === path))?.id;
 }
@@ -89,7 +90,7 @@ export function App() {
     {experimentView && <details className="stellar-workspace-scope"><summary>Scope</summary><div className="stellar-scope-menu"><ScopeBanner scope={scope}/></div></details>}
     <div className="tab-toggle" aria-label="Portal persona">{tabs.map(t => <button key={t.id} type="button" aria-pressed={persona === t.id} className={persona === t.id ? 'active' : ''} onClick={() => selectPersona(t.id)}>{t.label}</button>)}</div>
   </header><div className="layout">{persona !== 'experiments' && <aside className="sidebar"><nav aria-label={activeTab.label}><div className="group">{activeTab.items.map(([title, path]) => {
-    const active = path === '/portal/fleet' ? fleetPaths.includes(location.pathname)
+    const active = path === '/portal/fleet' ? fleetPaths.includes(location.pathname) || location.pathname.startsWith('/portal/fleet/infiniband/')
       : path === '/portal/jobs' ? ['/portal/jobs', '/portal/kueueviz'].includes(location.pathname)
         : location.pathname === path || (path !== '/portal' && location.pathname.startsWith(path + '/'));
     return <Link key={path} to={href(path)} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>{title}</Link>;
@@ -110,6 +111,7 @@ export function App() {
                   <Route path="/portal/experiments" element={<ExperimentsBoard/>}/>
                   <Route path="/stellar/*" element={<ExperimentsBoard/>}/>
                   {['jobs', 'kueueviz'].map(path => <Route key={path} path={'/portal/' + path} element={<Kueue/>}/>)}
+                  <Route path="/portal/fleet/infiniband/:validationId" element={<InfiniBandValidationDetail/>}/>
                   {['fleet', 'cluster', 'gpu', 'nodes'].map(path => <Route key={path} path={'/portal/' + path} element={<Fleet/>}/>)}
                   <Route path="/portal/cost" element={<CostBoard/>}/>
                   <Route path="/portal/observability" element={<Observability/>}/>
