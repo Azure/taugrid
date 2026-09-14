@@ -239,8 +239,8 @@ kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 # LocalQueue at v1beta2 (matching the production Kueue API). Both
 # schemas are intentionally x-kubernetes-preserve-unknown-fields so the
 # default "None" conversion strategy is a lossless passthrough between them.
-# RayJob is present so the researcher connection verifier can prove that the
-# workspace role covers every workload type supported by the Tau CLI.
+# RayJob and RayService are present so the researcher connection verifier can
+# check both workload types without installing a KubeRay controller.
 cat >"${SCRATCH_DIR}/mock-workload-crds.yaml" <<'YAML'
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -395,8 +395,32 @@ spec:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: rayservices.ray.io
+spec:
+  group: ray.io
+  names:
+    kind: RayService
+    listKind: RayServiceList
+    plural: rayservices
+    singular: rayservice
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
 YAML
 kubectl apply -f "${SCRATCH_DIR}/mock-workload-crds.yaml"
+kubectl wait --for=condition=Established \
+  -f "${SCRATCH_DIR}/mock-workload-crds.yaml" \
+  --timeout="${WAIT_SECONDS}s"
 
 # --- Establish the Tau APIs before applying the same full kustomization ArgoCD
 # applies. kubectl's RESTMapper cannot discover a CRD and its TauCluster
@@ -719,6 +743,10 @@ kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}
 echo "== RBAC boundary checks for the researcher subject =="
 kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+for verb in create get list watch delete patch update; do
+  kubectl auth can-i "${verb}" rayservices.ray.io -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+  [[ "$(kubectl auth can-i "${verb}" rayservices.ray.io -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+done
 kubectl auth can-i create configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
