@@ -205,6 +205,14 @@ jobs:
         if: matrix.race == true
         run: go test -race -count=1 ./...
 
+      - name: Check TauGrid skill examples
+        if: matrix.module == 'cli'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tau-skill-venv"
+          "$RUNNER_TEMP/tau-skill-venv/bin/python" -m pip install PyYAML==6.0.3
+          go build -o "$RUNNER_TEMP/tau-skill" ./cmd/tau
+          "$RUNNER_TEMP/tau-skill-venv/bin/python" ../skills/taugrid/scripts/check_examples.py --tau "$RUNNER_TEMP/tau-skill"
+
   cli-windows:
     name: CLI / Windows
     runs-on: windows-latest

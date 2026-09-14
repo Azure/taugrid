@@ -1,384 +1,204 @@
 ---
 name: taugrid
-description: "Run GPU and AI workloads on Kubernetes with TauGrid — the tau CLI plus Kueue queueing, KubeRay/Ray orchestration, GPU node health, and observability. Use for distributed training, fine-tuning, hyperparameter sweeps, model serving/inference, datasets, run lifecycle, and cluster/workspace onboarding. Trigger on plain-language intent even with no product name: 'run my training script on the cluster', 'fine-tune a 7B model', 'my GPU job is stuck/pending/preempted/OOMKilled', 'deploy this model for inference', 'set up a queue for my team'. Also trigger on tau.yaml, run config, Kueue admission or quota, LocalQueue/ClusterQueue, RayJob, torchrun, Ray Train/Tune, TauWorkspace, taugrid-portal, or Stellar. Use it BEFORE writing YAML destined for tau run, and before suggesting kubectl for a Tau-managed workload."
+description: "Author, validate, run, and troubleshoot AI workloads with TauGrid's tau CLI, optional Python SDK, and taugrid-portal. Use for Tau run configs, workspace connections, TauCluster workload profiles, Job/RayJob training and evaluation, model serving, datasets, logs, and experiment evidence. Use before generating YAML for tau run or diagnosing a Tau-managed workload. Generic Kubernetes, Ray, or cloud provisioning requests without a TauGrid connection are outside this skill."
 ---
 
-# TauGrid and the tau CLI
+# TauGrid
 
-TauGrid makes it easier to run GPU workloads on Kubernetes — data preparation,
-distributed training, fine-tuning, and inference. It brings together the `tau`
-CLI, workload queueing and admission with **Kueue**, Ray cluster orchestration
-with **KubeRay**, node-level **GPU health monitoring**, and cluster/workload
-**observability** into one stack, so platform teams get an integrated
-foundation and researchers can stay in their code instead of Kubernetes
-plumbing.
+Use `tau` to combine project-owned workload intent with platform-owned
+workspace and workload-profile policy. It renders Jobs, RayJobs, RayServices,
+or Deployments; Kubernetes, Kueue, and KubeRay own scheduling and reconciliation.
+The optional Python SDK owns decorator authoring. `taugrid-portal` is a
+separate binary for experiments and the observability portal.
 
-`tau` itself is a CLI, renderer, and observer — **not** a scheduler, operator,
-or cloud provisioner. It turns checked-in workload intent into Kubernetes Jobs
-or KubeRay RayJobs, submits them through Kueue, and gives one lifecycle surface
-for the result.
-
-Getting that boundary right is what separates useful help from confidently
-wrong help. When a job is stuck, the answer is usually "Kueue has no quota" or
-"the workspace is Degraded" — not something you can fix by editing YAML.
-
-## Who is asking
-
-Adapt to the person, since the same symptom has different owners:
-
-- **Researcher** — authoring `tau.yaml`, submitting runs, reading status/logs,
-  retrying, serving a model, pulling experiment evidence. They cannot fix
-  quota, node health, or workspace policy; tell them who can.
-- **Platform operator** — preparing clusters, bootstrapping workspaces,
-  queues, storage, and node health. See
-  [references/platform.md](references/platform.md).
-- **Contributor** — changing this repository's Go code. See
-  [Repository layout](#repository-layout-for-contributors) at the end.
-
-Most users have only the `tau` binary, not this source tree. Answer from
-`tau --help`, `tau run schema`, and this skill rather than pointing them at
-repository paths they do not have.
-
-## Ground rules that prevent most mistakes
-
-**Verify against the installed binary, not memory.** The CLI surface changed in
-v0.5 and binaries in the wild are often stale:
+## Start with the installed tools
 
 ```bash
-tau --help                    # actual root commands
-tau run schema -o json        # authoritative config schema
-tau run explain-config        # field reference with statuses
+tau version
+tau --help
+tau run schema -o json
+tau run explain-config
 ```
 
-If a command you expect is missing, the binary is old — say so rather than
-writing instructions against a surface the user does not have. They upgrade on
-Linux or macOS with
-`curl -fsSL https://github.com/Azure/taugrid/releases/latest/download/install.sh | sh`;
-the installer verifies the matching binary against `SHA256SUMS`.
+Treat the installed command help and generated schema as authority. Do not
+infer a feature from a release number or silently upgrade the user's tools.
+The application roots are `cluster`, `workspace`, `run`, `logs`, `serve`,
+`data`, `python`, and `version`; shell completion/help are also available.
+`tau logs` is supported, while old flat commands such as `tau submit`,
+`tau finetune`, `tau status`, and `tau ray` are not the current interface.
 
-**`tau` has exactly seven roots:** `cluster`, `workspace`, `run`, `serve`,
-`data`, `python`, `version`. Experiment tracking and the observability portal
-live in a **separate binary**, `taugrid-portal` — if a user still has
-`tau experiment` or `tau portal`, they are on a pre-split build. Pre-v0.5 flat
-roots (`submit`, `finetune`, `status`, `logs`, `ray`, `exp`, `queue`, `model`,
-`dataset`, …) are deleted, not deprecated.
+Most users have the binaries, not this repository. Give them commands and the
+bundled references; use source paths only for contributor work.
 
-**`tau run TARGET` is a positional argument, not a subcommand.** The single
-easiest thing to get wrong, since it reads identically to a real subcommand:
+Read the reference matching the task, not all of them:
 
-- `tau run train` → `run` root with `TARGET=train`, resolving `tau/train.yaml`
-- `tau run status` → the real `status` subcommand
+| Task | Reference |
+| --- | --- |
+| Author YAML, choose an engine, size GPUs, package source, persist output | [Run config](references/run-config.md) |
+| Select a profile or render without cluster access | [Workload profiles](references/workload-profiles.md) |
+| Serve an image/checkpoint, use literal command arguments, scale an endpoint | [Serving](references/serving.md) |
+| Connect, install, create/adopt a workspace, check PVCs or quota | [Platform](references/platform.md) |
+| Diagnose startup, historical logs, retries, or missing evidence | [Troubleshooting](references/troubleshooting.md) |
+| Use decorators, inspect/build Python workflows, or chain train/eval | [Python SDK](references/python-sdk.md) |
+| Change the repository or maintain this skill | [Contributing](references/contributing.md) |
 
-Subcommands are exactly: `validate`, `schema`, `explain-config`, `list`,
-`status`, `logs`, `get`, `cancel`, `resume`, `history`. Anything else is a
-target name — which is why `tau run retry` appears to "work" while doing
-nothing useful. There is no retry subcommand; retry is config behavior.
+## Establish scope and side effects
 
-**Prefer `tau` over raw `kubectl` for Tau-managed workloads.**
-`tau run status` already merges Job/RayJob state, Kueue admission, the startup
-phase tree, and pods into one ordered view. Reach for `kubectl` only to confirm
-something `tau run status` has already pointed at, and say why you're doing it.
+Identify the project, connection, workload namespace, and user's role before
+cluster operations. A researcher can fix their config or application; changing
+queue policy, RBAC, profiles, or node health belongs to the platform owner.
+Do not treat a diagnostic request as permission to submit, retry, deploy,
+delete, install, or create privileged validation pods.
 
-## Authoring a run config
+| Operation | What it actually does |
+| --- | --- |
+| `tau run validate --config <file>` | Offline parsing, dispatch checks, and some local entrypoint/import checks; no profile or cluster readiness proof |
+| `tau run --config <file> --dry-run=client` | Normally contacts the cluster to resolve the workspace and ready profile; renders without applying the workload |
+| Client dry-run with `policy.workload_profile_snapshot` | Offline rendering with explicit namespace/team/lane scope; not live authorization or capacity validation |
+| `--dry-run=server` | Connected preflight and Kubernetes API-server dry-run; not a scheduling or execution test |
+| `tau workspace connection` | Reviews/trusts the repository connection, resolves credentials, contacts Kubernetes, and saves isolated local connection state |
+| `tau workspace create` / `adopt` without `--apply` | Connected read-only preflight and manifest preview |
+| `tau cluster validate nodes` | Creates privileged validation pods; requires authorization |
 
-The normal contract is a checked-in **direct run config** — hand-written YAML
-that `tau run --config` reads. Minimal shape:
+`tau workspace connection` has no `--offline` flag. First-time repository trust
+requires an interactive terminal before credentials or the cluster are used.
+If headless execution asks for that review, ask the user to complete it; do not
+edit trust records, read credential stores, or bypass the check.
+
+## Author and render a direct run
+
+Prefer a checked-in direct config for ordinary training, evaluation, or batch
+work. In this example `training-1gpu` is an illustrative profile name: replace
+it with a ready, applicable profile supplied by the platform.
 
 ```yaml
-name: train                 # run name; also derives the default checkpoint path
-engine: rayjob              # job | rayjob
-entrypoint: train.py        # resolved relative to the config file
-
+name: train
+engine: job
+entrypoint: train.py
 runtime:
-  image: <pinned-image>     # pin a tag or digest; never :latest
-
+  image: <pinned-image>
 compute:
-  workers: 2                # Ray worker pods
-  gpus_per_worker: 8
-
+  gpus: 1
+policy:
+  profile: training-1gpu
 storage:
-  data_pvc: training-data   # mounted at /data
-  output: /data/checkpoints/workflows/train
+  data_pvc: training-data
 ```
 
-Top-level groups: `name`, `engine`, `entrypoint`, `script`, `image`,
-`schema_version`, `runtime`, `compute`, `execution`, `policy`, `storage`,
-`resilience`, `profiler`, `experiment`, `metrics`, `run`, `workflow`. There is
-no `eval` group — evaluation is an ordinary run. Full field list in
-[references/run-config.md](references/run-config.md); `tau run schema -o json`
-is the final authority since it is generated from the implementation.
-
-**The schema is strict — unknown fields are hard errors.** A typo like
-`compute.gpu` fails with `field gpu not found in type runconfig.Compute`.
-
-**`validate` alone is not enough — always follow it with a client dry-run.**
-`validate` is offline schema checking; preset resolution and GPU-count
-arithmetic happen at *render* time, so a config can validate clean and still be
-unrunnable:
+The image must contain the required runtime; the PVC must already exist.
+With a connected workspace and a durable mount, omitted `storage.output`
+inherits the workspace output root plus the run name. Do not copy another
+workspace's output path.
 
 ```bash
-tau run validate --config tau/train.yaml   # schema only
-tau run train --dry-run=client             # renders; catches the rest
+tau run validate --config tau/train.yaml
+tau run train --dry-run=client
 ```
 
-Two failures `validate` will pass:
+Validate **and** render before claiming a config is ready for submission.
+Validation does not resolve live profiles; rendering catches profile/cardinality
+conflicts and missing files. To keep the second step offline, use the explicit
+snapshot procedure in [Workload profiles](references/workload-profiles.md).
 
-| Config | `validate` | `--dry-run=client` |
-|---|---|---|
-| No `policy.preset` or `policy.profile` | is valid | `policy.profile or policy.preset is required` |
-| `processes_per_node: 99` on an 8-GPU preset | is valid | `processes_per_node (99) exceeds profile GPU count (8)` |
+Path rules matter:
 
-Both are free and offline, so run both before telling a user a config is good.
-Note that dry-run resolves `entrypoint` on disk, so run it from the config's
-directory or the script will appear missing.
+- `tau run train` resolves the **target** `tau/train.yaml`; `train` is not a
+  subcommand. `tau run status <name>` is a real lifecycle subcommand.
+- `tau run --config path/to/config.yaml` selects a file. With explicit
+  `--config`, a positional argument is a direct-run name override.
+- `tau run validate train` does **not** discover `tau/train.yaml`; use
+  `--config` with validation.
+- Relative script, snapshot, and project-directory paths resolve from the
+  config file, not the shell's current directory. A root `train.py` referenced
+  from `tau/train.yaml` needs `entrypoint: ../train.py`.
+- A monorepo can select a catalog project with `tau run ... --project <name>`.
+  Resolve ambiguity explicitly, including for lifecycle commands.
 
-`--config` takes an explicit path; a bare `TARGET` resolves `tau/TARGET.yaml`.
-They are not interchangeable.
+## Respect the workload profile
 
-### Engine choice constrains everything else
+`policy.preset`, local `TopologyPolicy` catalogs, and `--profiles-dir` are
+removed. Use `policy.profile`, or let Tau select the unique ready, applicable
+profile from `TauCluster/cluster`. Ambiguous or stale status is an error.
 
-`engine: job` renders a `batch/v1` Job — one pod, or an Indexed Job with
-torchrun. `engine: rayjob` renders a KubeRay RayJob (head + `compute.workers`
-workers). Mixing the two vocabularies is the most common authoring failure:
+The profile owns queue bindings, placement, priority classes, worker count,
+and GPUs per worker. Explicit sizing is an **assertion**, not permission to
+override it:
 
-| Intent | Correct | Common mistake |
-|---|---|---|
-| Multi-node PyTorch DDP | `engine: job` + `launcher: torchrun` + `execution.nodes: N` | `execution.nodes` with `engine: rayjob` |
-| Ray Train distributed | `engine: rayjob` + `compute.workers: N` | `launcher: torchrun` with `engine: rayjob` |
-| GPUs per pod on a Job | `policy.preset` (the node shape) | `compute.gpus_per_worker` with `engine: job` |
-| Extra PVC mounts | `engine: job` + `storage.mounts` | `storage.mounts` with `engine: rayjob` |
+| Workload | Direct config | Profile agreement |
+| --- | --- | --- |
+| Single CPU/GPU pod | `engine: job`, `compute.gpus: 0` or GPU count | GPU count must match |
+| Multi-node PyTorch | `engine: job`, `execution.launcher: torchrun` | `execution.nodes` and `compute.gpus` match worker count and GPUs per worker |
+| Ray Train/Tune | `engine: rayjob`, Ray launcher | `compute.workers` and `compute.gpus_per_worker` match; head is separate and CPU-only |
 
-`compute`'s Ray-shaped fields — `workers`, `gpus_per_worker`, `runtime.pip`,
-`head_*`/`worker_*` — are **rejected on `engine: job`**. For a Job, GPU count
-comes from the resolved preset, and `execution.processes_per_node` is validated
-against it. "8 GPUs per node" feels like a `compute` concern but is a placement
-one. `execution.launcher` is engine-scoped: `job` takes `python`/`torchrun`,
-`ray` takes `ray-train`/`ray-tune`.
+Use canonical `rayjob`; `ray` is a compatibility alias. Do not put
+`compute.gpus_per_worker`, Ray worker sizing, or `runtime.pip` on a direct Job.
+Do not add node selectors or change namespace/queue to bypass profile or
+workspace rejection. Ask the platform owner for the appropriate profile.
 
-Tau owns the distributed-training env vars. `MASTER_ADDR`, `MASTER_PORT`,
-`TAU_WORLD_SIZE`, `TAU_DIST_BACKEND`, `TAU_NUM_WORKERS`, and `NCCL_*` are
-rejected in `runtime.env` so rendezvous stays consistent with the rendered
-topology. `execution.allow_nccl_override: true` unblocks only the `NCCL_*`
-ones, for deliberate tuning.
+## Observe, then recover
 
-### Secrets
-
-Never put a secret value in a run config:
-
-- `runtime.env_secret` — `KEY: "secret-name:key"` → `valueFrom.secretKeyRef`.
-- `runtime.env_kv` — Azure Key Vault via Secrets Store CSI; all entries must
-  resolve to one vault.
-
-Client dry-run redacts both while keeping the dependency shape visible.
-
-## Running and observing
+After an authorized submission:
 
 ```bash
-tau run train                      # submit the checked-in target
-tau run status <run-name> --watch  # startup phase tree, live
-tau run logs <run-name>            # Ray driver output, or Job pod logs
-tau run get <run-name>             # durable results recorded by storage.output
-tau run cancel <run-name>          # delete workload; Kueue reclaims quota
-tau run list -n <namespace>        # Tau-managed Jobs and RayJobs
+tau run status <run-name> --watch
+tau run status <run-name> -o json
+tau logs <run-name> -f --tail 100
+tau run list -o json
+tau run get <run-name>
 ```
 
-On a repository's first cluster-backed `tau run`, Tau resolves credentials
-through the descriptor's access method: it either isolates an existing
-kubeconfig context or obtains AKS credentials with the user's Azure identity.
-The dedicated kubeconfig avoids mutating their main one; it is **not** a
-researcher-isolation boundary and should not be described as one.
+`tau logs` can discover a run across local workspace connections; use
+`--workspace`, or `--context` and `--namespace`, for an exact target.
+`tau run logs` remains available and inherits run-level `--project` routing.
+The log command uses Ray driver logs for RayJobs and pod logs for Jobs.
 
-`tau run status` is the canonical lifecycle view. It walks an ordered phase
-tree — Submitted, Kueue admission, (RayCluster), pod scheduling, DRA
-allocation, image pull, init containers, container start, Ready, (RayJob
-status) — where each phase reports pending, active, done, warning, or skipped.
+Prefer JSON for agent parsing. Status `--watch` is a human-readable stream,
+not JSON; use separate JSON polls or bound a watch with `--max-iterations`.
+`--diagnostic-hints` emits scoped Kubernetes follow-up commands and cannot
+be combined with watch or JSON (JSON already carries diagnostic commands).
 
-**Read it top to bottom and stop at the first phase that is not `done`.** That
-phase is the layer to investigate; everything after it is downstream noise.
+Read startup phases in order, skipping phases marked `skipped`. Investigate
+the first genuinely blocked/warning phase. Admission is not scheduling,
+running is not application progress, and completion is not artifact durability.
+Use scoped `kubectl` inspection when Tau's view lacks the necessary detail,
+within the caller's RBAC; raw Kubernetes diagnostics are not inherently
+operator-only.
 
-Three distinctions that matter when interpreting it:
-
-- **Admitted ≠ scheduled.** Kueue reserved quota; no pod exists yet.
-- **Running ≠ progressing.** Containers started; the training loop may be hung.
-- **Completed ≠ evidence preserved.** Check that artifacts actually landed.
-
-A `skipped` DRA phase is normal when the workload requests GPUs through the
-device plugin rather than DRA. It is not a failure.
-
-## Diagnosing a stuck or failed run
-
-Work the layers in order. Jumping to `kubectl describe pod` when the real
-problem is quota (layer 4) or a Degraded workspace (layer 2) wastes time and
-produces a misdiagnosis.
-
-| # | Layer | Command | Owner if it fails |
-|---|---|---|---|
-| 1 | Repo/connection resolution and access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) / platform (access) |
-| 2 | TauWorkspace readiness | `tau workspace status <name>` | Platform operator |
-| 3 | Config validation and render | `tau run validate --config <path>` | Researcher |
-| 4 | Kueue admission and quota | `tau run status <run>` (admission phase) | Queue owner |
-| 5 | Scheduling, DRA, image pull, init | `tau run status <run> --watch` | Platform or researcher |
-| 6 | GPU/node/topology health | `tau cluster validate nodes` / `... topology` | Node-pool operator |
-| 7 | Runtime progress and evidence | `tau run logs <run>` + `taugrid-portal experiment status <name>` | Researcher / platform |
-| 8 | Recovery | see retry/resume below | — |
-
-Layers 1–3 are offline and cost nothing, so run them first when a symptom is
-ambiguous. Full per-layer detail, including the operator-only `kubectl`
-commands for each, is in
-[references/troubleshooting.md](references/troubleshooting.md).
-
-Two guardrails worth stating to users directly:
-
-- Do not add namespace, queue, kubeconfig, or cloud credentials to a project
-  config to work around a platform readiness failure. Those are workspace
-  concerns, the submission gate is enforced server-side, and there is no
-  client-side bypass.
-- Do not resubmit blindly after a failure. Locate the first failed layer, then
-  choose retry or resume deliberately.
-
-## Retry and resume
-
-Automatic retry is configuration, not a command:
-
-```yaml
-resilience:
-  max_retries: 2
-  retry_on: ["Preempted", "Evicted"]   # default; OOMKilled is opt-in
-  backoff_initial: 30s
-  backoff_max: 5m
-  checkpoint_path: /data/checkpoints/finetunes/<name>
-```
-
-When `max_retries > 0` and no dry-run is set, `tau run` waits for terminal
-state, classifies the failure, checks it against `retry_on`, applies bounded
-exponential backoff, injects the checkpoint path and attempt number, then
-deletes and resubmits. If the reason is not in `retry_on`, Tau exits with an
-error naming it — unexpected failures surface instead of looping.
-
-`OOMKilled` is deliberately excluded by default: the same config with the same
-memory usually reproduces the same OOM, so retrying without changing anything
-just spends queue time to fail identically. Suggest adding it only after
-`compute` memory has been raised. `Unknown` is never retryable in either path.
-
-Manual resume:
+Automatic retry is `resilience.max_retries`, not `tau run retry`. It can wait,
+delete, and resubmit; enable it deliberately. Manual resume also deletes and
+replaces a failed workload:
 
 ```bash
-tau run resume <run-name> --config tau/train.yaml   # --config is required
+tau run resume <run-name> --config tau/train.yaml \
+  --from /data/projects/<workspace>/runs/<run-name>/checkpoints \
+  --dry-run=client
 ```
 
-Resume needs a durable checkpoint under `/data` — a workload that only wrote to
-node-local scratch has nothing to resume from, since that state does not
-survive workload deletion. If the original failure was `OOMKilled`, resume
-requires `--force`.
+Resume still inspects the live workload in dry-run mode. Use its actual durable
+checkpoint directory; the legacy default may not match workspace-scoped output.
+The trainer must load `TAU_RESUME_FROM`. After OOM, change the relevant memory
+or workload settings before using `--force`; `Unknown` is not retryable.
 
-## Serving a model
+## Keep the other contracts separate
 
-`tau serve` renders a KubeRay RayService (default) or a plain Deployment. A
-service is not a run — it does not inherit run lifecycle commands.
+- **Serving:** `tau serve deploy` requires an active repository workspace and
+  `--profile`. Even its client dry-run is connected. Deploy's explicit
+  namespace/context must agree with the connection; status/scale/delete use
+  their own target flags. See [Serving](references/serving.md).
+- **Secrets:** use `runtime.env_secret` for direct configs, never literal secret
+  values. `runtime.env_kv` is managed-workflow-only, not a direct Job/RayJob
+  feature. Redaction in output does not make a credentials-bearing config safe.
+- **Evaluation:** a direct eval is an ordinary Job/RayJob running evaluation
+  code; no direct `eval` group or `tau eval` command exists. The optional SDK's
+  `@tau.eval` is a different, managed workflow contract.
+- **Evidence:** `taugrid-portal experiment ...` and `taugrid-portal portal serve`
+  belong to the separate portal binary. Identify the store/backend before
+  diagnosing empty results; local expstore, ADX scalars, historical logs, and
+  lifecycle records are different evidence paths.
+- **Data:** `tau data dataset` supports catalog operations **and ingest**;
+  ingest copies bytes and writes registry state. Model/dataset alias updates
+  are mutations, not discovery operations.
 
-```bash
-tau serve deploy <name> --kind=rayservice --profile <p> --image <pinned> \
-  --import-path serve:app --checkpoint <path> --checkpoint-pvc <pvc> \
-  --namespace <ns> --context <ctx> --dry-run=client
-tau serve status <name> --kind=rayservice -n <ns>
-tau serve scale  <name> --kind=deployment --replicas 3 -n <ns>
-tau serve delete <name> --kind=rayservice -n <ns>
-```
-
-`--checkpoint` mounts the PVC at `/data`, resolves relative paths under
-`/data/checkpoints`, and sets `TAU_MODEL_PATH`; the app still owns loading.
-Direct `scale` works only for `--kind=deployment` — a RayService's Serve config
-is a serialized field, so redeploy or set `--min-replicas`/`--max-replicas` at
-creation. `--from-finetune`/`--from-model` read cluster metadata, so they
-cannot use client dry-run. Serving does not activate
-`tau/workspace.connection.yaml` — pass namespace and context explicitly.
-
-## Datasets and models
-
-```bash
-tau data dataset list|show|ref|verify     # curated dataset registry
-tau data model list|show|best|alias       # durable checkpoints and aliases
-```
-
-The registry is a catalog, not a data plane: records point at storage accessed
-by workload identity, and are immutable once registered — only aliases move.
-Reference a dataset from a run through its resolved path on the mounted PVC.
-
-## Evidence: experiments and artifacts
-
-Run evidence lives in the **`taugrid-portal`** binary, not `tau`:
-
-```bash
-taugrid-portal experiment search              # find indexed runs
-taugrid-portal experiment stellar <run-name>  # local dashboard (-o html|json|tui)
-taugrid-portal experiment open <run-name>     # serve and open in a browser
-taugrid-portal experiment status <name>       # durable lifecycle record
-taugrid-portal portal serve                   # unified observability portal
-```
-
-The local expstore is the authoritative packet; ADX/Kusto and the hosted
-Stellar UI are optional scalar projections. So "the dashboard is empty" is a
-projection problem, not necessarily lost data.
-
-Add discovery metadata so runs group correctly:
-
-```yaml
-name: <run-name>
-script: train.py
-compute:
-  gpus: 0
-experiment:
-  project: <project>
-  name: <the set of runs being compared>
-  group: <named subset>
-```
-
-`experiment` has no `question` field — that is an expstore/Stellar concept.
-The research question a set of runs answers is carried by `experiment.name`.
-
-## Platform operator work
-
-Operator commands need cluster-admin-level access and are deliberately not
-researcher-facing. `tau cluster validate nodes` creates privileged pods.
-
-```bash
-tau cluster install --version <version> --values <file>
-tau cluster validate nodes --gpu-class <c> --min-healthy <n>
-tau cluster validate topology --preset <preset>     # or --cluster-queue (default taugrid-cq)
-tau cluster uninstall --yes                         # Helm-owned resources only
-
-tau workspace check <name>                          # exits non-zero unless Ready
-tau workspace status <name> -o json
-```
-
-`cluster install` and `cluster uninstall` are Helm-only. Platform owners create
-`TauWorkspace` resources through reviewed Helm/GitOps/IaC. TauGrid 0.1 does not
-create or mutate StorageClasses, PVCs, PVs, CSI configuration, cloud storage,
-credentials, or Secrets.
-
-Workspace `Ready` requires `RBACReady` and `QueueReady` true with no drift.
-TauGrid 0.1 has no `StorageReady` condition on `TauWorkspace` or `TauCluster`,
-so **a `Ready` workspace can still have a missing PVC**. Verify the
-platform-managed claim before handing off. `WorkloadIdentityReady` is also
-diagnostic only. Degraded-condition recovery and the install/uninstall contract
-are in [references/platform.md](references/platform.md).
-
-## Boundaries — what to tell users Tau will not do
-
-Tau owns resolution, validation, rendering, submission, and lifecycle. It does
-**not** own:
-
-- Azure/AKS provisioning, node pools, or cloud RBAC
-- Kubernetes scheduling, or Kueue quota and admission decisions
-- Ray Train, PyTorch, or model-framework behavior
-- Project data preparation, model code, or serving application semantics
-
-When a request falls outside these — "make Tau create my GPU node pool", "have
-Tau raise my quota" — name the system that actually owns it and who to ask.
-Guessing a plausible-sounding flag is worse than saying so.
-
-## Contributing to this repository
-
-Module layout, CI guards, the `tau.azure.com/*` label contract, and how to
-verify a change: [references/contributing.md](references/contributing.md).
-Users of the `tau` binary do not need it.
+Report separately what parsed, rendered, passed connected checks, and actually
+ran. Never turn a successful offline fixture or snapshot into a claim about
+the user's live GPUs, credentials, storage, or service health.
