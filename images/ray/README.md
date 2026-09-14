@@ -8,8 +8,8 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 |-----------|---------|
 | **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
-| **Ray** | 2.56.1 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
-| **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1 includes the upstream protobuf 7 compatibility fix |
+| **Ray** | 2.58.0 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
+| **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1+ includes the upstream protobuf 7 compatibility fix |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
 | **NCCL** | NVIDIA Collective Communications Library — multi-GPU all-reduce, broadcast; uses RDMA/IB transport when available |
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
@@ -43,15 +43,18 @@ Version combinations are defined in [`versions.json`](versions.json):
   { "python": "3.12", "ray": "2.54.0", "cuda": "13.0" },
   { "python": "3.12", "ray": "2.55.1", "cuda": "13.0" },
   { "python": "3.12", "ray": "2.56.0", "cuda": "13.0" },
-  { "python": "3.12", "ray": "2.56.1", "cuda": "13.0", "default": true }
+  { "python": "3.12", "ray": "2.56.1", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.57.0", "cuda": "13.0" },
+  { "python": "3.12", "ray": "2.58.0", "cuda": "13.0", "default": true }
 ]
 ```
 
 Each entry records a Python/Ray/CUDA combination intended for release. There
 must be at most one `"default": true` entry. The Makefile uses its own defaults;
 the matrix is release input, not evidence of published availability. Older
-entries remain for historical build combinations; they do not inherit Ray
-2.56.1's Serve fix and must pass their own dependency and behavioral checks.
+entries remain for historical build combinations; entries prior to 2.56.1 do
+not include Ray's upstream protobuf 7 / Serve fix and must pass their own
+dependency and behavioral checks.
 
 ### Adding a new version combination
 
@@ -70,7 +73,7 @@ Version defaults are defined in the `Makefile` and can be overridden:
 make docker-build
 
 # Build with custom versions
-make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.56.1 CUDA_VERSION=13.0
+make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.58.0 CUDA_VERSION=13.0
 
 # Run image smoke tests
 make test
@@ -91,17 +94,17 @@ builds:
 
 ```bash
 # On an amd64 runner: build + push the amd64 image natively
-make docker-push-arch ARCH=amd64 IMG=<registry>/ray:py3.12-ray2.56.1-cuda13.0
+make docker-push-arch ARCH=amd64 IMG=<registry>/ray:py3.12-ray2.58.0-cuda13.0
 
 # On an arm64 runner: build + push the arm64 image natively
-make docker-push-arch ARCH=arm64 IMG=<registry>/ray:py3.12-ray2.56.1-cuda13.0
+make docker-push-arch ARCH=arm64 IMG=<registry>/ray:py3.12-ray2.58.0-cuda13.0
 
 # On any runner, after both of the above succeed: combine into one multi-arch
 # manifest at the canonical tag (pure registry metadata op — no build)
-make docker-push-manifest IMG=<registry>/ray:py3.12-ray2.56.1-cuda13.0
+make docker-push-manifest IMG=<registry>/ray:py3.12-ray2.58.0-cuda13.0
 ```
 
-`docker-push-arch` pushes to `$(IMG)-$(ARCH)` (e.g. `...:py3.12-ray2.56.1-cuda13.0-amd64`);
+`docker-push-arch` pushes to `$(IMG)-$(ARCH)` (e.g. `...:py3.12-ray2.58.0-cuda13.0-amd64`);
 `docker-push-manifest` reads those two arch-suffixed tags and publishes the
 combined manifest list at `$(IMG)` itself.
 
@@ -110,7 +113,7 @@ combined manifest list at `$(IMG)` itself.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PYTHON_VERSION` | `3.12` | Python version for the base image |
-| `RAY_VERSION` | `2.56.1` | Ray version to install via pip |
+| `RAY_VERSION` | `2.58.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
 | `ACR_REGISTRY` | *(required for `docker-push`)* | Backing ACR hostname for producer-side multi-arch pushes; consumers use MCR |
@@ -127,7 +130,7 @@ omits that suffix. The currently published 2.56.0 tag is:
 mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 ```
 
-The 2.56.1 build target in this source is not a claim that a corresponding
+The 2.58.0 build target in this source is not a claim that a corresponding
 consumer image is published. CLI defaults and chart image allowlists remain on
 the published version until the ADO release and coordinated consumer rollout.
 
@@ -165,7 +168,8 @@ Python protobuf 7.34 removed `FieldDescriptor.label` (see the
 [protobuf migration guide](https://protobuf.dev/support/migration/#fielddescriptorlabel)).
 [Ray 2.56.1](https://github.com/ray-project/ray/releases/tag/ray-2.56.1) fixes
 Serve's handling upstream by using `is_repeated` with a legacy fallback
-([upstream fix](https://github.com/ray-project/ray/pull/64592)). This image uses
-that patch release rather than a protobuf upper-bound workaround or a local
-Ray monkeypatch. The regression combination is Ray 2.56.1 with protobuf 7.36.0;
-verify the resolved versions and Serve behavior during release validation.
+([upstream fix](https://github.com/ray-project/ray/pull/64592)). This image's
+build targets from 2.56.1 onward include that fix rather than relying on a
+protobuf upper-bound workaround or a local Ray monkeypatch. The regression
+combination is Ray 2.56.1 with protobuf 7.36.0; verify the resolved versions
+and Serve behavior during release validation.
