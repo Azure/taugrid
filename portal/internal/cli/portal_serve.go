@@ -146,7 +146,10 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				costOpts.CostDatabase = costDatabase
 				nodeUtilOpts.Querier = querier
 				nodeUtilOpts.Cluster = clusterName
-				rdmaValidationOpts.Reader = rdmavalidation.KustoReader{Querier: querier}
+				rdmaValidationOpts.Reader = rdmavalidation.KustoReader{
+					Querier:   querier,
+					Ingestion: opts.kustoIngestion,
+				}
 				if historyEnabled {
 					runsOpts.History = runs.NewKustoHistoryReader(querier)
 				}

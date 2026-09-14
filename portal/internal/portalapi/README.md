@@ -131,11 +131,14 @@ network health. The summary card, cursor-paginated history, and
 **Failed**, **Running**, **Unknown**, and **Stale**. Missing, partial, malformed,
 unsupported, or unverified data never becomes Passed.
 
-The existing `TauExpMetrics` projection is the searchable index. Each validation
-phase emits a workspace/cluster/namespace-scoped `tau/run_status` marker with a
-versioned validation ID, schema, kind, and lifecycle state. Terminal rows add the
-bounded `rdma_validation/*` scalars and exact artifact URI/SHA linkage. The
-Portal selects the newest marker for each validation by retry-safe
+The existing experiment metrics path is the searchable index. The reader uses
+the configured `--kusto-ingestion` shape: `TauExpMetrics` for projection
+ingestion or `ExperimentMetrics` for repository-standard remote-write
+ingestion. Each validation phase emits a workspace/cluster/namespace-scoped
+`tau/run_status` marker with a versioned validation ID, schema, kind, and
+lifecycle state. Terminal rows add the bounded `rdma_validation/*` scalars and
+exact artifact URI/SHA linkage. The Portal selects the newest marker for each
+validation by retry-safe
 attempt/phase step, orders validations by event time plus validation ID, then
 derives historical status only when the terminal status, lifecycle, reason,
 namespace, and artifact linkage are internally consistent. Pagination cursors

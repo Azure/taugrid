@@ -59,8 +59,43 @@ func TestKustoReaderMapsTerminalSummaryFailClosed(t *testing.T) {
 	}
 	if !strings.Contains(query.query, "workspace_id == 'research'") ||
 		!strings.Contains(query.query, "cluster == 'cluster-a'") ||
-		!strings.Contains(query.query, "arg_max(step") {
+		!strings.Contains(query.query, "arg_max(step") ||
+		!strings.Contains(query.query, "let latest_validations = rdma") ||
+		!strings.Contains(query.query, "| sort by wall_time desc, validation_id desc\n| take 21") {
 		t.Fatalf("query is not scoped or ordered:\n%s", query.query)
+	}
+}
+
+func TestKustoReaderUsesConfiguredIngestionShape(t *testing.T) {
+	query := &fakeKustoQuerier{}
+	reader := KustoReader{Querier: query, Ingestion: "remote-write"}
+	if _, err := reader.List(context.Background(), Scope{
+		WorkspaceID: "research", Cluster: "cluster-a",
+	}, ListOptions{Limit: 20}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ExperimentMetrics",
+		"Labels['project']",
+		"Labels.workspace_id",
+		"source_cluster=tostring(Cluster)",
+	} {
+		if !strings.Contains(query.query, want) {
+			t.Fatalf("remote-write query missing %q:\n%s", want, query.query)
+		}
+	}
+	if strings.Contains(query.query, "TauExpMetrics") {
+		t.Fatalf("remote-write query contains projection table:\n%s", query.query)
+	}
+
+	query.query = ""
+	reader.Ingestion = "unsupported"
+	if _, err := reader.List(context.Background(), Scope{WorkspaceID: "research"}, ListOptions{Limit: 20}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported RDMA validation Kusto ingestion") {
+		t.Fatalf("List() error = %v, want unsupported ingestion", err)
+	}
+	if query.query != "" {
+		t.Fatalf("invalid ingestion executed query:\n%s", query.query)
 	}
 }
 

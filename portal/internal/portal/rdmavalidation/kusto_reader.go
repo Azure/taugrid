@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/taugrid/core/expkusto"
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kustoquery"
 	corevalidation "github.com/Azure/taugrid/core/rdmavalidation"
@@ -28,8 +29,9 @@ const (
 )
 
 type KustoReader struct {
-	Querier kustoquery.Querier
-	Now     func() time.Time
+	Querier   kustoquery.Querier
+	Ingestion string
+	Now       func() time.Time
 }
 
 func terminalLifecycleConsistent(lifecycle, historical string) bool {
@@ -177,7 +179,11 @@ func (r KustoReader) List(ctx context.Context, scope Scope, opts ListOptions) (P
 	if err != nil {
 		return Page{}, err
 	}
-	rows, err := r.Querier.Query(ctx, buildValidationQuery(scope, "", cursor, opts.Limit+1))
+	query, err := buildValidationQueryForIngestion(scope, "", cursor, opts.Limit+1, r.Ingestion)
+	if err != nil {
+		return Page{}, err
+	}
+	rows, err := r.Querier.Query(ctx, query)
 	if err != nil {
 		return Page{}, fmt.Errorf("query RDMA validations: %w", err)
 	}
@@ -219,7 +225,11 @@ func (r KustoReader) Get(ctx context.Context, scope Scope, validationID string) 
 	if r.Querier == nil {
 		return Detail{}, ErrUnavailable
 	}
-	rows, err := r.Querier.Query(ctx, buildValidationQuery(scope, validationID, Cursor{}, 1))
+	query, err := buildValidationQueryForIngestion(scope, validationID, Cursor{}, 1, r.Ingestion)
+	if err != nil {
+		return Detail{}, err
+	}
+	rows, err := r.Querier.Query(ctx, query)
 	if err != nil {
 		return Detail{}, fmt.Errorf("query RDMA validation %q: %w", validationID, err)
 	}
@@ -287,7 +297,32 @@ func (r KustoReader) now() time.Time {
 	return time.Now().UTC()
 }
 
-func buildValidationQuery(scope Scope, validationID string, cursor Cursor, limit int) string {
+func buildValidationQueryForIngestion(scope Scope, validationID string, cursor Cursor, limit int, ingestion string) (string, error) {
+	var source string
+	switch strings.ToLower(strings.TrimSpace(ingestion)) {
+	case "", "projection":
+		source = fmt.Sprintf(`%s
+| extend source_workspace='', source_cluster=''
+| extend experimentIdOf=iff(isempty(column_ifexists('experiment_id', '')), column_ifexists('question_id', ''), column_ifexists('experiment_id', ''))
+| project exported_at=todatetime(exported_at), ['project']=tostring(['project']),
+          experiment_id=tostring(experimentIdOf),
+          run_group_id=tostring(run_group_id), run_id=tostring(run_id),
+          metric_name=tostring(metric_name), step=tolong(step), wall_time=todatetime(wall_time),
+          value=todouble(value), tags=tostring(tags), source_workspace, source_cluster
+`, expkusto.DefaultProjectionTable)
+	case "remote-write":
+		source = fmt.Sprintf(`%s
+| project exported_at=todatetime(Timestamp), ['project']=tostring(Labels['project']),
+          experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''),
+          run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id),
+          metric_name=tostring(Labels.metric_name), step=tolong(Labels.step), wall_time=todatetime(Timestamp),
+          value=todouble(Value), tags=tostring(Labels.tags),
+          source_workspace=tostring(Labels.workspace_id), source_cluster=tostring(Cluster)
+`, expkusto.DefaultRemoteWriteTable)
+	default:
+		return "", fmt.Errorf("unsupported RDMA validation Kusto ingestion %q", ingestion)
+	}
+
 	var filters strings.Builder
 	fmt.Fprintf(&filters, "| where workspace_id == %s\n", kqlQuote(scope.WorkspaceID))
 	if scope.Cluster != "" {
@@ -306,34 +341,35 @@ func buildValidationQuery(scope Scope, validationID string, cursor Cursor, limit
 		)
 	}
 	return fmt.Sprintf(`let rdma = materialize(
-TauExpMetrics
+%s
 | extend rdma_tags=parse_json(tostring(tags))
-| extend workspace_id=tostring(rdma_tags[%s]),
-         cluster=tostring(rdma_tags[%s]),
+| extend workspace_id=coalesce(source_workspace, tostring(rdma_tags[%s])),
+         cluster=coalesce(source_cluster, tostring(rdma_tags[%s])),
          namespace=tostring(rdma_tags[%s]),
          validation_id=tostring(rdma_tags[%s]),
          validation_schema=tostring(rdma_tags[%s]),
          validation_kind=tostring(rdma_tags[%s]),
          lifecycle_state=tostring(rdma_tags[%s])
 | where validation_kind == %s
-%s| extend experimentIdOf=iff(isempty(column_ifexists('experiment_id', '')), column_ifexists('question_id', ''), column_ifexists('experiment_id', ''))
-| project exported_at=todatetime(exported_at), ['project']=tostring(['project']),
-          experiment_id=tostring(experimentIdOf),
+%s| project exported_at=todatetime(exported_at), ['project']=tostring(['project']),
+          experiment_id=tostring(experiment_id),
           run_group_id=tostring(run_group_id), run_id=tostring(run_id),
           metric_name=tostring(metric_name), step=tolong(step), wall_time=todatetime(wall_time),
           value=todouble(value), tags=tostring(tags), workspace_id, cluster, namespace,
           validation_id, validation_schema, validation_kind, lifecycle_state
 );
-let latest = rdma
+let latest_validations = rdma
 | where metric_name == %s
 | summarize arg_max(step, *) by workspace_id, validation_id
-%s| top %d by wall_time desc, validation_id desc;
+%s| sort by wall_time desc, validation_id desc
+| take %d;
 rdma
-| join kind=inner (latest | project workspace_id, validation_id) on workspace_id, validation_id
+| join kind=inner (latest_validations | project workspace_id, validation_id) on workspace_id, validation_id
 | project-away workspace_id1, validation_id1
 | summarize arg_max(step, *) by workspace_id, validation_id, metric_name
 | order by wall_time desc, validation_id desc, metric_name asc
 `,
+		source,
 		kqlQuote(exptelemetry.TauWorkspaceTag),
 		kqlQuote(exptelemetry.TauClusterTag),
 		kqlQuote(exptelemetry.TauNamespaceTag),
@@ -346,7 +382,7 @@ rdma
 		kqlQuote(exptelemetry.RunStatusMetricName),
 		cursorFilter,
 		limit,
-	)
+	), nil
 }
 
 func aggregateMetricRows(rows []kustoquery.Row, scope Scope) ([]validationAggregate, error) {
