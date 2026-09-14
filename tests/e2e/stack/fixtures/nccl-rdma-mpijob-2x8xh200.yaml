@@ -1,0 +1,158 @@
+# Repository-owned, operator-run NCCL/RDMA diagnostic. This is deliberately an
+# MPIJob rather than a Tau profile: it needs a pre-approved namespace security
+# accommodation for sshd, memlock capabilities, and root execution. It is
+# persisted suspended so Kueue alone controls when the operator may run it.
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: e2e-nccl-rdma-2x8xh200
+  namespace: {{STACK_NAMESPACE}}
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: taugrid-e2e
+    e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x8xh200
+    e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+    kueue.x-k8s.io/queue-name: {{STACK_LARGE_GPU_QUEUE}}
+spec:
+  slotsPerWorker: 8
+  runPolicy:
+    suspend: true
+    cleanPodPolicy: All
+    backoffLimit: 0
+    activeDeadlineSeconds: 900
+    ttlSecondsAfterFinished: 600
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        metadata:
+          labels:
+            e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x8xh200
+            e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+            e2e.taugrid.azure.com/role: launcher
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          containers:
+          - name: launcher
+            image: {{NCCL_RDMA_IMAGE}}
+            imagePullPolicy: IfNotPresent
+            securityContext:
+              # MPI operator SSH keys are mounted in root's home.
+              runAsUser: 0
+              allowPrivilegeEscalation: false
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+            command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              readonly output=/work/nccl-rdma-output.log
+              echo "# taugrid nccl-tests format: nccl-tests-2.16.0-table-v1"
+              set +e
+              mpirun \
+                --allow-run-as-root \
+                --bind-to none \
+                --map-by slot \
+                --hostfile /etc/mpi/hostfile \
+                --mca plm_rsh_args "-p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+                --mca btl ^openib \
+                -np 16 \
+                -x NCCL_DEBUG=INFO \
+                -x NCCL_IB_DISABLE=0 \
+                -x NCCL_NET_GDR_LEVEL=PHB \
+                /opt/nccl-tests/build/all_reduce_perf_mpi \
+                -b 8M -e 1G -f 2 -g 1 -w 5 -n 20 -c 1 \
+                2>&1 | tee "${output}"
+              mpi_status=${PIPESTATUS[0]}
+              set -e
+              [[ ${mpi_status} -eq 0 ]] || {
+                echo "MPI nccl-tests exited ${mpi_status}" >&2
+                exit "${mpi_status}"
+              }
+              grep -Eq 'NET/IB[[:space:]]*:[[:space:]]*Using' "${output}"
+              ! grep -Eq 'NET/Socket[[:space:]]*:[[:space:]]*Using' "${output}"
+              ! grep -Eiq 'No device found|Failed to open libibverbs|ibv_[[:alnum:]_]+.*(fail|error)|mlx5.*(fail|error)|verbs.*(fail|error)|unhandled system error' "${output}"
+              grep -Eq '^# Out of bounds values[[:space:]]*:[[:space:]]*0[[:space:]]+OK[[:space:]]*$' "${output}"
+              awk '
+                $1 ~ /^[0-9]+$/ && NF == 13 {
+                  if (($7 + 0) > 0 && ($8 + 0) > 0) found = 1
+                  if (($11 + 0) > 0 && ($12 + 0) > 0) found = 1
+                }
+                END { exit found ? 0 : 1 }
+              ' "${output}"
+              echo "NCCL_RDMA_CONFORMANCE_PASS"
+            volumeMounts:
+            - name: work
+              mountPath: /work
+          volumes:
+          - name: work
+            emptyDir: {}
+    Worker:
+      replicas: 2
+      restartPolicy: Never
+      template:
+        metadata:
+          labels:
+            e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x8xh200
+            e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+            e2e.taugrid.azure.com/role: worker
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          nodeSelector:
+            {{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x8xh200
+                    e2e.taugrid.azure.com/role: worker
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          - key: sku
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: worker
+            image: {{NCCL_RDMA_IMAGE}}
+            imagePullPolicy: IfNotPresent
+            securityContext:
+              # sshd owns the MPI remote process and memlock setup.
+              runAsUser: 0
+              allowPrivilegeEscalation: false
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+                add:
+                - IPC_LOCK
+                - SETGID
+                - SETUID
+                - SYS_CHROOT
+                - SYS_RESOURCE
+            resources:
+              requests:
+                nvidia.com/gpu: "8"
+                rdma/rdma_shared_device_a: "1"
+              limits:
+                nvidia.com/gpu: "8"
+                rdma/rdma_shared_device_a: "1"
+            volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+          volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi

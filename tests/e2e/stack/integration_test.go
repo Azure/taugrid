@@ -17,8 +17,10 @@
 package stack
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -33,6 +35,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -50,6 +55,9 @@ const (
 	rayJobNameTrainGPU    = "e2e-training-gpu"
 	rayJobNameNanoGPT     = "e2e-nanogpt-large-gpu"
 	rayJobNameFineWeb     = "e2e-fineweb-16xh200-ib"
+	ncclRDMAMPIJobName    = "e2e-nccl-rdma-2x8xh200"
+	ncclRDMAConfirmation  = "apply-fixed-nccl-rdma-mpijob"
+	ncclRDMAInvocationKey = "e2e.taugrid.azure.com/invocation"
 
 	gpuPodReadyTimeout      = 10 * time.Minute
 	gpuRayJobTimeout        = 20 * time.Minute
@@ -74,6 +82,12 @@ var localQueueGVR = schema.GroupVersionResource{
 	Resource: "localqueues",
 }
 
+var mpiJobGVR = schema.GroupVersionResource{
+	Group:    "kubeflow.org",
+	Version:  "v2beta1",
+	Resource: "mpijobs",
+}
+
 var stackNamespace = stackNamespaceForRun()
 
 func TestMain(m *testing.M) {
@@ -86,6 +100,17 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) int {
+	if os.Getenv("E2E_NCCL_RDMA") == "1" {
+		if os.Getenv("NCCL_RDMA_CONFIRM") != ncclRDMAConfirmation {
+			fmt.Fprintln(os.Stderr, "NCCL/RDMA diagnostic requires the explicit confirmation token before any cluster access")
+			return 1
+		}
+		if !regexp.MustCompile(`^nccl-rdma-[a-f0-9]{32}$`).MatchString(strings.TrimSpace(os.Getenv("NCCL_RDMA_INVOCATION"))) {
+			fmt.Fprintln(os.Stderr, "NCCL/RDMA diagnostic requires a unique nccl-rdma-<32 lowercase hex> invocation marker before any cluster access")
+			return 1
+		}
+	}
+
 	kubeClient, dynamicClient, err := e2e.BuildClients()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to build K8s clients: %v\n", err)
@@ -93,6 +118,10 @@ func runTests(m *testing.M) int {
 	}
 
 	ctx := context.Background()
+	if os.Getenv("E2E_NCCL_RDMA") == "1" && !stackUsesArgoCDQueue() {
+		fmt.Fprintln(os.Stderr, "NCCL/RDMA diagnostic requires an explicit pre-provisioned namespace and LocalQueue; refusing fixture-managed stack resources")
+		return 1
+	}
 	if largeGPUUsesManagerWorkloadAccess() && !stackUsesArgoCDQueue() {
 		fmt.Fprintln(os.Stderr, "manager workload access requires the pre-provisioned ArgoCD stack namespace and queue")
 		return 1
@@ -514,6 +543,335 @@ func TestRequireNanoGPTFlavorAssignments(t *testing.T) {
 
 func largeGPUUsesManagerWorkloadAccess() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("LARGE_GPU_WORKLOAD_ACCESS_MODE")), "manager")
+}
+
+// TestNCCLRDMA2x8H200 is an operator-owned diagnostic, not a standard Tau
+// profile. It is intentionally triple-gated and must be invoked only through
+// nccl_rdma_conformance.sh after its read-only preflight succeeds.
+func TestNCCLRDMA2x8H200(t *testing.T) {
+	if os.Getenv("AI_RUNTIME_E2E") != "1" {
+		t.Skip("set AI_RUNTIME_E2E=1 to run live e2e tests")
+	}
+	if os.Getenv("E2E_GPU") != "1" {
+		t.Skip("set E2E_GPU=1 to run GPU stack tests")
+	}
+	if os.Getenv("E2E_NCCL_RDMA") != "1" {
+		t.Skip("set E2E_NCCL_RDMA=1 to run the NCCL/RDMA MPIJob diagnostic")
+	}
+	require.Equal(t, ncclRDMAConfirmation, os.Getenv("NCCL_RDMA_CONFIRM"),
+		"NCCL/RDMA diagnostic requires the explicit harness confirmation token")
+	invocation := strings.TrimSpace(os.Getenv("NCCL_RDMA_INVOCATION"))
+	require.Regexp(t, `^nccl-rdma-[a-f0-9]{32}$`, invocation,
+		"NCCL/RDMA diagnostic requires the unique harness invocation marker")
+	require.True(t, stackUsesArgoCDQueue(), "NCCL/RDMA diagnostic requires a pre-existing namespace and LocalQueue")
+
+	tc := e2e.NewTestContext(t, context.Background())
+	recordOutcomeWithWorkflowSuffix(t, tc)
+
+	job, err := readNCCLRDMAMPIJobFixture()
+	require.NoError(t, err)
+
+	ownedUID, createErr := createNCCLRDMAMPIJob(tc, job, invocation)
+	if ownedUID != "" {
+		t.Cleanup(func() {
+			require.NoError(t, deleteOwnedNCCLRDMAMPIJobAndWait(tc, ownedUID, invocation),
+				"delete only the UID-owned NCCL/RDMA MPIJob and wait for its pods")
+		})
+	}
+	require.NoError(t, createErr)
+	suspended, found, err := unstructured.NestedBool(job.Object, "spec", "runPolicy", "suspend")
+	require.NoError(t, err)
+	require.True(t, found && suspended, "persisted MPIJob must remain suspended until Kueue admits it")
+
+	jobDeadline := time.Now().Add(13 * time.Minute)
+	ownedSelector := fmt.Sprintf("e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x8xh200,%s=%s", ncclRDMAInvocationKey, invocation)
+	tc.OnFailure(func() {
+		tc.DumpCRState(stackNamespace, mpiJobGVR, ncclRDMAMPIJobName)
+		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
+		tc.DumpPods(stackNamespace, ownedSelector)
+		tc.DumpEvents(stackNamespace)
+		tc.DumpPods("kueue-system", "")
+		tc.DumpPods("mpi-operator", "")
+	})
+
+	require.NoError(t, waitForMPIJobWorkloadAdmitted(tc, ownedUID, 2*time.Minute), "Kueue should admit the fixed MPIJob")
+	require.NoError(t, waitForMPIJobSuspendedState(tc, ownedUID, false, 30*time.Second),
+		"Kueue should unsuspend only the admitted MPIJob")
+
+	logCtx, cancelLogs := context.WithDeadline(tc.Ctx(), jobDeadline)
+	defer cancelLogs()
+	type logResult struct {
+		logs string
+		err  error
+	}
+	logsCh := make(chan logResult, 1)
+	go func() {
+		logs, err := followNCCLRDMALauncherLogs(logCtx, tc, invocation)
+		logsCh <- logResult{logs: logs, err: err}
+	}()
+
+	workerSelector := ownedSelector + ",e2e.taugrid.azure.com/role=worker"
+	require.NoError(t, tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, 2, 5*time.Minute),
+		"both eight-GPU MPI workers should be running and ready")
+	requireWorkersSplitEvenlyAcrossNodes(t, tc, workerSelector, 2, 1)
+
+	var captured logResult
+	select {
+	case captured = <-logsCh:
+	case <-logCtx.Done():
+		require.NoError(t, logCtx.Err(), "timed out streaming launcher logs")
+	}
+	require.NoError(t, captured.err, "stream launcher logs through MPIJob completion")
+	result, err := e2e.ParseNCCLRDMAOutput(captured.logs)
+	require.NoError(t, err, "launcher output must satisfy the pinned fail-closed NCCL/RDMA parser")
+	require.Positive(t, result.DataRows)
+	require.Positive(t, result.MaxAlgBW)
+	require.Positive(t, result.MaxBusBW)
+
+	remaining := time.Until(jobDeadline)
+	require.Positive(t, remaining, "MPIJob consumed the bounded diagnostic deadline before execution completed")
+	require.NoError(t, waitForMPIJobSucceeded(tc, ownedUID, remaining), "MPIJob should complete within the bounded diagnostic deadline")
+}
+
+func readNCCLRDMAMPIJobFixture() (*unstructured.Unstructured, error) {
+	data, err := e2e.ReadFixtureWithSubstitutions("stack/fixtures/nccl-rdma-mpijob-2x8xh200.yaml")
+	if err != nil {
+		return nil, err
+	}
+	job := &unstructured.Unstructured{}
+	if err := k8syaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(job); err != nil {
+		return nil, fmt.Errorf("decode NCCL/RDMA MPIJob fixture: %w", err)
+	}
+	return job, nil
+}
+
+func createNCCLRDMAMPIJob(tc *e2e.TestContext, job *unstructured.Unstructured, invocation string) (types.UID, error) {
+	if job.GetName() != ncclRDMAMPIJobName || job.GetNamespace() != stackNamespace {
+		return "", fmt.Errorf("NCCL/RDMA fixture identity changed unexpectedly: %s/%s", job.GetNamespace(), job.GetName())
+	}
+	if job.GetLabels()[ncclRDMAInvocationKey] != invocation {
+		return "", fmt.Errorf("NCCL/RDMA fixture invocation marker does not match the authorized invocation")
+	}
+	resource := tc.DynamicClient().Resource(mpiJobGVR).Namespace(stackNamespace)
+	_, err := resource.Get(tc.Ctx(), ncclRDMAMPIJobName, metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		if err == nil {
+			return "", fmt.Errorf("fixed MPIJob %s/%s already exists; refusing to replace or adopt it", stackNamespace, ncclRDMAMPIJobName)
+		}
+		return "", fmt.Errorf("check fixed MPIJob absence: %w", err)
+	}
+
+	if err := requireNCCLRDMANamespaceApproval(tc.Ctx(), tc.KubeClient(), stackNamespace); err != nil {
+		return "", err
+	}
+
+	created, createErr := resource.Create(tc.Ctx(), job, metav1.CreateOptions{})
+	if createErr == nil {
+		job.Object = created.Object
+		if created.GetUID() == "" {
+			return claimAmbiguousNCCLRDMACreate(tc.Ctx(), resource, invocation,
+				fmt.Errorf("create succeeded without returning an object UID"))
+		}
+		return created.GetUID(), nil
+	}
+	return claimAmbiguousNCCLRDMACreate(tc.Ctx(), resource, invocation, createErr)
+}
+
+func claimAmbiguousNCCLRDMACreate(
+	ctx context.Context,
+	resource dynamic.ResourceInterface,
+	invocation string,
+	createErr error,
+) (types.UID, error) {
+	current, getErr := resource.Get(ctx, ncclRDMAMPIJobName, metav1.GetOptions{})
+	if apierrors.IsNotFound(getErr) {
+		return "", fmt.Errorf("create MPIJob: %w", createErr)
+	}
+	if getErr != nil {
+		return "", fmt.Errorf("create MPIJob returned %v and ownership could not be determined: %w", createErr, getErr)
+	}
+	if current.GetLabels()[ncclRDMAInvocationKey] != invocation || current.GetUID() == "" {
+		return "", fmt.Errorf("create MPIJob returned %v and the object at %s/%s is not owned by invocation %s; refusing cleanup",
+			createErr, stackNamespace, ncclRDMAMPIJobName, invocation)
+	}
+	return current.GetUID(), fmt.Errorf("create MPIJob returned an ambiguous error after the owned object reached the API server: %w", createErr)
+}
+
+func requireNCCLRDMANamespaceApproval(ctx context.Context, kubeClient kubernetes.Interface, namespace string) error {
+	ns, err := kubeClient.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("re-read NCCL/RDMA namespace %s immediately before create: %w", namespace, err)
+	}
+	if ns.Labels["pod-security.kubernetes.io/enforce"] != "privileged" {
+		return fmt.Errorf("namespace %s no longer has pod-security.kubernetes.io/enforce=privileged; refusing create", namespace)
+	}
+	if ns.Annotations["tau.azure.com/nccl-rdma-diagnostic-approved"] != "true" {
+		return fmt.Errorf("namespace %s no longer has tau.azure.com/nccl-rdma-diagnostic-approved=true; refusing create", namespace)
+	}
+	return nil
+}
+
+func followNCCLRDMALauncherLogs(ctx context.Context, tc *e2e.TestContext, invocation string) (string, error) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		pods, err := tc.KubeClient().CoreV1().Pods(stackNamespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x8xh200,%s=%s,e2e.taugrid.azure.com/role=launcher",
+				ncclRDMAInvocationKey, invocation),
+		})
+		if err == nil && len(pods.Items) == 1 {
+			stream, streamErr := tc.KubeClient().CoreV1().Pods(stackNamespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{
+				Container: "launcher",
+				Follow:    true,
+			}).Stream(ctx)
+			if streamErr == nil {
+				defer stream.Close()
+				logs, readErr := io.ReadAll(stream)
+				return string(logs), readErr
+			}
+			lastErr = streamErr
+		} else if err != nil {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("launcher log stream unavailable before deadline: %w (last error: %v)", ctx.Err(), lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForMPIJobWorkloadAdmitted(tc *e2e.TestContext, uid types.UID, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(tc.Ctx(), 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		job, err := tc.DynamicClient().Resource(mpiJobGVR).Namespace(stackNamespace).Get(ctx, ncclRDMAMPIJobName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		if job.GetUID() != uid {
+			return false, fmt.Errorf("MPIJob UID changed from owned UID %s to %s", uid, job.GetUID())
+		}
+		workloads, err := tc.DynamicClient().Resource(e2e.WorkloadGVR).Namespace(stackNamespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+		for i := range workloads.Items {
+			workload := &workloads.Items[i]
+			owned := false
+			for _, ref := range workload.GetOwnerReferences() {
+				if ref.Kind == "MPIJob" && ref.Name == ncclRDMAMPIJobName && ref.UID == job.GetUID() {
+					owned = true
+					break
+				}
+			}
+			if !owned {
+				continue
+			}
+			conditions, _, err := unstructured.NestedSlice(workload.Object, "status", "conditions")
+			if err != nil {
+				return false, err
+			}
+			for _, raw := range conditions {
+				condition, ok := raw.(map[string]interface{})
+				if ok && condition["type"] == "Admitted" && condition["status"] == "True" {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
+}
+
+func waitForMPIJobSuspendedState(tc *e2e.TestContext, uid types.UID, want bool, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(tc.Ctx(), time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		job, err := tc.DynamicClient().Resource(mpiJobGVR).Namespace(stackNamespace).Get(ctx, ncclRDMAMPIJobName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		if job.GetUID() != uid {
+			return false, fmt.Errorf("MPIJob UID changed from owned UID %s to %s", uid, job.GetUID())
+		}
+		suspended, found, err := unstructured.NestedBool(job.Object, "spec", "runPolicy", "suspend")
+		if err != nil {
+			return false, err
+		}
+		return found && suspended == want, nil
+	})
+}
+
+func waitForMPIJobSucceeded(tc *e2e.TestContext, uid types.UID, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(tc.Ctx(), 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		job, err := tc.DynamicClient().Resource(mpiJobGVR).Namespace(stackNamespace).Get(ctx, ncclRDMAMPIJobName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		if job.GetUID() != uid {
+			return false, fmt.Errorf("MPIJob UID changed from owned UID %s to %s", uid, job.GetUID())
+		}
+		conditions, _, err := unstructured.NestedSlice(job.Object, "status", "conditions")
+		if err != nil {
+			return false, err
+		}
+		for _, raw := range conditions {
+			condition, ok := raw.(map[string]interface{})
+			if !ok || condition["status"] != "True" {
+				continue
+			}
+			switch condition["type"] {
+			case "Succeeded":
+				return true, nil
+			case "Failed":
+				return false, fmt.Errorf("MPIJob failed: reason=%v message=%v", condition["reason"], condition["message"])
+			}
+		}
+		return false, nil
+	})
+}
+
+func deleteOwnedNCCLRDMAMPIJobAndWait(tc *e2e.TestContext, uid types.UID, invocation string) error {
+	cleanupCtx, cancel := context.WithTimeout(tc.Ctx(), 3*time.Minute)
+	defer cancel()
+	resource := tc.DynamicClient().Resource(mpiJobGVR).Namespace(stackNamespace)
+	current, err := resource.Get(cleanupCtx, ncclRDMAMPIJobName, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	if err == nil {
+		if current.GetUID() != uid {
+			return fmt.Errorf("MPIJob %s/%s UID changed from owned UID %s to %s; refusing cleanup",
+				stackNamespace, ncclRDMAMPIJobName, uid, current.GetUID())
+		}
+
+		foreground := metav1.DeletePropagationForeground
+		err = resource.Delete(cleanupCtx, ncclRDMAMPIJobName, metav1.DeleteOptions{
+			PropagationPolicy: &foreground,
+			Preconditions:     &metav1.Preconditions{UID: &uid},
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	if err := wait.PollUntilContextTimeout(cleanupCtx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		current, err := resource.Get(ctx, ncclRDMAMPIJobName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err == nil && current.GetUID() != uid {
+			return true, nil
+		}
+		return false, err
+	}); err != nil {
+		return err
+	}
+	selector := fmt.Sprintf("e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x8xh200,%s=%s", ncclRDMAInvocationKey, invocation)
+	return wait.PollUntilContextTimeout(cleanupCtx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		pods, err := tc.KubeClient().CoreV1().Pods(stackNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return false, err
+		}
+		return len(pods.Items) == 0, nil
+	})
 }
 
 // TestFineWebRayTrain16xH200IB validates the live FineWeb InfiniBand conformance

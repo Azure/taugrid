@@ -11,6 +11,7 @@ on:
       - core/**
       - images/tau/**
       - images/tau-core-controller/**
+      - images/nccl-tests/**
       - images/taugrid-portal/**
       - portal/**
       - scripts/ci/validate-image-build-contract.sh
@@ -25,6 +26,7 @@ on:
       - core/**
       - images/tau/**
       - images/tau-core-controller/**
+      - images/nccl-tests/**
       - images/taugrid-portal/**
       - portal/**
       - scripts/ci/validate-image-build-contract.sh
@@ -59,16 +61,29 @@ jobs:
             make_directory: images/tau
             context: .
             dockerfile: images/tau/Dockerfile
+            smoke_command: --help
+            smoke_make: ""
           - name: TauGrid Portal
             image: taugrid-portal
             make_directory: images/taugrid-portal
             context: .
             dockerfile: images/taugrid-portal/Dockerfile
+            smoke_command: --help
+            smoke_make: ""
           - name: Tau core controller
             image: tau-core-controller
             make_directory: images/tau-core-controller
             context: .
             dockerfile: images/tau-core-controller/Dockerfile
+            smoke_command: --help
+            smoke_make: ""
+          - name: NCCL tests diagnostic
+            image: nccl-tests
+            make_directory: images/nccl-tests
+            context: .
+            dockerfile: images/nccl-tests/Dockerfile
+            smoke_command: ""
+            smoke_make: test
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,20 +97,51 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Prepare image build metadata
+        id: metadata
+        env:
+          IMAGE: ${{ matrix.image }}
+          MAKE_DIRECTORY: ${{ matrix.make_directory }}
+        run: |
+          if [[ "${IMAGE}" == "nccl-tests" ]]; then
+            {
+              echo "build_args<<EOF"
+              make --silent -C "${MAKE_DIRECTORY}" print-build-args
+              echo "EOF"
+              echo "platforms=$(make --silent -C "${MAKE_DIRECTORY}" print-platforms)"
+            } >>"${GITHUB_OUTPUT}"
+          else
+            {
+              echo "build_args="
+              echo "platforms=linux/amd64"
+            } >>"${GITHUB_OUTPUT}"
+          fi
+
       - name: Build image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          build-args: ${{ steps.metadata.outputs.build_args }}
           load: true
-          platforms: linux/amd64
+          platforms: ${{ steps.metadata.outputs.platforms }}
           pull: true
           push: false
           tags: taugrid/${{ matrix.image }}:validation
 
       - name: Smoke test image
-        run: docker run --rm "taugrid/${{ matrix.image }}:validation" --help
+        env:
+          IMAGE: ${{ matrix.image }}
+          MAKE_DIRECTORY: ${{ matrix.make_directory }}
+          SMOKE_COMMAND: ${{ matrix.smoke_command }}
+          SMOKE_MAKE: ${{ matrix.smoke_make }}
+        run: |
+          if [[ -n "${SMOKE_MAKE}" ]]; then
+            make -C "${MAKE_DIRECTORY}" "${SMOKE_MAKE}" IMG="taugrid/${IMAGE}:validation"
+          else
+            docker run --rm "taugrid/${IMAGE}:validation" "${SMOKE_COMMAND}"
+          fi
 
       - name: Scan image for critical vulnerabilities
         run: |

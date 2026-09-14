@@ -117,6 +117,7 @@ updates:
     directories:
       - "/images/adx-mon"
       - "/images/gpu-metrics-collector"
+      - "/images/nccl-tests"
       - "/images/ray"
       - "/images/tau-core-controller"
       - "/images/tau"

@@ -69,6 +69,83 @@ GPU_NODE_SELECTOR_VALUE='<gpu node selector value>' \
 go test -v -timeout 35m -run '^TestTauPyEntrypointRayJobGPU$' ./stack/
 ```
 
+### Manually gated NCCL/RDMA MPIJob diagnostic
+
+`TestNCCLRDMA2x8H200` is a repository-owned, operator-run diagnostic. It is not
+a standard Tau profile and is not called by a live workflow. The MPI operator
+needs root-owned SSH material, and GPUDirect RDMA needs an unlimited memlock
+limit plus `IPC_LOCK`/`SYS_RESOURCE`. OpenSSH privilege separation additionally
+needs `SETGID`, `SETUID`, and `SYS_CHROOT`; all other capabilities remain
+dropped, and the image test proves public-key authentication plus remote-command
+execution under that exact set. That smoke validates SSH and OpenSSH privilege
+separation only; effective memlock and RDMA behavior remain pending the
+authorized live run. Those requirements are deliberately
+outside normal Tau workload security policy, runconfig, ResourceProfiles, and
+CLI rendering.
+
+The target namespace and LocalQueue must already exist. An authorized platform
+owner must have approved the namespace accommodation by setting both:
+
+- `pod-security.kubernetes.io/enforce=privileged`
+- `tau.azure.com/nccl-rdma-diagnostic-approved=true`
+
+The harness only validates these values; it never creates or changes the
+namespace, queue, Pod Security labels, Kueue configuration, MPI operator, nodes,
+or RDMA devices. It also requires `kubeflow.org/v2beta1` MPIJob and Kueue's
+`kubeflow.org/mpijob` integration to be present. The preflight resolves the
+ConfigMap and key actually mounted by every Ready Kueue controller pod instead
+of accepting any matching ConfigMap. It then sends a non-persisting
+`--dry-run=server` probe with `suspend` deliberately omitted and requires Kueue
+admission to add `spec.runPolicy.suspend=true`. The real fixture independently
+sets `suspend: true`, so even a webhook race cannot persist a runnable MPIJob;
+the live test waits for Kueue admission and then for Kueue to unsuspend it.
+
+Build and publish `images/nccl-tests` only through an approved repository image
+producer. Contributor and diagnostic runs must not publish it. A live run
+requires exactly
+`mcr.microsoft.com/aks/ai-runtime/nccl-tests@sha256:<64 lowercase hex>`;
+mutable tags and every other repository are rejected.
+
+```bash
+cd tests/e2e
+export NCCL_RDMA_KUBECONFIG='<explicit kubeconfig path>'
+export NCCL_RDMA_KUBE_CONTEXT='<explicit context>'
+export E2E_STACK_NAMESPACE='<pre-existing approved namespace>'
+export E2E_STACK_LARGE_GPU_QUEUE='<pre-existing active LocalQueue>'
+export NCCL_RDMA_H200_SELECTOR='<key=value selecting exactly two H200 nodes>'
+export GPU_NODE_SELECTOR_KEY='<same selector key>'
+export GPU_NODE_SELECTOR_VALUE='<same selector value>'
+export NCCL_RDMA_E2E_IMAGE='mcr.microsoft.com/aks/ai-runtime/nccl-tests@sha256:<64 lowercase hex>'
+
+# Read-only: validates access, approved namespace accommodation, APIs, Kueue
+# controller configuration plus server-side admission dry-run, immutable image,
+# fixed-object absence, and two idle Ready H200 nodes with at least eight free
+# GPUs and one free RDMA device each.
+./stack/harness/nccl_rdma_conformance.sh preflight
+
+# Authorized mutation: create-only for e2e-nccl-rdma-2x8xh200, with no retry.
+# The harness generates a unique invocation marker; the Go test rechecks the
+# confirmation and namespace approval immediately before create.
+export NCCL_RDMA_CONFIRM=apply-fixed-nccl-rdma-mpijob
+./stack/harness/nccl_rdma_conformance.sh run
+```
+
+The run is bounded by the MPIJob's 900-second active deadline, zero retries,
+`cleanPodPolicy: All`, and a 600-second TTL, while the Go process has a 15-minute
+timeout. Pass requires all 16 ranks to run the MPI-enabled
+`all_reduce_perf_mpi`, a positive `NET/IB : Using` line, no
+`NET/Socket : Using` fallback or verbs/device failure, zero out-of-bounds
+values, at least one positive `algbw`/`busbw` row, and the exact
+`NCCL_RDMA_CONFORMANCE_PASS` sentinel. Any missing or conflicting evidence
+fails closed. Failure captures MPIJob, Workload, pod, event, Kueue, and MPI
+operator diagnostics. Normal, ambiguous-create, timeout, and signal cleanup
+first verifies the unique invocation marker, captures the object UID, and uses
+a client-go DELETE carrying both the UID precondition and Foreground propagation.
+The delete helper has a bounded client context and REST timeout; cleanup
+`kubectl` reads use bounded request timeouts; and the complete EXIT cleanup is
+capped at three minutes. It never force-applies, replaces, adopts, or name-only
+deletes an MPIJob.
+
 The runtime monitoring test accepts
 `AI_RUNTIME_GPU_MONITORING_<FAMILY>_SELECTOR` for `A10`, `A100`, `H100`,
 `H200`, `GB200`, and `GB300`. Configure only families present in the target
@@ -93,7 +170,7 @@ AI_RUNTIME_E2E=0 go test -count=1 ./...
 | `gpu-monitoring/` | 3 | DaemonSet exists, per-SKU scrape/rules ConfigMap shape, opinionated default alert rule inventory, sidecar wiring |
 | `managedgpu/` | 1 | Warm-cluster GPU smoke jobs on selected A10/A100 nodes |
 | `scheduler/` | 2 | Kubernetes scheduler honors Tau's GPU bin-packing preferred pod affinity and packs single-device plus 2-4 GPU same-node pods onto already-occupied nodes |
-| `stack/` | 7 | Full-stack Kueue → KubeRay → Ray Data **inference** pipeline, GPU variants, **training** SGD loop, Tau Python SDK CPU/GPU entrypoint submit tests, and manual 16-GPU Ray Train nanoGPT conformance |
+| `stack/` | 8 | Full-stack Kueue → KubeRay → Ray Data **inference** pipeline, GPU variants, **training** SGD loop, Tau Python SDK CPU/GPU entrypoint submit tests, manual 16-GPU Ray Train nanoGPT conformance, and the separately gated operator-owned NCCL/RDMA MPIJob diagnostic |
 
 The Tau Python SDK entrypoint smoke submits a CPU RayJob through
 `tau.train(entrypoint=...)` and verifies a staged pure-Python/PyTorch-shaped
