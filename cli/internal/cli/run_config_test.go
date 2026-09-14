@@ -16,6 +16,7 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -81,6 +82,39 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("portal Ray + Stellar dry-run missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T) {
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "")
+	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "")
+	config := filepath.Clean("../../../examples/market-policy/tau.yaml")
+	options, _, err := loadRunConfig(config)
+	if err != nil {
+		t.Fatalf("load market-policy config: %v", err)
+	}
+	options.workspace = "default"
+	options.metricsSessionID = "market-policy-test"
+	runtime, err := resolveMetricsOffload(
+		options,
+		"market-policy",
+		"default",
+		"test-context",
+		options.output,
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: options.dataPVC},
+	)
+	if err != nil {
+		t.Fatalf("resolve market-policy metrics offload: %v", err)
+	}
+	if got, want := runtime.Image, "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2"; got != want {
+		t.Fatalf("metrics offload image = %q, want %q", got, want)
+	}
+	if got, want := runtime.Out, "/var/run/tau/metrics-offload"; got != want {
+		t.Fatalf("metrics offload out = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(runtime.History, ","), "/data/market-policy/metrics-history-attempt-0/*.jsonl"; got != want {
+		t.Fatalf("metrics history = %q, want %q", got, want)
 	}
 }
 
@@ -997,26 +1031,16 @@ func TestRunConfigPythonBuildArtifactsDryRun(t *testing.T) {
 	}
 }
 
-func TestRunConfigRejectsEmbeddedTelemetryPolicy(t *testing.T) {
-	dir := t.TempDir()
-	config := filepath.Join(dir, "tau.yaml")
-	if err := os.WriteFile(config, []byte(`name: telemetry-out-of-scope
+func TestRunConfigRejectsMutableMetricsOffloadImage(t *testing.T) {
+	err := executeTauConfigError(t, `name: mutable-metrics-image
 engine: rayjob
 entrypoint: train.py
 metrics:
   offload:
-    image: example.com/tau:20260618.1
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := NewRoot()
-	var out, stderr bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"run", "--config", config, "--dry-run=client"})
-	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "field image not found in type runconfig.MetricsOffload") {
-		t.Fatalf("expected embedded metrics offload policy error, got %v\nstderr:\n%s", err, stderr.String())
+    image: example.com/taugrid-portal:latest
+`)
+	if err == nil || !strings.Contains(err.Error(), "must not use the unpinned :latest tag") {
+		t.Fatalf("expected mutable metrics offload image error, got %v", err)
 	}
 }
 
@@ -1264,6 +1288,8 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`metrics.offload.image` | supported",
+		"`metrics.offload.out` | supported",
 		"`run.ttl_seconds_after_finished` | direct-only",
 		"`storage.image_assets.name` | direct-only",
 		"`storage.image_assets.image` | direct-only",
@@ -1548,11 +1574,53 @@ func newConnectedRunConfigTestCommand(t *testing.T, args []string) *cobra.Comman
 	if configPath == "" {
 		t.Fatal("connected run config test requires --config")
 	}
-	installClusterProfileClientForTest(t, runConfigProfileForTest(t, configPath))
+	resolvedProfile := runConfigProfileForTest(t, configPath)
+	installClusterProfileClientForTest(t, resolvedProfile)
+	workspaceName := "test-workspace"
+	if cfg, err := runconfig.Load(configPath); err == nil {
+		workspaceName = firstNonEmpty(cfg.Policy.Workspace, workspaceName)
+	}
+	namespace := "test-workspace"
+	if len(resolvedProfile.LocalQueues) > 0 {
+		namespace = resolvedProfile.LocalQueues[0].Namespace
+	}
+	for i, arg := range runArgs {
+		switch {
+		case (arg == "--namespace" || arg == "-n") && i+1 < len(runArgs):
+			namespace = runArgs[i+1]
+		case strings.HasPrefix(arg, "--namespace="):
+			namespace = strings.TrimPrefix(arg, "--namespace=")
+		}
+	}
+	queue := firstNonEmpty(resolvedProfile.DefaultLocalQueue, "jobqueue")
 	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
-		ContextName: "test-context",
-		Namespace:   "test-workspace",
+		Workspace:    workspaceName,
+		WorkspaceUID: "workspace-uid",
+		ContextName:  "test-context",
+		Namespace:    namespace,
+		Queue:        queue,
 	}}
+	originalWorkspaceFetcher := fetchRunWorkspace
+	fetchRunWorkspace = func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
+		return tauworkspace.Workspace{
+			Metadata: tauworkspace.ObjectMeta{
+				Name:       workspaceName,
+				UID:        "workspace-uid",
+				Generation: 1,
+			},
+			Spec: tauworkspace.WorkspaceSpec{
+				Target: tauworkspace.WorkspaceTarget{Namespace: namespace},
+				Queue:  queue,
+			},
+			Status: tauworkspace.WorkspaceStatus{
+				Phase:              "Ready",
+				ObservedGeneration: 1,
+				Target:             tauworkspace.WorkspaceTargetStatus{ResolvedNamespace: namespace},
+				Queue:              tauworkspace.WorkspaceQueueStatus{LocalQueue: queue},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { fetchRunWorkspace = originalWorkspaceFetcher })
 	cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer {
 		return ensurer
 	})
@@ -1623,6 +1691,8 @@ metrics:
   history: [metrics-history-attempt-*/*.jsonl]
   offload:
     enabled: true
+    image: registry.example.com/taugrid-portal:20260903.1
+    out: /var/run/tau/metrics-offload
 experiment:
   project: pretraining
   title: bounded run
@@ -1634,7 +1704,11 @@ experiment:
 	if err != nil {
 		t.Fatalf("loadRunConfig: %v", err)
 	}
-	if !options.metricsOffloadEnabled || len(options.metricsHistory) != 1 || options.metricsHistory[0] != "metrics-history-attempt-*/*.jsonl" {
+	if !options.metricsOffloadEnabled ||
+		options.metricsOffloadImage != "registry.example.com/taugrid-portal:20260903.1" ||
+		options.metricsOffloadOut != "/var/run/tau/metrics-offload" ||
+		len(options.metricsHistory) != 1 ||
+		options.metricsHistory[0] != "metrics-history-attempt-*/*.jsonl" {
 		t.Fatalf("unexpected direct metrics dispatch options: %+v", options)
 	}
 }

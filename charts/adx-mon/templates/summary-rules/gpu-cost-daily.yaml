@@ -11,26 +11,29 @@ spec:
   database: {{ .Values.summaryRules.items.gpuCostDaily.database | quote }}
   table: {{ .Values.summaryRules.items.gpuCostDaily.table | quote }}
   interval: {{ .Values.summaryRules.items.gpuCostDaily.interval | quote }}
+  {{- with .Values.summaryRules.items.gpuCostDaily.ingestionDelay }}
+  ingestionDelay: {{ . | quote }}
+  {{- end }}
   {{- with .Values.summaryRules.items.gpuCostDaily.criteria }}
   criteria:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   body: |
-    // Daily GPU cost aggregation: rolls up hourly cost data by namespace and SKU.
+    // Daily GPU cost aggregation: rolls up fractional hourly allocation data.
     // Reads from GpuCostHourly (output of gpu-cost-hourly SummaryRule).
-    // Each row in GpuCostHourly represents exactly 1 hour of usage (bin(Timestamp, 1h)),
-    // so sum(gpu_count) = total GPU-hours and sum(hourly_cost) = total cost.
+    // gpu_count is fractional GPU-hours observed in each hourly bin.
     GpuCostHourly
     | where Timestamp between (_startTime .. _endTime)
+    | extend workspace = coalesce(workspace, namespace)
     | summarize
         total_gpu_hours = sum(gpu_count),
         total_cost = sum(hourly_cost),
         avg_utilization = avg(avg_util),
-        avg_rate = avg(rate_per_gpu_hour),
-        distinct_pods = dcount(pod),
-        distinct_nodes = dcount(node)
-        by bin(Timestamp, 1d), namespace, sku
+        avg_rate = avg(rate_per_gpu_hour)
+        by bin(Timestamp, 1d), Cluster, workspace, namespace, sku
+    // Pod/node identity is intentionally removed from workspace-hour rows.
+    | extend distinct_pods = long(null), distinct_nodes = long(null)
     | project Timestamp, namespace, sku,
         total_gpu_hours, total_cost, avg_utilization, avg_rate,
-        distinct_pods, distinct_nodes
+        distinct_pods, distinct_nodes, Cluster, workspace
 {{- end }}

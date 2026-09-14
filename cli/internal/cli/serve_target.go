@@ -21,20 +21,15 @@ type serveTarget struct {
 	Namespace    string
 	Queue        string
 	ClusterQueue string
-	Team         string
 }
 
-// resolveServeTarget selects the namespace and its platform-managed default
-// LocalQueue. Researchers may disambiguate the namespace, but queue selection
-// remains Kueue configuration rather than a serve flag.
-//
-// The resolver reads the kueue.x-k8s.io/default-local-queue namespace label,
-// verifies the LocalQueue exists, and checks that the current identity can
-// create the serving resource there.
-//
-// Client and server dry-runs use this same connected resolution path as apply.
-// Serving cannot safely render a queue or authorization placeholder.
-func resolveServeTarget(ctx context.Context, r queueresolve.RawRunner, namespace, workloadResource string) (serveTarget, string, error) {
+// resolveServeTarget resolves the platform-managed default LocalQueue for
+// callers that do not have an active repository workspace placement.
+func resolveServeTarget(
+	ctx context.Context,
+	r queueresolve.RawRunner,
+	namespace, workloadResource string,
+) (serveTarget, string, error) {
 	target := serveTarget{
 		Namespace: strings.TrimSpace(namespace),
 	}
@@ -58,8 +53,42 @@ func resolveServeTarget(ctx context.Context, r queueresolve.RawRunner, namespace
 		Namespace:    selected.Namespace,
 		Queue:        selected.QueueName,
 		ClusterQueue: selected.ClusterQueue,
-		Team:         selected.Team,
 	}, "", nil
+}
+
+// resolveServeWorkspaceTarget verifies the exact namespace-local queue assigned
+// by the active TauWorkspace. Client and server dry-runs use the same connected
+// path as apply; namespace labels are not trusted as workspace identity.
+func resolveServeWorkspaceTarget(
+	ctx context.Context,
+	r queueresolve.RawRunner,
+	namespace, queue, expectedClusterQueue, workloadResource string,
+) (serveTarget, error) {
+	target := serveTarget{
+		Namespace: strings.TrimSpace(namespace),
+		Queue:     strings.TrimSpace(queue),
+	}
+	selected, err := queueresolve.ResolveExactQueue(ctx, r, queueresolve.ResolveAccessibleQueueOptions{
+		Namespace:        target.Namespace,
+		QueueName:        target.Queue,
+		WorkloadResource: workloadResource,
+	})
+	if err != nil {
+		return serveTarget{}, fmt.Errorf("resolve TauWorkspace LocalQueue: %w", err)
+	}
+	if expected := strings.TrimSpace(expectedClusterQueue); expected != "" && selected.ClusterQueue != expected {
+		return serveTarget{}, fmt.Errorf(
+			"TauWorkspace expects LocalQueue %q to use ClusterQueue %q, but it uses %q",
+			selected.QueueName,
+			expected,
+			selected.ClusterQueue,
+		)
+	}
+	return serveTarget{
+		Namespace:    selected.Namespace,
+		Queue:        selected.QueueName,
+		ClusterQueue: selected.ClusterQueue,
+	}, nil
 }
 
 func serveWorkloadResource(kind string) string {

@@ -114,7 +114,11 @@ func TestListWorkloadsParsesOwnerReferences(t *testing.T) {
 	// surface those owner names so the Portal can join by ownership.
 	const raw = `{"items":[
       {"metadata":{"name":"rayjob-portal-e2e-abcde","namespace":"ray",
-        "ownerReferences":[{"name":"portal-e2e"},{"name":""}]},
+        "ownerReferences":[
+          {"name":"portal-e2e","uid":"rayjob-uid","controller":true},
+          {"name":"observer","uid":"observer-uid","controller":false},
+          {"name":""}
+        ]},
        "spec":{"queueName":"team-a"},
        "status":{"conditions":[{"type":"Admitted","status":"True"}]}}
     ]}`
@@ -125,8 +129,11 @@ func TestListWorkloadsParsesOwnerReferences(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d workloads, want 1", len(got))
 	}
-	if len(got[0].Owners) != 1 || got[0].Owners[0] != "portal-e2e" {
-		t.Fatalf("owners = %v, want [portal-e2e] (empty names dropped)", got[0].Owners)
+	if len(got[0].Owners) != 2 || got[0].Owners[0] != "portal-e2e" || got[0].Owners[1] != "observer" {
+		t.Fatalf("owners = %v, want non-empty owner names preserved", got[0].Owners)
+	}
+	if len(got[0].OwnerUIDs) != 1 || got[0].OwnerUIDs[0] != "rayjob-uid" {
+		t.Fatalf("owner UIDs = %v, want [rayjob-uid]", got[0].OwnerUIDs)
 	}
 }
 

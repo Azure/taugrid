@@ -1,0 +1,60 @@
+suite: historical log connection
+templates:
+  - templates/log-connection.yaml
+tests:
+  - it: does not publish an unconfigured connection
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: publishes the explicit typed connection in the release namespace
+    release:
+      namespace: custom-system
+    set:
+      logging.enabled: true
+      logging.endpoint: https://actual-adx.example
+      logging.cluster: source-worker
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tau-log-connection
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+      - equal:
+          path: data["connection.json"]
+          value: '{"cluster":"source-worker","database":"Logs","endpoint":"https://actual-adx.example","schema":"tau.logs.connection.v1"}'
+  - it: does not infer logging configuration from Portal
+    set:
+      logging.enabled: true
+      portal.kusto.endpoint: https://portal-adx.example
+      portal.kusto.database: Metrics
+      portal.cluster: portal-cluster
+    asserts:
+      - failedTemplate:
+          errorMessage: logging.endpoint is required when logging.enabled=true
+  - it: requires a telemetry source rather than guessing from the endpoint
+    set:
+      logging.enabled: true
+      logging.endpoint: https://actual-adx.example
+    asserts:
+      - failedTemplate:
+          errorMessage: logging.cluster must match the telemetry source Cluster when logging.enabled=true
+  - it: rejects an empty database
+    set:
+      logging.enabled: true
+      logging.endpoint: https://actual-adx.example
+      logging.cluster: source-worker
+      logging.database: " "
+    asserts:
+      - failedTemplate:
+          errorMessage: logging.database is required when logging.enabled=true
+  - it: preserves explicitly configured custom destinations
+    set:
+      logging.enabled: true
+      logging.endpoint: " https://actual-adx.example "
+      logging.cluster: 'worker-"east"'
+      logging.database: Archive
+    asserts:
+      - equal:
+          path: data["connection.json"]
+          value: '{"cluster":"worker-\"east\"","database":"Archive","endpoint":"https://actual-adx.example","schema":"tau.logs.connection.v1"}'

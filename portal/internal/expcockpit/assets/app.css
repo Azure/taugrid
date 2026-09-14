@@ -98,6 +98,78 @@ body.embedded .boot-shell {
   min-height: 100vh;
 }
 
+.dashboard-slot {
+  display: contents;
+}
+
+.focused-series-controls [hidden] {
+  display: none;
+}
+
+.full-record,
+.sample-data {
+  min-width: 0;
+  margin-block: 8px;
+}
+
+.full-record {
+  grid-column: 1 / -1;
+}
+
+.full-record summary,
+.sample-data summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.full-record pre {
+  max-height: 28rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.record-browser,
+.table-preview {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.record-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-block: 10px;
+}
+
+.record-pagination button {
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.record-pagination button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.record-pagination button:focus-visible,
+.sample-data summary:focus-visible,
+.full-record summary:focus-visible {
+  outline: 2px solid var(--aim-primary);
+  outline-offset: 2px;
+}
+
+.label-metric-list small {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
 .stellar-landing-app {
   min-height: 100vh;
   padding: 48px;
@@ -1387,10 +1459,6 @@ body.embedded .landing-shell {
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
-.warning-list.compact {
-  gap: 5px;
-}
-
 .researcher-fact {
   display: grid;
   gap: 3px;
@@ -1420,15 +1488,13 @@ body.embedded .landing-shell {
   white-space: nowrap;
 }
 
-.comparability-strip,
-.warning-list {
+.comparability-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
 
-.comparability-hint,
-.warning-list span {
+.comparability-hint {
   padding: 5px 8px;
   border: 1px solid #e4eaf3;
   border-radius: 999px;
@@ -1444,30 +1510,10 @@ body.embedded .landing-shell {
   color: #17633d;
 }
 
-.comparability-hint.warning,
-.warning-list span {
+.comparability-hint.warning {
   border-color: #f1d6a8;
   background: #fff8ec;
   color: #8a5a14;
-}
-
-.section-summary {
-  display: grid;
-  gap: 3px;
-  padding: 10px;
-  border: 1px solid #e8edf5;
-  border-radius: 9px;
-  background: #fbfdff;
-}
-
-.section-summary strong {
-  color: #2e3347;
-  font-size: 13px;
-}
-
-.section-summary span {
-  color: #606986;
-  font-size: 12px;
 }
 
 .research-metric-grid {
@@ -1476,7 +1522,6 @@ body.embedded .landing-shell {
   gap: 9px;
 }
 
-.validation-grid,
 .error-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -1831,8 +1876,7 @@ body.embedded .landing-shell {
   min-height: 210px;
 }
 
-.metric-card-state,
-.metric-value-tile {
+.metric-card-state {
   display: grid;
   min-height: 116px;
   place-items: center;
@@ -1845,30 +1889,12 @@ body.embedded .landing-shell {
   text-align: center;
 }
 
-.metric-card.large .metric-card-state,
-.metric-card.large .metric-value-tile {
+.metric-card.large .metric-card-state {
   min-height: 270px;
 }
 
-.metric-card.uniform .metric-card-state,
-.metric-card.uniform .metric-value-tile {
+.metric-card.uniform .metric-card-state {
   min-height: 210px;
-}
-
-.metric-value-tile {
-  gap: 4px;
-  align-content: center;
-}
-
-.metric-value-tile strong {
-  color: #2e3347;
-  font-size: 24px;
-  font-variant-numeric: tabular-nums;
-}
-
-.metric-value-tile span {
-  color: #606986;
-  font-size: 11px;
 }
 
 .metric-card-density {
@@ -3027,7 +3053,6 @@ button.zoom-pill {
   .decision-strip.compact.secondary,
   .repro-grid,
   .research-metric-grid,
-  .validation-grid,
   .error-grid,
   .label-card-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -3065,9 +3090,7 @@ button.zoom-pill {
   .dashboard-large-chart,
   .dashboard-medium-chart,
   .metric-card.large .metric-card-state,
-  .metric-card.large .metric-value-tile,
-  .metric-card.uniform .metric-card-state,
-  .metric-card.uniform .metric-value-tile {
+  .metric-card.uniform .metric-card-state {
     min-height: 150px;
   }
 

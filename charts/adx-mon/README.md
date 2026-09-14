@@ -254,10 +254,14 @@ Available alerts: `gpuXidCritical`, `nodeNotReady`, `eccUncorrectable`, `nvlinkD
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `summaryRules.enabled` | Deploy SummaryRule CRDs | `true` |
-| `summaryRules.items.<name>.enabled` | Enable individual rule | `true` |
+| `summaryRules.items.<name>.enabled` | Enable individual rule | varies |
 | `summaryRules.items.<name>.interval` | Rollup interval | varies |
 
 Available rules: `gpuUtilizationHourly`, `gpuCostHourly`, `gpuCostDaily`, `namespaceCostMonthly`, `nodeResourcesHourly`.
+
+`gpuCostDaily` and `namespaceCostMonthly` default to disabled. They are derived,
+append-only rollups; adx-mon v0.3.0 cannot safely order dependent rules when a
+rule generation changes. The Portal reads `GpuCostHourly` directly.
 
 ### GPU Cost Rates
 

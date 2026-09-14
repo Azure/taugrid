@@ -22,6 +22,13 @@ tau-core-controller:
     defaultWorkloadProfileNamespace: ${workspace_namespace}
 
 taugrid-core:
+%{ if adx_enabled }
+  logging:
+    enabled: true
+    endpoint: ${adx_endpoint}
+    database: Logs
+    cluster: ${cluster_name}
+%{ endif }
   portal:
     enabled: true
     workloadNamespace: ${workspace_namespace}

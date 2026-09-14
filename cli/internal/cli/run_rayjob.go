@@ -160,6 +160,8 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 
 	capture := buildRayJobCaptureMetadata(ctx, captureCommand, name, namespace, o.image, o.workers, o.gpusPerWorker, dataPVC, o.configHash)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
+	capture = addLaunchMetadata(capture, topologyHolder.GPUClass, selected.Selection.Profile.Name, o.script, o.launcher, o.workers, o.gpusPerWorker)
+	capture = addLaunchGPUResources(capture, normalizedGPUResourceMode, o.migProfile)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
 	if o.submissionID != "" {
@@ -201,6 +203,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 		if err != nil {
 			return err
 		}
+		metricsRuntime.Tags = addLaunchTag(metricsRuntime.Tags, capture)
 		annotations[experiment.AnnotationExperimentSource] = "stellar"
 		annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}

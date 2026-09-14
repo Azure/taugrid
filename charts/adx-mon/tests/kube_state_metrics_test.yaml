@@ -147,6 +147,13 @@ tests:
             key: CriticalAddonsOnly
             operator: Exists
 
+  - it: KSM Deployment exposes TauWorkspace labels on namespaces
+    template: charts/kube-state-metrics/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metric-labels-allowlist=namespaces=[tau.azure.com/workspace],pods=[app.kubernetes.io/name,app.kubernetes.io/component,ray.io/is-ray-node],nodes=[node.kubernetes.io/instance-type,kubernetes.azure.com/agentpool]"
+
   # ── RBAC ──────────────────────────────────────────────────────────
 
   - it: KSM Role includes Kueue CRD RBAC rules
@@ -164,6 +171,7 @@ tests:
             verbs:
               - list
               - watch
+
 
   # ── Sharding ──────────────────────────────────────────────────────
 

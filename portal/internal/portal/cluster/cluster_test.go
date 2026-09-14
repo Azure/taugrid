@@ -79,23 +79,25 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 
 	// First GPU: healthy, values mapped through.
 	g0 := snap.GPUs[0]
-	if g0.Instance != "node-0" || g0.GPU != "0" || !g0.Healthy {
+	if g0.Instance != "node-0" || g0.GPU != "0" || g0.Healthy == nil || !*g0.Healthy {
 		t.Fatalf("gpu0 = %#v, want node-0/0 healthy", g0)
 	}
-	if g0.UtilizationPct != 91 || g0.TemperatureCelsius != 63 || g0.MemoryUsedMB != 70000 {
+	if g0.UtilizationPct == nil || *g0.UtilizationPct != 91 ||
+		g0.TemperatureCelsius == nil || *g0.TemperatureCelsius != 63 ||
+		g0.MemoryUsedMB == nil || *g0.MemoryUsedMB != 70000 {
 		t.Fatalf("gpu0 metrics = %#v", g0)
 	}
-	if g0.CorrectableRemappedRows != 2 {
+	if g0.CorrectableRemappedRows == nil || *g0.CorrectableRemappedRows != 2 {
 		t.Fatalf("gpu0 correctable = %v, want 2", g0.CorrectableRemappedRows)
 	}
 
 	// Third GPU: numeric-string utilization parsed, unhealthy via row_remap_failure.
 	g2 := snap.GPUs[2]
-	if g2.UtilizationPct != 77 {
+	if g2.UtilizationPct == nil || *g2.UtilizationPct != 77 {
 		t.Fatalf("gpu2 utilization = %v, want 77 (from string)", g2.UtilizationPct)
 	}
-	if g2.Healthy {
-		t.Fatal("gpu2 healthy = true, want false (row_remap_failure > 0)")
+	if g2.Healthy == nil || *g2.Healthy {
+		t.Fatal("gpu2 healthy must be false (row_remap_failure > 0)")
 	}
 }
 
@@ -143,11 +145,30 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		"namespace == @'team-alpha'",
 		"instance == @'node-7'",
 		"modelName == @'H100'",
+		"let latest_attribution = samples",
+		"arg_max(Timestamp, Value) by Cluster, instance, gpu, metric",
+		"arg_max(Timestamp, namespace, pod, modelName) by Cluster, instance, gpu",
 		"evaluate pivot(metric",
+		"join kind=leftouter latest_attribution on Cluster, instance, gpu",
 		"@'uncorrectable_remapped_rows'",
 	} {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("KQL missing %q:\n%s", want, kql)
+		}
+	}
+}
+
+func TestBuildKQLUsesPhysicalGPUIdentity(t *testing.T) {
+	kql := buildKQL(Options{})
+	if strings.Contains(kql, "by Cluster, instance, gpu, modelName, namespace, pod, metric") {
+		t.Fatalf("KQL still treats workload attribution as GPU identity:\n%s", kql)
+	}
+	for _, want := range []string{
+		"by Cluster, instance, gpu, metric",
+		"by Cluster, instance, gpu",
+	} {
+		if !strings.Contains(kql, want) {
+			t.Fatalf("KQL missing physical GPU grouping %q:\n%s", want, kql)
 		}
 	}
 }

@@ -42,6 +42,7 @@ type RunProfileRecord struct {
 	ImageDigest string
 	TauCommand  string
 	ResultURI   string
+	Launch      *experiment.Launch
 
 	Cluster          string
 	Namespace        string
@@ -103,6 +104,7 @@ func ExperimentRunProfile(s Snapshot, c CostProfile, opts ExperimentRunDataOptio
 		ImageDigest: cleanProfileValue(annotationOrDefault(s, experiment.AnnotationImageDigest, "")),
 		TauCommand:  cleanProfileValue(annotationOrDefault(s, experiment.AnnotationTauCommand, "")),
 		ResultURI:   cleanProfileValue(annotationOrDefault(s, workloadmeta.AnnotationResultPath, "")),
+		Launch:      experiment.ParseLaunch(annotationOrDefault(s, workloadmeta.AnnotationLaunch, "")),
 
 		Cluster:          opts.Cluster,
 		Namespace:        cleanProfileValue(annotationOrDefault(s, experiment.AnnotationNamespace, s.Namespace)),

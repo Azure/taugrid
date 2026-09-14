@@ -239,6 +239,13 @@ tests:
           path: data["config.toml"]
           pattern: '"\^etcd\.\*"'
 
+  - it: collector keeps namespace labels for workspace chargeback
+    template: collector/configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.toml"]
+          pattern: '"\^kube_namespace\.\*"'
+
   - it: DaemonSet carve-out is data-driven (emptying exclude re-drops the families)
     template: collector/configmap.yaml
     set:

@@ -1,0 +1,4 @@
+interface:
+  display_name: "TauGrid"
+  short_description: "Run and diagnose TauGrid AI workloads safely"
+  default_prompt: "Use $taugrid to inspect my workload and choose the correct authoring, validation, and execution steps."

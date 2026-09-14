@@ -101,6 +101,41 @@ exit 1
 	}
 }
 
+func TestRunStatusWorkloadSelectorsPreserveSafeNameFallback(t *testing.T) {
+	jobUID := "kueue.x-k8s.io/job-uid=job-new"
+	runName := workloadmeta.LabelJob + "=train-001"
+	tests := []struct {
+		name string
+		snap Snapshot
+		rj   RayJob
+		want []string
+	}{
+		{
+			name: "recreated job falls back after new uid",
+			snap: Snapshot{JobFound: true, JobUID: "job-new"},
+			want: []string{jobUID, runName},
+		},
+		{
+			name: "same-name job and rayjob stay uid-only",
+			snap: Snapshot{JobFound: true, JobUID: "job-new"},
+			rj:   RayJob{Found: true, UID: "ray-stale"},
+			want: []string{jobUID},
+		},
+		{
+			name: "missing uid still uses run name",
+			snap: Snapshot{JobFound: true},
+			want: []string{runName},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runStatusWorkloadSelectors(tt.snap, tt.rj, "train-001"); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("selectors = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFetchManagerCleanup_UnionsAllWorkloadSelectorsAndDedupesNames(t *testing.T) {
 	runner := statusRawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
 		switch strings.Join(args, " ") {

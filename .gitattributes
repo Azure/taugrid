@@ -1,0 +1,2 @@
+# AKS Bash waiters run on Linux CI and Windows development hosts.
+terraform/aks/*.sh text eol=lf

@@ -11,6 +11,8 @@ tests:
   # --- gpu-utilization-hourly ---
   - it: renders gpu-utilization-hourly SummaryRule when enabled
     template: summary-rules/gpu-utilization-hourly.yaml
+    set:
+      global.clusterName: cluster-a
     asserts:
       - hasDocuments:
           count: 1
@@ -38,6 +40,15 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "percentile\\(Value, 95\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "labels.hostname"
+      - matchRegex:
+          path: spec.body
+          pattern: "let local_cluster = \"cluster-a\""
+      - matchRegex:
+          path: spec.body
+          pattern: "where Cluster == local_cluster"
 
   - it: does not render gpu-utilization-hourly when disabled
     template: summary-rules/gpu-utilization-hourly.yaml
@@ -48,8 +59,10 @@ tests:
           count: 0
 
   # --- gpu-cost-hourly ---
-  - it: renders gpu-cost-hourly with inline datatable and cost calculation
+  - it: renders gpu-cost-hourly with fractional allocation cost calculation
     template: summary-rules/gpu-cost-hourly.yaml
+    set:
+      global.clusterName: cluster-a
     asserts:
       - hasDocuments:
           count: 1
@@ -62,6 +75,9 @@ tests:
       - equal:
           path: spec.interval
           value: "1h"
+      - equal:
+          path: spec.ingestionDelay
+          value: "2m"
       - matchRegex:
           path: spec.body
           pattern: "datatable\\(sku:string, rate_per_gpu_hour:real\\)"
@@ -73,10 +89,61 @@ tests:
           pattern: "hourly_cost"
       - matchRegex:
           path: spec.body
-          pattern: "gpu_count \\* rate_per_gpu_hour"
+          pattern: "bin\\(Timestamp, 1m\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "sum\\(minute_gpus\\) / 60\\.0"
+      - matchRegex:
+          path: spec.body
+          pattern: "peak_gpu_count = max\\(minute_workspace_gpus\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubePodStatusPhase"
+      - matchRegex:
+          path: spec.body
+          pattern: "phase in \\(\"Pending\", \"Running\", \"Unknown\"\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "join kind=inner active_pod_minutes"
+      - matchRegex:
+          path: spec.body
+          pattern: "resource startswith \"nvidia_com_mig_\""
+      - matchRegex:
+          path: spec.body
+          pattern: "mig_gpcs / 7\\.0"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubePodResourceclaimInfo"
+      - matchRegex:
+          path: spec.body
+          pattern: "claim_template == \"full-gpu\""
+      - matchRegex:
+          path: spec.body
+          pattern: "\\^ds-\\(\\[0-9\\]\\+\\)gpus\\$"
+      - matchRegex:
+          path: spec.body
+          pattern: "schema_version = 4"
+      - matchRegex:
+          path: spec.body
+          pattern: "let local_cluster = \"cluster-a\""
+      - matchRegex:
+          path: spec.body
+          pattern: "where Cluster == local_cluster"
       - matchRegex:
           path: spec.body
           pattern: "_startTime \\.\\. _endTime"
+      - matchRegex:
+          path: spec.body
+          pattern: "hourly_cost, Cluster, workspace, peak_gpu_count"
+      - matchRegex:
+          path: spec.body
+          pattern: "KubeNamespaceLabels"
+      - matchRegex:
+          path: spec.body
+          pattern: "label_tau_azure_com_workspace"
+      - matchRegex:
+          path: spec.body
+          pattern: "coalesce\\(tostring\\(labels.exported_namespace\\), tostring\\(labels.namespace\\)\\)"
 
   - it: includes GPU rates from values in the datatable
     template: summary-rules/gpu-cost-hourly.yaml
@@ -99,6 +166,8 @@ tests:
   # --- gpu-cost-daily ---
   - it: renders gpu-cost-daily with total_cost column
     template: summary-rules/gpu-cost-daily.yaml
+    set:
+      summaryRules.items.gpuCostDaily.enabled: true
     asserts:
       - hasDocuments:
           count: 1
@@ -111,6 +180,9 @@ tests:
       - equal:
           path: spec.interval
           value: "24h"
+      - equal:
+          path: spec.ingestionDelay
+          value: "10m"
       - matchRegex:
           path: spec.body
           pattern: "GpuCostHourly"
@@ -120,6 +192,9 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "_startTime \\.\\. _endTime"
+      - notMatchRegex:
+          path: spec.body
+          pattern: "dcount\\("
 
   - it: does not render gpu-cost-daily when disabled
     template: summary-rules/gpu-cost-daily.yaml
@@ -130,8 +205,10 @@ tests:
           count: 0
 
   # --- namespace-cost-monthly ---
-  - it: renders namespace-cost-monthly with total_cost and pod_day_count
+  - it: renders namespace-cost-monthly with delayed cost aggregation
     template: summary-rules/namespace-cost-monthly.yaml
+    set:
+      summaryRules.items.namespaceCostMonthly.enabled: true
     asserts:
       - hasDocuments:
           count: 1
@@ -144,6 +221,9 @@ tests:
       - equal:
           path: spec.interval
           value: "24h"
+      - equal:
+          path: spec.ingestionDelay
+          value: "20m"
       - matchRegex:
           path: spec.body
           pattern: "GpuCostDaily"
@@ -153,9 +233,15 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "pod_day_count"
+      - notMatchRegex:
+          path: spec.body
+          pattern: "sum\\(distinct_pods\\)"
       - matchRegex:
           path: spec.body
           pattern: "Timestamp = bin"
+      - matchRegex:
+          path: spec.body
+          pattern: "Cluster, workspace, namespace, sku"
 
   - it: does not render namespace-cost-monthly when disabled
     template: summary-rules/namespace-cost-monthly.yaml

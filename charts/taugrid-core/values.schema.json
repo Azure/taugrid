@@ -3,8 +3,34 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "endpoint": { "type": "string" },
+        "database": { "type": "string" },
+        "cluster": { "type": "string" }
+      }
+    },
     "global": {
       "type": "object",
+      "properties": {
+        "adx": {
+          "type": "object",
+          "properties": {
+            "queryConnection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "endpoint": { "type": "string" },
+                "database": { "type": "string" },
+                "clientID": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
       "additionalProperties": true
     }
   }

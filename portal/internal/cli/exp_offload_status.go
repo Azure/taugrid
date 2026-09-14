@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,10 +126,21 @@ func readMetricsCompletionStatus(path string) (metricsCompletionStatus, error) {
 	if path == "" {
 		return status, nil
 	}
-	raw, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return metricsCompletionStatus{}, err
 	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return metricsCompletionStatus{}, err
+	}
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		return metricsCompletionStatus{}, err
+	}
+	// Retrying the same sentinel must not create a new terminal observation.
+	status.CompletedAt = info.ModTime().UTC().Format(time.RFC3339Nano)
 	rawText := strings.TrimSpace(string(raw))
 	if rawText == "" {
 		return status, nil
@@ -139,6 +151,9 @@ func readMetricsCompletionStatus(path string) (metricsCompletionStatus, error) {
 		}
 	} else {
 		status.State = rawText
+	}
+	if strings.TrimSpace(status.CompletedAt) == "" {
+		status.CompletedAt = info.ModTime().UTC().Format(time.RFC3339Nano)
 	}
 	normalized, err := normalizeMetricsCompletionState(status.State)
 	if err != nil {
@@ -165,12 +180,19 @@ func metricsCompletionStatusRow(store *expstore.Store, opts metricsOffloadOption
 		return metricsRunStatusRow{}, fmt.Errorf("completion status completed_at must be RFC3339: %w", err)
 	}
 	manifest := store.Manifest()
+	sourceStoreID := result.SourceStoreID
+	if sourceStoreID == "" {
+		sourceStoreID, err = store.ADXSourceStoreID()
+		if err != nil {
+			return metricsRunStatusRow{}, err
+		}
+	}
 	tags, err := metricsCompletionStatusTags(status, opts.Tags)
 	if err != nil {
 		return metricsRunStatusRow{}, err
 	}
 	return metricsRunStatusRow{
-		SourceStoreID: result.SourceStoreID,
+		SourceStoreID: sourceStoreID,
 		Project:       firstNonEmpty(opts.Project, manifest.Project, "default"),
 		ExperimentID:  metricsOffloadExperimentID(opts),
 		RunGroupID:    firstNonEmpty(opts.RunGroupID, "default"),

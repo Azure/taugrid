@@ -119,6 +119,8 @@ test:
 	@docker run --rm $(IMG) python3 -c "import ray.serve" 2>&1 && \
 		echo "PASS: ray[serve] - ray.serve importable" || \
 		{ echo "FAIL: ray[serve] - could not import ray.serve"; exit 1; }
+	@echo "=== Verifying Python dependency consistency ==="
+	@docker run --rm $(IMG) python3 -m pip check
 	@echo "=== Verifying wget is GNU Wget 1.x (not wget2) ==="
 	@docker run --rm $(IMG) wget --version 2>&1 | grep -q "^GNU Wget " && \
 		echo "PASS: GNU Wget 1.x is installed" || \

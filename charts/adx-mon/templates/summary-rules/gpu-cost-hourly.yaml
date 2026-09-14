@@ -2,7 +2,9 @@
 apiVersion: adx-mon.azure.com/v1
 kind: SummaryRule
 metadata:
-  name: {{ include "adx-mon.fullname" . }}-gpu-cost-hourly
+  # Bump the suffix whenever allocation semantics change. Replacing the CRD
+  # preserves delayed first-run windowing; updating one in place does not.
+  name: {{ include "adx-mon.fullname" . }}-gpu-cost-hourly-v4
   namespace: {{ include "adx-mon.namespace" . }}
   labels:
     {{- include "adx-mon.labels" . | nindent 4 }}
@@ -11,55 +13,140 @@ spec:
   database: {{ .Values.summaryRules.items.gpuCostHourly.database | quote }}
   table: {{ .Values.summaryRules.items.gpuCostHourly.table | quote }}
   interval: {{ .Values.summaryRules.items.gpuCostHourly.interval | quote }}
+  {{- with .Values.summaryRules.items.gpuCostHourly.ingestionDelay }}
+  ingestionDelay: {{ . | quote }}
+  {{- end }}
   {{- with .Values.summaryRules.items.gpuCostHourly.criteria }}
   criteria:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   body: |
-    // Hourly GPU cost calculation: GPU requests × per-GPU-hour rate by namespace.
+    // Hourly GPU cost calculation: sampled GPU allocations × per-GPU-hour rate.
     // GPU rates are inlined as a datatable (sourced from values.yaml cost.gpuRates).
     // ConfigMap gpu-rates.json serves as GitOps documentation; KQL cannot read K8s resources.
-    // Cost model: allocation-based (gpu_count × rate). Utilization tracked for analysis.
+    // gpu_count stores fractional GPU-hours for compatibility with the existing table.
     let gpu_rates = datatable(sku:string, rate_per_gpu_hour:real) [
     {{- range $sku, $rate := .Values.cost.gpuRates }}
         "{{ $sku }}", {{ $rate }},
     {{- end }}
     ];
-    // NOTE: Allocation-based costing — a pod is billed for the full hour in which
-    // it appears, regardless of actual runtime within that hour. A 5-minute pod
-    // requesting 1 GPU is charged 1 GPU-hour. This is intentional; for fractional-
-    // hour weighting, sample coverage logic would be needed.
-    let gpu_requests = database("{{ .Values.adx.metricsDatabase }}").KubePodContainerResourceRequests
+    // Count only scheduled, non-terminal pods. KSM retains resource requests for
+    // completed pods until deletion, so requests alone would continue billing.
+    let local_cluster = "{{ include "adx-mon.clusterName" . }}";
+    let active_pod_minutes = database("{{ .Values.adx.metricsDatabase }}").KubePodStatusPhase
     | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
     | extend labels = parse_json(Labels)
-    | where tostring(labels.resource) == "nvidia_com_gpu"
     | extend namespace = tostring(labels.namespace),
+             pod = tostring(labels.pod),
+             phase = tostring(labels.phase)
+    | where Value > 0 and phase in ("Pending", "Running", "Unknown")
+    | summarize by bin(Timestamp, 1m), Cluster, namespace, pod;
+    // Collapse repeated scrapes into one allocation observation per minute.
+    // MIG profiles encode their GPC share in the resource name (for example,
+    // nvidia.com/mig-1g.18gb is 1/7 of a currently supported 7g physical GPU).
+    let device_plugin_request_minutes = database("{{ .Values.adx.metricsDatabase }}").KubePodContainerResourceRequests
+    | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
+    | extend labels = parse_json(Labels)
+    | extend resource = tostring(labels.resource),
+             namespace = tostring(labels.namespace),
              pod = tostring(labels.pod),
              node = tostring(labels.node),
              container = tostring(labels.container)
-    | summarize container_gpus = max(Value) by bin(Timestamp, 1h), namespace, pod, node, container
-    | summarize gpu_count = sum(container_gpus) by Timestamp, namespace, pod, node;
+    | where resource == "nvidia_com_gpu" or resource startswith "nvidia_com_mig_"
+    | where isnotempty(node)
+    | extend mig_gpcs = toreal(extract(@"^nvidia_com_mig_([0-9]+)g_", 1, resource))
+    | extend gpu_fraction = iff(resource == "nvidia_com_gpu", 1.0, mig_gpcs / 7.0)
+    | where isnotnull(gpu_fraction) and gpu_fraction > 0.0 and gpu_fraction <= 1.0
+    | summarize container_gpus = max(Value * gpu_fraction) by bin(Timestamp, 1m), Cluster, namespace, pod, node, container
+    | join kind=inner active_pod_minutes on Timestamp, Cluster, namespace, pod
+    | summarize gpu_count = sum(container_gpus) by Timestamp, Cluster, namespace, pod, node;
+    // TauGrid's DRA contract uses full-gpu and ds-<N>gpus claim templates.
+    // Count each claim once, even when it is referenced by multiple running pods.
+    let dra_pod_claim_minutes = database("{{ .Values.adx.metricsDatabase }}").KubePodResourceclaimInfo
+    | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.namespace),
+             pod = tostring(labels.pod),
+             resourceclaim = tostring(labels.resourceclaim_name),
+             claim_template = tostring(labels.resourceclaim_template_name)
+    | where Value > 0 and isnotempty(resourceclaim)
+    | extend gpu_count = case(
+        claim_template == "full-gpu", 1.0,
+        claim_template matches regex @"^ds-[0-9]+gpus$",
+            toreal(extract(@"^ds-([0-9]+)gpus$", 1, claim_template)),
+        0.0)
+    | where gpu_count > 0
+    | summarize gpu_count = max(gpu_count)
+        by bin(Timestamp, 1m), Cluster, namespace, pod, resourceclaim
+    | join kind=inner active_pod_minutes on Timestamp, Cluster, namespace, pod;
+    let pod_nodes = database("{{ .Values.adx.metricsDatabase }}").KubePodInfo
+    | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.namespace),
+             pod = tostring(labels.pod),
+             node = tostring(labels.node)
+    | where isnotempty(node)
+    | summarize arg_max(Timestamp, node) by bin(Timestamp, 1m), Cluster, namespace, pod;
+    let dra_request_minutes = dra_pod_claim_minutes
+    | join kind=inner pod_nodes on Timestamp, Cluster, namespace, pod
+    | summarize arg_max(pod, node, gpu_count)
+        by Timestamp, Cluster, namespace, resourceclaim
+    | project Timestamp, Cluster, namespace, pod, node, gpu_count;
+    let gpu_request_minutes = union device_plugin_request_minutes, dra_request_minutes;
     let node_skus = database("{{ .Values.adx.metricsDatabase }}").KubeNodeLabels
     | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
     | extend labels = parse_json(Labels)
     | extend node = tostring(labels.node),
              sku = tostring(labels.label_node_kubernetes_io_instance_type)
-    | summarize arg_max(Timestamp, sku) by node;
+    | summarize arg_max(Timestamp, sku) by Cluster, node;
+    let namespace_workspaces = database("{{ .Values.adx.metricsDatabase }}").KubeNamespaceLabels
+    | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
+    | extend labels = parse_json(Labels)
+    | extend namespace = tostring(labels.namespace),
+             workspace = tostring(labels.label_tau_azure_com_workspace)
+    | summarize arg_max(Timestamp, workspace) by Cluster, namespace;
     let gpu_util_by_pod = database("{{ .Values.adx.metricsDatabase }}").DCGMFIDEVGPUUTIL
     | where Timestamp between (_startTime .. _endTime)
+    | where Cluster == local_cluster
     | extend labels = parse_json(Labels)
-    | extend namespace = tostring(labels.exported_namespace),
+    | extend namespace = coalesce(tostring(labels.exported_namespace), tostring(labels.namespace)),
              pod = tostring(labels.pod)
     | where isnotempty(pod)
-    | summarize avg_util = avg(Value) by bin(Timestamp, 1h), namespace, pod;
-    gpu_requests
-    | join kind=leftouter node_skus on node
-    | join kind=leftouter gpu_util_by_pod on Timestamp, namespace, pod
+    | summarize avg_util = avg(Value) by bin(Timestamp, 1m), Cluster, namespace, pod;
+    let minute_allocations = materialize(gpu_request_minutes
+    | join kind=leftouter node_skus on Cluster, node
+    | join kind=leftouter namespace_workspaces on Cluster, namespace
+    | join kind=leftouter gpu_util_by_pod on Timestamp, Cluster, namespace, pod
     | join kind=leftouter gpu_rates on sku
     | extend avg_util = coalesce(avg_util, 0.0),
+             workspace = coalesce(workspace, namespace),
              sku = coalesce(sku, "unknown"),
              rate_per_gpu_hour = coalesce(rate_per_gpu_hour, 0.0)
-    | extend hourly_cost = gpu_count * rate_per_gpu_hour
+    | summarize minute_gpus = sum(gpu_count),
+        minute_cost = sum(gpu_count * rate_per_gpu_hour),
+        avg_util = avg(avg_util),
+        rate_per_gpu_hour = avg(rate_per_gpu_hour)
+        by Timestamp, Cluster, workspace, namespace, sku);
+    let workspace_hourly_peaks = minute_allocations
+    | summarize minute_workspace_gpus = sum(minute_gpus)
+        by Timestamp, Cluster, workspace, namespace
+    | summarize peak_gpu_count = max(minute_workspace_gpus)
+        by Timestamp = bin(Timestamp, 1h), Cluster, workspace, namespace;
+    minute_allocations
+    | summarize gpu_count = sum(minute_gpus) / 60.0,
+        hourly_cost = sum(minute_cost) / 60.0,
+        avg_util = avg(avg_util),
+        rate_per_gpu_hour = avg(rate_per_gpu_hour)
+        by Timestamp = bin(Timestamp, 1h), Cluster, workspace, namespace, sku
+    | join kind=inner workspace_hourly_peaks on Timestamp, Cluster, workspace, namespace
+    | extend pod = "", node = "", schema_version = 4
     | project Timestamp, namespace, pod, node, sku, gpu_count, avg_util,
-        rate_per_gpu_hour, hourly_cost
+        rate_per_gpu_hour, hourly_cost, Cluster, workspace, peak_gpu_count,
+        schema_version
 {{- end }}

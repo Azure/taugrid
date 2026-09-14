@@ -59,7 +59,11 @@ const (
 // cluster state. A job with none of these signals is a normal
 // single-cluster submission and IsMultiKueue returns false.
 func (s Snapshot) IsMultiKueue() bool {
-	if s.JobManagedBy == multiKueueManagedBy || s.RayJob.ManagedBy == multiKueueManagedBy {
+	if s.JobFound {
+		if s.JobManagedBy == multiKueueManagedBy {
+			return true
+		}
+	} else if primaryRayJob(s).ManagedBy == multiKueueManagedBy || s.JobManagedBy == multiKueueManagedBy {
 		return true
 	}
 	for _, w := range s.Workloads {

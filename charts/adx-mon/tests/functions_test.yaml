@@ -36,10 +36,10 @@ tests:
           pattern: "Labels.Hostname"
       - matchRegex:
           path: spec.body
-          pattern: "tostring\\(Namespace\\)"
+          pattern: "Labels.hostname"
       - matchRegex:
           path: spec.body
-          pattern: "tostring\\(Pod\\)"
+          pattern: "Labels.namespace"
       - isNotEmpty:
           path: metadata.labels
 

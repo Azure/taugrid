@@ -10,6 +10,33 @@ tau.azure.com/component: taugrid-core
 {{- end }}
 
 {{/*
+Resolve the intentionally supplied cluster query connection, not adx-mon credentials.
+An absent connection preserves the store-less/degraded Portal install.
+*/}}
+{{- define "taugrid-core.adxQueryConnection" -}}
+{{- $adx := default dict (default dict .Values.global).adx -}}
+{{- $connection := default dict $adx.queryConnection -}}
+{{- $endpoint := trim (default "" $connection.endpoint) -}}
+{{- $database := trim (default "" $connection.database) -}}
+{{- $clientID := trim (default "" $connection.clientID) -}}
+{{- if or $endpoint $database $clientID -}}
+{{- if not (and $endpoint $database $clientID) -}}
+{{- fail "global.adx.queryConnection requires endpoint, database, and clientID together (a separately provisioned ADX Viewer identity); leave all three empty to disable inheritance" -}}
+{{- end -}}
+{{- $url := urlParse $endpoint -}}
+{{- if or (ne (get $url "scheme") "https") (not (get $url "hostname")) (get $url "userinfo") (get $url "query") (get $url "fragment") (not (has (get $url "path") (list "" "/"))) -}}
+{{- fail "global.adx.queryConnection.endpoint must be an HTTPS ADX query endpoint without credentials, path, query, or fragment" -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" $clientID) -}}
+{{- fail "global.adx.queryConnection.clientID must be the UUID client ID of a separately provisioned ADX Viewer identity" -}}
+{{- end -}}
+{{- dict "endpoint" $endpoint "database" $database "clientID" $clientID | toJson -}}
+{{- else -}}
+{}
+{{- end -}}
+{{- end }}
+
+{{/*
 Whether `lookup` can see the cluster at all.
 
 `lookup` returns empty both for an absent object and for every render that has

@@ -81,10 +81,13 @@ ENV CUDA_HOME="/usr/local/cuda"
 # find the stub during flashinfer JIT compilation.
 ENV LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
 
+# Ray 2.56.1 includes the upstream Serve fix for protobuf 7; no local
+# protobuf upper bound or Ray monkeypatch is needed.
 RUN pip install --no-cache-dir \
     "ray[default]==${RAY_VERSION}" \
     "ray[data]==${RAY_VERSION}" \
-    "ray[serve]==${RAY_VERSION}"
+    "ray[serve]==${RAY_VERSION}" \
+    && pip check
 
 # Run as non-root for security (nonroot user is built into the base image)
 USER nonroot:nonroot

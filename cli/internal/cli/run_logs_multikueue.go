@@ -25,17 +25,18 @@ import (
 )
 
 type runLogsOptions struct {
-	Namespace     string
-	Follow        bool
-	Tail          int
-	Container     string
-	AllContainers bool
-	Previous      bool
-	Timestamps    bool
-	Prefix        bool
-	KustoCluster  string
-	KustoEndpoint string
-	KustoDatabase string
+	Namespace       string
+	SystemNamespace string
+	Follow          bool
+	Tail            int
+	Container       string
+	AllContainers   bool
+	Previous        bool
+	Timestamps      bool
+	Prefix          bool
+	KustoCluster    string
+	KustoEndpoint   string
+	KustoDatabase   string
 }
 
 type runLogsHooks struct {
@@ -47,6 +48,7 @@ type runLogsHooks struct {
 	jobPodsExist            func(context.Context, kubeRawRunner, string, string) (bool, error)
 	resolveMultiKueueWorker func(context.Context, kubeRawRunner, string) (multiKueueWorkerRef, error)
 	queryADXLogs            func(context.Context, kustoLogsQuery) ([]kustoquery.Row, error)
+	resolveLogConnection    func(context.Context) (logConnection, error)
 }
 
 type multiKueueWorkerRef struct {
@@ -269,6 +271,14 @@ func normalizeRunLogsHooks(r *kube.Runner, opts runLogsOptions, name string, hoo
 	if hooks.queryADXLogs == nil {
 		hooks.queryADXLogs = queryADXLogs
 	}
+	if hooks.resolveLogConnection == nil {
+		hooks.resolveLogConnection = func(ctx context.Context) (logConnection, error) {
+			if r == nil {
+				return logConnection{}, fmt.Errorf("no Kubernetes connection available for log discovery")
+			}
+			return fetchLogConnection(ctx, r, opts.SystemNamespace)
+		}
+	}
 	return hooks
 }
 
@@ -411,18 +421,10 @@ func localTerminalRayJobLogs(ctx context.Context, name string, opts runLogsOptio
 	if opts.Follow {
 		return "", fmt.Errorf("--follow is not supported after a RayJob's head pod is deleted; tau queries ADX and does not implement cursor-based polling or de-duplication for centrally offloaded driver logs")
 	}
-	missing := make([]string, 0, 3)
-	if strings.TrimSpace(opts.KustoCluster) == "" {
-		missing = append(missing, "--kusto-cluster")
-	}
-	if strings.TrimSpace(opts.KustoEndpoint) == "" {
-		missing = append(missing, "--kusto-endpoint")
-	}
-	if strings.TrimSpace(opts.KustoDatabase) == "" {
-		missing = append(missing, "--kusto-database")
-	}
-	if len(missing) > 0 {
-		return "", fmt.Errorf("head pod was deleted and terminal local RayJob logs require %s to query ADX Logs.ContainerLogs", strings.Join(missing, ", "))
+	var err error
+	opts, err = resolveTerminalLogConnection(ctx, opts, hooks)
+	if err != nil {
+		return "", err
 	}
 	rayClusterName := strings.TrimSpace(snap.RayJob.RayClusterName)
 	if rayClusterName == "" {

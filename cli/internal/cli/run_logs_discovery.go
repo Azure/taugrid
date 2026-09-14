@@ -326,10 +326,11 @@ func defaultRunLogsDiscoveryHooks(cmd *cobra.Command, connection *runLifecycleCo
 				return runLogsRoute{}, err
 			}
 			route := runLogsRoute{
-				Workspace:   connection.workspace,
-				KubeContext: resolvedContext,
-				Kubeconfig:  activeKubeconfigPath(),
-				Namespace:   namespace,
+				Workspace:       connection.workspace,
+				SystemNamespace: connection.systemNamespace,
+				KubeContext:     resolvedContext,
+				Kubeconfig:      activeKubeconfigPath(),
+				Namespace:       namespace,
 			}
 			restore()
 			return route, nil
@@ -373,6 +374,9 @@ func defaultRunLogsDiscoveryHooks(cmd *cobra.Command, connection *runLifecycleCo
 		},
 		execute: func(ctx context.Context, out io.Writer, route runLogsRoute, name string, opts runLogsOptions) error {
 			opts.Namespace = route.Namespace
+			opts.SystemNamespace = systemNamespaceForConnection(cmd, workspaceconnection.ActiveConnection{
+				SystemNamespace: route.SystemNamespace,
+			})
 			r := kube.NewWithKubeconfig(route.KubeContext, route.Kubeconfig)
 			if err := validateCachedRunLogsRoute(ctx, r, route); err != nil {
 				return err

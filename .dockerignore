@@ -2,3 +2,7 @@
 cli/bin/
 **/*.test
 .git/
+portal/frontend/node_modules/
+portal/frontend/*.tsbuildinfo
+portal/bin/
+portal/internal/portalapi/assets/

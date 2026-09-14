@@ -236,7 +236,9 @@ type Metrics struct {
 }
 
 type MetricsOffload struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled bool   `yaml:"enabled"`
+	Image   string `yaml:"image"`
+	Out     string `yaml:"out"`
 }
 
 // Experiment names where a run belongs in the identity hierarchy:
@@ -610,6 +612,22 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 			return fmt.Errorf("metrics.history[%d] %q: relative paths must not escape storage.output", i, raw)
 		}
 	}
+	if image := strings.TrimSpace(m.Offload.Image); image != "" {
+		if image != m.Offload.Image {
+			return fmt.Errorf("metrics offload image must not contain whitespace")
+		}
+		if err := ValidateMetricsOffloadImage(image); err != nil {
+			return err
+		}
+	}
+	if out := strings.TrimSpace(m.Offload.Out); out != "" {
+		if out != m.Offload.Out || !path.IsAbs(out) || path.Clean(out) != out || strings.Contains(out, `\`) {
+			return fmt.Errorf("metrics.offload.out %q must be a clean absolute container path", m.Offload.Out)
+		}
+		if !strings.HasPrefix(out, "/data/") && !strings.HasPrefix(out, "/var/run/tau/") {
+			return fmt.Errorf("metrics.offload.out %q must be under /data or /var/run/tau", m.Offload.Out)
+		}
+	}
 	if !m.Offload.Enabled {
 		return nil
 	}
@@ -634,6 +652,31 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 		if err := exptelemetry.ValidateID("group", groupID); err != nil {
 			return fmt.Errorf("experiment.group: %w", err)
 		}
+	}
+	return nil
+}
+
+// ValidateMetricsOffloadImage rejects mutable or implicit sidecar image
+// references while allowing either an exact digest or an explicit non-latest
+// release tag.
+func ValidateMetricsOffloadImage(image string) error {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return fmt.Errorf("metrics offload image is required when metrics offload is enabled")
+	}
+	if strings.ContainsAny(image, " \t\r\n") {
+		return fmt.Errorf("metrics offload image must not contain whitespace")
+	}
+	if strings.Contains(image, "@sha256:") {
+		return nil
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon <= lastSlash || lastColon == len(image)-1 {
+		return fmt.Errorf("metrics offload image %q must include an explicit non-latest tag or @sha256 digest", image)
+	}
+	if strings.EqualFold(image[lastColon+1:], "latest") {
+		return fmt.Errorf("metrics offload image must not use the unpinned :latest tag")
 	}
 	return nil
 }

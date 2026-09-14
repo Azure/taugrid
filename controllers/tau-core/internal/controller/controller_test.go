@@ -463,6 +463,11 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 	if len(readerRole.Rules) == 0 || len(readerRole.Rules[0].ResourceNames) != 1 || readerRole.Rules[0].ResourceNames[0] != "aurora" {
 		t.Fatalf("reader role rules = %#v, want resourceNames scoped to aurora", readerRole.Rules)
 	}
+	if len(readerRole.Rules) != 3 || !reflect.DeepEqual(readerRole.Rules[2], rbacv1.PolicyRule{
+		APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{"tau-log-connection"}, Verbs: []string{"get"},
+	}) {
+		t.Fatalf("reader role must grant only named get access to logging metadata: %#v", readerRole.Rules)
+	}
 	var readerBinding rbacv1.RoleBinding
 	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workspace-reader-aurora", Namespace: tauv1alpha1.SystemNamespace}, &readerBinding); err != nil {
 		t.Fatalf("workspace reader rolebinding not reconciled: %v", err)

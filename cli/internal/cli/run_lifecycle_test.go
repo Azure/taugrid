@@ -6,6 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -26,6 +27,52 @@ func TestRunStatusRegistersRunProfileFlag(t *testing.T) {
 func TestRunStatusRegistersDiagnosticHintsFlag(t *testing.T) {
 	if flag := newRunStatusCmd().Flags().Lookup("diagnostic-hints"); flag == nil {
 		t.Fatal("tau run status must support --diagnostic-hints")
+	}
+}
+
+func TestRunStatusRegistersMachineReadableOutputFlag(t *testing.T) {
+	flag := newRunStatusCmd().Flags().Lookup("output")
+	if flag == nil {
+		t.Fatal("tau run status must support --output")
+	}
+	if flag.DefValue != "table" {
+		t.Fatalf("tau run status --output default = %q, want table", flag.DefValue)
+	}
+}
+
+func TestRunStatusHelpDistinguishesSummaryAndCompleteJSON(t *testing.T) {
+	help := newRunStatusCmd().Long
+	for _, want := range []string{
+		"decision-oriented lifecycle summary",
+		"--output json for the complete versioned record",
+		"Kueue admission details",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("status help missing %q:\n%s", want, help)
+		}
+	}
+}
+
+func TestResolveRunStatusConnectionKeepsJSONStdoutClean(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	_, _, _, err := resolveRunStatusConnection(cmd, "json", func(cmd *cobra.Command) (string, string, func(), error) {
+		_, _ = io.WriteString(cmd.OutOrStdout(), "Activating workspace connection...\n")
+		return "research", "ray", func() {}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(cmd.OutOrStdout(), `{"kind":"RunStatus"}`)
+	var document map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatalf("stdout is not one JSON document: %v\n%s", err, stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "Activating workspace connection") {
+		t.Fatalf("connection progress was not redirected to stderr: %q", got)
 	}
 }
 

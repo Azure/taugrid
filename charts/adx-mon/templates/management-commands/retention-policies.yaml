@@ -12,8 +12,6 @@ metadata:
 spec:
   database: {{ .name | quote }}
   body: |
-    // Retention policy for {{ .name }} database.
-    // SoftDeletePeriod={{ .softDeletePeriod }}, HotCachePeriod={{ .hotCachePeriod }}.
     .alter-merge database {{ .name }} policy retention softdelete = {{ .softDeletePeriod }} recoverability = disabled
     .alter database {{ .name }} policy caching hot = {{ .hotCachePeriod }}
 {{- end }}

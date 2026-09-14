@@ -36,14 +36,19 @@ const (
 
 // Workload identity and kind.
 const (
-	LabelJob          = "tau.azure.com/job"
-	LabelRun          = "tau.azure.com/run"
+	// LabelJob is a compatibility join key for older and custom producers. It is
+	// not required on current Tau Jobs or pods; use Kubernetes Job ownership
+	// labels to associate pods with a batch Job.
+	LabelJob = "tau.azure.com/job"
+	LabelRun = "tau.azure.com/run"
+	// LabelRunID is the stable Tau run identity shared across workload objects.
 	LabelRunID        = "tau.azure.com/run-id"
 	LabelWorkloadKind = "tau.azure.com/workload-kind"
 	LabelService      = "tau.azure.com/service"
 	LabelDataset      = "tau.azure.com/dataset"
 
 	AnnotationNamespace = "tau.azure.com/namespace"
+	AnnotationLaunch    = "tau.azure.com/launch"
 
 	// These identify the workload that owns a generated Secret.
 	AnnotationOwnerName = "tau.azure.com/owner-name"

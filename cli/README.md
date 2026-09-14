@@ -178,11 +178,22 @@ Use the run lifecycle after submission:
 
 ```bash
 tau run status <run-name> --watch
+tau run status <run-name> --output json
+tau run status <run-name> --output json --run-profile
 tau logs <run-name>
 tau run get <run-name>  # Job-backed run with persisted results
 tau run resume <run-name> --config tau/train.yaml
 tau run cancel <run-name>
 ```
+
+`status --output json` emits a versioned `RunStatus` document for agents and
+automation. It includes the derived lifecycle state, structured startup phases,
+Kueue workloads, pods, events, recovery diagnostics, and scoped deep-diagnostic
+commands. The default view renders the same document as concise progress,
+resources, attention, and next-action sections for researchers. Add
+`--run-profile` for live run-scoped GPU utilization evidence.
+JSON status is a point-in-time document; agents should poll it instead of
+combining it with `--watch`.
 
 For copyable workspace-first repositories, run `tau workspace init-repo`, which
 scaffolds a Tau-ready project layout. The examples at the repository root are
