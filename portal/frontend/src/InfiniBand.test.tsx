@@ -9,7 +9,7 @@ import { Fleet } from './Fleet';
 import { InfiniBandFleet, InfiniBandValidationDetail } from './InfiniBand';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import type { RDMAValidationDetail, WorkspaceScope } from './types';
-import { firstHistoryPage, latestSummary, passedValidation, secondHistoryPage } from './test/rdma-fixtures';
+import { firstHistoryPage, fleetNodes, latestSummary, passedValidation, secondHistoryPage } from './test/rdma-fixtures';
 
 const scope: WorkspaceScope = {
   workspace: 'research', name: 'Research', cluster: 'research-west', namespace: 'tau-system',
@@ -48,6 +48,7 @@ describe('InfiniBand fleet validation', () => {
   it('integrates the InfiniBand Fleet subtab and states the exact coverage', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
       return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
     }));
     const client = createPortalQueryClient();
@@ -65,16 +66,35 @@ describe('InfiniBand fleet validation', () => {
     let resolveFetch: ((response: Response) => void) | undefined;
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { resolveFetch = resolve; })));
     const rendered = renderPortal('/portal/fleet');
-    expect(screen.getAllByText(/Loading snapshot/)).toHaveLength(2);
+    expect(screen.getAllByText(/Loading snapshot/)).toHaveLength(3);
     rendered.unmount();
     resolveFetch?.(json({}));
 
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => Promise.resolve(json(
-      String(input).includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 },
+      String(input).includes('/nodes') ? { ...fleetNodes, totalNodes: 0, gpuNodes: 0, totalGPUs: 0, rdmaAdvertisedGpuNodes: 0, nodes: [], skus: [] } :
+        String(input).includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 },
     ))));
     renderPortal('/portal/fleet');
     expect(await screen.findByText(/Current state is Unknown/)).toBeVisible();
     expect(screen.getByText(/No InfiniBand validation history is available/)).toBeVisible();
+  });
+
+  it('separates fleet RDMA capability, tested topology, and per-GPU health', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByText(/RDMA advertised: 2/)).toBeVisible();
+    expect(screen.getAllByText(/rdma\/rdma_shared_device_a 1\/1 allocatable/)).toHaveLength(2);
+    expect(screen.getAllByText(/kubernetes.azure.com\/agentpool/)).toHaveLength(3);
+    expect(screen.getAllByText('Yes')).toHaveLength(2);
+    expect(screen.getByText('Not tested in latest run')).toBeVisible();
+    expect(screen.getAllByRole('link', { name: 'Open per-GPU metrics' })[0]).toHaveAttribute(
+      'href', expect.stringContaining('view=health&instance=h200-node-a'),
+    );
   });
 
   it.each([
@@ -163,6 +183,7 @@ describe('InfiniBand fleet validation', () => {
   it('paginates history and navigates to routed validation detail', async () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
       if (url.includes('/summary')) return Promise.resolve(json(latestSummary));
       if (url.includes(secondHistoryPage.validations[0].validationId)) return Promise.resolve(json(secondHistoryPage.validations[0]));
       if (url.includes('cursor=page-two')) return Promise.resolve(json(secondHistoryPage));

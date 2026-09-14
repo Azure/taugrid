@@ -7,7 +7,7 @@ import { useBoard } from './data';
 import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Table, n1 } from './components';
 import type {
   RDMAFreshness, RDMAHistoricalStatus, RDMANode, RDMARdmaDevice, RDMAValidation,
-  RDMAValidationDetail, RDMAValidationPage, RDMAValidationState, RDMAValidationSummary,
+  RDMAValidationDetail, RDMAValidationPage, RDMAValidationState, RDMAValidationSummary, Nodes,
 } from './types';
 
 const pageSize = 20;
@@ -95,7 +95,53 @@ function bandwidthSummary(validation: RDMAValidation) {
 }
 
 export function InfiniBandFleet() {
-  return <><Note>{coverageStatement}</Note><Note>{inventoryCaveat}</Note><LatestValidation/><ValidationHistory/></>;
+  return <><Note>{coverageStatement}</Note><Note>{inventoryCaveat}</Note><FleetInfiniBandTopology/><LatestValidation/><ValidationHistory/></>;
+}
+
+function rdmaScheduling(node: Nodes['nodes'][number]) {
+  const resources = node.rdmaResources || [];
+  if (!resources.length) return 'Not advertised';
+  return resources.map(resource =>
+    `${resource.name} ${resource.allocatable}/${resource.capacity} allocatable`,
+  ).join(', ');
+}
+
+function FleetInfiniBandTopology() {
+  const inventoryQuery = useBoard<Nodes>('/api/portal/nodes');
+  const latestQuery = useBoard<RDMAValidationSummary>('/api/portal/rdma-validations/summary');
+  return <><h2>Fleet InfiniBand capability and site</h2>
+    <Note>InfiniBand capability is derived from each node's advertised <code>rdma/*</code> scheduling resources. It is inventory, not link health. Per-GPU health remains available from the Health view.</Note>
+    <BoardResult query={inventoryQuery} label="InfiniBand fleet inventory" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).">{snapshot => {
+      const latest = latestQuery.data?.latest;
+      const validationSite = latest?.actual?.site;
+      const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
+      const nodes = (snapshot.nodes || []).filter(node => node.gpuCapacity > 0);
+      return <>
+        <Note>GPU nodes: {nodes.length} · RDMA advertised: {snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'} · latest tested site / pool: {known([validationSite, latest?.actual?.pool].filter(Boolean).join(' / '))}</Note>
+        {latestQuery.isError && <Note warn>Latest run coverage is unavailable; inventory capability is still shown independently.</Note>}
+        {!nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
+          : <Table headers={['Node', 'GPU inventory', 'IB / RDMA scheduling', 'Pool / region / zone', 'Validated topology', 'Same validated site', 'GPU health']}
+            rows={nodes.map(node => {
+              const tested = testedByName.get(node.name);
+              const sameSite = tested?.site && validationSite ? tested.site === validationSite ? 'Yes' : 'No' : 'Unknown';
+              const inventoryLocation = [
+                node.agentPool ? `${node.agentPool}${node.agentPoolLabel ? ` (${node.agentPoolLabel})` : ''}` : undefined,
+                node.region ? `${node.region}${node.regionLabel ? ` (${node.regionLabel})` : ''}` : undefined,
+                node.zone ? `${node.zone}${node.zoneLabel ? ` (${node.zoneLabel})` : ''}` : undefined,
+              ].filter(Boolean).join(' · ') || 'Unknown';
+              return [
+                node.name,
+                `${node.gpuCapacity || 0} ${node.gpuProduct || node.sku || 'GPU model Unknown'}`,
+                rdmaScheduling(node),
+                inventoryLocation,
+                tested ? `${tested.site || 'site Unknown'} / ${tested.pool || 'pool Unknown'} · ${stateLabel(latest?.state || 'unknown')} · ${list(tested.gpuUuids)}` : 'Not tested in latest run',
+                sameSite,
+                <ScopedLink to={'/portal/fleet?view=health&instance=' + encodeURIComponent(node.name)}>Open per-GPU metrics</ScopedLink>,
+              ];
+            })}/>}
+      </>;
+    }}</BoardResult>
+  </>;
 }
 
 function LatestValidation() {

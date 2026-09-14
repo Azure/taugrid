@@ -47,8 +47,8 @@ const nodesJSON = `{"items":[
       "kubernetes.azure.com/agentpool":"h100pool",
       "topology.kubernetes.io/region":"westeurope",
       "topology.kubernetes.io/zone":"westeurope-0"}},
-   "status":{"capacity":{"cpu":"40","memory":"329974272Ki","nvidia.com/gpu":"1"},
-     "allocatable":{"nvidia.com/gpu":"1"},
+   "status":{"capacity":{"cpu":"40","memory":"329974272Ki","nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
+     "allocatable":{"nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
      "conditions":[{"type":"MemoryPressure","status":"False"},{"type":"Ready","status":"True"}]}},
   {"metadata":{"name":"aks-h100pool-2","labels":{
       "node.kubernetes.io/instance-type":"Standard_NC40ads_H100_v5",
@@ -81,6 +81,9 @@ func TestBoardAggregatesFleet(t *testing.T) {
 	if snap.TotalGPUs != 2 {
 		t.Fatalf("TotalGPUs = %d, want 2", snap.TotalGPUs)
 	}
+	if snap.RDMAAdvertisedGPUNodes != 1 {
+		t.Fatalf("RDMAAdvertisedGPUNodes = %d, want 1", snap.RDMAAdvertisedGPUNodes)
+	}
 	if snap.TotalCPUCores != 88 { // 40 + 40 + 8
 		t.Fatalf("TotalCPUCores = %d, want 88", snap.TotalCPUCores)
 	}
@@ -111,6 +114,17 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	}
 	if n.GPUCapacity != 1 || n.GPUAllocatable != 1 {
 		t.Fatalf("gpu cap/alloc = %d/%d, want 1/1", n.GPUCapacity, n.GPUAllocatable)
+	}
+	if n.AgentPoolLabel != labelAgentPool ||
+		n.RegionLabel != "topology.kubernetes.io/region" ||
+		n.ZoneLabel != "topology.kubernetes.io/zone" {
+		t.Fatalf("location label sources = pool %q region %q zone %q", n.AgentPoolLabel, n.RegionLabel, n.ZoneLabel)
+	}
+	if len(n.RDMAResources) != 1 ||
+		n.RDMAResources[0].Name != "rdma/rdma_shared_device_a" ||
+		n.RDMAResources[0].Capacity != 1 ||
+		n.RDMAResources[0].Allocatable != 1 {
+		t.Fatalf("RDMA resources = %+v", n.RDMAResources)
 	}
 	// 329974272Ki = 337893654528 bytes ≈ 314.7 GiB.
 	if n.MemoryGiB < 314 || n.MemoryGiB > 315 {

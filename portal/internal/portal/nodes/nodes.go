@@ -35,7 +35,8 @@ import (
 // have legacy (beta) aliases still present on some AKS nodes, so each is
 // resolved from a preference-ordered list.
 const (
-	gpuResourceKey = "nvidia.com/gpu"
+	gpuResourceKey     = "nvidia.com/gpu"
+	rdmaResourcePrefix = "rdma/"
 
 	labelAgentPool       = "kubernetes.azure.com/agentpool"
 	labelAgentPoolLegacy = "agentpool"
@@ -67,18 +68,30 @@ type Options struct {
 // (from millicores, so a 40-core node reads 40, not 40000); Memory in bytes and
 // a human GiB convenience; GPU counts are whole devices.
 type Node struct {
-	Name           string  `json:"name"`
-	Ready          bool    `json:"ready"`
-	AgentPool      string  `json:"agentPool,omitempty"`
-	SKU            string  `json:"sku,omitempty"`
-	GPUProduct     string  `json:"gpuProduct,omitempty"`
-	Region         string  `json:"region,omitempty"`
-	Zone           string  `json:"zone,omitempty"`
-	CPUCores       int64   `json:"cpuCores"`
-	MemoryBytes    int64   `json:"memoryBytes"`
-	MemoryGiB      float64 `json:"memoryGiB"`
-	GPUCapacity    int64   `json:"gpuCapacity"`
-	GPUAllocatable int64   `json:"gpuAllocatable"`
+	Name           string         `json:"name"`
+	Ready          bool           `json:"ready"`
+	AgentPool      string         `json:"agentPool,omitempty"`
+	AgentPoolLabel string         `json:"agentPoolLabel,omitempty"`
+	SKU            string         `json:"sku,omitempty"`
+	GPUProduct     string         `json:"gpuProduct,omitempty"`
+	Region         string         `json:"region,omitempty"`
+	RegionLabel    string         `json:"regionLabel,omitempty"`
+	Zone           string         `json:"zone,omitempty"`
+	ZoneLabel      string         `json:"zoneLabel,omitempty"`
+	CPUCores       int64          `json:"cpuCores"`
+	MemoryBytes    int64          `json:"memoryBytes"`
+	MemoryGiB      float64        `json:"memoryGiB"`
+	GPUCapacity    int64          `json:"gpuCapacity"`
+	GPUAllocatable int64          `json:"gpuAllocatable"`
+	RDMAResources  []RDMAResource `json:"rdmaResources,omitempty"`
+}
+
+// RDMAResource is one device-plugin resource advertised by a node. Presence
+// establishes schedulable RDMA capability, not link health or validation.
+type RDMAResource struct {
+	Name        string `json:"name"`
+	Capacity    int64  `json:"capacity"`
+	Allocatable int64  `json:"allocatable"`
 }
 
 // DaemonSet is a GPU/runtime-relevant DaemonSet. It is deliberately a compact
@@ -103,16 +116,17 @@ type SKUCount struct {
 // Snapshot is the Cluster Nodes board payload: per-node rows plus fleet rollups
 // (totals and per-SKU counts).
 type Snapshot struct {
-	TotalNodes      int         `json:"totalNodes"`
-	ReadyNodes      int         `json:"readyNodes"`
-	GPUNodes        int         `json:"gpuNodes"`
-	TotalCPUCores   int64       `json:"totalCPUCores"`
-	TotalMemoryGiB  float64     `json:"totalMemoryGiB"`
-	TotalGPUs       int64       `json:"totalGPUs"`
-	SKUs            []SKUCount  `json:"skus"`
-	Nodes           []Node      `json:"nodes"`
-	DaemonSets      []DaemonSet `json:"daemonSets,omitempty"`
-	DaemonSetsError string      `json:"daemonSetsError,omitempty"`
+	TotalNodes             int         `json:"totalNodes"`
+	ReadyNodes             int         `json:"readyNodes"`
+	GPUNodes               int         `json:"gpuNodes"`
+	TotalCPUCores          int64       `json:"totalCPUCores"`
+	TotalMemoryGiB         float64     `json:"totalMemoryGiB"`
+	TotalGPUs              int64       `json:"totalGPUs"`
+	RDMAAdvertisedGPUNodes int         `json:"rdmaAdvertisedGpuNodes"`
+	SKUs                   []SKUCount  `json:"skus"`
+	Nodes                  []Node      `json:"nodes"`
+	DaemonSets             []DaemonSet `json:"daemonSets,omitempty"`
+	DaemonSetsError        string      `json:"daemonSetsError,omitempty"`
 }
 
 // Board lists Nodes via the Reader and aggregates them into a Snapshot. An empty
@@ -227,6 +241,9 @@ func aggregate(data []byte) (Snapshot, error) {
 		if n.GPUCapacity > 0 {
 			snap.GPUNodes++
 		}
+		if n.GPUCapacity > 0 && len(n.RDMAResources) > 0 {
+			snap.RDMAAdvertisedGPUNodes++
+		}
 		sku := n.SKU
 		if sku == "" {
 			sku = "unknown"
@@ -261,20 +278,52 @@ func parseNode(obj nodeObj) Node {
 	labels := obj.Metadata.Labels
 	milli := quantityMilli(obj.Status.Capacity["cpu"])
 	memBytes := quantityValue(obj.Status.Capacity["memory"])
+	agentPoolLabel, agentPool := firstLabelWithKey(labels, labelAgentPool, labelAgentPoolLegacy)
+	regionLabel, region := firstLabelWithKey(labels, regionLabels...)
+	zoneLabel, zone := firstLabelWithKey(labels, zoneLabels...)
 	return Node{
 		Name:           obj.Metadata.Name,
 		Ready:          isReady(obj),
-		AgentPool:      firstLabel(labels, labelAgentPool, labelAgentPoolLegacy),
+		AgentPool:      agentPool,
+		AgentPoolLabel: agentPoolLabel,
 		SKU:            firstLabel(labels, skuLabels...),
 		GPUProduct:     labels[labelGPUProduct],
-		Region:         firstLabel(labels, regionLabels...),
-		Zone:           firstLabel(labels, zoneLabels...),
+		Region:         region,
+		RegionLabel:    regionLabel,
+		Zone:           zone,
+		ZoneLabel:      zoneLabel,
 		CPUCores:       milli / 1000,
 		MemoryBytes:    memBytes,
 		MemoryGiB:      round1(float64(memBytes) / (1024 * 1024 * 1024)),
 		GPUCapacity:    quantityValue(obj.Status.Capacity[gpuResourceKey]),
 		GPUAllocatable: quantityValue(obj.Status.Allocatable[gpuResourceKey]),
+		RDMAResources:  rdmaResources(obj.Status.Capacity, obj.Status.Allocatable),
 	}
+}
+
+func rdmaResources(capacity, allocatable map[string]string) []RDMAResource {
+	names := make(map[string]struct{})
+	for name := range capacity {
+		if strings.HasPrefix(strings.ToLower(name), rdmaResourcePrefix) {
+			names[name] = struct{}{}
+		}
+	}
+	for name := range allocatable {
+		if strings.HasPrefix(strings.ToLower(name), rdmaResourcePrefix) {
+			names[name] = struct{}{}
+		}
+	}
+	out := make([]RDMAResource, 0, len(names))
+	for name := range names {
+		resource := RDMAResource{
+			Name: name, Capacity: quantityValue(capacity[name]), Allocatable: quantityValue(allocatable[name]),
+		}
+		if resource.Capacity > 0 || resource.Allocatable > 0 {
+			out = append(out, resource)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // isReady reports whether the node's Ready condition is True.
@@ -316,12 +365,17 @@ func quantityMilli(s string) int64 {
 
 // firstLabel returns the first non-empty value among the given label keys.
 func firstLabel(labels map[string]string, keys ...string) string {
+	_, value := firstLabelWithKey(labels, keys...)
+	return value
+}
+
+func firstLabelWithKey(labels map[string]string, keys ...string) (string, string) {
 	for _, k := range keys {
 		if v := labels[k]; v != "" {
-			return v
+			return k, v
 		}
 	}
-	return ""
+	return "", ""
 }
 
 func round1(v float64) float64 {

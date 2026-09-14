@@ -161,6 +161,16 @@ and stale only afterward. Message bytes are derived from element count only for
 recognized fixed-width data types. Unknown data types leave message size
 Unknown instead of guessing.
 
+The Fleet InfiniBand view also reads the authorized Kubernetes node inventory.
+It marks nodes as RDMA-advertised only when their status exposes a positive
+`rdma/*` capacity or allocatable resource, and shows agent pool, region, and
+zone with the exact label key selected by the inventory reader. That capability
+signal is not health. The UI links each GPU node to its separate per-GPU health
+observations, and reports same-site coverage only for nodes whose canonical
+validation artifact carries matching tested-site evidence. Missing topology is
+Unknown; inventory region or zone is never silently treated as a validation
+site.
+
 ## Data interpretation and recovery
 
 `GET /api/portal/overview?view=workloads` returns profiles, queue counters, and

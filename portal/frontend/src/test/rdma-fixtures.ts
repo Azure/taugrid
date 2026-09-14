@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import type { RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
+import type { Nodes, RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
 
 export const passedValidation: RDMAValidationDetail = {
   validationId: 'nccl-rdma-0123456789abcdef0123456789abcdef',
@@ -161,6 +161,67 @@ export const latestSummary: RDMAValidationSummary = {
   latest: passedValidation,
   total: 2,
   generatedAt: '2026-09-14T20:04:00Z',
+};
+
+export const fleetNodes: Nodes = {
+  totalNodes: 3,
+  readyNodes: 3,
+  gpuNodes: 3,
+  totalGPUs: 3,
+  totalCPUCores: 120,
+  totalMemoryGiB: 944.1,
+  rdmaAdvertisedGpuNodes: 2,
+  skus: [
+    { sku: 'Standard_ND96isr_H200_v5', nodes: 2, gpus: 2 },
+    { sku: 'Standard_NC24ads_A100_v4', nodes: 1, gpus: 1 },
+  ],
+  nodes: [
+    {
+      name: 'h200-node-a',
+      agentPool: 'h200',
+      agentPoolLabel: 'kubernetes.azure.com/agentpool',
+      sku: 'Standard_ND96isr_H200_v5',
+      region: 'eastus2euap',
+      regionLabel: 'topology.kubernetes.io/region',
+      zone: 'eastus2euap-1',
+      zoneLabel: 'topology.kubernetes.io/zone',
+      cpuCores: 40,
+      memoryGiB: 314.7,
+      gpuCapacity: 1,
+      gpuProduct: 'NVIDIA H200',
+      ready: true,
+      rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
+    },
+    {
+      name: 'h200-node-b',
+      agentPool: 'h200',
+      agentPoolLabel: 'kubernetes.azure.com/agentpool',
+      sku: 'Standard_ND96isr_H200_v5',
+      region: 'eastus2euap',
+      regionLabel: 'topology.kubernetes.io/region',
+      zone: 'eastus2euap-1',
+      zoneLabel: 'topology.kubernetes.io/zone',
+      cpuCores: 40,
+      memoryGiB: 314.7,
+      gpuCapacity: 1,
+      gpuProduct: 'NVIDIA H200',
+      ready: true,
+      rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
+    },
+    {
+      name: 'a100-node-c',
+      agentPool: 'a100',
+      agentPoolLabel: 'kubernetes.azure.com/agentpool',
+      sku: 'Standard_NC24ads_A100_v4',
+      region: 'westus3',
+      regionLabel: 'topology.kubernetes.io/region',
+      cpuCores: 40,
+      memoryGiB: 314.7,
+      gpuCapacity: 1,
+      gpuProduct: 'NVIDIA A100',
+      ready: true,
+    },
+  ],
 };
 
 export const firstHistoryPage: RDMAValidationPage = {
