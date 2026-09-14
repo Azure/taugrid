@@ -1,295 +1,188 @@
-# Troubleshooting by lifecycle layer
+# Troubleshooting runs and evidence
 
-A Tau run crosses independent control planes. Diagnose the **first** transition
-that did not complete; every symptom after it is downstream noise.
+Diagnose from observed state, not a fixed assumption about the failing layer.
+A missing connection, rejected config, queued workload, and vanished RayJob
+need different starting points. Stay read-only unless repair is authorized.
 
-Start every investigation the same way:
+## Establish the exact target
 
 ```bash
+tau version
 tau run status <run-name>
+tau run status <run-name> -o json
+tau run status <run-name> --diagnostic-hints
+tau logs <run-name> --tail 100
 ```
 
-Then work the layers below in order and stop at the first one that is not
-complete. Each layer names its Tau command first; the `kubectl` commands are
-operator-only confirmation of what `tau run status` already reported, not
-replacements for it.
+For a known target use `--context <context> --namespace <namespace>`.
+In a monorepo, run lifecycle commands accept `--project <project>`.
+Root `tau logs` can search locally configured workspace connections;
+ambiguity is a reason to select an exact workspace/context, not guess.
 
-## Contents
+Use JSON for agent processing. `--watch` cannot be combined with JSON or
+`--diagnostic-hints`; a bounded human-readable watch can use
+`--max-iterations`. JSON already includes diagnostic commands, so do not
+reconstruct them from guessed labels.
 
-- [Layer index](#layer-index)
-- [1. Repository/connection resolution](#1-repositoryconnection-resolution-and-cluster-access)
-- [2. TauWorkspace readiness](#2-tauworkspace-readiness)
-- [3. Config validation and rendering](#3-config-validation-and-rendering)
-- [4. Kueue admission and quota](#4-kueue-admission-and-quota)
-- [5. Scheduling, DRA, image pull, init, readiness](#5-scheduling-dra-image-pull-init-and-readiness)
-- [6. GPU/node/topology health](#6-gpunodetopology-health)
-- [7. Runtime progress and durable evidence](#7-runtime-progress-and-durable-evidence)
-- [8. Recovery handoff](#8-recovery-handoff)
-- [Symptom index](#symptom-index)
-
-## Layer index
-
-| # | Layer | Primary command | Owner if it fails |
-|---|---|---|---|
-| 1 | Repo/connection resolution and cluster access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) / platform (access) |
-| 2 | TauWorkspace readiness and handoff validity | `tau workspace status <name>` | Platform operator |
-| 3 | Client-side config validation and rendering | `tau run validate --config <path>` | Researcher |
-| 4 | Kueue admission and quota | `tau run status <run>` (admission phase) | Platform/queue owner |
-| 5 | Scheduling, DRA, image pull, init, readiness | `tau run status <run> --watch` | Platform (infra) or researcher (crash) |
-| 6 | GPU/node/topology health | `tau cluster validate nodes` / `... topology` | Node-pool operator |
-| 7 | Runtime progress and durable evidence | `tau run logs <run>` + `taugrid-portal experiment status <name>` | Researcher (app) / platform (pipeline) |
-| 8 | Recovery handoff | see [8](#8-recovery-handoff) | — |
-
-The offline form of layer 1 and layer 3 cost nothing. Run them first when the
-symptom is ambiguous, then use the live connection check.
-
-## The startup phase tree
-
-`tau run status` renders one ordered tree for every run:
-
-```
-Submitted → Kueue admission → [MultiKueue placement] → [RayCluster]
-  → Pod scheduling → DRA allocation → Image pull → Init containers
-  → Container start → Ready → [RayJob status]
-```
-
-Bracketed phases appear conditionally: `RayCluster`/`RayJob status` only for
-RayJobs, `MultiKueue placement` only when the workload dispatched to a worker
-cluster. Each phase reports `pending`, `active`, `done`, `warning`, or
-`skipped`.
-
-`skipped` is not failure. A skipped DRA phase is expected when the workload
-requests GPUs through the device plugin instead of DRA.
-
-Three distinctions that prevent misdiagnosis:
-
-- **Admitted ≠ scheduled.** Quota was reserved; no pod exists yet.
-- **Running ≠ progressing.** Containers started; the loop may be hung.
-- **Completed ≠ evidence preserved.** Verify artifacts actually landed.
-
-## 1. Repository/connection resolution and cluster access
+If no workload was created, start with local config validation:
 
 ```bash
-tau workspace connection
+tau run validate --config tau/train.yaml
 ```
 
-**Success proves:** the current project's descriptor is valid, credentials
-resolve, Kubernetes is reachable, and the workspace, LocalQueue, and
-authorization contract match. Add `--offline` to check only repository
-configuration.
+This is offline. `tau workspace connection`, workspace status, profile export,
+and ordinary client rendering are connected. There is no
+`tau workspace connection --offline`. For offline-only work inspect the
+non-secret descriptor as a file and use a platform-supplied profile snapshot;
+do not read the credential cache.
 
-**Failure means:** no descriptor, more than one candidate, or a schema
-violation. This is a repository configuration problem; every later layer is
-unreachable until it is fixed.
+## Find the first blocked startup phase
 
-If live connection fails while `tau workspace connection --offline` succeeds,
-the problem is credential resolution, VPN/DNS reachability, Kubernetes
-availability, or RBAC rather than a bad descriptor.
+The status tree includes conditional phases:
 
-**Next:** missing/invalid descriptor → get a valid one from the platform owner.
-Reachability or permission failure → platform action, or transient network.
-
-## 2. TauWorkspace readiness
-
-```bash
-tau workspace status <name>
-tau workspace check  <name>      # exits non-zero unless Ready — use in scripts
-tau workspace status <name> -o json
+```text
+Submitted -> Kueue admission -> [MultiKueue placement] -> [RayCluster]
+  -> Pod scheduling -> DRA allocation -> Image pull -> Init containers
+  -> Container start -> Ready -> [RayJob status]
 ```
 
-**Success proves:** `status.phase` is `Ready` — `RBACReady` and `QueueReady`
-true, no drift. Ready proves the workspace handoff is valid for submitting; it
-does not prove Azure infrastructure was just created, and it does not
-substitute for per-run queue admission (layer 4).
+`pending`, `active`, `done`, `warning`, and `skipped` have different meanings.
+A skipped DRA phase is normal for device-plugin GPUs. Investigate the first
+genuinely blocked/warning phase; do not stop at an expected skipped phase or
+assume every active phase is broken.
 
-**It also does not prove storage works.** TauGrid 0.1 has no `StorageReady`
-condition on `TauWorkspace` or `TauCluster`. A `Ready` workspace can still have
-a missing or unbound platform-managed PVC, so if the symptom is storage-shaped,
-check the PVC directly rather than trusting the phase.
+| Evidence | Next check | Likely owner |
+| --- | --- | --- |
+| Interactive trust/authentication required | User completes `tau workspace connection` in an interactive terminal | Researcher/access owner |
+| Workspace Pending/Degraded or cached UID differs | `tau workspace status`; inspect/reconnect the intended workspace | Platform; user for reconnect |
+| No ready/applicable profile or multiple candidates | Current TauCluster generation/hash, scope and profile name | Platform |
+| Config validation/render error | [Run config](run-config.md); config-relative paths and profile assertions | Researcher |
+| Kueue admission blocked | Queue reason, quota/borrowing/priority | Queue owner |
+| Admitted but unscheduled | Node selectors/taints, free resources, topology or DRA | Platform |
+| ImagePullBackOff | Image reference, registry identity, node egress | Image/platform owner |
+| Init failure | Source staging, PVC mount, identity, init logs | Depends on the failed step |
+| Running with no useful progress | Driver/worker logs, application and distributed communication | Researcher/platform |
+| Completed with no results | Actual output PVC/path, publication and offload | Researcher/platform |
 
-**Failure means:** `Pending` or `Degraded` — a platform-owned condition is
-unmet. Resubmitting will not fix it.
+Admitted means quota was reserved, not that pods were scheduled. Running means
+containers started, not that the training loop progresses. A hang can still
+involve storage/network/GPU failure; do not declare infrastructure healthy from
+pod phase alone.
 
-`WorkloadIdentityReady` is diagnostic and does not gate the phase, but resolve
-it before running workloads that use Azure Workload Identity.
-
-**Next:** platform action. Do not hand-edit RBAC, queues, or storage to work
-around a Degraded condition — see [platform.md](platform.md#recovering-a-degraded-workspace).
-There is no client-side bypass; the submission gate is enforced server-side.
-
-## 3. Config validation and rendering
+## Workspace, profiles, and storage
 
 ```bash
-tau run validate --config tau/train.yaml   # schema only
-tau run train --dry-run=client             # renders locally; catches preset/GPU errors
-tau run train --dry-run=server             # render + API-server dry-run, no admission
+tau workspace status <workspace> --system-namespace <system-namespace> -o json
+tau workspace check <workspace> --data-pvc <pvc>
+tau cluster profiles export --context <context>
+tau cluster validate topology --context <context> --profile <profile>
 ```
 
-**Run both.** `validate` is schema-only; preset resolution and GPU-count
-arithmetic happen at render time, so a config can validate clean and still fail
-to render (missing `policy.preset`, or `processes_per_node` exceeding the
-preset's GPU count). Neither step contacts the cluster for
-`--dry-run=client`.
+Workspace Ready gates on RBAC/queue conditions and absence of drift, not on a
+`StorageReady` condition. PVC diagnostics may warn without making
+`workspace check` fail; read the output. A Bound PVC still does not prove
+mounting/writing succeeds. Workload identity readiness is diagnostic.
 
-**Success proves:** the config parses, passes schema validation, and resolves
-to a renderable Job or RayJob.
+Inspect the rejected profile's applicability before changing the config.
+Counts, queue, placement, and priority settings cannot override the profile.
+Connected client dry-run also checks the live workspace output-root boundary;
+an offline snapshot render does not.
 
-**Failure means:** a schema/field error, an unresolvable preset, an ambiguous
-target, or an SDK-generated managed manifest being run through the direct path.
-All authoring problems — nothing here touches a cluster, queue, or node.
+## Targeted Kubernetes inspection
 
-If dry-run reports the entrypoint script missing, that is a working-directory
-problem, not a config defect — dry-run resolves `entrypoint` on disk relative
-to the config.
-
-**Next:** researcher fixes the config. See
-[run-config.md](run-config.md#error-message--cause) for the error→cause map.
-
-## 4. Kueue admission and quota
+When Tau has identified the relevant layer, inspect only necessary objects
+within the caller's RBAC:
 
 ```bash
-tau run status <run-name>
+kubectl --context <context> -n <namespace> get workloads
+kubectl --context <context> -n <namespace> describe localqueue <queue>
+kubectl --context <context> describe clusterqueue <clusterqueue>
+kubectl --context <context> -n <namespace> describe pod <pod>
+kubectl --context <context> -n <namespace> get events --sort-by=.lastTimestamp
 ```
 
-Read the **Kueue admission** line: `N/M admitted queue=<names>`, plus a
-`reason=` hint when not admitted.
+Cluster-scoped queue/node information may require a platform operator. Do not
+dump Secret objects or credential files. `tau cluster validate nodes` creates
+privileged pods and needs separate authorization; it is not a read-only
+equivalent of topology inspection.
 
-**Success proves:** quota was reserved. It does **not** prove pods were
-scheduled — continue to layer 5.
+For MultiKueue, manager-side absence of pods can mean execution moved to a
+worker. Use the placement phase and platform-provided worker context. Check
+current `MultiKueueReady`; do not manually create another worker copy or alter
+credentials to recover status.
 
-**Failure means:** `0/N admitted` with a quota reason → the LocalQueue /
-ClusterQueue has no capacity right now, including borrowing limits. A reason
-mentioning preemption or eviction → Kueue reclaimed capacity for
-higher-priority work.
+## Live and historical logs
 
-Do not proceed to GPU or node debugging (layer 6) before this reports `done`.
-A workload waiting on quota looks exactly like a workload waiting on nodes if
-you skip this line.
+`tau logs` / `tau run logs` read RayJob driver execution logs through Ray's
+dashboard API while local worker access is available. For batch Jobs, use
+`--container`, `--previous`, `--all-containers`, `--timestamps`, or `--prefix`
+as needed. These container-specific flags are not a Ray driver-log contract.
 
-**Next:** platform/queue owner for capacity or priority. Operator-only
-confirmation:
+After terminal local RayJob pods are cleaned up, Tau can read ADX-offloaded
+logs using `tau-log-connection` in the selected cluster's system namespace.
+Override `--kusto-endpoint`, `--kusto-database`, and `--kusto-cluster` only
+with platform-supplied metadata. Here `--kusto-cluster` means the telemetry
+source `Cluster`, **not** the Azure ADX resource name.
 
-```bash
-kubectl get workload -n <namespace>
-kubectl describe clusterqueue <cluster-queue-name>
-kubectl describe localqueue  <local-queue-name> -n <namespace>
-```
+Manager-side MultiKueue RayJob logs use central ADX ContainerLogs after the
+worker is known. Missing ADX configuration or failed offload does not justify
+claiming logs were preserved. Expired Kubernetes objects also do not prove
+preemption; inspect retention and durable lifecycle history.
 
-## 5. Scheduling, DRA, image pull, init, and readiness
+## Experiments, datasets, and artifacts
 
-```bash
-tau run status <run-name> --watch
-```
-
-Read the remaining phases in order.
-
-| Phase stuck | Likely cause | Owner |
-|---|---|---|
-| Pod scheduling | Node selector/taint mismatch, or admission (layer 4) not actually complete | Platform / re-check layer 4 |
-| DRA allocation (>~30s) | No matching GPU device; check `ResourceSlice` availability | Platform |
-| Image pull (`ErrImagePull`/`ImagePullBackOff`) | Wrong image/tag, registry credentials, node egress | Researcher or image owner |
-| Init containers | Init step crashing | Researcher |
-| Container start | Application crashing before ready | Researcher |
-
-**Next:** operator-only deep inspection, *after* the tree identified the phase:
+Use the separate portal binary and identify the intended store:
 
 ```bash
-kubectl describe pod <pod-name> -n <namespace>
-kubectl get resourceclaim -n <namespace>
-kubectl get events -n <namespace> --sort-by=.lastTimestamp
-```
-
-If the tree shows only a **MultiKueue placement** phase and no local pod phases
-progress, the workload dispatched to a worker cluster — inspect it from the
-worker context before assuming it is stuck. Confirm that the selected
-`multiKueue` profile is Ready and that the current `TauCluster/cluster`
-`MultiKueueReady` condition still reports healthy AdmissionCheck, config, and
-worker prerequisites.
-
-## 6. GPU/node/topology health
-
-```bash
-tau cluster validate nodes --gpu-class <class> --min-healthy <N> --timeout 2m
-tau cluster validate topology --preset <preset-name>
-tau cluster validate topology --cluster-queue taugrid-cq
-```
-
-Both require cluster-admin-level access — `validate nodes` runs privileged
-pods. This is operator diagnosis, not a researcher-facing step.
-
-`validate nodes` flags: `--context`, `--gpu-class`, `--selector` (alternative
-to `--gpu-class`), `--min-healthy`, `--timeout` (default `2m`, per pod). It
-checks `nvidia-smi`, NVLink, IB, and ECC health.
-
-`validate topology` flags: `--context`, `--preset` (one preset's full chain:
-LocalQueue, ClusterQueue, topology, priority classes, ResourceFlavor node
-match), `--cluster-queue` (default `taugrid-cq`; validates all ResourceFlavors
-referenced by a ClusterQueue when `--preset` is omitted).
-
-**Failure means:** a node reported `DEGRADED`/`UNHEALTHY` for a specific reason
-(NVLink down, uncorrectable ECC, IB down) — a hardware problem, not a Tau or
-application bug. Zero matching nodes for a ResourceFlavor means the node pool,
-instance type, or device plugin does not match what the preset expects.
-
-## 7. Runtime progress and durable evidence
-
-```bash
-tau run logs <run-name>
-taugrid-portal experiment status <name>
+taugrid-portal experiment --store <store-path> search
+taugrid-portal experiment --store <store-path> status <name>
+taugrid-portal experiment --store <store-path> stellar <name> -o json
 tau run get <run-name>
 ```
 
-`tau run logs` fetches the Ray Job **driver** execution log for a RayJob (not
-head-pod container logs), or the batch Job's pod logs.
+Local expstore, ADX metrics, ADX logs, and lifecycle history are distinct.
+An empty dashboard may mean wrong scope/store, no published metric chunks,
+missing identity, or a broken projection. Do not assert that a local packet
+exists until you have checked it. `metrics.offload` rejects multi-node direct
+Indexed Jobs; use the supported single-pod Job/RayJob path.
 
-**Success proves:** the driver log shows real progress (loss decreasing, steps
-advancing, checkpoints written) and that progress is mirrored into the durable
-experiment record.
-
-**Failure means:**
-
-- No progress despite `Ready`/`Running` → application-level hang (data loader
-  stall, deadlock, collective waiting on a dead rank). Not infrastructure.
-- Empty experiment record but healthy logs → the metrics-offload path or
-  checkpoint contract is not wired for this run. Not a training failure.
-
-**Next:** no progress in logs → researcher (application logic). Missing
-evidence with healthy logs → platform, for offload/expstore configuration.
-
-## 8. Recovery handoff
-
-Only after you have located the first failed layer, choose a recovery action.
-Retrying past an unresolved layer 1–3 problem, a Degraded workspace, or a real
-quota/node problem just reproduces the same failure.
-
-Automatic retry is config (`resilience.max_retries > 0`), not a command — there
-is no `tau run retry`. Manual resume:
+Dataset lookup and verification:
 
 ```bash
-tau run resume <run-name> --config tau/train.yaml   # --config required
-tau run resume <run-name> --config tau/train.yaml --from <checkpoint-dir>
-tau run resume <run-name> --config tau/train.yaml --force   # required after OOMKilled
+tau data dataset list -o json
+tau data dataset show <dataset>@<version>
+tau data dataset ref <dataset>@<version>
+tau data dataset verify <dataset>@<version>
+tau data model list -o json
+tau data model show <model>/<run>
+tau data model best <model>
 ```
 
-Resume requires a durable checkpoint under `/data`. Node-local scratch does not
-survive workload deletion, so there is nothing to resume from.
+Registry backend determines whether these read local files, PVC data, or Azure
+storage; byte verification can be expensive. Dataset `ingest` transfers bytes,
+`alias set` mutates pointers, and removal/index rebuild change state. Do not
+run them as passive diagnostics. `tau run get` retrieves the recorded output;
+storage helpers may need pod access, so it is not an offline metadata check.
 
-Failure classification: `OOMKilled`, `Preempted`, `Evicted`, `Completed`,
-`Running`, `Unknown`. `Unknown` is never retryable in either path — if Tau
-cannot classify the failure, the signal you would need to decide "retry" vs
-"fix and resubmit" is missing. Inspect status and logs instead of looping.
+## Retry and resume
 
-## Symptom index
+First fix the actual cause. Automatic retry is config-driven and disabled by
+default; it permits `Preempted`/`Evicted`, with `OOMKilled` opt-in.
+Manual resume requires a failed existing workload and its config:
 
-| Symptom | Start at | Most common cause |
-|---|---|---|
-| "Job is Pending and nothing happens" | Layer 4 | No queue quota right now |
-| "Admitted but no pods" | Layer 5 | Node selector/taint mismatch, or no capacity |
-| "ImagePullBackOff" | Layer 5 | Wrong tag or missing registry credentials |
-| "Workspace not Ready / submission denied" | Layer 2 | Platform-owned condition unmet |
-| "Config error on submit" | Layer 3 | Unknown field or engine/field mismatch |
-| "Running but loss never moves" | Layer 7 | Application hang; infra is fine |
-| "Job disappeared mid-run" | Layer 4 | Preempted by higher-priority work |
-| "Dashboard empty but job ran" | Layer 7 | Metrics offload not wired; local expstore still authoritative |
-| "Worked yesterday, fails today" | Layer 6 then 4 | Node health regression, or quota consumed by other work |
-| "`tau: unknown command`" | — | Stale binary, or a removed pre-v0.5 root; run `tau --help` |
+```bash
+tau run resume <run-name> --config tau/train.yaml \
+  --from /data/projects/<workspace>/runs/<run-name>/checkpoints \
+  --dry-run=client
+```
+
+This preview still reads live state but does not delete the original workload.
+The normal command validates a replacement before deleting/resubmitting.
+Use the actual durable checkpoint directory; a generic legacy default is not
+proof the checkpoint exists. The application must read `TAU_RESUME_FROM`.
+
+After OOM, raise the relevant resources or change the workload before
+`--force`. `Unknown`, active, and successfully completed workloads are not
+resume candidates. Metrics-enabled resume preserves its session's output
+path/PVC. MultiKueue recovery waits for manager-side cleanup/finalizer proof;
+do not short-circuit that wait by editing finalizers or submitting duplicates.
