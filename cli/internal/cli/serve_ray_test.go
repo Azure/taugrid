@@ -226,15 +226,28 @@ func TestServeRayRejectsNonRayFlagsBeforeConnecting(t *testing.T) {
 
 func TestServeEightRankSnapshotFixture(t *testing.T) {
 	expected := eightRankServeSnapshot(t)
-	actual, err := os.ReadFile(filepath.Join("testdata", "serve-h100-eight.snapshot.yaml"))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "serve-h100-eight.snapshot.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(actual, expected) {
-		t.Fatalf("fixture differs from canonical snapshot; expected:\n%s", expected)
-	}
-	if _, err := profile.DecodeSnapshotProvider(actual); err != nil {
-		t.Fatal(err)
+	lfFixture := bytes.ReplaceAll(fixture, []byte("\r\n"), []byte("\n"))
+	for _, test := range []struct {
+		name string
+		data []byte
+	}{
+		{"checkout", fixture},
+		{"LF", lfFixture},
+		{"CRLF", bytes.ReplaceAll(lfFixture, []byte("\n"), []byte("\r\n"))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			normalized := bytes.ReplaceAll(test.data, []byte("\r\n"), []byte("\n"))
+			if !bytes.Equal(normalized, expected) {
+				t.Fatalf("fixture differs from canonical snapshot; expected:\n%s", expected)
+			}
+			if _, err := profile.DecodeSnapshotProvider(test.data); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
