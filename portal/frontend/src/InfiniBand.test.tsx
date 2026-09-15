@@ -99,6 +99,12 @@ describe('InfiniBand fleet validation', () => {
     expect(await screen.findAllByText('Advertised', { selector: '.badge' })).toHaveLength(2);
     expect(screen.getAllByText(/rdma\/rdma_shared_device_a/)).toHaveLength(2);
     expect(screen.getAllByText(/kubernetes.azure.com\/agentpool/)).toHaveLength(3);
+    expect(screen.getByRole('region', { name: 'Site eastus2euap' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Site westus3' })).toBeVisible();
+    expect(screen.getByText('Passed · 2-GPU run path')).toBeVisible();
+    expect(screen.getByText(/h200-node-a \/ GPU-aaaaaaaa ↔ h200-node-b \/ GPU-bbbbbbbb/)).toBeVisible();
+    expect(screen.getAllByText('RDMA advertised', { selector: '.fabric-capability' })).toHaveLength(2);
+    expect(screen.getByText(/other GPUs in the site are not implied validated/)).toBeVisible();
     expect(screen.getByText(/All 10 required condition families reported fresh False/)).toBeVisible();
     expect(screen.getByText(/1 fresh fault condition: GPUNVLinkReplayErrors/)).toBeVisible();
     expect(screen.getByText(/GPUECCDoubleRetired missing/)).toBeVisible();

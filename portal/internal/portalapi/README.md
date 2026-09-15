@@ -165,7 +165,15 @@ recognized fixed-width data types. Unknown data types leave message size
 Unknown instead of guessing.
 
 The Fleet InfiniBand view also reads the authorized Kubernetes node inventory
-and renders a row-oriented evidence matrix. It marks nodes as RDMA-advertised
+and renders a site-bounded GPU fabric map followed by a row-oriented evidence
+matrix. The map groups nodes by the exact region label and pool, shows each
+node's inventory GPU count, and uses labeled color and shape cues to distinguish
+RDMA scheduling capability, condition faults, unknown evidence, and the exact
+GPU UUIDs sampled by the latest validation. It draws a validated run path only
+for the artifact-recorded nodes and GPU UUIDs; sharing a site, pool, or
+`rdma/*` resource never manufactures a connection claim.
+
+It marks nodes as RDMA-advertised
 only when their status exposes a positive `rdma/*` capacity or allocatable
 resource, and shows agent pool, region, and zone with the exact label key
 selected by the inventory reader. That capability signal is not health.

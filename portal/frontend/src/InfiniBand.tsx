@@ -248,6 +248,104 @@ function gpuTelemetryDetail(node: FleetNode, samples: GPU[]) {
   return metrics.join(' · ');
 }
 
+function evidenceLabel(state: EvidenceState) {
+  return state === 'observed_ok' ? 'Observed OK' : state === 'fault' ? 'Fault' : 'Unknown';
+}
+
+function FleetFabricMap({
+  nodes, latest, gpuConditions, ibConditions, gpuTelemetry,
+}: {
+  nodes: FleetNode[];
+  latest?: RDMAValidation;
+  gpuConditions: EvidenceSummary[];
+  ibConditions: EvidenceSummary[];
+  gpuTelemetry: EvidenceSummary[];
+}) {
+  const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
+  const sites = new Map<string, { node: FleetNode; index: number }[]>();
+  nodes.forEach((node, index) => {
+    const site = node.region || 'Site Unknown';
+    sites.set(site, [...(sites.get(site) || []), { node, index }]);
+  });
+  const validationSite = latest?.actual?.site;
+  const connectionNodes = latest?.actual?.nodes || [];
+  const connectionGPUs = connectionNodes.flatMap(node =>
+    (node.gpuUuids || []).map(uuid => `${node.name} / ${uuid}`));
+
+  return <section className="fabric-map" aria-label="GPU InfiniBand fabric by site">
+    <div className="fabric-map-head">
+      <div><h3>GPU fabric by site</h3>
+        <p>Site boundaries come from the exact Kubernetes region label. Blue marks GPUs hosted on an RDMA-advertised node; only the labeled run path is validated GPU-to-GPU connection evidence.</p>
+      </div>
+      <div className="fabric-legend" aria-label="Fabric map legend">
+        <span><i className="legend-swatch rdma"/>GPU on RDMA-advertised node</span>
+        <span><i className="legend-line passed"/>Passed run path</span>
+        <span><i className="legend-line failed"/>Failed or fault</span>
+        <span><i className="legend-swatch unknown"/>Unknown / unverified</span>
+      </div>
+    </div>
+    {!latest && <div className="fabric-no-link"><EvidenceBadge state="unknown"/>
+      <span>No validated GPU-to-GPU InfiniBand path is available in this scope.</span>
+    </div>}
+    <div className="fabric-sites">
+      {[...sites.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([site, siteNodes], siteIndex) => {
+        const pools = new Map<string, { node: FleetNode; index: number }[]>();
+        siteNodes.forEach(entry => {
+          const pool = entry.node.agentPool || 'Pool Unknown';
+          pools.set(pool, [...(pools.get(pool) || []), entry]);
+        });
+        const siteGPUCount = siteNodes.reduce((total, entry) => total + entry.node.gpuCapacity, 0);
+        const siteRDMAGPUs = siteNodes.reduce((total, entry) =>
+          total + ((entry.node.rdmaResources || []).length ? entry.node.gpuCapacity : 0), 0);
+        const showConnection = validationSite === site && connectionNodes.length > 0;
+        return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={`Site ${site}`} key={site}>
+          <header><div><strong>{site}</strong><span>Site boundary · {siteGPUCount} GPUs</span></div>
+            <span>{siteRDMAGPUs}/{siteGPUCount} GPUs on RDMA-advertised nodes</span>
+          </header>
+          {showConnection && <div className={`fabric-connection ${latest?.state || 'unknown'}`}>
+            <span className="connection-rail" aria-hidden="true"><i/><i/></span>
+            <div><strong>{stateLabel(latest!.state)} · {connectionGPUs.length || 'Unknown'}-GPU run path</strong>
+              <span>{connectionGPUs.length ? connectionGPUs.join(' ↔ ') : connectionNodes.map(node => node.name).join(' ↔ ')}</span>
+              <small>This path is run evidence only; other GPUs in the site are not implied validated.</small>
+            </div>
+          </div>}
+          <div className="fabric-pools">
+            {[...pools.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([pool, poolNodes]) =>
+              <section className="fabric-pool" aria-label={`Pool ${pool}`} key={pool}>
+                <h4>{pool}<span>{poolNodes.length} node{poolNodes.length === 1 ? '' : 's'}</span></h4>
+                <div className="fabric-nodes">{poolNodes.sort((left, right) => left.node.name.localeCompare(right.node.name)).map(({ node, index }) => {
+                  const rdmaAdvertised = Boolean(node.rdmaResources?.length);
+                  const tested = testedByName.get(node.name);
+                  const visibleGPUs = Math.min(node.gpuCapacity, 16);
+                  return <article className={`fabric-node${tested ? ` tested ${latest?.state || 'unknown'}` : ''}`} key={node.name}>
+                    <div className="fabric-node-head"><strong>{node.name}</strong>
+                      <span className={`fabric-capability ${rdmaAdvertised ? 'rdma' : 'unknown'}`}>{rdmaAdvertised ? 'RDMA advertised' : 'No RDMA resource'}</span>
+                    </div>
+                    <span>{node.gpuCapacity} × {node.gpuProduct || node.sku || 'GPU model Unknown'}</span>
+                    <div className="gpu-bank" aria-label={`${node.gpuCapacity} GPUs; ${rdmaAdvertised ? 'RDMA scheduling advertised' : 'RDMA scheduling not advertised'}`}>
+                      {Array.from({ length: visibleGPUs }, (_, gpuIndex) =>
+                        <i className={`gpu-chip ${rdmaAdvertised ? 'rdma' : 'unknown'}`} key={gpuIndex}/>)}
+                      {node.gpuCapacity > visibleGPUs && <b>+{node.gpuCapacity - visibleGPUs}</b>}
+                    </div>
+                    {tested && <div className={`tested-gpus ${latest?.state || 'unknown'}`}>
+                      <strong>{tested.gpuUuids?.length || 'Unknown'} GPU sampled in latest run</strong>
+                      <span>{list(tested.gpuUuids)}</span>
+                    </div>}
+                    <div className="fabric-signals">
+                      <span className={gpuConditions[index].state}>GPU/NVLink <b>{evidenceLabel(gpuConditions[index].state)}</b></span>
+                      <span className={ibConditions[index].state}>InfiniBand <b>{evidenceLabel(ibConditions[index].state)}</b></span>
+                      <span className={gpuTelemetry[index].state}>Telemetry <b>{evidenceLabel(gpuTelemetry[index].state)}</b></span>
+                    </div>
+                  </article>;
+                })}</div>
+              </section>)}
+          </div>
+        </section>;
+      })}
+    </div>
+  </section>;
+}
+
 function FleetInfiniBandEvidence() {
   const inventoryQuery = useBoard<Nodes>('/api/portal/nodes');
   const telemetryQuery = useBoard<Cluster>('/api/portal/cluster');
@@ -282,7 +380,9 @@ function FleetInfiniBandEvidence() {
         {latestQuery.isError && <Note warn>Latest run coverage is unavailable; inventory capability is still shown independently.</Note>}
         {telemetryQuery.isError && <Note warn>Per-GPU ADX telemetry is unavailable; condition and inventory evidence remain independent.</Note>}
         {!nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
-          : <Table headers={['Node / GPU', 'Site / pool', 'RDMA scheduling', 'Continuous GPU / NVLink', 'Continuous IB', 'Per-GPU ADX telemetry', 'Latest run evidence']}
+          : <><FleetFabricMap nodes={nodes} latest={latest || undefined} gpuConditions={gpuConditions} ibConditions={ibConditions} gpuTelemetry={gpuTelemetry}/>
+            <h3>Evidence matrix</h3>
+            <Table headers={['Node / GPU', 'Site / pool', 'RDMA scheduling', 'Continuous GPU / NVLink', 'Continuous IB', 'Per-GPU ADX telemetry', 'Latest run evidence']}
             rows={nodes.map((node, index) => {
               const tested = testedByName.get(node.name);
               const sameSite = node.region && validationSite ? node.region === validationSite ? 'same site' : 'different site' : 'site Unknown';
@@ -306,7 +406,7 @@ function FleetInfiniBandEvidence() {
                   : <div className="evidence-cell"><EvidenceBadge state="unknown"/>
                     <small>{latest ? `Not tested in latest run · ${sameSite}` : 'No validation run is available.'}</small></div>,
               ];
-            })}/>}
+            })}/></>}
       </>;
     }}</BoardResult>
   </>;
