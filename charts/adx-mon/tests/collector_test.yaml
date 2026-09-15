@@ -111,7 +111,6 @@ tests:
               fieldRef:
                 fieldPath: spec.nodeName
 
-
   - it: has init container to fix WAL directory permissions
     template: collector/daemonset.yaml
     asserts:
@@ -167,6 +166,19 @@ tests:
       - matchRegex:
           path: data["config.toml"]
           pattern: "endpoint = 'https://RELEASE-NAME-adx-mon-ingestor"
+
+  - it: uses the supported hostname token for node-local scrape targets
+    template: collector/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "http://\\$\\(HOSTNAME\\):3100/metrics"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "https://\\$\\(HOSTNAME\\):10250/metrics/cadvisor"
+      - matchRegex:
+          path: data["config.toml"]
+          pattern: "https://\\$\\(HOSTNAME\\):10250/metrics/resource"
 
   - it: config.toml lifts cluster metadata into ADX columns for metrics and logs
     template: collector/configmap.yaml

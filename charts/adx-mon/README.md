@@ -182,9 +182,18 @@ Apply in order: `values.yaml` → `values-ai-runtime.yaml` → cluster-specific 
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `collector.gpu.dcgmScrape` | Scrape DCGM exporter via annotation discovery | `true` |
+| `collector.gpu.dcgmScrape` | Enable GPU telemetry support | `true` |
 | `collector.gpu.kernelTarget` | Collect kernel logs via journald `_TRANSPORT=kernel` | `true` |
 | `collector.gpu.kernelLogTable` | ADX table for kernel logs | `KernelLogs` |
+
+Mixed GPU-stack clusters must route each node to exactly one DCGM owner. Use an
+anchored, node-name-scoped `extraStaticTargets` entry for AKS host exporters.
+For GPU Operator releases without exporter-specific annotations, set the
+common operand annotations `adx-mon/scrape: "true"` and
+`adx-mon/port: "9400"`. adx-mon watches only pods on its own node, and the
+declared port limits discovery to the DCGM exporter. Do not configure a static
+GPU Operator Service target in parallel because static and discovered targets
+are not deduplicated.
 
 ### Collector Singleton
 
