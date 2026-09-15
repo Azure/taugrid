@@ -190,15 +190,32 @@ detailed rollout semantics are documented below.
 ### Continuous GPU metric coverage
 
 `DcgmExporterUnavailable=False` proves HTTP reachability, not that every
-physical GPU supplied the health fields used by the rules. NVIDIA's default
-`dcp-metrics-included.csv` can omit ECC, NVLink error, and throttling counters
-while still exposing utilization and row-remapping metrics.
+physical GPU supplied every health field used by the rules. The default
+NVIDIA/AKS profile provides general telemetry, XID, PCIe replay, and
+row-remapping fields, but does not enable the deeper ECC and NVLink counters.
 
-After publishing a collector built with the metric-coverage contract, pin its
-immutable digest and set:
+Those deeper rules are disabled by default. Opt in only after verifying that
+the target GPU generation and DCGM version support the reduced field set:
 
 ```yaml
 metricsCollector:
+  extendedHealthChecks: true
+```
+
+The extended set covers volatile and retired-page ECC, aggregate NVLink replay,
+and Grace CPU ECC. The retired-page rules use `DCGM_FI_DEV_RETIRED_DBE` and
+`DCGM_FI_DEV_RETIRED_SBE`; aggregate ECC totals are not treated as retired
+pages. Grace CPU ECC uses node-exporter's `node_memory_ECC_*` metrics rather
+than nonexistent DCGM fields. Raw NVLink CRC and power/thermal throttling
+duration rules are deliberately excluded: individual increments do not
+provide a portable hardware-health threshold across GPU generations.
+
+For fail-closed per-GPU coverage, publish and pin a collector image with the
+metric-coverage contract, then additionally set:
+
+```yaml
+metricsCollector:
+  extendedHealthChecks: true
   requireMetricCoverage: true
 dcgmExporterMetrics:
   enabled: true
@@ -206,11 +223,11 @@ dcgmExporterMetrics:
   name: gpu-monitoring-dcgm-metrics
 ```
 
-The ten default continuous GPU rules marked `perGpu: true` then require
-`num_gpus` distinct `UUID` values for their profile. The marker is chart-only;
-the rendered rule fields are `minSamples` and `sampleLabel`. Sparse XID event
-selectors remain optional. Missing or incomplete continuous readings become
-Kubernetes `Unknown`, not `False/...Ok`; rate baselines also need consecutive
+The continuous rules marked `perGpu: true` then require `num_gpus` distinct
+`UUID` values for their profile. The marker is chart-only; the rendered rule
+fields are `minSamples` and `sampleLabel`. Sparse XID event selectors remain
+optional. Missing or incomplete continuous readings become Kubernetes
+`Unknown`, not `False/...Ok`; rate baselines also need consecutive
 observations. Known faults remain `True` even if another device lacks data.
 
 Coverage defaults **off** because the currently pinned public collector digest
@@ -220,10 +237,13 @@ rejects a config containing no coverage rules. Do not enable it against the
 legacy image. Source merge, approved image publication, digest pinning, and
 coverage activation are separate rollout steps.
 
-The optional ConfigMap contains `dcgm-metrics.csv`, retaining the existing fleet
-signals while enabling the continuous GPU health inputs. It does **not** change
-another release's exporter or a GPU Operator `ClusterPolicy`. The owner of that
-exporter must separately reference it, for example:
+The optional ConfigMap contains a reduced `dcgm-metrics.csv`: NVIDIA's normal
+telemetry fields plus only the extended ECC and aggregate NVLink replay inputs.
+It does not include per-link counters, raw CRC counters, or power/thermal
+throttling-duration fields. Enabling the ConfigMap requires
+`extendedHealthChecks: true`, but it still does **not** change another release's
+exporter or a GPU Operator `ClusterPolicy`. The exporter owner must separately
+reference it, for example:
 
 ```yaml
 spec:
@@ -240,35 +260,6 @@ Confirm the running exporter loaded the file and emits finite samples for
 every physical GPU; a field's presence in CSV is not proof of hardware/DCGM
 support. Unsupported fields must remain visibly unknown, not be replaced with
 fabricated zeros. This is continuous telemetry, not a burn-in or bandwidth test.
-
-On newer drivers, the legacy NVLink aggregate field-query API can return
-unsupported even when per-link counters are available. DCGM routes per-link
-fields through a different, supported NVML API on R520+ drivers. The optional
-CSV includes the flit-CRC, data-CRC and replay fields for links 0 through 17.
-For a verified topology, a profile can explicitly select these instead of
-the three legacy total-counter rules:
-
-```yaml
-metricsCollector:
-  requireMetricCoverage: true
-gpuSkus:
-  h200:
-    nvlinkMetricLinkIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
-```
-
-This requires a collector image supporting `metricNames`, not just the initial
-coverage feature. The chart preserves the rules' conditions, thresholds,
-windows and debounce periods, but requires **every selected link on the same
-`num_gpus` UUIDs**. Missing one of 144 GPU/link observations for an eight-GPU
-H200 profile makes the corresponding condition Unknown. Each counter's increase
-is evaluated independently so a reset on one link cannot mask another's fault.
-
-Link selection is opt-in per profile, requires coverage enabled, and must be a
-nonempty list of distinct integers from 0 through 17. Other profiles retain
-their existing rules. Only configure physically verified expected links;
-do not copy the 18-link H200 topology to single-GPU or partially connected VMs.
-An empty list is rejected rather than silently removing NVLink health checks.
-Exporter field coverage must be established before the collector is activated.
 
 For the two-GPU H100 NVL topology, the NVLink check accepts NVIDIA's indented
 output and only excludes the six explicitly expected inactive links. Unexpected
@@ -293,39 +284,18 @@ stack to satisfy a mismatched monitoring profile.
 
 The managed exporter can be reachable while its package-provided
 `/etc/dcgm-exporter/default-counters.csv` omits the continuous health inputs.
-Changing the scrape port does not fix missing fields. Where the node owner
-authorizes a host customization, the opt-in
-[`configure-managed-dcgm-exporter.py`](operations/configure-managed-dcgm-exporter.py)
-helper preserves every existing CSV field and adds the health counters:
+Changing the scrape port does not fix missing fields, and AKS currently exposes
+no supported API for replacing that collector list. TauGrid therefore does not
+modify the managed systemd unit or package-owned CSV.
 
-```bash
-# Run on the intended host with Python 3.10+, systemd, and the existing AKS stack.
-sudo python3 charts/gpu-monitoring/operations/configure-managed-dcgm-exporter.py plan \
-  --metrics-file charts/gpu-monitoring/configs/dcgm-metrics.csv
-sudo python3 charts/gpu-monitoring/operations/configure-managed-dcgm-exporter.py apply \
-  --metrics-file charts/gpu-monitoring/configs/dcgm-metrics.csv
-# To restore the original AKS invocation:
-sudo python3 charts/gpu-monitoring/operations/configure-managed-dcgm-exporter.py rollback
-```
-
-It writes a content-addressed CSV under `/etc/taugrid/dcgm-exporter/` and an
-owned `90-taugrid-metrics.conf` systemd drop-in. It does not overwrite the
-package CSV, service unit, or AKS `10-aks-override.conf`; it restarts only the
-exporter, retaining port 19400. It verifies the original files, host-engine
-process, physical GPU identities, and exporter recovery, and rolls back a
-failed apply. Foreign or changed configurations are rejected rather than
-overwritten. Independently verify finite samples for all required UUID/field
-pairs before enabling the coverage-aware collector; HTTP recovery alone is
-not that proof.
-
-This is an explicit node-owner customization, **not an AKS API setting or an
-automatic Helm action**. It survives a normal reboot but not node replacement
-or reimage. Integrate reapplication into the node owner's approved provisioning
-workflow before treating it as a fleet-wide production fix. A changed host
-engine or vendor configuration requires fresh review; the helper refuses stale
-rollback assumptions. Remove the owned override before retiring the integration.
-For an A100 topology verified to have links 0 through 11 on every GPU, use those
-12 IDs with `gpuSkus.a100.nvlinkMetricLinkIds`, not the H200 18-link example.
+To use `extendedHealthChecks` on AKS, run a separately managed DCGM exporter on
+the normal user-owned port 9400 and point its configuration at the optional
+ConfigMap. Configure the collector's profile-specific exporter URL to reach the
+node-local Service and use `internalTrafficPolicy: Local`. A driver-only node
+pool with a declaratively managed exporter is another supported ownership
+model. Do not install overlapping GPU Operator driver, device-plugin, or
+host-engine components alongside the AKS-managed GPU stack merely to obtain
+additional metrics.
 
 ### Host DCGM health-watch ownership
 
@@ -383,10 +353,11 @@ dcgmHealth:
 no configurable `required`, `availabilityCondition`, condition name, or
 debounce. Both values require literal `metricsCollector.enabled: true` —
 every accepted profile's contract includes the fixed `DcgmExporterUnavailable`
-scrape target and every `DCGM_*` collector rule, and the collector is the
-only component that renders them. Disabling DCGM health monitoring entirely
-means disabling the gpu-monitoring component or chart release itself; there
-is no per-profile opt-out.
+scrape target and the baseline collector rules. Rules requiring non-default
+DCGM fields render only with `metricsCollector.extendedHealthChecks: true`.
+The collector is the only component that renders them. Disabling DCGM health
+monitoring entirely means disabling the gpu-monitoring component or chart
+release itself; there is no per-profile opt-out.
 
 | `source` | Runs host `dcgmi` | Scrapes exporter | Cross-cloud mapping |
 | --- | --- | --- | --- |

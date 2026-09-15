@@ -154,6 +154,7 @@ dcgmHealth:
   exporterUrl: http://localhost:19400/metrics
 metricsCollector:
   enabled: true
+  extendedHealthChecks: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
     tag: 5e606678
@@ -167,7 +168,8 @@ metricsCollector:
       memory: "64Mi"
   rules:
     - name: ecc-dbe-retired
-      metricName: DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
+      extended: true
+      metricName: DCGM_FI_DEV_RETIRED_DBE
       conditionType: GPUECCDoubleRetired
       mode: rate
       threshold: 0
@@ -348,19 +350,22 @@ when its config contains no coverage rule.
 | `sampleLabel` | string | Count distinct nonempty label values instead of raw samples; requires `minSamples` |
 | `maxSampleAge` | duration | Maximum explicit sample age and rate-observation gap; default `2m` for coverage rules |
 
-### Default Rules (20)
+### Chart Rules
 
-| Category | Condition | Mode | Action |
-|----------|-----------|------|--------|
-| **ECC Double-Bit** | `GPUECCDoubleRetired`, `GPUECCDoubleVolatile` | rate 1m | drain |
-| **NVLink Errors** | `GPUNVLinkCRCFlitErrors`, `GPUNVLinkCRCDataErrors`, `GPUNVLinkReplayErrors` | rate 1m | drain |
-| **XID Errors** | `XIDError48`, `XIDError63`, `XIDError64`, `XIDError79`, `XIDError94`, `XIDError95` | instant | drain |
-| **Thermal/Power** | `GPUThermalViolation`, `GPUPowerViolation` | rate 1m | taint |
-| **InfiniBand** | `IBLinkDown`, `IBSymbolError` | rate 1m | taint |
-| **Correctable ECC** | `GPUECCSingleVolatileRate` (>10/10m), `GPUECCSingleRetired` | rate | taint |
-| **PCIe** | `GPUPCIeReplayErrors` (>5/5m) | rate | taint |
-| **Grace CPU** | `GraceCPUECCUncorrectable` | instant | drain |
-| **Grace CPU** | `GraceCPUECCCorrectableRate` (>10/10m) | rate | taint |
+| Enabled | Category | Condition | Mode | Action |
+|---------|----------|-----------|------|--------|
+| default | **XID Errors** | `XIDError48`, `XIDError63`, `XIDError64`, `XIDError79`, `XIDError94`, `XIDError95` | instant | drain |
+| default | **InfiniBand** | `IBLinkDown`, `IBSymbolError` | rate 1m | taint |
+| default | **PCIe** | `GPUPCIeReplayErrors` (>5/5m) | rate | taint |
+| opt-in | **ECC Double-Bit** | `GPUECCDoubleRetired`, `GPUECCDoubleVolatile` | rate 1m | drain |
+| opt-in | **NVLink Errors** | `GPUNVLinkReplayErrors` | rate 1m | drain |
+| opt-in | **Correctable ECC** | `GPUECCSingleVolatileRate` (>10/10m), `GPUECCSingleRetired` | rate | taint |
+| opt-in | **Grace CPU** | `GraceCPUECCUncorrectable` | instant | drain |
+| opt-in | **Grace CPU** | `GraceCPUECCCorrectableRate` (>10/10m) | rate | taint |
+
+The opt-in rows require `metricsCollector.extendedHealthChecks=true` in the
+chart. Raw NVLink CRC increments and power/thermal throttle duration are not
+used as health conditions because portable failure thresholds are not defined.
 
 > The "Action" column reflects what UNO does when the condition fires — the collector only writes the condition.
 

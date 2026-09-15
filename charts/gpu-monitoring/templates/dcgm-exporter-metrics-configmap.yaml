@@ -1,4 +1,7 @@
 {{- if .Values.dcgmExporterMetrics.enabled }}
+{{- if not .Values.metricsCollector.extendedHealthChecks }}
+{{- fail "dcgmExporterMetrics.enabled requires metricsCollector.extendedHealthChecks=true" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
