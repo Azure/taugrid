@@ -166,7 +166,7 @@ func TestOwnedResourceRefsUseOnlySuccessfulCreateUIDs(t *testing.T) {
 	require.Equal(t, "Job", refs[1].Kind)
 }
 
-func TestDeleteOwnedNCCLRDMAResourcesContinuesAfterOneDeleteFails(t *testing.T) {
+func TestDeleteOwnedNCCLRDMAResourcesPreservesSupportWhenJobDeleteFails(t *testing.T) {
 	job := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "batch/v1", "kind": "Job",
 		"metadata": map[string]interface{}{
@@ -203,7 +203,67 @@ func TestDeleteOwnedNCCLRDMAResourcesContinuesAfterOneDeleteFails(t *testing.T) 
 	_, getErr := dynamicClient.Resource(schema.GroupVersionResource{
 		Version: "v1", Resource: "configmaps",
 	}).Namespace(stackNamespace).Get(context.Background(), "nccl-rdma-probe", metav1.GetOptions{})
-	require.True(t, apierrors.IsNotFound(getErr), "cleanup must attempt later resources after the Job delete fails")
+	require.NoError(t, getErr, "cleanup must preserve support resources when the Job cannot be deleted safely")
+}
+
+func TestDeleteOwnedNCCLRDMAResourcesDrainsPodsBeforeRemovingNetworkPolicy(t *testing.T) {
+	job := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "batch/v1", "kind": "Job",
+		"metadata": map[string]interface{}{
+			"name": ncclRDMAJobName, "namespace": stackNamespace, "uid": "job-uid",
+		},
+	}}
+	networkPolicyGVR := schema.GroupVersionResource{
+		Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies",
+	}
+	networkPolicy := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+		"metadata": map[string]interface{}{
+			"name": "nccl-rdma-isolation", "namespace": stackNamespace, "uid": "network-policy-uid",
+		},
+	}}
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), job, networkPolicy)
+	kubeClient := kubernetesfake.NewSimpleClientset()
+	podListCalls := 0
+	kubeClient.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		podListCalls++
+		if podListCalls == 1 {
+			return true, &corev1.PodList{Items: []corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "owned-pod", Namespace: stackNamespace,
+					Labels: map[string]string{
+						"e2e.taugrid.azure.com/diagnostic": "nccl-rdma-2x1xh200",
+						ncclRDMAInvocationKey:              "nccl-rdma-0123456789abcdef0123456789abcdef",
+					},
+				},
+			}}}, nil
+		}
+		return true, &corev1.PodList{}, nil
+	})
+	owned := []ownedNCCLRDMAResource{
+		{
+			GVR: networkPolicyGVR, Namespace: stackNamespace,
+			Name: networkPolicy.GetName(), UID: networkPolicy.GetUID(),
+		},
+		{GVR: ncclRDMAJobGVR, Namespace: stackNamespace, Name: ncclRDMAJobName, UID: "job-uid"},
+	}
+
+	require.NoError(t, deleteOwnedNCCLRDMAResourcesWithin(
+		context.Background(),
+		dynamicClient,
+		kubeClient,
+		owned,
+		"nccl-rdma-0123456789abcdef0123456789abcdef",
+		time.Second,
+	))
+	require.GreaterOrEqual(t, podListCalls, 2)
+	var deleted []string
+	for _, action := range dynamicClient.Actions() {
+		if action.GetVerb() == "delete" {
+			deleted = append(deleted, action.GetResource().Resource)
+		}
+	}
+	require.Equal(t, []string{"jobs", "networkpolicies"}, deleted)
 }
 
 func TestDeleteOwnedNCCLRDMAResourcesSupportsClusterScopedObjects(t *testing.T) {

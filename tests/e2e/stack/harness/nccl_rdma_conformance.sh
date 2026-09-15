@@ -670,7 +670,9 @@ diagnostics() {
 
 cleanup_owned_uids() {
   local entry parsed group version resource namespace type name object_uid object current_uid pods index cleanup_failed
+  local job_entry="" job_parsed="" barrier_complete
   local -a entries=()
+  local -a support_entries=()
   local -a remaining_entries=()
   local deadline=$((SECONDS + CLEANUP_OVERALL_SECONDS))
   cleanup_failed=0
@@ -679,8 +681,61 @@ cleanup_owned_uids() {
   while IFS= read -r entry; do
     entries+=("$entry")
   done <"$NCCL_RDMA_OWNED_UID_FILE"
-  for ((index=${#entries[@]} - 1; index >= 0; index--)); do
-    entry="${entries[index]}"
+  for entry in "${entries[@]}"; do
+    parsed="$(decode_owned_uid_entry "$entry")" \
+      || fail "malformed successful-create UID ledger entry; refusing cleanup"
+    IFS='|' read -r group version resource namespace name object_uid <<<"$parsed"
+    if [[ "$group" == "batch" && "$resource" == "jobs" && "$name" == "$JOB_NAME" ]]; then
+      [[ -z "$job_entry" ]] || fail "successful-create UID ledger contains duplicate diagnostic Job entries"
+      job_entry="$entry"
+      job_parsed="$parsed"
+      continue
+    fi
+    support_entries+=("$entry")
+  done
+
+  if [[ -n "$job_entry" ]]; then
+    IFS='|' read -r group version resource namespace name object_uid <<<"$job_parsed"
+    type="$resource"
+    [[ -z "$group" ]] || type="$resource.$group"
+    run_owned_delete_bounded "$deadline" "$namespace" "$group" "$version" "$resource" "$name" "$object_uid" \
+      || {
+        echo "ERROR: UID-precondition deletion failed for $resource ${namespace:+$namespace/}$name UID $object_uid" >&2
+        return 1
+      }
+    barrier_complete=0
+    while ((SECONDS < deadline)); do
+      object="$(cleanup_get_owned_json "$deadline" "$namespace" "$type" "$name")" \
+        || {
+          echo "ERROR: cannot verify diagnostic Job cleanup for $resource ${namespace:+$namespace/}$name" >&2
+          break
+        }
+      if [[ -n "$object" ]]; then
+        current_uid="$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("metadata", {}).get("uid", ""))' <<<"$object")"
+        if [[ "$current_uid" == "$object_uid" ]]; then
+          sleep 1
+          continue
+        fi
+      fi
+      pods="$(cleanup_kube "$deadline" get pods -n "$(require_env E2E_STACK_NAMESPACE)" -l "$DIAGNOSTIC_SELECTOR" -o name)" \
+        || {
+          echo "ERROR: cannot verify diagnostic Pod drain before support-resource cleanup" >&2
+          break
+        }
+      if [[ -z "$pods" ]]; then
+        barrier_complete=1
+        break
+      fi
+      sleep 1
+    done
+    if ((barrier_complete == 0)); then
+      echo "ERROR: diagnostic Job or Pods remained; preserving NetworkPolicy and support resources" >&2
+      return 1
+    fi
+  fi
+
+  for ((index=${#support_entries[@]} - 1; index >= 0; index--)); do
+    entry="${support_entries[index]}"
     parsed="$(decode_owned_uid_entry "$entry")" \
       || fail "malformed successful-create UID ledger entry; refusing cleanup"
     IFS='|' read -r group version resource namespace name object_uid <<<"$parsed"
@@ -692,7 +747,7 @@ cleanup_owned_uids() {
         cleanup_failed=1
       }
   done
-  remaining_entries=("${entries[@]}")
+  remaining_entries=("${support_entries[@]}")
   while ((SECONDS < deadline && ${#remaining_entries[@]} > 0)); do
     entries=("${remaining_entries[@]}")
     remaining_entries=()

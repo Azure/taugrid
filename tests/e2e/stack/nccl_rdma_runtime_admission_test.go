@@ -49,6 +49,13 @@ func TestVerifyNCCLRDMAEphemeralContainerDeniedUsesExistingOwnedPod(t *testing.T
 			client := fake.NewSimpleClientset(pod.DeepCopy())
 			client.PrependReactor("update", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 				require.Equal(t, "ephemeralcontainers", action.GetSubresource())
+				updated := action.(k8stesting.UpdateAction).GetObject().(*corev1.Pod)
+				require.Len(t, updated.Spec.EphemeralContainers, 1)
+				security := updated.Spec.EphemeralContainers[0].SecurityContext
+				require.NotNil(t, security)
+				require.NotNil(t, security.AllowPrivilegeEscalation)
+				require.False(t, *security.AllowPrivilegeEscalation)
+				require.Equal(t, []corev1.Capability{"ALL"}, security.Capabilities.Drop)
 				if test.reactionError != nil {
 					return true, nil, test.reactionError
 				}

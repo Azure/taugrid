@@ -793,7 +793,7 @@ cleanup_owned_uids
 	require.NotContains(t, string(output), "unexpected delete")
 }
 
-func TestNCCLRDMAHarnessCleanupAttemptsEveryOwnedUIDAfterDeleteFailure(t *testing.T) {
+func TestNCCLRDMAHarnessCleanupPreservesSupportAfterJobDeleteFailure(t *testing.T) {
 	temp := t.TempDir()
 	ledger := filepath.Join(temp, "owned-uids")
 	calls := filepath.Join(temp, "delete-calls")
@@ -829,7 +829,53 @@ cleanup_owned_uids
 	data, readErr := os.ReadFile(calls)
 	require.NoError(t, readErr)
 	require.Contains(t, string(data), "jobs")
-	require.Contains(t, string(data), "configmaps")
+	require.NotContains(t, string(data), "configmaps")
+}
+
+func TestNCCLRDMAHarnessCleanupDrainsPodsBeforeRemovingNetworkPolicy(t *testing.T) {
+	temp := t.TempDir()
+	ledger := filepath.Join(temp, "owned-uids")
+	calls := filepath.Join(temp, "delete-calls")
+	podCalls := filepath.Join(temp, "pod-calls")
+	require.NoError(t, os.WriteFile(podCalls, []byte("0"), 0o600))
+	require.NoError(t, os.WriteFile(
+		ledger,
+		[]byte(
+			`{"group":"networking.k8s.io","version":"v1","resource":"networkpolicies","namespace":"taugrid-rdma-diagnostic","name":"nccl-rdma-isolation","uid":"network-policy-uid"}`+"\n"+
+				`{"group":"batch","version":"v1","resource":"jobs","namespace":"taugrid-rdma-diagnostic","name":"e2e-nccl-rdma-2x1xh200","uid":"job-uid"}`+"\n",
+		),
+		0o600,
+	))
+	command := exec.Command("bash", "-c", fmt.Sprintf(`
+source %q
+run_owned_delete_bounded() {
+  printf '%%s\n' "$5" >>"$DELETE_CALLS"
+}
+cleanup_get_owned_json() {
+  return 0
+}
+cleanup_kube() {
+  shift
+  if [[ "$1" == get && "$2" == pods ]]; then
+    count="$(cat "$POD_CALLS")"
+    printf '%%s' "$((count + 1))" >"$POD_CALLS"
+    ((count > 0)) || printf 'pod/owned\n'
+  fi
+}
+cleanup_owned_uids
+`, ncclRDMAHarnessPath(t)))
+	command.Env = append(os.Environ(),
+		"E2E_STACK_NAMESPACE=taugrid-rdma-diagnostic",
+		"NCCL_RDMA_INVOCATION=nccl-rdma-0123456789abcdef0123456789abcdef",
+		"NCCL_RDMA_OWNED_UID_FILE="+ledger,
+		"DELETE_CALLS="+calls,
+		"POD_CALLS="+podCalls,
+	)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	data, err := os.ReadFile(calls)
+	require.NoError(t, err)
+	require.Equal(t, "jobs\nnetworkpolicies\n", string(data))
 }
 
 func TestNCCLRDMAHarnessCleanupPreservesEmptyAPIGroupAndClusterScope(t *testing.T) {

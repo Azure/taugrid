@@ -239,6 +239,11 @@ func Evaluate(result Result) Evaluation {
 	if result.JobExitCode != nil && *result.JobExitCode != 0 {
 		addFailure(ReasonNonzeroExit, "job_exit_code", "Job exit code was nonzero")
 	}
+	for index, pod := range result.Pods {
+		if pod.ExitCode != nil && *pod.ExitCode != 0 {
+			addFailure(ReasonNonzeroExit, fmt.Sprintf("pods[%d].exit_code", index), "Pod exit code was nonzero")
+		}
+	}
 	for _, exit := range result.RankExits {
 		if exit.ExitCode != nil && *exit.ExitCode != 0 {
 			addFailure(ReasonNonzeroExit, fmt.Sprintf("rank_exits[%d]", exit.Rank), "rank exit code was nonzero")

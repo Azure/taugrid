@@ -105,6 +105,12 @@ func TestEvaluateTopologyAndRequiredEvidence(t *testing.T) {
 		result.RankExits = nil
 		assertStatus(t, &result, StatusUnknown, ReasonMissingRequiredEvidence)
 	})
+	t.Run("known nonzero pod exit fails", func(t *testing.T) {
+		result := validPassResult(t)
+		nonzero := 17
+		result.Pods[1].ExitCode = &nonzero
+		assertStatus(t, &result, StatusFail, ReasonNonzeroExit)
+	})
 	t.Run("cleanup incomplete fails", func(t *testing.T) {
 		result := validPassResult(t)
 		result.Cleanup.State = CleanupIncomplete

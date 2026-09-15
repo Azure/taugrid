@@ -191,6 +191,21 @@ func TestGeneratedPodProbeRetainsManualSelectorLabels(t *testing.T) {
 	require.Equal(t, "e2e-nccl-rdma-2x1xh200-1", pod.Spec.Hostname)
 }
 
+func TestMaliciousPodProbeRemainsRestrictedCompliant(t *testing.T) {
+	pod := maliciousPodProbe("taugrid-rdma-diagnostic")
+	require.NotNil(t, pod.Spec.SecurityContext)
+	require.NotNil(t, pod.Spec.SecurityContext.RunAsNonRoot)
+	require.True(t, *pod.Spec.SecurityContext.RunAsNonRoot)
+	require.NotNil(t, pod.Spec.SecurityContext.SeccompProfile)
+	require.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, pod.Spec.SecurityContext.SeccompProfile.Type)
+	require.Len(t, pod.Spec.Containers, 1)
+	security := pod.Spec.Containers[0].SecurityContext
+	require.NotNil(t, security)
+	require.NotNil(t, security.AllowPrivilegeEscalation)
+	require.False(t, *security.AllowPrivilegeEscalation)
+	require.Equal(t, []corev1.Capability{"ALL"}, security.Capabilities.Drop)
+}
+
 func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("set KUBEBUILDER_ASSETS to installed envtest binaries for API-server CEL compilation")
@@ -208,7 +223,9 @@ func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: boundaryNamespace,
 			Labels: map[string]string{
-				"tau.azure.com/nccl-rdma-security-boundary": "v3",
+				"tau.azure.com/nccl-rdma-security-boundary":  "v3",
+				"pod-security.kubernetes.io/enforce":         "restricted",
+				"pod-security.kubernetes.io/enforce-version": "latest",
 			},
 		},
 	}, metav1.CreateOptions{})
@@ -402,7 +419,9 @@ func TestNCCLRDMABoundaryReportsNoTypeCheckWarnings(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: boundaryNamespace,
 			Labels: map[string]string{
-				"tau.azure.com/nccl-rdma-security-boundary": "v3",
+				"tau.azure.com/nccl-rdma-security-boundary":  "v3",
+				"pod-security.kubernetes.io/enforce":         "restricted",
+				"pod-security.kubernetes.io/enforce-version": "latest",
 			},
 		},
 	}, metav1.CreateOptions{})

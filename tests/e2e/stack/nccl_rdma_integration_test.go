@@ -163,7 +163,7 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 	require.NotNil(t, completedJob.Status.CompletionTime)
 	manifest, err := sanitizedNCCLRDMAJob(job)
 	require.NoError(t, err)
-	require.NoError(t, recorder.cleanup(tc, owned, invocation, false))
+	cleanupErr := recorder.cleanup(tc, owned, invocation, false)
 	contract, err := e2e.BuildNCCLRDMAValidationResult(e2e.NCCLRDMAValidationInput{
 		ValidationID: invocation,
 		RunID:        recorder.result.RunID, Attempt: recorder.result.Attempt,
@@ -185,7 +185,7 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 		Cleanup: recorder.result.Cleanup,
 	})
 	require.NoError(t, err)
-	require.NoError(t, recorder.write(contract))
+	require.NoError(t, persistNCCLRDMAContractAfterCleanup(recorder, contract, cleanupErr))
 	require.Equal(t, rdmavalidation.StatusPass, contract.Status)
 }
 
@@ -219,11 +219,18 @@ func verifyNCCLRDMAEphemeralContainerDenied(
 	ownedPod corev1.Pod,
 ) error {
 	pod := ownedPod.DeepCopy()
+	allowPrivilegeEscalation := false
 	pod.Spec.EphemeralContainers = []corev1.EphemeralContainer{{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
 			Name:    "attacker",
 			Image:   "invalid.example/attacker@sha256:" + strings.Repeat("b", 64),
 			Command: []string{"/bin/false"},
+			SecurityContext: &corev1.SecurityContext{
+				AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"ALL"},
+				},
+			},
 		},
 	}}
 	_, err := client.CoreV1().Pods(pod.Namespace).UpdateEphemeralContainers(
@@ -806,28 +813,89 @@ func deleteOwnedNCCLRDMAResourcesWithin(
 		item     ownedNCCLRDMAResource
 		resource dynamic.ResourceInterface
 	}
-	pending := make([]pendingResource, 0, len(owned))
+	jobs := make([]pendingResource, 0, 1)
+	support := make([]pendingResource, 0, len(owned))
 	for index := len(owned) - 1; index >= 0; index-- {
 		item := owned[index]
 		var resource dynamic.ResourceInterface = dynamicClient.Resource(item.GVR)
 		if item.Namespace != "" {
 			resource = dynamicClient.Resource(item.GVR).Namespace(item.Namespace)
 		}
-		pending = append(pending, pendingResource{item: item, resource: resource})
+		candidate := pendingResource{item: item, resource: resource}
+		if item.GVR == ncclRDMAJobGVR {
+			jobs = append(jobs, candidate)
+		} else {
+			support = append(support, candidate)
+		}
+	}
+	startDelete := func(candidate pendingResource) {
 		foreground := metav1.DeletePropagationForeground
-		err := resource.Delete(cleanupCtx, item.Name, metav1.DeleteOptions{
+		err := candidate.resource.Delete(cleanupCtx, candidate.item.Name, metav1.DeleteOptions{
 			PropagationPolicy: &foreground,
-			Preconditions:     &metav1.Preconditions{UID: &item.UID},
+			Preconditions:     &metav1.Preconditions{UID: &candidate.item.UID},
 		})
 		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf(
 				"start UID-owned delete for %s/%s UID %s: %w",
-				item.GVR.Resource, item.Name, item.UID, err,
+				candidate.item.GVR.Resource, candidate.item.Name, candidate.item.UID, err,
 			))
 		}
 	}
 
-	remaining := append([]pendingResource(nil), pending...)
+	for _, job := range jobs {
+		startDelete(job)
+	}
+	if len(jobs) > 0 {
+		if len(cleanupErrors) > 0 {
+			return errors.Join(cleanupErrors...)
+		}
+		selector := fmt.Sprintf(
+			"e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x1xh200,%s=%s",
+			ncclRDMAInvocationKey,
+			invocation,
+		)
+		var barrierError error
+		err := wait.PollUntilContextTimeout(cleanupCtx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+			for _, job := range jobs {
+				current, err := job.resource.Get(ctx, job.item.Name, metav1.GetOptions{})
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				if err != nil {
+					barrierError = fmt.Errorf("verify Job deletion: %w", err)
+					return false, nil
+				}
+				if current.GetUID() == job.item.UID {
+					return false, nil
+				}
+			}
+			pods, err := kubeClient.CoreV1().Pods(stackNamespace).List(
+				ctx,
+				metav1.ListOptions{LabelSelector: selector},
+			)
+			if err != nil {
+				barrierError = fmt.Errorf("verify diagnostic Pod drain: %w", err)
+				return false, nil
+			}
+			return len(pods.Items) == 0, nil
+		})
+		if err != nil {
+			cleanupErrors = append(
+				cleanupErrors,
+				fmt.Errorf("Job deletion and diagnostic Pod drain did not complete before cleanup deadline: %w", err),
+			)
+			if barrierError != nil {
+				cleanupErrors = append(cleanupErrors, barrierError)
+			}
+			return errors.Join(cleanupErrors...)
+		}
+	}
+
+	for _, candidate := range support {
+		startDelete(candidate)
+	}
+
+	remaining := append([]pendingResource(nil), support...)
 	err := wait.PollUntilContextTimeout(cleanupCtx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		next := remaining[:0]
 		for _, candidate := range remaining {
@@ -854,16 +922,6 @@ func deleteOwnedNCCLRDMAResourcesWithin(
 				candidate.item.GVR.Resource, candidate.item.Name, candidate.item.UID,
 			))
 		}
-	}
-	selector := fmt.Sprintf("e2e.taugrid.azure.com/diagnostic=nccl-rdma-2x1xh200,%s=%s", ncclRDMAInvocationKey, invocation)
-	if err := wait.PollUntilContextTimeout(cleanupCtx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
-		pods, err := kubeClient.CoreV1().Pods(stackNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-		if err != nil {
-			return false, err
-		}
-		return len(pods.Items) == 0, nil
-	}); err != nil {
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("diagnostic pods remained after cleanup deadline: %w", err))
 	}
 	return errors.Join(cleanupErrors...)
 }

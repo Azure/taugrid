@@ -522,11 +522,23 @@ func maliciousPodProbe(namespace string) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			AutomountServiceAccountToken: boolPointer(false),
 			RestartPolicy:                corev1.RestartPolicyNever,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot: boolPointer(true),
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
+				},
+			},
 			Containers: []corev1.Container{{
 				Name:         "attacker",
 				Image:        "invalid.example/attacker@sha256:" + strings.Repeat("a", 64),
 				Command:      []string{"/bin/false"},
 				VolumeMounts: []corev1.VolumeMount{{Name: "credential", MountPath: "/credential"}},
+				SecurityContext: &corev1.SecurityContext{
+					AllowPrivilegeEscalation: boolPointer(false),
+					Capabilities: &corev1.Capabilities{
+						Drop: []corev1.Capability{"ALL"},
+					},
+				},
 			}},
 			Volumes: []corev1.Volume{{
 				Name: "credential",

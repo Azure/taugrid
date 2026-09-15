@@ -5,6 +5,7 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,30 @@ func TestNCCLRDMAArtifactRecorderPersistsContractPlacementFailure(t *testing.T) 
 	require.NoError(t, json.Unmarshal(written, &stored))
 	require.Equal(t, rdmavalidation.StatusFail, stored.Status)
 	require.Equal(t, rdmavalidation.ReasonPlacementMismatch, stored.Reason)
+	require.NotEmpty(t, stored.Measurements.Samples)
+	require.NotEmpty(t, stored.Evidence)
+}
+
+func TestNCCLRDMAArtifactRecorderPersistsMeasurementsBeforeReportingCleanupFailure(t *testing.T) {
+	raw, err := e2e.ReadRepoFile("core/rdmavalidation/testdata/pass.golden.json")
+	require.NoError(t, err)
+	var result rdmavalidation.Result
+	require.NoError(t, json.Unmarshal(raw, &result))
+	result.Cleanup.State = rdmavalidation.CleanupIncomplete
+	result.Cleanup.RemainingResources = []rdmavalidation.ResourceRef{result.Cleanup.OwnedResources[0]}
+
+	path := filepath.Join(t.TempDir(), "cleanup-failure.json")
+	recorder := &ncclRDMAArtifactRecorder{t: t, path: path}
+	cleanupErr := errors.New("cleanup deadline expired")
+	require.ErrorIs(t, persistNCCLRDMAContractAfterCleanup(recorder, result, cleanupErr), cleanupErr)
+
+	written, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var stored rdmavalidation.Result
+	require.NoError(t, json.Unmarshal(written, &stored))
+	require.Equal(t, rdmavalidation.StatusFail, stored.Status)
+	require.Equal(t, rdmavalidation.ReasonCleanupIncomplete, stored.Reason)
+	require.Equal(t, rdmavalidation.CleanupIncomplete, stored.Cleanup.State)
 	require.NotEmpty(t, stored.Measurements.Samples)
 	require.NotEmpty(t, stored.Evidence)
 }

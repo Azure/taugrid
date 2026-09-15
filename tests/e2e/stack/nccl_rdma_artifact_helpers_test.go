@@ -4,6 +4,7 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -88,6 +89,14 @@ func (recorder *ncclRDMAArtifactRecorder) write(result rdmavalidation.Result) er
 	recorder.written = true
 	recorder.t.Logf("NCCL/RDMA validation artifact: %s", recorder.path)
 	return nil
+}
+
+func persistNCCLRDMAContractAfterCleanup(
+	recorder *ncclRDMAArtifactRecorder,
+	result rdmavalidation.Result,
+	cleanupErr error,
+) error {
+	return errors.Join(cleanupErr, recorder.write(result))
 }
 
 func (recorder *ncclRDMAArtifactRecorder) cleanup(
