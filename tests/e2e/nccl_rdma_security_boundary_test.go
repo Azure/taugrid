@@ -151,6 +151,9 @@ func TestNCCLRDMASecurityBoundaryFixture(t *testing.T) {
 		`object.spec.selector.size() == 4`,
 		`object.spec.clusterIP == "None"`,
 		`object.spec.podSelector.matchLabels.size() == 3`,
+		`object.spec.podSelector.matchExpressions.size() == 0`,
+		`object.spec.ingress[0].from[0].podSelector.matchLabels.size() == 3`,
+		`object.spec.egress[0].to[0].podSelector.matchLabels.size() == 3`,
 		`port.protocol == "UDP" && port.port == 53`,
 		`port.protocol == "TCP" && port.port == 53`,
 		`"kube-system"`,
@@ -158,6 +161,7 @@ func TestNCCLRDMASecurityBoundaryFixture(t *testing.T) {
 	} {
 		require.Contains(t, allSupportCEL, required)
 	}
+	require.NotContains(t, allSupportCEL, "podSelector ==")
 
 	connectPolicy := decodeNCCLRDMABoundaryDocument[admissionregistrationv1.ValidatingAdmissionPolicy](
 		t, documents, "ValidatingAdmissionPolicy/taugrid-nccl-rdma-connect-deny",

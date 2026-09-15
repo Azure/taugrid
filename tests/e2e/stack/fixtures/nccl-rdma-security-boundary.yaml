@@ -782,21 +782,43 @@ spec:
         "nccl-rdma-2x1xh200" &&
       object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/invocation"] ==
         object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.podSelector.matchExpressions) ||
+       object.spec.podSelector.matchExpressions.size() == 0) &&
       object.spec.policyTypes == ["Ingress", "Egress"] &&
       object.spec.ingress.size() == 1 &&
       object.spec.ingress[0].from.size() == 1 &&
       (!has(object.spec.ingress[0].ports) ||
        object.spec.ingress[0].ports.size() == 0) &&
-      object.spec.ingress[0].from[0].podSelector ==
-        object.spec.podSelector &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels.size() == 3 &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels[
+        "batch.kubernetes.io/job-name"
+      ] == "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/diagnostic"
+      ] == "nccl-rdma-2x1xh200" &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/invocation"
+      ] == object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.ingress[0].from[0].podSelector.matchExpressions) ||
+       object.spec.ingress[0].from[0].podSelector.matchExpressions.size() == 0) &&
       !has(object.spec.ingress[0].from[0].namespaceSelector) &&
       !has(object.spec.ingress[0].from[0].ipBlock) &&
       object.spec.egress.size() == 2 &&
       object.spec.egress[0].to.size() == 1 &&
       (!has(object.spec.egress[0].ports) ||
        object.spec.egress[0].ports.size() == 0) &&
-      object.spec.egress[0].to[0].podSelector ==
-        object.spec.podSelector &&
+      object.spec.egress[0].to[0].podSelector.matchLabels.size() == 3 &&
+      object.spec.egress[0].to[0].podSelector.matchLabels[
+        "batch.kubernetes.io/job-name"
+      ] == "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.egress[0].to[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/diagnostic"
+      ] == "nccl-rdma-2x1xh200" &&
+      object.spec.egress[0].to[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/invocation"
+      ] == object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.egress[0].to[0].podSelector.matchExpressions) ||
+       object.spec.egress[0].to[0].podSelector.matchExpressions.size() == 0) &&
       !has(object.spec.egress[0].to[0].namespaceSelector) &&
       !has(object.spec.egress[0].to[0].ipBlock) &&
       object.spec.egress[1].to.size() == 1 &&
