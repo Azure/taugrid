@@ -9,6 +9,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
 | **Ray** | 2.58.0 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
+| **Jinja2** | Explicit Serve dependency for Ray 2.57.0 and 2.58.0, whose package metadata omits it |
 | **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1+ includes the upstream protobuf 7 compatibility fix |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
 | **NCCL** | NVIDIA Collective Communications Library — multi-GPU all-reduce, broadcast; uses RDMA/IB transport when available |

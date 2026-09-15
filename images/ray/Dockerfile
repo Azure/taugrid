@@ -82,11 +82,14 @@ ENV CUDA_HOME="/usr/local/cuda"
 ENV LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
 
 # Ray 2.56.1 includes the upstream Serve fix for protobuf 7; no local
-# protobuf upper bound or Ray monkeypatch is needed.
+# protobuf upper bound or Ray monkeypatch is needed. Ray 2.57.0 and 2.58.0
+# omit Jinja2 from their serve extra even though Serve's HAProxy support
+# imports it, so keep that runtime dependency explicit for the current matrix.
 RUN pip install --no-cache-dir \
     "ray[default]==${RAY_VERSION}" \
     "ray[data]==${RAY_VERSION}" \
     "ray[serve]==${RAY_VERSION}" \
+    "jinja2>=3.1,<4" \
     && pip check
 
 # Run as non-root for security (nonroot user is built into the base image)
