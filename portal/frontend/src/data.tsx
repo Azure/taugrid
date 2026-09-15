@@ -4,6 +4,8 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { QueryCache, QueryClient, useQuery, useQueryClient, type Query, type UseQueryResult } from '@tanstack/react-query';
 import type { Directory, WorkspaceScope } from './types';
 
+export const boardStaleTimeMs = 15_000;
+
 export class APIError extends Error {
   constructor(public status: number, public state: string, detail: string) { super(`${status} ${detail}`); }
 }
@@ -23,7 +25,7 @@ export function createPortalQueryClient() {
     // A later failure or cancellation must not restore a rejected payload.
     if (denied.has(query) && query.state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 });
   });
-  return new QueryClient({ queryCache: cache, defaultOptions: { queries: { retry: false, staleTime: 15_000 } } });
+  return new QueryClient({ queryCache: cache, defaultOptions: { queries: { retry: false, staleTime: boardStaleTimeMs } } });
 }
 
 export function readableQuery<T>(query: UseQueryResult<T, Error>) {
