@@ -195,13 +195,36 @@ tests:
           pattern: 'metricName: DCGM_FI_DEV_PCIE_REPLAY_COUNTER'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_port_link_downed_total'
+          pattern: 'metricName: node_infiniband_link_downed_total'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_port_symbol_error_total'
+          pattern: 'metricName: node_infiniband_symbol_error_total'
       - notMatchRegex:
           path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_(link_downed|symbol_error)_total'
+          pattern: 'metricName: node_infiniband_port_(link_downed|symbol_error)_total'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBLinkDown\s+for: 1m\s+maxSampleAge: 2m\s+metricName: node_infiniband_link_downed_total\s+minSamples: 8'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'requiredSampleValues:\s+- mlx5_0\s+- mlx5_1\s+- mlx5_2\s+- mlx5_3\s+- mlx5_4\s+- mlx5_5\s+- mlx5_6\s+- mlx5_7\s+sampleLabel: device'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBSymbolError\s+for: 1m\s+maxSampleAge: 2m\s+metricName: node_infiniband_symbol_error_total\s+minSamples: 8'
+
+  - it: profiles without declared InfiniBand devices cannot claim metric coverage
+    set:
+      enabledGpuSkus[0]: h100-nvl-1g
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100-nvl-1g
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBLinkDown'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBLinkDown\s+maxSampleAge'
 
   - it: extended rules render only behind the explicit opt-in
     set:

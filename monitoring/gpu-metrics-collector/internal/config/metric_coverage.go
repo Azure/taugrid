@@ -45,8 +45,8 @@ func validateCoverage(r rules.Rule) error {
 		}
 	}
 	if r.MinSamples == 0 {
-		if r.SampleLabel != "" || r.MaxSampleAge != 0 {
-			return fmt.Errorf("rule %q requires minSamples when sampleLabel or maxSampleAge is set", r.Name)
+		if r.SampleLabel != "" || len(r.RequiredSampleValues) > 0 || r.MaxSampleAge != 0 {
+			return fmt.Errorf("rule %q requires minSamples when sampleLabel, requiredSampleValues, or maxSampleAge is set", r.Name)
 		}
 		return nil
 	}
@@ -58,6 +58,18 @@ func validateCoverage(r rules.Rule) error {
 	}
 	if r.SampleLabel != "" && !labelNamePattern.MatchString(r.SampleLabel) {
 		return fmt.Errorf("rule %q sampleLabel must be a Prometheus label name", r.Name)
+	}
+	if len(r.RequiredSampleValues) > 0 {
+		if r.SampleLabel == "" || len(r.RequiredSampleValues) != r.MinSamples {
+			return fmt.Errorf("rule %q requiredSampleValues requires sampleLabel and exactly minSamples distinct values", r.Name)
+		}
+		seen := make(map[string]bool, len(r.RequiredSampleValues))
+		for _, value := range r.RequiredSampleValues {
+			if value == "" || seen[value] {
+				return fmt.Errorf("rule %q requiredSampleValues must contain distinct nonempty values", r.Name)
+			}
+			seen[value] = true
+		}
 	}
 	if r.Mode != "instant" && r.Mode != "rate" {
 		return fmt.Errorf("rule %q metric coverage requires instant or rate mode", r.Name)

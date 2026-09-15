@@ -600,6 +600,12 @@ metricsCollector.extendedHealthChecks is enabled.
 {{- if and $coverage (not $extended) }}
 {{- fail "metricsCollector.requireMetricCoverage requires metricsCollector.extendedHealthChecks=true" }}
 {{- end }}
+{{- $ibDevices := list }}
+{{- range $devicePort := splitList " " (trim (default "" $sku.ib_devices)) }}
+{{- if $devicePort }}
+{{- $ibDevices = append $ibDevices (regexReplaceAll ":.*$" $devicePort "") }}
+{{- end }}
+{{- end }}
 {{- $rules := list }}
 {{- $covered := 0 }}
 {{- range $rule := $root.Values.metricsCollector.rules }}
@@ -611,6 +617,12 @@ metricsCollector.extendedHealthChecks is enabled.
 {{- end }}
 {{- if or (not $rule.extended) $extended }}
 {{- $rendered := omit (deepCopy $rule) "extended" "perGpu" }}
+{{- if and (gt (len $ibDevices) 0) (or (eq $rule.conditionType "IBLinkDown") (eq $rule.conditionType "IBSymbolError")) }}
+{{- $_ := set $rendered "minSamples" (len $ibDevices) }}
+{{- $_ := set $rendered "sampleLabel" "device" }}
+{{- $_ := set $rendered "requiredSampleValues" $ibDevices }}
+{{- $_ := set $rendered "maxSampleAge" "2m" }}
+{{- end }}
 {{- if and $coverage $rule.perGpu }}
 {{- if le (int $sku.num_gpus) 0 }}
 {{- fail (printf "gpuSkus.%s.num_gpus must be positive for per-GPU metric coverage" $skuName) }}

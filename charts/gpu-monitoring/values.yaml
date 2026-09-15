@@ -253,14 +253,14 @@ metricsCollector:
       threshold: 0
     # Critical: InfiniBand (any increase over 1m → taint)
     - name: ib-link-down
-      metricName: node_infiniband_port_link_downed_total
+      metricName: node_infiniband_link_downed_total
       conditionType: IBLinkDown
       mode: rate
       threshold: 0
       window: 1m
       for: 1m
     - name: ib-symbol-error
-      metricName: node_infiniband_port_symbol_error_total
+      metricName: node_infiniband_symbol_error_total
       conditionType: IBSymbolError
       mode: rate
       threshold: 0
