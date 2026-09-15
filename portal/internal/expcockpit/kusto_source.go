@@ -1710,7 +1710,8 @@ func latestKustoStatusRow(rows []KustoMetricRow) (KustoMetricRow, bool) {
 		if !isKustoRunStatusMetric(row) {
 			continue
 		}
-		if !ok || row.WallTime > latest.WallTime {
+		if !ok || row.Step > latest.Step ||
+			(row.Step == latest.Step && row.WallTime > latest.WallTime) {
 			latest = row
 			ok = true
 		}
@@ -1722,7 +1723,7 @@ func kustoRunStatusState(row KustoMetricRow) string {
 	tags := kustoRowTags(row)
 	if state := normalizeKustoLifecycle(tags[expkusto.RunStatusStateTag]); state != "" {
 		switch state {
-		case "succeeded", "failed", "cancelled":
+		case "pending", "running", "succeeded", "failed", "cancelled":
 			return state
 		}
 	}
@@ -1754,6 +1755,11 @@ func kustoMergedTags(rows []KustoMetricRow) map[string]string {
 	tags := map[string]string{}
 	for _, row := range rows {
 		for key, value := range kustoRowTags(row) {
+			tags[key] = value
+		}
+	}
+	if status, ok := latestKustoStatusRow(rows); ok {
+		for key, value := range kustoRowTags(status) {
 			tags[key] = value
 		}
 	}
@@ -2172,8 +2178,9 @@ func classifyKustoRun(rows []KustoMetricRow, now time.Time, staleAfter time.Dura
 	terminalAt := time.Time{}
 	controlPlaneAt := time.Time{}
 	reasons := []string{}
+	statusState := ""
 	if hasStatus {
-		statusState := kustoRunStatusState(statusRow)
+		statusState = kustoRunStatusState(statusRow)
 		if terminalOutcome(statusState) != "" {
 			outcome = statusState
 			reasons = kustoRunStatusReasons(statusRow)
@@ -2194,6 +2201,12 @@ func classifyKustoRun(rows []KustoMetricRow, now time.Time, staleAfter time.Dura
 		Now:                  now,
 		NotRespondingAfter:   staleAfter,
 	})
+	if statusState == "pending" && truth.LivenessState == "running" {
+		truth.LivenessState = ""
+		truth.Reason = "run has a recent explicit pending status marker and no terminal outcome"
+		truth.Source = "tau_status_marker"
+		truth.Explicit = true
+	}
 	if len(reasons) == 0 {
 		reasons = []string{truth.Reason}
 	}
@@ -2201,7 +2214,12 @@ func classifyKustoRun(rows []KustoMetricRow, now time.Time, staleAfter time.Dura
 		Truth:      truth,
 		Successful: truth.OutcomeState == "succeeded",
 		Reasons:    reasons,
-		StartedAt:  firstNonEmptyString(firstMetricAt, firstKustoTime(rows)),
+		StartedAt: func() string {
+			if statusState == "pending" {
+				return ""
+			}
+			return firstNonEmptyString(firstMetricAt, firstKustoTime(rows))
+		}(),
 		CompletedAt: func() string {
 			if truth.OutcomeState == "" {
 				return ""
