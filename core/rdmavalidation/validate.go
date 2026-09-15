@@ -32,21 +32,22 @@ var allowedEnvironmentKeys = map[string]bool{
 }
 
 var validReasons = map[ReasonCode]bool{
-	ReasonValidationPassed:         true,
-	ReasonSocketFallbackObserved:   true,
-	ReasonIBTransportNotProven:     true,
-	ReasonTransportFailure:         true,
-	ReasonPeerAuthenticationFailed: true,
-	ReasonPlacementMismatch:        true,
-	ReasonTopologyMismatch:         true,
-	ReasonCorrectnessError:         true,
-	ReasonNonzeroExit:              true,
-	ReasonCleanupIncomplete:        true,
-	ReasonMissingRequiredEvidence:  true,
-	ReasonInvalidMeasurement:       true,
-	ReasonEvidenceIntegrityMissing: true,
-	ReasonParserRejected:           true,
-	ReasonRuntimeError:             true,
+	ReasonValidationPassed:           true,
+	ReasonSocketFallbackObserved:     true,
+	ReasonIBTransportNotProven:       true,
+	ReasonTransportFailure:           true,
+	ReasonPeerAuthenticationFailed:   true,
+	ReasonPlacementMismatch:          true,
+	ReasonTopologyMismatch:           true,
+	ReasonCorrectnessError:           true,
+	ReasonNonzeroExit:                true,
+	ReasonCleanupIncomplete:          true,
+	ReasonMissingRequiredEvidence:    true,
+	ReasonTopologyEvidenceIncomplete: true,
+	ReasonInvalidMeasurement:         true,
+	ReasonEvidenceIntegrityMissing:   true,
+	ReasonParserRejected:             true,
+	ReasonRuntimeError:               true,
 }
 
 var failureReasons = map[ReasonCode]bool{
@@ -119,9 +120,89 @@ func Evaluate(result Result) Evaluation {
 	if result.Placement.DistinctNodes != nil && !*result.Placement.DistinctNodes {
 		addFailure(ReasonPlacementMismatch, "placement.distinct_nodes", "ranks did not run on distinct nodes")
 	}
-	if result.Requested.Topology.Site != "" && result.Actual.Site != "" &&
+	if result.Requested.Topology.SiteMode != "" || result.Actual.SiteMode != "" {
+		if result.Requested.Topology.SiteMode == SiteTopologyNotApplicable &&
+			strings.TrimSpace(result.Requested.Topology.Site) != "" {
+			addUnknown(
+				ReasonTopologyEvidenceIncomplete,
+				"requested.topology.site",
+				"Unbounded site topology cannot be not_applicable when a site was requested",
+			)
+		}
+		if result.Requested.Topology.SiteMode == SiteTopologyIncomplete ||
+			result.Actual.SiteMode == SiteTopologyIncomplete {
+			addUnknown(
+				ReasonTopologyEvidenceIncomplete,
+				"actual.site",
+				"Unbounded site topology evidence was partial, conflicting, or disagreed across nodes",
+			)
+		} else if result.Requested.Topology.SiteMode != result.Actual.SiteMode {
+			addUnknown(
+				ReasonTopologyEvidenceIncomplete,
+				"actual.site_mode",
+				"requested and actual Unbounded site topology applicability did not match",
+			)
+		} else if result.Requested.Topology.SiteMode == SiteTopologyComplete &&
+			result.Requested.Topology.Site != result.Actual.Site {
+			addFailure(ReasonPlacementMismatch, "actual.site", "actual Unbounded site did not match requested site")
+		}
+		for index, node := range result.Actual.Nodes {
+			if node.SiteLabelConflict {
+				addUnknown(
+					ReasonTopologyEvidenceIncomplete,
+					fmt.Sprintf("actual.nodes[%d].site", index),
+					"canonical and legacy Unbounded site labels conflicted; canonical value was preserved",
+				)
+			}
+		}
+		switch result.Actual.SiteMode {
+		case SiteTopologyComplete:
+			for index, node := range result.Actual.Nodes {
+				if strings.TrimSpace(node.Site) != strings.TrimSpace(result.Actual.Site) {
+					addUnknown(
+						ReasonTopologyEvidenceIncomplete,
+						fmt.Sprintf("actual.nodes[%d].site", index),
+						"node Unbounded site did not match the complete aggregate site",
+					)
+				}
+			}
+		case SiteTopologyNotApplicable:
+			if strings.TrimSpace(result.Actual.Site) != "" {
+				addUnknown(
+					ReasonTopologyEvidenceIncomplete,
+					"actual.site",
+					"not_applicable Unbounded site topology contained an aggregate site",
+				)
+			}
+			for index, node := range result.Actual.Nodes {
+				if strings.TrimSpace(node.Site) != "" ||
+					strings.TrimSpace(node.SiteSourceKey) != "" ||
+					node.SiteLabelConflict {
+					addUnknown(
+						ReasonTopologyEvidenceIncomplete,
+						fmt.Sprintf("actual.nodes[%d].site", index),
+						"not_applicable Unbounded site topology contained node site evidence",
+					)
+				}
+			}
+		}
+	} else if result.Requested.Topology.Site != "" && result.Actual.Site != "" &&
 		result.Requested.Topology.Site != result.Actual.Site {
 		addFailure(ReasonPlacementMismatch, "actual.site", "actual site did not match requested site")
+	}
+	if result.Requested.Topology.Region != "" {
+		if result.Actual.Region != "" && result.Requested.Topology.Region != result.Actual.Region {
+			addFailure(ReasonPlacementMismatch, "actual.region", "actual region did not match requested region")
+		}
+		for index, node := range result.Actual.Nodes {
+			if node.Region != "" && node.Region != result.Requested.Topology.Region {
+				addFailure(
+					ReasonPlacementMismatch,
+					fmt.Sprintf("actual.nodes[%d].region", index),
+					"node region did not match requested region",
+				)
+			}
+		}
 	}
 	if result.Requested.Topology.Pool != "" && result.Actual.Pool != "" &&
 		result.Requested.Topology.Pool != result.Actual.Pool {
@@ -225,6 +306,28 @@ func Validate(result Result) error {
 	}
 	if result.Cleanup.State != CleanupComplete && result.Cleanup.State != CleanupIncomplete && result.Cleanup.State != CleanupUnknown {
 		return fmt.Errorf("unknown cleanup state %q", result.Cleanup.State)
+	}
+	for field, mode := range map[string]SiteTopologyMode{
+		"requested.topology.site_mode": result.Requested.Topology.SiteMode,
+		"actual.site_mode":             result.Actual.SiteMode,
+	} {
+		if mode != "" && mode != SiteTopologyComplete && mode != SiteTopologyNotApplicable && mode != SiteTopologyIncomplete {
+			return fmt.Errorf("unknown %s %q", field, mode)
+		}
+	}
+	if result.Requested.Topology.SiteMode != "" &&
+		result.Requested.Topology.SiteProvider != UnboundedSiteProvider {
+		return fmt.Errorf("requested.topology.site_provider must equal %q", UnboundedSiteProvider)
+	}
+	if result.Actual.SiteMode != "" && result.Actual.SiteProvider != UnboundedSiteProvider {
+		return fmt.Errorf("actual.site_provider must equal %q", UnboundedSiteProvider)
+	}
+	for index, node := range result.Actual.Nodes {
+		if node.SiteSourceKey != "" &&
+			node.SiteSourceKey != UnboundedSiteLabelKey &&
+			node.SiteSourceKey != LegacyUnboundedSiteLabelKey {
+			return fmt.Errorf("actual.nodes[%d].site_source_key is not an exact supported Unbounded site label", index)
+		}
 	}
 	if !validReasons[result.Reason] {
 		return fmt.Errorf("unknown reason %q", result.Reason)
@@ -437,7 +540,14 @@ func missingPassFields(result Result) []string {
 		missing = append(missing, "requested.topology")
 	}
 	requireString("requested.topology.gpu_model", result.Requested.Topology.GPUModel)
-	requireString("requested.topology.site", result.Requested.Topology.Site)
+	if result.Requested.Topology.SiteMode == "" {
+		requireString("requested.topology.site", result.Requested.Topology.Site)
+	} else {
+		requireString("requested.topology.site_provider", result.Requested.Topology.SiteProvider)
+		if result.Requested.Topology.SiteMode == SiteTopologyComplete {
+			requireString("requested.topology.site", result.Requested.Topology.Site)
+		}
+	}
 	requireString("requested.topology.pool", result.Requested.Topology.Pool)
 	resources := result.Requested.Resources
 	if resources.CPURequestMilli <= 0 || resources.CPULimitMilli < resources.CPURequestMilli ||
@@ -454,7 +564,14 @@ func missingPassFields(result Result) []string {
 	}
 	requireString("requested.parameters.operation", parameters.Operation)
 	requireString("requested.parameters.data_type", parameters.DataType)
-	requireString("actual.site", result.Actual.Site)
+	if result.Actual.SiteMode == "" {
+		requireString("actual.site", result.Actual.Site)
+	} else {
+		requireString("actual.site_provider", result.Actual.SiteProvider)
+		if result.Actual.SiteMode == SiteTopologyComplete {
+			requireString("actual.site", result.Actual.Site)
+		}
+	}
 	requireString("actual.pool", result.Actual.Pool)
 	if len(result.Actual.Nodes) != 2 {
 		missing = append(missing, "actual.nodes")
@@ -463,6 +580,16 @@ func missingPassFields(result Result) []string {
 		prefix := fmt.Sprintf("actual.nodes[%d].", index)
 		requireString(prefix+"name", node.Name)
 		requireString(prefix+"uid", node.UID)
+		if result.Actual.SiteMode != "" {
+			requireString(prefix+"pool", node.Pool)
+			if result.Actual.SiteMode == SiteTopologyComplete {
+				requireString(prefix+"site", node.Site)
+				requireString(prefix+"site_source_key", node.SiteSourceKey)
+			}
+		}
+		if result.Requested.Topology.Region != "" {
+			requireString(prefix+"region", node.Region)
+		}
 		requireString(prefix+"gpu_model", node.GPUModel)
 		requireString(prefix+"gpu_uuid", node.GPUUUID)
 		requireString(prefix+"rdma_device", node.RDMADevice)

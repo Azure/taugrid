@@ -6,20 +6,23 @@ package rdmavalidation
 import "time"
 
 const (
-	SchemaVersion             = "rdma-validation.v1"
-	Kind                      = "tau.rdma_validation"
-	ArtifactType              = "rdma-validation"
-	ArtifactContentType       = "application/vnd.tau.rdma-validation.v1+json"
-	RunKindTag                = "tau.validation.kind"
-	MetricValidationIDTag     = "tau.rdma_validation.validation_id"
-	MetricSchemaTag           = "tau.rdma_validation.schema"
-	MetricKindTag             = "tau.rdma_validation.kind"
-	MetricLifecycleStateTag   = "tau.rdma_validation.lifecycle_state"
-	MetricValidationStatusTag = "tau.rdma_validation.status"
-	MetricValidationReasonTag = "tau.rdma_validation.reason"
-	MetricArtifactURITag      = "tau.rdma_validation.artifact_uri"
-	MetricArtifactSHA256Tag   = "tau.rdma_validation.artifact_sha256"
-	DefaultStaleAfterSeconds  = int64(24 * time.Hour / time.Second)
+	SchemaVersion               = "rdma-validation.v1"
+	Kind                        = "tau.rdma_validation"
+	ArtifactType                = "rdma-validation"
+	ArtifactContentType         = "application/vnd.tau.rdma-validation.v1+json"
+	RunKindTag                  = "tau.validation.kind"
+	MetricValidationIDTag       = "tau.rdma_validation.validation_id"
+	MetricSchemaTag             = "tau.rdma_validation.schema"
+	MetricKindTag               = "tau.rdma_validation.kind"
+	MetricLifecycleStateTag     = "tau.rdma_validation.lifecycle_state"
+	MetricValidationStatusTag   = "tau.rdma_validation.status"
+	MetricValidationReasonTag   = "tau.rdma_validation.reason"
+	MetricArtifactURITag        = "tau.rdma_validation.artifact_uri"
+	MetricArtifactSHA256Tag     = "tau.rdma_validation.artifact_sha256"
+	DefaultStaleAfterSeconds    = int64(24 * time.Hour / time.Second)
+	UnboundedSiteProvider       = "unbounded"
+	UnboundedSiteLabelKey       = "unbounded-cloud.io/site"
+	LegacyUnboundedSiteLabelKey = "net.unbounded-cloud.io/site"
 )
 
 const (
@@ -45,24 +48,33 @@ const (
 	CleanupUnknown    CleanupState = "unknown"
 )
 
+type SiteTopologyMode string
+
+const (
+	SiteTopologyComplete      SiteTopologyMode = "complete"
+	SiteTopologyNotApplicable SiteTopologyMode = "not_applicable"
+	SiteTopologyIncomplete    SiteTopologyMode = "incomplete"
+)
+
 type ReasonCode string
 
 const (
-	ReasonValidationPassed         ReasonCode = "validation_passed"
-	ReasonSocketFallbackObserved   ReasonCode = "socket_fallback_observed"
-	ReasonIBTransportNotProven     ReasonCode = "ib_transport_not_proven"
-	ReasonTransportFailure         ReasonCode = "transport_failure"
-	ReasonPeerAuthenticationFailed ReasonCode = "peer_authentication_failed"
-	ReasonPlacementMismatch        ReasonCode = "placement_mismatch"
-	ReasonTopologyMismatch         ReasonCode = "topology_mismatch"
-	ReasonCorrectnessError         ReasonCode = "correctness_error"
-	ReasonNonzeroExit              ReasonCode = "nonzero_exit"
-	ReasonCleanupIncomplete        ReasonCode = "cleanup_incomplete"
-	ReasonMissingRequiredEvidence  ReasonCode = "missing_required_evidence"
-	ReasonInvalidMeasurement       ReasonCode = "invalid_measurement"
-	ReasonEvidenceIntegrityMissing ReasonCode = "evidence_integrity_missing"
-	ReasonParserRejected           ReasonCode = "parser_rejected"
-	ReasonRuntimeError             ReasonCode = "runtime_error"
+	ReasonValidationPassed           ReasonCode = "validation_passed"
+	ReasonSocketFallbackObserved     ReasonCode = "socket_fallback_observed"
+	ReasonIBTransportNotProven       ReasonCode = "ib_transport_not_proven"
+	ReasonTransportFailure           ReasonCode = "transport_failure"
+	ReasonPeerAuthenticationFailed   ReasonCode = "peer_authentication_failed"
+	ReasonPlacementMismatch          ReasonCode = "placement_mismatch"
+	ReasonTopologyMismatch           ReasonCode = "topology_mismatch"
+	ReasonCorrectnessError           ReasonCode = "correctness_error"
+	ReasonNonzeroExit                ReasonCode = "nonzero_exit"
+	ReasonCleanupIncomplete          ReasonCode = "cleanup_incomplete"
+	ReasonMissingRequiredEvidence    ReasonCode = "missing_required_evidence"
+	ReasonTopologyEvidenceIncomplete ReasonCode = "topology_evidence_incomplete"
+	ReasonInvalidMeasurement         ReasonCode = "invalid_measurement"
+	ReasonEvidenceIntegrityMissing   ReasonCode = "evidence_integrity_missing"
+	ReasonParserRejected             ReasonCode = "parser_rejected"
+	ReasonRuntimeError               ReasonCode = "runtime_error"
 )
 
 type Result struct {
@@ -135,13 +147,16 @@ type Requested struct {
 }
 
 type RequestedTopology struct {
-	NodeCount        int    `json:"node_count"`
-	PodCount         int    `json:"pod_count"`
-	RankCount        int    `json:"rank_count"`
-	DistinctHostname bool   `json:"distinct_hostname"`
-	Site             string `json:"site"`
-	Pool             string `json:"pool"`
-	GPUModel         string `json:"gpu_model"`
+	NodeCount        int              `json:"node_count"`
+	PodCount         int              `json:"pod_count"`
+	RankCount        int              `json:"rank_count"`
+	DistinctHostname bool             `json:"distinct_hostname"`
+	Site             string           `json:"site"`
+	SiteProvider     string           `json:"site_provider,omitempty"`
+	SiteMode         SiteTopologyMode `json:"site_mode,omitempty"`
+	Region           string           `json:"region,omitempty"`
+	Pool             string           `json:"pool"`
+	GPUModel         string           `json:"gpu_model"`
 }
 
 type RequestedResources struct {
@@ -167,19 +182,27 @@ type BenchmarkParameters struct {
 }
 
 type Actual struct {
-	Site  string       `json:"site"`
-	Pool  string       `json:"pool"`
-	Nodes []NodeResult `json:"nodes"`
+	Site         string           `json:"site"`
+	SiteProvider string           `json:"site_provider,omitempty"`
+	SiteMode     SiteTopologyMode `json:"site_mode,omitempty"`
+	Region       string           `json:"region,omitempty"`
+	Pool         string           `json:"pool"`
+	Nodes        []NodeResult     `json:"nodes"`
 }
 
 type NodeResult struct {
-	Name          string `json:"name"`
-	UID           string `json:"uid"`
-	GPUModel      string `json:"gpu_model"`
-	GPUUUID       string `json:"gpu_uuid"`
-	RDMADevice    string `json:"rdma_device"`
-	RDMAInterface string `json:"rdma_interface"`
-	RDMALinkState string `json:"rdma_link_state"`
+	Name              string `json:"name"`
+	UID               string `json:"uid"`
+	Site              string `json:"site,omitempty"`
+	SiteSourceKey     string `json:"site_source_key,omitempty"`
+	SiteLabelConflict bool   `json:"site_label_conflict,omitempty"`
+	Region            string `json:"region,omitempty"`
+	Pool              string `json:"pool,omitempty"`
+	GPUModel          string `json:"gpu_model"`
+	GPUUUID           string `json:"gpu_uuid"`
+	RDMADevice        string `json:"rdma_device"`
+	RDMAInterface     string `json:"rdma_interface"`
+	RDMALinkState     string `json:"rdma_link_state"`
 }
 
 type Placement struct {

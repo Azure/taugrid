@@ -42,6 +42,7 @@ func newNCCLRDMAArtifactRecorder(t *testing.T, invocation string, createdAt time
 		ExperimentID:     strings.TrimSpace(os.Getenv("NCCL_RDMA_EXPERIMENT_ID")),
 		RunGroupID:       strings.TrimSpace(os.Getenv("NCCL_RDMA_RUN_GROUP_ID")),
 		ExpectedSite:     strings.TrimSpace(os.Getenv("NCCL_RDMA_EXPECTED_SITE")),
+		ExpectedRegion:   strings.TrimSpace(os.Getenv("NCCL_RDMA_EXPECTED_REGION")),
 		ExpectedPool:     strings.TrimSpace(os.Getenv("NCCL_RDMA_EXPECTED_POOL")),
 		ExpectedGPUModel: strings.TrimSpace(os.Getenv("NCCL_RDMA_EXPECTED_GPU_MODEL")),
 		SourceRevision:   strings.TrimSpace(os.Getenv("NCCL_RDMA_SOURCE_REVISION")),
@@ -162,10 +163,13 @@ func (recorder *ncclRDMAArtifactRecorder) requireInputs() error {
 		"NCCL_RDMA_RUN_ATTEMPT":        strconv.Itoa(recorder.result.Attempt),
 		"NCCL_RDMA_WORKSPACE_ID":       recorder.result.WorkspaceID,
 		"NCCL_RDMA_CLUSTER":            recorder.result.Cluster,
-		"NCCL_RDMA_EXPECTED_SITE":      recorder.result.Requested.Topology.Site,
 		"NCCL_RDMA_EXPECTED_POOL":      recorder.result.Requested.Topology.Pool,
 		"NCCL_RDMA_EXPECTED_GPU_MODEL": recorder.result.Requested.Topology.GPUModel,
 		"NCCL_RDMA_SOURCE_REVISION":    recorder.result.Source.Revision,
+	}
+	if recorder.result.Requested.Topology.SiteMode == rdmavalidation.SiteTopologyComplete &&
+		strings.TrimSpace(recorder.result.Requested.Topology.Site) == "" {
+		return fmt.Errorf("NCCL_RDMA_EXPECTED_SITE is required when Unbounded site topology is applicable")
 	}
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" || name == "NCCL_RDMA_RUN_ATTEMPT" && recorder.result.Attempt < 1 {

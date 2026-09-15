@@ -41,6 +41,17 @@ func TestValidateRejectsContractDrift(t *testing.T) {
 		"status enum":  func(result *Result) { result.Status = "maybe" },
 		"cleanup enum": func(result *Result) { result.Cleanup.State = "done" },
 		"reason enum":  func(result *Result) { result.Reason = "other" },
+		"site mode enum": func(result *Result) {
+			result.Requested.Topology.SiteMode = "other"
+		},
+		"site provider": func(result *Result) {
+			enableUnboundedSiteTopology(result)
+			result.Actual.SiteProvider = "other"
+		},
+		"site source key": func(result *Result) {
+			enableUnboundedSiteTopology(result)
+			result.Actual.Nodes[0].SiteSourceKey = "example.com/unbounded-cloud.io/site"
+		},
 		"non UTC": func(result *Result) {
 			result.ObservedAt = result.ObservedAt.In(time.FixedZone("local", 0))
 		},
@@ -92,6 +103,96 @@ func TestEvaluateTopologyAndRequiredEvidence(t *testing.T) {
 			Name: "e2e-nccl-rdma-2x1xh200", UID: "job-uid",
 		}}
 		assertStatus(t, &result, StatusFail, ReasonCleanupIncomplete)
+	})
+	t.Run("complete Unbounded topology passes", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		assertStatus(t, &result, StatusPass, ReasonValidationPassed)
+	})
+	t.Run("not applicable Unbounded topology passes", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Requested.Topology.Site = ""
+		result.Requested.Topology.SiteMode = SiteTopologyNotApplicable
+		result.Actual.Site = ""
+		result.Actual.SiteMode = SiteTopologyNotApplicable
+		for index := range result.Actual.Nodes {
+			result.Actual.Nodes[index].Site = ""
+			result.Actual.Nodes[index].SiteSourceKey = ""
+		}
+		assertStatus(t, &result, StatusPass, ReasonValidationPassed)
+	})
+	t.Run("requested Unbounded site without labels is unknown", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Actual.Site = ""
+		result.Actual.SiteMode = SiteTopologyIncomplete
+		for index := range result.Actual.Nodes {
+			result.Actual.Nodes[index].Site = ""
+			result.Actual.Nodes[index].SiteSourceKey = ""
+		}
+		assertStatus(t, &result, StatusUnknown, ReasonTopologyEvidenceIncomplete)
+	})
+	t.Run("requested site cannot be declared not applicable", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Requested.Topology.SiteMode = SiteTopologyNotApplicable
+		result.Actual.Site = ""
+		result.Actual.SiteMode = SiteTopologyNotApplicable
+		for index := range result.Actual.Nodes {
+			result.Actual.Nodes[index].Site = ""
+			result.Actual.Nodes[index].SiteSourceKey = ""
+		}
+		assertStatus(t, &result, StatusUnknown, ReasonTopologyEvidenceIncomplete)
+	})
+	t.Run("partial Unbounded topology is unknown", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Actual.Site = ""
+		result.Actual.SiteMode = SiteTopologyIncomplete
+		result.Actual.Nodes[1].Site = ""
+		result.Actual.Nodes[1].SiteSourceKey = ""
+		assertStatus(t, &result, StatusUnknown, ReasonTopologyEvidenceIncomplete)
+	})
+	t.Run("conflicting Unbounded labels are unknown", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Actual.SiteMode = SiteTopologyIncomplete
+		result.Actual.Nodes[0].SiteLabelConflict = true
+		assertStatus(t, &result, StatusUnknown, ReasonTopologyEvidenceIncomplete)
+	})
+	t.Run("complete aggregate with node disagreement is unknown", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Actual.Nodes[1].Site = "eastus2"
+		assertStatus(t, &result, StatusUnknown, ReasonTopologyEvidenceIncomplete)
+	})
+	t.Run("not applicable topology cannot contain node evidence", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Requested.Topology.Site = ""
+		result.Requested.Topology.SiteMode = SiteTopologyNotApplicable
+		result.Actual.Site = ""
+		result.Actual.SiteMode = SiteTopologyNotApplicable
+		assertStatus(t, &result, StatusUnknown, ReasonTopologyEvidenceIncomplete)
+	})
+	t.Run("complete Unbounded site mismatch fails", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Actual.Site = "eastus2"
+		for index := range result.Actual.Nodes {
+			result.Actual.Nodes[index].Site = "eastus2"
+		}
+		assertStatus(t, &result, StatusFail, ReasonPlacementMismatch)
+	})
+	t.Run("one Unbounded site may span unconstrained regions", func(t *testing.T) {
+		result := validPassResult(t)
+		enableUnboundedSiteTopology(&result)
+		result.Requested.Topology.Region = ""
+		result.Actual.Region = ""
+		result.Actual.Nodes[0].Region = "eastus2euap"
+		result.Actual.Nodes[1].Region = "westus3"
+		assertStatus(t, &result, StatusPass, ReasonValidationPassed)
 	})
 }
 
@@ -452,6 +553,7 @@ func validPassResult(t *testing.T) Result {
 		{Rank: 0, ElapsedSeconds: 0.18, AlgBWGbps: 13.5, BusBWGbps: 13.5},
 		{Rank: 1, ElapsedSeconds: maxRankTime, AlgBWGbps: 12.5, BusBWGbps: 12.5},
 	}
+
 	digest := "sha256:" + strings.Repeat("a", 64)
 	evidence := make([]EvidenceRef, 0, 5)
 	for index, name := range []string{"sanitized-manifest", "sanitized-logs", "placement", "image-receipt", "cleanup"} {
@@ -542,6 +644,21 @@ func validPassResult(t *testing.T) Result {
 		t.Fatalf("Finalize(valid result): %v", err)
 	}
 	return result
+}
+
+func enableUnboundedSiteTopology(result *Result) {
+	result.Requested.Topology.SiteProvider = UnboundedSiteProvider
+	result.Requested.Topology.SiteMode = SiteTopologyComplete
+	result.Requested.Topology.Region = "westus3"
+	result.Actual.SiteProvider = UnboundedSiteProvider
+	result.Actual.SiteMode = SiteTopologyComplete
+	result.Actual.Region = "westus3"
+	for index := range result.Actual.Nodes {
+		result.Actual.Nodes[index].Site = result.Actual.Site
+		result.Actual.Nodes[index].SiteSourceKey = UnboundedSiteLabelKey
+		result.Actual.Nodes[index].Region = result.Actual.Region
+		result.Actual.Nodes[index].Pool = result.Actual.Pool
+	}
 }
 
 func assertStatus(t *testing.T, result *Result, status Status, reason ReasonCode) {

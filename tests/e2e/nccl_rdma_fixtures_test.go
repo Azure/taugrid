@@ -541,6 +541,13 @@ func TestNCCLRDMAOutputFailureReasonSeparatesProvenAndUnknownFailures(t *testing
 			require.Equal(t, test.reason, NCCLRDMAParseFailureReason(err))
 		})
 	}
+	t.Run("one site may span regions when region is unconstrained", func(t *testing.T) {
+		nodes := baselineNCCLRDMANodes()
+		nodes.Items[1].Labels["topology.kubernetes.io/region"] = "westus3"
+		result := runNCCLRDMAHarnessCapacityWithTopology(t, nodes, corev1.PodList{}, "eastus2", "")
+		require.NoError(t, result.err, result.output)
+		require.Contains(t, result.output, "Unbounded site topology resolved")
+	})
 }
 
 const validNCCLRDMAOutput = `TAUGRID_RANK_LOG_BEGIN rank=0
@@ -700,6 +707,7 @@ func TestNCCLRDMAHarnessIsCreateOnlyBoundedAndMutationScoped(t *testing.T) {
 		"NCCL_RDMA_RESULT_PATH",
 		"NCCL_RDMA_WORKSPACE_ID",
 		"NCCL_RDMA_EXPECTED_SITE",
+		"NCCL_RDMA_EXPECTED_REGION",
 		"NCCL_RDMA_EXPECTED_POOL",
 		"NCCL_RDMA_EXPECTED_GPU_MODEL",
 		"NCCL_RDMA_SOURCE_REVISION",
@@ -967,7 +975,10 @@ func TestNCCLRDMAHarnessCapacityPreflightUsesRequestsAndAllowsFifteenOfSixteenGP
 				resource.MustParse("250Gi")
 		},
 		"wrong site": func(nodes *corev1.NodeList, _ *corev1.PodList) {
-			nodes.Items[1].Labels["topology.kubernetes.io/region"] = "eastus2"
+			nodes.Items[1].Labels[rdmavalidation.LegacyUnboundedSiteLabelKey] = "westus3"
+		},
+		"wrong region": func(nodes *corev1.NodeList, _ *corev1.PodList) {
+			nodes.Items[1].Labels["topology.kubernetes.io/region"] = "westus3"
 		},
 		"wrong pool": func(nodes *corev1.NodeList, _ *corev1.PodList) {
 			nodes.Items[1].Labels["kubernetes.azure.com/agentpool"] = "otherpool"
@@ -988,6 +999,89 @@ func TestNCCLRDMAHarnessCapacityPreflightUsesRequestsAndAllowsFifteenOfSixteenGP
 			mutate(candidateNodes, candidatePods)
 			result := runNCCLRDMAHarnessCapacity(t, *candidateNodes, *candidatePods)
 			require.Error(t, result.err)
+		})
+	}
+}
+
+func TestNCCLRDMAHarnessCapacityPreflightResolvesExactUnboundedSiteLabels(t *testing.T) {
+	tests := map[string]struct {
+		mutate       func(*corev1.NodeList)
+		expectedSite string
+		wantError    string
+		wantOutput   string
+	}{
+		"canonical": {
+			mutate: func(nodes *corev1.NodeList) {
+				for index := range nodes.Items {
+					delete(nodes.Items[index].Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+					nodes.Items[index].Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+				}
+			},
+			expectedSite: "eastus2", wantOutput: rdmavalidation.UnboundedSiteLabelKey,
+		},
+		"legacy fallback": {
+			mutate:       func(*corev1.NodeList) {},
+			expectedSite: "eastus2", wantOutput: rdmavalidation.LegacyUnboundedSiteLabelKey,
+		},
+		"both same prefers canonical": {
+			mutate: func(nodes *corev1.NodeList) {
+				for index := range nodes.Items {
+					nodes.Items[index].Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+				}
+			},
+			expectedSite: "eastus2", wantOutput: rdmavalidation.UnboundedSiteLabelKey,
+		},
+		"both conflict fails closed": {
+			mutate: func(nodes *corev1.NodeList) {
+				for index := range nodes.Items {
+					nodes.Items[index].Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+					nodes.Items[index].Labels[rdmavalidation.LegacyUnboundedSiteLabelKey] = "westus3"
+				}
+			},
+			expectedSite: "eastus2", wantError: "conflicting Unbounded site labels",
+		},
+		"absent is not applicable": {
+			mutate: func(nodes *corev1.NodeList) {
+				for index := range nodes.Items {
+					delete(nodes.Items[index].Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+				}
+			},
+			wantOutput: "Unbounded site topology is not applicable",
+		},
+		"partial fails closed": {
+			mutate: func(nodes *corev1.NodeList) {
+				delete(nodes.Items[1].Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+			},
+			expectedSite: "eastus2", wantError: "site label evidence is partial",
+		},
+		"disagreement fails closed": {
+			mutate: func(nodes *corev1.NodeList) {
+				nodes.Items[1].Labels[rdmavalidation.LegacyUnboundedSiteLabelKey] = "westus3"
+			},
+			expectedSite: "eastus2", wantError: "resolve to different Unbounded sites",
+		},
+		"lookalike is ignored": {
+			mutate: func(nodes *corev1.NodeList) {
+				for index := range nodes.Items {
+					delete(nodes.Items[index].Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+					nodes.Items[index].Labels["example.com/unbounded-cloud.io/site"] = "eastus2"
+				}
+			},
+			wantOutput: "Unbounded site topology is not applicable",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			nodes := baselineNCCLRDMANodes()
+			test.mutate(&nodes)
+			result := runNCCLRDMAHarnessCapacityWithSite(t, nodes, corev1.PodList{}, test.expectedSite)
+			if test.wantError != "" {
+				require.Error(t, result.err)
+				require.Contains(t, result.output, test.wantError)
+				return
+			}
+			require.NoError(t, result.err, result.output)
+			require.Contains(t, result.output, test.wantOutput)
 		})
 	}
 }
@@ -1076,6 +1170,25 @@ func runNCCLRDMAHarnessCapacity(
 	nodes corev1.NodeList,
 	pods corev1.PodList,
 ) ncclRDMACommandResult {
+	return runNCCLRDMAHarnessCapacityWithTopology(t, nodes, pods, "eastus2", "eastus2euap")
+}
+
+func runNCCLRDMAHarnessCapacityWithSite(
+	t *testing.T,
+	nodes corev1.NodeList,
+	pods corev1.PodList,
+	expectedSite string,
+) ncclRDMACommandResult {
+	return runNCCLRDMAHarnessCapacityWithTopology(t, nodes, pods, expectedSite, "eastus2euap")
+}
+
+func runNCCLRDMAHarnessCapacityWithTopology(
+	t *testing.T,
+	nodes corev1.NodeList,
+	pods corev1.PodList,
+	expectedSite string,
+	expectedRegion string,
+) ncclRDMACommandResult {
 	t.Helper()
 	temp := t.TempDir()
 	nodesPath := filepath.Join(temp, "nodes.json")
@@ -1104,7 +1217,8 @@ esac
 		"NCCL_RDMA_KUBECONFIG=/tmp/not-used",
 		"NCCL_RDMA_KUBE_CONTEXT=offline",
 		"NCCL_RDMA_H200_SELECTOR=accelerator=nvidia-h200",
-		"NCCL_RDMA_EXPECTED_SITE=westus3",
+		"NCCL_RDMA_EXPECTED_SITE="+expectedSite,
+		"NCCL_RDMA_EXPECTED_REGION="+expectedRegion,
 		"NCCL_RDMA_EXPECTED_POOL=h200pool",
 		"NCCL_RDMA_EXPECTED_GPU_MODEL=NVIDIA H200",
 	)
@@ -1223,9 +1337,10 @@ func baselineNCCLRDMANodes() corev1.NodeList {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name,
 				Labels: map[string]string{
-					"topology.kubernetes.io/region":  "westus3",
-					"kubernetes.azure.com/agentpool": "h200pool",
-					"nvidia.com/gpu.product":         "NVIDIA-H200",
+					rdmavalidation.LegacyUnboundedSiteLabelKey: "eastus2",
+					"topology.kubernetes.io/region":            "eastus2euap",
+					"kubernetes.azure.com/agentpool":           "h200pool",
+					"nvidia.com/gpu.product":                   "NVIDIA-H200",
 				},
 			},
 			Status: corev1.NodeStatus{

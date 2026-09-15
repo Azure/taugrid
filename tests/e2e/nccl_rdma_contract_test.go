@@ -23,7 +23,9 @@ func TestBuildNCCLRDMAValidationResultConvertsParserEvidence(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, rdmavalidation.StatusPass, result.Status)
 	require.Equal(t, rdmavalidation.ReasonValidationPassed, result.Reason)
-	require.Equal(t, "westus3", result.Actual.Site)
+	require.Equal(t, "eastus2", result.Actual.Site)
+	require.Equal(t, "eastus2euap", result.Actual.Region)
+	require.Equal(t, rdmavalidation.LegacyUnboundedSiteLabelKey, result.Actual.Nodes[0].SiteSourceKey)
 	require.Equal(t, "h200pool", result.Actual.Pool)
 	require.Equal(t, "GPU-aaaaaaaa", result.Actual.Nodes[0].GPUUUID)
 	require.Equal(t, "eth2", result.Actual.Nodes[1].RDMAInterface)
@@ -35,6 +37,157 @@ func TestBuildNCCLRDMAValidationResultConvertsParserEvidence(t *testing.T) {
 		require.Regexp(t, `^sha256:[0-9a-f]{64}$`, evidence.SHA256)
 		require.Positive(t, evidence.SizeBytes)
 	}
+}
+
+func TestBuildNCCLRDMAValidationResultResolvesUnboundedSiteTopology(t *testing.T) {
+	tests := map[string]struct {
+		mutate       func(*NCCLRDMAValidationInput)
+		wantStatus   rdmavalidation.Status
+		wantMode     rdmavalidation.SiteTopologyMode
+		wantSite     string
+		wantSource   string
+		wantConflict bool
+	}{
+		"canonical": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				for _, node := range input.Nodes {
+					delete(node.Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+					node.Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+				}
+			},
+			wantStatus: rdmavalidation.StatusPass, wantMode: rdmavalidation.SiteTopologyComplete,
+			wantSite: "eastus2", wantSource: rdmavalidation.UnboundedSiteLabelKey,
+		},
+		"legacy fallback": {
+			mutate:     func(*NCCLRDMAValidationInput) {},
+			wantStatus: rdmavalidation.StatusPass, wantMode: rdmavalidation.SiteTopologyComplete,
+			wantSite: "eastus2", wantSource: rdmavalidation.LegacyUnboundedSiteLabelKey,
+		},
+		"both same prefers canonical": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				for _, node := range input.Nodes {
+					node.Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+				}
+			},
+			wantStatus: rdmavalidation.StatusPass, wantMode: rdmavalidation.SiteTopologyComplete,
+			wantSite: "eastus2", wantSource: rdmavalidation.UnboundedSiteLabelKey,
+		},
+		"both conflict is unknown": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				for _, node := range input.Nodes {
+					node.Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+					node.Labels[rdmavalidation.LegacyUnboundedSiteLabelKey] = "westus3"
+				}
+			},
+			wantStatus: rdmavalidation.StatusUnknown, wantMode: rdmavalidation.SiteTopologyIncomplete,
+			wantSite: "eastus2", wantSource: rdmavalidation.UnboundedSiteLabelKey, wantConflict: true,
+		},
+		"absent is not applicable": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				input.ExpectedSite = ""
+				for _, node := range input.Nodes {
+					delete(node.Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+				}
+			},
+			wantStatus: rdmavalidation.StatusPass, wantMode: rdmavalidation.SiteTopologyNotApplicable,
+		},
+		"absent requested site is unknown": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				for _, node := range input.Nodes {
+					delete(node.Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+				}
+			},
+			wantStatus: rdmavalidation.StatusUnknown, wantMode: rdmavalidation.SiteTopologyIncomplete,
+		},
+		"partial is unknown": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				delete(input.Nodes["h200-b"].Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+			},
+			wantStatus: rdmavalidation.StatusUnknown, wantMode: rdmavalidation.SiteTopologyIncomplete,
+			wantSource: rdmavalidation.LegacyUnboundedSiteLabelKey,
+		},
+		"disagreement is unknown": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				input.Nodes["h200-b"].Labels[rdmavalidation.LegacyUnboundedSiteLabelKey] = "westus3"
+			},
+			wantStatus: rdmavalidation.StatusUnknown, wantMode: rdmavalidation.SiteTopologyIncomplete,
+			wantSource: rdmavalidation.LegacyUnboundedSiteLabelKey,
+		},
+		"lookalike is ignored": {
+			mutate: func(input *NCCLRDMAValidationInput) {
+				input.ExpectedSite = ""
+				for _, node := range input.Nodes {
+					delete(node.Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+					node.Labels["example.com/unbounded-cloud.io/site"] = "eastus2"
+				}
+			},
+			wantStatus: rdmavalidation.StatusPass, wantMode: rdmavalidation.SiteTopologyNotApplicable,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := ParseNCCLRDMAOutput(validNCCLRDMAOutput)
+			require.NoError(t, err)
+			input := validNCCLRDMAValidationInput(parsed)
+			test.mutate(&input)
+			result, err := BuildNCCLRDMAValidationResult(input)
+			require.NoError(t, err)
+			require.Equal(t, test.wantStatus, result.Status)
+			require.Equal(t, test.wantMode, result.Actual.SiteMode)
+			require.Equal(t, test.wantSite, result.Actual.Site)
+			require.Equal(t, test.wantSource, result.Actual.Nodes[0].SiteSourceKey)
+			require.Equal(t, test.wantConflict, result.Actual.Nodes[0].SiteLabelConflict)
+			require.Equal(t, "eastus2euap", result.Actual.Region)
+		})
+	}
+}
+
+func TestBuildNCCLRDMAValidationResultAllowsOneSiteAcrossRegionsWhenUnconstrained(t *testing.T) {
+	parsed, err := ParseNCCLRDMAOutput(validNCCLRDMAOutput)
+	require.NoError(t, err)
+	input := validNCCLRDMAValidationInput(parsed)
+	input.ExpectedRegion = ""
+	input.Nodes["h200-b"].Labels["topology.kubernetes.io/region"] = "westus3"
+
+	result, err := BuildNCCLRDMAValidationResult(input)
+	require.NoError(t, err)
+	require.Equal(t, rdmavalidation.StatusPass, result.Status)
+	require.Empty(t, result.Actual.Region)
+	require.Equal(t, "eastus2euap", result.Actual.Nodes[0].Region)
+	require.Equal(t, "westus3", result.Actual.Nodes[1].Region)
+	require.Equal(t, "eastus2", result.Actual.Site)
+}
+
+func TestBuildNCCLRDMAValidationResultTreatsMissingRequestedRegionAsUnknown(t *testing.T) {
+	parsed, err := ParseNCCLRDMAOutput(validNCCLRDMAOutput)
+	require.NoError(t, err)
+	input := validNCCLRDMAValidationInput(parsed)
+	delete(input.Nodes["h200-b"].Labels, "topology.kubernetes.io/region")
+
+	result, err := BuildNCCLRDMAValidationResult(input)
+	require.NoError(t, err)
+	require.Equal(t, rdmavalidation.StatusUnknown, result.Status)
+	require.Equal(t, rdmavalidation.ReasonMissingRequiredEvidence, result.Reason)
+}
+
+func TestBuildNCCLRDMAValidationResultPlacementEvidenceHashesExactSiteSource(t *testing.T) {
+	parsed, err := ParseNCCLRDMAOutput(validNCCLRDMAOutput)
+	require.NoError(t, err)
+	fallbackInput := validNCCLRDMAValidationInput(parsed)
+	fallback, err := BuildNCCLRDMAValidationResult(fallbackInput)
+	require.NoError(t, err)
+
+	canonicalInput := validNCCLRDMAValidationInput(parsed)
+	for _, node := range canonicalInput.Nodes {
+		delete(node.Labels, rdmavalidation.LegacyUnboundedSiteLabelKey)
+		node.Labels[rdmavalidation.UnboundedSiteLabelKey] = "eastus2"
+	}
+	canonical, err := BuildNCCLRDMAValidationResult(canonicalInput)
+	require.NoError(t, err)
+
+	require.NotEqual(t, fallback.Evidence[2].SHA256, canonical.Evidence[2].SHA256)
+	require.Equal(t, rdmavalidation.LegacyUnboundedSiteLabelKey, fallback.Actual.Nodes[0].SiteSourceKey)
+	require.Equal(t, rdmavalidation.UnboundedSiteLabelKey, canonical.Actual.Nodes[0].SiteSourceKey)
 }
 
 func TestBuildNCCLRDMAValidationResultFailsClosedOnPlacementMismatch(t *testing.T) {
@@ -81,7 +234,8 @@ func validNCCLRDMAValidationInput(parsed NCCLRDMAResult) NCCLRDMAValidationInput
 		RunID:        "nccl-rdma-0123456789abcdef0123456789abcdef", Attempt: 1,
 		WorkspaceID: "taugrid-rdma", Cluster: "h200-validation", Namespace: "taugrid-rdma-diagnostic",
 		ProjectID: "taugrid", ExperimentID: "rdma-validation", RunGroupID: "manual",
-		ExpectedSite: "westus3", ExpectedPool: "h200pool", ExpectedGPUModel: "NVIDIA H200",
+		ExpectedSite: "eastus2", ExpectedRegion: "eastus2euap",
+		ExpectedPool: "h200pool", ExpectedGPUModel: "NVIDIA H200",
 		SourceRevision: strings.Repeat("1", 40),
 		CreatedAt:      created, StartedAt: started, AdmittedAt: admitted, CompletedAt: completed,
 		ObservedAt: cleanupCompleted, StaleAfter: 24 * time.Hour,
@@ -121,8 +275,9 @@ func rdmaContractNode(name, uid string) *corev1.Node {
 	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
 		Name: name, UID: types.UID(uid),
 		Labels: map[string]string{
-			"topology.kubernetes.io/region":  "westus3",
-			"kubernetes.azure.com/agentpool": "h200pool",
+			rdmavalidation.LegacyUnboundedSiteLabelKey: "eastus2",
+			"topology.kubernetes.io/region":            "eastus2euap",
+			"kubernetes.azure.com/agentpool":           "h200pool",
 		},
 	}}
 }

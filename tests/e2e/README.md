@@ -221,7 +221,8 @@ export E2E_STACK_LARGE_GPU_QUEUE='h200-rdma'
 export NCCL_RDMA_H200_SELECTOR='<key=value selecting exactly two H200 nodes>'
 export GPU_NODE_SELECTOR_KEY='<same selector key>'
 export GPU_NODE_SELECTOR_VALUE='<same selector value>'
-export NCCL_RDMA_EXPECTED_SITE='<exact topology.kubernetes.io/region>'
+export NCCL_RDMA_EXPECTED_SITE='<exact Unbounded site, when site labels are present>'
+export NCCL_RDMA_EXPECTED_REGION='<optional exact topology.kubernetes.io/region constraint>'
 export NCCL_RDMA_EXPECTED_POOL='<exact kubernetes.azure.com/agentpool>'
 export NCCL_RDMA_EXPECTED_GPU_MODEL='<exact runtime GPU model, for example NVIDIA H200>'
 export NCCL_RDMA_WORKSPACE_ID='<lowercase telemetry workspace ID>'
@@ -253,6 +254,22 @@ export NCCL_RDMA_CONFIRM=create-fixed-nccl-rdma-indexed-job
 export NCCL_RDMA_RESULT_PATH='<immutable result JSON path>'
 ./stack/harness/nccl_rdma_conformance.sh run
 ```
+
+Unbounded site topology is resolved from exact label keys only. The canonical
+`unbounded-cloud.io/site` value wins when non-empty; the deprecated
+`net.unbounded-cloud.io/site` value is used only when the canonical value is
+absent or empty. Lookalike and fuzzy keys are ignored. Conflicting canonical
+and deprecated values, partial node coverage, or node disagreement fail the
+preflight closed. If neither selected node has either exact label,
+`NCCL_RDMA_EXPECTED_SITE` must be empty or unset and Unbounded site topology is
+recorded as `not_applicable`; that absence alone does not invalidate generic
+RDMA. If a site was explicitly requested, all-absent labels are instead
+`incomplete` and cannot pass. Kubernetes region remains separate and never
+substitutes for site. It is recorded per node and as an aggregate only when both
+nodes have the same non-empty value; `NCCL_RDMA_EXPECTED_REGION` constrains it
+only when explicitly set, because one Unbounded site may span regions.
+Successful artifacts record the selected exact site label key for each node, so
+canonical and deprecated evidence have distinct placement hashes.
 
 Each pod requests 4 CPU, 16Gi memory, one H200, and one RDMA resource, with
 limits of 8 CPU, 32Gi memory, one GPU, and one RDMA resource. The 1+1 shape may
@@ -309,11 +326,16 @@ data are forbidden. The only environment projection is a fixed eight-key
 benchmark/NCCL allowlist.
 
 A `pass` requires the full two-node/two-pod/two-rank evidence set, matching
-site/pool/H200 model, distinct GPU UUIDs, active RDMA device/interface evidence,
+applicable Unbounded site, Kubernetes region, pool, and H200 model, distinct GPU
+UUIDs, active RDMA device/interface evidence,
 verified HMAC peers, positive `NET/IB` evidence, no socket fallback, positive
 finite bandwidth, zero correctness errors and exits, complete evidence hashes,
-and cleanup with no remaining owned resources. A proven violation is `fail`;
-missing, ambiguous, or unverifiable evidence is `unknown`. Fail and unknown
+and cleanup with no remaining owned resources. Unbounded site topology may be
+`not_applicable` only when both selected nodes lack both exact supported labels.
+Partial coverage, disagreement, or conflicting canonical/deprecated labels is
+`incomplete` and produces `unknown`, while preserving any selected canonical
+value and explicit conflict evidence. A proven violation is `fail`; missing,
+ambiguous, or unverifiable evidence is `unknown`. Fail and unknown
 artifacts are still written when possible. Historical status is immutable:
 freshness is calculated separately from `observed_at`,
 `stale_after_seconds`, and `valid_until`; v1 fixes the freshness interval at

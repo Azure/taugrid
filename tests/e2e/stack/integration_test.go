@@ -672,6 +672,7 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 		Namespace: stackNamespace, ProjectID: recorder.result.ProjectID,
 		ExperimentID: recorder.result.ExperimentID, RunGroupID: recorder.result.RunGroupID,
 		ExpectedSite:     recorder.result.Requested.Topology.Site,
+		ExpectedRegion:   recorder.result.Requested.Topology.Region,
 		ExpectedPool:     recorder.result.Requested.Topology.Pool,
 		ExpectedGPUModel: recorder.result.Requested.Topology.GPUModel,
 		SourceRevision:   recorder.result.Source.Revision,
@@ -685,8 +686,8 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 		Cleanup: recorder.result.Cleanup,
 	})
 	require.NoError(t, err)
-	require.Equal(t, rdmavalidation.StatusPass, contract.Status)
 	require.NoError(t, recorder.write(contract))
+	require.Equal(t, rdmavalidation.StatusPass, contract.Status)
 }
 
 type ownedNCCLRDMAResource struct {

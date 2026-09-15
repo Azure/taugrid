@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Azure/taugrid/core/rdmavalidation"
@@ -31,6 +32,7 @@ type NCCLRDMAValidationInput struct {
 	RunGroupID   string
 
 	ExpectedSite     string
+	ExpectedRegion   string
 	ExpectedPool     string
 	ExpectedGPUModel string
 	SourceRevision   string
@@ -60,6 +62,10 @@ func NewNCCLRDMAValidationSkeleton(input NCCLRDMAValidationInput) rdmavalidation
 	if staleSeconds <= 0 {
 		staleSeconds = 86400
 	}
+	siteMode := rdmavalidation.SiteTopologyComplete
+	if strings.TrimSpace(input.ExpectedSite) == "" {
+		siteMode = rdmavalidation.SiteTopologyNotApplicable
+	}
 	return rdmavalidation.Result{
 		Schema: rdmavalidation.SchemaVersion, Kind: rdmavalidation.Kind,
 		ValidationID: input.ValidationID, RunID: input.RunID, Attempt: input.Attempt,
@@ -82,7 +88,9 @@ func NewNCCLRDMAValidationSkeleton(input NCCLRDMAValidationInput) rdmavalidation
 		Requested: rdmavalidation.Requested{
 			Topology: rdmavalidation.RequestedTopology{
 				NodeCount: 2, PodCount: 2, RankCount: 2, DistinctHostname: true,
-				Site: input.ExpectedSite, Pool: input.ExpectedPool, GPUModel: input.ExpectedGPUModel,
+				Site: input.ExpectedSite, SiteProvider: rdmavalidation.UnboundedSiteProvider,
+				SiteMode: siteMode, Region: input.ExpectedRegion,
+				Pool: input.ExpectedPool, GPUModel: input.ExpectedGPUModel,
 			},
 			Resources: rdmavalidation.RequestedResources{
 				CPURequestMilli: 4000, CPULimitMilli: 8000,
@@ -117,7 +125,9 @@ func BuildNCCLRDMAValidationResult(input NCCLRDMAValidationInput) (rdmavalidatio
 		return pods[i].Labels["batch.kubernetes.io/job-completion-index"] <
 			pods[j].Labels["batch.kubernetes.io/job-completion-index"]
 	})
-	site, pool := "", ""
+	sites := make([]nodeSiteEvidence, 0, 2)
+	regions := make([]string, 0, 2)
+	pools := make([]string, 0, 2)
 	placementMatches := true
 	distinctNodes := pods[0].Spec.NodeName != pods[1].Spec.NodeName
 	result.Pods = make([]rdmavalidation.PodResult, 0, 2)
@@ -132,11 +142,13 @@ func BuildNCCLRDMAValidationResult(input NCCLRDMAValidationInput) (rdmavalidatio
 		if node == nil {
 			return result, fmt.Errorf("pod %s references missing node %s", pod.Name, pod.Spec.NodeName)
 		}
-		nodeSite := node.Labels["topology.kubernetes.io/region"]
+		nodeSite := resolveUnboundedSite(node.Labels)
+		nodeRegion := node.Labels["topology.kubernetes.io/region"]
 		nodePool := node.Labels["kubernetes.azure.com/agentpool"]
-		if rank == 0 {
-			site, pool = nodeSite, nodePool
-		} else if nodeSite != site || nodePool != pool {
+		sites = append(sites, nodeSite)
+		regions = append(regions, nodeRegion)
+		pools = append(pools, nodePool)
+		if rank > 0 && nodePool != pools[0] {
 			placementMatches = false
 		}
 		runtime, ok := input.Parsed.Runtime[rank]
@@ -158,8 +170,11 @@ func BuildNCCLRDMAValidationResult(input NCCLRDMAValidationInput) (rdmavalidatio
 			placementMatches = false
 		}
 		result.Actual.Nodes = append(result.Actual.Nodes, rdmavalidation.NodeResult{
-			Name: pod.Spec.NodeName, UID: string(node.UID), GPUModel: runtime.GPUModel,
-			GPUUUID: runtime.GPUUUID, RDMADevice: runtime.RDMADevice,
+			Name: pod.Spec.NodeName, UID: string(node.UID),
+			Site: nodeSite.Value, SiteSourceKey: nodeSite.SourceKey,
+			SiteLabelConflict: nodeSite.Conflict, Region: nodeRegion, Pool: nodePool,
+			GPUModel: runtime.GPUModel,
+			GPUUUID:  runtime.GPUUUID, RDMADevice: runtime.RDMADevice,
 			RDMAInterface: runtime.RDMAInterface, RDMALinkState: runtime.RDMALinkState,
 		})
 		result.Pods = append(result.Pods, rdmavalidation.PodResult{
@@ -181,10 +196,36 @@ func BuildNCCLRDMAValidationResult(input NCCLRDMAValidationInput) (rdmavalidatio
 		})
 		interfaces = append(interfaces, runtime.RDMAInterface)
 	}
-	result.Actual.Site, result.Actual.Pool = site, pool
+	result.Actual.SiteProvider = rdmavalidation.UnboundedSiteProvider
+	result.Actual.Site, result.Actual.SiteMode = aggregateUnboundedSite(sites)
+	if result.Requested.Topology.SiteMode == rdmavalidation.SiteTopologyComplete &&
+		result.Actual.SiteMode == rdmavalidation.SiteTopologyNotApplicable {
+		result.Actual.SiteMode = rdmavalidation.SiteTopologyIncomplete
+		result.Errors = append(result.Errors, rdmavalidation.ValidationError{
+			Code:    rdmavalidation.ReasonTopologyEvidenceIncomplete,
+			Field:   "actual.site",
+			Message: "an Unbounded site was requested, but neither exact supported site label was present",
+		})
+	}
+	result.Actual.Region = commonTopologyValue(regions)
+	result.Actual.Pool = commonTopologyValue(pools)
+	if result.Actual.SiteMode == rdmavalidation.SiteTopologyIncomplete {
+		result.Errors = append(result.Errors, incompleteSiteErrors(sites)...)
+	}
 	placementMatches = placementMatches && distinctNodes &&
-		site == input.ExpectedSite && pool == input.ExpectedPool &&
+		result.Actual.Pool == input.ExpectedPool &&
 		input.Parsed.Nodes == [2]string{pods[0].Spec.NodeName, pods[1].Spec.NodeName}
+	if input.ExpectedRegion != "" {
+		for _, region := range regions {
+			if region != "" && region != input.ExpectedRegion {
+				placementMatches = false
+			}
+		}
+	}
+	if result.Actual.SiteMode == rdmavalidation.SiteTopologyComplete &&
+		result.Requested.Topology.SiteMode == rdmavalidation.SiteTopologyComplete {
+		placementMatches = placementMatches && result.Actual.Site == input.ExpectedSite
+	}
 	result.Placement = rdmavalidation.Placement{
 		MatchesRequest: contractBoolPointer(placementMatches), DistinctNodes: contractBoolPointer(distinctNodes),
 	}
@@ -210,6 +251,103 @@ func BuildNCCLRDMAValidationResult(input NCCLRDMAValidationInput) (rdmavalidatio
 		return result, err
 	}
 	return result, nil
+}
+
+type nodeSiteEvidence struct {
+	Value     string
+	SourceKey string
+	Conflict  bool
+}
+
+func resolveUnboundedSite(labels map[string]string) nodeSiteEvidence {
+	canonical := strings.TrimSpace(labels[rdmavalidation.UnboundedSiteLabelKey])
+	legacy := strings.TrimSpace(labels[rdmavalidation.LegacyUnboundedSiteLabelKey])
+	if canonical != "" {
+		return nodeSiteEvidence{
+			Value: canonical, SourceKey: rdmavalidation.UnboundedSiteLabelKey,
+			Conflict: legacy != "" && legacy != canonical,
+		}
+	}
+	if legacy != "" {
+		return nodeSiteEvidence{Value: legacy, SourceKey: rdmavalidation.LegacyUnboundedSiteLabelKey}
+	}
+	return nodeSiteEvidence{}
+}
+
+func aggregateUnboundedSite(nodes []nodeSiteEvidence) (string, rdmavalidation.SiteTopologyMode) {
+	present := 0
+	value := ""
+	disagreement := false
+	conflict := false
+	for _, node := range nodes {
+		if node.Value == "" {
+			continue
+		}
+		present++
+		if value == "" {
+			value = node.Value
+		} else if node.Value != value {
+			disagreement = true
+		}
+		conflict = conflict || node.Conflict
+	}
+	if present == 0 {
+		return "", rdmavalidation.SiteTopologyNotApplicable
+	}
+	if present != len(nodes) || disagreement || conflict {
+		if present != len(nodes) || disagreement || value == "" {
+			return "", rdmavalidation.SiteTopologyIncomplete
+		}
+		return value, rdmavalidation.SiteTopologyIncomplete
+	}
+	return value, rdmavalidation.SiteTopologyComplete
+}
+
+func incompleteSiteErrors(nodes []nodeSiteEvidence) []rdmavalidation.ValidationError {
+	errors := make([]rdmavalidation.ValidationError, 0, len(nodes)+1)
+	present := 0
+	values := map[string]struct{}{}
+	for index, node := range nodes {
+		if node.Value != "" {
+			present++
+			values[node.Value] = struct{}{}
+		}
+		if node.Conflict {
+			errors = append(errors, rdmavalidation.ValidationError{
+				Code:    rdmavalidation.ReasonTopologyEvidenceIncomplete,
+				Field:   fmt.Sprintf("actual.nodes[%d].site", index),
+				Message: "canonical and legacy Unbounded site labels conflicted; canonical value was preserved",
+			})
+		}
+	}
+	if present != len(nodes) {
+		errors = append(errors, rdmavalidation.ValidationError{
+			Code:    rdmavalidation.ReasonTopologyEvidenceIncomplete,
+			Field:   "actual.site",
+			Message: "Unbounded site label evidence was present on only some selected nodes",
+		})
+	}
+	if len(values) > 1 {
+		errors = append(errors, rdmavalidation.ValidationError{
+			Code:    rdmavalidation.ReasonTopologyEvidenceIncomplete,
+			Field:   "actual.site",
+			Message: "selected nodes resolved to different Unbounded sites",
+		})
+	}
+	return errors
+}
+
+func commonTopologyValue(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	value := values[0]
+	for _, candidate := range values[1:] {
+		if candidate != value {
+			return ""
+		}
+	}
+	return value
 }
 
 func ncclRDMAEvidence(

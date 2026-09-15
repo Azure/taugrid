@@ -397,22 +397,25 @@ if int(used.get("count/workloads.kueue.x-k8s.io", "0")) != 0:
 }
 
 validate_capacity() {
-  local kubeconfig context selector expected_site expected_pool expected_gpu_model
+  local kubeconfig context selector expected_site expected_region expected_pool expected_gpu_model
   kubeconfig="$(require_env NCCL_RDMA_KUBECONFIG)"
   context="$(require_env NCCL_RDMA_KUBE_CONTEXT)"
   selector="$(require_env NCCL_RDMA_H200_SELECTOR)"
-  expected_site="$(require_env NCCL_RDMA_EXPECTED_SITE)"
+  expected_site="${NCCL_RDMA_EXPECTED_SITE:-}"
+  expected_region="${NCCL_RDMA_EXPECTED_REGION:-}"
   expected_pool="$(require_env NCCL_RDMA_EXPECTED_POOL)"
   expected_gpu_model="$(require_env NCCL_RDMA_EXPECTED_GPU_MODEL)"
 
   python3 - "$kubeconfig" "$context" "$selector" "$RDMA_RESOURCE" \
-    "$expected_site" "$expected_pool" "$expected_gpu_model" <<'PY'
+    "$expected_site" "$expected_region" "$expected_pool" "$expected_gpu_model" <<'PY'
 import json
 import subprocess
 import sys
 from decimal import Decimal, InvalidOperation
 
-kubeconfig, context, selector, rdma_resource, expected_site, expected_pool, expected_gpu_model = sys.argv[1:]
+kubeconfig, context, selector, rdma_resource, expected_site, expected_region, expected_pool, expected_gpu_model = sys.argv[1:]
+canonical_site_key = "unbounded-cloud.io/site"
+legacy_site_key = "net.unbounded-cloud.io/site"
 worker_requests = {
     "cpu": 4000,
     "memory": 16 * 1024**3,
@@ -424,7 +427,7 @@ def kubectl(*args):
     command = ["kubectl", "--kubeconfig", kubeconfig, "--context", context, *args, "-o", "json"]
     return json.loads(subprocess.check_output(command, text=True))
 
-nodes = kubectl("get", "nodes", "-l", selector).get("items", [])
+nodes = kubectl("get", "nodes", "-l", selector).get("items") or []
 ready = []
 for node in nodes:
     conditions = node.get("status", {}).get("conditions", [])
@@ -433,6 +436,7 @@ for node in nodes:
         ready.append(node)
 if len(ready) != 2:
     raise SystemExit(f"selector {selector!r} must resolve to exactly two Ready schedulable H200 nodes; got {len(ready)}")
+site_evidence = []
 for node in ready:
     labels = node.get("metadata", {}).get("labels", {})
     name = node.get("metadata", {}).get("name", "")
@@ -446,15 +450,62 @@ for node in ready:
             raise SystemExit(
                 f"node {name} has disallowed taint {key}={taint.get('value', '')}:{effect}"
             )
-    if labels.get("topology.kubernetes.io/region") != expected_site:
-        raise SystemExit(f"node {name} is not in expected site {expected_site}")
+    if expected_region and labels.get("topology.kubernetes.io/region") != expected_region:
+        raise SystemExit(f"node {name} is not in expected region {expected_region}")
+    canonical_site = labels.get(canonical_site_key, "").strip()
+    legacy_site = labels.get(legacy_site_key, "").strip()
+    if canonical_site:
+        site_evidence.append((name, canonical_site, canonical_site_key))
+        if legacy_site and legacy_site != canonical_site:
+            raise SystemExit(
+                f"node {name} has conflicting Unbounded site labels: "
+                f"{canonical_site_key}={canonical_site!r}, {legacy_site_key}={legacy_site!r}; "
+                "canonical value selected but topology evidence is incomplete"
+            )
+    elif legacy_site:
+        site_evidence.append((name, legacy_site, legacy_site_key))
+    else:
+        site_evidence.append((name, "", ""))
     if labels.get("kubernetes.azure.com/agentpool") != expected_pool:
         raise SystemExit(f"node {name} is not in expected pool {expected_pool}")
     product = labels.get("nvidia.com/gpu.product", "")
     if product and expected_gpu_model.lower().replace(" ", "") not in product.lower().replace("-", "").replace("_", ""):
         raise SystemExit(f"node {name} GPU product {product!r} does not match expected model {expected_gpu_model!r}")
 
-pods = kubectl("get", "pods", "--all-namespaces").get("items", [])
+present_sites = [item for item in site_evidence if item[1]]
+if not present_sites:
+    if expected_site:
+        raise SystemExit(
+            f"expected Unbounded site {expected_site!r}, but neither exact supported site label "
+            "was present on either selected node"
+        )
+    print("Unbounded site topology is not applicable: neither exact supported site label is present")
+elif len(present_sites) != len(site_evidence):
+    rendered = ", ".join(
+        f"{name}={value!r} via {source or 'none'}" for name, value, source in site_evidence
+    )
+    raise SystemExit(f"Unbounded site label evidence is partial across selected nodes: {rendered}")
+elif len({item[1] for item in present_sites}) != 1:
+    rendered = ", ".join(
+        f"{name}={value!r} via {source}" for name, value, source in site_evidence
+    )
+    raise SystemExit(f"selected nodes resolve to different Unbounded sites: {rendered}")
+elif not expected_site:
+    raise SystemExit(
+        "NCCL_RDMA_EXPECTED_SITE is required when exact Unbounded site labels are present"
+    )
+elif present_sites[0][1] != expected_site:
+    raise SystemExit(
+        f"selected nodes resolve to Unbounded site {present_sites[0][1]!r}, "
+        f"not expected site {expected_site!r}"
+    )
+else:
+    print(
+        "Unbounded site topology resolved: "
+        + ", ".join(f"{name}={value!r} via {source}" for name, value, source in site_evidence)
+    )
+
+pods = kubectl("get", "pods", "--all-namespaces").get("items") or []
 
 def quantity(value, resource):
     text = str(value or "0")
@@ -557,7 +608,6 @@ prepare_result_contract() {
   launch_dir="$PWD"
   require_env NCCL_RDMA_WORKSPACE_ID >/dev/null
   require_env NCCL_RDMA_CLUSTER >/dev/null
-  require_env NCCL_RDMA_EXPECTED_SITE >/dev/null
   require_env NCCL_RDMA_EXPECTED_POOL >/dev/null
   require_env NCCL_RDMA_EXPECTED_GPU_MODEL >/dev/null
   [[ -z "$(git -C "$E2E_ROOT/../.." status --porcelain)" ]] \
@@ -582,7 +632,6 @@ preflight() {
   require_env E2E_STACK_LARGE_GPU_QUEUE >/dev/null
   require_env GPU_NODE_SELECTOR_KEY >/dev/null
   require_env GPU_NODE_SELECTOR_VALUE >/dev/null
-  require_env NCCL_RDMA_EXPECTED_SITE >/dev/null
   require_env NCCL_RDMA_EXPECTED_POOL >/dev/null
   require_env NCCL_RDMA_EXPECTED_GPU_MODEL >/dev/null
   [[ "$(require_env NCCL_RDMA_H200_SELECTOR)" == "$(require_env GPU_NODE_SELECTOR_KEY)=$(require_env GPU_NODE_SELECTOR_VALUE)" ]] \
