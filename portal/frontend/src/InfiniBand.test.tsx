@@ -109,7 +109,68 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getByText('39% avg')).toBeVisible();
     expect(screen.getByText('1 fault')).toBeVisible();
     expect(screen.getByText(/fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown/)).toBeVisible();
+    const independent = screen.getByRole('region', { name: 'Independent source evidence' });
+    expect(within(independent).getByRole('cell', { name: '63%' })).toBeVisible();
+    expect(within(independent).getByRole('cell', { name: '72%' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'GPU Dashboard' })).not.toBeInTheDocument();
+  });
+
+  it('correlates telemetry by exact cluster and instance identity', async () => {
+    const telemetry = {
+      ...fleetGPUHealth,
+      gpus: [
+        ...fleetGPUHealth.gpus,
+        { ...fleetGPUHealth.gpus[0], cluster: 'other-cluster', utilizationPct: 99, healthy: false },
+      ],
+    };
+    const nodeUtil = {
+      ...fleetNodeUtil,
+      nodes: [
+        ...fleetNodeUtil.nodes,
+        { ...fleetNodeUtil.nodes[0], cluster: 'other-cluster', cpuUtilPct: 99, memUsedPct: 98 },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(telemetry));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(nodeUtil));
+      return Promise.resolve(json(latestSummary));
+    }));
+    renderPortal('/portal/fleet');
+
+    const card = (await screen.findByText('h200-node-a', { selector: '.fabric-node-head strong' })).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card!).getByText('41%')).toBeVisible();
+    expect(within(card!).getByText('63%')).toBeVisible();
+    expect(within(card!).queryByText('99%')).not.toBeInTheDocument();
+    const independent = screen.getByRole('region', { name: 'Independent source evidence' });
+    expect(within(independent).getAllByRole('cell', { name: 'other-cluster' })).toHaveLength(2);
+    expect(within(independent).getByRole('cell', { name: '99' })).toBeVisible();
+    expect(within(independent).getByRole('cell', { name: '99%' })).toBeVisible();
+    expect(within(independent).getByRole('cell', { name: '98%' })).toBeVisible();
+  });
+
+  it('does not attach historical validation evidence to a recreated node name', async () => {
+    const recreatedNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'h200-node-a'
+        ? { ...node, uid: 'replacement-node-a-uid' }
+        : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(recreatedNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(latestSummary));
+    }));
+    renderPortal('/portal/fleet');
+
+    const card = (await screen.findByText('h200-node-a', { selector: '.fabric-node-head strong' })).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card!).queryByText(/GPU sampled in latest run/)).not.toBeInTheDocument();
+    expect(screen.getByText('Passed · 2-GPU run path')).toBeVisible();
   });
 
   it('separates fleet RDMA capability, tested topology, and per-GPU health', async () => {

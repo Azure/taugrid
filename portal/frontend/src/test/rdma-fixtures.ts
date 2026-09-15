@@ -4,6 +4,10 @@
 import type { Cluster, Nodes, NodeUtil, RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
 
 const fixtureObservedAt = '2026-09-14T20:03:00Z';
+const fixtureScope = {
+  workspace: 'research', name: 'Research', cluster: 'research-west', namespace: 'tau-system',
+  source: 'portal', authorizationMode: 'workspace', availability: 'available', managed: false,
+} as const;
 const gpuConditionTypes = [
   'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
   'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
@@ -190,6 +194,7 @@ export const latestSummary: RDMAValidationSummary = {
 };
 
 export const fleetNodes: Nodes = {
+  scope: fixtureScope,
   totalNodes: 3,
   readyNodes: 3,
   gpuNodes: 3,
@@ -204,6 +209,7 @@ export const fleetNodes: Nodes = {
   nodes: [
     {
       name: 'h200-node-a',
+      uid: 'node-a-uid',
       agentPool: 'h200',
       agentPoolLabel: 'kubernetes.azure.com/agentpool',
       sku: 'Standard_ND96isr_H200_v5',
@@ -223,6 +229,7 @@ export const fleetNodes: Nodes = {
     },
     {
       name: 'h200-node-b',
+      uid: 'node-b-uid',
       agentPool: 'h200',
       agentPoolLabel: 'kubernetes.azure.com/agentpool',
       sku: 'Standard_ND96isr_H200_v5',
@@ -244,6 +251,7 @@ export const fleetNodes: Nodes = {
     },
     {
       name: 'a100-node-c',
+      uid: 'node-c-uid',
       agentPool: 'a100',
       agentPoolLabel: 'kubernetes.azure.com/agentpool',
       sku: 'Standard_NC24ads_A100_v4',
@@ -271,14 +279,14 @@ export const fleetGPUHealth: Cluster = {
   models: [{ modelName: 'NVIDIA H200', gpus: 2 }],
   gpus: [
     {
-      instance: 'h200-node-a', gpu: '0', modelName: 'NVIDIA H200',
+      cluster: 'research-west', instance: 'h200-node-a', gpu: '0', modelName: 'NVIDIA H200',
       utilizationPct: 41, temperatureCelsius: 58, powerWatts: 410,
       memoryUsedMB: 32768, memoryFreeMB: 111104,
       correctableRemappedRows: 0, uncorrectableRemappedRows: 0, rowRemapFailure: 0,
       healthy: true,
     },
     {
-      instance: 'h200-node-b', gpu: '0', modelName: 'NVIDIA H200',
+      cluster: 'research-west', instance: 'h200-node-b', gpu: '0', modelName: 'NVIDIA H200',
       utilizationPct: 37, temperatureCelsius: 61, powerWatts: 402,
       memoryUsedMB: 32768, memoryFreeMB: 111104,
       correctableRemappedRows: 0, uncorrectableRemappedRows: 1, rowRemapFailure: 0,
@@ -293,17 +301,17 @@ export const fleetNodeUtil: NodeUtil = {
   availability: 'ready',
   nodes: [
     {
-      instance: 'h200-node-a', cpuCores: 40, cpuUtilPct: 63, memUsedPct: 72,
+      cluster: 'research-west', instance: 'h200-node-a', cpuCores: 40, cpuUtilPct: 63, memUsedPct: 72,
       memTotalBytes: 337893654528, memAvailBytes: 94610259968,
       cpuCoverage: { samples: 20, observedCores: 40, usableCores: 40, observedSeconds: 560, windowCoveragePct: 93, counterResets: 0 },
     },
     {
-      instance: 'h200-node-b', cpuCores: 40, cpuUtilPct: 48, memUsedPct: 68,
+      cluster: 'research-west', instance: 'h200-node-b', cpuCores: 40, cpuUtilPct: 48, memUsedPct: 68,
       memTotalBytes: 337893654528, memAvailBytes: 108125798400,
       cpuCoverage: { samples: 20, observedCores: 40, usableCores: 40, observedSeconds: 560, windowCoveragePct: 93, counterResets: 0 },
     },
     {
-      instance: 'a100-node-c', cpuCores: 40, cpuUtilPct: null, memUsedPct: null,
+      cluster: 'research-west', instance: 'a100-node-c', cpuCores: 40, cpuUtilPct: null, memUsedPct: null,
       memTotalBytes: null, memAvailBytes: null,
       cpuCoverage: { samples: 0, observedCores: 0, usableCores: 0, observedSeconds: 0, windowCoveragePct: 0, counterResets: 0 },
     },

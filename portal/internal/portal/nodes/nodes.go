@@ -88,6 +88,7 @@ type Options struct {
 // a human GiB convenience; GPU counts are whole devices.
 type Node struct {
 	Name              string         `json:"name"`
+	UID               string         `json:"uid,omitempty"`
 	Ready             bool           `json:"ready"`
 	AgentPool         string         `json:"agentPool,omitempty"`
 	AgentPoolLabel    string         `json:"agentPoolLabel,omitempty"`
@@ -241,6 +242,7 @@ type nodeList struct {
 type nodeObj struct {
 	Metadata struct {
 		Name   string            `json:"name"`
+		UID    string            `json:"uid"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Status struct {
@@ -323,6 +325,7 @@ func parseNode(obj nodeObj) Node {
 	zoneLabel, zone := firstLabelWithKey(labels, zoneLabels...)
 	return Node{
 		Name:           obj.Metadata.Name,
+		UID:            obj.Metadata.UID,
 		Ready:          isReady(obj),
 		AgentPool:      agentPool,
 		AgentPoolLabel: agentPoolLabel,

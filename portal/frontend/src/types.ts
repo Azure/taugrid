@@ -43,7 +43,7 @@ export interface Nodes extends Scoped {
   totalNodes: number; readyNodes: number; gpuNodes: number; totalGPUs: number;
   totalCPUCores: number; totalMemoryGiB: number; rdmaAdvertisedGpuNodes?: number;
   skus: { sku: string; nodes: number; gpus: number }[];
-  nodes: { name: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
+  nodes: { name: string; uid?: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
     cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuProduct?: string; ready: boolean;
     agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
     rdmaResources?: { name: string; capacity: number; allocatable: number }[];
