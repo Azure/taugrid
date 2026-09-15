@@ -1,7 +1,23 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import type { Nodes, RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
+import type { Cluster, Nodes, RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
+
+const fixtureObservedAt = '2026-09-14T20:03:00Z';
+const gpuConditionTypes = [
+  'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
+  'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
+  'GPUPowerViolation', 'GPUECCSingleVolatileRate', 'GPUECCSingleRetired',
+  'GPUPCIeReplayErrors',
+];
+const ibConditionTypes = ['IBLinkDown', 'IBSymbolError'];
+const observedConditions = (fault?: string) => [...gpuConditionTypes, ...ibConditionTypes].map(type => ({
+  type,
+  status: type === fault ? 'True' : 'False',
+  reason: type === fault ? `${type}ThresholdExceeded` : `${type}Ok`,
+  lastHeartbeatTime: fixtureObservedAt,
+  lastTransitionTime: '2026-09-11T02:51:06Z',
+}));
 
 export const passedValidation: RDMAValidationDetail = {
   validationId: 'nccl-rdma-0123456789abcdef0123456789abcdef',
@@ -191,6 +207,7 @@ export const fleetNodes: Nodes = {
       gpuProduct: 'NVIDIA H200',
       ready: true,
       rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
+      operationalConditions: observedConditions(),
     },
     {
       name: 'h200-node-b',
@@ -207,6 +224,9 @@ export const fleetNodes: Nodes = {
       gpuProduct: 'NVIDIA H200',
       ready: true,
       rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
+      operationalConditions: observedConditions('GPUNVLinkReplayErrors')
+        .filter(condition => condition.type !== 'GPUECCSingleRetired')
+        .reverse(),
     },
     {
       name: 'a100-node-c',
@@ -220,6 +240,33 @@ export const fleetNodes: Nodes = {
       gpuCapacity: 1,
       gpuProduct: 'NVIDIA A100',
       ready: true,
+    },
+  ],
+};
+
+export const fleetGPUHealth: Cluster = {
+  window: '15m0s',
+  totalGPUs: 2,
+  errorGPUs: 1,
+  telemetryAvailable: true,
+  utilizationObservedGPUs: 2,
+  healthObservedGPUs: 2,
+  unknownHealthGPUs: 0,
+  models: [{ modelName: 'NVIDIA H200', gpus: 2 }],
+  gpus: [
+    {
+      instance: 'h200-node-a', gpu: '0', modelName: 'NVIDIA H200',
+      utilizationPct: 41, temperatureCelsius: 58, powerWatts: 410,
+      memoryUsedMB: 32768, memoryFreeMB: 111104,
+      correctableRemappedRows: 0, uncorrectableRemappedRows: 0, rowRemapFailure: 0,
+      healthy: true,
+    },
+    {
+      instance: 'h200-node-b', gpu: '0', modelName: 'NVIDIA H200',
+      utilizationPct: 37, temperatureCelsius: 61, powerWatts: 402,
+      memoryUsedMB: 32768, memoryFreeMB: 111104,
+      correctableRemappedRows: 0, uncorrectableRemappedRows: 1, rowRemapFailure: 0,
+      healthy: false,
     },
   ],
 };

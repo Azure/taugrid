@@ -4,12 +4,12 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Fleet } from './Fleet';
 import { InfiniBandFleet, InfiniBandValidationDetail } from './InfiniBand';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import type { RDMAValidationDetail, WorkspaceScope } from './types';
-import { firstHistoryPage, fleetNodes, latestSummary, passedValidation, secondHistoryPage } from './test/rdma-fixtures';
+import { firstHistoryPage, fleetGPUHealth, fleetNodes, latestSummary, passedValidation, secondHistoryPage } from './test/rdma-fixtures';
 
 const scope: WorkspaceScope = {
   workspace: 'research', name: 'Research', cluster: 'research-west', namespace: 'tau-system',
@@ -39,8 +39,14 @@ function renderPortal(initialEntry: string, detailOnly = false) {
   </MemoryRouter></QueryClientProvider>);
 }
 
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-14T20:04:00Z'));
+});
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -49,6 +55,7 @@ describe('InfiniBand fleet validation', () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
       return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
     }));
     const client = createPortalQueryClient();
@@ -72,6 +79,7 @@ describe('InfiniBand fleet validation', () => {
 
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => Promise.resolve(json(
       String(input).includes('/nodes') ? { ...fleetNodes, totalNodes: 0, gpuNodes: 0, totalGPUs: 0, rdmaAdvertisedGpuNodes: 0, nodes: [], skus: [] } :
+        String(input).includes('/cluster') ? { ...fleetGPUHealth, totalGPUs: 0, gpus: [] } :
         String(input).includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 },
     ))));
     renderPortal('/portal/fleet');
@@ -83,18 +91,53 @@ describe('InfiniBand fleet validation', () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
       return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
     }));
     renderPortal('/portal/fleet');
 
-    expect(await screen.findByText(/RDMA advertised: 2/)).toBeVisible();
-    expect(screen.getAllByText(/rdma\/rdma_shared_device_a 1\/1 allocatable/)).toHaveLength(2);
+    expect(await screen.findAllByText('Advertised', { selector: '.badge' })).toHaveLength(2);
+    expect(screen.getAllByText(/rdma\/rdma_shared_device_a/)).toHaveLength(2);
     expect(screen.getAllByText(/kubernetes.azure.com\/agentpool/)).toHaveLength(3);
-    expect(screen.getAllByText('Yes')).toHaveLength(2);
-    expect(screen.getByText('Not tested in latest run')).toBeVisible();
-    expect(screen.getAllByRole('link', { name: 'Open per-GPU metrics' })[0]).toHaveAttribute(
+    expect(screen.getByText(/All 10 required condition families reported fresh False/)).toBeVisible();
+    expect(screen.getByText(/1 fresh fault condition: GPUNVLinkReplayErrors/)).toBeVisible();
+    expect(screen.getByText(/GPUECCDoubleRetired missing/)).toBeVisible();
+    expect(screen.getByText(/0\/1 GPUs have complete row-remap verdicts/)).toBeVisible();
+    expect(screen.getAllByRole('link', { name: /Open per-GPU metrics/ })[0]).toHaveAttribute(
       'href', expect.stringContaining('view=health&instance=h200-node-a'),
     );
+    expect(screen.getAllByText('Passed', { selector: '.badge' }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/Not tested in latest run · different site/)).toBeVisible();
+  });
+
+  it('keeps stale and future continuous evidence Unknown', async () => {
+    const staleNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map((node, index) => ({
+        ...node,
+        operationalConditions: index === 2
+          ? [
+            { type: 'GPUECCDoubleRetired', status: 'False', lastHeartbeatTime: '2026-09-14T20:03:00Z' },
+            { type: 'GPUECCDoubleRetired', status: 'False', lastHeartbeatTime: '2026-09-14T20:03:00Z' },
+          ]
+          : node.operationalConditions?.map(condition => ({
+            ...condition,
+            lastHeartbeatTime: index === 0 ? '2026-09-14T19:30:00Z' : '2026-09-14T20:06:00Z',
+          })),
+      })),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(staleNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByText(/GPUECCDoubleRetired heartbeat is stale/)).toBeVisible();
+    expect(screen.getByText(/GPUECCDoubleRetired heartbeat is in the future/)).toBeVisible();
+    expect(screen.getByText(/GPUECCDoubleRetired duplicated/)).toBeVisible();
+    expect(screen.getAllByText('Unknown', { selector: '.badge' }).length).toBeGreaterThanOrEqual(4);
   });
 
   it.each([
@@ -184,6 +227,7 @@ describe('InfiniBand fleet validation', () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
       if (url.includes('/summary')) return Promise.resolve(json(latestSummary));
       if (url.includes(secondHistoryPage.validations[0].validationId)) return Promise.resolve(json(secondHistoryPage.validations[0]));
       if (url.includes('cursor=page-two')) return Promise.resolve(json(secondHistoryPage));

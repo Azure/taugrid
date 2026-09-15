@@ -49,7 +49,11 @@ const nodesJSON = `{"items":[
       "topology.kubernetes.io/zone":"westeurope-0"}},
    "status":{"capacity":{"cpu":"40","memory":"329974272Ki","nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
      "allocatable":{"nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
-     "conditions":[{"type":"MemoryPressure","status":"False"},{"type":"Ready","status":"True"}]}},
+     "conditions":[
+       {"type":"MemoryPressure","status":"False"},
+       {"type":"GPUNVLinkCRCDataErrors","status":"False","reason":"GPUNVLinkCRCDataErrorsOk","lastHeartbeatTime":"2026-09-14T20:03:00Z","lastTransitionTime":"2026-09-11T02:51:06Z"},
+       {"type":"IBLinkDown","status":"Unknown","reason":"IBLinkDownMetricCoverageUnknown","message":"required metric coverage is incomplete","lastHeartbeatTime":"2026-09-14T20:03:01+00:00"},
+       {"type":"Ready","status":"True"}]}},
   {"metadata":{"name":"aks-h100pool-2","labels":{
       "node.kubernetes.io/instance-type":"Standard_NC40ads_H100_v5",
       "kubernetes.azure.com/agentpool":"h100pool"}},
@@ -125,6 +129,16 @@ func TestBoardParsesNodeFields(t *testing.T) {
 		n.RDMAResources[0].Capacity != 1 ||
 		n.RDMAResources[0].Allocatable != 1 {
 		t.Fatalf("RDMA resources = %+v", n.RDMAResources)
+	}
+	if len(n.Conditions) != 2 ||
+		n.Conditions[0].Type != "GPUNVLinkCRCDataErrors" ||
+		n.Conditions[0].Status != "False" ||
+		n.Conditions[0].LastHeartbeatTime != "2026-09-14T20:03:00Z" ||
+		n.Conditions[1].Type != "IBLinkDown" ||
+		n.Conditions[1].Status != "Unknown" ||
+		n.Conditions[1].Message != "required metric coverage is incomplete" ||
+		n.Conditions[1].LastHeartbeatTime != "2026-09-14T20:03:01Z" {
+		t.Fatalf("operational conditions = %+v", n.Conditions)
 	}
 	// 329974272Ki = 337893654528 bytes ≈ 314.7 GiB.
 	if n.MemoryGiB < 314 || n.MemoryGiB > 315 {

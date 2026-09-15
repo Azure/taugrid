@@ -4,15 +4,24 @@
 import { useState, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 import { useBoard } from './data';
-import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Table, n1 } from './components';
+import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Table, measured, n1 } from './components';
 import type {
-  RDMAFreshness, RDMAHistoricalStatus, RDMANode, RDMARdmaDevice, RDMAValidation,
+  Cluster, GPU, RDMAFreshness, RDMAHistoricalStatus, RDMANode, RDMARdmaDevice, RDMAValidation,
   RDMAValidationDetail, RDMAValidationPage, RDMAValidationState, RDMAValidationSummary, Nodes,
 } from './types';
 
 const pageSize = 20;
+const conditionFreshnessMs = 15 * 60 * 1000;
+const futureClockSkewMs = 60 * 1000;
 const coverageStatement = 'Point-in-time two-GPU inter-node RDMA validation; this is not continuous InfiniBand or fleet health.';
 const inventoryCaveat = 'Fleet inventory and site or node-pool labels do not imply that a validation covered every GPU or performed multi-site distributed training.';
+const gpuConditionTypes = [
+  'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
+  'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
+  'GPUPowerViolation', 'GPUECCSingleVolatileRate', 'GPUECCSingleRetired',
+  'GPUPCIeReplayErrors',
+] as const;
+const ibConditionTypes = ['IBLinkDown', 'IBSymbolError'] as const;
 
 const known = (value: ReactNode) => value === undefined || value === null || value === '' ? 'Unknown' : value;
 const list = (value?: string[]) => value?.length ? value.join(', ') : 'Unknown';
@@ -95,48 +104,203 @@ function bandwidthSummary(validation: RDMAValidation) {
 }
 
 export function InfiniBandFleet() {
-  return <><Note>{coverageStatement}</Note><Note>{inventoryCaveat}</Note><FleetInfiniBandTopology/><LatestValidation/><ValidationHistory/></>;
+  return <><Note>{coverageStatement}</Note><Note>{inventoryCaveat}</Note><FleetInfiniBandEvidence/><LatestValidation/><ValidationHistory/></>;
 }
 
-function rdmaScheduling(node: Nodes['nodes'][number]) {
+type FleetNode = Nodes['nodes'][number];
+type OperationalCondition = NonNullable<FleetNode['operationalConditions']>[number];
+type EvidenceState = 'observed_ok' | 'fault' | 'unknown';
+
+interface EvidenceSummary {
+  state: EvidenceState;
+  observed: number;
+  expected: number;
+  lastObservedAt?: number;
+  detail: string;
+}
+
+function EvidenceBadge({ state }: { state: EvidenceState }) {
+  const label = state === 'observed_ok' ? 'Observed OK' : state === 'fault' ? 'Fault' : 'Unknown';
+  const tone = state === 'observed_ok' ? 'done' : state === 'fault' ? 'fail' : 'queue';
+  return <span className={'badge ' + tone}>{label}</span>;
+}
+
+function conditionSummary(
+  conditions: OperationalCondition[] | undefined,
+  expectedTypes: readonly string[],
+  now = Date.now(),
+): EvidenceSummary {
+  const byType = new Map<string, OperationalCondition[]>();
+  for (const condition of conditions || []) {
+    const values = byType.get(condition.type) || [];
+    values.push(condition);
+    byType.set(condition.type, values);
+  }
+  let observed = 0;
+  let lastObservedAt: number | undefined;
+  const faults: string[] = [];
+  const unknown: string[] = [];
+  for (const type of expectedTypes) {
+    const values = byType.get(type) || [];
+    if (values.length !== 1) {
+      unknown.push(values.length ? `${type} duplicated` : `${type} missing`);
+      continue;
+    }
+    const condition = values[0];
+    const heartbeat = Date.parse(condition.lastHeartbeatTime || '');
+    if (!Number.isFinite(heartbeat)) {
+      unknown.push(`${type} heartbeat invalid`);
+      continue;
+    }
+    if (heartbeat > now + futureClockSkewMs) {
+      unknown.push(`${type} heartbeat is in the future`);
+      continue;
+    }
+    if (now - heartbeat > conditionFreshnessMs) {
+      unknown.push(`${type} heartbeat is stale`);
+      continue;
+    }
+    observed++;
+    lastObservedAt = lastObservedAt === undefined ? heartbeat : Math.max(lastObservedAt, heartbeat);
+    if (condition.status === 'True') faults.push(type);
+    else if (condition.status !== 'False') unknown.push(`${type} is ${condition.status || 'Unknown'}`);
+  }
+  if (faults.length) {
+    return {
+      state: 'fault', observed, expected: expectedTypes.length, lastObservedAt,
+      detail: `${faults.length} fresh fault condition${faults.length === 1 ? '' : 's'}: ${faults.join(', ')}`,
+    };
+  }
+  if (unknown.length) {
+    return {
+      state: 'unknown', observed, expected: expectedTypes.length, lastObservedAt,
+      detail: unknown[0] + (unknown.length > 1 ? ` · ${unknown.length - 1} more coverage gaps` : ''),
+    };
+  }
+  return {
+    state: 'observed_ok', observed, expected: expectedTypes.length, lastObservedAt,
+    detail: `All ${expectedTypes.length} required condition families reported fresh False`,
+  };
+}
+
+function telemetrySummary(node: FleetNode, samples: GPU[]): EvidenceSummary {
+  const nodeSamples = samples.filter(sample => sample.instance === node.name);
+  const byGPU = new Map(nodeSamples.map(sample => [sample.gpu, sample]));
+  const values = [...byGPU.values()];
+  const faults = values.filter(sample => sample.healthy === false);
+  const knownVerdicts = values.filter(sample => sample.healthy === true || sample.healthy === false);
+  if (faults.length) {
+    return {
+      state: 'fault', observed: values.length, expected: node.gpuCapacity,
+      detail: `${faults.length} GPU row-remap fault verdict${faults.length === 1 ? '' : 's'}`,
+    };
+  }
+  if (nodeSamples.length !== byGPU.size || values.length !== node.gpuCapacity || knownVerdicts.length !== node.gpuCapacity) {
+    return {
+      state: 'unknown', observed: values.length, expected: node.gpuCapacity,
+      detail: nodeSamples.length !== byGPU.size
+        ? 'Duplicate GPU identities were returned in the ADX window'
+        : `${knownVerdicts.length}/${node.gpuCapacity} GPUs have complete row-remap verdicts in the ADX window`,
+    };
+  }
+  return {
+    state: 'observed_ok', observed: values.length, expected: node.gpuCapacity,
+    detail: `All ${node.gpuCapacity} inventory GPUs have observed row-remap verdicts`,
+  };
+}
+
+function stateCounts(summaries: EvidenceSummary[]) {
+  return summaries.reduce((counts, summary) => {
+    counts[summary.state]++;
+    return counts;
+  }, { observed_ok: 0, fault: 0, unknown: 0 } as Record<EvidenceState, number>);
+}
+
+function evidenceCell(summary: EvidenceSummary) {
+  return <div className="evidence-cell"><EvidenceBadge state={summary.state}/>
+    <span>{summary.observed}/{summary.expected} fresh</span>
+    <small>{summary.detail}</small>
+    {summary.lastObservedAt !== undefined && <small>Latest heartbeat {age(Math.max(0, Date.now() - summary.lastObservedAt) / 1000)} ago</small>}
+  </div>;
+}
+
+function rdmaScheduling(node: FleetNode) {
   const resources = node.rdmaResources || [];
-  if (!resources.length) return 'Not advertised';
-  return resources.map(resource =>
-    `${resource.name} ${resource.allocatable}/${resource.capacity} allocatable`,
-  ).join(', ');
+  if (!resources.length) return <div className="evidence-cell"><EvidenceBadge state="unknown"/><small>No positive <code>rdma/*</code> resource is advertised.</small></div>;
+  return <div className="evidence-cell"><span className="badge kind">Advertised</span>
+    {resources.map(resource => <small key={resource.name}><code>{resource.name}</code> {resource.allocatable}/{resource.capacity} allocatable</small>)}
+  </div>;
 }
 
-function FleetInfiniBandTopology() {
+function gpuTelemetryDetail(node: FleetNode, samples: GPU[]) {
+  const values = samples.filter(sample => sample.instance === node.name);
+  const metrics = [
+    values.map(sample => sample.utilizationPct).filter(measured).length
+      ? `avg util ${n1(values.map(sample => sample.utilizationPct).filter(measured).reduce((sum, value) => sum + value, 0) / values.map(sample => sample.utilizationPct).filter(measured).length)}%`
+      : undefined,
+    values.map(sample => sample.temperatureCelsius).filter(measured).length
+      ? `max ${n1(Math.max(...values.map(sample => sample.temperatureCelsius).filter(measured)))}°C`
+      : undefined,
+    values.map(sample => sample.uncorrectableRemappedRows).filter(measured).length
+      ? `uncorrectable remaps ${n1(values.map(sample => sample.uncorrectableRemappedRows).filter(measured).reduce((sum, value) => sum + value, 0))}`
+      : undefined,
+  ].filter(Boolean);
+  return metrics.join(' · ');
+}
+
+function FleetInfiniBandEvidence() {
   const inventoryQuery = useBoard<Nodes>('/api/portal/nodes');
+  const telemetryQuery = useBoard<Cluster>('/api/portal/cluster');
   const latestQuery = useBoard<RDMAValidationSummary>('/api/portal/rdma-validations/summary');
-  return <><h2>Fleet InfiniBand capability and site</h2>
-    <Note>InfiniBand capability is derived from each node's advertised <code>rdma/*</code> scheduling resources. It is inventory, not link health. Per-GPU health remains available from the Health view.</Note>
+  return <><h2>Fleet InfiniBand evidence</h2>
+    <Note>Each column is independent evidence: Kubernetes scheduling capability, monitoring-owned continuous Node conditions, 15-minute per-GPU ADX telemetry, and the latest immutable validation run. No column upgrades another to healthy.</Note>
     <BoardResult query={inventoryQuery} label="InfiniBand fleet inventory" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).">{snapshot => {
       const latest = latestQuery.data?.latest;
       const validationSite = latest?.actual?.site;
       const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
       const nodes = (snapshot.nodes || []).filter(node => node.gpuCapacity > 0);
+      const telemetry = telemetryQuery.data?.gpus || [];
+      const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, gpuConditionTypes));
+      const ibConditions = nodes.map(node => conditionSummary(node.operationalConditions, ibConditionTypes));
+      const gpuTelemetry = nodes.map(node => telemetrySummary(node, telemetry));
+      const gpuConditionCounts = stateCounts(gpuConditions);
+      const ibConditionCounts = stateCounts(ibConditions);
+      const telemetryCounts = stateCounts(gpuTelemetry);
       return <>
-        <Note>GPU nodes: {nodes.length} · RDMA advertised: {snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'} · latest tested site / pool: {known([validationSite, latest?.actual?.pool].filter(Boolean).join(' / '))}</Note>
+        <dl className="evidence-strip" aria-label="Fleet InfiniBand evidence summary">
+          <div><dt>GPU nodes</dt><dd>{nodes.length}</dd><span>{snapshot.totalGPUs} inventory GPUs</span></div>
+          <div><dt>RDMA advertised</dt><dd>{snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}</dd><span>scheduling capability only</span></div>
+          <div><dt>GPU / NVLink conditions</dt><dd>{gpuConditionCounts.observed_ok} OK · {gpuConditionCounts.fault} fault</dd><span>{gpuConditionCounts.unknown} unknown</span></div>
+          <div><dt>IB conditions</dt><dd>{ibConditionCounts.observed_ok} OK · {ibConditionCounts.fault} fault</dd><span>{ibConditionCounts.unknown} unknown</span></div>
+          <div><dt>Per-GPU telemetry</dt><dd>{telemetryCounts.observed_ok} complete</dd><span>{telemetryCounts.fault} fault · {telemetryCounts.unknown} unknown nodes</span></div>
+          <div><dt>Latest run</dt><dd>{latest ? stateLabel(latest.state) : 'Unknown'}</dd><span>{known([validationSite, latest?.actual?.pool].filter(Boolean).join(' / '))}</span></div>
+        </dl>
         {latestQuery.isError && <Note warn>Latest run coverage is unavailable; inventory capability is still shown independently.</Note>}
+        {telemetryQuery.isError && <Note warn>Per-GPU ADX telemetry is unavailable; condition and inventory evidence remain independent.</Note>}
         {!nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
-          : <Table headers={['Node', 'GPU inventory', 'IB / RDMA scheduling', 'Pool / region / zone', 'Validated topology', 'Same validated site', 'GPU health']}
-            rows={nodes.map(node => {
+          : <Table headers={['Node / GPU', 'Site / pool', 'RDMA scheduling', 'Continuous GPU / NVLink', 'Continuous IB', 'Per-GPU ADX telemetry', 'Latest run evidence']}
+            rows={nodes.map((node, index) => {
               const tested = testedByName.get(node.name);
-              const sameSite = tested?.site && validationSite ? tested.site === validationSite ? 'Yes' : 'No' : 'Unknown';
-              const inventoryLocation = [
-                node.agentPool ? `${node.agentPool}${node.agentPoolLabel ? ` (${node.agentPoolLabel})` : ''}` : undefined,
-                node.region ? `${node.region}${node.regionLabel ? ` (${node.regionLabel})` : ''}` : undefined,
-                node.zone ? `${node.zone}${node.zoneLabel ? ` (${node.zoneLabel})` : ''}` : undefined,
-              ].filter(Boolean).join(' · ') || 'Unknown';
+              const sameSite = node.region && validationSite ? node.region === validationSite ? 'same site' : 'different site' : 'site Unknown';
+              const telemetryDetail = gpuTelemetryDetail(node, telemetry);
               return [
-                node.name,
-                `${node.gpuCapacity || 0} ${node.gpuProduct || node.sku || 'GPU model Unknown'}`,
+                <div className="node-identity"><strong>{node.name}</strong><span>{node.gpuCapacity || 0} × {node.gpuProduct || 'GPU model Unknown'}</span><small>{node.sku || 'SKU Unknown'} · {node.ready ? 'Node Ready' : 'Node not Ready'}</small></div>,
+                <div className="node-identity"><strong>{node.region || 'Site Unknown'}</strong>
+                  <span>{node.regionLabel || 'No site label source'}</span>
+                  <small>{node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}{node.agentPoolLabel ? ` · ${node.agentPoolLabel}` : ''}</small>
+                  <small>{node.zone ? `Zone ${node.zone}` : 'Zone Unknown'}{node.zoneLabel ? ` · ${node.zoneLabel}` : ''}</small>
+                </div>,
                 rdmaScheduling(node),
-                inventoryLocation,
-                tested ? `${tested.site || 'site Unknown'} / ${tested.pool || 'pool Unknown'} · ${stateLabel(latest?.state || 'unknown')} · ${list(tested.gpuUuids)}` : 'Not tested in latest run',
-                sameSite,
-                <ScopedLink to={'/portal/fleet?view=health&instance=' + encodeURIComponent(node.name)}>Open per-GPU metrics</ScopedLink>,
+                evidenceCell(gpuConditions[index]),
+                evidenceCell(ibConditions[index]),
+                <div className="telemetry-cell">{evidenceCell(gpuTelemetry[index])}{telemetryDetail && <small>{telemetryDetail}</small>}
+                  <ScopedLink to={'/portal/fleet?view=health&instance=' + encodeURIComponent(node.name)}>Open per-GPU metrics →</ScopedLink>
+                </div>,
+                tested ? <div className="evidence-cell"><ValidationState state={latest?.state || 'unknown'}/>
+                  <small>Tested node · {sameSite}</small><small>{list(tested.gpuUuids)}</small>
+                  {latest && <ScopedLink to={'/portal/fleet/infiniband/' + encodeURIComponent(latest.validationId)}>Open run evidence →</ScopedLink>}</div>
+                  : <div className="evidence-cell"><EvidenceBadge state="unknown"/>
+                    <small>{latest ? `Not tested in latest run · ${sameSite}` : 'No validation run is available.'}</small></div>,
               ];
             })}/>}
       </>;

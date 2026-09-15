@@ -164,15 +164,30 @@ and stale only afterward. Message bytes are derived from element count only for
 recognized fixed-width data types. Unknown data types leave message size
 Unknown instead of guessing.
 
-The Fleet InfiniBand view also reads the authorized Kubernetes node inventory.
-It marks nodes as RDMA-advertised only when their status exposes a positive
-`rdma/*` capacity or allocatable resource, and shows agent pool, region, and
-zone with the exact label key selected by the inventory reader. That capability
-signal is not health. The UI links each GPU node to its separate per-GPU health
-observations, and reports same-site coverage only for nodes whose canonical
-validation artifact carries matching tested-site evidence. Missing topology is
-Unknown; inventory region or zone is never silently treated as a validation
-site.
+The Fleet InfiniBand view also reads the authorized Kubernetes node inventory
+and renders a row-oriented evidence matrix. It marks nodes as RDMA-advertised
+only when their status exposes a positive `rdma/*` capacity or allocatable
+resource, and shows agent pool, region, and zone with the exact label key
+selected by the inventory reader. That capability signal is not health.
+
+Continuous GPU/NVLink and InfiniBand evidence comes from an explicit allowlist
+of monitoring-owned Kubernetes Node condition families. A condition family is
+**Observed OK** only when every required family appears exactly once with a
+fresh `False` observation. A fresh `True` condition is **Fault** and takes
+precedence over missing coverage in another family. Missing, duplicate,
+malformed, stale, future-dated, or `Unknown` evidence stays **Unknown**. The
+Portal uses a 15-minute freshness window and tolerates at most one minute of
+future clock skew. Evaluation is keyed by condition type, so condition ordering
+does not affect the result.
+
+Per-GPU ADX telemetry remains a separate evidence column and currently reports
+only whether every expected GPU has a complete row-remap verdict; it is not
+presented as comprehensive GPU health. The latest run column remains
+point-in-time two-GPU inter-node validation evidence. Same-site coverage is
+reported only for nodes whose canonical validation artifact carries matching
+tested-site evidence. Missing topology is Unknown; inventory region or zone is
+never silently treated as a validation site. Each node links to the Fleet
+Health view for the underlying per-GPU metrics.
 
 ## Data interpretation and recovery
 

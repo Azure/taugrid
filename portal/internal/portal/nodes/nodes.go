@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -44,9 +45,23 @@ const (
 )
 
 var (
-	skuLabels    = []string{"node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type", "kubernetes.azure.com/sku"}
-	regionLabels = []string{"topology.kubernetes.io/region", "failure-domain.beta.kubernetes.io/region"}
-	zoneLabels   = []string{"topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone"}
+	skuLabels                 = []string{"node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type", "kubernetes.azure.com/sku"}
+	regionLabels              = []string{"topology.kubernetes.io/region", "failure-domain.beta.kubernetes.io/region"}
+	zoneLabels                = []string{"topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone"}
+	operationalConditionTypes = map[string]struct{}{
+		"GPUECCDoubleRetired":      {},
+		"GPUECCDoubleVolatile":     {},
+		"GPUNVLinkCRCFlitErrors":   {},
+		"GPUNVLinkCRCDataErrors":   {},
+		"GPUNVLinkReplayErrors":    {},
+		"GPUThermalViolation":      {},
+		"GPUPowerViolation":        {},
+		"GPUECCSingleVolatileRate": {},
+		"GPUECCSingleRetired":      {},
+		"GPUPCIeReplayErrors":      {},
+		"IBLinkDown":               {},
+		"IBSymbolError":            {},
+	}
 )
 
 // Reader lists the raw Nodes JSON the board needs. kubeclient.Client satisfies
@@ -84,6 +99,7 @@ type Node struct {
 	GPUCapacity    int64          `json:"gpuCapacity"`
 	GPUAllocatable int64          `json:"gpuAllocatable"`
 	RDMAResources  []RDMAResource `json:"rdmaResources,omitempty"`
+	Conditions     []Condition    `json:"operationalConditions,omitempty"`
 }
 
 // RDMAResource is one device-plugin resource advertised by a node. Presence
@@ -92,6 +108,18 @@ type RDMAResource struct {
 	Name        string `json:"name"`
 	Capacity    int64  `json:"capacity"`
 	Allocatable int64  `json:"allocatable"`
+}
+
+// Condition is one allowlisted GPU, NVLink, or InfiniBand Node condition. Raw
+// status and timestamps are preserved so the Portal can fail closed on
+// missing, stale, invalid, or future evidence instead of manufacturing health.
+type Condition struct {
+	Type               string `json:"type"`
+	Status             string `json:"status"`
+	Reason             string `json:"reason,omitempty"`
+	Message            string `json:"message,omitempty"`
+	LastHeartbeatTime  string `json:"lastHeartbeatTime,omitempty"`
+	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
 
 // DaemonSet is a GPU/runtime-relevant DaemonSet. It is deliberately a compact
@@ -212,8 +240,12 @@ type nodeObj struct {
 		Capacity    map[string]string `json:"capacity"`
 		Allocatable map[string]string `json:"allocatable"`
 		Conditions  []struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
+			Type               string `json:"type"`
+			Status             string `json:"status"`
+			Reason             string `json:"reason"`
+			Message            string `json:"message"`
+			LastHeartbeatTime  string `json:"lastHeartbeatTime"`
+			LastTransitionTime string `json:"lastTransitionTime"`
 		} `json:"conditions"`
 	} `json:"status"`
 }
@@ -298,7 +330,36 @@ func parseNode(obj nodeObj) Node {
 		GPUCapacity:    quantityValue(obj.Status.Capacity[gpuResourceKey]),
 		GPUAllocatable: quantityValue(obj.Status.Allocatable[gpuResourceKey]),
 		RDMAResources:  rdmaResources(obj.Status.Capacity, obj.Status.Allocatable),
+		Conditions:     operationalConditions(obj),
 	}
+}
+
+func operationalConditions(obj nodeObj) []Condition {
+	out := make([]Condition, 0, len(obj.Status.Conditions))
+	for _, condition := range obj.Status.Conditions {
+		if _, ok := operationalConditionTypes[condition.Type]; !ok {
+			continue
+		}
+		out = append(out, Condition{
+			Type: condition.Type, Status: condition.Status,
+			Reason: condition.Reason, Message: condition.Message,
+			LastHeartbeatTime:  normalizeTimestamp(condition.LastHeartbeatTime),
+			LastTransitionTime: normalizeTimestamp(condition.LastTransitionTime),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
+	return out
+}
+
+func normalizeTimestamp(value string) string {
+	if value == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return parsed.UTC().Format(time.RFC3339Nano)
 }
 
 func rdmaResources(capacity, allocatable map[string]string) []RDMAResource {
