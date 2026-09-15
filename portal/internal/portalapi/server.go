@@ -1094,8 +1094,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // handleNodeUtil serves the node resource-utilization board: per-node CPU
 // utilization (from the node_cpu_idle_seconds counter delta) and memory-used
 // percentage (from node_memory_total/available), from the Metrics ADX database
-// via NodeHealth(). It is the CPU/memory sibling of the Cluster Health board,
-// rendered beneath the per-GPU table on the Utilization page. Optional
+// via the raw node-exporter tables. It is the CPU/memory sibling of the Cluster
+// Health board, rendered beneath the per-GPU table on the Utilization page. Optional
 // ?window=&cluster=&instance= scope the query. When the board has no Kusto
 // querier (portal started without --kusto-query-command) it returns 503; a
 // query failure returns 502.

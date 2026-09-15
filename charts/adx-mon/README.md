@@ -195,6 +195,11 @@ declared port limits discovery to the DCGM exporter. Do not configure a static
 GPU Operator Service target in parallel because static and discovered targets
 are not deduplicated.
 
+TauGrid's gpu-monitoring DaemonSets independently annotate their node-exporter
+sidecars on port 9100. This supplies exact node-local CPU/memory series,
+including for Flex nodes whose Kubernetes node names are not resolvable through
+cluster DNS.
+
 ### Collector Singleton
 
 | Parameter | Description | Default |

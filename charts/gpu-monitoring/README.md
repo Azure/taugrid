@@ -272,6 +272,13 @@ must use their existing profile-specific `dcgmHealth.source: exporter` override
 and a node-local exporter URL. Do not globally disable host diagnostics on
 profiles that actually provide them.
 
+When the node-exporter sidecar is enabled, its pod template opts into adx-mon
+scrape discovery on port 9100. adx-mon watches only pods on the collector's
+node and scrapes the pod IP, so current node CPU/memory telemetry works for
+externally joined Flex nodes without relying on node-name DNS. Disabling the
+sidecar also removes these annotations; another explicit node metrics source is
+then required for ADX-backed history.
+
 ### AKS-managed exporter counters on port 19400
 
 AKS driver installation alone does not install host DCGM. The
