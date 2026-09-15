@@ -116,7 +116,7 @@ test:
 		echo "PASS: ray[data] - ray.data importable" || \
 		{ echo "FAIL: ray[data] - could not import ray.data"; exit 1; }
 	@echo "=== Verifying ray[serve] ==="
-	@docker run --rm $(IMG) python3 -c "import jinja2; import ray.serve" 2>&1 && \
+	@docker run --rm $(IMG) python3 -c "import ray.serve" 2>&1 && \
 		echo "PASS: ray[serve] - ray.serve importable" || \
 		{ echo "FAIL: ray[serve] - could not import ray.serve"; exit 1; }
 	@echo "=== Verifying Python dependency consistency ==="
