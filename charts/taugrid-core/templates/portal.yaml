@@ -168,6 +168,10 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  # Fleet Compute current CPU/memory utilization from Metrics Server.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
   # Fleet Compute runtime-plumbing summary: GPU/runtime DaemonSet readiness.
   - apiGroups: ["apps"]
     resources: ["daemonsets"]

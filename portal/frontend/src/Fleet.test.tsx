@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -120,6 +120,32 @@ describe('Fleet dashboard', () => {
     expect(screen.queryByText('Evidence matrix and runtime coverage')).not.toBeInTheDocument();
   });
 
+  it('marks successful source snapshots stale after the query freshness window', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-14T20:04:00Z'));
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const freshness = screen.getByLabelText('Fleet data source freshness');
+    expect(within(freshness).getAllByText(/Updated/)).toHaveLength(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_001);
+    });
+
+    expect(within(freshness).getAllByText(/Stale · last success/)).toHaveLength(3);
+  });
+
   it('keeps telemetry visible when inventory is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
@@ -176,6 +202,61 @@ describe('Fleet dashboard', () => {
     expect(within(independent).getByRole('cell', { name: '99' })).toBeVisible();
     expect(within(independent).getByRole('cell', { name: '99%' })).toBeVisible();
     expect(within(independent).getByRole('cell', { name: '98%' })).toBeVisible();
+  });
+
+  it('prefers current Kubernetes node metrics and omits unavailable GPU metric tiles', async () => {
+    const currentMetrics = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'h200-node-a'
+        ? { ...node, cpuUtilPct: 12.5, memUsedPct: 34.5, metricsObservedAt: '2026-09-14T20:03:45Z', metricsWindow: '15s' }
+        : node.name === 'a100-node-c'
+          ? { ...node, cpuUtilPct: 7, memUsedPct: 21, metricsObservedAt: '2026-09-14T20:03:45Z', metricsWindow: '15s' }
+          : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(currentMetrics));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    const h200 = (await screen.findByText('h200-node-a', { selector: '.fabric-node-head strong' })).closest('article');
+    expect(h200).not.toBeNull();
+    expect(within(h200!).getByText('12.5%')).toBeVisible();
+    expect(within(h200!).getByText('34.5%')).toBeVisible();
+    expect(within(h200!).queryByText('63%')).not.toBeInTheDocument();
+    expect(within(h200!).queryByText('72%')).not.toBeInTheDocument();
+    expect(within(h200!).getAllByText(/Metrics API · 15s window/)).toHaveLength(2);
+
+    const a100 = screen.getByText('a100-node-c', { selector: '.fabric-node-head strong' }).closest('article');
+    expect(a100).not.toBeNull();
+    expect(within(a100!).queryByText('GPU load')).not.toBeInTheDocument();
+    expect(within(a100!).queryByText('GPU temp')).not.toBeInTheDocument();
+    expect(within(a100!).getByText('7%')).toBeVisible();
+    expect(within(a100!).getByText('21%')).toBeVisible();
+    expect(within(a100!).getByText('Telemetry').parentElement).toHaveTextContent('Unknown');
+  });
+
+  it('surfaces Node metrics failures while preserving inventory and ADX fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
+        ...fleetNodes,
+        nodeMetricsError: 'list node metrics: metrics API unavailable',
+      }));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByText(/Current Node metrics are incomplete/)).toHaveTextContent('metrics API unavailable');
+    const card = screen.getByText('h200-node-a', { selector: '.fabric-node-head strong' }).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card!).getByText('63%')).toBeVisible();
+    expect(within(card!).getByText('72%')).toBeVisible();
   });
 
   it('separates RDMA capability, continuous conditions, and per-GPU health', async () => {

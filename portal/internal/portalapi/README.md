@@ -122,12 +122,14 @@ unified Fleet page; an `instance` query focuses the inline per-GPU detail table.
 
 ## Fleet InfiniBand evidence
 
-The Fleet page combines authorized Kubernetes node inventory, per-GPU ADX
-telemetry, node utilization, and continuous GPU/NVLink and InfiniBand Node
-conditions in one operational dashboard. Inventory, telemetry, and utilization
-refresh and retry together while retaining independent freshness and failure
-status. Telemetry remains visible as independent source evidence when exact
-cluster and instance identity is unavailable or does not safely match inventory.
+The Fleet page combines authorized Kubernetes node inventory and current
+Metrics Server CPU/memory usage, per-GPU ADX telemetry, historical ADX node
+utilization, and continuous GPU/NVLink and InfiniBand Node conditions in one
+operational dashboard. Inventory, telemetry, and utilization refresh and retry
+together while retaining independent freshness and failure status. Current
+Metrics Server samples are preferred on exact inventory nodes; exact ADX node
+rows are a fallback, while mismatched telemetry remains visible as independent
+source evidence.
 
 The inventory reader selects the exact canonical `unbounded-cloud.io/site`
 label first and the exact deprecated `net.unbounded-cloud.io/site` migration
@@ -151,6 +153,12 @@ scheduled, non-terminal Pods and Kubernetes init/restartable-init scheduling
 semantics. Free capacity is reported only for Ready, non-cordoned nodes. Missing
 or unauthorized Pod visibility, MIG, and DRA allocation cases fail closed to
 Unknown instead of presenting zero assignments or free GPUs.
+
+Current CPU and memory utilization similarly require cluster-wide access to
+`metrics.k8s.io/v1beta1` Node metrics. Missing, unauthorized, or malformed
+samples preserve inventory, surface an explicit error, and fall back only to an
+exact cluster-plus-instance ADX match. Missing per-GPU telemetry does not create
+empty load and temperature tiles; the node's Telemetry status remains Unknown.
 
 Continuous GPU/NVLink and InfiniBand evidence comes from an explicit allowlist
 of monitoring-owned Kubernetes Node condition families. A condition family is

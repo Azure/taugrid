@@ -198,7 +198,7 @@
   .fabric-capability.warning { border-color: #e7b76f; background: #fef4e6; color: var(--amber); }
   .fabric-capability.fault { border-color: #f0a6a6; background: var(--warn-bg); color: var(--warn); }
   .fabric-metrics {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); margin: 10px 0;
     border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
   }
   .fabric-metrics > span { min-width: 0; padding: 7px 6px; border-right: 1px solid var(--line); }

@@ -46,6 +46,7 @@ export interface Nodes extends Scoped {
   skus: { sku: string; nodes: number; gpus: number }[];
   nodes: { name: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
     cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuAllocatable?: number;
+    cpuUtilPct?: number; memUsedPct?: number; metricsObservedAt?: string; metricsWindow?: string;
     gpuAllocated?: number; gpuAvailable?: number; gpuProduct?: string; ready: boolean; schedulable?: boolean;
     agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
     rdmaResources?: { name: string; capacity: number; allocatable: number }[];
@@ -55,6 +56,7 @@ export interface Nodes extends Scoped {
     }[] }[];
   daemonSets?: { namespace: string; name: string; ready: number; desired: number; available: number; healthy: boolean }[];
   daemonSetsError?: string;
+  nodeMetricsError?: string;
 }
 export interface NodeUtil extends Scoped {
   window: string; queriedAt: string; availability: 'ready' | 'empty';

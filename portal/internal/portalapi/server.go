@@ -1082,6 +1082,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{
 		IncludeDaemonSets:  includeClusterWide,
 		IncludeAllocations: includeClusterWide,
+		IncludeMetrics:     includeClusterWide,
 	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())

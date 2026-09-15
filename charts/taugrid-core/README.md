@@ -375,7 +375,9 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
   `portal.serviceAccount.create=true`) to create a ClusterRole granting read
   access to core `services` (Ray dashboard discovery), `pods`, `events`, and
   RayClusters (Job detail ownership), core `nodes` (Cluster Nodes hardware
-  inventory), and Kueue `localqueues`/`clusterqueues`/`workloads` (queue depth).
+  inventory), aggregated `metrics.k8s.io` Node metrics (current Fleet CPU and
+  memory utilization), and Kueue `localqueues`/`clusterqueues`/`workloads`
+  (queue depth).
   Without the RBAC, those boards return 502 with the API server's forbidden
   error and the rest of the portal still serves; 503 is reserved for a portal
   that could not build a Kubernetes client at all.

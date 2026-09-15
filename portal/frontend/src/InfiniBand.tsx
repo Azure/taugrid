@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
-import { useBoard } from './data';
+import { boardStaleTimeMs, useBoard } from './data';
 import { Empty, Note, ScopedLink, Table, measured, n1, utilizationSummary } from './components';
 import type { Cluster, GPU, Nodes, NodeUtil } from './types';
 
@@ -20,11 +20,14 @@ const ibConditionTypes = ['IBLinkDown', 'IBSymbolError'] as const;
 const known = (value: ReactNode) => value === undefined || value === null || value === '' ? 'Unknown' : value;
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0;
 
-function sourceFreshness(query: { dataUpdatedAt: number; isError: boolean; isFetching: boolean }) {
+function sourceFreshness(query: { dataUpdatedAt: number; isError: boolean; isFetching: boolean; isStale: boolean }, now: number) {
   if (query.isFetching) return 'Refreshing';
   if (query.isError) return query.dataUpdatedAt > 0
     ? <>Stale · last success <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleTimeString()}</time></>
     : 'Unavailable';
+  if (query.dataUpdatedAt > 0 && (query.isStale || now >= query.dataUpdatedAt + boardStaleTimeMs)) {
+    return <>Stale · last success <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleTimeString()}</time></>;
+  }
   return query.dataUpdatedAt > 0
     ? <>Updated <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleTimeString()}</time></>
     : 'Not loaded';
@@ -255,6 +258,12 @@ function FleetFabricMap({
                     measured(sample.memoryUsedMB) && measured(sample.memoryFreeMB)
                       ? [sample.memoryUsedMB + sample.memoryFreeMB] : []);
                   const usage = nodeUtil.find(sample => sample.instance === node.name);
+                  const cpuUtilization = measured(node.cpuUtilPct) ? node.cpuUtilPct : usage?.cpuUtilPct;
+                  const memoryUtilization = measured(node.memUsedPct) ? node.memUsedPct : usage?.memUsedPct;
+                  const currentMetricsDetail = node.metricsWindow ? `Metrics API · ${node.metricsWindow} window` : 'Metrics API';
+                  const gpuMemoryDetail = gpuMemoryUsed.length && gpuMemoryTotal.length
+                    ? `GPU ${n1(gpuMemoryUsed.reduce((sum, value) => sum + value, 0) / 1024)} / ${n1(gpuMemoryTotal.reduce((sum, value) => sum + value, 0) / 1024)} GiB`
+                    : '';
                   return <article className="fabric-node" key={node.name}>
                     <div className="fabric-node-head"><strong>{node.name}</strong>
                       <div className="fabric-node-badges">
@@ -271,10 +280,15 @@ function FleetFabricMap({
                     <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
                     {node.siteLabelConflict && <span className="warn">Unbounded site label conflict · canonical value shown</span>}
                     <div className="fabric-metrics">
-                      <span><small>GPU load</small><b>{gpuUtilization === null ? 'Unknown' : `${n1(gpuUtilization)}%`}</b><i>{samples.filter(sample => measured(sample.utilizationPct)).length}/{node.gpuCapacity} observed</i></span>
-                      <span><small>GPU temp</small><b>{gpuTemperature.length ? `${n1(Math.max(...gpuTemperature))}°C` : 'Unknown'}</b><i>{gpuTemperature.length ? 'max observed' : 'no samples'}</i></span>
-                      <span><small>CPU</small><b>{measured(usage?.cpuUtilPct) ? `${n1(usage.cpuUtilPct)}%` : 'Unknown'}</b><i>{usage?.cpuCoverage ? `${n1(usage.cpuCoverage.windowCoveragePct)}% coverage` : 'no coverage'}</i></span>
-                      <span><small>Node memory</small><b>{measured(usage?.memUsedPct) ? `${n1(usage.memUsedPct)}%` : 'Unknown'}</b><i>{gpuMemoryUsed.length && gpuMemoryTotal.length ? `GPU ${n1(gpuMemoryUsed.reduce((sum, value) => sum + value, 0) / 1024)} / ${n1(gpuMemoryTotal.reduce((sum, value) => sum + value, 0) / 1024)} GiB` : 'GPU memory Unknown'}</i></span>
+                      {gpuUtilization !== null && <span><small>GPU load</small><b>{n1(gpuUtilization)}%</b><i>{samples.filter(sample => measured(sample.utilizationPct)).length}/{node.gpuCapacity} observed</i></span>}
+                      {!!gpuTemperature.length && <span><small>GPU temp</small><b>{n1(Math.max(...gpuTemperature))}°C</b><i>max observed</i></span>}
+                      <span><small>CPU</small><b>{measured(cpuUtilization) ? `${n1(cpuUtilization)}%` : 'Unknown'}</b><i>{measured(node.cpuUtilPct)
+                        ? currentMetricsDetail
+                        : usage?.cpuCoverage ? `ADX · ${n1(usage.cpuCoverage.windowCoveragePct)}% coverage` : 'no current sample'}</i></span>
+                      <span><small>Node memory</small><b>{measured(memoryUtilization) ? `${n1(memoryUtilization)}%` : 'Unknown'}</b><i>{[
+                        measured(node.memUsedPct) ? currentMetricsDetail : measured(usage?.memUsedPct) ? 'ADX fallback' : 'no current sample',
+                        gpuMemoryDetail,
+                      ].filter(Boolean).join(' · ')}</i></span>
                     </div>
                     <div className="fabric-signals">
                       <span className={gpuConditions[index].state}>GPU/NVLink <b>{evidenceLabel(gpuConditions[index].state)}</b></span>
@@ -342,6 +356,18 @@ function FleetInfiniBandEvidence() {
     { name: 'GPU telemetry', query: telemetryQuery },
     { name: 'node utilization', query: nodeUtilQuery },
   ];
+  const [freshnessNow, setFreshnessNow] = useState(() => Date.now());
+  useEffect(() => {
+    const nextExpiry = Math.min(...sourceQueries
+      .map(query => query.dataUpdatedAt > 0 ? query.dataUpdatedAt + boardStaleTimeMs : Number.POSITIVE_INFINITY)
+      .filter(expiry => expiry > freshnessNow));
+    if (!Number.isFinite(nextExpiry)) return;
+    const timeout = window.setTimeout(
+      () => setFreshnessNow(Math.max(Date.now(), nextExpiry)),
+      Math.max(0, nextExpiry - Date.now() + 1),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [freshnessNow, inventoryQuery.dataUpdatedAt, telemetryQuery.dataUpdatedAt, nodeUtilQuery.dataUpdatedAt]);
   const unavailableSources = sourceResults.filter(source => source.query.isError);
   const hasData = sourceQueries.some(query => query.data !== undefined);
   const isFetching = sourceQueries.some(query => query.isFetching);
@@ -363,6 +389,7 @@ function FleetInfiniBandEvidence() {
       {!!unavailableSources.length && <Note warn>Unavailable: {unavailableSources.map(source =>
         `${source.name}: ${source.query.error?.message || 'request failed'}`).join('; ')}. Available sources remain visible and missing evidence stays Unknown.</Note>}
       {hasData && <>
+        {snapshot?.nodeMetricsError && <Note warn>Current Node metrics are incomplete: {snapshot.nodeMetricsError}. Inventory remains visible and exact ADX matches are used as fallback.</Note>}
         <dl className="evidence-strip" aria-label="Fleet operational summary">
           <div><dt>Node health</dt><dd>{snapshot ? `${snapshot.readyNodes}/${snapshot.totalNodes} nodes ready` : 'Unknown'}</dd><span>{snapshot
             ? `${snapshot.totalCPUCores} CPU · ${n1(snapshot.totalMemoryGiB)} GiB`
@@ -379,9 +406,9 @@ function FleetInfiniBandEvidence() {
             : 'Inventory-dependent capability and coverage'}</span></div>
         </dl>
         <div className="source-freshness" aria-label="Fleet data source freshness">
-          <span><strong>Inventory</strong> {sourceFreshness(inventoryQuery)}</span>
-          <span><strong>GPU telemetry</strong> {sourceFreshness(telemetryQuery)}</span>
-          <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery)}</span>
+          <span><strong>Inventory</strong> {sourceFreshness(inventoryQuery, freshnessNow)}</span>
+          <span><strong>GPU telemetry</strong> {sourceFreshness(telemetryQuery, freshnessNow)}</span>
+          <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery, freshnessNow)}</span>
         </div>
         {!snapshot ? <Empty warn>GPU inventory is unavailable. Telemetry remains visible; fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown.</Empty>
           : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>

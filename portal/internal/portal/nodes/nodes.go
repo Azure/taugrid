@@ -80,12 +80,17 @@ type podReader interface {
 	ListPods(ctx context.Context, namespace string) ([]byte, error)
 }
 
+type nodeMetricsReader interface {
+	ListNodeMetrics(ctx context.Context) ([]byte, error)
+}
+
 // Options controls optional infrastructure signals attached to the node
 // inventory. DaemonSets are cluster-wide objects, so callers serving a
 // workspace-scoped audience must opt in only after authorizing that scope.
 type Options struct {
 	IncludeDaemonSets  bool
 	IncludeAllocations bool
+	IncludeMetrics     bool
 }
 
 // Node is one node's static hardware inventory. CPU is reported in whole cores
@@ -109,6 +114,10 @@ type Node struct {
 	CPUCores          int64          `json:"cpuCores"`
 	MemoryBytes       int64          `json:"memoryBytes"`
 	MemoryGiB         float64        `json:"memoryGiB"`
+	CPUUtilPct        *float64       `json:"cpuUtilPct,omitempty"`
+	MemoryUsedPct     *float64       `json:"memUsedPct,omitempty"`
+	MetricsObservedAt string         `json:"metricsObservedAt,omitempty"`
+	MetricsWindow     string         `json:"metricsWindow,omitempty"`
 	GPUCapacity       int64          `json:"gpuCapacity"`
 	GPUAllocatable    int64          `json:"gpuAllocatable"`
 	GPUAllocated      *int64         `json:"gpuAllocated,omitempty"`
@@ -176,6 +185,7 @@ type Snapshot struct {
 	Nodes                  []Node      `json:"nodes"`
 	DaemonSets             []DaemonSet `json:"daemonSets,omitempty"`
 	DaemonSetsError        string      `json:"daemonSetsError,omitempty"`
+	NodeMetricsError       string      `json:"nodeMetricsError,omitempty"`
 }
 
 // Board lists Nodes via the Reader and aggregates them into a Snapshot. An empty
@@ -191,6 +201,9 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	}
 	if opts.IncludeAllocations {
 		attachGPUAllocations(ctx, r, &snap)
+	}
+	if opts.IncludeMetrics {
+		attachNodeMetrics(ctx, r, &snap)
 	}
 	if !opts.IncludeDaemonSets {
 		return snap, nil
@@ -402,6 +415,70 @@ func attachGPUAllocations(ctx context.Context, r Reader, snap *Snapshot) {
 		snap.Nodes[i].GPUAvailable = &available
 		snap.GPUAllocated += allocated
 		snap.GPUAvailable += available
+	}
+}
+
+type nodeMetricsList struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Timestamp string            `json:"timestamp"`
+		Window    string            `json:"window"`
+		Usage     map[string]string `json:"usage"`
+	} `json:"items"`
+}
+
+func attachNodeMetrics(ctx context.Context, r Reader, snap *Snapshot) {
+	reader, ok := r.(nodeMetricsReader)
+	if !ok {
+		return
+	}
+	raw, err := reader.ListNodeMetrics(ctx)
+	if err != nil {
+		snap.NodeMetricsError = fmt.Sprintf("list node metrics: %v", err)
+		return
+	}
+	var metrics nodeMetricsList
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		snap.NodeMetricsError = fmt.Sprintf("decode node metrics: %v", err)
+		return
+	}
+	nodeIndex := make(map[string]int, len(snap.Nodes))
+	for i := range snap.Nodes {
+		nodeIndex[snap.Nodes[i].Name] = i
+	}
+	issues := make([]string, 0)
+	for _, sample := range metrics.Items {
+		index, found := nodeIndex[sample.Metadata.Name]
+		if !found {
+			continue
+		}
+		observedAt, timestampErr := time.Parse(time.RFC3339Nano, sample.Timestamp)
+		window, windowErr := time.ParseDuration(sample.Window)
+		if timestampErr != nil || windowErr != nil || window <= 0 {
+			issues = append(issues, fmt.Sprintf("%s has invalid timestamp or window", sample.Metadata.Name))
+			continue
+		}
+		node := &snap.Nodes[index]
+		node.MetricsObservedAt = observedAt.UTC().Format(time.RFC3339Nano)
+		node.MetricsWindow = window.String()
+		if cpu, err := resource.ParseQuantity(sample.Usage["cpu"]); err == nil && cpu.Sign() >= 0 && node.CPUCores > 0 {
+			value := round1(cpu.AsApproximateFloat64() / float64(node.CPUCores) * 100)
+			node.CPUUtilPct = &value
+		} else {
+			issues = append(issues, fmt.Sprintf("%s has invalid CPU usage", sample.Metadata.Name))
+		}
+		if memory, err := resource.ParseQuantity(sample.Usage["memory"]); err == nil && memory.Sign() >= 0 && node.MemoryBytes > 0 {
+			value := round1(float64(memory.Value()) / float64(node.MemoryBytes) * 100)
+			node.MemoryUsedPct = &value
+		} else {
+			issues = append(issues, fmt.Sprintf("%s has invalid memory usage", sample.Metadata.Name))
+		}
+	}
+	if len(issues) > 0 {
+		sort.Strings(issues)
+		snap.NodeMetricsError = strings.Join(issues, "; ")
 	}
 }
 

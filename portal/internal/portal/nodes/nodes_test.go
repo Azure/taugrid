@@ -6,6 +6,7 @@ package nodes
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,9 @@ type fakeReader struct {
 	podsJSON            string
 	podsErr             error
 	podsCallCount       int
+	nodeMetricsJSON     string
+	nodeMetricsErr      error
+	nodeMetricsCalls    int
 }
 
 func (f *fakeReader) ListNodes(_ context.Context) ([]byte, error) {
@@ -45,6 +49,16 @@ func (f *fakeReader) ListPods(_ context.Context, _ string) ([]byte, error) {
 	}
 	if f.podsJSON != "" {
 		return []byte(f.podsJSON), nil
+	}
+	return []byte(`{"items":[]}`), nil
+}
+func (f *fakeReader) ListNodeMetrics(_ context.Context) ([]byte, error) {
+	f.nodeMetricsCalls++
+	if f.nodeMetricsErr != nil {
+		return nil, f.nodeMetricsErr
+	}
+	if f.nodeMetricsJSON != "" {
+		return []byte(f.nodeMetricsJSON), nil
 	}
 	return []byte(`{"items":[]}`), nil
 }
@@ -406,6 +420,85 @@ func TestBoardOnlyReadsPodsWhenExplicitlyIncluded(t *testing.T) {
 	}
 	if reader.podsCallCount != 0 {
 		t.Fatalf("ListPods calls = %d, want 0", reader.podsCallCount)
+	}
+}
+
+func TestBoardAttachesCurrentNodeMetrics(t *testing.T) {
+	const metricsJSON = `{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":"2026-09-15T20:00:00.123456789Z","window":"15.001s",
+	   "usage":{"cpu":"2","memory":"164987136Ki"}},
+	  {"metadata":{"name":"stale-node"},"timestamp":"2026-09-15T20:00:00Z","window":"15s",
+	   "usage":{"cpu":"99","memory":"99Gi"}}
+	]}`
+	reader := &fakeReader{json: nodesJSON, nodeMetricsJSON: metricsJSON}
+	snap, err := Board(context.Background(), reader, Options{IncludeMetrics: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if reader.nodeMetricsCalls != 1 {
+		t.Fatalf("ListNodeMetrics calls = %d, want 1", reader.nodeMetricsCalls)
+	}
+	node := snap.Nodes[0]
+	if node.CPUUtilPct == nil || *node.CPUUtilPct != 5 {
+		t.Fatalf("CPUUtilPct = %v, want 5", node.CPUUtilPct)
+	}
+	if node.MemoryUsedPct == nil || *node.MemoryUsedPct != 50 {
+		t.Fatalf("MemoryUsedPct = %v, want 50", node.MemoryUsedPct)
+	}
+	if node.MetricsObservedAt != "2026-09-15T20:00:00.123456789Z" || node.MetricsWindow != "15.001s" {
+		t.Fatalf("metrics evidence = %q / %q", node.MetricsObservedAt, node.MetricsWindow)
+	}
+	if snap.NodeMetricsError != "" {
+		t.Fatalf("NodeMetricsError = %q, want empty", snap.NodeMetricsError)
+	}
+}
+
+func TestBoardPreservesInventoryWhenNodeMetricsAreUnavailable(t *testing.T) {
+	reader := &fakeReader{json: nodesJSON, nodeMetricsErr: errors.New("forbidden")}
+	snap, err := Board(context.Background(), reader, Options{IncludeMetrics: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if snap.TotalNodes != 3 || snap.NodeMetricsError == "" {
+		t.Fatalf("snapshot totals/error = %d/%q, want inventory plus explicit metrics error",
+			snap.TotalNodes, snap.NodeMetricsError)
+	}
+	for _, node := range snap.Nodes {
+		if node.CPUUtilPct != nil || node.MemoryUsedPct != nil {
+			t.Fatalf("node %q unexpectedly has metrics: %+v", node.Name, node)
+		}
+	}
+}
+
+func TestBoardKeepsValidPartialNodeMetrics(t *testing.T) {
+	const metricsJSON = `{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":"2026-09-15T20:00:00Z","window":"15s",
+	   "usage":{"cpu":"bad","memory":"164987136Ki"}},
+	  {"metadata":{"name":"aks-h100pool-2"},"timestamp":"bad","window":"15s",
+	   "usage":{"cpu":"1","memory":"1Gi"}}
+	]}`
+	snap, err := Board(context.Background(), &fakeReader{json: nodesJSON, nodeMetricsJSON: metricsJSON}, Options{IncludeMetrics: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	first := snap.Nodes[0]
+	if first.CPUUtilPct != nil || first.MemoryUsedPct == nil || *first.MemoryUsedPct != 50 {
+		t.Fatalf("partial metrics = CPU %v memory %v, want nil/50", first.CPUUtilPct, first.MemoryUsedPct)
+	}
+	if snap.NodeMetricsError == "" ||
+		!strings.Contains(snap.NodeMetricsError, "aks-h100pool-1 has invalid CPU usage") ||
+		!strings.Contains(snap.NodeMetricsError, "aks-h100pool-2 has invalid timestamp or window") {
+		t.Fatalf("NodeMetricsError = %q, want both malformed sample diagnostics", snap.NodeMetricsError)
+	}
+}
+
+func TestBoardOnlyReadsNodeMetricsWhenExplicitlyIncluded(t *testing.T) {
+	reader := &fakeReader{json: nodesJSON}
+	if _, err := Board(context.Background(), reader, Options{}); err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if reader.nodeMetricsCalls != 0 {
+		t.Fatalf("ListNodeMetrics calls = %d, want 0", reader.nodeMetricsCalls)
 	}
 }
 
