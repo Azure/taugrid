@@ -209,6 +209,21 @@ describe('InfiniBand fleet validation', () => {
     });
   });
 
+  it('distinguishes node capability checks from an absent inter-node run', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({ ...latestSummary, latest: null }));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByText(/No recorded two-GPU inter-node NCCL validation run/)).toBeVisible();
+    expect(screen.getByText(/RDMA advertisement and node link checks below remain separate capability signals/)).toBeVisible();
+    expect(screen.getAllByText('RDMA advertised', { selector: '.fabric-capability' })).toHaveLength(2);
+  });
+
   it('labels a raw gpu pool with the inferred NVIDIA model', async () => {
     const modelNodes = {
       ...fleetNodes,

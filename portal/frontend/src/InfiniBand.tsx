@@ -311,7 +311,7 @@ function FleetFabricMap({
       </div>
     </div>
     {!latest && <div className="fabric-no-link"><EvidenceBadge state="unknown"/>
-      <span>No validated GPU-to-GPU InfiniBand path is available in this scope.</span>
+      <span>No recorded two-GPU inter-node NCCL validation run is available for this workspace and cluster. RDMA advertisement and node link checks below remain separate capability signals.</span>
     </div>}
     {!useUnboundedSites && nodes.length > 0 && <div className="fabric-no-link">
       <EvidenceBadge state="unknown"/>
