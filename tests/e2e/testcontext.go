@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -221,6 +222,8 @@ func (tc *TestContext) OnFailure(fn func()) {
 //     Dataset URI/SHA256/token-count placeholders are required when the FineWeb
 //     fixture is used; model-shape, bounded-step, checkpoint, and IB NCCL
 //     placeholders default to the 1.716B / first-checkpoint conformance values.
+//   - {{NCCL_RDMA_INVOCATION}}: unique harness-generated ownership marker used
+//     to make create and UID-precondition cleanup fail closed.
 //   - {{STACK_NAMESPACE}}, {{STACK_QUEUE}}, and {{STACK_LARGE_GPU_QUEUE}}:
 //     Kueue namespace/LocalQueue routing. Tests default to the local stack fixture
 //     queues unless E2E_STACK_USE_ARGOCD_QUEUE or explicit stack queue env vars opt
@@ -239,8 +242,20 @@ func (tc *TestContext) OnFailure(fn func()) {
 //     payload instead of depending on a ConfigMap that MultiKueue does not
 //     replicate to worker clusters.
 func readFixture(name string) ([]byte, error) {
-	path := filepath.Join("fixtures", name)
-	data, err := os.ReadFile(path)
+	cleanName := filepath.Clean(name)
+	if cleanName != name || filepath.IsAbs(cleanName) || cleanName == "." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("invalid fixture path %q", name)
+	}
+
+	path, repoPathErr := findRepoFile(filepath.Join("tests", "e2e", cleanName))
+	var data []byte
+	var err error
+	if repoPathErr == nil {
+		data, err = os.ReadFile(path)
+	} else {
+		path = filepath.Join("fixtures", cleanName)
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reading fixture %s: %w", name, err)
 	}
@@ -257,6 +272,13 @@ func readFixture(name string) ([]byte, error) {
 			return nil, fmt.Errorf("fixture %s uses {{RAY_IMAGE}} but RAY_E2E_IMAGE env var is not set", name)
 		}
 		data = bytes.ReplaceAll(data, []byte("{{RAY_IMAGE}}"), []byte(img))
+	}
+	if bytes.Contains(data, []byte("{{NCCL_RDMA_INVOCATION}}")) {
+		invocation := strings.TrimSpace(os.Getenv("NCCL_RDMA_INVOCATION"))
+		if !ncclRDMAInvocationRE.MatchString(invocation) {
+			return nil, fmt.Errorf("fixture %s requires NCCL_RDMA_INVOCATION as nccl-rdma- followed by 32 lowercase hex characters", name)
+		}
+		data = bytes.ReplaceAll(data, []byte("{{NCCL_RDMA_INVOCATION}}"), []byte(invocation))
 	}
 	if bytes.Contains(data, []byte("{{NANOGPT_TAS_ANNOTATION}}")) {
 		annotation := "# TAS omitted: the local stack queue flavor is not topology-aware"
@@ -345,6 +367,8 @@ func readFixture(name string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+var ncclRDMAInvocationRE = regexp.MustCompile(`^nccl-rdma-[a-f0-9]{32}$`)
 
 // ReadFixtureWithSubstitutions reads a YAML fixture and performs the exact
 // same placeholder substitution readFixture applies at apply/delete time
@@ -457,6 +481,7 @@ func findRepoFile(relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	for {
 		// Check for repo root markers.
 		for _, marker := range []string{".git", "go.work"} {
@@ -474,6 +499,16 @@ func findRepoFile(relPath string) (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// ReadRepoFile reads a repository-relative file without depending on the
+// current package working directory.
+func ReadRepoFile(relPath string) ([]byte, error) {
+	path, err := findRepoFile(relPath)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
 }
 
 // parseMakefileVars extracts simple "VAR ?= value" or "VAR := value" assignments from a Makefile.

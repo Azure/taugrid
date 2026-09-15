@@ -1,0 +1,175 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Repository-owned, operator-run 2-GPU inter-node RDMA validation. This is not
+# nccl-tests, a full-node topology test, or an all-16-GPU bandwidth benchmark.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e2e-nccl-rdma-2x1xh200
+  namespace: {{STACK_NAMESPACE}}
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: taugrid-e2e
+    e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x1xh200
+    e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+    kueue.x-k8s.io/queue-name: {{STACK_LARGE_GPU_QUEUE}}
+spec:
+  suspend: true
+  completions: 2
+  parallelism: 2
+  completionMode: Indexed
+  manualSelector: true
+  selector:
+    matchLabels:
+      batch.kubernetes.io/job-name: e2e-nccl-rdma-2x1xh200
+      e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x1xh200
+      e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nccl-rdma-diagnostic
+        batch.kubernetes.io/job-name: e2e-nccl-rdma-2x1xh200
+        e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x1xh200
+        e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+    spec:
+      serviceAccountName: nccl-rdma-runner
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        {{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                e2e.taugrid.azure.com/diagnostic: nccl-rdma-2x1xh200
+                e2e.taugrid.azure.com/invocation: {{NCCL_RDMA_INVOCATION}}
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: sku
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: probe
+        image: nvcr.io/nvidia/pytorch@sha256:e14cf0da7ca0d878d0874eb81062b77df275491d4a8d030a2a7463a4e8b07f01
+        imagePullPolicy: IfNotPresent
+        command:
+        - /usr/local/bin/torchrun
+        args:
+        - --nnodes=2
+        - --nproc-per-node=1
+        - --node-rank=$(JOB_COMPLETION_INDEX)
+        - --master-addr=e2e-nccl-rdma-rank0
+        - --master-port=29500
+        - /opt/taugrid/torchrun-rdma-probe.py
+        env:
+        - name: TAUGRID_BACKEND
+          value: nccl
+        - name: TAUGRID_LIVE_RDMA
+          value: "1"
+        - name: TAUGRID_RUN_ID
+          value: {{NCCL_RDMA_INVOCATION}}
+        - name: TAUGRID_NODE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        - name: TAUGRID_AUTH_KEY_FILE
+          value: /var/run/taugrid-auth/key
+        - name: TAUGRID_ELEMENTS
+          value: "16777216"
+        - name: TAUGRID_WARMUP
+          value: "5"
+        - name: TAUGRID_ITERATIONS
+          value: "20"
+        - name: NCCL_DEBUG
+          value: INFO
+        - name: NCCL_DEBUG_SUBSYS
+          value: INIT,NET
+        - name: NCCL_IB_DISABLE
+          value: "0"
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        ports:
+        - name: rendezvous
+          containerPort: 29500
+          protocol: TCP
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+            - ALL
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        resources:
+          requests:
+            cpu: "4"
+            memory: 16Gi
+            nvidia.com/gpu: "1"
+            rdma/rdma_shared_device_a: "1"
+          limits:
+            cpu: "8"
+            memory: 32Gi
+            nvidia.com/gpu: "1"
+            rdma/rdma_shared_device_a: "1"
+        volumeMounts:
+        - name: probe
+          mountPath: /opt/taugrid
+          readOnly: true
+        - name: auth
+          mountPath: /var/run/taugrid-auth
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: probe
+        configMap:
+          name: nccl-rdma-probe
+          defaultMode: 292
+      - name: auth
+        secret:
+          secretName: nccl-rdma-auth
+          defaultMode: 288
+      - name: tmp
+        emptyDir:
+          sizeLimit: 4Gi
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi

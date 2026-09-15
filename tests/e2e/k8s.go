@@ -1402,6 +1402,7 @@ func gvrFromObject(obj *unstructured.Unstructured) (schema.GroupVersionResource,
 		"Service":        "services",
 		"RayCluster":     "rayclusters",
 		"RayJob":         "rayjobs",
+		"MPIJob":         "mpijobs",
 	}
 
 	resource, ok := kindToResource[obj.GetKind()]
