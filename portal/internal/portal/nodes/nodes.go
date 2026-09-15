@@ -11,10 +11,11 @@
 // shares the Jobs/Ray Kubernetes reader and needs no Kusto access.
 //
 // It mirrors what the gpudash TUI extracts per node:
-// SKU from node.kubernetes.io/instance-type, pool from
-// kubernetes.azure.com/agentpool, region/zone from topology.kubernetes.io/*,
-// and CPU/memory/GPU from .status.capacity/.allocatable. Capacity quantities are
-// parsed with k8s.io/apimachinery resource.Quantity (cpu "40"/"96000m" →
+// SKU from node.kubernetes.io/instance-type, Unbounded site from its exact
+// canonical or migration label, pool from kubernetes.azure.com/agentpool,
+// region/zone from topology.kubernetes.io/*, and CPU/memory/GPU from
+// .status.capacity/.allocatable. Capacity quantities are parsed with
+// k8s.io/apimachinery resource.Quantity (cpu "40"/"96000m" →
 // millicores, memory "329974272Ki" → bytes).
 //
 // The board degrades gracefully: a portal without Kubernetes access disables it
@@ -42,10 +43,13 @@ const (
 	labelAgentPool       = "kubernetes.azure.com/agentpool"
 	labelAgentPoolLegacy = "agentpool"
 	labelGPUProduct      = "nvidia.com/gpu.product"
+	labelUnboundedSite   = "unbounded-cloud.io/site"
+	labelUnboundedLegacy = "net.unbounded-cloud.io/site"
 )
 
 var (
 	skuLabels                 = []string{"node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type", "kubernetes.azure.com/sku"}
+	unboundedSiteLabels       = []string{labelUnboundedSite, labelUnboundedLegacy}
 	regionLabels              = []string{"topology.kubernetes.io/region", "failure-domain.beta.kubernetes.io/region"}
 	zoneLabels                = []string{"topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone"}
 	operationalConditionTypes = map[string]struct{}{
@@ -89,6 +93,8 @@ type Node struct {
 	AgentPoolLabel string         `json:"agentPoolLabel,omitempty"`
 	SKU            string         `json:"sku,omitempty"`
 	GPUProduct     string         `json:"gpuProduct,omitempty"`
+	Site           string         `json:"site,omitempty"`
+	SiteLabel      string         `json:"siteLabel,omitempty"`
 	Region         string         `json:"region,omitempty"`
 	RegionLabel    string         `json:"regionLabel,omitempty"`
 	Zone           string         `json:"zone,omitempty"`
@@ -311,6 +317,7 @@ func parseNode(obj nodeObj) Node {
 	milli := quantityMilli(obj.Status.Capacity["cpu"])
 	memBytes := quantityValue(obj.Status.Capacity["memory"])
 	agentPoolLabel, agentPool := firstLabelWithKey(labels, labelAgentPool, labelAgentPoolLegacy)
+	siteLabel, site := firstLabelWithKey(labels, unboundedSiteLabels...)
 	regionLabel, region := firstLabelWithKey(labels, regionLabels...)
 	zoneLabel, zone := firstLabelWithKey(labels, zoneLabels...)
 	return Node{
@@ -320,6 +327,8 @@ func parseNode(obj nodeObj) Node {
 		AgentPoolLabel: agentPoolLabel,
 		SKU:            firstLabel(labels, skuLabels...),
 		GPUProduct:     labels[labelGPUProduct],
+		Site:           site,
+		SiteLabel:      siteLabel,
 		Region:         region,
 		RegionLabel:    regionLabel,
 		Zone:           zone,

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -106,15 +106,17 @@ describe('InfiniBand fleet validation', () => {
     expect(await screen.findAllByText('Advertised', { selector: '.badge' })).toHaveLength(2);
     expect(screen.getAllByText(/rdma\/rdma_shared_device_a/)).toHaveLength(2);
     expect(screen.getAllByText(/kubernetes.azure.com\/agentpool/)).toHaveLength(3);
-    expect(screen.getByRole('region', { name: 'Site eastus2euap' })).toBeVisible();
-    expect(screen.getByRole('region', { name: 'Site westus3' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Unbounded site eastus2' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Unbounded site cluster' })).toBeVisible();
+    expect(screen.getAllByText(/net.unbounded-cloud.io\/site/)).not.toHaveLength(0);
+    expect(screen.getAllByText('unbounded-cloud.io/site', { exact: true })).not.toHaveLength(0);
+    expect(screen.getAllByText(/Region eastus2euap/)).not.toHaveLength(0);
     expect(screen.getByText('Passed · 2-GPU run path')).toBeVisible();
     expect(screen.getByText(/h200-node-a \/ GPU-aaaaaaaa ↔ h200-node-b \/ GPU-bbbbbbbb/)).toBeVisible();
     expect(screen.getAllByText('RDMA advertised', { selector: '.fabric-capability' })).toHaveLength(2);
     expect(screen.getByText(/other GPUs in the site are not implied validated/)).toBeVisible();
-    expect(screen.getAllByRole('link', { name: /GPU details/ })[0]).toHaveAttribute(
-      'href', expect.stringContaining('instance=h200-node-a'),
-    );
+    expect(screen.getAllByRole('link', { name: /GPU details/ }).some(link =>
+      link.getAttribute('href')?.includes('instance=h200-node-a'))).toBe(true);
     fireEvent.click(screen.getByText('Evidence matrix and runtime coverage'));
     expect(screen.getByText(/All 10 required condition families reported fresh False/)).toBeVisible();
     expect(screen.getByText(/1 fresh fault condition: GPUNVLinkReplayErrors/)).toBeVisible();
@@ -123,6 +125,53 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getAllByRole('link', { name: /Open per-GPU metrics/ })[0]).toHaveAttribute('href', expect.stringContaining('instance=h200-node-a'));
     expect(screen.getAllByText('Passed', { selector: '.badge' }).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/Not tested in latest run · different site/)).toBeVisible();
+  });
+
+  it('keeps partial Unbounded coverage explicit and does not infer site from region', async () => {
+    const partialNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'a100-node-c'
+        ? { ...node, region: 'eastus2euap' }
+        : node.name === 'h200-node-b'
+          ? { ...node, site: undefined, siteLabel: undefined }
+          : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(partialNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(url.includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 }));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('2/3 GPU nodes are labeled');
+    expect(screen.getByRole('region', { name: 'Unbounded site eastus2' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Unbounded site cluster' })).toBeVisible();
+    const unknownSite = screen.getByRole('region', { name: 'Unbounded site Unknown' });
+    expect(unknownSite).toBeVisible();
+    expect(within(unknownSite).getByText(/No Unbounded site label · Region eastus2euap/)).toBeVisible();
+  });
+
+  it('omits Unbounded site grouping when no GPU node has a supported label', async () => {
+    const unlabeledNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(({ site: _site, siteLabel: _siteLabel, ...node }) => node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(unlabeledNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(url.includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 }));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByRole('heading', { name: 'GPU fleet by region and pool' })).toBeVisible();
+    expect(screen.getByText(/Unbounded site visualization is unavailable/)).toBeVisible();
+    expect(screen.queryByRole('region', { name: /Unbounded site/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Region eastus2euap' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Region westus3' })).toBeVisible();
   });
 
   it('opens per-GPU health and utilization inline on the unified Fleet page', async () => {

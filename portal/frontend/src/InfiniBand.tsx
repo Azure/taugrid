@@ -14,7 +14,7 @@ const pageSize = 20;
 const conditionFreshnessMs = 15 * 60 * 1000;
 const futureClockSkewMs = 60 * 1000;
 const coverageStatement = 'Point-in-time two-GPU inter-node RDMA validation; this is not continuous InfiniBand or fleet health.';
-const inventoryCaveat = 'Fleet inventory and site or node-pool labels do not imply that a validation covered every GPU or performed multi-site distributed training.';
+const inventoryCaveat = 'Fleet inventory and Unbounded site or node-pool labels do not imply that a validation covered every GPU or performed multi-site distributed training.';
 const gpuConditionTypes = [
   'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
   'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
@@ -273,9 +273,14 @@ function FleetFabricMap({
   nodeUtil: NodeUtil['nodes'];
 }) {
   const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
+  const labeledSiteNodes = nodes.filter(node => node.site).length;
+  const useUnboundedSites = labeledSiteNodes > 0;
+  const partialSiteCoverage = useUnboundedSites && labeledSiteNodes < nodes.length;
   const sites = new Map<string, { node: FleetNode; index: number }[]>();
   nodes.forEach((node, index) => {
-    const site = node.region || 'Site Unknown';
+    const site = useUnboundedSites
+      ? node.site || 'Unknown'
+      : node.region || 'Region Unknown';
     sites.set(site, [...(sites.get(site) || []), { node, index }]);
   });
   const validationSite = latest?.actual?.site;
@@ -283,10 +288,12 @@ function FleetFabricMap({
   const connectionGPUs = connectionNodes.flatMap(node =>
     (node.gpuUuids || []).map(uuid => `${node.name} / ${uuid}`));
 
-  return <section className="fabric-map" aria-label="GPU InfiniBand fabric by site">
+  return <section className="fabric-map" aria-label={useUnboundedSites ? 'GPU InfiniBand fabric by Unbounded site' : 'GPU fleet by region and pool'}>
     <div className="fabric-map-head">
-      <div><h3>GPU fabric by site</h3>
-        <p>Site boundaries come from the exact Kubernetes region label. Blue marks GPUs hosted on an RDMA-advertised node; only the labeled run path is validated GPU-to-GPU connection evidence.</p>
+      <div><h3>{useUnboundedSites ? 'GPU fabric by Unbounded site' : 'GPU fleet by region and pool'}</h3>
+        <p>{useUnboundedSites
+          ? <>Site boundaries use exact <code>unbounded-cloud.io/site</code> identity, with the exact <code>net.unbounded-cloud.io/site</code> migration fallback. Region and pool remain separate.</>
+          : <>No GPU node exposes a supported Unbounded site label. Region and pool are shown as placement only, not as a network-site boundary.</>}</p>
       </div>
       <div className="fabric-legend" aria-label="Fabric map legend">
         <span><i className="legend-swatch rdma"/>GPU on RDMA-advertised node</span>
@@ -298,6 +305,14 @@ function FleetFabricMap({
     {!latest && <div className="fabric-no-link"><EvidenceBadge state="unknown"/>
       <span>No validated GPU-to-GPU InfiniBand path is available in this scope.</span>
     </div>}
+    {!useUnboundedSites && nodes.length > 0 && <div className="fabric-no-link">
+      <EvidenceBadge state="unknown"/>
+      <span>Unbounded site visualization is unavailable; no GPU node has a supported site label.</span>
+    </div>}
+    {partialSiteCoverage && <div className="fabric-no-link" role="alert">
+      <EvidenceBadge state="unknown"/>
+      <span>Unbounded site coverage is partial: {labeledSiteNodes}/{nodes.length} GPU nodes are labeled. Unlabeled nodes remain in the Unknown bucket.</span>
+    </div>}
     <div className="fabric-sites">
       {[...sites.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([site, siteNodes], siteIndex) => {
         const pools = new Map<string, { node: FleetNode; index: number }[]>();
@@ -308,9 +323,16 @@ function FleetFabricMap({
         const siteGPUCount = siteNodes.reduce((total, entry) => total + entry.node.gpuCapacity, 0);
         const siteRDMAGPUs = siteNodes.reduce((total, entry) =>
           total + ((entry.node.rdmaResources || []).length ? entry.node.gpuCapacity : 0), 0);
-        const showConnection = validationSite === site && connectionNodes.length > 0;
-        return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={`Site ${site}`} key={site}>
-          <header><div><strong>{site}</strong><span>Site boundary · {siteGPUCount} GPUs</span></div>
+        const siteLabels = [...new Set(siteNodes.flatMap(entry => entry.node.siteLabel ? [entry.node.siteLabel] : []))].sort();
+        const regions = [...new Set(siteNodes.flatMap(entry => entry.node.region ? [entry.node.region] : []))].sort();
+        const showConnection = useUnboundedSites && validationSite === site && connectionNodes.length > 0;
+        const groupLabel = useUnboundedSites ? `Unbounded site ${site}` : `Region ${site}`;
+        return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={groupLabel} key={site}>
+          <header><div><strong>{site}</strong>
+            <span>{useUnboundedSites
+              ? `${siteLabels.join(', ') || 'No Unbounded site label'} · ${regions.length ? `Region ${regions.join(', ')}` : 'Region Unknown'}`
+              : 'Region placement · Unbounded site Unknown'} · {siteGPUCount} GPUs</span>
+          </div>
             <span>{siteRDMAGPUs}/{siteGPUCount} GPUs on RDMA-advertised nodes</span>
           </header>
           {showConnection && <div className={`fabric-connection ${latest?.state || 'unknown'}`}>
@@ -341,6 +363,7 @@ function FleetFabricMap({
                       <span className={`fabric-capability ${rdmaAdvertised ? 'rdma' : 'unknown'}`}>{rdmaAdvertised ? 'RDMA advertised' : 'No RDMA resource'}</span>
                     </div>
                     <span>{node.gpuCapacity} × {node.gpuProduct || node.sku || 'GPU model Unknown'} · {node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
+                    <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
                     <div className="gpu-bank" aria-label={`${node.gpuCapacity} GPUs; ${rdmaAdvertised ? 'RDMA scheduling advertised' : 'RDMA scheduling not advertised'}`}>
                       {Array.from({ length: visibleGPUs }, (_, gpuIndex) =>
                         <i className={`gpu-chip ${rdmaAdvertised ? 'rdma' : 'unknown'}`} key={gpuIndex}/>)}
@@ -429,15 +452,16 @@ function FleetInfiniBandEvidence() {
                   ])}/>}
             </section>}
             <details className="fleet-disclosure"><summary>Evidence matrix and runtime coverage</summary>
-            <Table headers={['Node / GPU', 'Site / pool', 'RDMA scheduling', 'Continuous GPU / NVLink', 'Continuous IB', 'Per-GPU ADX telemetry', 'Latest run evidence']}
+            <Table headers={['Node / GPU', 'Site / region / pool', 'RDMA scheduling', 'Continuous GPU / NVLink', 'Continuous IB', 'Per-GPU ADX telemetry', 'Latest run evidence']}
             rows={nodes.map((node, index) => {
               const tested = testedByName.get(node.name);
-              const sameSite = node.region && validationSite ? node.region === validationSite ? 'same site' : 'different site' : 'site Unknown';
+              const sameSite = node.site && validationSite ? node.site === validationSite ? 'same site' : 'different site' : 'site Unknown';
               const telemetryDetail = gpuTelemetryDetail(node, telemetry);
               return [
                 <div className="node-identity"><strong>{node.name}</strong><span>{node.gpuCapacity || 0} × {node.gpuProduct || 'GPU model Unknown'}</span><small>{node.sku || 'SKU Unknown'} · {node.ready ? 'Node Ready' : 'Node not Ready'}</small></div>,
-                <div className="node-identity"><strong>{node.region || 'Site Unknown'}</strong>
-                  <span>{node.regionLabel || 'No site label source'}</span>
+                <div className="node-identity"><strong>{node.site || 'Site Unknown'}</strong>
+                  <span>{node.siteLabel || 'No Unbounded site label'}</span>
+                  <small>{node.region ? `Region ${node.region}` : 'Region Unknown'}{node.regionLabel ? ` · ${node.regionLabel}` : ''}</small>
                   <small>{node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}{node.agentPoolLabel ? ` · ${node.agentPoolLabel}` : ''}</small>
                   <small>{node.zone ? `Zone ${node.zone}` : 'Zone Unknown'}{node.zoneLabel ? ` · ${node.zoneLabel}` : ''}</small>
                 </div>,

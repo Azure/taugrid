@@ -163,8 +163,17 @@ recognized fixed-width data types. Unknown data types leave message size
 Unknown instead of guessing.
 
 The Fleet InfiniBand view also reads the authorized Kubernetes node inventory
-and renders a site-bounded GPU fabric map followed by a row-oriented evidence
-matrix. The map groups nodes by the exact region label and pool, shows each
+and conditionally renders an Unbounded-site-bounded GPU fabric map followed by
+a row-oriented evidence matrix. The inventory reader selects the exact
+canonical `unbounded-cloud.io/site` label first and the exact deprecated
+`net.unbounded-cloud.io/site` migration label only when the canonical value is
+empty. It never performs fuzzy label matching or substitutes region, zone, or
+pool for site identity. If no GPU node has either supported label, the primary
+map remains grouped by ordinary region and pool placement without presenting
+an Unbounded site visualization. Partial coverage keeps every unlabeled GPU
+node in an explicit Unknown bucket and reports the coverage gap.
+
+Region, zone, and pool remain separate placement fields. The map shows each
 node's inventory GPU count, and uses labeled color and shape cues to distinguish
 RDMA scheduling capability, condition faults, unknown evidence, and the exact
 GPU UUIDs sampled by the latest validation. It draws a validated run path only
@@ -173,8 +182,9 @@ for the artifact-recorded nodes and GPU UUIDs; sharing a site, pool, or
 
 It marks nodes as RDMA-advertised
 only when their status exposes a positive `rdma/*` capacity or allocatable
-resource, and shows agent pool, region, and zone with the exact label key
-selected by the inventory reader. That capability signal is not health.
+resource, and shows Unbounded site, agent pool, region, and zone with the exact
+label key selected by the inventory reader. The site label is a topology
+boundary, not CNI health, and RDMA capability is not health.
 
 Continuous GPU/NVLink and InfiniBand evidence comes from an explicit allowlist
 of monitoring-owned Kubernetes Node condition families. A condition family is

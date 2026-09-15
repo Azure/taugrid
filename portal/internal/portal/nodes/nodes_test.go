@@ -45,6 +45,7 @@ const nodesJSON = `{"items":[
   {"metadata":{"name":"aks-h100pool-1","labels":{
       "node.kubernetes.io/instance-type":"Standard_NC40ads_H100_v5",
       "kubernetes.azure.com/agentpool":"h100pool",
+      "unbounded-cloud.io/site":"cluster",
       "topology.kubernetes.io/region":"westeurope",
       "topology.kubernetes.io/zone":"westeurope-0"}},
    "status":{"capacity":{"cpu":"40","memory":"329974272Ki","nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
@@ -113,6 +114,9 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	if n.Region != "westeurope" || n.Zone != "westeurope-0" {
 		t.Fatalf("region/zone = %q/%q, want westeurope/westeurope-0", n.Region, n.Zone)
 	}
+	if n.Site != "cluster" || n.SiteLabel != labelUnboundedSite {
+		t.Fatalf("site/source = %q/%q, want cluster/%s", n.Site, n.SiteLabel, labelUnboundedSite)
+	}
 	if n.CPUCores != 40 {
 		t.Fatalf("CPUCores = %d, want 40 (parsed from millicores)", n.CPUCores)
 	}
@@ -146,6 +150,34 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	}
 	if !n.Ready {
 		t.Fatal("aks-h100pool-1 should be Ready")
+	}
+}
+
+func TestBoardResolvesExactUnboundedSiteLabels(t *testing.T) {
+	const j = `{"items":[
+	  {"metadata":{"name":"canonical","labels":{
+	    "unbounded-cloud.io/site":"canonical-site",
+	    "net.unbounded-cloud.io/site":"legacy-site"}},
+	   "status":{"capacity":{"cpu":"1","memory":"1Gi","nvidia.com/gpu":"1"}}},
+	  {"metadata":{"name":"legacy","labels":{
+	    "net.unbounded-cloud.io/site":"legacy-site"}},
+	   "status":{"capacity":{"cpu":"1","memory":"1Gi","nvidia.com/gpu":"1"}}},
+	  {"metadata":{"name":"lookalike","labels":{
+	    "example.com/unbounded-site":"wrong-site"}},
+	   "status":{"capacity":{"cpu":"1","memory":"1Gi","nvidia.com/gpu":"1"}}}
+	]}`
+	snap, err := Board(context.Background(), &fakeReader{json: j}, Options{})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if got := snap.Nodes[0]; got.Site != "canonical-site" || got.SiteLabel != labelUnboundedSite {
+		t.Fatalf("canonical site = %q/%q, want canonical-site/%s", got.Site, got.SiteLabel, labelUnboundedSite)
+	}
+	if got := snap.Nodes[1]; got.Site != "legacy-site" || got.SiteLabel != labelUnboundedLegacy {
+		t.Fatalf("legacy site = %q/%q, want legacy-site/%s", got.Site, got.SiteLabel, labelUnboundedLegacy)
+	}
+	if got := snap.Nodes[2]; got.Site != "" || got.SiteLabel != "" {
+		t.Fatalf("lookalike site = %q/%q, want empty/empty", got.Site, got.SiteLabel)
 	}
 }
 

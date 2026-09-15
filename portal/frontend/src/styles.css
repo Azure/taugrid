@@ -212,9 +212,9 @@
     display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 14px;
     border-bottom: 1px solid color-mix(in srgb, var(--site-color) 28%, white); color: var(--site-color);
   }
-  .fabric-site > header > div { display: flex; align-items: baseline; gap: 10px; }
+  .fabric-site > header > div { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .fabric-site > header strong { font-size: 15px; }
-  .fabric-site > header span { font-size: 11px; font-weight: 650; }
+  .fabric-site > header span { overflow-wrap: anywhere; font-size: 11px; font-weight: 650; }
   .fabric-connection {
     display: flex; align-items: center; gap: 14px; margin: 12px 14px 0; padding: 10px 12px;
     border: 1px solid #cbd5e1; background: #fff; color: var(--muted);
