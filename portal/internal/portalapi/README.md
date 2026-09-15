@@ -21,11 +21,10 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   successful response time, and snapshot freshness. The 15-second stale time
   marks snapshots stale; it does not poll. Live embedded dashboards manage
   freshness inside their own UI instead of using snapshot controls.
-- **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs,rdmavalidation}` package
+- **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
-  `kubeclient` reader) and Kusto (Cluster/Cost/InfiniBand validation share a
-  `kustoquery` querier).
+  `kubeclient` reader) and Kusto (Cluster/Cost/Node Utilization share a `kustoquery` querier).
 - **Soft-degrade contract** — a handler with a nil data source returns **503**;
   a `Board()` error returns **502**; an empty-but-successful result is a normal
   **200**. Boards light up together per source family, so a portal without
@@ -106,7 +105,7 @@ Experiments opens its native dashboard directly.
 |---|---|---|---|---|
 | Workloads | Jobs | `/portal/runs` | `runs.Board` → `/api/portal/runs` (batch Jobs + ray.io RayJobs) | ② |
 | Workloads | Services | `/portal/services` | none — placeholder (Ray Serve / KServe) | ③ |
-| Platform | Fleet | `/portal/fleet` | unified `nodes.Board` inventory, `cluster.Board` per-GPU telemetry, `nodeutil.Board` CPU/memory, continuous Node conditions, and `rdmavalidation.KustoReader` run evidence; exact validation detail uses workspace-scoped Stellar artifacts | ① + ② |
+| Platform | Fleet | `/portal/fleet` | unified `nodes.Board` inventory, `cluster.Board` per-GPU telemetry, `nodeutil.Board` CPU/memory, and continuous Node conditions | ① + ② |
 | Platform | Kueue | `/portal/jobs` | `jobs.Board` (Kueue queue snapshot) | ① (PriorityClass = ③) |
 | Platform | Ray | `/portal/ray` | `ray.Board` (dashboard Services, K8s) | ① |
 | Platform | Observability | `/portal/observability` | none — placeholder | ③ |
@@ -121,83 +120,37 @@ evidence share one site-aware operational map. The legacy
 `/portal/{cluster,gpu,nodes}` paths and old `?view=` links still resolve to the
 unified Fleet page; an `instance` query focuses the inline per-GPU detail table.
 
-## InfiniBand validation contract
+## Fleet InfiniBand evidence
 
-Fleet InfiniBand status is point-in-time, run-based evidence, not continuous
-network health. The summary card, cursor-paginated history, and
-`/portal/fleet/infiniband/<validation-id>` detail route expose only **Passed**,
-**Failed**, **Running**, **Unknown**, and **Stale**. Missing, partial, malformed,
-unsupported, or unverified data never becomes Passed.
+The Fleet page combines authorized Kubernetes node inventory, per-GPU ADX
+telemetry, node utilization, and continuous GPU/NVLink and InfiniBand Node
+conditions in one operational dashboard. Inventory, telemetry, and utilization
+refresh and retry together while retaining independent freshness and failure
+status. Telemetry remains visible as independent source evidence when exact
+cluster and instance identity is unavailable or does not safely match inventory.
 
-The existing experiment metrics path is the searchable index. The reader uses
-the configured `--kusto-ingestion` shape: `TauExpMetrics` for projection
-ingestion or `ExperimentMetrics` for repository-standard remote-write
-ingestion. Each validation phase emits a workspace/cluster/namespace-scoped
-`tau/run_status` marker with a versioned validation ID, schema, kind, and
-lifecycle state. Terminal rows add the bounded `rdma_validation/*` scalars and
-exact artifact URI/SHA linkage. The Portal selects the newest marker for each
-validation by retry-safe
-attempt/phase step, orders validations by event time plus validation ID, then
-derives historical status only when the terminal status, lifecycle, reason,
-namespace, and artifact linkage are internally consistent. Pagination cursors
-are opaque and versioned. Workspace authorization and cluster scope are applied
-before the read. The recorded diagnostic namespace is evidence, not an
-authorization filter, because an authorized workspace validation can run in a
-dedicated namespace that differs from its workload namespace.
+The inventory reader selects the exact canonical `unbounded-cloud.io/site`
+label first and the exact deprecated `net.unbounded-cloud.io/site` migration
+label only when the canonical value is empty. It never performs fuzzy label
+matching or substitutes region, zone, or pool for site identity. If no GPU node
+has either supported label, the map remains grouped by ordinary region and pool
+placement without presenting an Unbounded site visualization. Partial coverage
+keeps every unlabeled GPU node in an explicit Unknown bucket and reports the
+coverage gap. When both exact labels are non-empty and disagree, inventory
+preserves the canonical value and source key while reporting the conflict.
 
-The canonical `core/rdmavalidation.Result` JSON remains authoritative for
-technical detail. The Portal never dereferences the metric's artifact URI.
-After workspace authorization it lists the exact run's `rdma-validation`
-artifact through Stellar, selects the contract-defined artifact ID/type/name and
-digest, follows only Stellar's returned same-origin `fetch_url`, limits the
-payload to 8 MiB, verifies size and SHA-256, requires canonical JSON with the
-known schema, and runs the core fail-closed validation before returning detail.
-Unknown schemas stay Unknown in history and return an explicit detail error;
-malformed or integrity-failed artifacts also return typed errors rather than a
-success-shaped fallback.
+Region, zone, and pool remain separate placement fields. Nodes are
+RDMA-advertised only when status exposes a positive `rdma/*` capacity or
+allocatable resource. The site label is a topology boundary, not CNI health,
+and RDMA capability is not health. Node cards separately show Ready and
+scheduling state, NVIDIA model, GPU capacity and allocation, utilization, and
+continuous condition evidence.
 
-Historical pass/fail/unknown is immutable. Staleness is a separate presentation
-state at the exact `valid_until` boundary; a result is fresh at `valid_until`
-and stale only afterward. Message bytes are derived from element count only for
-recognized fixed-width data types. Unknown data types leave message size
-Unknown instead of guessing.
-
-The Fleet InfiniBand view also reads the authorized Kubernetes node inventory
-and conditionally renders an Unbounded-site-bounded GPU fabric map followed by
-a row-oriented evidence matrix. The inventory reader selects the exact
-canonical `unbounded-cloud.io/site` label first and the exact deprecated
-`net.unbounded-cloud.io/site` migration label only when the canonical value is
-empty. It never performs fuzzy label matching or substitutes region, zone, or
-pool for site identity. If no GPU node has either supported label, the primary
-map remains grouped by ordinary region and pool placement without presenting
-an Unbounded site visualization. Partial coverage keeps every unlabeled GPU
-node in an explicit Unknown bucket and reports the coverage gap. When both
-exact labels are non-empty and disagree, the inventory preserves the canonical
-value and source key but reports the conflict on both the fleet and node views.
-
-Region, zone, and pool remain separate placement fields. The map shows each
-node's inventory GPU count, and uses labeled color and shape cues to distinguish
-RDMA scheduling capability, condition faults, unknown evidence, and the exact
-GPU UUIDs sampled by the latest validation. It draws a validated run path only
-for the artifact-recorded nodes and GPU UUIDs when the artifact topology mode
-is `complete`, or when reading a legacy V1 artifact without the additive
-topology mode. `incomplete` and `not_applicable` results do not draw a site
-path. Sharing a site, pool, or `rdma/*` resource never manufactures a connection
-claim.
-
-The additive V1 topology contract exposes `site_provider`, `site_mode`, and
-`region` on requested and actual placement, plus each actual node's `site`,
-`site_source_key`, `site_label_conflict`, `region`, and `pool`. The Portal keeps
-these fields separate in detail responses and renders exact source and conflict
-evidence. For legacy V1 artifacts that predate these fields, it retains the
-aggregate site and pool fallback without inventing a source key. Unknown future
-schema versions remain fail-closed.
-
-It marks nodes as RDMA-advertised
-only when their status exposes a positive `rdma/*` capacity or allocatable
-resource, and shows Unbounded site, agent pool, region, and zone with the exact
-label key selected by the inventory reader. The site label is a topology
-boundary, not CNI health, and RDMA capability is not health.
+GPU allocation requires cluster-wide Pod visibility. Counts include active,
+scheduled, non-terminal Pods and Kubernetes init/restartable-init scheduling
+semantics. Free capacity is reported only for Ready, non-cordoned nodes. Missing
+or unauthorized Pod visibility, MIG, and DRA allocation cases fail closed to
+Unknown instead of presenting zero assignments or free GPUs.
 
 Continuous GPU/NVLink and InfiniBand evidence comes from an explicit allowlist
 of monitoring-owned Kubernetes Node condition families. A condition family is
@@ -209,14 +162,9 @@ Portal uses a 15-minute freshness window and tolerates at most one minute of
 future clock skew. Evaluation is keyed by condition type, so condition ordering
 does not affect the result.
 
-Per-GPU ADX telemetry remains a separate evidence column and currently reports
-only whether every expected GPU has a complete row-remap verdict; it is not
-presented as comprehensive GPU health. The latest run column remains
-point-in-time two-GPU inter-node validation evidence. Same-site coverage is
-reported only for nodes whose canonical validation artifact carries matching
-tested-site evidence. Missing topology is Unknown; inventory region or zone is
-never silently treated as a validation site. Each node links to the Fleet
-Health view for the underlying per-GPU metrics.
+Per-GPU ADX telemetry reports whether every expected inventory GPU has a
+complete row-remap verdict; it is not presented as comprehensive GPU health.
+Each node links to the inline Fleet GPU detail table for the underlying metrics.
 
 ## Data interpretation and recovery
 
@@ -291,8 +239,8 @@ source for today**. They are listed here — not implemented — so the gap betw
    budget, and reporting contracts; utilization alone cannot supply them.
 
 2. **Fleet depth — NPD and AlertRule.** The unified Fleet map now reads
-   continuous GPU, NVLink, and InfiniBand Node conditions independently from
-   run validation evidence. Two richer signals remain unavailable:
+   continuous GPU, NVLink, and InfiniBand Node conditions. Two richer signals
+   remain unavailable:
    - **NPD** DaemonSet health would need a Kubernetes read of NPD pods/conditions.
    - **AlertRule** evaluation would need to read adx-mon AlertRule CRDs and their
      firing state.

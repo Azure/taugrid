@@ -55,7 +55,7 @@ func (f *fakeReader) ListPods(_ context.Context, _ string) ([]byte, error) {
 // no nvidia.com/gpu.product label (as on the live poc cluster), so GPUProduct is
 // empty there; SKU still identifies the hardware.
 const nodesJSON = `{"items":[
-  {"metadata":{"name":"aks-h100pool-1","uid":"h100-node-1-uid","labels":{
+  {"metadata":{"name":"aks-h100pool-1","labels":{
       "node.kubernetes.io/instance-type":"Standard_NC40ads_H100_v5",
       "kubernetes.azure.com/agentpool":"h100pool",
       "unbounded-cloud.io/site":"cluster",
@@ -126,9 +126,6 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	n := snap.Nodes[0]
 	if n.Name != "aks-h100pool-1" {
 		t.Fatalf("nodes[0] = %q, want aks-h100pool-1 (name-sorted)", n.Name)
-	}
-	if n.UID != "h100-node-1-uid" {
-		t.Fatalf("nodes[0].UID = %q, want h100-node-1-uid", n.UID)
 	}
 	if n.SKU != "Standard_NC40ads_H100_v5" || n.AgentPool != "h100pool" {
 		t.Fatalf("sku/pool = %q/%q, want Standard_NC40ads_H100_v5/h100pool", n.SKU, n.AgentPool)

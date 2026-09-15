@@ -43,14 +43,6 @@ CLI.
   and recovery state. ADX/Kusto is a downstream analytics projection only, not
   the source of truth, and telemetry is not the only copy of non-scalar run
   state.
-- Durable InfiniBand validation follows the same split: bounded experiment
-  metric rows provide workspace-scoped lifecycle/history discovery through
-  either the `TauExpMetrics` projection or the repository-standard
-  `ExperimentMetrics` remote-write shape selected by `--kusto-ingestion`.
-  The immutable versioned `core/rdmavalidation` artifact remains authoritative
-  for technical evidence. Portal detail reads go through workspace-scoped
-  Stellar artifact authorization and never dereference a metric-supplied URI
-  directly.
 - The portal and Stellar are read-only. They never mutate cluster state.
 - Secret values belong in Kubernetes Secret or Key Vault references, never in
   checked-in configs, ConfigMaps, annotations, logs, metrics, or screenshots.

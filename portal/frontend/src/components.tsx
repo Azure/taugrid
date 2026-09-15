@@ -26,17 +26,15 @@ export function Empty({ children, warn = false }: { children: ReactNode; warn?: 
 export function Note({ children, warn = false }: { children: ReactNode; warn?: boolean }) {
   return <p className={'note' + (warn ? ' warn' : '')}>{children}</p>;
 }
-export function BoardResult<T>({ query: result, label, children, hint = '', partial = false, live = false, onRefresh, refreshing = false }: {
+export function BoardResult<T>({ query: result, label, children, hint = '', partial = false, live = false }: {
   query: UseQueryResult<T, Error>; label: string; children: (data: T) => ReactNode; hint?: string; partial?: boolean; live?: boolean;
-  onRefresh?: () => Promise<unknown> | void; refreshing?: boolean;
 }) {
   const query = readableQuery(result);
   const hasData = query.data !== undefined;
   const embedded = live && hasData && !query.error;
-  const isRefreshing = query.isFetching || refreshing;
   const action = query.error || partial ? 'Retry' : 'Refresh';
   const status = embedded ? 'Embedded live dashboard; freshness is managed inside the dashboard.'
-    : isRefreshing ? (hasData ? 'Refreshing; showing the previous snapshot.' : 'Loading snapshot…')
+    : query.isFetching ? (hasData ? 'Refreshing; showing the previous snapshot.' : 'Loading snapshot…')
       : query.error ? (hasData ? 'Stale snapshot; refresh failed.' : 'Unavailable.')
         : partial ? 'Some sources unavailable; see section diagnostics.'
           : query.isStale ? 'Stale snapshot; refresh for current data.' : 'Snapshot; not live.';
@@ -45,8 +43,8 @@ export function BoardResult<T>({ query: result, label, children, hint = '', part
       <span role="status">{label}: {status}{!embedded && hasData && query.dataUpdatedAt > 0 && <>
         {' '}Last successful response <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleString()}</time>.
       </>}</span>
-      {!embedded && <button type="button" className="btn" aria-label={action + ' ' + label} disabled={isRefreshing}
-        onClick={() => { void (onRefresh ? onRefresh() : query.refetch()); }}>{isRefreshing ? 'Refreshing…' : action}</button>}
+      {!embedded && <button type="button" className="btn" aria-label={action + ' ' + label} disabled={query.isFetching}
+        onClick={() => { void query.refetch(); }}>{query.isFetching ? 'Refreshing…' : action}</button>}
     </div>
     <div aria-busy={query.isFetching}>
       {query.error && <div className="empty warn" role="alert">{label} {hasData ? 'refresh failed' : 'unavailable'}: {query.error.message}{hint}. {staleReadMessage(query)}</div>}

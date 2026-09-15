@@ -93,7 +93,6 @@ type Options struct {
 // a human GiB convenience; GPU counts are whole devices.
 type Node struct {
 	Name              string         `json:"name"`
-	UID               string         `json:"uid,omitempty"`
 	Ready             bool           `json:"ready"`
 	Schedulable       bool           `json:"schedulable"`
 	AgentPool         string         `json:"agentPool,omitempty"`
@@ -119,7 +118,7 @@ type Node struct {
 }
 
 // RDMAResource is one device-plugin resource advertised by a node. Presence
-// establishes schedulable RDMA capability, not link health or validation.
+// establishes schedulable RDMA capability, not link health.
 type RDMAResource struct {
 	Name        string `json:"name"`
 	Capacity    int64  `json:"capacity"`
@@ -259,7 +258,6 @@ type nodeList struct {
 type nodeObj struct {
 	Metadata struct {
 		Name   string            `json:"name"`
-		UID    string            `json:"uid"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Spec struct {
@@ -471,7 +469,6 @@ func parseNode(obj nodeObj) Node {
 	ready := isReady(obj)
 	return Node{
 		Name:           obj.Metadata.Name,
-		UID:            obj.Metadata.UID,
 		Ready:          ready,
 		Schedulable:    ready && !obj.Spec.Unschedulable,
 		AgentPool:      agentPool,

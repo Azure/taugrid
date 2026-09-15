@@ -2,17 +2,13 @@
 // Licensed under the MIT License.
 
 import type { ReactNode } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { useBoard } from './data';
-import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Table, measured, n1, utilizationSummary } from './components';
-import type {
-  Cluster, GPU, RDMAFreshness, RDMAHistoricalStatus, RDMANode, RDMARdmaDevice, RDMAValidation,
-  RDMAValidationDetail, RDMAValidationState, RDMAValidationSummary, Nodes, NodeUtil,
-} from './types';
+import { Empty, Note, ScopedLink, Table, measured, n1, utilizationSummary } from './components';
+import type { Cluster, GPU, Nodes, NodeUtil } from './types';
 
 const conditionFreshnessMs = 15 * 60 * 1000;
 const futureClockSkewMs = 60 * 1000;
-const coverageStatement = 'Point-in-time two-GPU inter-node RDMA validation; this is not continuous InfiniBand or fleet health.';
 const gpuConditionTypes = [
   'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
   'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
@@ -22,63 +18,7 @@ const gpuConditionTypes = [
 const ibConditionTypes = ['IBLinkDown', 'IBSymbolError'] as const;
 
 const known = (value: ReactNode) => value === undefined || value === null || value === '' ? 'Unknown' : value;
-const list = (value?: string[]) => value?.length ? value.join(', ') : 'Unknown';
-const yesNoUnknown = (value?: boolean | null) => value === true ? 'Yes' : value === false ? 'No' : 'Unknown';
-const timestamp = (value?: string) => value ? <time dateTime={value}>{new Date(value).toLocaleString()}</time> : 'Unknown';
-const bytes = (value?: number | null) => value === undefined || value === null ? 'Unknown' : value.toLocaleString();
-const seconds = (value?: number | null) => value === undefined || value === null ? 'Unknown' : `${n1(value)}s`;
-const bandwidth = (value?: number | null) => value === undefined || value === null ? 'Unknown' : `${n1(value)} GB/s`;
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0;
-const historicalLabel = (value: RDMAHistoricalStatus) => value === 'pass' ? 'Passed' : value === 'fail' ? 'Failed' : 'Unknown';
-const freshnessLabel = (value: RDMAFreshness) => ({
-  fresh: 'Fresh', stale: 'Stale', unknown: 'Unknown', not_applicable: 'Not applicable',
-})[value];
-const stateLabel = (value: RDMAValidationState) => ({
-  passed: 'Passed', failed: 'Failed', running: 'Running', unknown: 'Unknown', stale: 'Stale',
-})[value];
-const stateTone = (value: RDMAValidationState) =>
-  value === 'passed' ? 'done' : value === 'failed' ? 'fail' : value === 'running' || value === 'stale' ? 'queue' : '';
-
-export function ValidationState({ state }: { state: RDMAValidationState }) {
-  return <span className={'badge ' + stateTone(state)}>{stateLabel(state)}</span>;
-}
-
-function stateMeaning(validation: RDMAValidation) {
-  switch (validation.state) {
-    case 'passed': return 'Verified evidence passed for this validation run only.';
-    case 'failed': return 'This validation run failed; review transport, correctness, exits, and cleanup.';
-    case 'running': return 'This validation is still running; no final pass or fail result is available.';
-    case 'stale': return `The latest validation is stale. Its immutable historical result was ${historicalLabel(validation.historicalStatus)}.`;
-    default: return 'The result is absent, incomplete, malformed, unsupported, or unverified; do not infer success.';
-  }
-}
-
-function age(value?: number | null) {
-  if (value === undefined || value === null || value < 0) return 'Unknown';
-  if (value < 60) return `${Math.floor(value)}s`;
-  if (value < 3600) return `${Math.floor(value / 60)}m`;
-  if (value < 86400) return `${Math.floor(value / 3600)}h ${Math.floor(value % 3600 / 60)}m`;
-  return `${Math.floor(value / 86400)}d ${Math.floor(value % 86400 / 3600)}h`;
-}
-
-function actualGPUs(validation: RDMAValidation) {
-  const nodes = validation.actual?.nodes;
-  if (!nodes?.length || !nodes.some(node => node.gpuUuids?.length)) return undefined;
-  return nodes.reduce((total, node) => total + (node.gpuUuids?.length || 0), 0);
-}
-
-function topologySite(site?: string, provider?: string, mode?: string) {
-  if (mode === 'not_applicable') return 'Unbounded site not applicable';
-  if (mode === 'incomplete') return site ? `Unbounded site incomplete · ${site}` : 'Unbounded site incomplete';
-  if (mode === 'complete') return `${provider === 'unbounded' ? 'Unbounded site' : 'Site'} ${site || 'Unknown'}`;
-  return site || 'Unknown';
-}
-
-function validationSite(validation?: RDMAValidation | null) {
-  const actual = validation?.actual;
-  if (actual?.siteMode && actual.siteMode !== 'complete') return undefined;
-  return actual?.site;
-}
 
 function sourceFreshness(query: { dataUpdatedAt: number; isError: boolean; isFetching: boolean }) {
   if (query.isFetching) return 'Refreshing';
@@ -88,36 +28,6 @@ function sourceFreshness(query: { dataUpdatedAt: number; isError: boolean; isFet
   return query.dataUpdatedAt > 0
     ? <>Updated <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleTimeString()}</time></>
     : 'Not loaded';
-}
-
-function requestedCoverage(validation: RDMAValidation) {
-  const requested = validation.requested;
-  if (!requested) return 'Unknown';
-  const gpus = requested.nodeCount !== undefined && requested.nodeCount !== null &&
-    requested.ranksPerNode !== undefined && requested.ranksPerNode !== null &&
-    requested.gpusPerRank !== undefined && requested.gpusPerRank !== null
-    ? requested.nodeCount * requested.ranksPerNode * requested.gpusPerRank : undefined;
-  return [
-    requested.nodeCount === undefined || requested.nodeCount === null ? undefined : `${requested.nodeCount} nodes`,
-    gpus === undefined ? undefined : `${gpus} GPUs`,
-    topologySite(requested.site, requested.siteProvider, requested.siteMode),
-    requested.region ? `Region ${requested.region}` : undefined,
-    requested.pool, requested.gpuModel,
-  ].filter(Boolean).join(' · ') || 'Unknown';
-}
-
-function actualCoverage(validation: RDMAValidation) {
-  const nodes = validation.actual?.nodes?.length;
-  const gpus = actualGPUs(validation);
-  return [
-    nodes === undefined ? undefined : `${nodes} nodes`,
-    gpus === undefined ? undefined : `${gpus} GPUs`,
-    topologySite(validation.actual?.site, validation.actual?.siteProvider, validation.actual?.siteMode),
-    validation.actual?.region ? `Region ${validation.actual.region}` : undefined,
-    validation.actual?.pool,
-    validation.placement?.matchesRequest === true ? 'matches request' :
-      validation.placement?.matchesRequest === false ? 'does not match request' : undefined,
-  ].filter(Boolean).join(' · ') || 'Unknown';
 }
 
 export function InfiniBandFleet() {
@@ -273,19 +183,15 @@ function IndependentSourceEvidence({ gpuSamples, nodeUtil }: { gpuSamples: GPU[]
 }
 
 function FleetFabricMap({
-  nodes, latest, gpuConditions, ibConditions, gpuTelemetry, gpuSamples, nodeUtil,
+  nodes, gpuConditions, ibConditions, gpuTelemetry, gpuSamples, nodeUtil,
 }: {
   nodes: FleetNode[];
-  latest?: RDMAValidation;
   gpuConditions: EvidenceSummary[];
   ibConditions: EvidenceSummary[];
   gpuTelemetry: EvidenceSummary[];
   gpuSamples: GPU[];
   nodeUtil: NodeUtil['nodes'];
 }) {
-  const testedByIdentity = new Map((latest?.actual?.nodes || [])
-    .filter(node => node.name && node.uid)
-    .map(node => [`${node.name}\u0000${node.uid}`, node]));
   const labeledSiteNodes = nodes.filter(node => node.site).length;
   const conflictingSiteNodes = nodes.filter(node => node.siteLabelConflict).length;
   const useUnboundedSites = labeledSiteNodes > 0;
@@ -297,11 +203,6 @@ function FleetFabricMap({
       : node.region || 'Region Unknown';
     sites.set(site, [...(sites.get(site) || []), { node, index }]);
   });
-  const validationSiteName = validationSite(latest);
-  const connectionNodes = latest?.actual?.nodes || [];
-  const connectionGPUs = connectionNodes.flatMap(node =>
-    (node.gpuUuids || []).map(uuid => `${node.name} / ${uuid}`));
-
   return <section className="fabric-map" aria-label={useUnboundedSites ? 'GPU InfiniBand fabric by Unbounded site' : 'GPU fleet by region and pool'}>
     <div className="fabric-map-head">
       <h3>GPU Dashboard</h3>
@@ -330,7 +231,6 @@ function FleetFabricMap({
           total + ((entry.node.rdmaResources || []).length ? entry.node.gpuCapacity : 0), 0);
         const siteLabels = [...new Set(siteNodes.flatMap(entry => entry.node.siteLabel ? [entry.node.siteLabel] : []))].sort();
         const regions = [...new Set(siteNodes.flatMap(entry => entry.node.region ? [entry.node.region] : []))].sort();
-        const showConnection = useUnboundedSites && validationSiteName === site && connectionNodes.length > 0;
         const groupLabel = useUnboundedSites ? `Unbounded site ${site}` : `Region ${site}`;
         return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={groupLabel} key={site}>
           <header><div><strong>{site}</strong>
@@ -340,13 +240,6 @@ function FleetFabricMap({
           </div>
             <span>{siteRDMAGPUs}/{siteGPUCount} GPUs on RDMA-advertised nodes</span>
           </header>
-          {showConnection && <div className={`fabric-connection ${latest?.state || 'unknown'}`}>
-            <span className="connection-rail" aria-hidden="true"><i/><i/></span>
-            <div><strong>{stateLabel(latest!.state)} · {connectionGPUs.length || 'Unknown'}-GPU run path</strong>
-              <span>{connectionGPUs.length ? connectionGPUs.join(' ↔ ') : connectionNodes.map(node => node.name).join(' ↔ ')}</span>
-              <small>This path is run evidence only; other GPUs in the site are not implied validated.</small>
-            </div>
-          </div>}
           <div className="fabric-pools">
             {[...pools.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([pool, poolNodes]) => {
               const models = [...new Set(poolNodes.map(entry => gpuModelLabel(entry.node)))].sort();
@@ -354,7 +247,6 @@ function FleetFabricMap({
                 <h4>{models.join(' / ')}<span>Pool {pool} · {poolNodes.length} node{poolNodes.length === 1 ? '' : 's'}</span></h4>
                 <div className="fabric-nodes">{poolNodes.sort((left, right) => left.node.name.localeCompare(right.node.name)).map(({ node, index }) => {
                   const rdmaAdvertised = Boolean(node.rdmaResources?.length);
-                  const tested = node.uid ? testedByIdentity.get(`${node.name}\u0000${node.uid}`) : undefined;
                   const samples = gpuSamples.filter(sample => sample.instance === node.name);
                   const gpuUtilization = average(samples.map(sample => sample.utilizationPct));
                   const gpuTemperature = samples.map(sample => sample.temperatureCelsius).filter(measured);
@@ -363,7 +255,7 @@ function FleetFabricMap({
                     measured(sample.memoryUsedMB) && measured(sample.memoryFreeMB)
                       ? [sample.memoryUsedMB + sample.memoryFreeMB] : []);
                   const usage = nodeUtil.find(sample => sample.instance === node.name);
-                  return <article className={`fabric-node${tested ? ` tested ${latest?.state || 'unknown'}` : ''}`} key={node.name}>
+                  return <article className="fabric-node" key={node.name}>
                     <div className="fabric-node-head"><strong>{node.name}</strong>
                       <div className="fabric-node-badges">
                         <span className={`fabric-capability ${!node.ready ? 'fault' : node.schedulable === false ? 'warning' : ''}`}>
@@ -384,10 +276,6 @@ function FleetFabricMap({
                       <span><small>CPU</small><b>{measured(usage?.cpuUtilPct) ? `${n1(usage.cpuUtilPct)}%` : 'Unknown'}</b><i>{usage?.cpuCoverage ? `${n1(usage.cpuCoverage.windowCoveragePct)}% coverage` : 'no coverage'}</i></span>
                       <span><small>Node memory</small><b>{measured(usage?.memUsedPct) ? `${n1(usage.memUsedPct)}%` : 'Unknown'}</b><i>{gpuMemoryUsed.length && gpuMemoryTotal.length ? `GPU ${n1(gpuMemoryUsed.reduce((sum, value) => sum + value, 0) / 1024)} / ${n1(gpuMemoryTotal.reduce((sum, value) => sum + value, 0) / 1024)} GiB` : 'GPU memory Unknown'}</i></span>
                     </div>
-                    {tested && <div className={`tested-gpus ${latest?.state || 'unknown'}`}>
-                      <strong>{tested.gpuUuids?.length || 'Unknown'} GPU sampled in latest run</strong>
-                      <span>{list(tested.gpuUuids)}</span>
-                    </div>}
                     <div className="fabric-signals">
                       <span className={gpuConditions[index].state}>GPU/NVLink <b>{evidenceLabel(gpuConditions[index].state)}</b></span>
                       <span className={ibConditions[index].state}>InfiniBand <b>{evidenceLabel(ibConditions[index].state)}</b></span>
@@ -411,11 +299,9 @@ function FleetInfiniBandEvidence() {
   const inventoryQuery = useBoard<Nodes>('/api/portal/nodes');
   const telemetryQuery = useBoard<Cluster>('/api/portal/cluster');
   const nodeUtilQuery = useBoard<NodeUtil>('/api/portal/nodeutil');
-  const latestQuery = useBoard<RDMAValidationSummary>('/api/portal/rdma-validations/summary');
-  const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery, latestQuery];
+  const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery];
   const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
   const snapshot = inventoryQuery.data;
-  const latest = latestQuery.data?.latest;
   const nodes = (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0);
   const gpuSchedulable = snapshot?.gpuSchedulable ?? snapshot?.gpuAllocatable ?? snapshot?.totalGPUs ?? 0;
   const gpuAllocationKnown = snapshot?.gpuAllocationKnown === true &&
@@ -455,7 +341,6 @@ function FleetInfiniBandEvidence() {
     { name: 'inventory', query: inventoryQuery },
     { name: 'GPU telemetry', query: telemetryQuery },
     { name: 'node utilization', query: nodeUtilQuery },
-    { name: 'validation', query: latestQuery },
   ];
   const unavailableSources = sourceResults.filter(source => source.query.isError);
   const hasData = sourceQueries.some(query => query.data !== undefined);
@@ -492,19 +377,15 @@ function FleetInfiniBandEvidence() {
           <div><dt>InfiniBand</dt><dd>{snapshot ? `${snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}/${snapshot.gpuNodes} RDMA nodes` : 'Unknown'}</dd><span>{snapshot
             ? `GPU/NVLink ${gpuConditionCoveredGPUs}/${snapshot.totalGPUs} · IB ${ibConditionCoveredGPUs}/${snapshot.totalGPUs} GPUs covered`
             : 'Inventory-dependent capability and coverage'}</span></div>
-          {latest && <div><dt>Latest validation</dt><dd>{stateLabel(latest.state)}</dd><span>
-            {`${topologySite(latest.actual?.site, latest.actual?.siteProvider, latest.actual?.siteMode)}${latest.actual?.pool ? ` / ${latest.actual.pool}` : ''}`}
-          </span></div>}
         </dl>
         <div className="source-freshness" aria-label="Fleet data source freshness">
           <span><strong>Inventory</strong> {sourceFreshness(inventoryQuery)}</span>
           <span><strong>GPU telemetry</strong> {sourceFreshness(telemetryQuery)}</span>
           <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery)}</span>
-          <span><strong>Validation</strong> {sourceFreshness(latestQuery)}</span>
         </div>
-        {!snapshot ? <Empty warn>GPU inventory is unavailable. Telemetry and validation remain visible; fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown.</Empty>
+        {!snapshot ? <Empty warn>GPU inventory is unavailable. Telemetry remains visible; fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown.</Empty>
           : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
-          : <><FleetFabricMap nodes={nodes} latest={latest || undefined} gpuConditions={gpuConditions} ibConditions={ibConditions}
+          : <><FleetFabricMap nodes={nodes} gpuConditions={gpuConditions} ibConditions={ibConditions}
             gpuTelemetry={gpuTelemetry} gpuSamples={attributedTelemetry} nodeUtil={attributedNodeUtil}/>
             </>}
         <IndependentSourceEvidence gpuSamples={independentTelemetry} nodeUtil={independentNodeUtil}/>
@@ -522,145 +403,4 @@ function FleetInfiniBandEvidence() {
       </>}
     </div>
   </section>;
-}
-
-export function InfiniBandValidationDetail() {
-  const { validationId = '' } = useParams();
-  const query = useBoard<RDMAValidationDetail>('/api/portal/rdma-validations/' + encodeURIComponent(validationId), !!validationId);
-  return <><div className="page-head"><div><PageTitle title="InfiniBand validation">{coverageStatement}</PageTitle></div>
-    <ScopedLink to="/portal/fleet" className="back">← Back to Fleet</ScopedLink></div>
-    {!validationId ? <Empty warn>Invalid validation path: a validation ID is required.</Empty>
-      : <BoardResult query={query} label="InfiniBand validation detail">{validation => <ValidationDetail validation={validation}/>}</BoardResult>}
-  </>;
-}
-
-function nodeDevices(nodes?: RDMANode[]) {
-  return (nodes || []).flatMap(node => (node.rdmaDevices || []).map(device => [node, device] as [RDMANode, RDMARdmaDevice]));
-}
-
-function ValidationDetail({ validation }: { validation: RDMAValidationDetail }) {
-  return <><div className="detail-meta"><ValidationState state={validation.state}/>
-    <span>Freshness: {freshnessLabel(validation.freshness)}</span>
-    <span>Historical result: {historicalLabel(validation.historicalStatus)}</span></div>
-    <Note warn={validation.state !== 'passed'}>{stateMeaning(validation)}</Note>
-
-    <h2>Identity and freshness</h2><KV rows={[
-      ['Validation ID', validation.validationId], ['Run ID', known(validation.runId)], ['Run attempt', known(validation.runAttempt)],
-      ['Schema', known(validation.schemaVersion)], ['Kind', known(validation.kind)], ['Reason code', known(validation.reasonCode)],
-      ['Reason', known(validation.reason)], ['Cluster', known(validation.cluster)], ['Workspace', known(validation.workspaceId)],
-      ['Namespace', known(validation.namespace)], ['Created', timestamp(validation.createdAt)], ['Started', timestamp(validation.startedAt)],
-      ['Admitted', timestamp(validation.admittedAt)], ['Completed', timestamp(validation.completedAt)], ['Observed', timestamp(validation.observedAt)],
-      ['Valid until', timestamp(validation.validUntil)], ['Age', age(validation.ageSeconds)], ['Stale after', seconds(validation.staleAfterSeconds)],
-    ]}/>
-
-    <h2>Requested and actual placement</h2><Note>{coverageStatement}</Note><KV rows={[
-      ['Requested', requestedCoverage(validation)], ['Actual', actualCoverage(validation)],
-      ['Requested site provider', known(validation.requested?.siteProvider)],
-      ['Requested site mode', known(validation.requested?.siteMode)],
-      ['Requested region', known(validation.requested?.region)],
-      ['Actual site provider', known(validation.actual?.siteProvider)],
-      ['Actual site mode', known(validation.actual?.siteMode)],
-      ['Actual region', known(validation.actual?.region)],
-      ['Distinct nodes', yesNoUnknown(validation.placement?.distinctNodes)], ['Matches request', yesNoUnknown(validation.placement?.matchesRequest)],
-      ['Placement reason', known(validation.placement?.reason)],
-    ]}/>
-    {!validation.actual?.nodes?.length ? <Empty warn>Node, GPU, and RDMA placement evidence is unavailable.</Empty>
-      : <Table headers={['Node', 'UID', 'Unbounded site evidence', 'Region', 'Pool', 'GPU model', 'GPU UUIDs']}
-        rows={validation.actual.nodes.map(node => [
-          known(node.name), known(node.uid),
-          <div className="node-identity">
-            <strong>{topologySite(node.site, validation.actual?.siteProvider, validation.actual?.siteMode)}</strong>
-            <span>{node.siteSourceKey || (validation.actual?.siteMode ? 'Site source unavailable' : 'Legacy artifact · source unavailable')}</span>
-            {node.siteLabelConflict && <small className="warn">Canonical and fallback site labels conflict</small>}
-          </div>,
-          known(node.region), known(node.pool), known(node.gpuModel), list(node.gpuUuids),
-        ])}/>}
-    {!!nodeDevices(validation.actual?.nodes).length && <Table headers={['Node', 'Resource', 'Device', 'Interface', 'Port', 'Link layer', 'State']}
-      rows={nodeDevices(validation.actual?.nodes).map(([node, device]) => [
-        known(node.name), known(device.resourceName), known(device.device), known(device.interface),
-        known(device.port), known(device.linkLayer), known(device.state),
-      ])}/>}
-
-    <h2>Source and image provenance</h2><KV rows={[
-      ['Repository', known(validation.source?.repository)], ['Source revision', known(validation.source?.revision)],
-      ['Image repository', known(validation.source?.imageRepository)], ['Image index digest', known(validation.source?.imageIndexDigest)],
-      ['Image platform digest', known(validation.source?.imagePlatformDigest)], ['Image config digest', known(validation.source?.imageConfigDigest)],
-      ['SBOM manifest digest', known(validation.source?.sbomManifestDigest)],
-      ['SBOM layer digest', known(validation.source?.sbomLayerDigest)],
-      ['VEX manifest digest', known(validation.source?.vexManifestDigest)],
-      ['VEX layer digest', known(validation.source?.vexLayerDigest)],
-      ['Signature manifest digest', known(validation.source?.signatureManifestDigest)],
-      ['Signature layer digest', known(validation.source?.signatureLayerDigest)],
-      ['Signature trust verified', yesNoUnknown(validation.source?.signatureTrustVerified)],
-    ]}/>
-
-    <h2>NCCL and transport evidence</h2><KV rows={[
-      ['Collective', known([validation.collective?.library, validation.collective?.version, validation.collective?.operation].filter(Boolean).join(' / '))],
-      ['Transport backend', known(validation.transport?.backend)], ['NCCL NET', known(validation.transport?.ncclNet)],
-      ['NET/IB positive evidence', yesNoUnknown(validation.transport?.ibPositiveEvidence)],
-      ['Interfaces', list(validation.transport?.interfaces)], ['RDMA devices', list(validation.transport?.rdmaDevices)],
-      ['Socket fallback detected', yesNoUnknown(validation.transport?.socketFallbackDetected)],
-    ]}/>
-    {!!validation.transport?.evidence?.length && <Table headers={['Observed transport evidence']}
-      rows={validation.transport.evidence.map(evidence => [evidence])}/>}
-    {!!Object.keys(validation.transport?.environment || {}).length &&
-      <Table headers={['Environment', 'Value']} rows={Object.entries(validation.transport?.environment || {})}/>}
-
-    <h2>Parameters and bandwidth</h2><KV rows={[
-      ['Operation', known(validation.parameters?.operation)], ['Data type', known(validation.parameters?.dataType)],
-      ['Elements', known(validation.parameters?.elements)], ['World size', known(validation.parameters?.worldSize)],
-      ['Processes per pod', known(validation.parameters?.processesPerPod)],
-      ['Message sizes', validation.parameters?.messageSizesBytes?.length ? validation.parameters.messageSizesBytes.map(bytes).join(', ') : 'Unknown'],
-      ['Warmup iterations', known(validation.parameters?.warmupIterations)], ['Iterations', known(validation.parameters?.iterations)],
-      ['algbw min / median / mean / max', ['min', 'median', 'mean', 'max'].map(key => bandwidth(validation.summary?.algbwGbps?.[key as 'min'])).join(' / ')],
-      ['busbw min / median / mean / max', ['min', 'median', 'mean', 'max'].map(key => bandwidth(validation.summary?.busbwGbps?.[key as 'min'])).join(' / ')],
-      ['Duration', seconds(validation.durationSeconds)],
-    ]}/>
-    {!validation.measurements?.length ? <Empty warn>No per-rank bandwidth measurements were reported.</Empty>
-      : <Table headers={['Rank', 'Message bytes', 'Iterations', 'Elapsed', '#algbw GB/s', '#busbw GB/s']}
-        rows={validation.measurements.map(measurement => [
-          known(measurement.rank), bytes(measurement.messageSizeBytes), known(measurement.iterations),
-          seconds(measurement.elapsedSeconds), bandwidth(measurement.algbwGbps), bandwidth(measurement.busbwGbps),
-        ])}/>}
-
-    <h2>Correctness and process exits</h2><KV rows={[
-      ['Correctness passed', yesNoUnknown(validation.correctness?.passed)], ['Maximum error', known(validation.correctness?.maxError)],
-      ['Error count', known(validation.correctness?.errorCount)], ['Job exit code', known(validation.jobExitCode)],
-      ['Rank exits', validation.rankExitCodes?.length ? validation.rankExitCodes.map(exit => `rank ${known(exit.rank)}: ${known(exit.code)}`).join(', ') : 'Unknown'],
-    ]}/>
-    {!!validation.pods?.length && <Table headers={['Pod', 'UID', 'Node', 'Exit']}
-      rows={validation.pods.map(pod => [
-        known(pod.name), known(pod.uid), known(pod.node), known(pod.exitCode),
-      ])}/>}
-    {!!validation.ranks?.length && <Table headers={['Rank', 'Pod UID', 'Node', 'Node UID', 'Peer authenticated', 'Memlock soft / hard', 'Exit']}
-      rows={validation.ranks.map(rank => [
-        known(rank.rank), known(rank.podUid), known(rank.node), known(rank.nodeUid),
-        yesNoUnknown(rank.peerAuthenticated), `${bytes(rank.memlockSoftBytes)} / ${bytes(rank.memlockHardBytes)}`, known(rank.exitCode),
-      ])}/>}
-    {!!validation.errors?.length && <Table headers={['Stage', 'Code', 'Error']}
-      rows={validation.errors.map(error => [known(error.stage), known(error.code), known(error.message)])}/>}
-
-    <h2>Cleanup</h2><KV rows={[
-      ['Status', known(validation.cleanup?.status)], ['Started', timestamp(validation.cleanup?.startedAt)],
-      ['Completed', timestamp(validation.cleanup?.completedAt)], ['Owned resources', list(validation.cleanup?.ownedResources)],
-      ['Remaining resources', list(validation.cleanup?.remainingResources)],
-      ['Reason', known(validation.cleanup?.reason)],
-    ]}/>
-
-    <h2>Artifact verification and evidence</h2><KV rows={[
-      ['Verification', known(validation.artifactVerification?.state)],
-      ['Content type', known(validation.artifactVerification?.contentType)],
-      ['Artifact URI', known(validation.artifactVerification?.uri)],
-      ['Artifact SHA-256', known(validation.artifactVerification?.sha256)], ['Artifact size', bytes(validation.artifactVerification?.sizeBytes)],
-      ['Verified at', timestamp(validation.artifactVerification?.verifiedAt)], ['Verification reason', known(validation.artifactVerification?.reason)],
-      ['Producer', known([validation.producer?.name, validation.producer?.version].filter(Boolean).join(' / '))],
-      ['Parser', known([validation.parser?.name, validation.parser?.version].filter(Boolean).join(' / '))],
-    ]}/>
-    {!validation.evidence?.length ? <Empty warn>No evidence hashes were reported.</Empty>
-      : <Table headers={['Evidence', 'URI', 'SHA-256', '#Bytes', 'Captured']}
-        rows={validation.evidence.map(evidence => [
-          known(evidence.name), known(evidence.uri), known(evidence.sha256),
-          bytes(evidence.sizeBytes), timestamp(evidence.capturedAt),
-        ])}/>}
-  </>;
 }

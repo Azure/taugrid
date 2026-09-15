@@ -194,8 +194,9 @@ func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	b.WriteString("let top_experiments = deduped\n")
 	b.WriteString("| summarize latest_wall_time=max(wall_time) by project_id, experiment_id, workspace_id\n")
 	fmt.Fprintf(&b, "| top %d by latest_wall_time desc;\n", opts.Limit+1)
-	writeLatestExperimentMetricRows(&b)
+	b.WriteString("deduped\n")
 	b.WriteString("| join kind=inner (top_experiments) on project_id, experiment_id, workspace_id\n")
+	b.WriteString("| summarize arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id\n")
 	b.WriteString("| order by wall_time desc, project_id asc, run_group_id asc, run_id asc, metric_name asc\n")
 	writeExperimentSearchProjection(&b, "project_id")
 	return b.String(), nil
@@ -423,24 +424,12 @@ func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []
 	b.WriteString("let top_experiments = deduped\n")
 	b.WriteString("| summarize latest_wall_time=max(wall_time) by project_id, experiment_id, workspace_id\n")
 	fmt.Fprintf(&b, "| top %d by latest_wall_time desc;\n", opts.Limit+1)
-	writeLatestExperimentMetricRows(&b)
+	b.WriteString("deduped\n")
 	b.WriteString("| join kind=inner (top_experiments) on project_id, experiment_id, workspace_id\n")
+	b.WriteString("| summarize arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id\n")
 	b.WriteString("| order by wall_time desc, project_id asc, run_group_id asc, run_id asc, metric_name asc\n")
 	writeExperimentSearchProjection(&b, "project_id")
 	return b.String()
-}
-
-func writeLatestExperimentMetricRows(b *strings.Builder) {
-	const dimensions = "project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id"
-	fmt.Fprintf(b, "let latest_status_steps = deduped\n| where metric_name == %s\n", kqlString(RunStatusMetricName))
-	fmt.Fprintf(b, "| summarize max_status_step=max(step) by %s;\n", dimensions)
-	fmt.Fprintf(b, "let latest_status = deduped\n| where metric_name == %s\n", kqlString(RunStatusMetricName))
-	fmt.Fprintf(b, "| join kind=inner (latest_status_steps) on %s\n", dimensions)
-	b.WriteString("| where step == max_status_step\n")
-	fmt.Fprintf(b, "| summarize arg_max(wall_time, *) by %s;\n", dimensions)
-	fmt.Fprintf(b, "let latest_metrics = deduped\n| where metric_name != %s\n", kqlString(RunStatusMetricName))
-	fmt.Fprintf(b, "| summarize arg_max(wall_time, *) by %s;\n", dimensions)
-	b.WriteString("union latest_metrics, latest_status\n")
 }
 
 func writeLifecycleMetricRows(b *strings.Builder, opts RunLifecycleQueryOptions, filterOpts MetricsQueryOptions) {

@@ -44,7 +44,7 @@ export interface Nodes extends Scoped {
   gpuAllocatable: number; gpuSchedulable: number; gpuAllocated: number; gpuAvailable: number; gpuAllocationKnown: boolean; gpuAllocationError?: string;
   totalCPUCores: number; totalMemoryGiB: number; rdmaAdvertisedGpuNodes?: number;
   skus: { sku: string; nodes: number; gpus: number }[];
-  nodes: { name: string; uid?: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
+  nodes: { name: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
     cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuAllocatable?: number;
     gpuAllocated?: number; gpuAvailable?: number; gpuProduct?: string; ready: boolean; schedulable?: boolean;
     agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
@@ -67,117 +67,6 @@ export interface NodeUtil extends Scoped {
       windowCoveragePct: number; counterResets: number; firstSampleAt?: string; lastSampleAt?: string;
     };
   }[];
-}
-export type RDMAValidationState = 'passed' | 'failed' | 'running' | 'unknown' | 'stale';
-export type RDMAHistoricalStatus = 'pass' | 'fail' | 'unknown' | null;
-export type RDMAFreshness = 'fresh' | 'stale' | 'unknown' | 'not_applicable';
-export interface RDMADigestSummary {
-  min?: number | null; max?: number | null; mean?: number | null; median?: number | null;
-}
-export interface RDMASource {
-  repository?: string; revision?: string; imageRepository?: string; imageIndexDigest?: string;
-  imagePlatformDigest?: string; imageConfigDigest?: string;
-  sbomManifestDigest?: string; sbomLayerDigest?: string;
-  vexManifestDigest?: string; vexLayerDigest?: string;
-  signatureManifestDigest?: string; signatureLayerDigest?: string;
-  signatureTrustVerified?: boolean | null;
-}
-export interface RDMARequested {
-  nodeCount?: number | null; podCount?: number | null; rankCount?: number | null;
-  ranksPerNode?: number | null; gpusPerRank?: number | null; distinctHostname?: boolean | null;
-  site?: string; siteProvider?: string; siteMode?: RDMASiteTopologyMode; region?: string;
-  pool?: string; gpuModel?: string; gpuResource?: string; rdmaResource?: string;
-  rdmaPerPod?: number | null; messageSizesBytes?: number[]; warmupIterations?: number | null; iterations?: number | null;
-}
-export type RDMASiteTopologyMode = 'complete' | 'not_applicable' | 'incomplete';
-export interface RDMARdmaDevice {
-  resourceName?: string; device?: string; port?: number | null; interface?: string;
-  linkLayer?: string; state?: string;
-}
-export interface RDMANode {
-  name?: string; uid?: string; site?: string; siteSourceKey?: string; siteLabelConflict?: boolean;
-  region?: string; pool?: string; gpuModel?: string;
-  gpuUuids?: string[]; rdmaDevices?: RDMARdmaDevice[];
-}
-export interface RDMAActual {
-  site?: string; siteProvider?: string; siteMode?: RDMASiteTopologyMode; region?: string;
-  pool?: string; nodes?: RDMANode[];
-}
-export interface RDMAPlacement {
-  distinctNodes?: boolean | null; matchesRequest?: boolean | null; reason?: string;
-}
-export interface RDMAPod {
-  name?: string; uid?: string; node?: string; phase?: string; startedAt?: string;
-  completedAt?: string; exitCode?: number | null; reason?: string;
-}
-export interface RDMARank {
-  rank?: number | null; podUid?: string; node?: string; nodeUid?: string;
-  peerAuthenticated?: boolean | null; memlockSoftBytes?: number | null; memlockHardBytes?: number | null;
-  exitCode?: number | null;
-}
-export interface RDMACollective {
-  library?: string; version?: string; operation?: string;
-}
-export interface RDMATransport {
-  backend?: string; ncclNet?: string; interfaces?: string[]; rdmaDevices?: string[];
-  socketFallbackDetected?: boolean | null; ibPositiveEvidence?: boolean | null;
-  evidence?: string[]; environment?: Record<string, string>;
-}
-export interface RDMAParameters {
-  worldSize?: number | null; processesPerPod?: number | null; elements?: number | null;
-  dataType?: string; operation?: string; messageSizesBytes?: number[];
-  warmupIterations?: number | null; iterations?: number | null;
-}
-export interface RDMAMeasurement {
-  rank?: number | null; messageSizeBytes?: number | null; iterations?: number | null;
-  elapsedSeconds?: number | null; algbwGbps?: number | null; busbwGbps?: number | null;
-}
-export interface RDMACorrectness {
-  passed?: boolean | null; maxError?: number | null; errorCount?: number | null;
-}
-export interface RDMAError {
-  stage?: string; code?: string; message?: string;
-}
-export interface RDMARankExit {
-  rank?: number | null; code?: number | null;
-}
-export interface RDMACleanup {
-  status?: 'complete' | 'incomplete' | 'not_attempted' | 'unknown'; startedAt?: string;
-  completedAt?: string; ownedResources?: string[]; remainingResources?: string[]; reason?: string;
-}
-export interface RDMAEvidence {
-  name?: string; uri?: string; sha256?: string; sizeBytes?: number | null; capturedAt?: string;
-}
-export interface RDMAProducer {
-  name?: string; version?: string;
-}
-export interface RDMAArtifactVerification {
-  state?: 'verified' | 'missing' | 'invalid' | 'unsupported_schema' | 'unavailable' | 'unknown';
-  contentType?: string; uri?: string; sha256?: string; sizeBytes?: number | null; verifiedAt?: string; reason?: string;
-}
-export interface RDMAValidation {
-  validationId: string; runId?: string; runAttempt?: number | null;
-  state: RDMAValidationState; historicalStatus: RDMAHistoricalStatus; freshness: RDMAFreshness;
-  reasonCode?: string; reason?: string; workspaceId?: string; cluster?: string; namespace?: string;
-  project?: string; experimentId?: string; runGroupId?: string;
-  createdAt?: string; startedAt?: string; admittedAt?: string; completedAt?: string;
-  observedAt?: string; validUntil?: string; staleAfterSeconds?: number | null; ageSeconds?: number | null;
-  requested?: RDMARequested; actual?: RDMAActual; placement?: RDMAPlacement;
-  source?: RDMASource; collective?: RDMACollective; transport?: RDMATransport; parameters?: RDMAParameters;
-  summary?: { algbwGbps?: RDMADigestSummary; busbwGbps?: RDMADigestSummary };
-  correctness?: RDMACorrectness; durationSeconds?: number | null; cleanup?: RDMACleanup;
-  artifactVerification?: RDMAArtifactVerification;
-}
-export interface RDMAValidationSummary extends Scoped {
-  latest: RDMAValidation | null; total?: number; generatedAt?: string;
-}
-export interface RDMAValidationPage extends Scoped {
-  validations: RDMAValidation[]; nextCursor?: string | null; truncated?: boolean; generatedAt?: string;
-}
-export interface RDMAValidationDetail extends RDMAValidation, Scoped {
-  schemaVersion?: string; kind?: string; pods?: RDMAPod[]; ranks?: RDMARank[];
-  measurements?: RDMAMeasurement[]; errors?: RDMAError[]; jobExitCode?: number | null;
-  rankExitCodes?: RDMARankExit[]; evidence?: RDMAEvidence[]; producer?: RDMAProducer; parser?: RDMAProducer;
 }
 export interface Jobs extends Scoped {
   namespace?: string; workloadProfiles?: Profiles; hints?: string[];
