@@ -95,6 +95,9 @@ locals {
   generated_directory               = var.generated_directory != null ? abspath(var.generated_directory) : "${path.module}/generated"
   kubeconfig_path                   = "${local.generated_directory}/kubeconfig"
   adx_mon_values_path               = "${local.generated_directory}/adx-mon-values.yaml"
+  adx_mon_release_name              = "adx-mon"
+  adx_mon_release_namespace         = "adx-mon"
+  adx_mon_chart_hash                = sha256(jsonencode({ for file in fileset("${path.module}/../../charts/adx-mon", "**") : file => filesha256("${path.module}/../../charts/adx-mon/${file}") }))
   helm_home_directory               = "${local.generated_directory}/helm-${substr(sha256(local.kubeconfig_path), 0, 16)}"
   helm_config_home                  = "${local.helm_home_directory}/config"
   helm_cache_home                   = "${local.helm_home_directory}/cache"
@@ -109,7 +112,7 @@ locals {
   bootstrap_workspace_path          = "${local.generated_directory}/bootstrap-workspace.yaml"
   command_interpreter_is_powershell = can(regex("(?i)(pwsh|powershell)(\\.exe)?$", try(var.command_interpreter[0], "")))
   bootstrap_workspace_command       = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForTauWorkspaceReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -WorkspaceManifest '${local.bootstrap_workspace_path}' -WorkspaceName '${local.bootstrap_workspace_name}'" : "bash '${path.module}/wait-for-tau-workspace-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${local.bootstrap_workspace_path}' '${local.bootstrap_workspace_name}'"
-  adx_functions_command             = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForAdxFunctionsReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -ChartPath '${path.module}/../../charts/adx-mon' -BaseValuesFile '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' -EnvironmentValuesFile '${local.adx_mon_values_path}'" : "bash '${path.module}/wait-for-adx-functions-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${path.module}/../../charts/adx-mon' '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' '${local.adx_mon_values_path}'"
+  adx_functions_command             = local.command_interpreter_is_powershell ? "& '${path.module}/Wait-ForAdxFunctionsReady.ps1' -SubscriptionId '${var.subscription_id}' -ResourceGroup '${azurerm_resource_group.this.name}' -ClusterName '${azurerm_kubernetes_cluster.this.name}' -Kubeconfig '${local.kubeconfig_path}' -ChartPath '${path.module}/../../charts/adx-mon' -BaseValuesFile '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' -EnvironmentValuesFile '${local.adx_mon_values_path}' -ReleaseName '${local.adx_mon_release_name}' -ReleaseNamespace '${local.adx_mon_release_namespace}'" : "bash '${path.module}/wait-for-adx-functions-ready.sh' '${var.subscription_id}' '${azurerm_resource_group.this.name}' '${azurerm_kubernetes_cluster.this.name}' '${local.kubeconfig_path}' '${path.module}/../../charts/adx-mon' '${path.module}/../../charts/adx-mon/values-ai-runtime.yaml' '${local.adx_mon_values_path}' '${local.adx_mon_release_name}' '${local.adx_mon_release_namespace}'"
   helm_dcgm_repository_command      = local.command_interpreter_is_powershell ? "& { New-Item -ItemType Directory -Force -Path $env:HELM_CONFIG_HOME, $env:HELM_CACHE_HOME, $env:HELM_DATA_HOME | Out-Null; helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update; $repoAddExitCode = $LASTEXITCODE; $repositories = helm repo list --output json | ConvertFrom-Json; $repoListExitCode = $LASTEXITCODE; $expectedRepository = @($repositories | Where-Object { $_.name -eq 'dcgm-exporter' -and $_.url -eq 'https://nvidia.github.io/dcgm-exporter/helm-charts' }); if ($repoAddExitCode -ne 0) { Write-Warning 'helm repo add returned a non-zero exit code; continuing only because the repository state is verified below.' }; if ($repoListExitCode -ne 0 -or $expectedRepository.Count -ne 1) { Write-Error 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.'; exit 1 }; helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Error 'The expected dcgm-exporter chart version is not resolvable from the verified repository.'; exit 1 } }" : "mkdir -p \"$HELM_CONFIG_HOME\" \"$HELM_CACHE_HOME\" \"$HELM_DATA_HOME\" && { helm repo add dcgm-exporter https://nvidia.github.io/dcgm-exporter/helm-charts --force-update || echo 'helm repo add returned a non-zero exit code; validating repository state.'; repositories=$(helm repo list --output json) && case \"$repositories\" in *dcgm-exporter*https://nvidia.github.io/dcgm-exporter/helm-charts*) ;; *) echo 'The isolated Helm repository list does not contain the expected dcgm-exporter repository.' >&2; exit 1 ;; esac && helm show chart dcgm-exporter/dcgm-exporter --version '${var.dcgm_exporter_chart_version}' >/dev/null; }"
   taugrid_values = templatefile("${path.module}/taugrid-values.yaml.tftpl", {
     gpu_quota                    = local.gpu_quota
@@ -528,6 +531,9 @@ resource "terraform_data" "install_adx_mon" {
     azurerm_kubernetes_cluster.this.id,
     azurerm_kubernetes_cluster_node_pool.gpu.id,
     local_file.adx_mon_values[0].content_sha256,
+    local.adx_mon_chart_hash,
+    local.adx_mon_release_name,
+    local.adx_mon_release_namespace,
     azurerm_kusto_database_principal_assignment.adx_mon,
     join(" ", var.command_interpreter),
   ]
@@ -538,7 +544,7 @@ resource "terraform_data" "install_adx_mon" {
     environment = {
       KUBECONFIG = abspath(local.kubeconfig_path)
     }
-    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm upgrade --install adx-mon ../../charts/adx-mon --namespace adx-mon --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --set functions.enabled=false --wait --timeout 30m"
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm upgrade --install '${local.adx_mon_release_name}' ../../charts/adx-mon --namespace '${local.adx_mon_release_namespace}' --create-namespace --values ../../charts/adx-mon/values-ai-runtime.yaml --values '${local_file.adx_mon_values[0].filename}' --set functions.enabled=false --wait --timeout 30m"
   }
 
   depends_on = [
@@ -558,6 +564,7 @@ resource "terraform_data" "install_adx_functions" {
     local_file.adx_mon_values[0].content_sha256,
     filesha256("${path.module}/Wait-ForAdxFunctionsReady.ps1"),
     filesha256("${path.module}/wait-for-adx-functions-ready.sh"),
+    filesha256("${path.module}/adx-function-state.jq"),
     join(" ", var.command_interpreter),
   ]
 
