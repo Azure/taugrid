@@ -100,6 +100,7 @@ func knownReason(reason string) bool {
 		corevalidation.ReasonPeerAuthenticationFailed,
 		corevalidation.ReasonPlacementMismatch,
 		corevalidation.ReasonTopologyMismatch,
+		corevalidation.ReasonTopologyEvidenceIncomplete,
 		corevalidation.ReasonCorrectnessError,
 		corevalidation.ReasonNonzeroExit,
 		corevalidation.ReasonCleanupIncomplete,
@@ -263,6 +264,9 @@ func (r KustoReader) Get(ctx context.Context, scope Scope, validationID string) 
 	if summary.State == StateRunning {
 		return Detail{Validation: summary, SchemaVersion: aggregate.lifecycle.schema, Kind: aggregate.lifecycle.kind}, nil
 	}
+	if summary.HistoricalStatus == nil {
+		return Detail{}, fmt.Errorf("%w: terminal projection is incomplete or inconsistent", ErrArtifactIntegrity)
+	}
 	status, ok := aggregate.metrics[corevalidation.MetricStatus]
 	if !ok || status.artifactURI == "" || status.artifactHash == "" {
 		return Detail{}, fmt.Errorf("%w: terminal result has no verified artifact linkage", ErrArtifactIntegrity)
@@ -281,6 +285,12 @@ func (r KustoReader) Get(ctx context.Context, scope Scope, validationID string) 
 	detail, err := DecodeArtifact(raw, metadata, r.now())
 	if err != nil {
 		return Detail{}, err
+	}
+	if detail.RunID != aggregate.lifecycle.runID ||
+		detail.RunAttempt == nil || summary.RunAttempt == nil || *detail.RunAttempt != *summary.RunAttempt ||
+		detail.HistoricalStatus == nil || *detail.HistoricalStatus != *summary.HistoricalStatus ||
+		detail.ReasonCode != summary.ReasonCode {
+		return Detail{}, fmt.Errorf("%w: artifact outcome does not match the selected terminal lifecycle", ErrArtifactIntegrity)
 	}
 	if detail.Cluster != aggregate.lifecycle.cluster ||
 		detail.Namespace != aggregate.lifecycle.namespace ||
@@ -324,12 +334,12 @@ func buildValidationQueryForIngestion(scope Scope, validationID string, cursor C
 	}
 
 	var filters strings.Builder
-	fmt.Fprintf(&filters, "| where workspace_id == %s\n", kqlQuote(scope.WorkspaceID))
+	fmt.Fprintf(&filters, "| where workspace_id == %s\n", kustoquery.QuoteString(scope.WorkspaceID))
 	if scope.Cluster != "" {
-		fmt.Fprintf(&filters, "| where cluster == %s\n", kqlQuote(scope.Cluster))
+		fmt.Fprintf(&filters, "| where cluster == %s\n", kustoquery.QuoteString(scope.Cluster))
 	}
 	if validationID != "" {
-		fmt.Fprintf(&filters, "| where validation_id == %s\n", kqlQuote(validationID))
+		fmt.Fprintf(&filters, "| where validation_id == %s\n", kustoquery.QuoteString(validationID))
 	}
 	cursorFilter := ""
 	if !cursor.SortAt.IsZero() {
@@ -337,7 +347,7 @@ func buildValidationQueryForIngestion(scope Scope, validationID string, cursor C
 			"| where wall_time < datetime(%s) or (wall_time == datetime(%s) and validation_id < %s)\n",
 			cursor.SortAt.UTC().Format(time.RFC3339Nano),
 			cursor.SortAt.UTC().Format(time.RFC3339Nano),
-			kqlQuote(cursor.ValidationID),
+			kustoquery.QuoteString(cursor.ValidationID),
 		)
 	}
 	return fmt.Sprintf(`let rdma = materialize(
@@ -370,16 +380,16 @@ rdma
 | order by wall_time desc, validation_id desc, metric_name asc
 `,
 		source,
-		kqlQuote(exptelemetry.TauWorkspaceTag),
-		kqlQuote(exptelemetry.TauClusterTag),
-		kqlQuote(exptelemetry.TauNamespaceTag),
-		kqlQuote(validationIDTag),
-		kqlQuote(validationSchemaTag),
-		kqlQuote(validationKindTag),
-		kqlQuote(lifecycleStateTag),
-		kqlQuote(corevalidation.Kind),
+		kustoquery.QuoteString(exptelemetry.TauWorkspaceTag),
+		kustoquery.QuoteString(exptelemetry.TauClusterTag),
+		kustoquery.QuoteString(exptelemetry.TauNamespaceTag),
+		kustoquery.QuoteString(validationIDTag),
+		kustoquery.QuoteString(validationSchemaTag),
+		kustoquery.QuoteString(validationKindTag),
+		kustoquery.QuoteString(lifecycleStateTag),
+		kustoquery.QuoteString(corevalidation.Kind),
 		filters.String(),
-		kqlQuote(exptelemetry.RunStatusMetricName),
+		kustoquery.QuoteString(exptelemetry.RunStatusMetricName),
 		cursorFilter,
 		limit,
 	), nil
@@ -683,11 +693,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func kqlQuote(value string) string {
-	value = strings.ReplaceAll(value, "'", "''")
-	value = strings.ReplaceAll(value, "\r", "")
-	value = strings.ReplaceAll(value, "\n", "")
-	return "'" + value + "'"
 }

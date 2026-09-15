@@ -81,6 +81,16 @@ function validationSite(validation?: RDMAValidation | null) {
   return actual?.site;
 }
 
+function sourceFreshness(query: { dataUpdatedAt: number; isError: boolean; isFetching: boolean }) {
+  if (query.isFetching) return 'Refreshing';
+  if (query.isError) return query.dataUpdatedAt > 0
+    ? <>Stale · last success <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleTimeString()}</time></>
+    : 'Unavailable';
+  return query.dataUpdatedAt > 0
+    ? <>Updated <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleTimeString()}</time></>
+    : 'Not loaded';
+}
+
 function requestedCoverage(validation: RDMAValidation) {
   const requested = validation.requested;
   if (!requested) return 'Unknown';
@@ -421,9 +431,12 @@ function FleetInfiniBandEvidence() {
   const telemetryQuery = useBoard<Cluster>('/api/portal/cluster');
   const nodeUtilQuery = useBoard<NodeUtil>('/api/portal/nodeutil');
   const latestQuery = useBoard<RDMAValidationSummary>('/api/portal/rdma-validations/summary');
+  const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery, latestQuery];
+  const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
   return <><h2>Fleet operational map</h2>
     <Note>Capacity, utilization, health, and InfiniBand evidence share one topology, but remain independent signals. Unknown is never treated as idle, healthy, or connected.</Note>
-    <BoardResult query={inventoryQuery} label="InfiniBand fleet inventory" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).">{snapshot => {
+    <BoardResult query={inventoryQuery} label="InfiniBand fleet inventory" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."
+      partial={sourceQueries.some(query => query.isError)} refreshing={sourceQueries.some(query => query.isFetching)} onRefresh={refreshAll}>{snapshot => {
       const latest = latestQuery.data?.latest;
       const validationSiteName = validationSite(latest);
       const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
@@ -455,6 +468,12 @@ function FleetInfiniBandEvidence() {
             ? `${topologySite(latest.actual?.site, latest.actual?.siteProvider, latest.actual?.siteMode)}${latest.actual?.pool ? ` / ${latest.actual.pool}` : ''}`
             : 'Unknown'}</span></div>
         </dl>
+        <div className="source-freshness" aria-label="Fleet data source freshness">
+          <span><strong>Inventory</strong> {sourceFreshness(inventoryQuery)}</span>
+          <span><strong>GPU telemetry</strong> {sourceFreshness(telemetryQuery)}</span>
+          <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery)}</span>
+          <span><strong>Validation</strong> {sourceFreshness(latestQuery)}</span>
+        </div>
         {latestQuery.isError && <Note warn>Latest run coverage is unavailable; inventory capability is still shown independently.</Note>}
         {telemetryQuery.isError && <Note warn>Per-GPU ADX telemetry is unavailable; condition and inventory evidence remain independent.</Note>}
         {nodeUtilQuery.isError && <Note warn>Node CPU and memory utilization is unavailable; inventory capacity remains visible.</Note>}

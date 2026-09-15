@@ -168,6 +168,11 @@
   }
   .evidence-strip dd { margin: 5px 0 2px; font-size: 14px; font-weight: 700; }
   .evidence-strip span { display: block; color: var(--muted); font-size: 11px; line-height: 1.35; }
+  .source-freshness {
+    display: flex; flex-wrap: wrap; gap: 7px 18px; margin: -18px 0 18px; padding: 8px 18px;
+    border-bottom: 1px solid var(--line); background: #fafbfd; color: var(--muted); font-size: 11px;
+  }
+  .source-freshness strong { color: var(--ink); margin-right: 4px; }
   .node-identity, .evidence-cell, .telemetry-cell {
     display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 150px;
   }

@@ -104,7 +104,7 @@ func (s *Server) handleRDMAValidationDetail(w http.ResponseWriter, r *http.Reque
 		writeRDMAValidationError(w, http.StatusNotFound, scope, "not_found", "InfiniBand validation not found", false)
 		return
 	}
-	writeScopedJSON(w, http.StatusOK, detail, scope, "ready")
+	writeScopedJSON(w, http.StatusOK, detail, scope, detail.State)
 }
 
 func (s *Server) rdmaValidationScope(request *http.Request, scope WorkspaceScope) rdmavalidation.Scope {

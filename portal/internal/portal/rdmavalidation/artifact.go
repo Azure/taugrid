@@ -353,6 +353,8 @@ func reasonText(reason corevalidation.ReasonCode) string {
 		return "Actual placement did not match the requested topology."
 	case corevalidation.ReasonTopologyMismatch:
 		return "The observed validation topology was invalid."
+	case corevalidation.ReasonTopologyEvidenceIncomplete:
+		return "Unbounded site topology evidence was incomplete or conflicting."
 	case corevalidation.ReasonCorrectnessError:
 		return "The collective reported a correctness error."
 	case corevalidation.ReasonNonzeroExit:

@@ -57,12 +57,27 @@ func TestKustoReaderMapsTerminalSummaryFailClosed(t *testing.T) {
 		validation.Transport.IBPositiveEvidence == nil || !*validation.Transport.IBPositiveEvidence {
 		t.Fatalf("transport = %+v", validation.Transport)
 	}
-	if !strings.Contains(query.query, "workspace_id == 'research'") ||
-		!strings.Contains(query.query, "cluster == 'cluster-a'") ||
+	if !strings.Contains(query.query, "workspace_id == @'research'") ||
+		!strings.Contains(query.query, "cluster == @'cluster-a'") ||
 		!strings.Contains(query.query, "arg_max(step") ||
 		!strings.Contains(query.query, "let latest_validations = rdma") ||
 		!strings.Contains(query.query, "| sort by wall_time desc, validation_id desc\n| take 21") {
 		t.Fatalf("query is not scoped or ordered:\n%s", query.query)
+	}
+}
+
+func TestKustoReaderQuotesScopedFiltersAsVerbatimLiterals(t *testing.T) {
+	query := &fakeKustoQuerier{}
+	reader := KustoReader{Querier: query}
+	cluster := `cluster-a\' | union TauExpMetrics | where '1' == '1`
+	if _, err := reader.List(context.Background(), Scope{
+		WorkspaceID: "research", Cluster: cluster,
+	}, ListOptions{Limit: 20}); err != nil {
+		t.Fatal(err)
+	}
+	want := "cluster == " + kustoquery.QuoteString(cluster)
+	if !strings.Contains(query.query, want) {
+		t.Fatalf("query missing safely quoted cluster %q:\n%s", want, query.query)
 	}
 }
 
@@ -279,6 +294,17 @@ func TestKustoReaderMarksStaleUnsupportedAndInconsistentUnknown(t *testing.T) {
 	if page.Validations[0].State != StateUnknown || page.Validations[0].ReasonCode != "malformed_status" {
 		t.Fatalf("mixed terminal projection = %+v", page.Validations[0])
 	}
+	fetched := false
+	_, err = reader.Get(context.Background(), Scope{
+		WorkspaceID: "research",
+		FetchArtifact: func(context.Context, ArtifactMetadata) ([]byte, ArtifactMetadata, error) {
+			fetched = true
+			return nil, ArtifactMetadata{}, nil
+		},
+	}, "validation-mixed")
+	if !errors.Is(err, ErrArtifactIntegrity) || fetched {
+		t.Fatalf("Get() error = %v, fetched = %v; want integrity rejection before fetch", err, fetched)
+	}
 }
 
 func TestKustoReaderMissingBandwidthRemainsUnknown(t *testing.T) {
@@ -421,7 +447,7 @@ func TestKustoReaderPaginatesByTimeAndValidationID(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(query.query, "validation_id < 'validation-b'") {
+	if !strings.Contains(query.query, "validation_id < @'validation-b'") {
 		t.Fatalf("cursor query =\n%s", query.query)
 	}
 }

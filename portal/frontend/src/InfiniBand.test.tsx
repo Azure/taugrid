@@ -94,13 +94,14 @@ describe('InfiniBand fleet validation', () => {
   });
 
   it('separates fleet RDMA capability, tested topology, and per-GPU health', async () => {
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
       if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
       return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
     renderPortal('/portal/fleet');
 
     expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
@@ -127,6 +128,15 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getAllByRole('link', { name: /Open per-GPU metrics/ })[0]).toHaveAttribute('href', expect.stringContaining('instance=h200-node-a'));
     expect(screen.getAllByText('Passed', { selector: '.badge' }).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/Not tested in latest run · different site/)).toBeVisible();
+
+    fetchMock.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh InfiniBand fleet inventory' }));
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([input]) => String(input));
+      for (const path of ['/api/portal/nodes', '/api/portal/cluster', '/api/portal/nodeutil', '/api/portal/rdma-validations/summary']) {
+        expect(urls.some(url => url.includes(path))).toBe(true);
+      }
+    });
   });
 
   it.each(['incomplete', 'not_applicable'] as const)('does not draw a validated site path for %s topology', async siteMode => {

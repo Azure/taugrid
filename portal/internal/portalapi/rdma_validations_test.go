@@ -96,6 +96,10 @@ func TestRDMAValidationRoutes(t *testing.T) {
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
 			t.Fatalf("%s: status=%d body=%s", tc.path, rec.Code, rec.Body.String())
 		}
+		if tc.path == "/api/portal/rdma-validations/nccl-rdma-detail" &&
+			!strings.Contains(rec.Body.String(), `"state":"passed"`) {
+			t.Fatalf("%s: validation state was not preserved: %s", tc.path, rec.Body.String())
+		}
 	}
 	if reader.summaryScope.WorkspaceID != "research" || reader.summaryScope.Cluster != "cluster-a" {
 		t.Fatalf("summary scope = %+v", reader.summaryScope)
