@@ -12,7 +12,7 @@ rules:
     resources: ["jobs"]
     verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
   - apiGroups: ["ray.io"]
-    resources: ["rayjobs"]
+    resources: ["rayjobs", "rayservices"]
     verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "persistentvolumeclaims"]

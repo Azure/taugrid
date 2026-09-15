@@ -577,6 +577,65 @@ func TestWorkspaceClusterWideAuthorizationCreatesNoResearcherRBAC(t *testing.T) 
 	}
 }
 
+func TestWorkspaceRoleAliasPreservesExistingRBAC(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, testLocalQueue("aurora", "aurora", "aurora-cq"), testClusterQueue("aurora-cq")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+	for range 3 {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var beforeBindings rbacv1.RoleBindingList
+	var beforeClusterBindings rbacv1.ClusterRoleBindingList
+	var beforeRoles rbacv1.RoleList
+	for _, list := range []client.ObjectList{&beforeBindings, &beforeClusterBindings, &beforeRoles} {
+		if err := c.List(ctx, list); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(beforeBindings.Items) != 2 || len(beforeClusterBindings.Items) != 1 || len(beforeRoles.Items) != 1 {
+		t.Fatal("expected researcher, workspace reader and ClusterQueue reader RBAC")
+	}
+	for _, role := range []string{"researcher", "tau-researcher-v1"} {
+		if err := c.Get(ctx, req.NamespacedName, workspace); err != nil {
+			t.Fatal(err)
+		}
+		workspace.Spec.Role = role
+		if err := c.Update(ctx, workspace); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		var bindings rbacv1.RoleBindingList
+		var clusterBindings rbacv1.ClusterRoleBindingList
+		var roles rbacv1.RoleList
+		for _, list := range []client.ObjectList{&bindings, &clusterBindings, &roles} {
+			if err := c.List(ctx, list); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !reflect.DeepEqual(beforeBindings.Items, bindings.Items) ||
+			!reflect.DeepEqual(beforeClusterBindings.Items, clusterBindings.Items) ||
+			!reflect.DeepEqual(beforeRoles.Items, roles.Items) {
+			t.Fatalf("switching to role %q changed RBAC objects", role)
+		}
+		if err := c.Get(ctx, req.NamespacedName, workspace); err != nil {
+			t.Fatal(err)
+		}
+		if workspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+			t.Fatalf("role %q: workspace phase = %q", role, workspace.Status.Phase)
+		}
+	}
+}
+
 func TestWorkspaceClusterWideAuthorizationDoesNotDeleteForeignRBAC(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

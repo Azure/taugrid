@@ -66,7 +66,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, agents, "experiment-specific data/PVC/secret references")
 	assertContains(t, agents, "only reference platform-provided claims")
 	assertContains(t, agents, "Do **not** add `policy.workspace`")
-	assertContains(t, agents, "requires `workspace-rbac` authorization and role `tau-researcher-v1`")
+	assertContains(t, agents, "requires `workspace-rbac` authorization and role `researcher`")
 	assertNotContains(t, agents, "`cluster-wide` authorization")
 	assertContains(t, agents, "Do not commit workspace-derived namespace, queue policy, kubeconfig, or identity credentials")
 	assertContains(t, agents, "Never commit `.env`, credentials, kubeconfigs, tokens")
@@ -89,7 +89,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, readme, "${EDITOR:-vi} .env")
 	assertContains(t, readme, "Generated from the standalone `tau-gen` workflow")
 	assertContains(t, readme, "docker build -f images/train.Dockerfile -t \"$BUILD_IMAGE\" .")
-	assertContains(t, readme, "requires `workspace-rbac` authorization and role `tau-researcher-v1`")
+	assertContains(t, readme, "requires `workspace-rbac` authorization and role `researcher`")
 	assertNotContains(t, readme, "`cluster-wide` authorization")
 	assertContains(t, readme, "tau run train")
 	assertContains(t, readme, "checked-in")
@@ -168,7 +168,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 		"workspace: research-ws",
 		"systemNamespace: tau-system",
 		"mode: workspace-rbac",
-		"requiredRole: tau-researcher-v1",
+		"requiredRole: researcher",
 		"resourceID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-ai",
 		"tenantID: 11111111-1111-1111-1111-111111111111",
 		"method: aks",
@@ -180,8 +180,8 @@ func TestRenderPythonScaffold(t *testing.T) {
 		t.Fatalf("generated workspace connection is invalid: %v\n%s", err, connection)
 	}
 	if descriptor.Authorization.Mode != workspaceconnection.AuthorizationModeWorkspaceRBAC ||
-		descriptor.Authorization.RequiredRole != "tau-researcher-v1" {
-		t.Fatalf("generated authorization = %#v, want workspace-rbac with tau-researcher-v1", descriptor.Authorization)
+		descriptor.Authorization.RequiredRole != "researcher" {
+		t.Fatalf("generated authorization = %#v, want workspace-rbac with researcher", descriptor.Authorization)
 	}
 
 	for _, rel := range []string{"scripts/setup.sh", "scripts/setup-azure.sh", "scripts/doctor.sh", "scripts/configure.sh", "scripts/smoke.sh", "scripts/train.sh"} {

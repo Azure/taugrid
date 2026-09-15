@@ -50,12 +50,27 @@ access:
   method: kubeconfig
 authorization:
   mode: workspace-rbac
-  requiredRole: tau-researcher-v1
+  requiredRole: researcher
 requirements:
   minTauVersion: 0.3.0
 network:
   privateCluster: false
 ```
+
+The logical role is `researcher`. The updated CLI and workspace CRD also accept
+`tau-researcher-v1` as a legacy alias; both use the same existing ClusterRole and
+permissions. `tau cluster install` updates TauGrid's own CRDs from the selected
+chart before upgrading an existing release; the expanded role enum keeps old
+workspace CRs valid without renaming them. Direct Helm upgrades need an explicit
+CRD update first because Helm skips existing CRDs. CRDs are not rolled back by
+Helm's `--atomic` option. Older CLIs that compare role names literally need matching
+descriptor and workspace values.
+
+Update the researcher ClusterRole from the Helm or Kustomize RBAC manifests
+before connecting with this CLI. It now grants RayService lifecycle permissions
+through the existing namespace-scoped RoleBinding, and connection verification
+requires create/get/list/patch/delete access to RayServices as well as Jobs and
+RayJobs. Updating the CRD alone does not add these permissions.
 
 An AKS platform can replace only the access block:
 

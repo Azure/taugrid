@@ -13,6 +13,7 @@ aliases:
 
 - `--kind=rayservice` (default) for a Ray Serve application; KubeRay must be
   installed and the image must expose the specified Python import path.
+  Multi-worker profiles use a CPU head plus a fixed GPU worker pool.
 - `--kind=deployment` for a plain Kubernetes Deployment such as a raw vLLM,
   TGI, Triton, or custom HTTP server.
 
@@ -154,9 +155,87 @@ Ray head startup and can combine head-container command/args with its generated
 Ray from starting. Existing `--args` rendering is retained for compatibility,
 but it is not an application argv or literal-shell-safety contract for
 RayService. Use `--import-path` for the Ray Serve application,
-`--runtime-pip` for its Python dependencies, and `--env` for configuration.
+`--app-args` for application-builder arguments, `--runtime-pip` for its Python
+dependencies, and `--env` for environment configuration.
 Arbitrary non-Ray server scripts belong in `--kind=deployment`, not the Ray
-head startup sequence.
+head startup sequence. Multi-node RayServices reject legacy `--args` rather
+than mixing an inference-server command into `ray start`.
+
+## Ray Serve application builders
+
+Use `--app-args <file>` with an explicit `--import-path` to pass a JSON or
+YAML object to a Ray Serve application builder, including Ray Serve LLM:
+
+```bash
+tau serve deploy model-api \
+  --kind=rayservice \
+  --profile <serve-profile> \
+  --image <compatible-ray-vllm-image> \
+  --ray-version <ray-version-in-image> \
+  --import-path ray.serve.llm:build_openai_app \
+  --app-args <llm-config.json> \
+  --context <context> \
+  --namespace <namespace> \
+  --dry-run=client
+```
+
+The argument object is embedded under `applications[].args` in
+`serveConfigV2`. It must be one document, no larger than 1 MiB, with
+JSON-compatible values. It is visible in the rendered manifest: do not put
+credentials in it; use `--env-secret` references when supported by the app.
+
+With `--app-args`, configure builder-owned deployments inside that object.
+CLI `--replicas`, `--min-replicas`, `--max-replicas`, `--target-qps`,
+`--scale-down-delay`, and legacy `--args` are rejected. For example, Ray Serve
+LLM uses `llm_configs[].deployment_config.num_replicas`; Tau does not inject
+a deployment named `default` over the native builder's generated names.
+Without `--app-args`, existing deployment overrides remain available.
+
+## Distributed model instances
+
+For workspace-RBAC connections, install the updated researcher ClusterRole.
+It grants RayService lifecycle permissions through the workspace's namespaced
+RoleBinding; both `researcher` and `tau-researcher-v1` use this role. The CLI
+checks create/get/list/patch/delete permissions when verifying the connection.
+
+For `--kind=rayservice`, a profile with `workerCount > 1` creates a CPU-only
+Ray head and that many GPU worker Pods. `workerCount` excludes the head, and
+`gpusPerWorker` is the GPU request for each worker. Optional `--nodes` and
+`--gpus` assert these values; neither overrides the profile. Distributed
+profiles require `mode: fixed`, `placement: multi-node-nccl`, and
+`executionTarget: singleCluster`.
+
+The worker pool has fixed `replicas`, `minReplicas`, and `maxReplicas`.
+Application `--replicas` and autoscaling settings operate within that pool;
+they do not silently increase Kubernetes GPU allocations. The CPU head
+advertises zero logical CPUs and GPUs for application scheduling, so model
+actors run on workers. It does not inherit GPU-specific TAS annotations.
+
+`--shm-size 32Gi` mounts a memory-backed `/dev/shm` on the head and workers.
+Model mounts and environment/secret references reach both templates.
+Ray-cluster-scoped worker anti-affinity keeps GPU workers on different
+hostnames and requires Kubernetes support for `matchLabelKeys`.
+
+Use `--import-path` to select a Ray Serve application. Tau injects
+`TAU_SERVE_NODES` and `TAU_SERVE_GPUS_PER_NODE` from the profile into the
+distributed application environment. Applications can use those values to
+validate their placement-group and engine configuration. KubeRay still owns
+Ray process startup and creates the head and serving Services.
+
+For offline review, `--workload-profile-snapshot <file>` accepts a validated
+`TauWorkloadProfileSnapshot` with `--dry-run=client` and an explicit
+`--namespace`. Do not combine it with `--context`. This path does not connect
+to Kubernetes, verify a workspace, or resolve checkpoint references. Its
+output is marked `tau.azure.com/workload-profile-source: snapshot` and cannot
+authorize server dry-run or apply. Without a snapshot, the connected workspace
+and authoritative-profile checks remain mandatory.
+
+Model-specific images, configuration, and deployment scripts belong to the
+application project. Tau renders the authorized worker pool and application
+arguments; it does not bundle or qualify an inference engine. Check the
+chosen image's Ray version, model support, and application imports separately.
+Model staging, quota, node capacity, and full-context inference are not proven
+by rendering, image publication, or import checks.
 
 ## Scale or remove
 
@@ -173,6 +252,13 @@ tau serve scale <service-name> \
 RayService scaling goes through redeploy: because its Serve config is a
 serialized field, redeploy a RayService with `--replicas` to change the count, or
 set `--min-replicas` and `--max-replicas` when creating it.
+For application builders using `--app-args`, change the deployment settings
+inside the argument file and redeploy instead of using those CLI overrides.
+
+For multi-worker RayService, size that fixed worker pool for the application's
+GPU demand. RayService cluster upgrades can temporarily require both old and
+new worker pools; plan the extra capacity or a separately approved
+stop-and-redeploy procedure.
 
 Remove either kind explicitly:
 

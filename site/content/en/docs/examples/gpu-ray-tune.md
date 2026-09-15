@@ -338,7 +338,7 @@ tau workspace connection
 ```
 
 The descriptor must contain `authorization.mode: workspace-rbac` and
-`requiredRole: tau-researcher-v1`. It contains no kubeconfig, token, or client
+`requiredRole: researcher`. It contains no kubeconfig, token, or client
 secret.
 
 ## 7. Run the six-trial sweep using the resolved workspace connection

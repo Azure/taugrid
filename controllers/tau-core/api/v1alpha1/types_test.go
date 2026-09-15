@@ -23,7 +23,7 @@ func TestTauWorkspaceRoundTrip(t *testing.T) {
 		Spec: TauWorkspaceSpec{
 			PrincipalRef:      &PrincipalRef{Provider: PrincipalProviderEntra, Name: "aurora-researchers"},
 			KubernetesSubject: &KubernetesSubject{Kind: "Group", Name: "aurora-researchers"},
-			Role:              "tau-researcher-v1",
+			Role:              "researcher",
 			Target:            WorkspaceTarget{Namespace: "aurora", CreateNamespace: true},
 			Queue:             "aurora",
 			Defaults:          WorkspaceDefaults{OutputRoot: "/data/projects/aurora/runs", Priority: "normal"},
@@ -196,6 +196,10 @@ func TestCRDManifestsPinWorkspaceContract(t *testing.T) {
 	authMode := props["authorization"].Properties["mode"]
 	if len(authMode.Enum) != 2 || authMode.Default == nil {
 		t.Fatalf("authorization.mode schema = %#v, want two modes and workspace-rbac default", authMode)
+	}
+	roles := props["role"].Enum
+	if len(roles) != 2 || string(roles[0].Raw) != `"researcher"` || string(roles[1].Raw) != `"tau-researcher-v1"` {
+		t.Fatalf("role enum = %v, want researcher and its legacy alias only", roles)
 	}
 	statusProps := version.Schema.OpenAPIV3Schema.Properties["status"].Properties
 	if _, ok := statusProps["quota"]; ok {

@@ -14,6 +14,8 @@ KUBE_CONTEXT="${TAU_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"
 NAMESPACE="${TAU_KIND_NAMESPACE:-ray}"
 JOB_NAME="${TAU_KIND_RUN_NAME:-tau-kind-smoke}"
 RAY_JOB_NAME="${TAU_KIND_RAY_RUN_NAME:-tau-kind-ray}"
+RAY_SERVICE_NAME="tau-kind-serve"
+RAY_SERVICE_MANIFEST=""
 WAIT_TIMEOUT="${TAU_KIND_WAIT_TIMEOUT:-180s}"
 RAY_WAIT_TIMEOUT="${TAU_KIND_RAY_WAIT_TIMEOUT:-600s}"
 TAUGRID_RELEASE="${TAU_KIND_TAUGRID_RELEASE:-taugrid-kind}"
@@ -50,12 +52,9 @@ need() {
   fi
 }
 
-for tool in kind kubectl helm "$CONTAINER_ENGINE"; do
+for tool in kind kubectl helm go "$CONTAINER_ENGINE"; do
   need "$tool"
 done
-if [[ "${TAU_KIND_SKIP_BUILD:-0}" != "1" ]]; then
-  need go
-fi
 
 run_with_timeout() {
   local timeout_seconds="$1"
@@ -190,11 +189,17 @@ dump_diagnostics() {
     echo
     echo "Tau Kind smoke failed; dumping diagnostics from ${KUBE_CONTEXT}/${NAMESPACE}" >&2
     kubectl --request-timeout=10s --context "$KUBE_CONTEXT" get namespace "$NAMESPACE" -o wide >&2 || true
-    kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get job,pod,rayjob.ray.io,raycluster.ray.io,workloads.kueue.x-k8s.io,localqueues.kueue.x-k8s.io -o wide >&2 || true
+    kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get job,pod,rayjob.ray.io,rayservice.ray.io,raycluster.ray.io,workloads.kueue.x-k8s.io,localqueues.kueue.x-k8s.io -o wide >&2 || true
     kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" describe job "$JOB_NAME" >&2 || true
     kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" describe rayjob.ray.io "$RAY_JOB_NAME" >&2 || true
+    kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" describe rayservice.ray.io "$RAY_SERVICE_NAME" >&2 || true
+    kubectl --request-timeout=20s --context "$KUBE_CONTEXT" -n "$NAMESPACE" logs \
+      -l "tau.azure.com/service=${RAY_SERVICE_NAME}" --all-containers=true --tail=80 --prefix >&2 || true
     kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get events --sort-by=.lastTimestamp >&2 || true
     kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" get pod,deploy -o wide >&2 || true
+  fi
+  if [[ -n "$RAY_SERVICE_MANIFEST" ]]; then
+    rm -f -- "$RAY_SERVICE_MANIFEST"
   fi
   return "$status"
 }
@@ -416,7 +421,8 @@ fi
 "$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
   "$REPO_ROOT/charts/taugrid"
 
-"$TAU_BIN" cluster install \
+install_taugrid() {
+  "$TAU_BIN" cluster install \
   --chart "$REPO_ROOT/charts/taugrid" \
   --version 0.4.2 \
   --release "$TAUGRID_RELEASE" \
@@ -428,10 +434,14 @@ fi
   --set "tau-core-controller.image.repository=${CONTROLLER_IMAGE_REPOSITORY}" \
   --set "tau-core-controller.image.tag=${CONTROLLER_IMAGE_TAG}" \
   --set tau-core-controller.image.pullPolicy=Never
+}
+
+install_taugrid
 
 kubectl --context "$KUBE_CONTEXT" wait \
   --for=condition=Established \
   crd/rayjobs.ray.io \
+  crd/rayservices.ray.io \
   crd/rayclusters.ray.io \
   --timeout=120s
 
@@ -455,6 +465,8 @@ kubectl --context "$KUBE_CONTEXT" get \
   resourceflavors.kueue.x-k8s.io,clusterqueues.kueue.x-k8s.io,workloadpriorityclasses.kueue.x-k8s.io
 
 previous_ray_uid="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete rayservice.ray.io "$RAY_SERVICE_NAME" \
+  --ignore-not-found --cascade=foreground --timeout="$WAIT_TIMEOUT"
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete job "$JOB_NAME" --ignore-not-found
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete rayjob.ray.io "$RAY_JOB_NAME" --ignore-not-found
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete raycluster.ray.io -l "tau.azure.com/run-id=${RAY_JOB_NAME}" --ignore-not-found || true
@@ -490,7 +502,63 @@ fi
 kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o wide
 kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get workloads.kueue.x-k8s.io -l "kueue.x-k8s.io/job-uid=$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')" -o wide
 
-echo "Tau Kind smoke passed on context ${KUBE_CONTEXT} (batch Job + Kueue + KubeRay RayJob)"
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete rayjob.ray.io "$RAY_JOB_NAME" \
+  --cascade=foreground --timeout="$WAIT_TIMEOUT"
+wait_for_ray_cleanup "$WAIT_TIMEOUT"
+
+# Exercise a real schema upgrade while retaining an existing legacy-role CR.
+kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" delete workspace.tau.azure.com kind-legacy \
+  --ignore-not-found --timeout="$WAIT_TIMEOUT"
+kubectl --context "$KUBE_CONTEXT" patch crd workspaces.tau.azure.com --type=json \
+  -p='[{"op":"replace","path":"/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/role/enum","value":["tau-researcher-v1"]}]'
+"$TAU_BIN" workspace create kind-legacy --system-namespace "$TAUGRID_NAMESPACE" \
+  --context "$KUBE_CONTEXT" --principal-name kind-smoke-nobody |
+  sed 's/role: researcher/role: tau-researcher-v1/' |
+  kubectl --context "$KUBE_CONTEXT" create -f -
+legacy_uid="$(kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" get workspace.tau.azure.com kind-legacy -o jsonpath='{.metadata.uid}')"
+install_taugrid
+test "$(kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" get workspace.tau.azure.com kind-legacy -o jsonpath='{.metadata.uid}')" = "$legacy_uid"
+test "$(kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" get workspace.tau.azure.com kind-legacy -o jsonpath='{.spec.role}')" = "tau-researcher-v1"
+kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" patch workspace.tau.azure.com kind-legacy \
+  --type=merge -p='{"spec":{"role":"researcher"}}' --dry-run=server
+kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" wait workspace.tau.azure.com/kind-legacy \
+  --for=jsonpath='{.status.phase}'=Ready --timeout="$WAIT_TIMEOUT"
+
+RAY_SERVICE_MANIFEST="$(mktemp "${TMPDIR:-/tmp}/tau-kind-rayservice.XXXXXX")"
+(
+  cd "$TAU_DIR"
+  TAU_KIND_RAYSERVICE_MANIFEST="$RAY_SERVICE_MANIFEST" \
+    go test -count=1 ./internal/serve -run '^TestRenderKindRayServiceFixture$'
+)
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" create configmap tau-kind-serve-app \
+  --from-file="$EXAMPLE_DIR/serve_app.py" --dry-run=client -o yaml |
+  kubectl --context "$KUBE_CONTEXT" apply -f -
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" apply -f "$RAY_SERVICE_MANIFEST"
+wait_for_workload_admitted rayservice.ray.io "$RAY_SERVICE_NAME" "$WAIT_TIMEOUT"
+serve_workload="$(workload_name_for rayservice.ray.io "$RAY_SERVICE_NAME")"
+test "$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get workloads.kueue.x-k8s.io "$serve_workload" -o jsonpath='{.spec.priority}')" = "2000"
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" wait "rayservice.ray.io/${RAY_SERVICE_NAME}" \
+  --for=condition=Ready --timeout="$RAY_WAIT_TIMEOUT"
+serve_cluster="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayservice.ray.io "$RAY_SERVICE_NAME" -o jsonpath='{.status.activeServiceStatus.rayClusterName}')"
+test -n "$serve_cluster"
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" wait pod -l "ray.io/cluster=${serve_cluster}" \
+  --for=condition=Ready --timeout="$RAY_WAIT_TIMEOUT"
+worker_pods="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get pod \
+  -l "ray.io/cluster=${serve_cluster},ray.io/node-type=worker" -o name)"
+test "$(printf '%s\n' "$worker_pods" | wc -l | tr -d ' ')" = "2"
+for pod in $worker_pods; do
+  probe="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get "$pod" -o jsonpath='{.spec.containers[0].readinessProbe.exec.command}')"
+  [[ "$probe" == *":9000/-/healthz"* ]]
+  test "$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get "$pod" -o jsonpath='{.spec.volumes[?(@.name=="tau-shm")].emptyDir.medium}')" = "Memory"
+  kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" exec "$pod" -- python3 -c \
+    'import os; assert os.statvfs("/dev/shm").f_blocks * os.statvfs("/dev/shm").f_frsize == 256 * 1024 * 1024'
+done
+head_pod="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get pod \
+  -l "ray.io/cluster=${serve_cluster},ray.io/node-type=head" -o jsonpath='{.items[0].metadata.name}')"
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" exec "$head_pod" -- python3 -c \
+  'import urllib.request; result = urllib.request.urlopen("http://tau-kind-serve-serve-svc:9000/", timeout=15).read().decode(); assert result == "tau kind serve smoke complete", result'
+
+echo "Tau Kind smoke passed on context ${KUBE_CONTEXT} (Job + RayJob + RayService + legacy CRD upgrade)"
 
 if [[ "${TAU_KIND_DELETE_CLUSTER:-0}" == "1" ]]; then
   kind delete cluster --name "$CLUSTER_NAME"

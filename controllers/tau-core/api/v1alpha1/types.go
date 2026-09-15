@@ -309,10 +309,10 @@ type TauWorkspaceSpec struct {
 	Authorization     *WorkspaceAuthorization `json:"authorization,omitempty"`
 	PrincipalRef      *PrincipalRef           `json:"principalRef,omitempty"`
 	KubernetesSubject *KubernetesSubject      `json:"kubernetesSubject,omitempty"`
-	// Role is the researcher authorization role bound in the target namespace.
-	// The controller implements exactly one role, so the API accepts only that
-	// value rather than silently degrading unknown ones at reconcile time.
-	// +kubebuilder:validation:Enum=tau-researcher-v1
+	// Role is the logical researcher role. The legacy tau-researcher-v1 alias
+	// remains valid; both names bind the existing tau-researcher-v1 ClusterRole.
+	// No other role or arbitrary ClusterRole can be selected.
+	// +kubebuilder:validation:Enum=researcher;tau-researcher-v1
 	Role   string          `json:"role,omitempty"`
 	Target WorkspaceTarget `json:"target,omitempty"`
 	// Queue is the workspace LocalQueue name. It is optional: when omitted the
