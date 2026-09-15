@@ -37,8 +37,13 @@ import (
 // have legacy (beta) aliases still present on some AKS nodes, so each is
 // resolved from a preference-ordered list.
 const (
-	gpuResourceKey     = "nvidia.com/gpu"
-	rdmaResourcePrefix = "rdma/"
+	gpuResourceKey       = "nvidia.com/gpu"
+	rdmaResourcePrefix   = "rdma/"
+	conditionCategoryGPU = "gpu"
+	conditionCategoryIB  = "infiniband"
+
+	nodeMetricsMaxAge     = 2 * time.Minute
+	nodeMetricsFutureSkew = time.Minute
 
 	labelAgentPool       = "kubernetes.azure.com/agentpool"
 	labelAgentPoolLegacy = "agentpool"
@@ -48,23 +53,55 @@ const (
 )
 
 var (
-	skuLabels                 = []string{"node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type", "kubernetes.azure.com/sku"}
-	unboundedSiteLabels       = []string{labelUnboundedSite, labelUnboundedLegacy}
-	regionLabels              = []string{"topology.kubernetes.io/region", "failure-domain.beta.kubernetes.io/region"}
-	zoneLabels                = []string{"topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone"}
-	operationalConditionTypes = map[string]struct{}{
-		"GPUECCDoubleRetired":      {},
-		"GPUECCDoubleVolatile":     {},
-		"GPUNVLinkCRCFlitErrors":   {},
-		"GPUNVLinkCRCDataErrors":   {},
-		"GPUNVLinkReplayErrors":    {},
-		"GPUThermalViolation":      {},
-		"GPUPowerViolation":        {},
-		"GPUECCSingleVolatileRate": {},
-		"GPUECCSingleRetired":      {},
-		"GPUPCIeReplayErrors":      {},
-		"IBLinkDown":               {},
-		"IBSymbolError":            {},
+	skuLabels                      = []string{"node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type", "kubernetes.azure.com/sku"}
+	unboundedSiteLabels            = []string{labelUnboundedSite, labelUnboundedLegacy}
+	regionLabels                   = []string{"topology.kubernetes.io/region", "failure-domain.beta.kubernetes.io/region"}
+	zoneLabels                     = []string{"topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone"}
+	operationalConditionCategories = map[string]string{
+		"DcgmExporterUnavailable":     conditionCategoryGPU,
+		"NvidiaSmiProblem":            conditionCategoryGPU,
+		"NvidiaDeviceFilesProblem":    conditionCategoryGPU,
+		"GPUMissing":                  conditionCategoryGPU,
+		"NVLinkStatusInactive":        conditionCategoryGPU,
+		"XIDErrors":                   conditionCategoryGPU,
+		"GPUECCErrors":                conditionCategoryGPU,
+		"GPUECC":                      conditionCategoryGPU,
+		"GPUDriverProblem":            conditionCategoryGPU,
+		"GPUECCRemapPending":          conditionCategoryGPU,
+		"GPUECCRemapFailure":          conditionCategoryGPU,
+		"NVLinkB200Inactive":          conditionCategoryGPU,
+		"GPUVbiosMismatch":            conditionCategoryGPU,
+		"GPUVbiosInconsistent":        conditionCategoryGPU,
+		"GPUThrottle":                 conditionCategoryGPU,
+		"XIDErrorsAlwaysFail":         conditionCategoryGPU,
+		"TempIMEXProblem":             conditionCategoryGPU,
+		"GPUClockThrottling":          conditionCategoryGPU,
+		"NVLinkDown":                  conditionCategoryGPU,
+		"XIDError":                    conditionCategoryGPU,
+		"UnhealthyNvidiaDCGMServices": conditionCategoryGPU,
+		"UnhealthyNvidiaDevicePlugin": conditionCategoryGPU,
+		"GPUECCDoubleRetired":         conditionCategoryGPU,
+		"GPUECCDoubleVolatile":        conditionCategoryGPU,
+		"GPUNVLinkCRCFlitErrors":      conditionCategoryGPU,
+		"GPUNVLinkCRCDataErrors":      conditionCategoryGPU,
+		"GPUNVLinkReplayErrors":       conditionCategoryGPU,
+		"GPUThermalViolation":         conditionCategoryGPU,
+		"GPUPowerViolation":           conditionCategoryGPU,
+		"GPUECCSingleVolatileRate":    conditionCategoryGPU,
+		"GPUECCSingleRetired":         conditionCategoryGPU,
+		"GPUPCIeReplayErrors":         conditionCategoryGPU,
+		"XIDError48":                  conditionCategoryGPU,
+		"XIDError63":                  conditionCategoryGPU,
+		"XIDError64":                  conditionCategoryGPU,
+		"XIDError79":                  conditionCategoryGPU,
+		"XIDError94":                  conditionCategoryGPU,
+		"XIDError95":                  conditionCategoryGPU,
+		"IBLinkDown":                  conditionCategoryIB,
+		"IBSymbolError":               conditionCategoryIB,
+		"IBLinkIssue":                 conditionCategoryIB,
+		"IBPKeyIssue":                 conditionCategoryIB,
+		"IBLinkFlapping":              conditionCategoryIB,
+		"RoCELinkIssue":               conditionCategoryIB,
 	}
 )
 
@@ -139,6 +176,7 @@ type RDMAResource struct {
 // missing, stale, invalid, or future evidence instead of manufacturing health.
 type Condition struct {
 	Type               string `json:"type"`
+	Category           string `json:"category"`
 	Status             string `json:"status"`
 	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
@@ -449,6 +487,7 @@ func attachNodeMetrics(ctx context.Context, r Reader, snap *Snapshot) {
 		nodeIndex[snap.Nodes[i].Name] = i
 	}
 	issues := make([]string, 0)
+	now := time.Now().UTC()
 	for _, sample := range metrics.Items {
 		index, found := nodeIndex[sample.Metadata.Name]
 		if !found {
@@ -458,6 +497,14 @@ func attachNodeMetrics(ctx context.Context, r Reader, snap *Snapshot) {
 		window, windowErr := time.ParseDuration(sample.Window)
 		if timestampErr != nil || windowErr != nil || window <= 0 {
 			issues = append(issues, fmt.Sprintf("%s has invalid timestamp or window", sample.Metadata.Name))
+			continue
+		}
+		if observedAt.Before(now.Add(-nodeMetricsMaxAge)) {
+			issues = append(issues, fmt.Sprintf("%s has a stale metrics timestamp", sample.Metadata.Name))
+			continue
+		}
+		if observedAt.After(now.Add(nodeMetricsFutureSkew)) {
+			issues = append(issues, fmt.Sprintf("%s has a future metrics timestamp", sample.Metadata.Name))
 			continue
 		}
 		node := &snap.Nodes[index]
@@ -574,11 +621,12 @@ func parseNode(obj nodeObj) Node {
 func operationalConditions(obj nodeObj) []Condition {
 	out := make([]Condition, 0, len(obj.Status.Conditions))
 	for _, condition := range obj.Status.Conditions {
-		if _, ok := operationalConditionTypes[condition.Type]; !ok {
+		category, ok := operationalConditionCategories[condition.Type]
+		if !ok {
 			continue
 		}
 		out = append(out, Condition{
-			Type: condition.Type, Status: condition.Status,
+			Type: condition.Type, Category: category, Status: condition.Status,
 			Reason: condition.Reason, Message: condition.Message,
 			LastHeartbeatTime:  normalizeTimestamp(condition.LastHeartbeatTime),
 			LastTransitionTime: normalizeTimestamp(condition.LastTransitionTime),

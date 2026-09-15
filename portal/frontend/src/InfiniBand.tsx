@@ -9,13 +9,17 @@ import type { Cluster, GPU, Nodes, NodeUtil } from './types';
 
 const conditionFreshnessMs = 15 * 60 * 1000;
 const futureClockSkewMs = 60 * 1000;
-const gpuConditionTypes = [
-  'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
-  'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
-  'GPUPowerViolation', 'GPUECCSingleVolatileRate', 'GPUECCSingleRetired',
-  'GPUPCIeReplayErrors',
+const nodeMetricsFreshnessMs = 2 * 60 * 1000;
+const gpuConditionRequirements = [
+  { type: 'DcgmExporterUnavailable' },
+  { type: 'NvidiaSmiProblem' },
+  { type: 'NvidiaDeviceFilesProblem' },
+  { type: 'GPUMissing' },
 ] as const;
-const ibConditionTypes = ['IBLinkDown', 'IBSymbolError'] as const;
+const ibConditionRequirements = [
+  { type: 'IBLinkDown', reason: 'IBLinkDownObserved' },
+  { type: 'IBSymbolError', reason: 'IBSymbolErrorObserved' },
+] as const;
 
 const known = (value: ReactNode) => value === undefined || value === null || value === '' ? 'Unknown' : value;
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0;
@@ -39,6 +43,7 @@ export function InfiniBandFleet() {
 
 type FleetNode = Nodes['nodes'][number];
 type OperationalCondition = NonNullable<FleetNode['operationalConditions']>[number];
+type ConditionCategory = OperationalCondition['category'];
 type EvidenceState = 'observed_ok' | 'fault' | 'unknown';
 
 function gpuModelLabel(node: FleetNode) {
@@ -71,23 +76,34 @@ function EvidenceBadge({ state }: { state: EvidenceState }) {
 
 function conditionSummary(
   conditions: OperationalCondition[] | undefined,
-  expectedTypes: readonly string[],
+  category: ConditionCategory,
+  rdmaAdvertised = true,
   now = Date.now(),
 ): EvidenceSummary {
+  const requirements = category === 'gpu' ? gpuConditionRequirements : ibConditionRequirements;
+  const relevant = (conditions || []).filter(condition => condition.category === category);
   const byType = new Map<string, OperationalCondition[]>();
-  for (const condition of conditions || []) {
+  for (const condition of relevant) {
     const values = byType.get(condition.type) || [];
     values.push(condition);
     byType.set(condition.type, values);
   }
+  const expectedTypes = new Set([...byType.keys(), ...requirements.map(requirement => requirement.type)]);
+  const validByType = new Map<string, OperationalCondition>();
   let observed = 0;
   let lastObservedAt: number | undefined;
   const faults: string[] = [];
   const unknown: string[] = [];
-  for (const type of expectedTypes) {
-    const values = byType.get(type) || [];
+  for (const [type, values] of byType) {
     if (values.length !== 1) {
-      unknown.push(values.length ? `${type} duplicated` : `${type} missing`);
+      unknown.push(`${type} duplicated`);
+      for (const condition of values) {
+        const heartbeat = Date.parse(condition.lastHeartbeatTime || '');
+        if (condition.status === 'True' && Number.isFinite(heartbeat) &&
+          heartbeat <= now + futureClockSkewMs && now - heartbeat <= conditionFreshnessMs) {
+          faults.push(type);
+        }
+      }
       continue;
     }
     const condition = values[0];
@@ -105,26 +121,50 @@ function conditionSummary(
       continue;
     }
     observed++;
+    validByType.set(type, condition);
     lastObservedAt = lastObservedAt === undefined ? heartbeat : Math.max(lastObservedAt, heartbeat);
     if (condition.status === 'True') faults.push(type);
     else if (condition.status !== 'False') unknown.push(`${type} is ${condition.status || 'Unknown'}`);
   }
+  for (const requirement of requirements) {
+    const condition = validByType.get(requirement.type);
+    if (!condition) {
+      unknown.push(`${requirement.type} missing`);
+      continue;
+    }
+    if ('reason' in requirement && condition.status === 'False' && condition.reason !== requirement.reason) {
+      unknown.push(`${requirement.type} metric coverage is unverified`);
+    }
+  }
   if (faults.length) {
     return {
-      state: 'fault', observed, expected: expectedTypes.length, lastObservedAt,
-      detail: `${faults.length} fresh fault condition${faults.length === 1 ? '' : 's'}: ${faults.join(', ')}`,
+      state: 'fault', observed, expected: expectedTypes.size, lastObservedAt,
+      detail: `${new Set(faults).size} fresh fault condition${new Set(faults).size === 1 ? '' : 's'}: ${[...new Set(faults)].join(', ')}`,
+    };
+  }
+  if (category === 'infiniband' && !rdmaAdvertised) {
+    return {
+      state: 'unknown', observed, expected: expectedTypes.size, lastObservedAt,
+      detail: 'The node does not advertise an RDMA resource, so InfiniBand condition coverage is unverified',
     };
   }
   if (unknown.length) {
     return {
-      state: 'unknown', observed, expected: expectedTypes.length, lastObservedAt,
+      state: 'unknown', observed, expected: expectedTypes.size, lastObservedAt,
       detail: unknown[0] + (unknown.length > 1 ? ` · ${unknown.length - 1} more coverage gaps` : ''),
     };
   }
   return {
-    state: 'observed_ok', observed, expected: expectedTypes.length, lastObservedAt,
-    detail: `All ${expectedTypes.length} required condition families reported fresh False`,
+    state: 'observed_ok', observed, expected: expectedTypes.size, lastObservedAt,
+    detail: `All ${expectedTypes.size} enabled condition families reported fresh False`,
   };
+}
+
+function hasFreshNodeMetrics(node: FleetNode, now = Date.now()) {
+  const observedAt = Date.parse(node.metricsObservedAt || '');
+  return Number.isFinite(observedAt) &&
+    observedAt <= now + futureClockSkewMs &&
+    now - observedAt <= nodeMetricsFreshnessMs;
 }
 
 function telemetrySummary(node: FleetNode, samples: GPU[]): EvidenceSummary {
@@ -258,8 +298,9 @@ function FleetFabricMap({
                     measured(sample.memoryUsedMB) && measured(sample.memoryFreeMB)
                       ? [sample.memoryUsedMB + sample.memoryFreeMB] : []);
                   const usage = nodeUtil.find(sample => sample.instance === node.name);
-                  const cpuUtilization = measured(node.cpuUtilPct) ? node.cpuUtilPct : usage?.cpuUtilPct;
-                  const memoryUtilization = measured(node.memUsedPct) ? node.memUsedPct : usage?.memUsedPct;
+                  const currentNodeMetrics = hasFreshNodeMetrics(node);
+                  const cpuUtilization = currentNodeMetrics && measured(node.cpuUtilPct) ? node.cpuUtilPct : usage?.cpuUtilPct;
+                  const memoryUtilization = currentNodeMetrics && measured(node.memUsedPct) ? node.memUsedPct : usage?.memUsedPct;
                   const currentMetricsDetail = node.metricsWindow ? `Metrics API · ${node.metricsWindow} window` : 'Metrics API';
                   const gpuMemoryDetail = gpuMemoryUsed.length && gpuMemoryTotal.length
                     ? `GPU ${n1(gpuMemoryUsed.reduce((sum, value) => sum + value, 0) / 1024)} / ${n1(gpuMemoryTotal.reduce((sum, value) => sum + value, 0) / 1024)} GiB`
@@ -282,11 +323,11 @@ function FleetFabricMap({
                     <div className="fabric-metrics">
                       {gpuUtilization !== null && <span><small>GPU load</small><b>{n1(gpuUtilization)}%</b><i>{samples.filter(sample => measured(sample.utilizationPct)).length}/{node.gpuCapacity} observed</i></span>}
                       {!!gpuTemperature.length && <span><small>GPU temp</small><b>{n1(Math.max(...gpuTemperature))}°C</b><i>max observed</i></span>}
-                      <span><small>CPU</small><b>{measured(cpuUtilization) ? `${n1(cpuUtilization)}%` : 'Unknown'}</b><i>{measured(node.cpuUtilPct)
+                      <span><small>CPU</small><b>{measured(cpuUtilization) ? `${n1(cpuUtilization)}%` : 'Unknown'}</b><i>{currentNodeMetrics && measured(node.cpuUtilPct)
                         ? currentMetricsDetail
                         : usage?.cpuCoverage ? `ADX · ${n1(usage.cpuCoverage.windowCoveragePct)}% coverage` : 'no current sample'}</i></span>
                       <span><small>Node memory</small><b>{measured(memoryUtilization) ? `${n1(memoryUtilization)}%` : 'Unknown'}</b><i>{[
-                        measured(node.memUsedPct) ? currentMetricsDetail : measured(usage?.memUsedPct) ? 'ADX fallback' : 'no current sample',
+                        currentNodeMetrics && measured(node.memUsedPct) ? currentMetricsDetail : measured(usage?.memUsedPct) ? 'ADX fallback' : 'no current sample',
                         gpuMemoryDetail,
                       ].filter(Boolean).join(' · ')}</i></span>
                     </div>
@@ -344,8 +385,10 @@ function FleetInfiniBandEvidence() {
   const focusedGPUs = canCorrelateInventory && focusedInstance
     ? attributedTelemetry.filter(sample => sample.instance === focusedInstance)
     : [];
-  const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, gpuConditionTypes));
-  const ibConditions = nodes.map(node => conditionSummary(node.operationalConditions, ibConditionTypes));
+  const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, 'gpu'));
+  const ibConditions = nodes.map(node => conditionSummary(
+    node.operationalConditions, 'infiniband', Boolean(node.rdmaResources?.length),
+  ));
   const gpuTelemetry = nodes.map(node => telemetrySummary(node, attributedTelemetry));
   const gpuConditionCoveredGPUs = nodes.reduce((total, node, index) =>
     total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);

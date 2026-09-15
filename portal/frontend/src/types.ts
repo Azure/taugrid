@@ -51,7 +51,7 @@ export interface Nodes extends Scoped {
     agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
     rdmaResources?: { name: string; capacity: number; allocatable: number }[];
     operationalConditions?: {
-      type: string; status: string; reason?: string; message?: string;
+      type: string; category: 'gpu' | 'infiniband'; status: string; reason?: string; message?: string;
       lastHeartbeatTime?: string; lastTransitionTime?: string;
     }[] }[];
   daemonSets?: { namespace: string; name: string; ready: number; desired: number; available: number; healthy: boolean }[];

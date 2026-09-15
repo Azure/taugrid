@@ -239,6 +239,41 @@ describe('Fleet dashboard', () => {
     expect(within(a100!).getByText('Telemetry').parentElement).toHaveTextContent('Unknown');
   });
 
+  it('rejects stale and future Kubernetes node metrics in favor of ADX fallback', async () => {
+    const invalidCurrentMetrics = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'h200-node-a'
+        ? { ...node, cpuUtilPct: 99, memUsedPct: 98, metricsObservedAt: '2026-09-14T19:00:00Z', metricsWindow: '15s' }
+        : node.name === 'h200-node-b'
+          ? { ...node, cpuUtilPct: 97, memUsedPct: 96, metricsObservedAt: '2026-09-14T20:06:00Z', metricsWindow: '15s' }
+          : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(invalidCurrentMetrics));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    const stale = (await screen.findByText('h200-node-a', { selector: '.fabric-node-head strong' })).closest('article');
+    expect(stale).not.toBeNull();
+    expect(within(stale!).getByText('63%')).toBeVisible();
+    expect(within(stale!).getByText('72%')).toBeVisible();
+    expect(within(stale!).queryByText('99%')).not.toBeInTheDocument();
+    expect(within(stale!).queryByText('98%')).not.toBeInTheDocument();
+    expect(within(stale!).getByText(/ADX · 93% coverage/)).toBeVisible();
+    expect(within(stale!).getByText(/ADX fallback/)).toBeVisible();
+
+    const future = screen.getByText('h200-node-b', { selector: '.fabric-node-head strong' }).closest('article');
+    expect(future).not.toBeNull();
+    expect(within(future!).getByText('48%')).toBeVisible();
+    expect(within(future!).getByText('68%')).toBeVisible();
+    expect(within(future!).queryByText('97%')).not.toBeInTheDocument();
+    expect(within(future!).queryByText('96%')).not.toBeInTheDocument();
+  });
+
   it('surfaces Node metrics failures while preserving inventory and ADX fallback', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
@@ -290,6 +325,63 @@ describe('Fleet dashboard', () => {
         expect(urls.some(url => url.includes(path))).toBe(true);
       }
     });
+  });
+
+  it('surfaces producer faults even when optional condition coverage is incomplete', async () => {
+    const faultNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'h200-node-a'
+        ? {
+          ...node,
+          operationalConditions: [
+            ...(node.operationalConditions || []).filter(condition => condition.type !== 'GPUNVLinkReplayErrors'),
+            {
+              type: 'XIDError79', category: 'gpu' as const, status: 'True',
+              reason: 'XIDError79', lastHeartbeatTime: '2026-09-14T20:03:30Z',
+            },
+          ],
+        }
+        : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(faultNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    const card = (await screen.findByText('h200-node-a', { selector: '.fabric-node-head strong' })).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card!).getByText('GPU/NVLink').parentElement).toHaveTextContent('Fault');
+  });
+
+  it('does not treat legacy false InfiniBand conditions as verified coverage', async () => {
+    const unverifiedIB = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'h200-node-a'
+        ? {
+          ...node,
+          operationalConditions: node.operationalConditions?.map(condition =>
+            condition.category === 'infiniband'
+              ? { ...condition, reason: `${condition.type}Ok` }
+              : condition),
+        }
+        : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(unverifiedIB));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    const card = (await screen.findByText('h200-node-a', { selector: '.fabric-node-head strong' })).closest('article');
+    expect(card).not.toBeNull();
+    expect(within(card!).getByText('InfiniBand').parentElement).toHaveTextContent('Unknown');
   });
 
   it('labels a raw gpu pool with the inferred NVIDIA model', async () => {

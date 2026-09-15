@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/queue"
@@ -1120,10 +1121,10 @@ func (stubNodesReader) ListPods(_ context.Context, _ string) ([]byte, error) {
 	]}`), nil
 }
 func (stubNodesReader) ListNodeMetrics(_ context.Context) ([]byte, error) {
-	return []byte(`{"items":[
-	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":"2026-09-15T20:00:00Z","window":"15s",
+	return []byte(fmt.Sprintf(`{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":%q,"window":"15s",
 	   "usage":{"cpu":"4","memory":"164987136Ki"}}
-	]}`), nil
+	]}`, time.Now().UTC().Format(time.RFC3339Nano))), nil
 }
 
 func TestNodesBoardServesSnapshot(t *testing.T) {

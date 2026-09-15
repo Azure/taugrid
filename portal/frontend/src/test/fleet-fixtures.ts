@@ -9,16 +9,17 @@ const fixtureScope = {
   source: 'portal', authorizationMode: 'workspace', availability: 'available', managed: false,
 } as const;
 const gpuConditionTypes = [
-  'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
-  'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
-  'GPUPowerViolation', 'GPUECCSingleVolatileRate', 'GPUECCSingleRetired',
-  'GPUPCIeReplayErrors',
+  'DcgmExporterUnavailable', 'NvidiaSmiProblem', 'NvidiaDeviceFilesProblem',
+  'GPUMissing', 'GPUNVLinkReplayErrors',
 ];
 const ibConditionTypes = ['IBLinkDown', 'IBSymbolError'];
 const observedConditions = (fault?: string) => [...gpuConditionTypes, ...ibConditionTypes].map(type => ({
   type,
+  category: ibConditionTypes.includes(type) ? 'infiniband' as const : 'gpu' as const,
   status: type === fault ? 'True' : 'False',
-  reason: type === fault ? `${type}ThresholdExceeded` : `${type}Ok`,
+  reason: type === fault
+    ? `${type}ThresholdExceeded`
+    : ibConditionTypes.includes(type) ? `${type}Observed` : `${type}Ok`,
   lastHeartbeatTime: fixtureObservedAt,
   lastTransitionTime: '2026-09-11T02:51:06Z',
 }));
@@ -87,7 +88,7 @@ export const fleetNodes: Nodes = {
       schedulable: true,
       rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
       operationalConditions: observedConditions('GPUNVLinkReplayErrors')
-        .filter(condition => condition.type !== 'GPUECCSingleRetired')
+        .filter(condition => condition.type !== 'NvidiaDeviceFilesProblem')
         .reverse(),
     },
     {

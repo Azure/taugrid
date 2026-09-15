@@ -6,8 +6,10 @@ package nodes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeReader returns canned Nodes JSON so the board can be tested without a
@@ -169,9 +171,11 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	}
 	if len(n.Conditions) != 2 ||
 		n.Conditions[0].Type != "GPUNVLinkCRCDataErrors" ||
+		n.Conditions[0].Category != conditionCategoryGPU ||
 		n.Conditions[0].Status != "False" ||
 		n.Conditions[0].LastHeartbeatTime != "2026-09-14T20:03:00Z" ||
 		n.Conditions[1].Type != "IBLinkDown" ||
+		n.Conditions[1].Category != conditionCategoryIB ||
 		n.Conditions[1].Status != "Unknown" ||
 		n.Conditions[1].Message != "required metric coverage is incomplete" ||
 		n.Conditions[1].LastHeartbeatTime != "2026-09-14T20:03:01Z" {
@@ -424,12 +428,13 @@ func TestBoardOnlyReadsPodsWhenExplicitlyIncluded(t *testing.T) {
 }
 
 func TestBoardAttachesCurrentNodeMetrics(t *testing.T) {
-	const metricsJSON = `{"items":[
-	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":"2026-09-15T20:00:00.123456789Z","window":"15.001s",
+	observedAt := time.Now().UTC().Add(-30 * time.Second)
+	metricsJSON := fmt.Sprintf(`{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":%q,"window":"15.001s",
 	   "usage":{"cpu":"2","memory":"164987136Ki"}},
-	  {"metadata":{"name":"stale-node"},"timestamp":"2026-09-15T20:00:00Z","window":"15s",
+	  {"metadata":{"name":"stale-node"},"timestamp":%q,"window":"15s",
 	   "usage":{"cpu":"99","memory":"99Gi"}}
-	]}`
+	]}`, observedAt.Format(time.RFC3339Nano), observedAt.Format(time.RFC3339Nano))
 	reader := &fakeReader{json: nodesJSON, nodeMetricsJSON: metricsJSON}
 	snap, err := Board(context.Background(), reader, Options{IncludeMetrics: true})
 	if err != nil {
@@ -445,7 +450,7 @@ func TestBoardAttachesCurrentNodeMetrics(t *testing.T) {
 	if node.MemoryUsedPct == nil || *node.MemoryUsedPct != 50 {
 		t.Fatalf("MemoryUsedPct = %v, want 50", node.MemoryUsedPct)
 	}
-	if node.MetricsObservedAt != "2026-09-15T20:00:00.123456789Z" || node.MetricsWindow != "15.001s" {
+	if node.MetricsObservedAt != observedAt.Format(time.RFC3339Nano) || node.MetricsWindow != "15.001s" {
 		t.Fatalf("metrics evidence = %q / %q", node.MetricsObservedAt, node.MetricsWindow)
 	}
 	if snap.NodeMetricsError != "" {
@@ -471,12 +476,12 @@ func TestBoardPreservesInventoryWhenNodeMetricsAreUnavailable(t *testing.T) {
 }
 
 func TestBoardKeepsValidPartialNodeMetrics(t *testing.T) {
-	const metricsJSON = `{"items":[
-	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":"2026-09-15T20:00:00Z","window":"15s",
+	metricsJSON := fmt.Sprintf(`{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":%q,"window":"15s",
 	   "usage":{"cpu":"bad","memory":"164987136Ki"}},
 	  {"metadata":{"name":"aks-h100pool-2"},"timestamp":"bad","window":"15s",
 	   "usage":{"cpu":"1","memory":"1Gi"}}
-	]}`
+	]}`, time.Now().UTC().Add(-30*time.Second).Format(time.RFC3339Nano))
 	snap, err := Board(context.Background(), &fakeReader{json: nodesJSON, nodeMetricsJSON: metricsJSON}, Options{IncludeMetrics: true})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
@@ -489,6 +494,52 @@ func TestBoardKeepsValidPartialNodeMetrics(t *testing.T) {
 		!strings.Contains(snap.NodeMetricsError, "aks-h100pool-1 has invalid CPU usage") ||
 		!strings.Contains(snap.NodeMetricsError, "aks-h100pool-2 has invalid timestamp or window") {
 		t.Fatalf("NodeMetricsError = %q, want both malformed sample diagnostics", snap.NodeMetricsError)
+	}
+}
+
+func TestBoardRejectsStaleAndFutureNodeMetrics(t *testing.T) {
+	now := time.Now().UTC()
+	metricsJSON := fmt.Sprintf(`{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":%q,"window":"15s",
+	   "usage":{"cpu":"2","memory":"164987136Ki"}},
+	  {"metadata":{"name":"aks-h100pool-2"},"timestamp":%q,"window":"15s",
+	   "usage":{"cpu":"1","memory":"1Gi"}}
+	]}`,
+		now.Add(-nodeMetricsMaxAge-time.Second).Format(time.RFC3339Nano),
+		now.Add(nodeMetricsFutureSkew+time.Second).Format(time.RFC3339Nano))
+
+	snap, err := Board(context.Background(), &fakeReader{json: nodesJSON, nodeMetricsJSON: metricsJSON}, Options{IncludeMetrics: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	for _, node := range snap.Nodes[:2] {
+		if node.CPUUtilPct != nil || node.MemoryUsedPct != nil || node.MetricsObservedAt != "" {
+			t.Fatalf("node %q retained rejected metrics: %+v", node.Name, node)
+		}
+	}
+	if !strings.Contains(snap.NodeMetricsError, "aks-h100pool-1 has a stale metrics timestamp") ||
+		!strings.Contains(snap.NodeMetricsError, "aks-h100pool-2 has a future metrics timestamp") {
+		t.Fatalf("NodeMetricsError = %q, want stale and future diagnostics", snap.NodeMetricsError)
+	}
+}
+
+func TestBoardSurfacesCriticalProducerConditions(t *testing.T) {
+	const j = `{"items":[{"metadata":{"name":"gpu-node","labels":{}},
+	  "status":{"capacity":{"cpu":"4","memory":"8Gi","nvidia.com/gpu":"1"},"conditions":[
+	    {"type":"DcgmExporterUnavailable","status":"False","reason":"DcgmExporterUnavailableOk","lastHeartbeatTime":"2026-09-15T20:00:00Z"},
+	    {"type":"XIDError79","status":"True","reason":"XIDError79","lastHeartbeatTime":"2026-09-15T20:00:00Z"},
+	    {"type":"IBPKeyIssue","status":"True","reason":"IBPKeyMismatch","lastHeartbeatTime":"2026-09-15T20:00:00Z"},
+	    {"type":"MemoryPressure","status":"False"}]}}]}`
+	snap, err := Board(context.Background(), &fakeReader{json: j}, Options{})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	got := snap.Nodes[0].Conditions
+	if len(got) != 3 ||
+		got[0].Type != "DcgmExporterUnavailable" || got[0].Category != conditionCategoryGPU ||
+		got[1].Type != "IBPKeyIssue" || got[1].Category != conditionCategoryIB ||
+		got[2].Type != "XIDError79" || got[2].Category != conditionCategoryGPU {
+		t.Fatalf("operational conditions = %+v, want categorized availability, IB, and XID conditions", got)
 	}
 }
 
