@@ -88,7 +88,7 @@ func TestRDMAValidationArtifactFetchRequiresWorkspaceScopedRun(t *testing.T) {
 		t.Fatalf("artifact list = %+v", response)
 	}
 	artifact := response.Artifacts[0]
-	if artifact.ArtifactID != result.ValidationID+"-result" ||
+	if artifact.ArtifactID != result.WorkspaceID+"-"+result.ValidationID+"-attempt-1-result" ||
 		artifact.Type != rdmavalidation.ArtifactType ||
 		artifact.Digest != link.SHA256 ||
 		artifact.URI != artifactURI ||
