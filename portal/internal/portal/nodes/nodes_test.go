@@ -17,6 +17,9 @@ type fakeReader struct {
 	daemonSetsJSON      string
 	daemonSetsErr       error
 	daemonSetsCallCount int
+	podsJSON            string
+	podsErr             error
+	podsCallCount       int
 }
 
 func (f *fakeReader) ListNodes(_ context.Context) ([]byte, error) {
@@ -32,6 +35,16 @@ func (f *fakeReader) ListDaemonSets(_ context.Context) ([]byte, error) {
 	}
 	if f.daemonSetsJSON != "" {
 		return []byte(f.daemonSetsJSON), nil
+	}
+	return []byte(`{"items":[]}`), nil
+}
+func (f *fakeReader) ListPods(_ context.Context, _ string) ([]byte, error) {
+	f.podsCallCount++
+	if f.podsErr != nil {
+		return nil, f.podsErr
+	}
+	if f.podsJSON != "" {
+		return []byte(f.podsJSON), nil
 	}
 	return []byte(`{"items":[]}`), nil
 }
@@ -85,6 +98,12 @@ func TestBoardAggregatesFleet(t *testing.T) {
 	}
 	if snap.TotalGPUs != 2 {
 		t.Fatalf("TotalGPUs = %d, want 2", snap.TotalGPUs)
+	}
+	if snap.GPUAllocatable != 2 {
+		t.Fatalf("GPUAllocatable = %d, want 2", snap.GPUAllocatable)
+	}
+	if snap.GPUSchedulable != 1 {
+		t.Fatalf("GPUSchedulable = %d, want 1 (the second GPU node is NotReady)", snap.GPUSchedulable)
 	}
 	if snap.RDMAAdvertisedGPUNodes != 1 {
 		t.Fatalf("RDMAAdvertisedGPUNodes = %d, want 1", snap.RDMAAdvertisedGPUNodes)
@@ -153,6 +172,9 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	}
 	if !n.Ready {
 		t.Fatal("aks-h100pool-1 should be Ready")
+	}
+	if !n.Schedulable {
+		t.Fatal("aks-h100pool-1 should be schedulable")
 	}
 }
 
@@ -262,6 +284,131 @@ func TestBoardOnlyReadsDaemonSetsWhenExplicitlyIncluded(t *testing.T) {
 	}
 	if reader.daemonSetsCallCount != 1 || len(withDaemonSets.DaemonSets) != 1 || !withDaemonSets.DaemonSets[0].Healthy {
 		t.Fatalf("DaemonSet summary = %+v, calls = %d", withDaemonSets.DaemonSets, reader.daemonSetsCallCount)
+	}
+}
+
+func TestBoardCountsActiveScheduledGPUAssignments(t *testing.T) {
+	const gpuNodeJSON = `{"items":[
+	  {"metadata":{"name":"gpu-node","labels":{}},
+	   "status":{"capacity":{"cpu":"8","memory":"64Gi","nvidia.com/gpu":"4"},
+	     "allocatable":{"nvidia.com/gpu":"4"},
+	     "conditions":[{"type":"Ready","status":"True"}]}}
+	]}`
+	const podsJSON = `{"items":[
+	  {"spec":{"nodeName":"gpu-node",
+	      "containers":[
+	        {"resources":{"requests":{"nvidia.com/gpu":"1"}}},
+	        {"resources":{"requests":{"nvidia.com/gpu":"1"}}}],
+	      "initContainers":[
+	        {"restartPolicy":"Always","resources":{"requests":{"nvidia.com/gpu":"1"}}},
+	        {"resources":{"requests":{"nvidia.com/gpu":"3"}}},
+	        {"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},
+	   "status":{"phase":"Running"}},
+	  {"spec":{"containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},
+	   "status":{"phase":"Pending"}},
+	  {"spec":{"nodeName":"gpu-node","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},
+	   "status":{"phase":"Succeeded"}},
+	  {"spec":{"nodeName":"gpu-node","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},
+	   "status":{"phase":"Failed"}}
+	]}`
+	reader := &fakeReader{json: gpuNodeJSON, podsJSON: podsJSON}
+
+	snap, err := Board(context.Background(), reader, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if reader.podsCallCount != 1 {
+		t.Fatalf("ListPods calls = %d, want 1", reader.podsCallCount)
+	}
+	if !snap.GPUAllocationKnown || snap.GPUAllocated != 4 || snap.GPUAvailable != 0 {
+		t.Fatalf("GPU allocation = known %t, allocated %d, available %d; want true/4/0",
+			snap.GPUAllocationKnown, snap.GPUAllocated, snap.GPUAvailable)
+	}
+	if snap.Nodes[0].GPUAllocated == nil || *snap.Nodes[0].GPUAllocated != 4 ||
+		snap.Nodes[0].GPUAvailable == nil || *snap.Nodes[0].GPUAvailable != 0 {
+		t.Fatalf("node allocation = allocated %v, available %v; want 4/0",
+			snap.Nodes[0].GPUAllocated, snap.Nodes[0].GPUAvailable)
+	}
+}
+
+func TestBoardDoesNotCountUnavailableNodesAsFree(t *testing.T) {
+	snap, err := Board(context.Background(), &fakeReader{json: nodesJSON}, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if !snap.GPUAllocationKnown || snap.GPUSchedulable != 1 || snap.GPUAvailable != 1 {
+		t.Fatalf("GPU availability = known %t, schedulable %d, available %d; want true/1/1",
+			snap.GPUAllocationKnown, snap.GPUSchedulable, snap.GPUAvailable)
+	}
+	for _, node := range snap.Nodes {
+		if node.Name == "aks-h100pool-2" {
+			if node.Schedulable || node.GPUAvailable == nil || *node.GPUAvailable != 0 {
+				t.Fatalf("NotReady node = schedulable %t, available %v; want false/0", node.Schedulable, node.GPUAvailable)
+			}
+			return
+		}
+	}
+	t.Fatal("NotReady GPU node not found")
+}
+
+func TestBoardDoesNotCountCordonedNodesAsFree(t *testing.T) {
+	const cordonedNodeJSON = `{"items":[
+	  {"metadata":{"name":"cordoned","labels":{}},"spec":{"unschedulable":true},
+	   "status":{"capacity":{"cpu":"8","memory":"64Gi","nvidia.com/gpu":"1"},
+	     "allocatable":{"nvidia.com/gpu":"1"},
+	     "conditions":[{"type":"Ready","status":"True"}]}}
+	]}`
+	snap, err := Board(context.Background(), &fakeReader{json: cordonedNodeJSON}, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if !snap.GPUAllocationKnown || snap.GPUSchedulable != 0 || snap.GPUAvailable != 0 ||
+		snap.Nodes[0].Schedulable || snap.Nodes[0].GPUAvailable == nil || *snap.Nodes[0].GPUAvailable != 0 {
+		t.Fatalf("cordoned allocation snapshot = %+v, node = %+v; want known with zero schedulable/free GPUs", snap, snap.Nodes[0])
+	}
+}
+
+func TestBoardFailsClosedForUnsupportedGPUAssignmentTypes(t *testing.T) {
+	const podsJSON = `{"items":[
+	  {"spec":{"nodeName":"aks-h100pool-1","containers":[{"resources":{"requests":{"nvidia.com/mig-1g.10gb":"1"}}}]},"status":{"phase":"Running"}}
+	]}`
+	snap, err := Board(context.Background(), &fakeReader{json: nodesJSON, podsJSON: podsJSON}, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if snap.GPUAllocationKnown || snap.GPUAllocationError == "" {
+		t.Fatalf("GPU allocation = known %t, error %q; want unknown with error", snap.GPUAllocationKnown, snap.GPUAllocationError)
+	}
+}
+
+func TestBoardPreservesInventoryWhenGPUAssignmentsAreUnavailable(t *testing.T) {
+	reader := &fakeReader{json: nodesJSON, podsErr: errors.New("forbidden")}
+	snap, err := Board(context.Background(), reader, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if snap.TotalNodes != 3 || snap.GPUAllocatable != 2 {
+		t.Fatalf("inventory totals = nodes %d, allocatable %d; want 3/2", snap.TotalNodes, snap.GPUAllocatable)
+	}
+	if snap.GPUAllocationKnown || snap.GPUAvailable != 0 || snap.GPUAllocationError == "" {
+		t.Fatalf("GPU allocation = known %t, available %d, error %q; want unknown with error",
+			snap.GPUAllocationKnown, snap.GPUAvailable, snap.GPUAllocationError)
+	}
+	for _, node := range snap.Nodes {
+		if node.GPUAllocated != nil || node.GPUAvailable != nil {
+			t.Fatalf("node %q unexpectedly has allocation values: allocated %v, available %v",
+				node.Name, node.GPUAllocated, node.GPUAvailable)
+		}
+	}
+}
+
+func TestBoardOnlyReadsPodsWhenExplicitlyIncluded(t *testing.T) {
+	reader := &fakeReader{json: nodesJSON}
+	if _, err := Board(context.Background(), reader, Options{}); err != nil {
+		t.Fatalf("Board: %v", err)
+	}
+	if reader.podsCallCount != 0 {
+		t.Fatalf("ListPods calls = %d, want 0", reader.podsCallCount)
 	}
 }
 

@@ -1114,6 +1114,11 @@ func (stubNodesReader) ListNodes(_ context.Context) ([]byte, error) {
 func (stubNodesReader) ListDaemonSets(_ context.Context) ([]byte, error) {
 	return []byte(`{"items":[{"metadata":{"namespace":"gpu-monitoring","name":"dcgm-exporter"},"status":{"desiredNumberScheduled":2,"numberReady":1,"numberAvailable":1}}]}`), nil
 }
+func (stubNodesReader) ListPods(_ context.Context, _ string) ([]byte, error) {
+	return []byte(`{"items":[
+	  {"spec":{"nodeName":"aks-h100pool-1","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},"status":{"phase":"Running"}}
+	]}`), nil
+}
 
 func TestNodesBoardServesSnapshot(t *testing.T) {
 	server, err := NewServer(Options{
@@ -1130,10 +1135,14 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		TotalNodes int `json:"totalNodes"`
-		GPUNodes   int `json:"gpuNodes"`
-		TotalGPUs  int `json:"totalGPUs"`
-		SKUs       []struct {
+		TotalNodes         int   `json:"totalNodes"`
+		GPUNodes           int   `json:"gpuNodes"`
+		TotalGPUs          int   `json:"totalGPUs"`
+		GPUAllocationKnown bool  `json:"gpuAllocationKnown"`
+		GPUSchedulable     int64 `json:"gpuSchedulable"`
+		GPUAllocated       int64 `json:"gpuAllocated"`
+		GPUAvailable       int64 `json:"gpuAvailable"`
+		SKUs               []struct {
 			SKU  string `json:"sku"`
 			GPUs int    `json:"gpus"`
 		} `json:"skus"`
@@ -1149,6 +1158,10 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 	}
 	if got.TotalNodes != 2 || got.GPUNodes != 1 || got.TotalGPUs != 1 {
 		t.Fatalf("snapshot = %+v, want 2 nodes / 1 gpu-node / 1 gpu", got)
+	}
+	if !got.GPUAllocationKnown || got.GPUSchedulable != 1 || got.GPUAllocated != 1 || got.GPUAvailable != 0 {
+		t.Fatalf("GPU allocation = known %t, schedulable %d, allocated %d, available %d; want true/1/1/0",
+			got.GPUAllocationKnown, got.GPUSchedulable, got.GPUAllocated, got.GPUAvailable)
 	}
 	// GPU SKU sorts first in the rollup.
 	if len(got.SKUs) != 2 || got.SKUs[0].SKU != "Standard_NC40ads_H100_v5" || got.SKUs[0].GPUs != 1 {
@@ -1885,6 +1898,10 @@ func TestManagedWorkspaceSwitchScopesEveryBoard(t *testing.T) {
 					}
 				}
 			}
+			if board == "nodes" && body["gpuAllocationKnown"] != false {
+				t.Fatalf("%s/nodes gpuAllocationKnown = %v, want false without cluster-wide Pod authorization",
+					workspace.id, body["gpuAllocationKnown"])
+			}
 			for _, kql := range querier.kqls[kqlStart:] {
 				if !strings.Contains(kql, "Cluster == @'cluster-a'") {
 					t.Fatalf("%s/%s KQL missing resolved cluster filter:\n%s", workspace.id, board, kql)
@@ -2363,6 +2380,16 @@ func TestClusterWideWorkspaceCanReadRuntimeDaemonSets(t *testing.T) {
 	}
 	if reader.daemonSetCalls != 1 {
 		t.Fatalf("cluster-wide workspace read DaemonSets %d times, want 1", reader.daemonSetCalls)
+	}
+	foundClusterWidePods := false
+	for _, namespace := range reader.namespaces {
+		if namespace == "" {
+			foundClusterWidePods = true
+			break
+		}
+	}
+	if !foundClusterWidePods {
+		t.Fatalf("cluster-wide workspace pod namespaces = %v, want an all-namespaces read", reader.namespaces)
 	}
 }
 

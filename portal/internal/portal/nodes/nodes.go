@@ -76,11 +76,16 @@ type Reader interface {
 	ListDaemonSets(ctx context.Context) ([]byte, error)
 }
 
+type podReader interface {
+	ListPods(ctx context.Context, namespace string) ([]byte, error)
+}
+
 // Options controls optional infrastructure signals attached to the node
 // inventory. DaemonSets are cluster-wide objects, so callers serving a
 // workspace-scoped audience must opt in only after authorizing that scope.
 type Options struct {
-	IncludeDaemonSets bool
+	IncludeDaemonSets  bool
+	IncludeAllocations bool
 }
 
 // Node is one node's static hardware inventory. CPU is reported in whole cores
@@ -90,6 +95,7 @@ type Node struct {
 	Name              string         `json:"name"`
 	UID               string         `json:"uid,omitempty"`
 	Ready             bool           `json:"ready"`
+	Schedulable       bool           `json:"schedulable"`
 	AgentPool         string         `json:"agentPool,omitempty"`
 	AgentPoolLabel    string         `json:"agentPoolLabel,omitempty"`
 	SKU               string         `json:"sku,omitempty"`
@@ -106,6 +112,8 @@ type Node struct {
 	MemoryGiB         float64        `json:"memoryGiB"`
 	GPUCapacity       int64          `json:"gpuCapacity"`
 	GPUAllocatable    int64          `json:"gpuAllocatable"`
+	GPUAllocated      *int64         `json:"gpuAllocated,omitempty"`
+	GPUAvailable      *int64         `json:"gpuAvailable,omitempty"`
 	RDMAResources     []RDMAResource `json:"rdmaResources,omitempty"`
 	Conditions        []Condition    `json:"operationalConditions,omitempty"`
 }
@@ -158,6 +166,12 @@ type Snapshot struct {
 	TotalCPUCores          int64       `json:"totalCPUCores"`
 	TotalMemoryGiB         float64     `json:"totalMemoryGiB"`
 	TotalGPUs              int64       `json:"totalGPUs"`
+	GPUAllocatable         int64       `json:"gpuAllocatable"`
+	GPUSchedulable         int64       `json:"gpuSchedulable"`
+	GPUAllocated           int64       `json:"gpuAllocated"`
+	GPUAvailable           int64       `json:"gpuAvailable"`
+	GPUAllocationKnown     bool        `json:"gpuAllocationKnown"`
+	GPUAllocationError     string      `json:"gpuAllocationError,omitempty"`
 	RDMAAdvertisedGPUNodes int         `json:"rdmaAdvertisedGpuNodes"`
 	SKUs                   []SKUCount  `json:"skus"`
 	Nodes                  []Node      `json:"nodes"`
@@ -175,6 +189,9 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	snap, err := aggregate(raw)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if opts.IncludeAllocations {
+		attachGPUAllocations(ctx, r, &snap)
 	}
 	if !opts.IncludeDaemonSets {
 		return snap, nil
@@ -245,6 +262,9 @@ type nodeObj struct {
 		UID    string            `json:"uid"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
+	Spec struct {
+		Unschedulable bool `json:"unschedulable"`
+	} `json:"spec"`
 	Status struct {
 		Capacity    map[string]string `json:"capacity"`
 		Allocatable map[string]string `json:"allocatable"`
@@ -279,6 +299,10 @@ func aggregate(data []byte) (Snapshot, error) {
 		snap.TotalCPUCores += n.CPUCores
 		snap.TotalMemoryGiB += n.MemoryGiB
 		snap.TotalGPUs += n.GPUCapacity
+		snap.GPUAllocatable += n.GPUAllocatable
+		if n.Schedulable {
+			snap.GPUSchedulable += n.GPUAllocatable
+		}
 		if n.GPUCapacity > 0 {
 			snap.GPUNodes++
 		}
@@ -314,6 +338,127 @@ func aggregate(data []byte) (Snapshot, error) {
 	return snap, nil
 }
 
+type podList struct {
+	Items []pod `json:"items"`
+}
+
+type pod struct {
+	Spec struct {
+		NodeName       string            `json:"nodeName"`
+		Containers     []podContainer    `json:"containers"`
+		InitContainers []podContainer    `json:"initContainers"`
+		ResourceClaims []json.RawMessage `json:"resourceClaims"`
+		Overhead       map[string]string `json:"overhead"`
+	} `json:"spec"`
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+type podContainer struct {
+	RestartPolicy string `json:"restartPolicy"`
+	Resources     struct {
+		Requests map[string]string `json:"requests"`
+		Claims   []json.RawMessage `json:"claims"`
+	} `json:"resources"`
+}
+
+func attachGPUAllocations(ctx context.Context, r Reader, snap *Snapshot) {
+	reader, ok := r.(podReader)
+	if !ok {
+		return
+	}
+	raw, err := reader.ListPods(ctx, "")
+	if err != nil {
+		snap.GPUAllocationError = fmt.Sprintf("list pods: %v", err)
+		return
+	}
+	var pods podList
+	if err := json.Unmarshal(raw, &pods); err != nil {
+		snap.GPUAllocationError = fmt.Sprintf("decode pods: %v", err)
+		return
+	}
+	allocatedByNode := map[string]int64{}
+	for _, pod := range pods.Items {
+		if pod.Spec.NodeName == "" || pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
+			continue
+		}
+		request, supported := podGPURequest(pod)
+		if !supported {
+			snap.GPUAllocationError = "active pod uses an unsupported MIG or dynamic-resource allocation"
+			return
+		}
+		allocatedByNode[pod.Spec.NodeName] += request
+	}
+	snap.GPUAllocationKnown = true
+	for i := range snap.Nodes {
+		allocated := allocatedByNode[snap.Nodes[i].Name]
+		available := int64(0)
+		if snap.Nodes[i].Schedulable {
+			available = snap.Nodes[i].GPUAllocatable - allocated
+		}
+		if available < 0 {
+			available = 0
+		}
+		snap.Nodes[i].GPUAllocated = &allocated
+		snap.Nodes[i].GPUAvailable = &available
+		snap.GPUAllocated += allocated
+		snap.GPUAvailable += available
+	}
+}
+
+func podGPURequest(p pod) (int64, bool) {
+	if len(p.Spec.ResourceClaims) > 0 {
+		return 0, false
+	}
+	appRequest := int64(0)
+	for _, container := range p.Spec.Containers {
+		request, supported := containerGPURequest(container)
+		if !supported {
+			return 0, false
+		}
+		appRequest += request
+	}
+	restartableInitRequest := int64(0)
+	peakInitRequest := int64(0)
+	for _, container := range p.Spec.InitContainers {
+		request, supported := containerGPURequest(container)
+		if !supported {
+			return 0, false
+		}
+		if container.RestartPolicy == "Always" {
+			restartableInitRequest += request
+			if restartableInitRequest > peakInitRequest {
+				peakInitRequest = restartableInitRequest
+			}
+			continue
+		}
+		if request += restartableInitRequest; request > peakInitRequest {
+			peakInitRequest = request
+		}
+	}
+	appRequest += restartableInitRequest
+	if peakInitRequest > appRequest {
+		appRequest = peakInitRequest
+	}
+	if overhead, ok := p.Spec.Overhead[gpuResourceKey]; ok {
+		appRequest += quantityValue(overhead)
+	}
+	return appRequest, true
+}
+
+func containerGPURequest(container podContainer) (int64, bool) {
+	if len(container.Resources.Claims) > 0 {
+		return 0, false
+	}
+	for resource := range container.Resources.Requests {
+		if strings.HasPrefix(resource, "nvidia.com/mig-") {
+			return 0, false
+		}
+	}
+	return quantityValue(container.Resources.Requests[gpuResourceKey]), true
+}
+
 // parseNode reads one Node object into a Node row.
 func parseNode(obj nodeObj) Node {
 	labels := obj.Metadata.Labels
@@ -323,10 +468,12 @@ func parseNode(obj nodeObj) Node {
 	siteLabel, site := firstLabelWithKey(labels, unboundedSiteLabels...)
 	regionLabel, region := firstLabelWithKey(labels, regionLabels...)
 	zoneLabel, zone := firstLabelWithKey(labels, zoneLabels...)
+	ready := isReady(obj)
 	return Node{
 		Name:           obj.Metadata.Name,
 		UID:            obj.Metadata.UID,
-		Ready:          isReady(obj),
+		Ready:          ready,
+		Schedulable:    ready && !obj.Spec.Unschedulable,
 		AgentPool:      agentPool,
 		AgentPoolLabel: agentPoolLabel,
 		SKU:            firstLabel(labels, skuLabels...),

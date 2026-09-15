@@ -28,6 +28,7 @@ const timestamp = (value?: string) => value ? <time dateTime={value}>{new Date(v
 const bytes = (value?: number | null) => value === undefined || value === null ? 'Unknown' : value.toLocaleString();
 const seconds = (value?: number | null) => value === undefined || value === null ? 'Unknown' : `${n1(value)}s`;
 const bandwidth = (value?: number | null) => value === undefined || value === null ? 'Unknown' : `${n1(value)} GB/s`;
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0;
 const historicalLabel = (value: RDMAHistoricalStatus) => value === 'pass' ? 'Passed' : value === 'fail' ? 'Failed' : 'Unknown';
 const freshnessLabel = (value: RDMAFreshness) => ({
   fresh: 'Fresh', stale: 'Stale', unknown: 'Unknown', not_applicable: 'Not applicable',
@@ -304,15 +305,7 @@ function FleetFabricMap({
   return <section className="fabric-map" aria-label={useUnboundedSites ? 'GPU InfiniBand fabric by Unbounded site' : 'GPU fleet by region and pool'}>
     <div className="fabric-map-head">
       <h3>GPU Dashboard</h3>
-      <div className="fabric-legend" aria-label="Fabric map legend">
-        <span><i className="legend-line passed"/>Passed run path</span>
-        <span><i className="legend-line failed"/>Failed or fault</span>
-        <span><i className="legend-line unknown"/>Unknown / unverified</span>
-      </div>
     </div>
-    {!latest && <div className="fabric-no-link"><EvidenceBadge state="unknown"/>
-      <span>No recorded two-GPU inter-node NCCL validation run is available for this workspace and cluster. RDMA advertisement and node link checks below remain separate capability signals.</span>
-    </div>}
     {!useUnboundedSites && nodes.length > 0 && <div className="fabric-no-link">
       <EvidenceBadge state="unknown"/>
       <span>Unbounded site visualization is unavailable; no GPU node has a supported site label.</span>
@@ -372,9 +365,17 @@ function FleetFabricMap({
                   const usage = nodeUtil.find(sample => sample.instance === node.name);
                   return <article className={`fabric-node${tested ? ` tested ${latest?.state || 'unknown'}` : ''}`} key={node.name}>
                     <div className="fabric-node-head"><strong>{node.name}</strong>
-                      <span className={`fabric-capability ${rdmaAdvertised ? 'rdma' : 'unknown'}`}>{rdmaAdvertised ? 'RDMA advertised' : 'No RDMA resource'}</span>
+                      <div className="fabric-node-badges">
+                        <span className={`fabric-capability ${!node.ready ? 'fault' : node.schedulable === false ? 'warning' : ''}`}>
+                          {!node.ready ? 'Not Ready' : node.schedulable === false ? 'Scheduling disabled' : 'Ready'}
+                        </span>
+                        <span className={`fabric-capability ${rdmaAdvertised ? 'rdma' : 'unknown'}`}>{rdmaAdvertised ? 'RDMA advertised' : 'No RDMA resource'}</span>
+                      </div>
                     </div>
-                    <span>{node.gpuCapacity} × {gpuModelLabel(node)} · {node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
+                    <span>{node.gpuCapacity} × {gpuModelLabel(node)}{isCount(node.gpuAvailable) && isCount(node.gpuAllocated)
+                      ? ` · ${node.gpuAvailable} free · ${node.gpuAllocated} assigned`
+                      : ' · availability Unknown'}</span>
+                    <span>{node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
                     <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
                     {node.siteLabelConflict && <span className="warn">Unbounded site label conflict · canonical value shown</span>}
                     <div className="fabric-metrics">
@@ -416,6 +417,9 @@ function FleetInfiniBandEvidence() {
   const snapshot = inventoryQuery.data;
   const latest = latestQuery.data?.latest;
   const nodes = (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0);
+  const gpuSchedulable = snapshot?.gpuSchedulable ?? snapshot?.gpuAllocatable ?? snapshot?.totalGPUs ?? 0;
+  const gpuAllocationKnown = snapshot?.gpuAllocationKnown === true &&
+    isCount(snapshot.gpuAllocated) && isCount(snapshot.gpuAvailable) && isCount(gpuSchedulable);
   const telemetry = telemetryQuery.data?.gpus || [];
   const nodeUtil = nodeUtilQuery.data?.nodes || [];
   const nodeNames = new Set(nodes.map(node => node.name));
@@ -475,20 +479,22 @@ function FleetInfiniBandEvidence() {
         `${source.name}: ${source.query.error?.message || 'request failed'}`).join('; ')}. Available sources remain visible and missing evidence stays Unknown.</Note>}
       {hasData && <>
         <dl className="evidence-strip" aria-label="Fleet operational summary">
-          <div><dt>Fleet capacity</dt><dd>{snapshot ? `${snapshot.readyNodes}/${snapshot.totalNodes} nodes ready` : 'Unknown'}</dd><span>{snapshot
+          <div><dt>Node health</dt><dd>{snapshot ? `${snapshot.readyNodes}/${snapshot.totalNodes} nodes ready` : 'Unknown'}</dd><span>{snapshot
             ? `${snapshot.totalCPUCores} CPU · ${n1(snapshot.totalMemoryGiB)} GiB`
             : `${nodeUtilQuery.data?.nodes?.length || 0} node utilization records`}</span></div>
-          <div><dt>GPU inventory</dt><dd>{snapshot ? `${snapshot.totalGPUs} GPUs` : 'Unknown'}</dd><span>{snapshot
-            ? `${nodes.length} GPU nodes · ${snapshot.skus?.length || 0} SKUs`
+          <div><dt>GPU availability</dt><dd>{gpuAllocationKnown ? `${snapshot.gpuAvailable} free` : 'Unknown'}</dd><span>{snapshot
+            ? gpuAllocationKnown
+              ? `${snapshot.gpuAllocated} assigned · ${gpuSchedulable} schedulable`
+              : `${gpuSchedulable} schedulable · active assignments unavailable`
             : `${telemetry.length} GPU telemetry records`}</span></div>
           <div><dt>GPU utilization</dt><dd>{utilization.average === null ? 'Unknown' : `${n1(utilization.average)}% avg`}</dd><span>{utilization.observed}/{canCorrelateInventory ? snapshot?.totalGPUs : telemetry.length} {canCorrelateInventory ? 'inventory GPUs' : 'telemetry records'} observed</span></div>
           <div><dt>GPU health telemetry</dt><dd>{healthFaults.length ? `${healthFaults.length} fault` : knownHealth.length ? 'No observed faults' : 'Unknown'}</dd><span>{knownHealth.length}/{canCorrelateInventory ? snapshot?.totalGPUs : telemetry.length} {canCorrelateInventory ? 'inventory GPUs' : 'telemetry records'} observed</span></div>
           <div><dt>InfiniBand</dt><dd>{snapshot ? `${snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}/${snapshot.gpuNodes} RDMA nodes` : 'Unknown'}</dd><span>{snapshot
             ? `GPU/NVLink ${gpuConditionCoveredGPUs}/${snapshot.totalGPUs} · IB ${ibConditionCoveredGPUs}/${snapshot.totalGPUs} GPUs covered`
             : 'Inventory-dependent capability and coverage'}</span></div>
-          <div><dt>Latest run</dt><dd>{latest ? stateLabel(latest.state) : 'Unknown'}</dd><span>{latest
-            ? `${topologySite(latest.actual?.site, latest.actual?.siteProvider, latest.actual?.siteMode)}${latest.actual?.pool ? ` / ${latest.actual.pool}` : ''}`
-            : 'Unknown'}</span></div>
+          {latest && <div><dt>Latest validation</dt><dd>{stateLabel(latest.state)}</dd><span>
+            {`${topologySite(latest.actual?.site, latest.actual?.siteProvider, latest.actual?.siteMode)}${latest.actual?.pool ? ` / ${latest.actual.pool}` : ''}`}
+          </span></div>}
         </dl>
         <div className="source-freshness" aria-label="Fleet data source freshness">
           <span><strong>Inventory</strong> {sourceFreshness(inventoryQuery)}</span>

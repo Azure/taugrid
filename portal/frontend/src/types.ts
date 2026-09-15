@@ -41,10 +41,12 @@ export interface Cluster extends Scoped {
 }
 export interface Nodes extends Scoped {
   totalNodes: number; readyNodes: number; gpuNodes: number; totalGPUs: number;
+  gpuAllocatable: number; gpuSchedulable: number; gpuAllocated: number; gpuAvailable: number; gpuAllocationKnown: boolean; gpuAllocationError?: string;
   totalCPUCores: number; totalMemoryGiB: number; rdmaAdvertisedGpuNodes?: number;
   skus: { sku: string; nodes: number; gpus: number }[];
   nodes: { name: string; uid?: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
-    cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuProduct?: string; ready: boolean;
+    cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuAllocatable?: number;
+    gpuAllocated?: number; gpuAvailable?: number; gpuProduct?: string; ready: boolean; schedulable?: boolean;
     agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
     rdmaResources?: { name: string; capacity: number; allocatable: number }[];
     operationalConditions?: {

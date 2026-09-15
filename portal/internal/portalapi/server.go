@@ -1092,8 +1092,11 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "nodes board unavailable: portal started without Kubernetes access")
 		return
 	}
-	includeDaemonSets := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
-	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{IncludeDaemonSets: includeDaemonSets})
+	includeClusterWide := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
+	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{
+		IncludeDaemonSets:  includeClusterWide,
+		IncludeAllocations: includeClusterWide,
+	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return

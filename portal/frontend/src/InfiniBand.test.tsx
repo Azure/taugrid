@@ -67,10 +67,37 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
     expect(await screen.findByText(/3\/3 nodes ready/)).toBeVisible();
+    expect(screen.getByText('1 free')).toBeVisible();
+    expect(screen.getByText(/2 assigned · 3 schedulable/)).toBeVisible();
     expect(screen.getByText('63%')).toBeVisible();
-    expect(await screen.findAllByText(/two-GPU inter-node RDMA validation/)).not.toHaveLength(0);
-    expect(screen.getByText(/covers only recorded GPUs/)).toBeVisible();
-    expect(screen.getByText(/multi-site distributed training/)).toBeVisible();
+  });
+
+  it('does not claim free GPUs when active assignments are unavailable', async () => {
+    const unknownAllocations = {
+      ...fleetNodes,
+      gpuAllocated: 0,
+      gpuAvailable: 0,
+      gpuAllocationKnown: false,
+      nodes: fleetNodes.nodes.map(node => ({
+        ...node,
+        gpuAllocated: undefined,
+        gpuAvailable: undefined,
+      })),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(unknownAllocations));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(url.includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 }));
+    }));
+    renderPortal('/portal/fleet');
+
+    const availability = (await screen.findByText('GPU availability')).parentElement;
+    expect(availability).not.toBeNull();
+    expect(within(availability!).getByText('Unknown')).toBeVisible();
+    expect(within(availability!).getByText(/3 schedulable · active assignments unavailable/)).toBeVisible();
+    expect(screen.queryByText('3 free')).not.toBeInTheDocument();
   });
 
   it('shows deterministic loading and empty/unknown states', async () => {
@@ -82,7 +109,19 @@ describe('InfiniBand fleet validation', () => {
     resolveFetch?.(json({}));
 
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => Promise.resolve(json(
-      String(input).includes('/nodes') ? { ...fleetNodes, totalNodes: 0, gpuNodes: 0, totalGPUs: 0, rdmaAdvertisedGpuNodes: 0, nodes: [], skus: [] } :
+      String(input).includes('/nodes') ? {
+        ...fleetNodes,
+        totalNodes: 0,
+        gpuNodes: 0,
+        totalGPUs: 0,
+        gpuAllocatable: 0,
+        gpuSchedulable: 0,
+        gpuAllocated: 0,
+        gpuAvailable: 0,
+        rdmaAdvertisedGpuNodes: 0,
+        nodes: [],
+        skus: [],
+      } :
         String(input).includes('/cluster') ? { ...fleetGPUHealth, totalGPUs: 0, gpus: [] } :
           String(input).includes('/nodeutil') ? { ...fleetNodeUtil, nodes: [] } :
         String(input).includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 },
@@ -191,7 +230,7 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getAllByText(/Region eastus2euap/)).not.toHaveLength(0);
     expect(screen.getByText('Passed · 2-GPU run path')).toBeVisible();
     expect(screen.getByText(/h200-node-a \/ GPU-aaaaaaaa ↔ h200-node-b \/ GPU-bbbbbbbb/)).toBeVisible();
-    expect(screen.getAllByText('RDMA advertised', { selector: '.fabric-capability' })).toHaveLength(2);
+    expect(screen.getAllByText(/RDMA advertised/, { selector: '.fabric-capability' })).toHaveLength(2);
     expect(screen.getByText(/other GPUs in the site are not implied validated/)).toBeVisible();
     expect(screen.getAllByRole('link', { name: /GPU details/ }).some(link =>
       link.getAttribute('href')?.includes('instance=h200-node-a'))).toBe(true);
@@ -209,7 +248,7 @@ describe('InfiniBand fleet validation', () => {
     });
   });
 
-  it('distinguishes node capability checks from an absent inter-node run', async () => {
+  it('keeps node capability visible without unsolicited absent-run text', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
@@ -219,9 +258,10 @@ describe('InfiniBand fleet validation', () => {
     }));
     renderPortal('/portal/fleet');
 
-    expect(await screen.findByText(/No recorded two-GPU inter-node NCCL validation run/)).toBeVisible();
-    expect(screen.getByText(/RDMA advertisement and node link checks below remain separate capability signals/)).toBeVisible();
-    expect(screen.getAllByText('RDMA advertised', { selector: '.fabric-capability' })).toHaveLength(2);
+    await screen.findByRole('heading', { name: 'GPU Dashboard' });
+    expect(screen.queryByText(/No recorded two-GPU inter-node NCCL validation run/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Latest validation')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/RDMA advertised/, { selector: '.fabric-capability' })).toHaveLength(2);
   });
 
   it('labels a raw gpu pool with the inferred NVIDIA model', async () => {
