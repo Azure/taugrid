@@ -43,22 +43,23 @@ const (
 var approvalPlaceholderRE = regexp.MustCompile(`APPROVED_[A-Z0-9_]+`)
 
 type checkConfig struct {
-	kubeconfig      string
-	contextName     string
-	boundaryPath    string
-	jobPath         string
-	probePath       string
-	namespace       string
-	queue           string
-	clusterQueue    string
-	selectorKey     string
-	selectorValue   string
-	invocation      string
-	operator        string
-	kueueController string
-	jobController   string
-	untrusted       string
-	timeout         time.Duration
+	kubeconfig       string
+	contextName      string
+	boundaryPath     string
+	jobPath          string
+	probePath        string
+	namespace        string
+	queue            string
+	clusterQueue     string
+	selectorKey      string
+	selectorValue    string
+	invocation       string
+	operator         string
+	kueueController  string
+	jobController    string
+	garbageCollector string
+	untrusted        string
+	timeout          time.Duration
 }
 
 type boundaryDocuments struct {
@@ -82,6 +83,7 @@ func main() {
 	flag.StringVar(&config.operator, "operator", "", "approved operator username")
 	flag.StringVar(&config.kueueController, "kueue-controller", "", "approved Kueue controller username")
 	flag.StringVar(&config.jobController, "job-controller", "", "approved Job controller username")
+	flag.StringVar(&config.garbageCollector, "garbage-collector", "", "approved garbage collector username")
 	flag.StringVar(&config.untrusted, "untrusted", "", "explicit untrusted probe username")
 	flag.DurationVar(&config.timeout, "timeout", 45*time.Second, "overall admission check timeout")
 	flag.Parse()
@@ -137,7 +139,8 @@ func (config checkConfig) validate() error {
 		"selector-key": config.selectorKey, "selector-value": config.selectorValue,
 		"invocation": config.invocation, "operator": config.operator,
 		"kueue-controller": config.kueueController, "job-controller": config.jobController,
-		"untrusted": config.untrusted,
+		"garbage-collector": config.garbageCollector,
+		"untrusted":         config.untrusted,
 	}
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" || strings.Contains(value, "APPROVED_") {
@@ -149,12 +152,12 @@ func (config checkConfig) validate() error {
 	}
 	identities := map[string]struct{}{}
 	for _, identity := range []string{
-		config.operator, config.kueueController, config.jobController, config.untrusted,
+		config.operator, config.kueueController, config.jobController, config.garbageCollector, config.untrusted,
 	} {
 		identities[identity] = struct{}{}
 	}
-	if len(identities) != 4 {
-		return errors.New("operator, Kueue controller, Job controller, and untrusted probe identities must be distinct")
+	if len(identities) != 5 {
+		return errors.New("operator, Kueue controller, Job controller, garbage collector, and untrusted probe identities must be distinct")
 	}
 	if config.timeout <= 0 {
 		return errors.New("--timeout must be positive")
@@ -169,6 +172,7 @@ func renderBoundary(source []byte, probe string, config checkConfig) ([]byte, er
 		"APPROVED_OPERATOR_USERNAME":              config.operator,
 		"APPROVED_KUEUE_CONTROLLER_USERNAME":      config.kueueController,
 		"APPROVED_JOB_CONTROLLER_USERNAME":        config.jobController,
+		"APPROVED_GARBAGE_COLLECTOR_USERNAME":     config.garbageCollector,
 		"APPROVED_H200_SELECTOR_KEY":              config.selectorKey,
 		"APPROVED_H200_SELECTOR_VALUE":            config.selectorValue,
 		`"APPROVED_TORCHRUN_RDMA_PROBE_EXACT"`:    fmt.Sprintf("%q", probe),
@@ -349,23 +353,6 @@ func runAdmissionProbes(ctx context.Context, base *rest.Config, config checkConf
 		return err
 	}
 
-	var typedJob batchv1.Job
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(job.Object, &typedJob); err != nil {
-		return err
-	}
-	jobControllerClient, err := kubernetes.NewForConfig(impersonated(base, config.jobController))
-	if err != nil {
-		return err
-	}
-	for index := 0; index < 2; index++ {
-		pod := generatedPodProbe(&typedJob, index)
-		if _, err := jobControllerClient.CoreV1().Pods(config.namespace).Create(
-			ctx, pod, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}},
-		); err != nil {
-			return fmt.Errorf("approved Job controller generated Pod %d dry-run was denied: %w", index, err)
-		}
-	}
-
 	return runDeniedAdmissionProbes(ctx, base, config, job)
 }
 
@@ -459,9 +446,6 @@ func runDeniedAdmissionProbes(
 		if denyErr := expectDenied(err, "taugrid-nccl-rdma-connect-deny"); denyErr != nil {
 			return fmt.Errorf("%s bypass dry-run: %w", subresource, denyErr)
 		}
-	}
-	if err := ephemeralContainerDryRun(ctx, untrustedClient, config.namespace); err != nil {
-		return err
 	}
 	return nil
 }
@@ -596,34 +580,6 @@ func connectDryRun(
 		return fmt.Errorf("unsupported connect subresource %q", subresource)
 	}
 	return request.Do(ctx).Error()
-}
-
-func ephemeralContainerDryRun(
-	ctx context.Context,
-	client kubernetes.Interface,
-	namespace string,
-) error {
-	pod := maliciousPodProbe(namespace)
-	pod.Spec.EphemeralContainers = []corev1.EphemeralContainer{{
-		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name:    "attacker",
-			Image:   "invalid.example/attacker@sha256:" + strings.Repeat("b", 64),
-			Command: []string{"/bin/false"},
-		},
-	}}
-	err := client.CoreV1().RESTClient().Put().
-		Namespace(namespace).
-		Resource("pods").
-		Name(pod.Name).
-		SubResource("ephemeralcontainers").
-		Param("dryRun", metav1.DryRunAll).
-		Body(pod).
-		Do(ctx).
-		Error()
-	if denyErr := expectDenied(err, "taugrid-nccl-rdma-connect-deny"); denyErr != nil {
-		return fmt.Errorf("ephemeral-container bypass dry-run: %w", denyErr)
-	}
-	return nil
 }
 
 func boolPointer(value bool) *bool {

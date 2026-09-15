@@ -230,6 +230,7 @@ export NCCL_RDMA_CLUSTER='<lowercase telemetry cluster ID>'
 export NCCL_RDMA_OPERATOR_USERNAME='<exact approved operator username>'
 export NCCL_RDMA_KUEUE_CONTROLLER_USERNAME='<exact Kueue controller username>'
 export NCCL_RDMA_JOB_CONTROLLER_USERNAME='<exact Job controller username>'
+export NCCL_RDMA_GARBAGE_COLLECTOR_USERNAME='<exact garbage collector username>'
 export NCCL_RDMA_UNTRUSTED_USERNAME='<explicit distinct untrusted probe username>'
 
 # Read-only except for a non-persisting server-side admission dry-run: validates

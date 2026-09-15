@@ -91,6 +91,7 @@ func TestNCCLRDMASecurityBoundaryFixture(t *testing.T) {
 		"APPROVED_OPERATOR_USERNAME",
 		"APPROVED_KUEUE_CONTROLLER_USERNAME",
 		"APPROVED_JOB_CONTROLLER_USERNAME",
+		"APPROVED_GARBAGE_COLLECTOR_USERNAME",
 		`object.spec.completionMode == "Indexed"`,
 		`object.spec.completions == 2`,
 		`object.spec.parallelism == 2`,
@@ -158,6 +159,8 @@ func TestNCCLRDMASecurityBoundaryFixture(t *testing.T) {
 		`port.protocol == "TCP" && port.port == 53`,
 		`"kube-system"`,
 		`"kube-dns"`,
+		`request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME"`,
+		`oldObject.metadata.finalizers == ["foregroundDeletion"]`,
 	} {
 		require.Contains(t, allSupportCEL, required)
 	}

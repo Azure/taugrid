@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/rdmavalidation"
+	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,4 +71,26 @@ func TestNCCLRDMAArtifactRecorderRejectsInvalidTelemetryIDBeforeCreate(t *testin
 		time.Date(2026, time.September, 14, 20, 0, 0, 0, time.UTC),
 	)
 	require.ErrorContains(t, recorder.requireInputs(), "workspace_id")
+}
+
+func TestNCCLRDMAArtifactRecorderPersistsContractPlacementFailure(t *testing.T) {
+	raw, err := e2e.ReadRepoFile("core/rdmavalidation/testdata/pass.golden.json")
+	require.NoError(t, err)
+	var result rdmavalidation.Result
+	require.NoError(t, json.Unmarshal(raw, &result))
+	mismatch := false
+	result.Placement.MatchesRequest = &mismatch
+
+	path := filepath.Join(t.TempDir(), "placement-failure.json")
+	recorder := &ncclRDMAArtifactRecorder{t: t, path: path}
+	require.NoError(t, recorder.write(result))
+
+	written, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var stored rdmavalidation.Result
+	require.NoError(t, json.Unmarshal(written, &stored))
+	require.Equal(t, rdmavalidation.StatusFail, stored.Status)
+	require.Equal(t, rdmavalidation.ReasonPlacementMismatch, stored.Reason)
+	require.NotEmpty(t, stored.Measurements.Samples)
+	require.NotEmpty(t, stored.Evidence)
 }

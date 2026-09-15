@@ -86,11 +86,20 @@ spec:
       (request.operation == "CREATE" &&
        request.userInfo.username == "APPROVED_OPERATOR_USERNAME") ||
       (request.operation == "UPDATE" &&
-       request.userInfo.username in [
-         "APPROVED_KUEUE_CONTROLLER_USERNAME",
-         "APPROVED_JOB_CONTROLLER_USERNAME"
-       ])
-    message: Only the approved operator may create; only Kueue and the Job controller may update the diagnostic Job.
+       (
+         request.userInfo.username in [
+           "APPROVED_KUEUE_CONTROLLER_USERNAME",
+           "APPROVED_JOB_CONTROLLER_USERNAME"
+         ] ||
+         (
+           request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+           has(oldObject.metadata.deletionTimestamp) &&
+           has(oldObject.metadata.finalizers) &&
+           oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+           (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+         )
+       ))
+    message: Only the approved operator may create; only Kueue, the Job controller, or the garbage collector's deletion-finalizer transition may update the diagnostic Job.
   - expression: >-
       object.metadata.name == "e2e-nccl-rdma-2x1xh200" &&
       object.metadata.namespace == "taugrid-rdma-diagnostic" &&
@@ -444,7 +453,14 @@ spec:
         (
           (!has(object.metadata.finalizers) && !has(oldObject.metadata.finalizers)) ||
           (has(object.metadata.finalizers) && has(oldObject.metadata.finalizers) &&
-           object.metadata.finalizers == oldObject.metadata.finalizers)
+           object.metadata.finalizers == oldObject.metadata.finalizers) ||
+          (
+            request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+            has(oldObject.metadata.deletionTimestamp) &&
+            has(oldObject.metadata.finalizers) &&
+            oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+            (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+          )
         ) &&
         (
           (!has(object.metadata.ownerReferences) &&
@@ -501,8 +517,17 @@ spec:
   - name: diagnostic-namespace-only
     expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
   validations:
-  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
-    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
   - expression: >-
       object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
       object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
@@ -560,8 +585,17 @@ spec:
   - name: diagnostic-namespace-only
     expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
   validations:
-  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
-    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
   - expression: >-
       object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
       object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
@@ -620,8 +654,17 @@ spec:
   - name: diagnostic-namespace-only
     expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
   validations:
-  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
-    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
   - expression: >-
       object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
       object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
@@ -681,8 +724,17 @@ spec:
   - name: diagnostic-namespace-only
     expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
   validations:
-  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
-    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
   - expression: >-
       object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
       object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
@@ -759,8 +811,17 @@ spec:
   - name: diagnostic-namespace-only
     expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
   validations:
-  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
-    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
   - expression: >-
       object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
       object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&

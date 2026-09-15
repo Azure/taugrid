@@ -77,6 +77,7 @@ func Finalize(result *Result) error {
 	if result.Cleanup.State == "" {
 		result.Cleanup.State = CleanupUnknown
 	}
+	*result = normalizeResult(*result)
 	evaluation := Evaluate(*result)
 	result.Status = evaluation.Status
 	result.Reason = evaluation.Reason
@@ -85,6 +86,7 @@ func Finalize(result *Result) error {
 }
 
 func Evaluate(result Result) Evaluation {
+	result = normalizeResult(result)
 	var failures []ValidationError
 	var unknowns []ValidationError
 	for _, observed := range result.Errors {
@@ -430,6 +432,7 @@ func duplicateNodeOrRank(result Result) bool {
 	nodes := map[string]bool{}
 	nodeUIDs := map[string]bool{}
 	gpuUUIDs := map[string]bool{}
+	nodesByName := map[string]NodeResult{}
 	for _, node := range result.Actual.Nodes {
 		if node.Name != "" && nodes[node.Name] || node.UID != "" && nodeUIDs[node.UID] || node.GPUUUID != "" && gpuUUIDs[node.GPUUUID] {
 			return true
@@ -438,10 +441,14 @@ func duplicateNodeOrRank(result Result) bool {
 		nodes[node.Name] = node.Name != ""
 		nodeUIDs[node.UID] = node.UID != ""
 		gpuUUIDs[node.GPUUUID] = node.GPUUUID != ""
+		if node.Name != "" {
+			nodesByName[node.Name] = node
+		}
 	}
 	podUIDs := map[string]bool{}
 	podNodes := map[string]string{}
 	podRanks := map[int]bool{}
+	podsByRank := map[int]PodResult{}
 	for _, pod := range result.Pods {
 		if pod.Rank < 0 || pod.Rank > 1 || podUIDs[pod.UID] || podRanks[pod.Rank] ||
 			pod.NodeName != "" && !nodes[pod.NodeName] {
@@ -450,15 +457,34 @@ func duplicateNodeOrRank(result Result) bool {
 		podUIDs[pod.UID] = true
 		podNodes[pod.UID] = pod.NodeName
 		podRanks[pod.Rank] = true
+		podsByRank[pod.Rank] = pod
 	}
 	ranks := map[int]bool{}
+	rankPodUIDs := map[string]bool{}
+	rankNodeUIDs := map[string]bool{}
 	for _, rank := range result.Ranks {
 		if rank.Rank < 0 || rank.Rank > 1 || ranks[rank.Rank] ||
 			rank.PodUID != "" && !podUIDs[rank.PodUID] || rank.NodeUID != "" && !nodeUIDs[rank.NodeUID] ||
 			rank.PodUID != "" && rank.NodeName != "" && podNodes[rank.PodUID] != rank.NodeName {
 			return true
 		}
+		if expectedPod, ok := podsByRank[rank.Rank]; ok {
+			if rank.PodUID != "" && expectedPod.UID != "" && rank.PodUID != expectedPod.UID ||
+				rank.NodeName != "" && expectedPod.NodeName != "" && rank.NodeName != expectedPod.NodeName {
+				return true
+			}
+		}
+		if expectedNode, ok := nodesByName[rank.NodeName]; ok &&
+			rank.NodeUID != "" && expectedNode.UID != "" && rank.NodeUID != expectedNode.UID {
+			return true
+		}
+		if rank.PodUID != "" && rankPodUIDs[rank.PodUID] ||
+			rank.NodeUID != "" && rankNodeUIDs[rank.NodeUID] {
+			return true
+		}
 		ranks[rank.Rank] = true
+		rankPodUIDs[rank.PodUID] = rank.PodUID != ""
+		rankNodeUIDs[rank.NodeUID] = rank.NodeUID != ""
 	}
 	exits := map[int]bool{}
 	for _, exit := range result.RankExits {

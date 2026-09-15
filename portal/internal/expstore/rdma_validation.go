@@ -126,7 +126,7 @@ func ProjectRDMAValidation(
 		projection.Run.ResultURI = link.URI
 		size := link.SizeBytes
 		projection.Artifact = &ArtifactRecord{
-			ArtifactID:  result.ValidationID + "-result",
+			ArtifactID:  fmt.Sprintf("%s-%s-attempt-%d-result", result.WorkspaceID, result.ValidationID, result.Attempt),
 			RunID:       result.RunID,
 			Type:        rdmavalidation.ArtifactType,
 			URI:         link.URI,

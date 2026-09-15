@@ -107,6 +107,7 @@ func TestProjectRDMAValidationLifecycleAndArtifactLinkage(t *testing.T) {
 		t.Fatalf("succeeded classification = %+v", classification)
 	}
 	if first.Artifact == nil ||
+		first.Artifact.ArtifactID != result.WorkspaceID+"-"+result.ValidationID+"-attempt-1-result" ||
 		first.Artifact.Type != rdmavalidation.ArtifactType ||
 		first.Artifact.ContentType != rdmavalidation.ArtifactContentType ||
 		first.Artifact.URI != link.URI ||
@@ -499,6 +500,58 @@ func TestRDMAValidationProjectionPersistsExistingPortalRecords(t *testing.T) {
 	if len(artifacts) != 1 || artifacts[0].Type != rdmavalidation.ArtifactType ||
 		artifacts[0].Digest != link.SHA256 {
 		t.Fatalf("stored artifacts = %+v", artifacts)
+	}
+
+	attemptTwo := result
+	attemptTwo.Attempt = 2
+	attemptTwo.RunID = result.RunID + "-retry"
+	rawTwo, err := rdmavalidation.MarshalCanonical(attemptTwo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkTwo := rdmavalidation.ArtifactLink{
+		URI:         "file:///immutable/rdma-validation/" + attemptTwo.RunID + ".json",
+		SHA256:      sha256Bytes(rawTwo),
+		SizeBytes:   int64(len(rawTwo)),
+		FinalizedAt: link.FinalizedAt.Add(time.Minute),
+	}
+	projectionTwo, err := ProjectRDMAValidation(attemptTwo, &linkTwo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectionTwo.Artifact == nil || projectionTwo.Artifact.ArtifactID == projection.Artifact.ArtifactID {
+		t.Fatalf("attempt artifact IDs are not distinct: first=%+v second=%+v", projection.Artifact, projectionTwo.Artifact)
+	}
+	metricPathTwo := filepath.Join("metrics", attemptTwo.RunID, projectionTwo.Phase+".parquet")
+	absoluteMetricPathTwo := filepath.Join(store.Root, metricPathTwo)
+	if err := os.MkdirAll(filepath.Dir(absoluteMetricPathTwo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := parquet.WriteFile(absoluteMetricPathTwo, projectionTwo.Metrics); err != nil {
+		t.Fatal(err)
+	}
+	fileTwo := MetricFileRecord{
+		FileID:        projectionTwo.MetricFileID,
+		Path:          metricPathTwo,
+		Format:        "parquet",
+		SchemaVersion: MetricSchemaVersion,
+		Project:       attemptTwo.ProjectID,
+		RunGroupID:    attemptTwo.RunGroupID,
+		RunID:         attemptTwo.RunID,
+		RowCount:      int64(len(projectionTwo.Metrics)),
+		CreatedAt:     linkTwo.FinalizedAt.Format(time.RFC3339Nano),
+	}
+	if _, err := store.RecordRunData(ctx, RecordRunDataOptions{
+		Run:             projectionTwo.Run,
+		Tags:            projectionTwo.Tags,
+		Artifacts:       []ArtifactRecord{*projectionTwo.Artifact},
+		MetricFiles:     []MetricFileRecord{fileTwo},
+		MetricSummaries: SummarizeMetricRows(fileTwo, projectionTwo.Metrics),
+		IdempotencyKey:  projectionTwo.IdempotencyKey,
+		Command:         "rdma validation attempt two fixture",
+		RequestHash:     projectionTwo.RequestHash,
+	}); err != nil {
+		t.Fatalf("persist second terminal attempt: %v", err)
 	}
 	rows, err := parquet.ReadFile[MetricRow](absoluteMetricPath)
 	if err != nil {

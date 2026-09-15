@@ -303,13 +303,15 @@ if preemption.get("borrowWithinCohort", {}).get("policy") != "Never":
 }
 
 validate_active_security_boundary() {
-  local operator kueue_controller job_controller untrusted
+  local operator kueue_controller job_controller garbage_collector untrusted
   operator="$(require_env NCCL_RDMA_OPERATOR_USERNAME)"
   kueue_controller="$(require_env NCCL_RDMA_KUEUE_CONTROLLER_USERNAME)"
   job_controller="$(require_env NCCL_RDMA_JOB_CONTROLLER_USERNAME)"
+  garbage_collector="$(require_env NCCL_RDMA_GARBAGE_COLLECTOR_USERNAME)"
   untrusted="$(require_env NCCL_RDMA_UNTRUSTED_USERNAME)"
   [[ "$operator" != APPROVED_* && "$kueue_controller" != APPROVED_* &&
-    "$job_controller" != APPROVED_* && "$untrusted" != APPROVED_* ]] \
+    "$job_controller" != APPROVED_* && "$garbage_collector" != APPROVED_* &&
+    "$untrusted" != APPROVED_* ]] \
     || fail "all admission identities must be exact; unresolved APPROVED_* values are forbidden"
 
   (
@@ -329,6 +331,7 @@ validate_active_security_boundary() {
       --operator "$operator" \
       --kueue-controller "$kueue_controller" \
       --job-controller "$job_controller" \
+      --garbage-collector "$garbage_collector" \
       --untrusted "$untrusted" \
       --timeout 45s
   ) || fail "active API-server-compiled NCCL/RDMA admission boundary or malicious dry-run probes failed"
@@ -622,6 +625,9 @@ prepare_result_contract() {
   [[ "$NCCL_RDMA_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] \
     || fail "NCCL_RDMA_RUN_ATTEMPT must be a positive integer"
   NCCL_RDMA_RESULT_PATH="${NCCL_RDMA_RESULT_PATH:-${launch_dir}/rdma-validation/${NCCL_RDMA_INVOCATION}.json}"
+  if [[ "$NCCL_RDMA_RESULT_PATH" != /* ]]; then
+    NCCL_RDMA_RESULT_PATH="${launch_dir}/${NCCL_RDMA_RESULT_PATH}"
+  fi
   [[ ! -e "$NCCL_RDMA_RESULT_PATH" ]] \
     || fail "immutable RDMA validation artifact already exists: $NCCL_RDMA_RESULT_PATH"
   export NCCL_RDMA_SOURCE_REVISION NCCL_RDMA_RUN_ID NCCL_RDMA_RUN_ATTEMPT NCCL_RDMA_RESULT_PATH

@@ -697,6 +697,7 @@ func TestNCCLRDMAHarnessIsCreateOnlyBoundedAndMutationScoped(t *testing.T) {
 		"NCCL_RDMA_OPERATOR_USERNAME",
 		"NCCL_RDMA_KUEUE_CONTROLLER_USERNAME",
 		"NCCL_RDMA_JOB_CONTROLLER_USERNAME",
+		"NCCL_RDMA_GARBAGE_COLLECTOR_USERNAME",
 		"NCCL_RDMA_UNTRUSTED_USERNAME",
 		"--boundary \"$SECURITY_BOUNDARY_FIXTURE\"",
 		"--request-timeout=",
@@ -924,6 +925,40 @@ echo "unexpected continuation" >&2
 	require.Error(t, err, string(output))
 	require.FileExists(t, cleanupMarker)
 	require.NotContains(t, string(output), "unexpected continuation")
+}
+
+func TestNCCLRDMAHarnessResolvesRelativeResultPathAgainstLaunchDirectory(t *testing.T) {
+	temp := t.TempDir()
+	launchDir := filepath.Join(temp, "launch")
+	require.NoError(t, os.MkdirAll(launchDir, 0o755))
+	fakeGit := filepath.Join(temp, "git")
+	require.NoError(t, os.WriteFile(fakeGit, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+case " $* " in
+  *" status --porcelain "*) exit 0 ;;
+  *" rev-parse HEAD "*) printf '%040d\n' 1 ;;
+  *) echo "unexpected fake git arguments: $*" >&2; exit 2 ;;
+esac
+`), 0o700))
+	command := exec.Command("bash", "-c", fmt.Sprintf(`
+cd "$LAUNCH_DIR"
+source %q
+prepare_result_contract
+printf '%%s' "$NCCL_RDMA_RESULT_PATH"
+`, ncclRDMAHarnessPath(t)))
+	command.Env = append(os.Environ(),
+		"PATH="+temp+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"LAUNCH_DIR="+launchDir,
+		"NCCL_RDMA_INVOCATION=nccl-rdma-0123456789abcdef0123456789abcdef",
+		"NCCL_RDMA_RESULT_PATH=relative/result.json",
+		"NCCL_RDMA_WORKSPACE_ID=taugrid-rdma",
+		"NCCL_RDMA_CLUSTER=h200-validation",
+		"NCCL_RDMA_EXPECTED_POOL=h200pool",
+		"NCCL_RDMA_EXPECTED_GPU_MODEL=NVIDIA H200",
+	)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, filepath.Join(launchDir, "relative/result.json"), string(output))
 }
 
 func TestNCCLRDMAHarnessCapacityPreflightUsesRequestsAndAllowsFifteenOfSixteenGPUs(t *testing.T) {

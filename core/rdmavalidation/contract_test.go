@@ -29,7 +29,11 @@ func TestEvaluateMissingEvidenceUnknownAndGolden(t *testing.T) {
 	result := validPassResult(t)
 	result.Actual.Nodes[0].GPUUUID = ""
 	result.Actual.Nodes[1].RDMAInterface = ""
-	result.Evidence[0].SHA256 = ""
+	for index := range result.Evidence {
+		if result.Evidence[index].Name == "sanitized-manifest" {
+			result.Evidence[index].SHA256 = ""
+		}
+	}
 	assertStatus(t, &result, StatusUnknown, ReasonEvidenceIntegrityMissing)
 	assertGolden(t, "missing-unknown.golden.json", result)
 }
@@ -83,6 +87,12 @@ func TestEvaluateTopologyAndRequiredEvidence(t *testing.T) {
 	t.Run("pod node mismatch fails", func(t *testing.T) {
 		result := validPassResult(t)
 		result.Pods[1].NodeName = "other-node"
+		assertStatus(t, &result, StatusFail, ReasonTopologyMismatch)
+	})
+	t.Run("rank identity must match corresponding pod", func(t *testing.T) {
+		result := validPassResult(t)
+		result.Ranks[1] = result.Ranks[0]
+		result.Ranks[1].Rank = 1
 		assertStatus(t, &result, StatusFail, ReasonTopologyMismatch)
 	})
 	t.Run("missing parameters is unknown", func(t *testing.T) {
@@ -257,6 +267,25 @@ func TestCanonicalHashIsDeterministic(t *testing.T) {
 	}
 	if leftHash != rightHash {
 		t.Fatalf("deterministic hash mismatch: %s != %s", leftHash, rightHash)
+	}
+}
+
+func TestFinalizeCanonicalizesBeforeDerivingIndexedErrors(t *testing.T) {
+	result := validPassResult(t)
+	result.Actual.Nodes[0], result.Actual.Nodes[1] = result.Actual.Nodes[1], result.Actual.Nodes[0]
+	result.Actual.Nodes[0].GPUUUID = ""
+
+	if err := Finalize(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusUnknown {
+		t.Fatalf("status = %s, want %s", result.Status, StatusUnknown)
+	}
+	if result.Actual.Nodes[0].Name != "h200-a" || result.Actual.Nodes[1].Name != "h200-b" {
+		t.Fatalf("nodes were not canonicalized before evaluation: %+v", result.Actual.Nodes)
+	}
+	if _, err := MarshalCanonical(result); err != nil {
+		t.Fatalf("MarshalCanonical() rejected finalized incomplete result: %v", err)
 	}
 }
 

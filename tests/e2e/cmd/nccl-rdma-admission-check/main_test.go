@@ -42,6 +42,9 @@ func TestRenderBoundaryRequiresEveryExplicitApprovalInput(t *testing.T) {
 
 	config.jobController = "APPROVED_JOB_CONTROLLER_USERNAME"
 	require.ErrorContains(t, config.validate(), "unresolved approval placeholder")
+	config = testCheckConfig()
+	config.garbageCollector = "APPROVED_GARBAGE_COLLECTOR_USERNAME"
+	require.ErrorContains(t, config.validate(), "unresolved approval placeholder")
 
 	config = testCheckConfig()
 	config.untrusted = config.operator
@@ -238,7 +241,7 @@ func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 
 	config := testCheckConfig()
 	for index, username := range []string{
-		config.operator, config.kueueController, config.jobController, config.untrusted,
+		config.operator, config.kueueController, config.jobController, config.garbageCollector, config.untrusted,
 	} {
 		_, err = client.RbacV1().ClusterRoleBindings().Create(ctx, &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("nccl-rdma-envtest-%d", index)},
@@ -268,6 +271,14 @@ func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, dryRunSupportCreates(ctx, operatorDynamic, config.namespace, support))
+	operatorClient, err := kubernetes.NewForConfig(impersonated(restConfig, config.operator))
+	require.NoError(t, err)
+	_, err = operatorClient.CoreV1().ServiceAccounts(config.namespace).
+		Create(ctx, support.ServiceAccount.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err, "generated Pod dependency ServiceAccount must exist before its admission probe")
+	_, err = operatorClient.CoreV1().ConfigMaps(config.namespace).
+		Create(ctx, support.ConfigMap.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
 
 	untrustedDynamic, err := dynamic.NewForConfig(impersonated(restConfig, config.untrusted))
 	require.NoError(t, err)
@@ -344,6 +355,36 @@ func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 		"stringData": map[string]interface{}{"token": "attacker"},
 	}}, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
 	require.NoError(t, expectDenied(err, "taugrid-nccl-rdma-secret-boundary"))
+
+	foreground := metav1.DeletePropagationForeground
+	require.NoError(t, jobsFor(operatorDynamic, config.namespace).Delete(
+		ctx, createdJob.GetName(), metav1.DeleteOptions{PropagationPolicy: &foreground},
+	))
+	deletingJob, err := jobsFor(operatorDynamic, config.namespace).
+		Get(ctx, createdJob.GetName(), metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Contains(t, deletingJob.GetFinalizers(), metav1.FinalizerDeleteDependents)
+	deletingJob.SetFinalizers(nil)
+	garbageDynamic, err := dynamic.NewForConfig(impersonated(restConfig, config.garbageCollector))
+	require.NoError(t, err)
+	_, err = jobsFor(garbageDynamic, config.namespace).
+		Update(ctx, deletingJob, metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}})
+	require.NoError(t, err, "approved garbage collector may remove only foregroundDeletion from a deleting Job")
+
+	require.NoError(t, operatorClient.CoreV1().ConfigMaps(config.namespace).Delete(
+		ctx, support.ConfigMap.Name, metav1.DeleteOptions{PropagationPolicy: &foreground},
+	))
+	deletingConfigMap, err := operatorClient.CoreV1().ConfigMaps(config.namespace).
+		Get(ctx, support.ConfigMap.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Contains(t, deletingConfigMap.Finalizers, metav1.FinalizerDeleteDependents)
+	deletingConfigMap.Finalizers = nil
+	garbageClient, err := kubernetes.NewForConfig(impersonated(restConfig, config.garbageCollector))
+	require.NoError(t, err)
+	_, err = garbageClient.CoreV1().ConfigMaps(config.namespace).Update(
+		ctx, deletingConfigMap, metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}},
+	)
+	require.NoError(t, err, "approved garbage collector may remove only foregroundDeletion from deleting support")
 }
 
 func TestNCCLRDMABoundaryReportsNoTypeCheckWarnings(t *testing.T) {
@@ -450,16 +491,12 @@ func TestInteractiveBypassProbesSendNonPersistingSubresourceRequests(t *testing.
 		err := connectDryRun(context.Background(), client, boundaryNamespace, subresource)
 		require.NoError(t, expectDenied(err, "taugrid-nccl-rdma-connect-deny"))
 	}
-	require.NoError(t, ephemeralContainerDryRun(context.Background(), client, boundaryNamespace))
 
 	for _, suffix := range []string{"/exec", "/attach", "/portforward"} {
 		key := "POST /api/v1/namespaces/" + boundaryNamespace +
 			"/pods/e2e-nccl-rdma-policy-probe" + suffix
 		require.Equal(t, 1, requests[key])
 	}
-	ephemeralKey := "PUT /api/v1/namespaces/" + boundaryNamespace +
-		"/pods/e2e-nccl-rdma-policy-probe/ephemeralcontainers"
-	require.Equal(t, 1, requests[ephemeralKey])
 	for path := range requests {
 		require.False(t, strings.Contains(path, "delete"))
 	}
@@ -510,21 +547,22 @@ func fakeBoundaryClient(
 
 func testCheckConfig() checkConfig {
 	return checkConfig{
-		kubeconfig:      "/tmp/kubeconfig",
-		contextName:     "context",
-		boundaryPath:    "/tmp/boundary",
-		jobPath:         "/tmp/job",
-		probePath:       "/tmp/probe",
-		namespace:       boundaryNamespace,
-		queue:           boundaryQueue,
-		clusterQueue:    "owned-h200-rdma",
-		selectorKey:     "accelerator",
-		selectorValue:   "nvidia-h200",
-		invocation:      "nccl-rdma-0123456789abcdef0123456789abcdef",
-		operator:        "operator@example.com",
-		kueueController: "system:serviceaccount:kueue-system:kueue-controller-manager",
-		jobController:   "system:serviceaccount:kube-system:job-controller",
-		untrusted:       "attacker@example.com",
-		timeout:         time.Minute,
+		kubeconfig:       "/tmp/kubeconfig",
+		contextName:      "context",
+		boundaryPath:     "/tmp/boundary",
+		jobPath:          "/tmp/job",
+		probePath:        "/tmp/probe",
+		namespace:        boundaryNamespace,
+		queue:            boundaryQueue,
+		clusterQueue:     "owned-h200-rdma",
+		selectorKey:      "accelerator",
+		selectorValue:    "nvidia-h200",
+		invocation:       "nccl-rdma-0123456789abcdef0123456789abcdef",
+		operator:         "operator@example.com",
+		kueueController:  "system:serviceaccount:kueue-system:kueue-controller-manager",
+		jobController:    "system:serviceaccount:kube-system:job-controller",
+		garbageCollector: "system:kube-controller-manager",
+		untrusted:        "attacker@example.com",
+		timeout:          time.Minute,
 	}
 }

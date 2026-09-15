@@ -47,6 +47,7 @@ import (
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/Azure/taugrid/tests/e2e/results"
@@ -612,6 +613,8 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 		recorder.addError(rdmavalidation.ReasonRuntimeError, "pods", "an Indexed Job pod failed before placement validation")
 	}
 	require.NoError(t, err)
+	require.NoError(t, requireNCCLRDMAEphemeralContainerDenied(tc.Ctx(), pods),
+		"the untrusted identity must not add ephemeral containers to owned diagnostic pods")
 	nodesByIndex, err := requireNCCLRDMAExactPlacement(pods,
 		os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"))
 	if err != nil {
@@ -688,6 +691,56 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, recorder.write(contract))
 	require.Equal(t, rdmavalidation.StatusPass, contract.Status)
+}
+
+func requireNCCLRDMAEphemeralContainerDenied(ctx context.Context, pods []corev1.Pod) error {
+	if len(pods) == 0 {
+		return fmt.Errorf("no owned diagnostic pod is available for the ephemeral-container denial probe")
+	}
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	loadingRules.ExplicitPath = strings.TrimSpace(os.Getenv("NCCL_RDMA_KUBECONFIG"))
+	overrides := &clientcmd.ConfigOverrides{
+		CurrentContext: strings.TrimSpace(os.Getenv("NCCL_RDMA_KUBE_CONTEXT")),
+	}
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+	if err != nil {
+		return fmt.Errorf("load explicit kubeconfig for ephemeral-container denial probe: %w", err)
+	}
+	config.Impersonate.UserName = strings.TrimSpace(os.Getenv("NCCL_RDMA_UNTRUSTED_USERNAME"))
+	if config.Impersonate.UserName == "" {
+		return fmt.Errorf("NCCL_RDMA_UNTRUSTED_USERNAME is required for the ephemeral-container denial probe")
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("create untrusted client for ephemeral-container denial probe: %w", err)
+	}
+	return verifyNCCLRDMAEphemeralContainerDenied(ctx, client, pods[0])
+}
+
+func verifyNCCLRDMAEphemeralContainerDenied(
+	ctx context.Context,
+	client kubernetes.Interface,
+	ownedPod corev1.Pod,
+) error {
+	pod := ownedPod.DeepCopy()
+	pod.Spec.EphemeralContainers = []corev1.EphemeralContainer{{
+		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+			Name:    "attacker",
+			Image:   "invalid.example/attacker@sha256:" + strings.Repeat("b", 64),
+			Command: []string{"/bin/false"},
+		},
+	}}
+	_, err := client.CoreV1().Pods(pod.Namespace).UpdateEphemeralContainers(
+		ctx, pod.Name, pod, metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}},
+	)
+	if err == nil {
+		return fmt.Errorf("ephemeral-container dry-run unexpectedly succeeded")
+	}
+	if !apierrors.IsForbidden(err) ||
+		!strings.Contains(err.Error(), "taugrid-nccl-rdma-connect-deny") {
+		return fmt.Errorf("ephemeral-container dry-run was not denied by the expected policy: %w", err)
+	}
+	return nil
 }
 
 type ownedNCCLRDMAResource struct {
