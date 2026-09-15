@@ -87,25 +87,26 @@ type Options struct {
 // (from millicores, so a 40-core node reads 40, not 40000); Memory in bytes and
 // a human GiB convenience; GPU counts are whole devices.
 type Node struct {
-	Name           string         `json:"name"`
-	Ready          bool           `json:"ready"`
-	AgentPool      string         `json:"agentPool,omitempty"`
-	AgentPoolLabel string         `json:"agentPoolLabel,omitempty"`
-	SKU            string         `json:"sku,omitempty"`
-	GPUProduct     string         `json:"gpuProduct,omitempty"`
-	Site           string         `json:"site,omitempty"`
-	SiteLabel      string         `json:"siteLabel,omitempty"`
-	Region         string         `json:"region,omitempty"`
-	RegionLabel    string         `json:"regionLabel,omitempty"`
-	Zone           string         `json:"zone,omitempty"`
-	ZoneLabel      string         `json:"zoneLabel,omitempty"`
-	CPUCores       int64          `json:"cpuCores"`
-	MemoryBytes    int64          `json:"memoryBytes"`
-	MemoryGiB      float64        `json:"memoryGiB"`
-	GPUCapacity    int64          `json:"gpuCapacity"`
-	GPUAllocatable int64          `json:"gpuAllocatable"`
-	RDMAResources  []RDMAResource `json:"rdmaResources,omitempty"`
-	Conditions     []Condition    `json:"operationalConditions,omitempty"`
+	Name              string         `json:"name"`
+	Ready             bool           `json:"ready"`
+	AgentPool         string         `json:"agentPool,omitempty"`
+	AgentPoolLabel    string         `json:"agentPoolLabel,omitempty"`
+	SKU               string         `json:"sku,omitempty"`
+	GPUProduct        string         `json:"gpuProduct,omitempty"`
+	Site              string         `json:"site,omitempty"`
+	SiteLabel         string         `json:"siteLabel,omitempty"`
+	SiteLabelConflict bool           `json:"siteLabelConflict,omitempty"`
+	Region            string         `json:"region,omitempty"`
+	RegionLabel       string         `json:"regionLabel,omitempty"`
+	Zone              string         `json:"zone,omitempty"`
+	ZoneLabel         string         `json:"zoneLabel,omitempty"`
+	CPUCores          int64          `json:"cpuCores"`
+	MemoryBytes       int64          `json:"memoryBytes"`
+	MemoryGiB         float64        `json:"memoryGiB"`
+	GPUCapacity       int64          `json:"gpuCapacity"`
+	GPUAllocatable    int64          `json:"gpuAllocatable"`
+	RDMAResources     []RDMAResource `json:"rdmaResources,omitempty"`
+	Conditions        []Condition    `json:"operationalConditions,omitempty"`
 }
 
 // RDMAResource is one device-plugin resource advertised by a node. Presence
@@ -329,6 +330,9 @@ func parseNode(obj nodeObj) Node {
 		GPUProduct:     labels[labelGPUProduct],
 		Site:           site,
 		SiteLabel:      siteLabel,
+		SiteLabelConflict: labels[labelUnboundedSite] != "" &&
+			labels[labelUnboundedLegacy] != "" &&
+			labels[labelUnboundedSite] != labels[labelUnboundedLegacy],
 		Region:         region,
 		RegionLabel:    regionLabel,
 		Zone:           zone,

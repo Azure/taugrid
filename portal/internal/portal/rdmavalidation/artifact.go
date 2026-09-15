@@ -120,8 +120,14 @@ func mapResult(result corevalidation.Result, metadata ArtifactMetadata, now time
 		if node.GPUUUID != "" {
 			gpus = []string{node.GPUUUID}
 		}
+		nodeSite, nodePool := node.Site, node.Pool
+		if result.Actual.SiteMode == "" {
+			nodeSite, nodePool = result.Actual.Site, result.Actual.Pool
+		}
 		nodes = append(nodes, Node{
-			Name: node.Name, UID: node.UID, Site: result.Actual.Site, Pool: result.Actual.Pool,
+			Name: node.Name, UID: node.UID,
+			Site: nodeSite, SiteSourceKey: node.SiteSourceKey, SiteLabelConflict: node.SiteLabelConflict,
+			Region: node.Region, Pool: nodePool,
 			GPUModel: node.GPUModel, GPUUUIDs: gpus, RDMADevices: devices,
 		})
 	}
@@ -178,7 +184,9 @@ func mapResult(result corevalidation.Result, metadata ArtifactMetadata, now time
 			ObservedAt: formatTime(result.ObservedAt), ValidUntil: formatTime(result.ValidUntil),
 			StaleAfterSeconds: int64Pointer(result.StaleAfterSeconds), AgeSeconds: age,
 			Requested: mapRequested(result, messageSizes), Actual: &Actual{
-				Site: result.Actual.Site, Pool: result.Actual.Pool, Nodes: nodes,
+				Site: result.Actual.Site, SiteProvider: result.Actual.SiteProvider,
+				SiteMode: SiteTopologyMode(result.Actual.SiteMode), Region: result.Actual.Region,
+				Pool: result.Actual.Pool, Nodes: nodes,
 			},
 			Placement: &Placement{
 				DistinctNodes: result.Placement.DistinctNodes, MatchesRequest: result.Placement.MatchesRequest,
@@ -246,7 +254,9 @@ func mapRequested(result corevalidation.Result, messageSizes []int64) *Requested
 	requested := &Requested{
 		NodeCount: intPointer(topology.NodeCount), PodCount: intPointer(topology.PodCount),
 		RankCount: intPointer(topology.RankCount), DistinctHostname: boolPointer(topology.DistinctHostname),
-		Site: topology.Site, Pool: topology.Pool, GPUModel: topology.GPUModel,
+		Site: topology.Site, SiteProvider: topology.SiteProvider,
+		SiteMode: SiteTopologyMode(topology.SiteMode), Region: topology.Region,
+		Pool: topology.Pool, GPUModel: topology.GPUModel,
 		GPUResource: resources.GPUResource, RDMAResource: resources.RDMAResource,
 		RDMAPerPod: intPointer(int(resources.RDMACount)), MessageSizesBytes: messageSizes,
 		WarmupIterations: intPointer(parameters.Warmup), Iterations: intPointer(parameters.Iterations),

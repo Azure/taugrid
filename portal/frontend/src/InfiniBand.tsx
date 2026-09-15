@@ -68,6 +68,19 @@ function actualGPUs(validation: RDMAValidation) {
   return nodes.reduce((total, node) => total + (node.gpuUuids?.length || 0), 0);
 }
 
+function topologySite(site?: string, provider?: string, mode?: string) {
+  if (mode === 'not_applicable') return 'Unbounded site not applicable';
+  if (mode === 'incomplete') return site ? `Unbounded site incomplete · ${site}` : 'Unbounded site incomplete';
+  if (mode === 'complete') return `${provider === 'unbounded' ? 'Unbounded site' : 'Site'} ${site || 'Unknown'}`;
+  return site || 'Unknown';
+}
+
+function validationSite(validation?: RDMAValidation | null) {
+  const actual = validation?.actual;
+  if (actual?.siteMode && actual.siteMode !== 'complete') return undefined;
+  return actual?.site;
+}
+
 function requestedCoverage(validation: RDMAValidation) {
   const requested = validation.requested;
   if (!requested) return 'Unknown';
@@ -78,7 +91,9 @@ function requestedCoverage(validation: RDMAValidation) {
   return [
     requested.nodeCount === undefined || requested.nodeCount === null ? undefined : `${requested.nodeCount} nodes`,
     gpus === undefined ? undefined : `${gpus} GPUs`,
-    requested.site, requested.pool, requested.gpuModel,
+    topologySite(requested.site, requested.siteProvider, requested.siteMode),
+    requested.region ? `Region ${requested.region}` : undefined,
+    requested.pool, requested.gpuModel,
   ].filter(Boolean).join(' · ') || 'Unknown';
 }
 
@@ -88,7 +103,9 @@ function actualCoverage(validation: RDMAValidation) {
   return [
     nodes === undefined ? undefined : `${nodes} nodes`,
     gpus === undefined ? undefined : `${gpus} GPUs`,
-    validation.actual?.site, validation.actual?.pool,
+    topologySite(validation.actual?.site, validation.actual?.siteProvider, validation.actual?.siteMode),
+    validation.actual?.region ? `Region ${validation.actual.region}` : undefined,
+    validation.actual?.pool,
     validation.placement?.matchesRequest === true ? 'matches request' :
       validation.placement?.matchesRequest === false ? 'does not match request' : undefined,
   ].filter(Boolean).join(' · ') || 'Unknown';
@@ -274,6 +291,7 @@ function FleetFabricMap({
 }) {
   const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
   const labeledSiteNodes = nodes.filter(node => node.site).length;
+  const conflictingSiteNodes = nodes.filter(node => node.siteLabelConflict).length;
   const useUnboundedSites = labeledSiteNodes > 0;
   const partialSiteCoverage = useUnboundedSites && labeledSiteNodes < nodes.length;
   const sites = new Map<string, { node: FleetNode; index: number }[]>();
@@ -283,18 +301,14 @@ function FleetFabricMap({
       : node.region || 'Region Unknown';
     sites.set(site, [...(sites.get(site) || []), { node, index }]);
   });
-  const validationSite = latest?.actual?.site;
+  const validationSiteName = validationSite(latest);
   const connectionNodes = latest?.actual?.nodes || [];
   const connectionGPUs = connectionNodes.flatMap(node =>
     (node.gpuUuids || []).map(uuid => `${node.name} / ${uuid}`));
 
   return <section className="fabric-map" aria-label={useUnboundedSites ? 'GPU InfiniBand fabric by Unbounded site' : 'GPU fleet by region and pool'}>
     <div className="fabric-map-head">
-      <div><h3>{useUnboundedSites ? 'GPU fabric by Unbounded site' : 'GPU fleet by region and pool'}</h3>
-        <p>{useUnboundedSites
-          ? <>Site boundaries use exact <code>unbounded-cloud.io/site</code> identity, with the exact <code>net.unbounded-cloud.io/site</code> migration fallback. Region and pool remain separate.</>
-          : <>No GPU node exposes a supported Unbounded site label. Region and pool are shown as placement only, not as a network-site boundary.</>}</p>
-      </div>
+      <h3>GPU Dashboard</h3>
       <div className="fabric-legend" aria-label="Fabric map legend">
         <span><i className="legend-swatch rdma"/>GPU on RDMA-advertised node</span>
         <span><i className="legend-line passed"/>Passed run path</span>
@@ -313,6 +327,10 @@ function FleetFabricMap({
       <EvidenceBadge state="unknown"/>
       <span>Unbounded site coverage is partial: {labeledSiteNodes}/{nodes.length} GPU nodes are labeled. Unlabeled nodes remain in the Unknown bucket.</span>
     </div>}
+    {conflictingSiteNodes > 0 && <div className="fabric-no-link" role="alert">
+      <EvidenceBadge state="unknown"/>
+      <span>{conflictingSiteNodes}/{nodes.length} GPU nodes have conflicting canonical and fallback site labels. Canonical values are shown; topology evidence remains conflicted.</span>
+    </div>}
     <div className="fabric-sites">
       {[...sites.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([site, siteNodes], siteIndex) => {
         const pools = new Map<string, { node: FleetNode; index: number }[]>();
@@ -325,7 +343,7 @@ function FleetFabricMap({
           total + ((entry.node.rdmaResources || []).length ? entry.node.gpuCapacity : 0), 0);
         const siteLabels = [...new Set(siteNodes.flatMap(entry => entry.node.siteLabel ? [entry.node.siteLabel] : []))].sort();
         const regions = [...new Set(siteNodes.flatMap(entry => entry.node.region ? [entry.node.region] : []))].sort();
-        const showConnection = useUnboundedSites && validationSite === site && connectionNodes.length > 0;
+        const showConnection = useUnboundedSites && validationSiteName === site && connectionNodes.length > 0;
         const groupLabel = useUnboundedSites ? `Unbounded site ${site}` : `Region ${site}`;
         return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={groupLabel} key={site}>
           <header><div><strong>{site}</strong>
@@ -364,6 +382,7 @@ function FleetFabricMap({
                     </div>
                     <span>{node.gpuCapacity} × {node.gpuProduct || node.sku || 'GPU model Unknown'} · {node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
                     <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
+                    {node.siteLabelConflict && <span className="warn">Unbounded site label conflict · canonical value shown</span>}
                     <div className="gpu-bank" aria-label={`${node.gpuCapacity} GPUs; ${rdmaAdvertised ? 'RDMA scheduling advertised' : 'RDMA scheduling not advertised'}`}>
                       {Array.from({ length: visibleGPUs }, (_, gpuIndex) =>
                         <i className={`gpu-chip ${rdmaAdvertised ? 'rdma' : 'unknown'}`} key={gpuIndex}/>)}
@@ -406,7 +425,7 @@ function FleetInfiniBandEvidence() {
     <Note>Capacity, utilization, health, and InfiniBand evidence share one topology, but remain independent signals. Unknown is never treated as idle, healthy, or connected.</Note>
     <BoardResult query={inventoryQuery} label="InfiniBand fleet inventory" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).">{snapshot => {
       const latest = latestQuery.data?.latest;
-      const validationSite = latest?.actual?.site;
+      const validationSiteName = validationSite(latest);
       const testedByName = new Map((latest?.actual?.nodes || []).map(node => [node.name, node]));
       const nodes = (snapshot.nodes || []).filter(node => node.gpuCapacity > 0);
       const telemetry = telemetryQuery.data?.gpus || [];
@@ -432,7 +451,9 @@ function FleetInfiniBandEvidence() {
           <div><dt>GPU utilization</dt><dd>{utilization.average === null ? 'Unknown' : `${n1(utilization.average)}% avg`}</dd><span>{utilization.observed}/{snapshot.totalGPUs} inventory GPUs observed</span></div>
           <div><dt>GPU health telemetry</dt><dd>{healthFaults.length ? `${healthFaults.length} fault` : knownHealth.length ? 'No observed faults' : 'Unknown'}</dd><span>{knownHealth.length}/{snapshot.totalGPUs} inventory GPUs observed</span></div>
           <div><dt>InfiniBand</dt><dd>{snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}/{snapshot.gpuNodes} RDMA nodes</dd><span>GPU/NVLink {gpuConditionCoveredGPUs}/{snapshot.totalGPUs} · IB {ibConditionCoveredGPUs}/{snapshot.totalGPUs} GPUs covered</span></div>
-          <div><dt>Latest run</dt><dd>{latest ? stateLabel(latest.state) : 'Unknown'}</dd><span>{known([validationSite, latest?.actual?.pool].filter(Boolean).join(' / '))}</span></div>
+          <div><dt>Latest run</dt><dd>{latest ? stateLabel(latest.state) : 'Unknown'}</dd><span>{latest
+            ? `${topologySite(latest.actual?.site, latest.actual?.siteProvider, latest.actual?.siteMode)}${latest.actual?.pool ? ` / ${latest.actual.pool}` : ''}`
+            : 'Unknown'}</span></div>
         </dl>
         {latestQuery.isError && <Note warn>Latest run coverage is unavailable; inventory capability is still shown independently.</Note>}
         {telemetryQuery.isError && <Note warn>Per-GPU ADX telemetry is unavailable; condition and inventory evidence remain independent.</Note>}
@@ -455,12 +476,13 @@ function FleetInfiniBandEvidence() {
             <Table headers={['Node / GPU', 'Site / region / pool', 'RDMA scheduling', 'Continuous GPU / NVLink', 'Continuous IB', 'Per-GPU ADX telemetry', 'Latest run evidence']}
             rows={nodes.map((node, index) => {
               const tested = testedByName.get(node.name);
-              const sameSite = node.site && validationSite ? node.site === validationSite ? 'same site' : 'different site' : 'site Unknown';
+              const sameSite = node.site && validationSiteName ? node.site === validationSiteName ? 'same site' : 'different site' : 'site Unknown';
               const telemetryDetail = gpuTelemetryDetail(node, telemetry);
               return [
                 <div className="node-identity"><strong>{node.name}</strong><span>{node.gpuCapacity || 0} × {node.gpuProduct || 'GPU model Unknown'}</span><small>{node.sku || 'SKU Unknown'} · {node.ready ? 'Node Ready' : 'Node not Ready'}</small></div>,
                 <div className="node-identity"><strong>{node.site || 'Site Unknown'}</strong>
                   <span>{node.siteLabel || 'No Unbounded site label'}</span>
+                  {node.siteLabelConflict && <small className="warn">Canonical and fallback labels conflict</small>}
                   <small>{node.region ? `Region ${node.region}` : 'Region Unknown'}{node.regionLabel ? ` · ${node.regionLabel}` : ''}</small>
                   <small>{node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}{node.agentPoolLabel ? ` · ${node.agentPoolLabel}` : ''}</small>
                   <small>{node.zone ? `Zone ${node.zone}` : 'Zone Unknown'}{node.zoneLabel ? ` · ${node.zoneLabel}` : ''}</small>
@@ -588,14 +610,25 @@ function ValidationDetail({ validation }: { validation: RDMAValidationDetail }) 
 
     <h2>Requested and actual placement</h2><Note>{coverageStatement}</Note><KV rows={[
       ['Requested', requestedCoverage(validation)], ['Actual', actualCoverage(validation)],
+      ['Requested site provider', known(validation.requested?.siteProvider)],
+      ['Requested site mode', known(validation.requested?.siteMode)],
+      ['Requested region', known(validation.requested?.region)],
+      ['Actual site provider', known(validation.actual?.siteProvider)],
+      ['Actual site mode', known(validation.actual?.siteMode)],
+      ['Actual region', known(validation.actual?.region)],
       ['Distinct nodes', yesNoUnknown(validation.placement?.distinctNodes)], ['Matches request', yesNoUnknown(validation.placement?.matchesRequest)],
       ['Placement reason', known(validation.placement?.reason)],
     ]}/>
     {!validation.actual?.nodes?.length ? <Empty warn>Node, GPU, and RDMA placement evidence is unavailable.</Empty>
-      : <Table headers={['Node', 'UID', 'Site / pool', 'GPU model', 'GPU UUIDs']}
+      : <Table headers={['Node', 'UID', 'Unbounded site evidence', 'Region', 'Pool', 'GPU model', 'GPU UUIDs']}
         rows={validation.actual.nodes.map(node => [
-          known(node.name), known(node.uid), known([node.site, node.pool].filter(Boolean).join(' / ')),
-          known(node.gpuModel), list(node.gpuUuids),
+          known(node.name), known(node.uid),
+          <div className="node-identity">
+            <strong>{topologySite(node.site, validation.actual?.siteProvider, validation.actual?.siteMode)}</strong>
+            <span>{node.siteSourceKey || (validation.actual?.siteMode ? 'Site source unavailable' : 'Legacy artifact · source unavailable')}</span>
+            {node.siteLabelConflict && <small className="warn">Canonical and fallback site labels conflict</small>}
+          </div>,
+          known(node.region), known(node.pool), known(node.gpuModel), list(node.gpuUuids),
         ])}/>}
     {!!nodeDevices(validation.actual?.nodes).length && <Table headers={['Node', 'Resource', 'Device', 'Interface', 'Port', 'Link layer', 'State']}
       rows={nodeDevices(validation.actual?.nodes).map(([node, device]) => [

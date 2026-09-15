@@ -171,14 +171,27 @@ empty. It never performs fuzzy label matching or substitutes region, zone, or
 pool for site identity. If no GPU node has either supported label, the primary
 map remains grouped by ordinary region and pool placement without presenting
 an Unbounded site visualization. Partial coverage keeps every unlabeled GPU
-node in an explicit Unknown bucket and reports the coverage gap.
+node in an explicit Unknown bucket and reports the coverage gap. When both
+exact labels are non-empty and disagree, the inventory preserves the canonical
+value and source key but reports the conflict on both the fleet and node views.
 
 Region, zone, and pool remain separate placement fields. The map shows each
 node's inventory GPU count, and uses labeled color and shape cues to distinguish
 RDMA scheduling capability, condition faults, unknown evidence, and the exact
 GPU UUIDs sampled by the latest validation. It draws a validated run path only
-for the artifact-recorded nodes and GPU UUIDs; sharing a site, pool, or
-`rdma/*` resource never manufactures a connection claim.
+for the artifact-recorded nodes and GPU UUIDs when the artifact topology mode
+is `complete`, or when reading a legacy V1 artifact without the additive
+topology mode. `incomplete` and `not_applicable` results do not draw a site
+path. Sharing a site, pool, or `rdma/*` resource never manufactures a connection
+claim.
+
+The additive V1 topology contract exposes `site_provider`, `site_mode`, and
+`region` on requested and actual placement, plus each actual node's `site`,
+`site_source_key`, `site_label_conflict`, `region`, and `pool`. The Portal keeps
+these fields separate in detail responses and renders exact source and conflict
+evidence. For legacy V1 artifacts that predate these fields, it retains the
+aggregate site and pool fallback without inventing a source key. Unknown future
+schema versions remain fail-closed.
 
 It marks nodes as RDMA-advertised
 only when their status exposes a positive `rdma/*` capacity or allocatable

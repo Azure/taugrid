@@ -120,38 +120,55 @@ type Source struct {
 	SignatureTrustVerified  *bool  `json:"signatureTrustVerified,omitempty"`
 }
 
+type SiteTopologyMode string
+
+const (
+	SiteTopologyComplete      SiteTopologyMode = "complete"
+	SiteTopologyNotApplicable SiteTopologyMode = "not_applicable"
+	SiteTopologyIncomplete    SiteTopologyMode = "incomplete"
+)
+
 type Requested struct {
-	NodeCount         *int    `json:"nodeCount,omitempty"`
-	PodCount          *int    `json:"podCount,omitempty"`
-	RankCount         *int    `json:"rankCount,omitempty"`
-	RanksPerNode      *int    `json:"ranksPerNode,omitempty"`
-	GPUsPerRank       *int    `json:"gpusPerRank,omitempty"`
-	DistinctHostname  *bool   `json:"distinctHostname,omitempty"`
-	Site              string  `json:"site,omitempty"`
-	Pool              string  `json:"pool,omitempty"`
-	GPUModel          string  `json:"gpuModel,omitempty"`
-	GPUResource       string  `json:"gpuResource,omitempty"`
-	RDMAResource      string  `json:"rdmaResource,omitempty"`
-	RDMAPerPod        *int    `json:"rdmaPerPod,omitempty"`
-	MessageSizesBytes []int64 `json:"messageSizesBytes,omitempty"`
-	WarmupIterations  *int    `json:"warmupIterations,omitempty"`
-	Iterations        *int    `json:"iterations,omitempty"`
+	NodeCount         *int             `json:"nodeCount,omitempty"`
+	PodCount          *int             `json:"podCount,omitempty"`
+	RankCount         *int             `json:"rankCount,omitempty"`
+	RanksPerNode      *int             `json:"ranksPerNode,omitempty"`
+	GPUsPerRank       *int             `json:"gpusPerRank,omitempty"`
+	DistinctHostname  *bool            `json:"distinctHostname,omitempty"`
+	Site              string           `json:"site,omitempty"`
+	SiteProvider      string           `json:"siteProvider,omitempty"`
+	SiteMode          SiteTopologyMode `json:"siteMode,omitempty"`
+	Region            string           `json:"region,omitempty"`
+	Pool              string           `json:"pool,omitempty"`
+	GPUModel          string           `json:"gpuModel,omitempty"`
+	GPUResource       string           `json:"gpuResource,omitempty"`
+	RDMAResource      string           `json:"rdmaResource,omitempty"`
+	RDMAPerPod        *int             `json:"rdmaPerPod,omitempty"`
+	MessageSizesBytes []int64          `json:"messageSizesBytes,omitempty"`
+	WarmupIterations  *int             `json:"warmupIterations,omitempty"`
+	Iterations        *int             `json:"iterations,omitempty"`
 }
 
 type Actual struct {
-	Site  string `json:"site,omitempty"`
-	Pool  string `json:"pool,omitempty"`
-	Nodes []Node `json:"nodes,omitempty"`
+	Site         string           `json:"site,omitempty"`
+	SiteProvider string           `json:"siteProvider,omitempty"`
+	SiteMode     SiteTopologyMode `json:"siteMode,omitempty"`
+	Region       string           `json:"region,omitempty"`
+	Pool         string           `json:"pool,omitempty"`
+	Nodes        []Node           `json:"nodes,omitempty"`
 }
 
 type Node struct {
-	Name        string       `json:"name,omitempty"`
-	UID         string       `json:"uid,omitempty"`
-	Site        string       `json:"site,omitempty"`
-	Pool        string       `json:"pool,omitempty"`
-	GPUModel    string       `json:"gpuModel,omitempty"`
-	GPUUUIDs    []string     `json:"gpuUuids,omitempty"`
-	RDMADevices []RDMADevice `json:"rdmaDevices,omitempty"`
+	Name              string       `json:"name,omitempty"`
+	UID               string       `json:"uid,omitempty"`
+	Site              string       `json:"site,omitempty"`
+	SiteSourceKey     string       `json:"siteSourceKey,omitempty"`
+	SiteLabelConflict bool         `json:"siteLabelConflict,omitempty"`
+	Region            string       `json:"region,omitempty"`
+	Pool              string       `json:"pool,omitempty"`
+	GPUModel          string       `json:"gpuModel,omitempty"`
+	GPUUUIDs          []string     `json:"gpuUuids,omitempty"`
+	RDMADevices       []RDMADevice `json:"rdmaDevices,omitempty"`
 }
 
 type RDMADevice struct {

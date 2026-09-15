@@ -45,7 +45,7 @@ export interface Nodes extends Scoped {
   skus: { sku: string; nodes: number; gpus: number }[];
   nodes: { name: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
     cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuProduct?: string; ready: boolean;
-    agentPoolLabel?: string; siteLabel?: string; regionLabel?: string; zoneLabel?: string;
+    agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
     rdmaResources?: { name: string; capacity: number; allocatable: number }[];
     operationalConditions?: {
       type: string; status: string; reason?: string; message?: string;
@@ -83,19 +83,23 @@ export interface RDMASource {
 export interface RDMARequested {
   nodeCount?: number | null; podCount?: number | null; rankCount?: number | null;
   ranksPerNode?: number | null; gpusPerRank?: number | null; distinctHostname?: boolean | null;
-  site?: string; pool?: string; gpuModel?: string; gpuResource?: string; rdmaResource?: string;
+  site?: string; siteProvider?: string; siteMode?: RDMASiteTopologyMode; region?: string;
+  pool?: string; gpuModel?: string; gpuResource?: string; rdmaResource?: string;
   rdmaPerPod?: number | null; messageSizesBytes?: number[]; warmupIterations?: number | null; iterations?: number | null;
 }
+export type RDMASiteTopologyMode = 'complete' | 'not_applicable' | 'incomplete';
 export interface RDMARdmaDevice {
   resourceName?: string; device?: string; port?: number | null; interface?: string;
   linkLayer?: string; state?: string;
 }
 export interface RDMANode {
-  name?: string; uid?: string; site?: string; pool?: string; gpuModel?: string;
+  name?: string; uid?: string; site?: string; siteSourceKey?: string; siteLabelConflict?: boolean;
+  region?: string; pool?: string; gpuModel?: string;
   gpuUuids?: string[]; rdmaDevices?: RDMARdmaDevice[];
 }
 export interface RDMAActual {
-  site?: string; pool?: string; nodes?: RDMANode[];
+  site?: string; siteProvider?: string; siteMode?: RDMASiteTopologyMode; region?: string;
+  pool?: string; nodes?: RDMANode[];
 }
 export interface RDMAPlacement {
   distinctNodes?: boolean | null; matchesRequest?: boolean | null; reason?: string;

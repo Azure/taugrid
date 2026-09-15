@@ -103,6 +103,8 @@ describe('InfiniBand fleet validation', () => {
     }));
     renderPortal('/portal/fleet');
 
+    expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
+    expect(screen.queryByText(/Site boundaries use exact/)).not.toBeInTheDocument();
     expect(await screen.findAllByText('Advertised', { selector: '.badge' })).toHaveLength(2);
     expect(screen.getAllByText(/rdma\/rdma_shared_device_a/)).toHaveLength(2);
     expect(screen.getAllByText(/kubernetes.azure.com\/agentpool/)).toHaveLength(3);
@@ -125,6 +127,27 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getAllByRole('link', { name: /Open per-GPU metrics/ })[0]).toHaveAttribute('href', expect.stringContaining('instance=h200-node-a'));
     expect(screen.getAllByText('Passed', { selector: '.badge' }).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/Not tested in latest run · different site/)).toBeVisible();
+  });
+
+  it.each(['incomplete', 'not_applicable'] as const)('does not draw a validated site path for %s topology', async siteMode => {
+    const summary = {
+      ...latestSummary,
+      latest: latestSummary.latest && {
+        ...latestSummary.latest,
+        actual: { ...latestSummary.latest.actual, siteMode },
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(url.includes('/summary') ? summary : firstHistoryPage));
+    }));
+    renderPortal('/portal/fleet');
+
+    await screen.findAllByText('Advertised', { selector: '.badge' });
+    expect(screen.queryByText('Passed · 2-GPU run path')).not.toBeInTheDocument();
   });
 
   it('keeps partial Unbounded coverage explicit and does not infer site from region', async () => {
@@ -153,6 +176,26 @@ describe('InfiniBand fleet validation', () => {
     expect(within(unknownSite).getByText(/No Unbounded site label · Region eastus2euap/)).toBeVisible();
   });
 
+  it('warns when canonical and fallback inventory labels conflict', async () => {
+    const conflictNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map((node, index) => index === 0
+        ? { ...node, siteLabel: 'unbounded-cloud.io/site', siteLabelConflict: true }
+        : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(conflictNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('1/3 GPU nodes have conflicting canonical and fallback site labels');
+    expect(screen.getByText(/Unbounded site label conflict · canonical value shown/)).toBeVisible();
+  });
+
   it('omits Unbounded site grouping when no GPU node has a supported label', async () => {
     const unlabeledNodes = {
       ...fleetNodes,
@@ -167,7 +210,7 @@ describe('InfiniBand fleet validation', () => {
     }));
     renderPortal('/portal/fleet');
 
-    expect(await screen.findByRole('heading', { name: 'GPU fleet by region and pool' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
     expect(screen.getByText(/Unbounded site visualization is unavailable/)).toBeVisible();
     expect(screen.queryByRole('region', { name: /Unbounded site/ })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Region eastus2euap' })).toBeVisible();
@@ -281,6 +324,10 @@ describe('InfiniBand fleet validation', () => {
 
     expect((await screen.findAllByText('NVIDIA H200'))[0]).toBeVisible();
     expect(screen.getByText(/nccl \/ 2\.28\.8 \/ all_reduce/)).toBeVisible();
+    expect(screen.getAllByText('unbounded', { exact: true })).toHaveLength(2);
+    expect(screen.getAllByText('complete', { exact: true }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('unbounded-cloud.io/site', { exact: true })).toBeVisible();
+    expect(screen.getByText('net.unbounded-cloud.io/site', { exact: true })).toBeVisible();
     expect(screen.getAllByText('IB')[0]).toBeVisible();
     expect(screen.getAllByText('GPU-aaaaaaaa')[0]).toBeVisible();
     expect(screen.getAllByText('mlx5_0')[0]).toBeVisible();
@@ -288,6 +335,29 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getByText('rank 0: 0, rank 1: 0')).toBeVisible();
     expect(screen.getByText('sha256:' + 'a'.repeat(64))).toBeVisible();
     expect(screen.getByText('sha256:' + 'b'.repeat(64))).toBeVisible();
+  });
+
+  it('shows incomplete and conflicting validation topology explicitly', async () => {
+    const conflicting = {
+      ...passedValidation,
+      state: 'unknown',
+      historicalStatus: 'unknown',
+      reasonCode: 'topology_evidence_incomplete',
+      reason: 'Unbounded site topology evidence is incomplete.',
+      actual: {
+        ...passedValidation.actual,
+        siteMode: 'incomplete',
+        nodes: passedValidation.actual?.nodes?.map((node, index) => index === 0
+          ? { ...node, siteLabelConflict: true }
+          : node),
+      },
+    } satisfies RDMAValidationDetail;
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(conflicting))));
+    renderPortal(`/portal/fleet/infiniband/${conflicting.validationId}`, true);
+
+    expect(await screen.findByText('Canonical and fallback site labels conflict')).toBeVisible();
+    expect(screen.getByText('incomplete', { exact: true })).toBeVisible();
+    expect(screen.getAllByText(/Unbounded site incomplete/)).not.toHaveLength(0);
   });
 
   it('retains and labels a stale snapshot when refresh fails', async () => {

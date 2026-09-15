@@ -184,8 +184,7 @@
     display: flex; align-items: flex-start; justify-content: space-between; gap: 18px;
     padding: 16px 18px; border-bottom: 1px solid var(--line); background: #fff;
   }
-  .fabric-map-head h3 { margin: 0 0 5px; }
-  .fabric-map-head p { max-width: 72ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .fabric-map-head h3 { margin: 0; }
   .fabric-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 14px; min-width: 300px; }
   .fabric-legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; }
   .legend-swatch, .gpu-chip {

@@ -172,9 +172,13 @@ func TestBoardResolvesExactUnboundedSiteLabels(t *testing.T) {
 	}
 	if got := snap.Nodes[0]; got.Site != "canonical-site" || got.SiteLabel != labelUnboundedSite {
 		t.Fatalf("canonical site = %q/%q, want canonical-site/%s", got.Site, got.SiteLabel, labelUnboundedSite)
+	} else if !got.SiteLabelConflict {
+		t.Fatal("canonical and legacy disagreement must be exposed as a conflict")
 	}
 	if got := snap.Nodes[1]; got.Site != "legacy-site" || got.SiteLabel != labelUnboundedLegacy {
 		t.Fatalf("legacy site = %q/%q, want legacy-site/%s", got.Site, got.SiteLabel, labelUnboundedLegacy)
+	} else if got.SiteLabelConflict {
+		t.Fatal("legacy-only site must not report a conflict")
 	}
 	if got := snap.Nodes[2]; got.Site != "" || got.SiteLabel != "" {
 		t.Fatalf("lookalike site = %q/%q, want empty/empty", got.Site, got.SiteLabel)

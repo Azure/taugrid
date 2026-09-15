@@ -38,6 +38,12 @@ func TestDecodeArtifactMapsCanonicalPass(t *testing.T) {
 		len(detail.Actual.Nodes[0].GPUUUIDs) != 1 || detail.Actual.Nodes[0].GPUUUIDs[0] != "GPU-aaaaaaaa" {
 		t.Fatalf("topology = requested %+v actual %+v", detail.Requested, detail.Actual)
 	}
+	if detail.Requested.SiteMode != "" || detail.Actual.SiteMode != "" ||
+		detail.Actual.Nodes[0].Site != detail.Actual.Site ||
+		detail.Actual.Nodes[0].Pool != detail.Actual.Pool ||
+		detail.Actual.Nodes[0].SiteSourceKey != "" {
+		t.Fatalf("legacy topology mapping = requested %+v actual %+v", detail.Requested, detail.Actual)
+	}
 	if detail.Transport == nil || detail.Transport.NCCLNet != "IB" ||
 		detail.Transport.SocketFallbackDetected == nil || *detail.Transport.SocketFallbackDetected ||
 		len(detail.Transport.Evidence) != 2 {
@@ -58,6 +64,98 @@ func TestDecodeArtifactMapsCanonicalPass(t *testing.T) {
 	if detail.ArtifactVerification == nil || detail.ArtifactVerification.State != "verified" ||
 		detail.ArtifactVerification.VerifiedAt != now.Format(time.RFC3339Nano) {
 		t.Fatalf("verification = %+v", detail.ArtifactVerification)
+	}
+}
+
+func TestDecodeArtifactMapsUnboundedTopologyEvidence(t *testing.T) {
+	result := readResult(t, "pass.golden.json")
+	result.Requested.Topology.Site = "eastus2"
+	result.Requested.Topology.SiteProvider = corevalidation.UnboundedSiteProvider
+	result.Requested.Topology.SiteMode = corevalidation.SiteTopologyComplete
+	result.Requested.Topology.Region = "eastus2euap"
+	result.Actual.Site = "eastus2"
+	result.Actual.SiteProvider = corevalidation.UnboundedSiteProvider
+	result.Actual.SiteMode = corevalidation.SiteTopologyComplete
+	result.Actual.Region = "eastus2euap"
+	for index := range result.Actual.Nodes {
+		result.Actual.Nodes[index].Site = "eastus2"
+		result.Actual.Nodes[index].SiteSourceKey = corevalidation.LegacyUnboundedSiteLabelKey
+		result.Actual.Nodes[index].Region = "eastus2euap"
+		result.Actual.Nodes[index].Pool = "h200pool"
+	}
+	if err := corevalidation.Finalize(&result); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := corevalidation.MarshalCanonical(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := DecodeArtifact(raw, metadataForRaw(raw), result.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Requested == nil ||
+		detail.Requested.SiteProvider != corevalidation.UnboundedSiteProvider ||
+		detail.Requested.SiteMode != SiteTopologyComplete ||
+		detail.Requested.Region != "eastus2euap" {
+		t.Fatalf("requested topology = %+v", detail.Requested)
+	}
+	if detail.Actual == nil ||
+		detail.Actual.SiteProvider != corevalidation.UnboundedSiteProvider ||
+		detail.Actual.SiteMode != SiteTopologyComplete ||
+		detail.Actual.Region != "eastus2euap" ||
+		len(detail.Actual.Nodes) != 2 {
+		t.Fatalf("actual topology = %+v", detail.Actual)
+	}
+	for _, node := range detail.Actual.Nodes {
+		if node.Site != "eastus2" ||
+			node.SiteSourceKey != corevalidation.LegacyUnboundedSiteLabelKey ||
+			node.Region != "eastus2euap" ||
+			node.Pool != "h200pool" ||
+			node.SiteLabelConflict {
+			t.Fatalf("node topology = %+v", node)
+		}
+	}
+}
+
+func TestDecodeArtifactMapsIncompleteTopologyConflict(t *testing.T) {
+	result := readResult(t, "pass.golden.json")
+	result.Requested.Topology.Site = "eastus2"
+	result.Requested.Topology.SiteProvider = corevalidation.UnboundedSiteProvider
+	result.Requested.Topology.SiteMode = corevalidation.SiteTopologyIncomplete
+	result.Actual.Site = "eastus2"
+	result.Actual.SiteProvider = corevalidation.UnboundedSiteProvider
+	result.Actual.SiteMode = corevalidation.SiteTopologyIncomplete
+	for index := range result.Actual.Nodes {
+		result.Actual.Nodes[index].Site = "eastus2"
+		result.Actual.Nodes[index].SiteSourceKey = corevalidation.UnboundedSiteLabelKey
+	}
+	result.Actual.Nodes[0].SiteLabelConflict = true
+	if err := corevalidation.Finalize(&result); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := corevalidation.MarshalCanonical(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := DecodeArtifact(raw, metadataForRaw(raw), result.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.State != StateUnknown {
+		t.Fatalf("state = %q, want unknown", detail.State)
+	}
+	hasTopologyError := false
+	for _, resultError := range detail.Errors {
+		hasTopologyError = hasTopologyError || resultError.Code == string(corevalidation.ReasonTopologyEvidenceIncomplete)
+	}
+	if !hasTopologyError {
+		t.Fatalf("errors = %+v, want %s", detail.Errors, corevalidation.ReasonTopologyEvidenceIncomplete)
+	}
+	if detail.Actual == nil || detail.Actual.SiteMode != SiteTopologyIncomplete ||
+		len(detail.Actual.Nodes) != 2 || !detail.Actual.Nodes[0].SiteLabelConflict ||
+		detail.Actual.Nodes[0].SiteSourceKey != corevalidation.UnboundedSiteLabelKey {
+		t.Fatalf("incomplete topology = %+v", detail.Actual)
 	}
 }
 
