@@ -65,11 +65,11 @@ describe('InfiniBand fleet validation', () => {
     </MemoryRouter></QueryClientProvider>);
 
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-    expect(await screen.findByText('Fleet operational map')).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
     expect(await screen.findByText(/3\/3 nodes ready/)).toBeVisible();
     expect(screen.getByText('63%')).toBeVisible();
     expect(await screen.findAllByText(/two-GPU inter-node RDMA validation/)).not.toHaveLength(0);
-    expect(screen.getByText(/do not imply that a validation covered every GPU/)).toBeVisible();
+    expect(screen.getByText(/covers only recorded GPUs/)).toBeVisible();
     expect(screen.getByText(/multi-site distributed training/)).toBeVisible();
   });
 
@@ -130,7 +130,7 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getByText(/Not tested in latest run · different site/)).toBeVisible();
 
     fetchMock.mockClear();
-    await userEvent.click(screen.getByRole('button', { name: 'Refresh InfiniBand fleet inventory' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh GPU dashboard data' }));
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map(([input]) => String(input));
       for (const path of ['/api/portal/nodes', '/api/portal/cluster', '/api/portal/nodeutil', '/api/portal/rdma-validations/summary']) {

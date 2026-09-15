@@ -14,7 +14,6 @@ const pageSize = 20;
 const conditionFreshnessMs = 15 * 60 * 1000;
 const futureClockSkewMs = 60 * 1000;
 const coverageStatement = 'Point-in-time two-GPU inter-node RDMA validation; this is not continuous InfiniBand or fleet health.';
-const inventoryCaveat = 'Fleet inventory and Unbounded site or node-pool labels do not imply that a validation covered every GPU or performed multi-site distributed training.';
 const gpuConditionTypes = [
   'GPUECCDoubleRetired', 'GPUECCDoubleVolatile', 'GPUNVLinkCRCFlitErrors',
   'GPUNVLinkCRCDataErrors', 'GPUNVLinkReplayErrors', 'GPUThermalViolation',
@@ -131,7 +130,7 @@ function bandwidthSummary(validation: RDMAValidation) {
 }
 
 export function InfiniBandFleet() {
-  return <><Note>{coverageStatement} {inventoryCaveat}</Note><FleetInfiniBandEvidence/>
+  return <><FleetInfiniBandEvidence/>
     <details className="fleet-disclosure"><summary>Validation run details and history</summary>
       <LatestValidation/><ValidationHistory/>
     </details>
@@ -320,10 +319,9 @@ function FleetFabricMap({
     <div className="fabric-map-head">
       <h3>GPU Dashboard</h3>
       <div className="fabric-legend" aria-label="Fabric map legend">
-        <span><i className="legend-swatch rdma"/>GPU on RDMA-advertised node</span>
         <span><i className="legend-line passed"/>Passed run path</span>
         <span><i className="legend-line failed"/>Failed or fault</span>
-        <span><i className="legend-swatch unknown"/>Unknown / unverified</span>
+        <span><i className="legend-line unknown"/>Unknown / unverified</span>
       </div>
     </div>
     {!latest && <div className="fabric-no-link"><EvidenceBadge state="unknown"/>
@@ -377,7 +375,6 @@ function FleetFabricMap({
                 <div className="fabric-nodes">{poolNodes.sort((left, right) => left.node.name.localeCompare(right.node.name)).map(({ node, index }) => {
                   const rdmaAdvertised = Boolean(node.rdmaResources?.length);
                   const tested = testedByName.get(node.name);
-                  const visibleGPUs = Math.min(node.gpuCapacity, 16);
                   const samples = gpuSamples.filter(sample => sample.instance === node.name);
                   const gpuUtilization = average(samples.map(sample => sample.utilizationPct));
                   const gpuTemperature = samples.map(sample => sample.temperatureCelsius).filter(measured);
@@ -393,11 +390,6 @@ function FleetFabricMap({
                     <span>{node.gpuCapacity} × {node.gpuProduct || node.sku || 'GPU model Unknown'} · {node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
                     <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
                     {node.siteLabelConflict && <span className="warn">Unbounded site label conflict · canonical value shown</span>}
-                    <div className="gpu-bank" aria-label={`${node.gpuCapacity} GPUs; ${rdmaAdvertised ? 'RDMA scheduling advertised' : 'RDMA scheduling not advertised'}`}>
-                      {Array.from({ length: visibleGPUs }, (_, gpuIndex) =>
-                        <i className={`gpu-chip ${rdmaAdvertised ? 'rdma' : 'unknown'}`} key={gpuIndex}/>)}
-                      {node.gpuCapacity > visibleGPUs && <b>+{node.gpuCapacity - visibleGPUs}</b>}
-                    </div>
                     <div className="fabric-metrics">
                       <span><small>GPU load</small><b>{gpuUtilization === null ? 'Unknown' : `${n1(gpuUtilization)}%`}</b><i>{samples.filter(sample => measured(sample.utilizationPct)).length}/{node.gpuCapacity} observed</i></span>
                       <span><small>GPU temp</small><b>{gpuTemperature.length ? `${n1(Math.max(...gpuTemperature))}°C` : 'Unknown'}</b><i>{gpuTemperature.length ? 'max observed' : 'no samples'}</i></span>
@@ -433,9 +425,7 @@ function FleetInfiniBandEvidence() {
   const latestQuery = useBoard<RDMAValidationSummary>('/api/portal/rdma-validations/summary');
   const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery, latestQuery];
   const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
-  return <><h2>Fleet operational map</h2>
-    <Note>Capacity, utilization, health, and InfiniBand evidence share one topology, but remain independent signals. Unknown is never treated as idle, healthy, or connected.</Note>
-    <BoardResult query={inventoryQuery} label="InfiniBand fleet inventory" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."
+  return <BoardResult query={inventoryQuery} label="GPU dashboard data" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."
       partial={sourceQueries.some(query => query.isError)} refreshing={sourceQueries.some(query => query.isFetching)} onRefresh={refreshAll}>{snapshot => {
       const latest = latestQuery.data?.latest;
       const validationSiteName = validationSite(latest);
@@ -457,6 +447,11 @@ function FleetInfiniBandEvidence() {
         total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
       const ibConditionCoveredGPUs = nodes.reduce((total, node, index) =>
         total + (ibConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
+      const unavailableSources = [
+        telemetryQuery.isError ? 'GPU telemetry' : '',
+        nodeUtilQuery.isError ? 'node utilization' : '',
+        latestQuery.isError ? 'validation' : '',
+      ].filter(Boolean);
       return <>
         <dl className="evidence-strip" aria-label="Fleet operational summary">
           <div><dt>Fleet capacity</dt><dd>{snapshot.readyNodes}/{snapshot.totalNodes} nodes ready</dd><span>{snapshot.totalCPUCores} CPU · {n1(snapshot.totalMemoryGiB)} GiB</span></div>
@@ -474,9 +469,7 @@ function FleetInfiniBandEvidence() {
           <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery)}</span>
           <span><strong>Validation</strong> {sourceFreshness(latestQuery)}</span>
         </div>
-        {latestQuery.isError && <Note warn>Latest run coverage is unavailable; inventory capability is still shown independently.</Note>}
-        {telemetryQuery.isError && <Note warn>Per-GPU ADX telemetry is unavailable; condition and inventory evidence remain independent.</Note>}
-        {nodeUtilQuery.isError && <Note warn>Node CPU and memory utilization is unavailable; inventory capacity remains visible.</Note>}
+        {!!unavailableSources.length && <Note warn>Unavailable: {unavailableSources.join(', ')}. Available inventory remains visible and missing evidence stays Unknown.</Note>}
         {!nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
           : <><FleetFabricMap nodes={nodes} latest={latest || undefined} gpuConditions={gpuConditions} ibConditions={ibConditions}
             gpuTelemetry={gpuTelemetry} gpuSamples={telemetry} nodeUtil={nodeUtilQuery.data?.nodes || []}/>
@@ -536,8 +529,7 @@ function FleetInfiniBandEvidence() {
             {snapshot.daemonSetsError && <Note warn>Runtime DaemonSets unavailable: {snapshot.daemonSetsError}</Note>}
             </details></>}
       </>;
-    }}</BoardResult>
-  </>;
+    }}</BoardResult>;
 }
 
 function LatestValidation() {
