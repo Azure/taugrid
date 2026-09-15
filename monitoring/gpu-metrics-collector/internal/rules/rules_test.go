@@ -76,6 +76,67 @@ func TestEvaluate_RateThreshold(t *testing.T) {
 	}
 }
 
+func TestEvaluate_RateScrapeGapPreservesOptionalHistory(t *testing.T) {
+	const metricName = "node_memory_ECC_correctable_total"
+	labels := map[string]string{"node": "grace-0"}
+	engine := NewEngine([]Rule{
+		{
+			Name:          "optional-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryErrors",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			For:           5 * time.Minute,
+		},
+		{
+			Name:          "covered-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryCoverage",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			MinSamples:    1,
+			SampleLabel:   "node",
+			MaxSampleAge:  2 * time.Minute,
+		},
+	})
+
+	engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 0},
+	})
+	key := metricKey(metricName, labels)
+	engine.mu.Lock()
+	engine.history[key][0].time = time.Now().Add(-6 * time.Minute)
+	engine.mu.Unlock()
+
+	engine.Evaluate(nil)
+
+	results := engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	if results[0].Firing {
+		t.Fatal("optional rule fired before its debounce elapsed")
+	}
+	if !results[1].Unknown {
+		t.Fatal("coverage rule treated the first post-gap observation as continuous")
+	}
+
+	engine.mu.Lock()
+	engine.pending["GraceCPUCorrectableMemoryErrors"] = time.Now().Add(-6 * time.Minute)
+	engine.mu.Unlock()
+
+	results = engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	if !results[0].Firing {
+		t.Fatal("optional rule lost the pre-gap baseline and missed the counter increase")
+	}
+	if results[1].Unknown || results[1].Firing {
+		t.Fatalf("coverage rule result = %+v, want known and not firing after two post-gap observations", results[1])
+	}
+}
+
 func TestEvaluate_ForDuration(t *testing.T) {
 	engine := NewEngine([]Rule{
 		{Name: "nvlink-bw", MetricName: "DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL", ConditionType: "NVLinkBandwidthLow", Mode: "instant", Threshold: -1, For: 5 * time.Minute},

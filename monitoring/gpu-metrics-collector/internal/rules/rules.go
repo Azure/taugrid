@@ -107,7 +107,7 @@ func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 
 	now := time.Now()
 	e.evalCounter++
-	e.removeMissingHistory(metrics)
+	e.breakMissingRateContinuity(metrics)
 	e.recordMetrics(metrics, now, e.evalCounter)
 
 	// Cleanup stale history every ~60 cycles (~15min at 15s interval).
@@ -284,22 +284,30 @@ func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time, cycle in
 	}
 }
 
-func (e *Engine) removeMissingHistory(metrics []scraper.Metric) {
+func (e *Engine) breakMissingRateContinuity(metrics []scraper.Metric) {
 	present := make(map[string]struct{}, len(metrics))
 	for _, m := range metrics {
 		present[metricKey(m.Name, m.Labels)] = struct{}{}
 	}
 	for key := range e.history {
-		if _, ok := present[key]; !ok {
-			delete(e.history, key)
-			for ruleIndex, breaks := range e.rateBreaks {
-				delete(breaks, key)
-				if len(breaks) == 0 {
-					delete(e.rateBreaks, ruleIndex)
-				}
+		if _, ok := present[key]; ok {
+			continue
+		}
+		for ruleIndex, rule := range e.rules {
+			if ruleUsesMetricKey(rule, key) {
+				e.breakRateContinuity(ruleIndex, rule, key)
 			}
 		}
 	}
+}
+
+func ruleUsesMetricKey(rule Rule, key string) bool {
+	for _, name := range rule.MetricSources() {
+		if key == name || strings.HasPrefix(key, name+"|") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) pruneHistory(key string, now time.Time, maxAge time.Duration) {
@@ -388,6 +396,12 @@ func (e *Engine) cleanupStaleHistory(now time.Time, maxAge time.Duration) {
 	for key, samples := range e.history {
 		if len(samples) == 0 || samples[len(samples)-1].time.Before(cutoff) {
 			delete(e.history, key)
+			for ruleIndex, breaks := range e.rateBreaks {
+				delete(breaks, key)
+				if len(breaks) == 0 {
+					delete(e.rateBreaks, ruleIndex)
+				}
+			}
 		}
 	}
 }
@@ -455,13 +469,8 @@ func (e *Engine) RestoreState(history map[string][]state.Sample, pending map[str
 	for k, samples := range history {
 		required := false
 		for _, rule := range e.rules {
-			if rule.MinSamples > 0 {
-				for _, name := range rule.MetricSources() {
-					if k == name || strings.HasPrefix(k, name+"|") {
-						required = true
-						break
-					}
-				}
+			if rule.MinSamples > 0 && ruleUsesMetricKey(rule, k) {
+				required = true
 			}
 			if required {
 				break
