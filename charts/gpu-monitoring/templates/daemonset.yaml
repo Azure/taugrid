@@ -399,6 +399,9 @@ spec:
             - --config=/etc/npd-metrics-collector/rules.yaml
             - --scrape-interval={{ $.Values.metricsCollector.scrapeInterval }}
             - --state-dir=/var/lib/npd-metrics-collector
+            {{- if $.Values.metricsCollector.requireMetricCoverage }}
+            - --require-metric-coverage
+            {{- end }}
           securityContext:
             runAsUser: 65532
             runAsGroup: 65532

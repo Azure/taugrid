@@ -37,6 +37,7 @@ func run() error {
 	nodeName := flag.String("node-name", "", "Node name (or set NODE_NAME env var)")
 	scrapeInterval := flag.Duration("scrape-interval", 15*time.Second, "Metrics scrape interval")
 	stateDir := flag.String("state-dir", "/var/lib/gpu-metrics-collector", "Directory for persisting state across restarts")
+	requireCoverage := flag.Bool("require-metric-coverage", false, "Require rules with an explicit continuous metric coverage contract")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -51,6 +52,11 @@ func run() error {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	if *requireCoverage {
+		if err := cfg.RequireMetricCoverage(); err != nil {
+			return err
+		}
 	}
 	slog.Info("loaded config", "rules", len(cfg.Rules), "targets", len(cfg.ScrapeTargets))
 

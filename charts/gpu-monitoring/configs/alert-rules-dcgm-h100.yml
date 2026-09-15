@@ -29,24 +29,6 @@ groups:
           summary: "GPU XID {{ $labels.err_code }} errors detected on {{ $labels.instance }}"
           description: "nvidia_gpu_xid_errors_total increased by {{ $value }} in 5m"
 
-      - alert: GPUNVLinkCRCFlitErrors
-        expr: increase(DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL[5m]) > 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "NVLink CRC flit errors on GPU {{ $labels.gpu }}"
-          description: "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL increased by {{ $value }}"
-
-      - alert: GPUNVLinkCRCDataErrors
-        expr: increase(DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL[5m]) > 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "NVLink CRC data errors on GPU {{ $labels.gpu }}"
-          description: "DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL increased by {{ $value }}"
-
       - alert: GPUNVLinkReplayErrors
         expr: increase(DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL[5m]) > 0
         for: 1m
@@ -55,15 +37,6 @@ groups:
         annotations:
           summary: "NVLink replay errors on GPU {{ $labels.gpu }}"
           description: "DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL increased by {{ $value }}"
-
-      - alert: GPUThermalViolation
-        expr: increase(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) > 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "GPU {{ $labels.gpu }} thermal throttling detected"
-          description: "DCGM_FI_DEV_THERMAL_VIOLATION increased by {{ $value }} in 5m"
 
       - alert: IBLinkDowned
         expr: increase(node_infiniband_port_link_downed_total[5m]) > 0
@@ -104,15 +77,6 @@ groups:
         annotations:
           summary: "PCIe replay errors on GPU {{ $labels.gpu }}"
           description: "DCGM_FI_DEV_PCIE_REPLAY_COUNTER increased by {{ $value }} in 5m"
-
-      - alert: GPUPowerViolation
-        expr: increase(DCGM_FI_DEV_POWER_VIOLATION[5m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "GPU {{ $labels.gpu }} power throttling detected"
-          description: "DCGM_FI_DEV_POWER_VIOLATION increased by {{ $value }} in 5m"
 
       - alert: GPUClockThrottled
         expr: DCGM_FI_DEV_CLOCK_THROTTLE_REASONS > 1

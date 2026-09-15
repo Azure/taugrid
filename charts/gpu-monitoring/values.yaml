@@ -116,6 +116,16 @@ dcgmHealth:
   source: host-dcgmi
   exporterUrl: http://localhost:19400/metrics
 
+# Optional reduced metrics profile for an externally owned NVIDIA DCGM
+# exporter. This is only for the explicit extendedHealthChecks opt-in below.
+# Point that exporter's configuration at this object separately; the chart
+# does not modify AKS-managed services, GPU Operator ClusterPolicy, or another
+# release's DaemonSet.
+dcgmExporterMetrics:
+  enabled: false
+  name: gpu-monitoring-dcgm-metrics
+  namespace: gpu-operator
+
 # Lightweight metrics collector — replaces Prometheus sidecar.
 # Scrapes DCGM + node-exporter, evaluates threshold/rate rules,
 # and patches Kubernetes Node conditions directly.
@@ -140,6 +150,14 @@ metricsCollector:
     tag: ""
     digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
   scrapeInterval: "15s"
+  # Enables health checks that need metrics outside the normal NVIDIA/AKS
+  # exporter profile. AKS has no supported API for replacing its managed
+  # exporter's field list, so this requires a separately managed exporter.
+  extendedHealthChecks: false
+  # Optional fail-closed coverage for extended per-GPU metrics. Requires
+  # extendedHealthChecks=true and a collector image that supports
+  # --require-metric-coverage. The legacy default digest does not support it.
+  requireMetricCoverage: false
   resources:
     requests:
       cpu: "2m"
@@ -160,54 +178,32 @@ metricsCollector:
   # `--prometheus-port`). Set to false to disable.
   npdScrape: true
   rules:
-    # Critical: ECC Double-Bit Errors (any increase over 1m → drain)
+    # Extended: ECC Double-Bit Errors (any increase over 1m → drain)
     - name: ecc-dbe-retired
-      metricName: DCGM_FI_DEV_ECC_DBE_AGG_TOTAL
+      extended: true
+      perGpu: true
+      metricName: DCGM_FI_DEV_RETIRED_DBE
       conditionType: GPUECCDoubleRetired
       mode: rate
       threshold: 0
       window: 1m
       for: 1m
     - name: ecc-dbe-volatile
+      extended: true
+      perGpu: true
       metricName: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
       conditionType: GPUECCDoubleVolatile
       mode: rate
       threshold: 0
       window: 1m
       for: 1m
-    # Critical: NVLink Errors (any increase over 1m → drain)
-    - name: nvlink-crc-flit
-      metricName: DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL
-      conditionType: GPUNVLinkCRCFlitErrors
-      mode: rate
-      threshold: 0
-      window: 1m
-      for: 1m
-    - name: nvlink-crc-data
-      metricName: DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL
-      conditionType: GPUNVLinkCRCDataErrors
-      mode: rate
-      threshold: 0
-      window: 1m
-      for: 1m
+    # Extended: NVLink replay errors. CRC counters are intentionally omitted;
+    # raw increments need topology- and generation-specific thresholds.
     - name: nvlink-replay
+      extended: true
+      perGpu: true
       metricName: DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL
       conditionType: GPUNVLinkReplayErrors
-      mode: rate
-      threshold: 0
-      window: 1m
-      for: 1m
-    # Critical: Thermal/Power Violations (any increase over 1m → taint)
-    - name: thermal-violation
-      metricName: DCGM_FI_DEV_THERMAL_VIOLATION
-      conditionType: GPUThermalViolation
-      mode: rate
-      threshold: 0
-      window: 1m
-      for: 1m
-    - name: power-violation
-      metricName: DCGM_FI_DEV_POWER_VIOLATION
-      conditionType: GPUPowerViolation
       mode: rate
       threshold: 0
       window: 1m
@@ -270,8 +266,10 @@ metricsCollector:
       threshold: 0
       window: 1m
       for: 1m
-    # Warning: Correctable ECC (rate >10 in 10m → taint)
+    # Extended: Correctable ECC degradation.
     - name: ecc-sbe-volatile-rate
+      extended: true
+      perGpu: true
       metricName: DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
       conditionType: GPUECCSingleVolatileRate
       mode: rate
@@ -279,7 +277,9 @@ metricsCollector:
       window: 10m
       for: 5m
     - name: ecc-sbe-retired
-      metricName: DCGM_FI_DEV_ECC_SBE_AGG_TOTAL
+      extended: true
+      perGpu: true
+      metricName: DCGM_FI_DEV_RETIRED_SBE
       conditionType: GPUECCSingleRetired
       mode: rate
       threshold: 0
@@ -287,21 +287,24 @@ metricsCollector:
       for: 5m
     # Warning: PCIe Replay (rate >5 in 5m → taint)
     - name: pcie-replay
+      perGpu: true
       metricName: DCGM_FI_DEV_PCIE_REPLAY_COUNTER
       conditionType: GPUPCIeReplayErrors
       mode: rate
       threshold: 5
       window: 5m
       for: 5m
-    # GB200: Grace CPU Memory ECC
+    # Extended GB200 Grace CPU memory ECC from node-exporter.
     - name: grace-cpu-ecc-uncorrectable
-      metricName: DCGM_FI_DEV_GRACE_CPU_ECC_UNCORRECTABLE
+      extended: true
+      metricName: node_memory_ECC_uncorrectable_total
       conditionType: GraceCPUECCUncorrectable
       mode: instant
       threshold: 0
       for: 1m
     - name: grace-cpu-ecc-correctable-rate
-      metricName: DCGM_FI_DEV_GRACE_CPU_ECC_CORRECTABLE
+      extended: true
+      metricName: node_memory_ECC_correctable_total
       conditionType: GraceCPUECCCorrectableRate
       mode: rate
       threshold: 10

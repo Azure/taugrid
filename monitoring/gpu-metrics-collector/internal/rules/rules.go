@@ -4,8 +4,11 @@
 package rules
 
 import (
+	"fmt"
 	"log/slog"
+	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,8 +18,11 @@ import (
 
 // Rule defines a threshold check against a scraped metric.
 type Rule struct {
-	Name          string            `yaml:"name"`
-	MetricName    string            `yaml:"metricName"`
+	Name       string `yaml:"name"`
+	MetricName string `yaml:"metricName,omitempty"`
+	// MetricNames checks every listed family on the same physical identities.
+	// Thresholds apply to each series, not to a sum that could hide counter resets.
+	MetricNames   []string          `yaml:"metricNames,omitempty"`
 	Labels        map[string]string `yaml:"labels,omitempty"`
 	ConditionType string            `yaml:"conditionType"`
 	// Threshold evaluation mode.
@@ -27,21 +33,38 @@ type Rule struct {
 	Window    time.Duration `yaml:"window,omitempty"`
 	// Duration the condition must persist before firing.
 	For time.Duration `yaml:"for,omitempty"`
+	// MinSamples opts a continuous rule into coverage checks. Zero preserves
+	// optional/sparse-event behavior. SampleLabel counts distinct identities.
+	MinSamples   int           `yaml:"minSamples,omitempty"`
+	SampleLabel  string        `yaml:"sampleLabel,omitempty"`
+	MaxSampleAge time.Duration `yaml:"maxSampleAge,omitempty"`
+}
+
+// MetricSources returns the rule's explicit input families.
+func (r Rule) MetricSources() []string {
+	if len(r.MetricNames) > 0 {
+		return r.MetricNames
+	}
+	return []string{r.MetricName}
 }
 
 // Result is the evaluation outcome of a single rule.
 type Result struct {
 	ConditionType string
 	Firing        bool
+	Unknown       bool
 	Reason        string
 	Message       string
 }
+
+const DefaultMaxSampleAge = 2 * time.Minute
 
 // Engine evaluates rules against scraped metrics.
 type Engine struct {
 	rules       []Rule
 	mu          sync.Mutex
-	history     map[string][]sample  // metric key → time series for rate calculations
+	history     map[string][]sample // metric key → time series for rate calculations
+	rateBreaks  map[int]map[string]int
 	pending     map[string]time.Time // conditionType → first time condition was met (for "for" duration)
 	evalCounter int                  // tracks cycles for periodic cleanup
 	retention   time.Duration        // how long to keep history samples
@@ -50,6 +73,7 @@ type Engine struct {
 type sample struct {
 	time  time.Time
 	value float64
+	cycle int
 }
 
 // NewEngine creates a rule engine.
@@ -68,10 +92,11 @@ func NewEngine(rules []Rule) *Engine {
 	}
 
 	return &Engine{
-		rules:     rules,
-		history:   make(map[string][]sample),
-		pending:   make(map[string]time.Time),
-		retention: retention,
+		rules:      rules,
+		history:    make(map[string][]sample),
+		rateBreaks: make(map[int]map[string]int),
+		pending:    make(map[string]time.Time),
+		retention:  retention,
 	}
 }
 
@@ -81,10 +106,11 @@ func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 	defer e.mu.Unlock()
 
 	now := time.Now()
-	e.recordMetrics(metrics, now)
+	e.evalCounter++
+	e.breakMissingRateContinuity(metrics)
+	e.recordMetrics(metrics, now, e.evalCounter)
 
 	// Cleanup stale history every ~60 cycles (~15min at 15s interval).
-	e.evalCounter++
 	if e.evalCounter%60 == 0 {
 		e.cleanupStaleHistory(now, 1*time.Hour)
 	}
@@ -93,15 +119,15 @@ func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 	idx := indexMetrics(metrics)
 
 	var results []Result
-	for _, rule := range e.rules {
-		r := e.evaluateRule(rule, idx, now)
+	for ruleIndex, rule := range e.rules {
+		r := e.evaluateRule(ruleIndex, rule, idx, now)
 		results = append(results, r)
 	}
 
 	return results
 }
 
-func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now time.Time) Result {
+func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper.Metric, now time.Time) Result {
 	result := Result{
 		ConditionType: rule.ConditionType,
 		Firing:        false,
@@ -109,15 +135,77 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 		Message:       "",
 	}
 
-	matched := matchMetrics(idx, rule.MetricName, rule.Labels)
-	if len(matched) == 0 {
+	var valid []scraper.Metric
+	var commonIdentities map[string]struct{}
+	matchedCount := 0
+	maxAge := rule.MaxSampleAge
+	if maxAge == 0 {
+		maxAge = DefaultMaxSampleAge
+	}
+	for sourceIndex, name := range rule.MetricSources() {
+		matched := matchMetrics(idx, name, rule.Labels)
+		matchedCount += len(matched)
+		identities := make(map[string]struct{}, len(matched))
+		validCount := 0
+		for _, m := range matched {
+			key := metricKey(m.Name, m.Labels)
+			if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
+				e.breakRateContinuity(ruleIndex, rule, key)
+				continue
+			}
+			if rule.MinSamples > 0 && !m.Timestamp.IsZero() &&
+				(m.Timestamp.Before(now.Add(-maxAge)) || m.Timestamp.After(now.Add(maxAge))) {
+				e.breakRateContinuity(ruleIndex, rule, key)
+				continue
+			}
+			if rule.SampleLabel != "" {
+				identity := m.Labels[rule.SampleLabel]
+				if identity == "" {
+					e.breakRateContinuity(ruleIndex, rule, key)
+					continue
+				}
+				identities[identity] = struct{}{}
+			}
+			validCount++
+			valid = append(valid, m)
+		}
+		observed := validCount
+		if rule.SampleLabel != "" {
+			observed = len(identities)
+			if sourceIndex == 0 {
+				commonIdentities = identities
+			} else {
+				for identity := range commonIdentities {
+					if _, exists := identities[identity]; !exists {
+						delete(commonIdentities, identity)
+					}
+				}
+			}
+		}
+		if rule.MinSamples > 0 && (observed < rule.MinSamples || validCount != len(matched)) {
+			result.Unknown = true
+			result.Reason = "MetricCoverageUnavailable"
+			result.Message = fmt.Sprintf("metric %q has %d valid samples/identities; requires at least %d; missing, invalid, or stale input is not healthy",
+				name, observed, rule.MinSamples)
+		}
+	}
+	if !result.Unknown && len(rule.MetricNames) > 1 && len(commonIdentities) < rule.MinSamples {
+		result.Unknown = true
+		result.Reason = "MetricCoverageUnavailable"
+		result.Message = fmt.Sprintf("all %d metric families must cover the same %d identities; only %d identities have every required family",
+			len(rule.MetricNames), rule.MinSamples, len(commonIdentities))
+	}
+	if matchedCount == 0 {
+		if rule.MinSamples > 0 {
+			delete(e.pending, rule.ConditionType)
+		}
 		return result
 	}
 
 	var firing bool
 	switch rule.Mode {
 	case "instant":
-		for _, m := range matched {
+		for _, m := range valid {
 			if m.Value > rule.Threshold {
 				firing = true
 				result.Message = "metric value exceeds threshold"
@@ -125,17 +213,27 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 			}
 		}
 	case "rate":
-		for _, m := range matched {
+		for _, m := range valid {
 			key := metricKey(m.Name, m.Labels)
-			increase := e.computeRate(key, rule.Window, now)
+			increase, known := e.computeRate(ruleIndex, key, rule.Window, now, rule.MinSamples > 0, maxAge)
+			if !known && rule.MinSamples > 0 {
+				result.Unknown = true
+				result.Reason = "MetricHistoryUnavailable"
+				result.Message = fmt.Sprintf("metric %q requires two current, consecutive counter observations; an interrupted baseline is not healthy", m.Name)
+				continue
+			}
 			if increase > rule.Threshold {
 				firing = true
-				result.Message = "metric rate of increase exceeds threshold"
-				break
 			}
 		}
 	default:
 		slog.Warn("unknown rule mode", "rule", rule.Name, "mode", rule.Mode)
+		if rule.MinSamples > 0 {
+			result.Unknown = true
+			result.Reason = "InvalidRuleMode"
+			result.Message = "continuous metric rule has an unsupported evaluation mode"
+		}
+		delete(e.pending, rule.ConditionType)
 		return result
 	}
 
@@ -157,16 +255,61 @@ func (e *Engine) evaluateRule(rule Rule, idx map[string][]scraper.Metric, now ti
 	}
 
 	result.Firing = true
+	result.Unknown = false
 	result.Reason = rule.ConditionType
+	if rule.Mode == "rate" {
+		result.Message = "metric rate of increase exceeds threshold"
+	}
 	return result
 }
 
-func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time) {
+func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time, cycle int) {
 	for _, m := range metrics {
 		key := metricKey(m.Name, m.Labels)
-		e.history[key] = append(e.history[key], sample{time: now, value: m.Value})
+		if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
+			delete(e.history, key)
+			continue
+		}
+		observedAt := now
+		if !m.Timestamp.IsZero() {
+			observedAt = m.Timestamp
+		}
+		history := e.history[key]
+		if len(history) > 0 && !observedAt.After(history[len(history)-1].time) {
+			if observedAt.Equal(history[len(history)-1].time) && m.Value == history[len(history)-1].value {
+				continue
+			}
+			delete(e.history, key)
+		}
+		e.history[key] = append(e.history[key], sample{time: observedAt, value: m.Value, cycle: cycle})
 		e.pruneHistory(key, now, e.retention)
 	}
+}
+
+func (e *Engine) breakMissingRateContinuity(metrics []scraper.Metric) {
+	present := make(map[string]struct{}, len(metrics))
+	for _, m := range metrics {
+		present[metricKey(m.Name, m.Labels)] = struct{}{}
+	}
+	for key := range e.history {
+		if _, ok := present[key]; ok {
+			continue
+		}
+		for ruleIndex, rule := range e.rules {
+			if ruleUsesMetricKey(rule, key) {
+				e.breakRateContinuity(ruleIndex, rule, key)
+			}
+		}
+	}
+}
+
+func ruleUsesMetricKey(rule Rule, key string) bool {
+	for _, name := range rule.MetricSources() {
+		if key == name || strings.HasPrefix(key, name+"|") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) pruneHistory(key string, now time.Time, maxAge time.Duration) {
@@ -181,31 +324,55 @@ func (e *Engine) pruneHistory(key string, now time.Time, maxAge time.Duration) {
 	}
 }
 
-func (e *Engine) computeRate(key string, window time.Duration, now time.Time) float64 {
+func (e *Engine) breakRateContinuity(ruleIndex int, rule Rule, key string) {
+	if rule.Mode != "rate" || rule.MinSamples == 0 {
+		return
+	}
+	if e.rateBreaks[ruleIndex] == nil {
+		e.rateBreaks[ruleIndex] = make(map[string]int)
+	}
+	e.rateBreaks[ruleIndex][key] = e.evalCounter
+}
+
+func (e *Engine) computeRate(ruleIndex int, key string, window time.Duration, now time.Time, requireCoverage bool, maxAge time.Duration) (float64, bool) {
 	samples := e.history[key]
+	if requireCoverage {
+		start := 0
+		if breaks := e.rateBreaks[ruleIndex]; breaks != nil {
+			breakCycle := breaks[key]
+			for start < len(samples) && samples[start].cycle <= breakCycle {
+				start++
+			}
+		}
+		for i := start + 1; i < len(samples); i++ {
+			if samples[i].time.Sub(samples[i-1].time) > maxAge {
+				start = i
+			}
+		}
+		samples = samples[start:]
+	}
 	if len(samples) < 2 {
-		return 0
+		return 0, false
 	}
 
 	cutoff := now.Add(-window)
-	var oldest *sample
-	for i := range samples {
-		if !samples[i].time.Before(cutoff) {
-			oldest = &samples[i]
-			break
-		}
+	oldestIndex := sort.Search(len(samples), func(i int) bool {
+		return !samples[i].time.Before(cutoff)
+	})
+	if oldestIndex == len(samples) {
+		return 0, false
 	}
-	if oldest == nil {
-		return 0
-	}
-
+	oldest := samples[oldestIndex]
 	latest := samples[len(samples)-1]
+	if !latest.time.After(oldest.time) {
+		return 0, false
+	}
 	increase := latest.value - oldest.value
 	if increase < 0 {
 		// Counter reset detected — use latest value as the increase since reset.
-		return latest.value
+		return latest.value, true
 	}
-	return increase
+	return increase, true
 }
 
 func metricKey(name string, labels map[string]string) string {
@@ -231,6 +398,12 @@ func (e *Engine) cleanupStaleHistory(now time.Time, maxAge time.Duration) {
 	for key, samples := range e.history {
 		if len(samples) == 0 || samples[len(samples)-1].time.Before(cutoff) {
 			delete(e.history, key)
+			for ruleIndex, breaks := range e.rateBreaks {
+				delete(breaks, key)
+				if len(breaks) == 0 {
+					delete(e.rateBreaks, ruleIndex)
+				}
+			}
 		}
 	}
 }
@@ -299,15 +472,29 @@ func (e *Engine) RestoreState(history map[string][]state.Sample, pending map[str
 		restored := make([]sample, 0, len(samples))
 		for _, s := range samples {
 			if now.Sub(s.Time) <= e.retention {
-				restored = append(restored, sample{time: s.Time, value: s.Value})
+				restored = append(restored, sample{time: s.Time, value: s.Value, cycle: e.evalCounter})
 			}
 		}
 		if len(restored) > 0 {
 			e.history[k] = restored
+			for ruleIndex, rule := range e.rules {
+				if rule.MinSamples > 0 && ruleUsesMetricKey(rule, k) {
+					e.breakRateContinuity(ruleIndex, rule, k)
+				}
+			}
 		}
 	}
 
 	for k, v := range pending {
-		e.pending[k] = v
+		required := false
+		for _, rule := range e.rules {
+			if rule.MinSamples > 0 && rule.ConditionType == k {
+				required = true
+				break
+			}
+		}
+		if !required {
+			e.pending[k] = v
+		}
 	}
 }
