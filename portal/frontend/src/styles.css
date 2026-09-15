@@ -242,6 +242,17 @@
   .fabric-capability.rdma { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
   .gpu-bank { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; min-height: 12px; }
   .gpu-bank b { color: var(--muted); font-size: 10px; }
+  .fabric-metrics {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .fabric-metrics > span { min-width: 0; padding: 7px 6px; border-right: 1px solid var(--line); }
+  .fabric-metrics > span:first-child { padding-left: 0; }
+  .fabric-metrics > span:last-child { border-right: 0; padding-right: 0; }
+  .fabric-metrics small, .fabric-metrics b, .fabric-metrics i { display: block; overflow-wrap: anywhere; }
+  .fabric-metrics small { color: var(--muted); font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .fabric-metrics b { margin-top: 3px; color: var(--text); font-size: 12px; }
+  .fabric-metrics i { margin-top: 2px; color: var(--muted); font-size: 8px; font-style: normal; line-height: 1.25; }
   .tested-gpus { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; padding: 7px 8px; background: var(--bg); font-size: 10px; }
   .tested-gpus.passed { background: var(--ok-bg); color: var(--ok); }
   .tested-gpus.failed { background: var(--warn-bg); color: var(--warn); }
@@ -251,6 +262,16 @@
   .fabric-signals span.observed_ok { border-color: var(--ok); color: var(--ok); }
   .fabric-signals span.fault { border-color: var(--warn); color: var(--warn); }
   .fabric-signals b { display: block; margin-top: 2px; font-size: 10px; }
+  .fabric-node > a { display: inline-block; margin-top: 9px; color: var(--accent); font-size: 10px; text-decoration: none; }
+  .focused-gpus { margin: 18px 0; }
+  .focused-gpus > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .focused-gpus h3 { margin: 0; }
+  .fleet-disclosure { margin-top: 18px; border-top: 1px solid var(--line); }
+  .fleet-disclosure > summary {
+    cursor: pointer; padding: 12px 0; color: var(--accent); font-size: 12px; font-weight: 700;
+  }
+  .fleet-disclosure[open] > summary { border-bottom: 1px solid var(--line); }
+  .fleet-disclosure > h2:first-of-type, .fleet-disclosure > h3:first-of-type { margin-top: 16px; }
   .pagination {
     display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px;
     color: var(--muted); font-size: 12px;
@@ -293,6 +314,9 @@
     .fabric-site > header > div { align-items: flex-start; flex-direction: column; gap: 2px; }
     .fabric-connection { align-items: flex-start; flex-direction: column; }
     .fabric-nodes { grid-template-columns: 1fr; }
+    .fabric-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .fabric-metrics > span:nth-child(2) { border-right: 0; }
+    .fabric-metrics > span:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
     .pagination { justify-content: space-between; flex-wrap: wrap; }
     .kv-label { width: 42%; }
   }

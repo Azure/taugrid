@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import type { Cluster, Nodes, RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
+import type { Cluster, Nodes, NodeUtil, RDMAValidationDetail, RDMAValidationPage, RDMAValidationSummary } from '../types';
 
 const fixtureObservedAt = '2026-09-14T20:03:00Z';
 const gpuConditionTypes = [
@@ -267,6 +267,29 @@ export const fleetGPUHealth: Cluster = {
       memoryUsedMB: 32768, memoryFreeMB: 111104,
       correctableRemappedRows: 0, uncorrectableRemappedRows: 1, rowRemapFailure: 0,
       healthy: false,
+    },
+  ],
+};
+
+export const fleetNodeUtil: NodeUtil = {
+  window: '15m0s',
+  queriedAt: '2026-09-14T20:03:30Z',
+  availability: 'ready',
+  nodes: [
+    {
+      instance: 'h200-node-a', cpuCores: 40, cpuUtilPct: 63, memUsedPct: 72,
+      memTotalBytes: 337893654528, memAvailBytes: 94610259968,
+      cpuCoverage: { samples: 20, observedCores: 40, usableCores: 40, observedSeconds: 560, windowCoveragePct: 93, counterResets: 0 },
+    },
+    {
+      instance: 'h200-node-b', cpuCores: 40, cpuUtilPct: 48, memUsedPct: 68,
+      memTotalBytes: 337893654528, memAvailBytes: 108125798400,
+      cpuCoverage: { samples: 20, observedCores: 40, usableCores: 40, observedSeconds: 560, windowCoveragePct: 93, counterResets: 0 },
+    },
+    {
+      instance: 'a100-node-c', cpuCores: 40, cpuUtilPct: null, memUsedPct: null,
+      memTotalBytes: null, memAvailBytes: null,
+      cpuCoverage: { samples: 0, observedCores: 0, usableCores: 0, observedSeconds: 0, windowCoveragePct: 0, counterResets: 0 },
     },
   ],
 };

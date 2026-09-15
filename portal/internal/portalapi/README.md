@@ -106,10 +106,7 @@ Experiments opens its native dashboard directly.
 |---|---|---|---|---|
 | Workloads | Jobs | `/portal/runs` | `runs.Board` → `/api/portal/runs` (batch Jobs + ray.io RayJobs) | ② |
 | Workloads | Services | `/portal/services` | none — placeholder (Ray Serve / KServe) | ③ |
-| Platform | Fleet › Health | `/portal/fleet?view=health` | `cluster.Board` (per-GPU health, Kusto) | ① (IB/NPD/AlertRule = ③) |
-| Platform | Fleet › Utilization | `/portal/fleet?view=util` | reuses `/api/portal/cluster`, re-sorted by util%, + node CPU/mem (`nodeutil.Board` → `/api/portal/nodeutil`, Kusto) | ① (heatmap/per-team = ③) |
-| Platform | Fleet › Compute | `/portal/fleet?view=compute` | `nodes.Board` (hardware inventory, K8s) | ① |
-| Platform | Fleet › InfiniBand | `/portal/fleet?view=infiniband` | `rdmavalidation.KustoReader` → `/api/portal/rdma-validations*`, with exact detail through workspace-scoped Stellar artifacts | ② |
+| Platform | Fleet | `/portal/fleet` | unified `nodes.Board` inventory, `cluster.Board` per-GPU telemetry, `nodeutil.Board` CPU/memory, continuous Node conditions, and `rdmavalidation.KustoReader` run evidence; exact validation detail uses workspace-scoped Stellar artifacts | ① + ② |
 | Platform | Kueue | `/portal/jobs` | `jobs.Board` (Kueue queue snapshot) | ① (PriorityClass = ③) |
 | Platform | Ray | `/portal/ray` | `ray.Board` (dashboard Services, K8s) | ① |
 | Platform | Observability | `/portal/observability` | none — placeholder | ③ |
@@ -119,9 +116,10 @@ Experiments opens its native dashboard directly.
 Workloads and Platform retain their `/portal` overview landings; Experiments
 goes directly to `/portal/experiments`, without a separate overview page.
 The overview API remains available for existing board consumers.
-The four Fleet boards share one page via in-page sub-tabs (Health |
-Utilization | Compute | InfiniBand); the legacy `/portal/{cluster,gpu,nodes}` paths still
-resolve to the matching Fleet sub-tab so existing deep-links keep working.
+Fleet capacity, GPU and node utilization, continuous health, and InfiniBand
+evidence share one site-aware operational map. The legacy
+`/portal/{cluster,gpu,nodes}` paths and old `?view=` links still resolve to the
+unified Fleet page; an `instance` query focuses the inline per-GPU detail table.
 
 ## InfiniBand validation contract
 
@@ -269,13 +267,9 @@ source for today**. They are listed here — not implemented — so the gap betw
    exists. Per-user attribution and budget burn still need their own identity,
    budget, and reporting contracts; utilization alone cannot supply them.
 
-2. **Fleet Health depth — continuous InfiniBand port/flap, NPD, and AlertRule.**
-   Today's Fleet Health is per-GPU DCGM health, while the InfiniBand sub-tab is
-   a separate run-based validation history. The proposal's richer continuous
-   health signals are not portal-readable:
-   - **Continuous InfiniBand port/flap** state lives in a node-local file written by
-     `check_ib_flaps.sh`; it must first be surfaced as a node condition (via the
-     collector) or pushed to ADX before a board can read it.
+2. **Fleet depth — NPD and AlertRule.** The unified Fleet map now reads
+   continuous GPU, NVLink, and InfiniBand Node conditions independently from
+   run validation evidence. Two richer signals remain unavailable:
    - **NPD** DaemonSet health would need a Kubernetes read of NPD pods/conditions.
    - **AlertRule** evaluation would need to read adx-mon AlertRule CRDs and their
      firing state.
