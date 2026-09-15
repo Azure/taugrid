@@ -90,11 +90,15 @@ func TestProjectRDMAValidationLifecycleAndArtifactLinkage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	instanceID, err := rdmaValidationInstanceID(result)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatal("RDMA validation projection is not deterministic")
 	}
-	if first.IdempotencyKey != result.WorkspaceID+"-"+result.ValidationID+"-attempt-1-terminal" ||
-		first.MetricFileID != result.WorkspaceID+"-"+result.ValidationID+"-attempt-1-terminal-metrics" ||
+	if first.IdempotencyKey != instanceID+"-terminal" ||
+		first.MetricFileID != instanceID+"-terminal-metrics" ||
 		first.RequestHash == "" || first.Step != 2 || first.Phase != "terminal" {
 		t.Fatalf("terminal projection identity = %+v", first)
 	}
@@ -107,7 +111,7 @@ func TestProjectRDMAValidationLifecycleAndArtifactLinkage(t *testing.T) {
 		t.Fatalf("succeeded classification = %+v", classification)
 	}
 	if first.Artifact == nil ||
-		first.Artifact.ArtifactID != result.WorkspaceID+"-"+result.ValidationID+"-attempt-1-result" ||
+		first.Artifact.ArtifactID != instanceID+"-result" ||
 		first.Artifact.Type != rdmavalidation.ArtifactType ||
 		first.Artifact.ContentType != rdmavalidation.ArtifactContentType ||
 		first.Artifact.URI != link.URI ||
@@ -283,6 +287,7 @@ func TestRDMAValidationProjectionRetryIdentityAndConflictHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	retry, err := ProjectRDMAValidation(result, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -312,6 +317,35 @@ func TestRDMAValidationProjectionRetryIdentityAndConflictHash(t *testing.T) {
 		attemptProjection.IdempotencyKey == first.IdempotencyKey ||
 		attemptProjection.MetricFileID == first.MetricFileID {
 		t.Fatalf("attempt-two identity = %+v", attemptProjection)
+	}
+}
+
+func TestRDMAValidationProjectionIdentityTupleIsUnambiguous(t *testing.T) {
+	first := readRDMAValidationGolden(t, "pass.golden.json")
+	first.WorkspaceID = "a-b"
+	first.ValidationID = "c"
+	first.RunID = "rdma-identity-first"
+
+	second := first
+	second.WorkspaceID = "a"
+	second.ValidationID = "b-c"
+	second.RunID = "rdma-identity-second"
+
+	firstProjection, err := ProjectRDMAValidation(first, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondProjection, err := ProjectRDMAValidation(second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstProjection.IdempotencyKey == secondProjection.IdempotencyKey ||
+		firstProjection.MetricFileID == secondProjection.MetricFileID {
+		t.Fatalf(
+			"ambiguous identity tuple generated colliding keys: first=%+v second=%+v",
+			firstProjection,
+			secondProjection,
+		)
 	}
 }
 

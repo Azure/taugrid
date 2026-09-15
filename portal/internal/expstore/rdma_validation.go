@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
@@ -78,6 +77,10 @@ func ProjectRDMAValidation(
 	if err != nil {
 		return RDMAValidationProjection{}, err
 	}
+	instanceID, err := rdmaValidationInstanceID(result)
+	if err != nil {
+		return RDMAValidationProjection{}, err
+	}
 	projectedResult := result
 	projectedResult.ProjectID = projectID
 	projectedResult.RunGroupID = runGroupID
@@ -126,7 +129,7 @@ func ProjectRDMAValidation(
 		projection.Run.ResultURI = link.URI
 		size := link.SizeBytes
 		projection.Artifact = &ArtifactRecord{
-			ArtifactID:  fmt.Sprintf("%s-%s-attempt-%d-result", result.WorkspaceID, result.ValidationID, result.Attempt),
+			ArtifactID:  instanceID + "-result",
 			RunID:       result.RunID,
 			Type:        rdmavalidation.ArtifactType,
 			URI:         link.URI,
@@ -156,8 +159,7 @@ func ProjectRDMAValidation(
 			projection.Metrics = append(projection.Metrics, row)
 		}
 	}
-	identity := result.WorkspaceID + "-" + result.ValidationID +
-		"-attempt-" + strconv.Itoa(result.Attempt) + "-" + phase
+	identity := instanceID + "-" + phase
 	projection.IdempotencyKey = identity
 	projection.MetricFileID = identity + "-metrics"
 	projection.RequestHash, err = rdmaValidationProjectionHash(projection)
@@ -165,6 +167,23 @@ func ProjectRDMAValidation(
 		return RDMAValidationProjection{}, err
 	}
 	return projection, nil
+}
+
+func rdmaValidationInstanceID(result rdmavalidation.Result) (string, error) {
+	identity, err := json.Marshal(struct {
+		WorkspaceID  string `json:"workspace_id"`
+		ValidationID string `json:"validation_id"`
+		Attempt      int    `json:"attempt"`
+	}{
+		WorkspaceID:  result.WorkspaceID,
+		ValidationID: result.ValidationID,
+		Attempt:      result.Attempt,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode RDMA validation identity: %w", err)
+	}
+	sum := sha256.Sum256(identity)
+	return "rdma-validation-" + hex.EncodeToString(sum[:]), nil
 }
 
 func rdmaProjectionPhase(lifecycle rdmavalidation.RunLifecycle, attempt int) (string, time.Time, int64, error) {

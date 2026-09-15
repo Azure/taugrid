@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,7 +89,8 @@ func TestRDMAValidationArtifactFetchRequiresWorkspaceScopedRun(t *testing.T) {
 		t.Fatalf("artifact list = %+v", response)
 	}
 	artifact := response.Artifacts[0]
-	if artifact.ArtifactID != result.WorkspaceID+"-"+result.ValidationID+"-attempt-1-result" ||
+	if !strings.HasPrefix(artifact.ArtifactID, "rdma-validation-") ||
+		!strings.HasSuffix(artifact.ArtifactID, "-result") ||
 		artifact.Type != rdmavalidation.ArtifactType ||
 		artifact.Digest != link.SHA256 ||
 		artifact.URI != artifactURI ||
