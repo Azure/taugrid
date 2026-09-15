@@ -730,13 +730,13 @@ func TestNCCLRDMAHarnessCleanupUsesOnlySuccessfulCreateUIDLedger(t *testing.T) {
 	calls := filepath.Join(temp, "delete-calls")
 	require.NoError(t, os.WriteFile(
 		ledger,
-		[]byte("batch|v1|jobs|e2e-nccl-rdma-2x1xh200|successful-create-uid\n"),
+		[]byte(`{"group":"batch","version":"v1","resource":"jobs","namespace":"taugrid-rdma-diagnostic","name":"e2e-nccl-rdma-2x1xh200","uid":"successful-create-uid"}`+"\n"),
 		0o600,
 	))
 	command := exec.Command("bash", "-c", fmt.Sprintf(`
 source %q
 run_owned_delete_bounded() {
-  printf '%%s\n' "$*" >>"$DELETE_CALLS"
+  printf '%%s|%%s|%%s|%%s|%%s|%%s\n' "$2" "$3" "$4" "$5" "$6" "$7" >>"$DELETE_CALLS"
 }
 cleanup_kube() {
   shift
@@ -791,8 +791,8 @@ func TestNCCLRDMAHarnessCleanupAttemptsEveryOwnedUIDAfterDeleteFailure(t *testin
 	require.NoError(t, os.WriteFile(
 		ledger,
 		[]byte(
-			"|v1|configmaps|nccl-rdma-probe|configmap-uid\n"+
-				"batch|v1|jobs|e2e-nccl-rdma-2x1xh200|job-uid\n",
+			`{"group":"","version":"v1","resource":"configmaps","namespace":"taugrid-rdma-diagnostic","name":"nccl-rdma-probe","uid":"configmap-uid"}`+"\n"+
+				`{"group":"batch","version":"v1","resource":"jobs","namespace":"taugrid-rdma-diagnostic","name":"e2e-nccl-rdma-2x1xh200","uid":"job-uid"}`+"\n",
 		),
 		0o600,
 	))
@@ -821,6 +821,42 @@ cleanup_owned_uids
 	require.NoError(t, readErr)
 	require.Contains(t, string(data), "jobs")
 	require.Contains(t, string(data), "configmaps")
+}
+
+func TestNCCLRDMAHarnessCleanupPreservesEmptyAPIGroupAndClusterScope(t *testing.T) {
+	temp := t.TempDir()
+	ledger := filepath.Join(temp, "owned-uids")
+	calls := filepath.Join(temp, "delete-calls")
+	require.NoError(t, os.WriteFile(
+		ledger,
+		[]byte(`{"group":"","version":"v1","resource":"namespaces","namespace":"","name":"taugrid-rdma-diagnostic","uid":"namespace-uid"}`+"\n"),
+		0o600,
+	))
+	command := exec.Command("bash", "-c", fmt.Sprintf(`
+source %q
+run_owned_delete_bounded() {
+  printf '%%s|%%s|%%s|%%s|%%s|%%s\n' "$2" "$3" "$4" "$5" "$6" "$7" >>"$DELETE_CALLS"
+}
+cleanup_get_owned_json() {
+  return 0
+}
+cleanup_kube() {
+  shift
+  return 0
+}
+cleanup_owned_uids
+`, ncclRDMAHarnessPath(t)))
+	command.Env = append(os.Environ(),
+		"E2E_STACK_NAMESPACE=taugrid-rdma-diagnostic",
+		"NCCL_RDMA_INVOCATION=nccl-rdma-0123456789abcdef0123456789abcdef",
+		"NCCL_RDMA_OWNED_UID_FILE="+ledger,
+		"DELETE_CALLS="+calls,
+	)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	data, err := os.ReadFile(calls)
+	require.NoError(t, err)
+	require.Equal(t, "||v1|namespaces|taugrid-rdma-diagnostic|namespace-uid\n", string(data))
 }
 
 func TestNCCLRDMAHarnessStopsManagedTestBeforeExitCleanup(t *testing.T) {
@@ -860,6 +896,26 @@ wait "$NCCL_RDMA_TEST_PID"
 	require.FileExists(t, cleanupMarker)
 	time.Sleep(2200 * time.Millisecond)
 	require.NoFileExists(t, childMarker, "managed live-test child continued after harness termination")
+}
+
+func TestNCCLRDMAHarnessRunsExitCleanupAfterRedirectedSubshellFailure(t *testing.T) {
+	cleanupMarker := filepath.Join(t.TempDir(), "cleanup-complete")
+	command := exec.Command("bash", "-c", fmt.Sprintf(`
+source %q
+cleanup_owned_uids() {
+  : >"$CLEANUP_MARKER"
+}
+NCCL_RDMA_OWNED_UID_FILE="$CLEANUP_MARKER.ledger"
+: >"$NCCL_RDMA_OWNED_UID_FILE"
+trap cleanup_on_exit EXIT
+( false ) >"$CLEANUP_MARKER.output" 2>&1
+echo "unexpected continuation" >&2
+`, ncclRDMAHarnessPath(t)))
+	command.Env = append(os.Environ(), "CLEANUP_MARKER="+cleanupMarker)
+	output, err := command.CombinedOutput()
+	require.Error(t, err, string(output))
+	require.FileExists(t, cleanupMarker)
+	require.NotContains(t, string(output), "unexpected continuation")
 }
 
 func TestNCCLRDMAHarnessCapacityPreflightUsesRequestsAndAllowsFifteenOfSixteenGPUs(t *testing.T) {

@@ -690,9 +690,19 @@ func TestNCCLRDMA2x1H200(t *testing.T) {
 }
 
 type ownedNCCLRDMAResource struct {
-	GVR  schema.GroupVersionResource
-	Name string
-	UID  types.UID
+	GVR       schema.GroupVersionResource
+	Namespace string
+	Name      string
+	UID       types.UID
+}
+
+type ownedNCCLRMALedgerEntry struct {
+	Group     string    `json:"group"`
+	Version   string    `json:"version"`
+	Resource  string    `json:"resource"`
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	UID       types.UID `json:"uid"`
 }
 
 type ncclRDMAResourceManifest struct {
@@ -805,7 +815,10 @@ func successfulNCCLRDMAOwnedResource(
 		)
 	}
 	return ownedNCCLRDMAResource{
-		GVR: manifest.GVR, Name: manifest.Object.GetName(), UID: created.GetUID(),
+		GVR:       manifest.GVR,
+		Namespace: manifest.Object.GetNamespace(),
+		Name:      manifest.Object.GetName(),
+		UID:       created.GetUID(),
 	}, nil
 }
 
@@ -829,10 +842,38 @@ func validateNCCLRDMAOwnedUIDLedger() error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("owned UID ledger %s is not a regular file", path)
 	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open owned UID ledger %s: %w", path, err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	line := 0
+	for scanner.Scan() {
+		line++
+		if _, err := decodeNCCLRDMAOwnedUIDLedgerEntry(scanner.Bytes()); err != nil {
+			return fmt.Errorf("parse owned UID ledger %s line %d: %w", path, line, err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read owned UID ledger %s: %w", path, err)
+	}
 	return nil
 }
 
 func appendNCCLRDMAOwnedUID(item ownedNCCLRDMAResource) error {
+	entry := ownedNCCLRMALedgerEntry{
+		Group:     item.GVR.Group,
+		Version:   item.GVR.Version,
+		Resource:  item.GVR.Resource,
+		Namespace: item.Namespace,
+		Name:      item.Name,
+		UID:       item.UID,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
 	path := strings.TrimSpace(os.Getenv(ncclRDMAOwnedUIDFile))
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
@@ -840,14 +881,45 @@ func appendNCCLRDMAOwnedUID(item ownedNCCLRDMAResource) error {
 	}
 	defer file.Close()
 	writer := bufio.NewWriter(file)
-	if _, err := fmt.Fprintf(writer, "%s|%s|%s|%s|%s\n",
-		item.GVR.Group, item.GVR.Version, item.GVR.Resource, item.Name, item.UID); err != nil {
+	if _, err := writer.Write(data); err != nil {
+		return err
+	}
+	if err := writer.WriteByte('\n'); err != nil {
 		return err
 	}
 	if err := writer.Flush(); err != nil {
 		return err
 	}
 	return file.Sync()
+}
+
+func decodeNCCLRDMAOwnedUIDLedgerEntry(data []byte) (ownedNCCLRMALedgerEntry, error) {
+	var entry ownedNCCLRMALedgerEntry
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&entry); err != nil {
+		return entry, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return entry, errors.New("multiple JSON values are not allowed")
+		}
+		return entry, fmt.Errorf("decode trailing ledger data: %w", err)
+	}
+	if strings.TrimSpace(entry.Version) == "" || strings.TrimSpace(entry.Resource) == "" ||
+		strings.TrimSpace(entry.Name) == "" || strings.TrimSpace(string(entry.UID)) == "" {
+		return entry, errors.New("version, resource, name, and UID are required")
+	}
+	for field, value := range map[string]string{
+		"group": entry.Group, "version": entry.Version, "resource": entry.Resource,
+		"namespace": entry.Namespace, "name": entry.Name, "uid": string(entry.UID),
+	} {
+		if strings.ContainsAny(value, "\r\n") {
+			return entry, fmt.Errorf("%s contains a newline", field)
+		}
+	}
+	return entry, nil
 }
 
 func requireNCCLRDMANamespaceApproval(ctx context.Context, kubeClient kubernetes.Interface, namespace string) error {
@@ -1187,7 +1259,10 @@ func deleteOwnedNCCLRDMAResourcesWithin(
 	pending := make([]pendingResource, 0, len(owned))
 	for index := len(owned) - 1; index >= 0; index-- {
 		item := owned[index]
-		resource := dynamicClient.Resource(item.GVR).Namespace(stackNamespace)
+		var resource dynamic.ResourceInterface = dynamicClient.Resource(item.GVR)
+		if item.Namespace != "" {
+			resource = dynamicClient.Resource(item.GVR).Namespace(item.Namespace)
+		}
 		pending = append(pending, pendingResource{item: item, resource: resource})
 		foreground := metav1.DeletePropagationForeground
 		err := resource.Delete(cleanupCtx, item.Name, metav1.DeleteOptions{

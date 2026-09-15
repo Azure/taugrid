@@ -35,8 +35,9 @@ import (
 )
 
 const (
-	boundaryNamespace = "taugrid-rdma-diagnostic"
-	boundaryQueue     = "h200-rdma"
+	boundaryNamespace   = "taugrid-rdma-diagnostic"
+	boundaryQueue       = "h200-rdma"
+	boundaryPolicyCount = 8
 )
 
 var approvalPlaceholderRE = regexp.MustCompile(`APPROVED_[A-Z0-9_]+`)
@@ -216,8 +217,12 @@ func decodeBoundaryDocuments(source []byte) (boundaryDocuments, error) {
 			result.bindings[binding.Name] = &binding
 		}
 	}
-	if len(result.policies) != 4 || len(result.bindings) != 4 {
-		return result, fmt.Errorf("security boundary must render exactly four policies and four Deny bindings")
+	if len(result.policies) != boundaryPolicyCount || len(result.bindings) != boundaryPolicyCount {
+		return result, fmt.Errorf(
+			"security boundary must render exactly %d policies and %d Deny bindings",
+			boundaryPolicyCount,
+			boundaryPolicyCount,
+		)
 	}
 	return result, nil
 }
@@ -229,7 +234,7 @@ func validateActiveBoundary(ctx context.Context, client kubernetes.Interface, ex
 			return fmt.Errorf("required ValidatingAdmissionPolicy %s is not active: %w", name, err)
 		}
 		if !reflect.DeepEqual(actual.Labels, wanted.Labels) || !reflect.DeepEqual(actual.Annotations, wanted.Annotations) ||
-			!reflect.DeepEqual(actual.Spec, wanted.Spec) {
+			!reflect.DeepEqual(canonicalPolicySpec(actual.Spec), canonicalPolicySpec(wanted.Spec)) {
 			return fmt.Errorf("active ValidatingAdmissionPolicy %s drifts from the rendered repository boundary", name)
 		}
 		if actual.Status.ObservedGeneration != actual.Generation || actual.Status.TypeChecking == nil {
@@ -245,7 +250,7 @@ func validateActiveBoundary(ctx context.Context, client kubernetes.Interface, ex
 			return fmt.Errorf("required ValidatingAdmissionPolicyBinding %s is not active: %w", name, err)
 		}
 		if !reflect.DeepEqual(actual.Labels, wanted.Labels) || !reflect.DeepEqual(actual.Annotations, wanted.Annotations) ||
-			!reflect.DeepEqual(actual.Spec, wanted.Spec) {
+			!reflect.DeepEqual(canonicalBindingSpec(actual.Spec), canonicalBindingSpec(wanted.Spec)) {
 			return fmt.Errorf("active ValidatingAdmissionPolicyBinding %s drifts from the rendered repository boundary", name)
 		}
 		if !reflect.DeepEqual(actual.Spec.ValidationActions, []admissionv1.ValidationAction{admissionv1.Deny}) {
@@ -253,6 +258,49 @@ func validateActiveBoundary(ctx context.Context, client kubernetes.Interface, ex
 		}
 	}
 	return nil
+}
+
+func canonicalPolicySpec(spec admissionv1.ValidatingAdmissionPolicySpec) admissionv1.ValidatingAdmissionPolicySpec {
+	copy := spec.DeepCopy()
+	canonicalMatchResources(copy.MatchConstraints)
+	return *copy
+}
+
+func canonicalBindingSpec(spec admissionv1.ValidatingAdmissionPolicyBindingSpec) admissionv1.ValidatingAdmissionPolicyBindingSpec {
+	copy := spec.DeepCopy()
+	canonicalMatchResources(copy.MatchResources)
+	return *copy
+}
+
+func canonicalMatchResources(match *admissionv1.MatchResources) {
+	if match == nil {
+		return
+	}
+	// Kubernetes 1.34 stores omitted all-resource selectors and scope explicitly.
+	// Canonicalize only those documented defaults so any narrowing or opt-in
+	// selector still fails the active-boundary comparison.
+	match.NamespaceSelector = canonicalLabelSelector(match.NamespaceSelector)
+	match.ObjectSelector = canonicalLabelSelector(match.ObjectSelector)
+	for index := range match.ResourceRules {
+		canonicalRuleScope(&match.ResourceRules[index])
+	}
+	for index := range match.ExcludeResourceRules {
+		canonicalRuleScope(&match.ExcludeResourceRules[index])
+	}
+}
+
+func canonicalLabelSelector(selector *metav1.LabelSelector) *metav1.LabelSelector {
+	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
+		return &metav1.LabelSelector{}
+	}
+	return selector
+}
+
+func canonicalRuleScope(rule *admissionv1.NamedRuleWithOperations) {
+	if rule.Scope == nil {
+		scope := admissionv1.AllScopes
+		rule.Scope = &scope
+	}
 }
 
 func explicitRESTConfig(kubeconfig, contextName string) (*rest.Config, error) {
@@ -379,7 +427,7 @@ func runDeniedAdmissionProbes(
 	_, err = untrustedClient.CoreV1().Secrets(config.namespace).Create(
 		ctx, secret, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}},
 	)
-	if err := expectDenied(err, "taugrid-nccl-rdma-support-boundary"); err != nil {
+	if err := expectDenied(err, "taugrid-nccl-rdma-secret-boundary"); err != nil {
 		return fmt.Errorf("malicious Secret dry-run: %w", err)
 	}
 	rootCA, err := untrustedClient.CoreV1().ConfigMaps(config.namespace).
@@ -395,7 +443,7 @@ func runDeniedAdmissionProbes(
 	_, err = untrustedClient.CoreV1().ConfigMaps(config.namespace).Update(
 		ctx, rootCA, metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}},
 	)
-	if err := expectDenied(err, "taugrid-nccl-rdma-support-boundary"); err != nil {
+	if err := expectDenied(err, "taugrid-nccl-rdma-configmap-boundary"); err != nil {
 		return fmt.Errorf("malicious support UPDATE dry-run: %w", err)
 	}
 	pod := maliciousPodProbe(config.namespace)

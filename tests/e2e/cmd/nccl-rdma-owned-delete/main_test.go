@@ -54,6 +54,46 @@ func TestDeleteOwnedResourceSendsUIDPreconditionAndForegroundBody(t *testing.T) 
 	))
 }
 
+func TestDeleteOwnedClusterScopedResourceSendsUIDPreconditionAndForegroundBody(t *testing.T) {
+	const uid = types.UID("31c57b2e-b633-4073-ad3f-6a9db75d94cf")
+	gvr := schema.GroupVersionResource{
+		Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(
+			t,
+			"/apis/admissionregistration.k8s.io/v1/validatingadmissionpolicies/taugrid-nccl-rdma-job-boundary",
+			r.URL.Path,
+		)
+		var options metav1.DeleteOptions
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&options))
+		require.NotNil(t, options.Preconditions)
+		require.NotNil(t, options.Preconditions.UID)
+		require.Equal(t, uid, *options.Preconditions.UID)
+		require.NotNil(t, options.PropagationPolicy)
+		require.Equal(t, metav1.DeletePropagationForeground, *options.PropagationPolicy)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"apiVersion":"v1","kind":"Status","status":"Success","code":200}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	require.NoError(t, err)
+	require.NoError(t, deleteOwnedResource(
+		context.Background(),
+		client,
+		gvr,
+		"",
+		"taugrid-nccl-rdma-job-boundary",
+		uid,
+		time.Second,
+	))
+}
+
 func TestDeleteOwnedResourceTreatsAlreadyDeletedAsSuccess(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	err := deleteOwnedResource(

@@ -483,7 +483,7 @@ spec:
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
-  name: taugrid-nccl-rdma-support-boundary
+  name: taugrid-nccl-rdma-serviceaccount-boundary
   labels:
     app.kubernetes.io/name: nccl-rdma-diagnostic
     app.kubernetes.io/managed-by: platform-gitops
@@ -496,7 +496,261 @@ spec:
     - apiGroups: [""]
       apiVersions: ["v1"]
       operations: ["CREATE", "UPDATE"]
-      resources: ["serviceaccounts", "configmaps", "secrets", "services"]
+      resources: ["serviceaccounts"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
+    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-runner" &&
+      object.metadata.labels.size() == 4 &&
+      object.automountServiceAccountToken == false &&
+      (!has(object.secrets) || object.secrets.size() == 0) &&
+      (!has(object.imagePullSecrets) || object.imagePullSecrets.size() == 0)
+    message: The dedicated ServiceAccount has no token automount, secrets, image credentials, or RBAC grant.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-serviceaccount-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-serviceaccount-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-configmap-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["configmaps"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
+    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-probe" &&
+      object.metadata.labels.size() == 4 &&
+      object.immutable == true &&
+      object.data.size() == 1 &&
+      object.data["torchrun-rdma-probe.py"] == "APPROVED_TORCHRUN_RDMA_PROBE_EXACT" &&
+      (!has(object.binaryData) || object.binaryData.size() == 0)
+    message: The immutable repository probe ConfigMap must contain only the exact approved Python source.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-configmap-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-configmap-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-secret-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["secrets"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
+    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-auth" &&
+      object.metadata.labels.size() == 4 &&
+      object.immutable == true &&
+      object.type == "Opaque" &&
+      object.data.size() == 1 &&
+      object.data["key"].size() == 32 &&
+      (!has(object.stringData) || object.stringData.size() == 0)
+    message: The immutable run-scoped Secret contains only one random 32-byte HMAC key.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-secret-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-secret-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-service-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["services"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: request.userInfo.username == "APPROVED_OPERATOR_USERNAME"
+    message: Only the approved operator may create or update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "e2e-nccl-rdma-rank0" &&
+      object.metadata.labels.size() == 4 &&
+      object.spec.clusterIP == "None" &&
+      object.spec.selector.size() == 4 &&
+      object.spec.selector["batch.kubernetes.io/job-name"] ==
+        "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.selector["batch.kubernetes.io/job-completion-index"] == "0" &&
+      object.spec.selector["e2e.taugrid.azure.com/diagnostic"] ==
+        "nccl-rdma-2x1xh200" &&
+      object.spec.selector["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      object.spec.ports.size() == 1 &&
+      object.spec.ports[0].name == "rendezvous" &&
+      object.spec.ports[0].protocol == "TCP" &&
+      object.spec.ports[0].port == 29500 &&
+      object.spec.ports[0].targetPort == 29500 &&
+      (!has(object.spec.ports[0].nodePort) || object.spec.ports[0].nodePort == 0) &&
+      !has(object.spec.ports[0].appProtocol) &&
+      object.spec.type == "ClusterIP" &&
+      (!has(object.spec.externalName) || object.spec.externalName == "") &&
+      (!has(object.spec.externalIPs) || object.spec.externalIPs.size() == 0) &&
+      (!has(object.spec.loadBalancerIP) || object.spec.loadBalancerIP == "") &&
+      (!has(object.spec.loadBalancerSourceRanges) ||
+       object.spec.loadBalancerSourceRanges.size() == 0)
+    message: The headless Service selects only rank zero and exposes only the torchrun rendezvous port.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-service-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-service-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-networkpolicy-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
     - apiGroups: ["networking.k8s.io"]
       apiVersions: ["v1"]
       operations: ["CREATE", "UPDATE"]
@@ -519,129 +773,64 @@ spec:
       (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
     message: Support resource labels, invocation, and ownership must be exact.
   - expression: >-
-      object.kind != "ServiceAccount" ||
-      (
-        object.metadata.name == "nccl-rdma-runner" &&
-        object.metadata.labels.size() == 4 &&
-        object.automountServiceAccountToken == false &&
-        (!has(object.secrets) || object.secrets.size() == 0) &&
-        (!has(object.imagePullSecrets) || object.imagePullSecrets.size() == 0)
-      )
-    message: The dedicated ServiceAccount has no token automount, secrets, image credentials, or RBAC grant.
-  - expression: >-
-      object.kind != "ConfigMap" ||
-      (
-        object.metadata.name == "nccl-rdma-probe" &&
-        object.metadata.labels.size() == 4 &&
-        object.immutable == true &&
-        object.data.size() == 1 &&
-        object.data["torchrun-rdma-probe.py"] == "APPROVED_TORCHRUN_RDMA_PROBE_EXACT" &&
-        (!has(object.binaryData) || object.binaryData.size() == 0)
-      )
-    message: The immutable repository probe ConfigMap must contain only the exact approved Python source.
-  - expression: >-
-      object.kind != "Secret" ||
-      (
-        object.metadata.name == "nccl-rdma-auth" &&
-        object.metadata.labels.size() == 4 &&
-        object.immutable == true &&
-        object.type == "Opaque" &&
-        object.data.size() == 1 &&
-        object.data["key"].size() == 32 &&
-        (!has(object.stringData) || object.stringData.size() == 0)
-      )
-    message: The immutable run-scoped Secret contains only one random 32-byte HMAC key.
-  - expression: >-
-      object.kind != "Service" ||
-      (
-        object.metadata.name == "e2e-nccl-rdma-rank0" &&
-        object.metadata.labels.size() == 4 &&
-        object.spec.clusterIP == "None" &&
-        object.spec.selector.size() == 4 &&
-        object.spec.selector["batch.kubernetes.io/job-name"] ==
-          "e2e-nccl-rdma-2x1xh200" &&
-        object.spec.selector["batch.kubernetes.io/job-completion-index"] == "0" &&
-        object.spec.selector["e2e.taugrid.azure.com/diagnostic"] ==
-          "nccl-rdma-2x1xh200" &&
-        object.spec.selector["e2e.taugrid.azure.com/invocation"] ==
-          object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
-        object.spec.ports.size() == 1 &&
-        object.spec.ports[0].name == "rendezvous" &&
-        object.spec.ports[0].protocol == "TCP" &&
-        object.spec.ports[0].port == 29500 &&
-        object.spec.ports[0].targetPort == 29500 &&
-        (!has(object.spec.ports[0].nodePort) || object.spec.ports[0].nodePort == 0) &&
-        !has(object.spec.ports[0].appProtocol) &&
-        object.spec.type == "ClusterIP" &&
-        (!has(object.spec.externalName) || object.spec.externalName == "") &&
-        (!has(object.spec.externalIPs) || object.spec.externalIPs.size() == 0) &&
-        (!has(object.spec.loadBalancerIP) || object.spec.loadBalancerIP == "") &&
-        (!has(object.spec.loadBalancerSourceRanges) ||
-         object.spec.loadBalancerSourceRanges.size() == 0)
-      )
-    message: The headless Service selects only rank zero and exposes only the torchrun rendezvous port.
-  - expression: >-
-      object.kind != "NetworkPolicy" ||
-      (
-        object.metadata.name == "nccl-rdma-isolation" &&
-        object.metadata.labels.size() == 4 &&
-        object.spec.podSelector.matchLabels.size() == 3 &&
-        object.spec.podSelector.matchLabels["batch.kubernetes.io/job-name"] ==
-          "e2e-nccl-rdma-2x1xh200" &&
-        object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/diagnostic"] ==
-          "nccl-rdma-2x1xh200" &&
-        object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/invocation"] ==
-          object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
-        object.spec.policyTypes == ["Ingress", "Egress"] &&
-        object.spec.ingress.size() == 1 &&
-        object.spec.ingress[0].from.size() == 1 &&
-        (!has(object.spec.ingress[0].ports) ||
-         object.spec.ingress[0].ports.size() == 0) &&
-        object.spec.ingress[0].from[0].podSelector ==
-          object.spec.podSelector &&
-        !has(object.spec.ingress[0].from[0].namespaceSelector) &&
-        !has(object.spec.ingress[0].from[0].ipBlock) &&
-        object.spec.egress.size() == 2 &&
-        object.spec.egress[0].to.size() == 1 &&
-        (!has(object.spec.egress[0].ports) ||
-         object.spec.egress[0].ports.size() == 0) &&
-        object.spec.egress[0].to[0].podSelector ==
-          object.spec.podSelector &&
-        !has(object.spec.egress[0].to[0].namespaceSelector) &&
-        !has(object.spec.egress[0].to[0].ipBlock) &&
-        object.spec.egress[1].to.size() == 1 &&
-        object.spec.egress[1].to[0].namespaceSelector.matchLabels[
-          "kubernetes.io/metadata.name"
-        ] == "kube-system" &&
-        object.spec.egress[1].to[0].podSelector.matchLabels["k8s-app"] ==
-          "kube-dns" &&
-        object.spec.egress[1].to[0].namespaceSelector.matchLabels.size() == 1 &&
-        (!has(object.spec.egress[1].to[0].namespaceSelector.matchExpressions) ||
-         object.spec.egress[1].to[0].namespaceSelector.matchExpressions.size() == 0) &&
-        object.spec.egress[1].to[0].podSelector.matchLabels.size() == 1 &&
-        (!has(object.spec.egress[1].to[0].podSelector.matchExpressions) ||
-         object.spec.egress[1].to[0].podSelector.matchExpressions.size() == 0) &&
-        !has(object.spec.egress[1].to[0].ipBlock) &&
-        object.spec.egress[1].ports.size() == 2 &&
-        object.spec.egress[1].ports.exists(
-          port, port.protocol == "UDP" && port.port == 53 && !has(port.endPort)
-        ) &&
-        object.spec.egress[1].ports.exists(
-          port, port.protocol == "TCP" && port.port == 53 && !has(port.endPort)
-        )
+      object.metadata.name == "nccl-rdma-isolation" &&
+      object.metadata.labels.size() == 4 &&
+      object.spec.podSelector.matchLabels.size() == 3 &&
+      object.spec.podSelector.matchLabels["batch.kubernetes.io/job-name"] ==
+        "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/diagnostic"] ==
+        "nccl-rdma-2x1xh200" &&
+      object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      object.spec.policyTypes == ["Ingress", "Egress"] &&
+      object.spec.ingress.size() == 1 &&
+      object.spec.ingress[0].from.size() == 1 &&
+      (!has(object.spec.ingress[0].ports) ||
+       object.spec.ingress[0].ports.size() == 0) &&
+      object.spec.ingress[0].from[0].podSelector ==
+        object.spec.podSelector &&
+      !has(object.spec.ingress[0].from[0].namespaceSelector) &&
+      !has(object.spec.ingress[0].from[0].ipBlock) &&
+      object.spec.egress.size() == 2 &&
+      object.spec.egress[0].to.size() == 1 &&
+      (!has(object.spec.egress[0].ports) ||
+       object.spec.egress[0].ports.size() == 0) &&
+      object.spec.egress[0].to[0].podSelector ==
+        object.spec.podSelector &&
+      !has(object.spec.egress[0].to[0].namespaceSelector) &&
+      !has(object.spec.egress[0].to[0].ipBlock) &&
+      object.spec.egress[1].to.size() == 1 &&
+      object.spec.egress[1].to[0].namespaceSelector.matchLabels[
+        "kubernetes.io/metadata.name"
+      ] == "kube-system" &&
+      object.spec.egress[1].to[0].podSelector.matchLabels["k8s-app"] ==
+        "kube-dns" &&
+      object.spec.egress[1].to[0].namespaceSelector.matchLabels.size() == 1 &&
+      (!has(object.spec.egress[1].to[0].namespaceSelector.matchExpressions) ||
+       object.spec.egress[1].to[0].namespaceSelector.matchExpressions.size() == 0) &&
+      object.spec.egress[1].to[0].podSelector.matchLabels.size() == 1 &&
+      (!has(object.spec.egress[1].to[0].podSelector.matchExpressions) ||
+       object.spec.egress[1].to[0].podSelector.matchExpressions.size() == 0) &&
+      !has(object.spec.egress[1].to[0].ipBlock) &&
+      object.spec.egress[1].ports.size() == 2 &&
+      object.spec.egress[1].ports.exists(
+        port, port.protocol == "UDP" && port.port == 53 && !has(port.endPort)
+      ) &&
+      object.spec.egress[1].ports.exists(
+        port, port.protocol == "TCP" && port.port == 53 && !has(port.endPort)
       )
     message: NetworkPolicy permits only peer diagnostic pods and kube-system DNS.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: taugrid-nccl-rdma-support-boundary
+  name: taugrid-nccl-rdma-networkpolicy-boundary
   labels:
     app.kubernetes.io/name: nccl-rdma-diagnostic
     app.kubernetes.io/managed-by: platform-gitops
     tau.azure.com/nccl-rdma-security-boundary: v3
 spec:
-  policyName: taugrid-nccl-rdma-support-boundary
+  policyName: taugrid-nccl-rdma-networkpolicy-boundary
   matchResources:
     matchPolicy: Equivalent
     namespaceSelector:

@@ -166,10 +166,17 @@ admission rejects a copied explicit value without a PriorityClass. The
 API-defaulted generated Pod value is pinned as `PreemptLowerPriority`, while
 Kueue queue and ClusterQueue preemption remain disabled.
 
-Before any live create, the harness requires all four VAPs and all four Deny
+Before any live create, the harness requires all eight VAPs and all eight Deny
 bindings to exist with the exact rendered repository specs and ownership
-labels. Each policy's status must report its active generation type-checked
-with no expression warnings. Impersonated, non-persisting server-side probes
+labels. The five support-resource policies are intentionally split by
+ServiceAccount, ConfigMap, Secret, Service, and NetworkPolicy schema so the API
+server type-checks every CEL expression against exactly one object type. Each
+policy's status must report its active generation type-checked with no
+expression warnings. The active comparison canonicalizes only Kubernetes'
+documented all-resource defaults (`namespaceSelector: {}`, `objectSelector: {}`
+and rule `scope: "*"`) so omitted and server-defaulted forms compare equal;
+non-empty selectors and narrower scopes remain drift. Impersonated,
+non-persisting server-side probes
 must allow the exact operator Job/support resources and exact Job-controller
 Pods; Kueue must restore `spec.suspend: true` on the unsuspended Job probe.
 Malicious probes must prove denial of an untrusted Job, Secret/support update,
@@ -180,9 +187,13 @@ cleanup authority and the explicit untrusted probe identity to lack DELETE on
 every protected kind. Any missing policy, drift, non-Deny binding, warning,
 denied expected path, accepted malicious path, or delete-authority mismatch
 fails preflight. Repository tests
-also install and evaluate the rendered policies on a local Kubernetes 1.36.2
-envtest API server; the target API server's active policy status and the live
-Kueue webhook are still independently required.
+also install and evaluate the rendered policies on local Kubernetes 1.34 and
+1.36 envtest API servers. Those regressions require server-defaulted selectors
+and scopes to compare equal, every support policy to match exactly one
+Kubernetes schema, and exact/malicious requests to retain their expected
+admission outcomes. Separate active-boundary tests fail on any API-reported
+type-check warning. The target API server's real active policy status and the
+live Kueue webhook are still independently required.
 
 The target Namespace, LocalQueue, admission policies, and bindings must already
 exist. The namespace must already have:
@@ -257,8 +268,12 @@ rank receipts, zero correctness error, positive `algbw`/`busbw` derived from the
 maximum rank time, and the exact live sentinel. Failure captures Job, Workload,
 pod, event, and Kueue diagnostics. Normal, partial-create, timeout, and signal
 cleanup records each UID directly from its successful API CREATE response,
-writes it to a private parent-process ledger, and uses only those recorded UIDs
-for bounded client-go Foreground DELETE calls with UID preconditions. Cleanup
+writes it as a strict JSON Lines record containing API group/version/resource,
+namespace, name, and UID to a private parent-process ledger, and uses only those
+recorded UIDs for bounded client-go Foreground DELETE calls with UID
+preconditions. Empty core API groups and empty cluster-scoped namespaces remain
+explicit fields and cannot shift parser columns. The delete helper supports
+both namespaced and cluster-scoped records. Cleanup
 initiates deletion for every recorded UID even when an earlier object is stuck,
 then checks all remaining owned UIDs until the shared deadline. INT/TERM
 handling stops and reaps the managed live-test process group before cleanup

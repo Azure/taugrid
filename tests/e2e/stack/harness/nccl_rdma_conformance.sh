@@ -95,7 +95,6 @@ command = [
     "go", "run", "./cmd/nccl-rdma-owned-delete",
     "--kubeconfig", kubeconfig,
     "--context", context,
-    "--namespace", namespace,
     "--group", group,
     "--version", version,
     "--resource", resource,
@@ -103,6 +102,8 @@ command = [
     "--uid", uid,
     "--timeout", f"{operation_timeout}s",
 ]
+if namespace:
+    command.extend(["--namespace", namespace])
 process = subprocess.Popen(command, cwd=cwd, start_new_session=True)
 try:
     raise SystemExit(process.wait(timeout=operation_timeout))
@@ -111,6 +112,43 @@ except subprocess.TimeoutExpired:
     process.wait()
     raise SystemExit("owned-delete exceeded the overall cleanup deadline")
 PY
+}
+
+decode_owned_uid_entry() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+required = {"group", "version", "resource", "namespace", "name", "uid"}
+try:
+    entry = json.loads(sys.argv[1])
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"invalid JSON: {exc}")
+if not isinstance(entry, dict) or set(entry) != required:
+    raise SystemExit("ledger entry must contain exactly group, version, resource, namespace, name, and uid")
+for field in required:
+    if not isinstance(entry[field], str):
+        raise SystemExit(f"ledger field {field} must be a string")
+for field in ("version", "resource", "name", "uid"):
+    if not entry[field]:
+        raise SystemExit(f"ledger field {field} is required")
+for field, value in entry.items():
+    if any(delimiter in value for delimiter in ("|", "\r", "\n")):
+        raise SystemExit(f"ledger field {field} contains a forbidden delimiter")
+print("|".join(entry[field] for field in ("group", "version", "resource", "namespace", "name", "uid")))
+PY
+}
+
+cleanup_get_owned_json() {
+  local deadline="$1"
+  local namespace="$2"
+  local type="$3"
+  local name="$4"
+  if [[ -n "$namespace" ]]; then
+    cleanup_kube "$deadline" get "$type" "$name" -n "$namespace" --ignore-not-found -o json
+  else
+    cleanup_kube "$deadline" get "$type" "$name" --ignore-not-found -o json
+  fi
 }
 
 require_qualified_image() {
@@ -576,12 +614,11 @@ diagnostics() {
 }
 
 cleanup_owned_uids() {
-  local namespace entry group version resource type name object_uid object current_uid pods index cleanup_failed
+  local entry parsed group version resource namespace type name object_uid object current_uid pods index cleanup_failed
   local -a entries=()
   local -a remaining_entries=()
   local deadline=$((SECONDS + CLEANUP_OVERALL_SECONDS))
   cleanup_failed=0
-  namespace="$(require_env E2E_STACK_NAMESPACE)"
   [[ -n "${NCCL_RDMA_OWNED_UID_FILE:-}" && -f "$NCCL_RDMA_OWNED_UID_FILE" ]] \
     || fail "successful-create UID ledger is unavailable; refusing name or label based cleanup"
   while IFS= read -r entry; do
@@ -589,14 +626,14 @@ cleanup_owned_uids() {
   done <"$NCCL_RDMA_OWNED_UID_FILE"
   for ((index=${#entries[@]} - 1; index >= 0; index--)); do
     entry="${entries[index]}"
-    IFS='|' read -r group version resource name object_uid <<<"$entry"
-    [[ -n "$version" && -n "$resource" && -n "$name" && -n "$object_uid" ]] \
+    parsed="$(decode_owned_uid_entry "$entry")" \
       || fail "malformed successful-create UID ledger entry; refusing cleanup"
+    IFS='|' read -r group version resource namespace name object_uid <<<"$parsed"
     type="$resource"
     [[ -z "$group" ]] || type="$resource.$group"
     run_owned_delete_bounded "$deadline" "$namespace" "$group" "$version" "$resource" "$name" "$object_uid" \
       || {
-        echo "ERROR: UID-precondition deletion failed for $resource $namespace/$name UID $object_uid" >&2
+        echo "ERROR: UID-precondition deletion failed for $resource ${namespace:+$namespace/}$name UID $object_uid" >&2
         cleanup_failed=1
       }
   done
@@ -605,12 +642,14 @@ cleanup_owned_uids() {
     entries=("${remaining_entries[@]}")
     remaining_entries=()
     for entry in "${entries[@]}"; do
-      IFS='|' read -r group version resource name object_uid <<<"$entry"
+      parsed="$(decode_owned_uid_entry "$entry")" \
+        || fail "malformed successful-create UID ledger entry during verification; refusing cleanup"
+      IFS='|' read -r group version resource namespace name object_uid <<<"$parsed"
       type="$resource"
       [[ -z "$group" ]] || type="$resource.$group"
-      object="$(cleanup_kube "$deadline" get "$type" "$name" -n "$namespace" --ignore-not-found -o json)" \
+      object="$(cleanup_get_owned_json "$deadline" "$namespace" "$type" "$name")" \
         || {
-          echo "ERROR: cannot verify cleanup for $resource $namespace/$name" >&2
+          echo "ERROR: cannot verify cleanup for $resource ${namespace:+$namespace/}$name" >&2
           remaining_entries+=("$entry")
           cleanup_failed=1
           continue
@@ -623,10 +662,13 @@ cleanup_owned_uids() {
     ((${#remaining_entries[@]} == 0)) || sleep 1
   done
   for entry in "${remaining_entries[@]}"; do
-    IFS='|' read -r group version resource name object_uid <<<"$entry"
-    echo "ERROR: overall cleanup deadline expired for $resource $namespace/$name UID $object_uid" >&2
+    parsed="$(decode_owned_uid_entry "$entry")" \
+      || fail "malformed successful-create UID ledger entry during timeout reporting"
+    IFS='|' read -r group version resource namespace name object_uid <<<"$parsed"
+    echo "ERROR: overall cleanup deadline expired for $resource ${namespace:+$namespace/}$name UID $object_uid" >&2
     cleanup_failed=1
   done
+  namespace="$(require_env E2E_STACK_NAMESPACE)"
   while ((SECONDS < deadline)); do
     pods="$(cleanup_kube "$deadline" get pods -n "$namespace" -l "$DIAGNOSTIC_SELECTOR" -o name)" \
       || {

@@ -96,13 +96,20 @@ func TestNCCLRDMAOwnedUIDLedgerRecordsOnlySuccessfulCreateResponse(t *testing.T)
 	require.NoError(t, validateNCCLRDMAOwnedUIDLedger())
 
 	item := ownedNCCLRDMAResource{
-		GVR: ncclRDMAJobGVR, Name: ncclRDMAJobName, UID: types.UID("owned-uid"),
+		GVR: ncclRDMAJobGVR, Namespace: stackNamespace, Name: ncclRDMAJobName, UID: types.UID("owned-uid"),
 	}
 
 	require.NoError(t, appendNCCLRDMAOwnedUID(item))
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.Equal(t, "batch|v1|jobs|e2e-nccl-rdma-2x1xh200|owned-uid\n", string(data))
+	require.JSONEq(t, `{
+		"group":"batch",
+		"version":"v1",
+		"resource":"jobs",
+		"namespace":"e2e-stack",
+		"name":"e2e-nccl-rdma-2x1xh200",
+		"uid":"owned-uid"
+	}`, string(data))
 
 	t.Setenv(ncclRDMAOwnedUIDFile, filepath.Join(t.TempDir(), "missing"))
 	require.ErrorContains(t, validateNCCLRDMAOwnedUIDLedger(), "stat owned UID ledger")
@@ -115,10 +122,40 @@ func TestNCCLRDMAOwnedUIDLedgerRecordsOnlySuccessfulCreateResponse(t *testing.T)
 	)
 }
 
+func TestNCCLRDMAOwnedUIDLedgerPreservesEmptyCoreAPIGroup(t *testing.T) {
+	entry, err := decodeNCCLRDMAOwnedUIDLedgerEntry([]byte(
+		`{"group":"","version":"v1","resource":"configmaps","namespace":"taugrid-rdma-diagnostic","name":"nccl-rdma-probe","uid":"configmap-uid"}`,
+	))
+	require.NoError(t, err)
+	require.Empty(t, entry.Group)
+	require.Equal(t, "v1", entry.Version)
+	require.Equal(t, "configmaps", entry.Resource)
+	require.Equal(t, "taugrid-rdma-diagnostic", entry.Namespace)
+	require.Equal(t, "nccl-rdma-probe", entry.Name)
+	require.Equal(t, types.UID("configmap-uid"), entry.UID)
+}
+
+func TestNCCLRDMAOwnedUIDLedgerRejectsAmbiguousOrMalformedEntries(t *testing.T) {
+	for name, data := range map[string]string{
+		"legacy delimiter format": "|v1|configmaps|nccl-rdma-probe|configmap-uid",
+		"unknown field":           `{"group":"","version":"v1","resource":"configmaps","name":"probe","uid":"uid","extra":"value"}`,
+		"missing UID":             `{"group":"","version":"v1","resource":"configmaps","name":"probe","uid":""}`,
+		"multiple values":         `{"group":"","version":"v1","resource":"configmaps","name":"probe","uid":"uid"} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeNCCLRDMAOwnedUIDLedgerEntry([]byte(data))
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestOwnedResourceRefsUseOnlySuccessfulCreateUIDs(t *testing.T) {
 	owned := []ownedNCCLRDMAResource{
-		{GVR: schema.GroupVersionResource{Version: "v1", Resource: "secrets"}, Name: "auth", UID: "secret-uid"},
-		{GVR: ncclRDMAJobGVR, Name: ncclRDMAJobName, UID: "job-uid"},
+		{
+			GVR:       schema.GroupVersionResource{Version: "v1", Resource: "secrets"},
+			Namespace: stackNamespace, Name: "auth", UID: "secret-uid",
+		},
+		{GVR: ncclRDMAJobGVR, Namespace: stackNamespace, Name: ncclRDMAJobName, UID: "job-uid"},
 	}
 	refs := ownedResourceRefs(owned)
 	require.Len(t, refs, 2)
@@ -148,10 +185,10 @@ func TestDeleteOwnedNCCLRDMAResourcesContinuesAfterOneDeleteFails(t *testing.T) 
 	})
 	owned := []ownedNCCLRDMAResource{
 		{
-			GVR:  schema.GroupVersionResource{Version: "v1", Resource: "configmaps"},
-			Name: "nccl-rdma-probe", UID: "configmap-uid",
+			GVR:       schema.GroupVersionResource{Version: "v1", Resource: "configmaps"},
+			Namespace: stackNamespace, Name: "nccl-rdma-probe", UID: "configmap-uid",
 		},
-		{GVR: ncclRDMAJobGVR, Name: ncclRDMAJobName, UID: "job-uid"},
+		{GVR: ncclRDMAJobGVR, Namespace: stackNamespace, Name: ncclRDMAJobName, UID: "job-uid"},
 	}
 
 	err := deleteOwnedNCCLRDMAResourcesWithin(
@@ -167,6 +204,34 @@ func TestDeleteOwnedNCCLRDMAResourcesContinuesAfterOneDeleteFails(t *testing.T) 
 		Version: "v1", Resource: "configmaps",
 	}).Namespace(stackNamespace).Get(context.Background(), "nccl-rdma-probe", metav1.GetOptions{})
 	require.True(t, apierrors.IsNotFound(getErr), "cleanup must attempt later resources after the Job delete fails")
+}
+
+func TestDeleteOwnedNCCLRDMAResourcesSupportsClusterScopedObjects(t *testing.T) {
+	policy := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind":       "ValidatingAdmissionPolicy",
+		"metadata": map[string]interface{}{
+			"name": "taugrid-nccl-rdma-job-boundary",
+			"uid":  "policy-uid",
+		},
+	}}
+	gvr := schema.GroupVersionResource{
+		Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies",
+	}
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), policy)
+	err := deleteOwnedNCCLRDMAResourcesWithin(
+		context.Background(),
+		dynamicClient,
+		kubernetesfake.NewSimpleClientset(),
+		[]ownedNCCLRDMAResource{{
+			GVR: gvr, Name: policy.GetName(), UID: policy.GetUID(),
+		}},
+		"nccl-rdma-0123456789abcdef0123456789abcdef",
+		50*time.Millisecond,
+	)
+	require.NoError(t, err)
+	_, getErr := dynamicClient.Resource(gvr).Get(context.Background(), policy.GetName(), metav1.GetOptions{})
+	require.True(t, apierrors.IsNotFound(getErr))
 }
 
 func TestRequireNCCLRDMAExactPlacement(t *testing.T) {

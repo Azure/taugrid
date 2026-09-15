@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
@@ -102,7 +103,7 @@ func TestValidateActiveBoundaryFailsClosedForMissingDriftAndBypassedBinding(t *t
 			context.Background(),
 			fakeBoundaryClient(t, expected, func(client kubernetes.Interface) {
 				policy, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
-					Get(context.Background(), "taugrid-nccl-rdma-support-boundary", metav1.GetOptions{})
+					Get(context.Background(), "taugrid-nccl-rdma-secret-boundary", metav1.GetOptions{})
 				require.NoError(t, err)
 				policy.Status.TypeChecking.ExpressionWarnings = append(
 					policy.Status.TypeChecking.ExpressionWarnings,
@@ -114,6 +115,45 @@ func TestValidateActiveBoundaryFailsClosedForMissingDriftAndBypassedBinding(t *t
 			}),
 			expected,
 		), "type-check warnings")
+	})
+	t.Run("Kubernetes 1.34 equivalent defaults", func(t *testing.T) {
+		require.NoError(t, validateActiveBoundary(
+			context.Background(),
+			fakeBoundaryClient(t, expected, func(client kubernetes.Interface) {
+				for name := range expected.policies {
+					policy, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+						Get(context.Background(), name, metav1.GetOptions{})
+					require.NoError(t, err)
+					policy.Spec.MatchConstraints.NamespaceSelector = &metav1.LabelSelector{}
+					policy.Spec.MatchConstraints.ObjectSelector = &metav1.LabelSelector{}
+					for index := range policy.Spec.MatchConstraints.ResourceRules {
+						scope := admissionv1.AllScopes
+						policy.Spec.MatchConstraints.ResourceRules[index].Scope = &scope
+					}
+					_, err = client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+						Update(context.Background(), policy, metav1.UpdateOptions{})
+					require.NoError(t, err)
+				}
+			}),
+			expected,
+		))
+	})
+	t.Run("non-empty selector drift is not normalized", func(t *testing.T) {
+		require.ErrorContains(t, validateActiveBoundary(
+			context.Background(),
+			fakeBoundaryClient(t, expected, func(client kubernetes.Interface) {
+				policy, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+					Get(context.Background(), "taugrid-nccl-rdma-job-boundary", metav1.GetOptions{})
+				require.NoError(t, err)
+				policy.Spec.MatchConstraints.ObjectSelector = &metav1.LabelSelector{
+					MatchLabels: map[string]string{"bypass": "true"},
+				}
+				_, err = client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+					Update(context.Background(), policy, metav1.UpdateOptions{})
+				require.NoError(t, err)
+			}),
+			expected,
+		), "drifts")
 	})
 }
 
@@ -184,6 +224,17 @@ func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 			Create(ctx, binding.DeepCopy(), metav1.CreateOptions{})
 		require.NoError(t, err)
 	}
+	generatedPolicy, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+		Get(ctx, "taugrid-nccl-rdma-generated-pods-boundary", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, generatedPolicy.Spec.MatchConstraints.NamespaceSelector)
+	require.NotNil(t, generatedPolicy.Spec.MatchConstraints.ObjectSelector)
+	require.Equal(t, admissionv1.AllScopes, *generatedPolicy.Spec.MatchConstraints.ResourceRules[0].Scope)
+	require.Equal(
+		t,
+		canonicalPolicySpec(expected.policies[generatedPolicy.Name].Spec),
+		canonicalPolicySpec(generatedPolicy.Spec),
+	)
 
 	config := testCheckConfig()
 	for index, username := range []string{
@@ -292,7 +343,86 @@ func TestNCCLRDMABoundaryCompilesOnLocalAPIServer(t *testing.T) {
 		},
 		"stringData": map[string]interface{}{"token": "attacker"},
 	}}, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
-	require.NoError(t, expectDenied(err, "taugrid-nccl-rdma-support-boundary"))
+	require.NoError(t, expectDenied(err, "taugrid-nccl-rdma-secret-boundary"))
+}
+
+func TestNCCLRDMABoundaryReportsNoTypeCheckWarnings(t *testing.T) {
+	kubeconfig := strings.TrimSpace(os.Getenv("NCCL_RDMA_TYPECHECK_KUBECONFIG"))
+	if kubeconfig == "" {
+		t.Skip("set NCCL_RDMA_TYPECHECK_KUBECONFIG to a disposable Kubernetes cluster with a controller manager")
+	}
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	require.NoError(t, err)
+	client, err := kubernetes.NewForConfig(config)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	_, err = client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: boundaryNamespace,
+			Labels: map[string]string{
+				"tau.azure.com/nccl-rdma-security-boundary": "v3",
+			},
+		},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		propagation := metav1.DeletePropagationForeground
+		require.NoError(t, client.CoreV1().Namespaces().Delete(
+			context.Background(),
+			boundaryNamespace,
+			metav1.DeleteOptions{PropagationPolicy: &propagation},
+		))
+	})
+
+	probe, err := e2e.ReadRepoFile("tests/e2e/stack/scripts/torchrun-rdma-probe.py")
+	require.NoError(t, err)
+	expected := testBoundaryDocumentsWithProbe(t, string(probe))
+	for _, policy := range expected.policies {
+		_, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+			Create(ctx, policy.DeepCopy(), metav1.CreateOptions{})
+		require.NoError(t, err)
+		policyName := policy.Name
+		t.Cleanup(func() {
+			require.NoError(t, client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+				Delete(context.Background(), policyName, metav1.DeleteOptions{}))
+		})
+	}
+	for _, binding := range expected.bindings {
+		_, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().
+			Create(ctx, binding.DeepCopy(), metav1.CreateOptions{})
+		require.NoError(t, err)
+		bindingName := binding.Name
+		t.Cleanup(func() {
+			require.NoError(t, client.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().
+				Delete(context.Background(), bindingName, metav1.DeleteOptions{}))
+		})
+	}
+
+	require.NoError(t, wait.PollUntilContextTimeout(
+		ctx, 250*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			for name := range expected.policies {
+				policy, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+					Get(ctx, name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				if policy.Status.ObservedGeneration != policy.Generation || policy.Status.TypeChecking == nil {
+					return false, nil
+				}
+				if len(policy.Status.TypeChecking.ExpressionWarnings) != 0 {
+					return false, fmt.Errorf(
+						"ValidatingAdmissionPolicy %s has type-check warnings: %v",
+						name,
+						policy.Status.TypeChecking.ExpressionWarnings,
+					)
+				}
+			}
+			return true, nil
+		},
+	))
+	require.NoError(t, validateActiveBoundary(ctx, client, expected))
 }
 
 func TestInteractiveBypassProbesSendNonPersistingSubresourceRequests(t *testing.T) {
@@ -393,7 +523,7 @@ func testCheckConfig() checkConfig {
 		invocation:      "nccl-rdma-0123456789abcdef0123456789abcdef",
 		operator:        "operator@example.com",
 		kueueController: "system:serviceaccount:kueue-system:kueue-controller-manager",
-		jobController:   "system:kube-controller-manager",
+		jobController:   "system:serviceaccount:kube-system:job-controller",
 		untrusted:       "attacker@example.com",
 		timeout:         time.Minute,
 	}

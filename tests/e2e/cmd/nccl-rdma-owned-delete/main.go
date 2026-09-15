@@ -44,9 +44,9 @@ func main() {
 	flag.DurationVar(&timeout, "timeout", defaultDeleteTimeout, "overall delete deadline")
 	flag.Parse()
 
-	if kubeconfig == "" || contextName == "" || namespace == "" ||
+	if kubeconfig == "" || contextName == "" ||
 		version == "" || resource == "" || name == "" || uid == "" || timeout <= 0 {
-		fmt.Fprintln(os.Stderr, "--kubeconfig, --context, --namespace, --version, --resource, --name, --uid, and a positive --timeout are required")
+		fmt.Fprintln(os.Stderr, "--kubeconfig, --context, --version, --resource, --name, --uid, and a positive --timeout are required; --namespace is optional for cluster-scoped resources")
 		os.Exit(2)
 	}
 
@@ -83,8 +83,8 @@ func deleteOwnedResource(
 	if gvr.Version == "" || gvr.Resource == "" {
 		return errors.New("resource version and plural resource are required")
 	}
-	if namespace == "" || name == "" {
-		return errors.New("namespace and name are required")
+	if name == "" {
+		return errors.New("name is required")
 	}
 	if uid == "" {
 		return errors.New("UID precondition is required")
@@ -95,7 +95,12 @@ func deleteOwnedResource(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	foreground := metav1.DeletePropagationForeground
-	err := client.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{
+	namespaceable := client.Resource(gvr)
+	var resourceClient dynamic.ResourceInterface = namespaceable
+	if namespace != "" {
+		resourceClient = namespaceable.Namespace(namespace)
+	}
+	err := resourceClient.Delete(ctx, name, metav1.DeleteOptions{
 		PropagationPolicy: &foreground,
 		Preconditions:     &metav1.Preconditions{UID: &uid},
 	})

@@ -33,7 +33,7 @@ const (
 
 func TestNCCLRDMASecurityBoundaryFixture(t *testing.T) {
 	documents := decodeNCCLRDMABoundaryDocuments(t)
-	require.Len(t, documents, 11)
+	require.Len(t, documents, 19)
 	require.NotContains(t, documents, "Role/nccl-rdma-submitter")
 	require.NotContains(t, documents, "RoleBinding/nccl-rdma-submitter")
 	require.NotContains(t, documents, "ServiceAccount/nccl-rdma-runner")
@@ -123,11 +123,25 @@ func TestNCCLRDMASecurityBoundaryFixture(t *testing.T) {
 		require.NotContains(t, allJobCEL, forbidden)
 	}
 
-	supportPolicy := decodeNCCLRDMABoundaryDocument[admissionregistrationv1.ValidatingAdmissionPolicy](
-		t, documents, "ValidatingAdmissionPolicy/taugrid-nccl-rdma-support-boundary",
-	)
-	allSupportCEL := allNCCLRDMACEL(supportPolicy)
+	supportPolicies := map[string]string{
+		"taugrid-nccl-rdma-serviceaccount-boundary": "serviceaccounts",
+		"taugrid-nccl-rdma-configmap-boundary":      "configmaps",
+		"taugrid-nccl-rdma-secret-boundary":         "secrets",
+		"taugrid-nccl-rdma-service-boundary":        "services",
+		"taugrid-nccl-rdma-networkpolicy-boundary":  "networkpolicies",
+	}
+	var supportCEL strings.Builder
+	for policyName, resource := range supportPolicies {
+		policy := decodeNCCLRDMABoundaryDocument[admissionregistrationv1.ValidatingAdmissionPolicy](
+			t, documents, "ValidatingAdmissionPolicy/"+policyName,
+		)
+		require.Len(t, policy.Spec.MatchConstraints.ResourceRules, 1)
+		require.Equal(t, []string{resource}, policy.Spec.MatchConstraints.ResourceRules[0].Resources)
+		supportCEL.WriteString(allNCCLRDMACEL(policy))
+	}
+	allSupportCEL := supportCEL.String()
 	require.NoError(t, validateNCCLRDMACELDelimiters(allSupportCEL))
+	require.NotContains(t, allSupportCEL, "object.kind !=")
 	for _, required := range []string{
 		`object.metadata.name == "nccl-rdma-runner"`,
 		`object.automountServiceAccountToken == false`,
