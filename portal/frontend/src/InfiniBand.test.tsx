@@ -9,7 +9,7 @@ import { Fleet } from './Fleet';
 import { InfiniBandFleet, InfiniBandValidationDetail } from './InfiniBand';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import type { RDMAValidationDetail, WorkspaceScope } from './types';
-import { firstHistoryPage, fleetGPUHealth, fleetNodes, fleetNodeUtil, latestSummary, passedValidation, secondHistoryPage } from './test/rdma-fixtures';
+import { firstHistoryPage, fleetGPUHealth, fleetNodes, fleetNodeUtil, latestSummary, passedValidation } from './test/rdma-fixtures';
 
 const scope: WorkspaceScope = {
   workspace: 'research', name: 'Research', cluster: 'research-west', namespace: 'tau-system',
@@ -77,7 +77,7 @@ describe('InfiniBand fleet validation', () => {
     let resolveFetch: ((response: Response) => void) | undefined;
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { resolveFetch = resolve; })));
     const rendered = renderPortal('/portal/fleet');
-    expect(screen.getAllByText(/Loading snapshot/)).toHaveLength(3);
+    expect(screen.getAllByText(/Loading snapshot/)).toHaveLength(1);
     rendered.unmount();
     resolveFetch?.(json({}));
 
@@ -88,9 +88,9 @@ describe('InfiniBand fleet validation', () => {
         String(input).includes('/summary') ? { latest: null, total: 0 } : { validations: [], nextCursor: null, total: 0 },
     ))));
     renderPortal('/portal/fleet');
-    fireEvent.click(screen.getByText('Validation run details and history'));
-    expect(await screen.findByText(/Current state is Unknown/)).toBeVisible();
-    expect(screen.getByText(/No InfiniBand validation history is available/)).toBeVisible();
+    expect(await screen.findByText(/No GPU or RDMA-capable nodes/)).toBeVisible();
+    expect(screen.queryByText('Evidence matrix and runtime coverage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Validation run details and history')).not.toBeInTheDocument();
   });
 
   it('separates fleet RDMA capability, tested topology, and per-GPU health', async () => {
@@ -106,13 +106,8 @@ describe('InfiniBand fleet validation', () => {
 
     expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
     expect(screen.queryByText(/Site boundaries use exact/)).not.toBeInTheDocument();
-    expect(await screen.findAllByText('Advertised', { selector: '.badge' })).toHaveLength(2);
-    expect(screen.getAllByText(/rdma\/rdma_shared_device_a/)).toHaveLength(2);
-    expect(screen.getAllByText(/kubernetes.azure.com\/agentpool/)).toHaveLength(3);
     expect(screen.getByRole('region', { name: 'Unbounded site eastus2' })).toBeVisible();
     expect(screen.getByRole('region', { name: 'Unbounded site cluster' })).toBeVisible();
-    expect(screen.getAllByText(/net.unbounded-cloud.io\/site/)).not.toHaveLength(0);
-    expect(screen.getAllByText('unbounded-cloud.io/site', { exact: true })).not.toHaveLength(0);
     expect(screen.getAllByText(/Region eastus2euap/)).not.toHaveLength(0);
     expect(screen.getByText('Passed · 2-GPU run path')).toBeVisible();
     expect(screen.getByText(/h200-node-a \/ GPU-aaaaaaaa ↔ h200-node-b \/ GPU-bbbbbbbb/)).toBeVisible();
@@ -120,14 +115,9 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getByText(/other GPUs in the site are not implied validated/)).toBeVisible();
     expect(screen.getAllByRole('link', { name: /GPU details/ }).some(link =>
       link.getAttribute('href')?.includes('instance=h200-node-a'))).toBe(true);
-    fireEvent.click(screen.getByText('Evidence matrix and runtime coverage'));
-    expect(screen.getByText(/All 10 required condition families reported fresh False/)).toBeVisible();
-    expect(screen.getByText(/1 fresh fault condition: GPUNVLinkReplayErrors/)).toBeVisible();
-    expect(screen.getByText(/GPUECCDoubleRetired missing/)).toBeVisible();
-    expect(screen.getByText(/0\/1 GPUs have complete row-remap verdicts/)).toBeVisible();
-    expect(screen.getAllByRole('link', { name: /Open per-GPU metrics/ })[0]).toHaveAttribute('href', expect.stringContaining('instance=h200-node-a'));
-    expect(screen.getAllByText('Passed', { selector: '.badge' }).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText(/Not tested in latest run · different site/)).toBeVisible();
+    expect(screen.getByRole('heading', { name: /NVIDIA H200.*Pool h200/ })).toBeVisible();
+    expect(screen.queryByText('Evidence matrix and runtime coverage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Validation run details and history')).not.toBeInTheDocument();
 
     fetchMock.mockClear();
     await userEvent.click(screen.getByRole('button', { name: 'Refresh GPU dashboard data' }));
@@ -137,6 +127,26 @@ describe('InfiniBand fleet validation', () => {
         expect(urls.some(url => url.includes(path))).toBe(true);
       }
     });
+  });
+
+  it('labels a raw gpu pool with the inferred NVIDIA model', async () => {
+    const modelNodes = {
+      ...fleetNodes,
+      nodes: fleetNodes.nodes.map(node => node.name === 'a100-node-c'
+        ? { ...node, agentPool: 'gpu', gpuProduct: undefined, sku: 'Standard_NC24ads_A100_v4' }
+        : node),
+    };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(modelNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(url.includes('/summary') ? latestSummary : firstHistoryPage));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByRole('heading', { name: /NVIDIA A100.*Pool gpu/ })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'gpu' })).not.toBeInTheDocument();
   });
 
   it.each(['incomplete', 'not_applicable'] as const)('does not draw a validated site path for %s topology', async siteMode => {
@@ -156,7 +166,7 @@ describe('InfiniBand fleet validation', () => {
     }));
     renderPortal('/portal/fleet');
 
-    await screen.findAllByText('Advertised', { selector: '.badge' });
+    await screen.findByRole('heading', { name: 'GPU Dashboard' });
     expect(screen.queryByText('Passed · 2-GPU run path')).not.toBeInTheDocument();
   });
 
@@ -268,11 +278,8 @@ describe('InfiniBand fleet validation', () => {
     }));
     renderPortal('/portal/fleet');
 
-    fireEvent.click(await screen.findByText('Evidence matrix and runtime coverage'));
-    expect(await screen.findByText(/GPUECCDoubleRetired heartbeat is stale/)).toBeVisible();
-    expect(screen.getByText(/GPUECCDoubleRetired heartbeat is in the future/)).toBeVisible();
-    expect(screen.getByText(/GPUECCDoubleRetired duplicated/)).toBeVisible();
-    expect(screen.getAllByText('Unknown', { selector: '.badge' }).length).toBeGreaterThanOrEqual(4);
+    await screen.findByRole('heading', { name: 'GPU Dashboard' });
+    expect(screen.getAllByText('Unknown', { selector: '.fabric-signals b' }).length).toBeGreaterThanOrEqual(3);
   });
 
   it.each([
@@ -385,34 +392,4 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.getByText(passedValidation.validationId, { selector: 'td' })).toBeVisible();
   });
 
-  it('paginates history and navigates to routed validation detail', async () => {
-    const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = String(input);
-      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
-      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
-      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
-      if (url.includes('/summary')) return Promise.resolve(json(latestSummary));
-      if (url.includes(secondHistoryPage.validations[0].validationId)) return Promise.resolve(json(secondHistoryPage.validations[0]));
-      if (url.includes('cursor=page-two')) return Promise.resolve(json(secondHistoryPage));
-      return Promise.resolve(json(firstHistoryPage));
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    renderPortal('/portal/fleet');
-
-    fireEvent.click(screen.getByText('Validation run details and history'));
-    expect((await screen.findAllByRole('link', { name: passedValidation.validationId }))[0]).toBeVisible();
-    await userEvent.click(screen.getByRole('button', { name: 'Next page' }));
-    expect(await screen.findByRole('link', { name: secondHistoryPage.validations[0].validationId })).toBeVisible();
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('cursor=page-two'), expect.any(Object));
-    expect(screen.getByText(/Page 2/)).toBeVisible();
-    await userEvent.click(screen.getByRole('button', { name: 'Previous page' }));
-    expect(await screen.findByText(/Page 1/)).toBeVisible();
-    await userEvent.click(screen.getByRole('button', { name: 'Next page' }));
-
-    fireEvent.click(screen.getByRole('link', { name: secondHistoryPage.validations[0].validationId }));
-    expect(await screen.findByRole('heading', { name: 'Artifact verification and evidence' })).toBeVisible();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/portal/rdma-validations/' + secondHistoryPage.validations[0].validationId), expect.any(Object),
-    ));
-  });
 });
