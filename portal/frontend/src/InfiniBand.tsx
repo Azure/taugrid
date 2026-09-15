@@ -388,36 +388,62 @@ function FleetInfiniBandEvidence() {
   const latestQuery = useBoard<RDMAValidationSummary>('/api/portal/rdma-validations/summary');
   const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery, latestQuery];
   const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
-  return <BoardResult query={inventoryQuery} label="GPU dashboard data" hint=" — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig)."
-      partial={sourceQueries.some(query => query.isError)} refreshing={sourceQueries.some(query => query.isFetching)} onRefresh={refreshAll}>{snapshot => {
-      const latest = latestQuery.data?.latest;
-      const nodes = (snapshot.nodes || []).filter(node => node.gpuCapacity > 0);
-      const telemetry = telemetryQuery.data?.gpus || [];
-      const nodeNames = new Set(nodes.map(node => node.name));
-      const matchedTelemetry = telemetry.filter(sample => nodeNames.has(sample.instance));
-      const utilization = utilizationSummary(matchedTelemetry);
-      const knownHealth = matchedTelemetry.filter(sample => sample.healthy === true || sample.healthy === false);
-      const healthFaults = matchedTelemetry.filter(sample => sample.healthy === false);
-      const focusedGPUs = focusedInstance ? telemetry.filter(sample => sample.instance === focusedInstance) : [];
-      const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, gpuConditionTypes));
-      const ibConditions = nodes.map(node => conditionSummary(node.operationalConditions, ibConditionTypes));
-      const gpuTelemetry = nodes.map(node => telemetrySummary(node, telemetry));
-      const gpuConditionCoveredGPUs = nodes.reduce((total, node, index) =>
-        total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
-      const ibConditionCoveredGPUs = nodes.reduce((total, node, index) =>
-        total + (ibConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
-      const unavailableSources = [
-        telemetryQuery.isError ? 'GPU telemetry' : '',
-        nodeUtilQuery.isError ? 'node utilization' : '',
-        latestQuery.isError ? 'validation' : '',
-      ].filter(Boolean);
-      return <>
+  const snapshot = inventoryQuery.data;
+  const latest = latestQuery.data?.latest;
+  const nodes = (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0);
+  const telemetry = telemetryQuery.data?.gpus || [];
+  const nodeNames = new Set(nodes.map(node => node.name));
+  const matchedTelemetry = snapshot ? telemetry.filter(sample => nodeNames.has(sample.instance)) : telemetry;
+  const utilization = utilizationSummary(matchedTelemetry);
+  const knownHealth = matchedTelemetry.filter(sample => sample.healthy === true || sample.healthy === false);
+  const healthFaults = matchedTelemetry.filter(sample => sample.healthy === false);
+  const focusedGPUs = focusedInstance ? telemetry.filter(sample => sample.instance === focusedInstance) : [];
+  const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, gpuConditionTypes));
+  const ibConditions = nodes.map(node => conditionSummary(node.operationalConditions, ibConditionTypes));
+  const gpuTelemetry = nodes.map(node => telemetrySummary(node, telemetry));
+  const gpuConditionCoveredGPUs = nodes.reduce((total, node, index) =>
+    total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
+  const ibConditionCoveredGPUs = nodes.reduce((total, node, index) =>
+    total + (ibConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
+  const sourceResults = [
+    { name: 'inventory', query: inventoryQuery },
+    { name: 'GPU telemetry', query: telemetryQuery },
+    { name: 'node utilization', query: nodeUtilQuery },
+    { name: 'validation', query: latestQuery },
+  ];
+  const unavailableSources = sourceResults.filter(source => source.query.isError);
+  const hasData = sourceQueries.some(query => query.data !== undefined);
+  const isFetching = sourceQueries.some(query => query.isFetching);
+  const lastUpdatedAt = Math.max(0, ...sourceQueries.map(query => query.data === undefined ? 0 : query.dataUpdatedAt));
+  const status = isFetching
+    ? hasData ? 'Refreshing; showing available snapshots.' : 'Loading snapshot…'
+    : unavailableSources.length
+      ? hasData ? 'Partial snapshot; unavailable evidence stays Unknown.' : 'Unavailable.'
+      : 'Snapshot; not live.';
+  return <section className="data-panel" aria-label="GPU dashboard data">
+    <div className="panel-status">
+      <span role="status">GPU dashboard data: {status}{hasData && lastUpdatedAt > 0 && <>
+        {' '}Last successful response <time dateTime={new Date(lastUpdatedAt).toISOString()}>{new Date(lastUpdatedAt).toLocaleString()}</time>.
+      </>}</span>
+      <button type="button" className="btn" aria-label={`${unavailableSources.length ? 'Retry' : 'Refresh'} GPU dashboard data`}
+        disabled={isFetching} onClick={() => { void refreshAll(); }}>{isFetching ? 'Refreshing…' : unavailableSources.length ? 'Retry' : 'Refresh'}</button>
+    </div>
+    <div aria-busy={isFetching}>
+      {!!unavailableSources.length && <Note warn>Unavailable: {unavailableSources.map(source =>
+        `${source.name}: ${source.query.error?.message || 'request failed'}`).join('; ')}. Available sources remain visible and missing evidence stays Unknown.</Note>}
+      {hasData && <>
         <dl className="evidence-strip" aria-label="Fleet operational summary">
-          <div><dt>Fleet capacity</dt><dd>{snapshot.readyNodes}/{snapshot.totalNodes} nodes ready</dd><span>{snapshot.totalCPUCores} CPU · {n1(snapshot.totalMemoryGiB)} GiB</span></div>
-          <div><dt>GPU inventory</dt><dd>{snapshot.totalGPUs} GPUs</dd><span>{nodes.length} GPU nodes · {snapshot.skus?.length || 0} SKUs</span></div>
-          <div><dt>GPU utilization</dt><dd>{utilization.average === null ? 'Unknown' : `${n1(utilization.average)}% avg`}</dd><span>{utilization.observed}/{snapshot.totalGPUs} inventory GPUs observed</span></div>
-          <div><dt>GPU health telemetry</dt><dd>{healthFaults.length ? `${healthFaults.length} fault` : knownHealth.length ? 'No observed faults' : 'Unknown'}</dd><span>{knownHealth.length}/{snapshot.totalGPUs} inventory GPUs observed</span></div>
-          <div><dt>InfiniBand</dt><dd>{snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}/{snapshot.gpuNodes} RDMA nodes</dd><span>GPU/NVLink {gpuConditionCoveredGPUs}/{snapshot.totalGPUs} · IB {ibConditionCoveredGPUs}/{snapshot.totalGPUs} GPUs covered</span></div>
+          <div><dt>Fleet capacity</dt><dd>{snapshot ? `${snapshot.readyNodes}/${snapshot.totalNodes} nodes ready` : 'Unknown'}</dd><span>{snapshot
+            ? `${snapshot.totalCPUCores} CPU · ${n1(snapshot.totalMemoryGiB)} GiB`
+            : `${nodeUtilQuery.data?.nodes?.length || 0} node utilization records`}</span></div>
+          <div><dt>GPU inventory</dt><dd>{snapshot ? `${snapshot.totalGPUs} GPUs` : 'Unknown'}</dd><span>{snapshot
+            ? `${nodes.length} GPU nodes · ${snapshot.skus?.length || 0} SKUs`
+            : `${telemetry.length} GPU telemetry records`}</span></div>
+          <div><dt>GPU utilization</dt><dd>{utilization.average === null ? 'Unknown' : `${n1(utilization.average)}% avg`}</dd><span>{utilization.observed}/{snapshot?.totalGPUs ?? telemetry.length} {snapshot ? 'inventory GPUs' : 'telemetry records'} observed</span></div>
+          <div><dt>GPU health telemetry</dt><dd>{healthFaults.length ? `${healthFaults.length} fault` : knownHealth.length ? 'No observed faults' : 'Unknown'}</dd><span>{knownHealth.length}/{snapshot?.totalGPUs ?? telemetry.length} {snapshot ? 'inventory GPUs' : 'telemetry records'} observed</span></div>
+          <div><dt>InfiniBand</dt><dd>{snapshot ? `${snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}/${snapshot.gpuNodes} RDMA nodes` : 'Unknown'}</dd><span>{snapshot
+            ? `GPU/NVLink ${gpuConditionCoveredGPUs}/${snapshot.totalGPUs} · IB ${ibConditionCoveredGPUs}/${snapshot.totalGPUs} GPUs covered`
+            : 'Inventory-dependent capability and coverage'}</span></div>
           <div><dt>Latest run</dt><dd>{latest ? stateLabel(latest.state) : 'Unknown'}</dd><span>{latest
             ? `${topologySite(latest.actual?.site, latest.actual?.siteProvider, latest.actual?.siteMode)}${latest.actual?.pool ? ` / ${latest.actual.pool}` : ''}`
             : 'Unknown'}</span></div>
@@ -428,24 +454,25 @@ function FleetInfiniBandEvidence() {
           <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery)}</span>
           <span><strong>Validation</strong> {sourceFreshness(latestQuery)}</span>
         </div>
-        {!!unavailableSources.length && <Note warn>Unavailable: {unavailableSources.join(', ')}. Available inventory remains visible and missing evidence stays Unknown.</Note>}
-        {!nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
+        {!snapshot ? <Empty warn>GPU inventory is unavailable. Telemetry and validation remain visible; fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown.</Empty>
+          : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
           : <><FleetFabricMap nodes={nodes} latest={latest || undefined} gpuConditions={gpuConditions} ibConditions={ibConditions}
             gpuTelemetry={gpuTelemetry} gpuSamples={telemetry} nodeUtil={nodeUtilQuery.data?.nodes || []}/>
-            {focusedInstance && <section className="focused-gpus" aria-label={`GPU details for ${focusedInstance}`}>
-              <div><h3>GPU details · {focusedInstance}</h3><ScopedLink to="/portal/fleet">Clear focus</ScopedLink></div>
-              {!focusedGPUs.length ? <Empty>No per-GPU telemetry is available for this node in the current window.</Empty>
-                : <Table headers={['GPU', 'Model', '#Util %', '#Temp °C', '#Power W', '#Memory MB', '#Uncorrectable rows', 'Health']}
-                  rows={focusedGPUs.map(gpu => [
-                    gpu.gpu, known(gpu.modelName), n1(gpu.utilizationPct), n1(gpu.temperatureCelsius), n1(gpu.powerWatts),
-                    `${n1(gpu.memoryUsedMB)} / ${measured(gpu.memoryUsedMB) && measured(gpu.memoryFreeMB) ? n1(gpu.memoryUsedMB + gpu.memoryFreeMB) : '—'}`,
-                    n1(gpu.uncorrectableRemappedRows),
-                    <span className={gpu.healthy === false ? 'warn' : gpu.healthy === true ? '' : 'muted'}>{gpu.healthy === true ? 'Observed OK' : gpu.healthy === false ? 'Fault' : 'Unknown'}</span>,
-                  ])}/>}
-            </section>}
             </>}
-      </>;
-    }}</BoardResult>;
+        {focusedInstance && <section className="focused-gpus" aria-label={`GPU details for ${focusedInstance}`}>
+          <div><h3>GPU details · {focusedInstance}</h3><ScopedLink to="/portal/fleet">Clear focus</ScopedLink></div>
+          {!focusedGPUs.length ? <Empty>No per-GPU telemetry is available for this node in the current window.</Empty>
+            : <Table headers={['GPU', 'Model', '#Util %', '#Temp °C', '#Power W', '#Memory MB', '#Uncorrectable rows', 'Health']}
+              rows={focusedGPUs.map(gpu => [
+                gpu.gpu, known(gpu.modelName), n1(gpu.utilizationPct), n1(gpu.temperatureCelsius), n1(gpu.powerWatts),
+                `${n1(gpu.memoryUsedMB)} / ${measured(gpu.memoryUsedMB) && measured(gpu.memoryFreeMB) ? n1(gpu.memoryUsedMB + gpu.memoryFreeMB) : '—'}`,
+                n1(gpu.uncorrectableRemappedRows),
+                <span className={gpu.healthy === false ? 'warn' : gpu.healthy === true ? '' : 'muted'}>{gpu.healthy === true ? 'Observed OK' : gpu.healthy === false ? 'Fault' : 'Unknown'}</span>,
+              ])}/>}
+        </section>}
+      </>}
+    </div>
+  </section>;
 }
 
 export function InfiniBandValidationDetail() {

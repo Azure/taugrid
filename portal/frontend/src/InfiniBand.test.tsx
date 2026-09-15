@@ -93,6 +93,25 @@ describe('InfiniBand fleet validation', () => {
     expect(screen.queryByText('Validation run details and history')).not.toBeInTheDocument();
   });
 
+  it('keeps Kusto telemetry and validation visible when inventory is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({ error: 'inventory unavailable' }, 503));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fleetGPUHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json(latestSummary));
+    }));
+    renderPortal('/portal/fleet');
+
+    expect(await screen.findByText(/inventory:.*inventory unavailable/)).toBeVisible();
+    expect(screen.getByText('2 GPU telemetry records')).toBeVisible();
+    expect(screen.getByText('3 node utilization records')).toBeVisible();
+    expect(screen.getByText('39% avg')).toBeVisible();
+    expect(screen.getByText('1 fault')).toBeVisible();
+    expect(screen.getByText(/fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown/)).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'GPU Dashboard' })).not.toBeInTheDocument();
+  });
+
   it('separates fleet RDMA capability, tested topology, and per-GPU health', async () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
