@@ -196,7 +196,9 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 			len(rule.MetricNames), rule.MinSamples, len(commonIdentities))
 	}
 	if matchedCount == 0 {
-		delete(e.pending, rule.ConditionType)
+		if rule.MinSamples > 0 {
+			delete(e.pending, rule.ConditionType)
+		}
 		return result
 	}
 
@@ -467,26 +469,19 @@ func (e *Engine) RestoreState(history map[string][]state.Sample, pending map[str
 
 	now := time.Now()
 	for k, samples := range history {
-		required := false
-		for _, rule := range e.rules {
-			if rule.MinSamples > 0 && ruleUsesMetricKey(rule, k) {
-				required = true
-			}
-			if required {
-				break
-			}
-		}
-		if required {
-			continue // Collector downtime cannot establish continuous coverage.
-		}
 		restored := make([]sample, 0, len(samples))
 		for _, s := range samples {
 			if now.Sub(s.Time) <= e.retention {
-				restored = append(restored, sample{time: s.Time, value: s.Value})
+				restored = append(restored, sample{time: s.Time, value: s.Value, cycle: e.evalCounter})
 			}
 		}
 		if len(restored) > 0 {
 			e.history[k] = restored
+			for ruleIndex, rule := range e.rules {
+				if rule.MinSamples > 0 && ruleUsesMetricKey(rule, k) {
+					e.breakRateContinuity(ruleIndex, rule, k)
+				}
+			}
 		}
 	}
 
