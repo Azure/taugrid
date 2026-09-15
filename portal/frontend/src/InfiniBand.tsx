@@ -266,12 +266,16 @@ function FleetInfiniBandEvidence() {
       const gpuConditionCounts = stateCounts(gpuConditions);
       const ibConditionCounts = stateCounts(ibConditions);
       const telemetryCounts = stateCounts(gpuTelemetry);
+      const gpuConditionCoveredGPUs = nodes.reduce((total, node, index) =>
+        total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
+      const ibConditionCoveredGPUs = nodes.reduce((total, node, index) =>
+        total + (ibConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
       return <>
         <dl className="evidence-strip" aria-label="Fleet InfiniBand evidence summary">
           <div><dt>GPU nodes</dt><dd>{nodes.length}</dd><span>{snapshot.totalGPUs} inventory GPUs</span></div>
           <div><dt>RDMA advertised</dt><dd>{snapshot.rdmaAdvertisedGpuNodes ?? 'Unknown'}</dd><span>scheduling capability only</span></div>
-          <div><dt>GPU / NVLink conditions</dt><dd>{gpuConditionCounts.observed_ok} OK · {gpuConditionCounts.fault} fault</dd><span>{gpuConditionCounts.unknown} unknown</span></div>
-          <div><dt>IB conditions</dt><dd>{ibConditionCounts.observed_ok} OK · {ibConditionCounts.fault} fault</dd><span>{ibConditionCounts.unknown} unknown</span></div>
+          <div><dt>GPU / NVLink conditions</dt><dd>{gpuConditionCoveredGPUs}/{snapshot.totalGPUs} GPUs covered</dd><span>{gpuConditionCounts.observed_ok} OK · {gpuConditionCounts.fault} fault · {gpuConditionCounts.unknown} unknown nodes</span></div>
+          <div><dt>IB conditions</dt><dd>{ibConditionCoveredGPUs}/{snapshot.totalGPUs} GPUs covered</dd><span>{ibConditionCounts.observed_ok} OK · {ibConditionCounts.fault} fault · {ibConditionCounts.unknown} unknown nodes</span></div>
           <div><dt>Per-GPU telemetry</dt><dd>{telemetryCounts.observed_ok} complete</dd><span>{telemetryCounts.fault} fault · {telemetryCounts.unknown} unknown nodes</span></div>
           <div><dt>Latest run</dt><dd>{latest ? stateLabel(latest.state) : 'Unknown'}</dd><span>{known([validationSite, latest?.actual?.pool].filter(Boolean).join(' / '))}</span></div>
         </dl>
