@@ -439,88 +439,55 @@ contract.
 
 ### Opt-in Entra authentication
 
-`portal.entraAuth.enabled` defaults to `false`. Enabling it adds six resources:
-a dedicated oauth2-proxy ServiceAccount, restricted Deployment and ClusterIP
-Service, a cert-manager Certificate, and Gateway API v1 Gateway and HTTPRoute.
-All use the release namespace. The HTTPS route forwards **every path to
-oauth2-proxy**, whose only upstream is the existing Portal ClusterIP Service.
-There is no direct public Portal/Ray route, static authentication upstream,
-mesh-wide `extensionProviders` configuration, or `AuthorizationPolicy`.
-Portal's existing Ray views/proxies remain behind this same login.
+`portal.entraAuth.enabled` defaults to `false`. When enabled, the chart adds a
+dedicated workload-identity oauth2-proxy, Certificate, Gateway, and HTTPRoute in
+the release namespace. Every public path terminates at oauth2-proxy; its only
+upstream is the existing Portal ClusterIP Service. Ray views served through
+Portal remain behind the same login.
 
-This is **shared viewer access**, not per-user or workspace authorization.
-Admitted users can see the data available to the existing Portal backend
-identity, including its cluster-wide read-only Kubernetes RBAC and configured
-ADX scopes. `workspaceDirectory.enabled` and `workspaceDirectory.auth.enabled`
-are rejected with this option: the current directory always trusts configured
-identity headers, and this integration does not provide a verified mapping.
-Use a separately reviewed external proxy for that authorization contract.
+This mode provides **shared viewer authentication**, not per-user data
+authorization. Every admitted viewer receives the read scope of Portal's
+existing Kubernetes and ADX identities. The chart rejects workspace-directory
+authentication because it cannot provide the required trusted identity-header
+mapping.
 
-| `portal.entraAuth` field | Default | Contract |
-|---|---|---|
-| `enabled` | `false` | Requires `portal.enabled=true`, ClusterIP and `access.mode=authenticated-proxy` |
-| `tenantID`, `clientID` | empty | Dedicated single-tenant Web app; UUIDs, separate from backend ADX identity |
-| `cookieSecret.name`, `.key` | empty / `cookie-secret` | Existing release-namespace Secret containing a URL-safe base64-encoded random 32-byte cookie key |
-| `gatewayClassName` | `istio` | Compatible preinstalled Gateway API controller |
-| `issuerRef.name`, `.kind`, `.group` | empty / `ClusterIssuer` / `cert-manager.io` | Operator-owned cert-manager Issuer (same namespace) or ClusterIssuer |
-| `image.repository`, `.tag` | empty / empty | Required approved build containing the callback-log privacy fix; prefer MCR |
-| `image.digest`, `.pullPolicy`, `imagePullSecrets` | empty / `IfNotPresent` / `[]` | A `sha256:` digest is required when enabled; mutable tags are rejected |
-| `replicaCount`, `resources` | `2`; requests `100m/128Mi`, limits `500m/256Mi` | Cookie sessions require no shared Redis store |
-| `nodeSelector`, `tolerations`, `affinity` | `{}`, `[]`, `{}` | Optional scheduling |
+Minimum configuration:
 
-The only hostname source is `portal.access.externalURL`, an HTTPS origin such as
-`https://portal.example.com` (optional trailing `/`, no port/path/query/fragment).
-The Web redirect URI is always `https://portal.example.com/oauth2/callback`.
-Cookies are host-only, Secure, HttpOnly, SameSite=Lax, have a `__Host-` name and
-a one-hour lifetime. Minimal sessions retain no access/refresh/ID tokens in the
-session cookie; this mode reauthenticates rather than refreshing offline.
-Do not configure inline cookie/client secrets or bypass arguments.
+| Field | Requirement |
+|---|---|
+| `portal.access.mode` | `authenticated-proxy` |
+| `portal.access.externalURL` | HTTPS origin with no port, query, or path |
+| `portal.entraAuth.tenantID`, `.clientID` | Single-tenant Entra Web app UUIDs |
+| `portal.entraAuth.cookieSecret` | Existing release-namespace Secret with a random 32-byte key |
+| `portal.entraAuth.gatewayClassName`, `.issuerRef` | Existing Gateway controller and cert-manager issuer |
+| `portal.entraAuth.image` | Approved callback-log-safe image pinned by `sha256:` digest; tags are rejected |
 
-Proxy request logging is disabled because the pinned proxy logs full request
-queries, including OAuth callback codes and state. Standard/error and
-authentication logging remain enabled. Configure the operator-owned Gateway
-and any other upstream proxy to omit request queries or disable access logging
-before enabling real sign-in; this chart does not configure controller logs.
+The generated callback is
+`<portal.access.externalURL>/oauth2/callback`. The Entra federated credential
+subject is
+`system:serviceaccount:<release-namespace>:<portal.resourceName>-oauth2-proxy`
+with audience `api://AzureADTokenExchange`. The proxy requests only `openid`
+and uses the mandatory `sub` claim for its session identity; it does not require
+optional `email` or `profile` claims.
 
-Do not use the stock oauth2-proxy v7.15.2 image. Its missing-CSRF callback
-diagnostics pass the complete HTTP request to the standard logger, exposing the
-callback query, cookies and authorization header. The required approved image
-must route those diagnostics through structured authentication logging and
-must not include decoded OAuth state in the message.
+Security invariants:
 
-For default names the proxy is `tau-portal-oauth2-proxy`, Gateway/HTTPRoute/
-Certificate are `tau-portal-entra`, and TLS Secret is `tau-portal-entra-tls`.
-These derive from `portal.resourceName` (a DNS label starting with a letter,
-at most 50 characters). Custom `portal.serviceName`, `portal.service.port` and
-release namespace are honored. Federate the browser app to
-`system:serviceaccount:<release-namespace>:<resourceName>-oauth2-proxy` using
-the cluster OIDC issuer and audience `api://AzureADTokenExchange`. The AKS
-Workload Identity webhook projects the token; no client secret is used.
-The proxy requests only `openid` and maps its required session identity field
-to the mandatory OIDC `sub` claim. Sign-in therefore does not depend on
-optional Entra `email` or `profile` claims.
+- Portal remains ClusterIP-only with no direct public or Ray Service route.
+- Client and cookie secrets are never accepted inline in Helm values.
+- Cookies are host-only, Secure, HttpOnly, SameSite=Lax, and contain no OAuth
+  access, refresh, or ID tokens.
+- Request logging is disabled. The image must include the callback-log privacy
+  fix; stock oauth2-proxy v7.15.2 can log callback queries, cookies, and
+  authorization headers on missing-CSRF failures.
+- ClusterIP is not network isolation. Operators must restrict in-cluster access
+  to both Portal and oauth2-proxy and restrict who can attach Gateway routes.
 
-**Required before enablement:** Gateway API v1 CRDs/controller, cert-manager
-with Gateway support and a reviewed issuer, AKS OIDC/Workload Identity webhook,
-DNS, externally managed cookie Secret, single-tenant Entra app/federation,
-tenant consent approval, enterprise-app **assignment required**, and explicitly
-assigned allowed users/groups. The HTTP listener is only for the issuer's
-HTTP-01 solver routes; the chart installs no HTTP Portal route or redirect.
-Namespaced writers must be trusted: they can otherwise attach their own routes.
-
-ClusterIP is **not** network isolation. Restrict in-cluster access to both
-Services separately, remove any previous direct backend exposure, and preserve
-the platform's ingress/egress controls. This chart creates no NetworkPolicy and
-does not claim enforcement by an unconfigured CNI or mesh.
-
-See the [complete setup and acceptance guide](../../site/content/en/docs/platform-admin-guide/setup-guides/enable-portal.md#opt-into-chart-managed-entra-browser-login)
-and [umbrella merge example](../../examples/portal-entra-auth/values.yaml).
-For a standalone chart, omit the `taugrid-core:` wrapper. Do not install a
-second standalone release alongside the umbrella. Merge into the **complete
-canonical values file**, retain existing infrastructure settings, and pass that
-file on **every** `tau cluster install` upgrade; the CLI uses `--reset-values`.
-Use a chart build/release containing this feature, not an older published chart
-with the same development version.
+For prerequisites, Entra configuration, complete values, acceptance checks, and
+rollback, use the
+[setup guide](../../site/content/en/docs/platform-admin-guide/setup-guides/enable-portal.md#opt-into-chart-managed-entra-browser-login)
+and [umbrella example](../../examples/portal-entra-auth/values.yaml). Merge the
+example into the release's complete canonical values file and retain those
+values on every `tau cluster install` upgrade.
 
 ### Browser signoff
 
