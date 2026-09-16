@@ -1,0 +1,302 @@
+{{- /* Copyright (c) Microsoft Corporation. Licensed under the MIT License. */ -}}
+{{- $portal := .Values.portal -}}
+{{- if not (kindIs "map" $portal.entraAuth) -}}
+{{- fail "portal.entraAuth must be an object" -}}
+{{- end -}}
+{{- $auth := $portal.entraAuth -}}
+{{- if not (kindIs "bool" $auth.enabled) -}}
+{{- fail "portal.entraAuth.enabled must be a boolean" -}}
+{{- end -}}
+{{- if $auth.enabled -}}
+{{- if not $portal.enabled -}}
+{{- fail "portal.entraAuth.enabled=true requires portal.enabled=true" -}}
+{{- end -}}
+{{- if ne $portal.service.type "ClusterIP" -}}
+{{- fail "portal.service.type must remain ClusterIP; expose Portal only through a platform-owned authenticated HTTPS proxy" -}}
+{{- end -}}
+{{- if ne (lower (trim (default "cluster-internal" $portal.access.mode))) "authenticated-proxy" -}}
+{{- fail "portal.entraAuth.enabled=true requires portal.access.mode=authenticated-proxy" -}}
+{{- end -}}
+{{- $externalURL := trim (default "" $portal.access.externalURL) -}}
+{{- if not (regexMatch "^https://([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z]([-a-z0-9]*[a-z0-9])?/?$" $externalURL) -}}
+{{- fail "portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /" -}}
+{{- end -}}
+{{- $hostname := get (urlParse $externalURL) "hostname" -}}
+{{- if gt (len $hostname) 253 -}}
+{{- fail "portal.entraAuth hostname must not exceed 253 characters" -}}
+{{- end -}}
+{{- range $label := splitList "." $hostname -}}
+{{- if gt (len $label) 63 -}}
+{{- fail "portal.entraAuth hostname labels must not exceed 63 characters" -}}
+{{- end -}}
+{{- end -}}
+{{- $directory := default dict $portal.workspaceDirectory -}}
+{{- if or $directory.enabled (default dict $directory.auth).enabled -}}
+{{- fail "portal.entraAuth does not support portal.workspaceDirectory.enabled or portal.workspaceDirectory.auth.enabled; verified workspace identity-header mapping is not provided" -}}
+{{- end -}}
+{{- range $key := list "tenantID" "clientID" -}}
+{{- $value := get $auth $key -}}
+{{- if not (and (kindIs "string" $value) (regexMatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" (toString $value))) -}}
+{{- fail (printf "portal.entraAuth.%s must be a UUID" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "cookieSecret" "issuerRef" "image" "resources" "nodeSelector" "affinity" -}}
+{{- if not (kindIs "map" (get $auth $key)) -}}
+{{- fail (printf "portal.entraAuth.%s must be an object" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "imagePullSecrets" "tolerations" -}}
+{{- if not (kindIs "slice" (get $auth $key)) -}}
+{{- fail (printf "portal.entraAuth.%s must be an array" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- $resourceName := default "tau-portal" $portal.resourceName -}}
+{{- if or (gt (len $resourceName) 50) (not (regexMatch "^[a-z]([-a-z0-9]*[a-z0-9])?$" $resourceName)) -}}
+{{- fail "portal.entraAuth requires portal.resourceName to be a DNS label starting with a letter, at most 50 characters" -}}
+{{- end -}}
+{{- $proxyName := printf "%s-oauth2-proxy" $resourceName -}}
+{{- $gatewayName := printf "%s-entra" $resourceName -}}
+{{- $tlsSecretName := printf "%s-entra-tls" $resourceName -}}
+{{- $serviceName := default $resourceName $portal.serviceName -}}
+{{- if eq $serviceName $proxyName -}}
+{{- fail "portal.serviceName must not equal the generated oauth2-proxy Service name" -}}
+{{- end -}}
+{{- if eq (default $resourceName $portal.serviceAccount.name) $proxyName -}}
+{{- fail "portal.serviceAccount.name must not equal the dedicated oauth2-proxy ServiceAccount name" -}}
+{{- end -}}
+{{- if eq $auth.cookieSecret.name $tlsSecretName -}}
+{{- fail "portal.entraAuth.cookieSecret.name must not equal the generated TLS Secret name" -}}
+{{- end -}}
+{{- range $entry := list (dict "key" "cookieSecret.name" "value" $auth.cookieSecret.name) (dict "key" "issuerRef.name" "value" $auth.issuerRef.name) (dict "key" "gatewayClassName" "value" $auth.gatewayClassName) -}}
+{{- $value := $entry.value -}}
+{{- if not (and (kindIs "string" $value) (le (len (toString $value)) 253) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" (toString $value))) -}}
+{{- fail (printf "portal.entraAuth.%s must be a nonempty Kubernetes name" $entry.key) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $auth.cookieSecret.key) (le (len (toString $auth.cookieSecret.key)) 253) (regexMatch "^[a-zA-Z0-9._-]+$" (toString $auth.cookieSecret.key))) -}}
+{{- fail "portal.entraAuth.cookieSecret.key must be a nonempty Secret data key" -}}
+{{- end -}}
+{{- if not (has $auth.issuerRef.kind (list "Issuer" "ClusterIssuer")) -}}
+{{- fail "portal.entraAuth.issuerRef.kind must be Issuer or ClusterIssuer" -}}
+{{- end -}}
+{{- if ne $auth.issuerRef.group "cert-manager.io" -}}
+{{- fail "portal.entraAuth.issuerRef.group must be cert-manager.io" -}}
+{{- end -}}
+{{- if or (kindIs "string" $auth.replicaCount) (not (regexMatch "^[1-9][0-9]*$" (toString $auth.replicaCount))) -}}
+{{- fail "portal.entraAuth.replicaCount must be a positive integer" -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $auth.image.repository) (ne (trim $auth.image.repository) "")) -}}
+{{- fail "portal.entraAuth.image.repository must name an approved oauth2-proxy image containing the callback-log privacy fix" -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $auth.image.digest) (regexMatch "^sha256:[0-9a-f]{64}$" $auth.image.digest)) -}}
+{{- fail "portal.entraAuth.image.digest must pin the approved callback-log-safe image by sha256 digest" -}}
+{{- end -}}
+{{- if ne (trim (default "" $auth.image.tag)) "" -}}
+{{- fail "portal.entraAuth.image.tag must be empty when the required digest is set" -}}
+{{- end -}}
+{{- $image := include "taugrid-core.image" (dict "component" "portal.entraAuth" "image" $auth.image) -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $proxyName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $proxyName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+  annotations:
+    azure.workload.identity/client-id: {{ $auth.clientID | quote }}
+    azure.workload.identity/tenant-id: {{ $auth.tenantID | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $proxyName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $proxyName }}
+    app.kubernetes.io/component: portal-entra-auth
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $auth.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ $proxyName }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $proxyName }}
+        app.kubernetes.io/component: portal-entra-auth
+        azure.workload.identity/use: "true"
+        {{- include "taugrid-core.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $proxyName }}
+      automountServiceAccountToken: false
+      {{- with $auth.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $auth.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $auth.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $auth.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: oauth2-proxy
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $auth.image.pullPolicy }}
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=entra-id
+            - --entra-id-federated-token-auth=true
+            - {{ printf "--client-id=%s" $auth.clientID | quote }}
+            - {{ printf "--oidc-issuer-url=https://login.microsoftonline.com/%s/v2.0" $auth.tenantID | quote }}
+            - {{ printf "--redirect-url=https://%s/oauth2/callback" $hostname | quote }}
+            - --scope=openid
+            - --insecure-oidc-skip-nonce=false
+            - --code-challenge-method=S256
+            - --email-domain=*
+            - --skip-provider-button=true
+            - --reverse-proxy=true
+            - {{ printf "--upstream=http://%s.%s.svc:%v/" $serviceName .Release.Namespace $portal.service.port | quote }}
+            - --cookie-name=__Host-taugrid-portal
+            - --cookie-path=/
+            - --cookie-secure=true
+            - --cookie-httponly=true
+            - --cookie-samesite=lax
+            - --cookie-expire=1h
+            - --cookie-refresh=0
+            - --session-cookie-minimal=true
+            - --pass-user-headers=false
+            - --pass-access-token=false
+            - --pass-authorization-header=false
+            - --set-authorization-header=false
+            - --request-logging=false
+          env:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $auth.cookieSecret.name }}
+                  key: {{ $auth.cookieSecret.key }}
+          ports:
+            - name: http
+              containerPort: 4180
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /ping, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $auth.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $proxyName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $proxyName }}
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ $proxyName }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 4180
+      targetPort: http
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $gatewayName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $tlsSecretName }}
+  dnsNames:
+    - {{ $hostname | quote }}
+  issuerRef:
+    {{- toYaml $auth.issuerRef | nindent 4 }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ $gatewayName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: {{ $auth.gatewayClassName }}
+  listeners:
+    - name: http
+      hostname: {{ $hostname | quote }}
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
+    - name: https
+      hostname: {{ $hostname | quote }}
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ $tlsSecretName }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $gatewayName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "taugrid-core.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $gatewayName }}
+      sectionName: https
+  hostnames:
+    - {{ $hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $proxyName }}
+          port: 4180
+{{- end }}

@@ -411,10 +411,11 @@ for source, authentication, network, and report-document constraints.
 
 ### Researcher browser access
 
-This chart does not install an ingress controller, Gateway, DNS record,
-certificate, or authentication proxy. Those resources are platform-owned
-because their identity, network, and certificate policies vary by environment.
-A supported researcher endpoint has all of these properties:
+By default this chart installs no browser exposure. Platforms can either opt
+into the [chart-managed Entra proxy](#opt-in-entra-authentication) below or
+maintain their own authenticated proxy. Controllers, DNS, identity, issuer
+policy and network isolation remain platform-owned in both cases.
+A supported externally managed researcher endpoint has all of these properties:
 
 1. A stable HTTPS URL and trusted certificate.
 2. Entra-aware authentication before any Portal route is served.
@@ -427,7 +428,7 @@ A supported researcher endpoint has all of these properties:
    browser URL in `portal.access.externalURL`.
 
 The access values declare the deployment contract and fail unsafe chart
-configurations; they do not provision or probe the external proxy.
+configurations; alone they do not provision or probe an external proxy.
 
 Until that platform path exists, keep
 `portal.access.mode=cluster-internal` and leave `externalURL` empty. In that
@@ -435,6 +436,90 @@ state there is intentionally no supported researcher browser signoff.
 `kubectl port-forward` is an operator diagnostic only and must not be used as
 researcher acceptance evidence. Historical IP addresses are not an endpoint
 contract.
+
+### Opt-in Entra authentication
+
+`portal.entraAuth.enabled` defaults to `false`. Enabling it adds six resources:
+a dedicated oauth2-proxy ServiceAccount, restricted Deployment and ClusterIP
+Service, a cert-manager Certificate, and Gateway API v1 Gateway and HTTPRoute.
+All use the release namespace. The HTTPS route forwards **every path to
+oauth2-proxy**, whose only upstream is the existing Portal ClusterIP Service.
+There is no direct public Portal/Ray route, static authentication upstream,
+mesh-wide `extensionProviders` configuration, or `AuthorizationPolicy`.
+Portal's existing Ray views/proxies remain behind this same login.
+
+This is **shared viewer access**, not per-user or workspace authorization.
+Admitted users can see the data available to the existing Portal backend
+identity, including its cluster-wide read-only Kubernetes RBAC and configured
+ADX scopes. `workspaceDirectory.enabled` and `workspaceDirectory.auth.enabled`
+are rejected with this option: the current directory always trusts configured
+identity headers, and this integration does not provide a verified mapping.
+Use a separately reviewed external proxy for that authorization contract.
+
+| `portal.entraAuth` field | Default | Contract |
+|---|---|---|
+| `enabled` | `false` | Requires `portal.enabled=true`, ClusterIP and `access.mode=authenticated-proxy` |
+| `tenantID`, `clientID` | empty | Dedicated single-tenant Web app; UUIDs, separate from backend ADX identity |
+| `cookieSecret.name`, `.key` | empty / `cookie-secret` | Existing release-namespace Secret containing a URL-safe base64-encoded random 32-byte cookie key |
+| `gatewayClassName` | `istio` | Compatible preinstalled Gateway API controller |
+| `issuerRef.name`, `.kind`, `.group` | empty / `ClusterIssuer` / `cert-manager.io` | Operator-owned cert-manager Issuer (same namespace) or ClusterIssuer |
+| `image.repository`, `.tag` | empty / empty | Required approved build containing the callback-log privacy fix; prefer MCR |
+| `image.digest`, `.pullPolicy`, `imagePullSecrets` | empty / `IfNotPresent` / `[]` | A `sha256:` digest is required when enabled; mutable tags are rejected |
+| `replicaCount`, `resources` | `2`; requests `100m/128Mi`, limits `500m/256Mi` | Cookie sessions require no shared Redis store |
+| `nodeSelector`, `tolerations`, `affinity` | `{}`, `[]`, `{}` | Optional scheduling |
+
+The only hostname source is `portal.access.externalURL`, an HTTPS origin such as
+`https://portal.example.com` (optional trailing `/`, no port/path/query/fragment).
+The Web redirect URI is always `https://portal.example.com/oauth2/callback`.
+Cookies are host-only, Secure, HttpOnly, SameSite=Lax, have a `__Host-` name and
+a one-hour lifetime. Minimal sessions retain no access/refresh/ID tokens in the
+session cookie; this mode reauthenticates rather than refreshing offline.
+Do not configure inline cookie/client secrets or bypass arguments.
+
+Proxy request logging is disabled because the pinned proxy logs full request
+queries, including OAuth callback codes and state. Standard/error and
+authentication logging remain enabled. Configure the operator-owned Gateway
+and any other upstream proxy to omit request queries or disable access logging
+before enabling real sign-in; this chart does not configure controller logs.
+
+Do not use the stock oauth2-proxy v7.15.2 image. Its missing-CSRF callback
+diagnostics pass the complete HTTP request to the standard logger, exposing the
+callback query, cookies and authorization header. The required approved image
+must route those diagnostics through structured authentication logging and
+must not include decoded OAuth state in the message.
+
+For default names the proxy is `tau-portal-oauth2-proxy`, Gateway/HTTPRoute/
+Certificate are `tau-portal-entra`, and TLS Secret is `tau-portal-entra-tls`.
+These derive from `portal.resourceName` (a DNS label starting with a letter,
+at most 50 characters). Custom `portal.serviceName`, `portal.service.port` and
+release namespace are honored. Federate the browser app to
+`system:serviceaccount:<release-namespace>:<resourceName>-oauth2-proxy` using
+the cluster OIDC issuer and audience `api://AzureADTokenExchange`. The AKS
+Workload Identity webhook projects the token; no client secret is used.
+
+**Required before enablement:** Gateway API v1 CRDs/controller, cert-manager
+with Gateway support and a reviewed issuer, AKS OIDC/Workload Identity webhook,
+DNS, externally managed cookie Secret, single-tenant Entra app/federation,
+tenant consent approval, enterprise-app **assignment required**, and explicitly
+assigned allowed users/groups. The HTTP listener is only for the issuer's
+HTTP-01 solver routes; the chart installs no HTTP Portal route or redirect.
+Namespaced writers must be trusted: they can otherwise attach their own routes.
+
+ClusterIP is **not** network isolation. Restrict in-cluster access to both
+Services separately, remove any previous direct backend exposure, and preserve
+the platform's ingress/egress controls. This chart creates no NetworkPolicy and
+does not claim enforcement by an unconfigured CNI or mesh.
+
+See the [complete setup and acceptance guide](../../site/content/en/docs/platform-admin-guide/setup-guides/enable-portal.md#opt-into-chart-managed-entra-browser-login)
+and [umbrella merge example](../../examples/portal-entra-auth/values.yaml).
+For a standalone chart, omit the `taugrid-core:` wrapper. Do not install a
+second standalone release alongside the umbrella. Merge into the **complete
+canonical values file**, retain existing infrastructure settings, and pass that
+file on **every** `tau cluster install` upgrade; the CLI uses `--reset-values`.
+Use a chart build/release containing this feature, not an older published chart
+with the same development version.
+
+### Browser signoff
 
 Browser signoff uses only the declared URL:
 

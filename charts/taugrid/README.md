@@ -316,6 +316,19 @@ Services chart. The TauGrid distribution overrides the standalone child chart so
 | `taugrid-core.portal.enabled` | bool | `true` | Unified operator observability portal |
 | `taugrid-core.portal.serviceAccount.create` | bool | `true` | Create the dedicated Portal ServiceAccount |
 | `taugrid-core.portal.rbac.create` | bool | `true` | Create cluster-wide read-only Kubernetes RBAC for Portal |
+| `taugrid-core.portal.entraAuth.enabled` | bool | `false` | Opt-in single-host Entra login via chart-managed oauth2-proxy, Certificate, Gateway and HTTPS HTTPRoute |
+
+Browser authentication is separately opt-in even though Portal is installed by
+default. Follow the [Portal authentication contract](../taugrid-core/README.md#opt-in-entra-authentication)
+and [setup guide](../../site/content/en/docs/platform-admin-guide/setup-guides/enable-portal.md#opt-into-chart-managed-entra-browser-login)
+before using the [merge example](../../examples/portal-entra-auth/values.yaml).
+It requires operator-provisioned Entra identity/federation and enterprise-app
+assignments, Workload Identity, cookie Secret, DNS, cert-manager issuer and a
+Gateway API controller. It gives shared Portal viewer access, not workspace
+authorization, and installs no public Ray head routes or mesh-wide policy.
+Merge this configuration into the **complete canonical umbrella values file**
+and pass it on every upgrade; a fragment alone with `tau cluster install`
+can reset unrelated infrastructure because the CLI uses `--reset-values`.
 
 All enabled system workloads and Services follow the Helm release namespace. Use `tau cluster install --namespace <name>` for a non-default system namespace on a fresh installation. Administrative workspace commands use the same value through `--system-namespace <name>`, and generated workspace connection descriptors persist it as `cluster.systemNamespace`. The gpu-monitoring 0.1.8 subchart rejects a non-empty deprecated `gpu-monitoring.namespace` override and directs operators to the release namespace instead. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 

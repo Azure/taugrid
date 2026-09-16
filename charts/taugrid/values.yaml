@@ -184,6 +184,10 @@ taugrid-core:
     enabled: false
   portal:
     enabled: true
+    # Browser login remains opt-in. See the Portal Entra setup guide for the
+    # required external identity, cookie Secret, issuer, DNS and Gateway controller.
+    entraAuth:
+      enabled: false
     serviceAccount:
       create: true
       name: tau-portal
