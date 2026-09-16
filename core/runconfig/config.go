@@ -124,6 +124,16 @@ type Runtime struct {
 	EnvSecret  map[string]string `yaml:"env_secret"`
 	EnvKV      map[string]string `yaml:"env_kv"`
 	Security   Security          `yaml:"security"`
+	RDMA       RDMA              `yaml:"rdma"`
+}
+
+// RDMA opts Job containers into RDMA device resources and the memlock
+// capabilities NCCL NET/IB needs for verbs memory registration.
+type RDMA struct {
+	Enabled      bool   `yaml:"enabled"`
+	ResourceName string `yaml:"resource_name,omitempty"`
+	Count        *int   `yaml:"count,omitempty"`
+	ShmSize      string `yaml:"shm_size,omitempty"`
 }
 
 const SecurityModeRestricted = "restricted"

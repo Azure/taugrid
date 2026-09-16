@@ -176,6 +176,10 @@ type Options struct {
 	// SecurityMode applies the typed runtime.security contract.
 	SecurityMode string
 
+	// RDMA opts the Job into RDMA device resources and injects the
+	// IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities NCCL NET/IB needs.
+	RDMA RDMAOptions
+
 	// OutputDir, if set, advertises the durable result path on the pod via
 	// the TAU_OUTPUT_DIR env var. Setting this does not otherwise affect
 	// the rendered manifest; the result-path/result-pvc annotations live
@@ -239,6 +243,46 @@ type VolumeMount struct {
 	Name      string
 	MountPath string
 	ReadOnly  bool
+}
+
+// RDMAOptions controls RDMA device injection and security posture for Job
+// workloads that need NCCL InfiniBand verbs.
+type RDMAOptions struct {
+	Enabled      bool
+	ResourceName string
+	Count        int
+	ShmSize      string
+}
+
+const (
+	defaultRDMAResourceName  = "rdma/rdma_shared_device_a"
+	defaultRDMAResourceCount = 1
+	defaultRDMAShmSize       = "32Gi"
+)
+
+// NormalizeRDMA returns an RDMAOptions with defaults applied.
+func NormalizeRDMA(cfg runconfig.RDMA) RDMAOptions {
+	if !cfg.Enabled {
+		return RDMAOptions{}
+	}
+	resourceName := strings.TrimSpace(cfg.ResourceName)
+	if resourceName == "" {
+		resourceName = defaultRDMAResourceName
+	}
+	count := defaultRDMAResourceCount
+	if cfg.Count != nil {
+		count = *cfg.Count
+	}
+	shmSize := strings.TrimSpace(cfg.ShmSize)
+	if shmSize == "" {
+		shmSize = defaultRDMAShmSize
+	}
+	return RDMAOptions{
+		Enabled:      true,
+		ResourceName: resourceName,
+		Count:        count,
+		ShmSize:      shmSize,
+	}
 }
 
 // ProfileOptions configures the opt-in profiler wrapper for Job workloads.
@@ -812,7 +856,18 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if p.Runtime.ImagePullPolicy != "" {
 		container["imagePullPolicy"] = p.Runtime.ImagePullPolicy
 	}
-	if p.Runtime.SecurityContext != nil {
+	if o.RDMA.Enabled {
+		container["securityContext"] = map[string]any{
+			"runAsUser":                int64(0),
+			"runAsGroup":               int64(0),
+			"allowPrivilegeEscalation": false,
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+			"capabilities": map[string]any{
+				"drop": []any{"ALL"},
+				"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
+			},
+		}
+	} else if p.Runtime.SecurityContext != nil {
 		container["securityContext"] = p.Runtime.SecurityContext
 	}
 	if len(cmd) > 0 {
@@ -837,6 +892,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	applyContainerResourceOverrides(resources, o)
 	profile.AddGPUResources(resources, gpu.Count)
+	if o.RDMA.Enabled {
+		addRDMAResources(resources, o.RDMA)
+	}
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
@@ -880,11 +938,15 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 
 	// /dev/shm: PyTorch DDP uses shared memory for inter-process IPC. The
 	// default 64MB is too small for multi-GPU training; mount an emptyDir
-	// backed by memory.
+	// backed by memory. RDMA workloads get a larger default (32Gi).
 	if o.Launcher == "torchrun" && (o.ProcessesPerNode > 1 || o.Nodes > 1) && !hasVolume(pod, "dshm") {
+		shmSize := "16Gi"
+		if o.RDMA.Enabled && o.RDMA.ShmSize != "" {
+			shmSize = o.RDMA.ShmSize
+		}
 		shmVol := map[string]any{
 			"name":     "dshm",
-			"emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"},
+			"emptyDir": map[string]any{"medium": "Memory", "sizeLimit": shmSize},
 		}
 		shmMount := map[string]any{"name": "dshm", "mountPath": "/dev/shm"}
 		if existing, ok := pod["volumes"].([]any); ok {
@@ -1194,6 +1256,16 @@ func applyContainerResourceOverrides(resources map[string]any, o Options) {
 	if len(limits) > 0 {
 		resources["limits"] = limits
 	}
+}
+
+func addRDMAResources(resources map[string]any, rdma RDMAOptions) {
+	requests := copyResourceQuantities(resources["requests"])
+	limits := copyResourceQuantities(resources["limits"])
+	count := strconv.Itoa(rdma.Count)
+	requests[rdma.ResourceName] = count
+	limits[rdma.ResourceName] = count
+	resources["requests"] = requests
+	resources["limits"] = limits
 }
 
 func copyResourceQuantities(existing any) map[string]any {
