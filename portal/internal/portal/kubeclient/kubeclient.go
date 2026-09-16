@@ -47,6 +47,9 @@ var (
 	nodeGVR = schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "nodes",
 	}
+	nodeMetricsGVR = schema.GroupVersionResource{
+		Group: "metrics.k8s.io", Version: "v1beta1", Resource: "nodes",
+	}
 	jobGVR = schema.GroupVersionResource{
 		Group: "batch", Version: "v1", Resource: "jobs",
 	}
@@ -150,6 +153,13 @@ func (c *Client) ListServices(ctx context.Context, namespace string) ([]byte, er
 // (SKU, agentpool, region/zone) to describe the fleet's hardware.
 func (c *Client) ListNodes(ctx context.Context) ([]byte, error) {
 	return c.listRaw(ctx, nodeGVR, "")
+}
+
+// ListNodeMetrics returns current cluster-scoped Node CPU and memory usage from
+// Metrics Server. The Fleet board treats this as optional current evidence and
+// preserves inventory when the aggregated API is unavailable.
+func (c *Client) ListNodeMetrics(ctx context.Context) ([]byte, error) {
+	return c.listRaw(ctx, nodeMetricsGVR, "")
 }
 
 // ListDaemonSets returns DaemonSets across all namespaces for the Fleet Compute

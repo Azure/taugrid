@@ -183,3 +183,24 @@ tests:
              - get
              - list
              - watch
+
+  - it: grants read-only access to current Node metrics
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - metrics.k8s.io
+            resources:
+              - nodes
+            verbs:
+              - get
+              - list

@@ -41,12 +41,22 @@ export interface Cluster extends Scoped {
 }
 export interface Nodes extends Scoped {
   totalNodes: number; readyNodes: number; gpuNodes: number; totalGPUs: number;
-  totalCPUCores: number; totalMemoryGiB: number;
+  gpuAllocatable: number; gpuSchedulable: number; gpuAllocated: number; gpuAvailable: number; gpuAllocationKnown: boolean; gpuAllocationError?: string;
+  totalCPUCores: number; totalMemoryGiB: number; rdmaAdvertisedGpuNodes?: number;
   skus: { sku: string; nodes: number; gpus: number }[];
-  nodes: { name: string; agentPool?: string; sku?: string; region?: string; zone?: string;
-    cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuProduct?: string; ready: boolean }[];
+  nodes: { name: string; agentPool?: string; sku?: string; site?: string; region?: string; zone?: string;
+    cpuCores: number; memoryGiB: number; gpuCapacity: number; gpuAllocatable?: number;
+    cpuUtilPct?: number; memUsedPct?: number; metricsObservedAt?: string; metricsWindow?: string;
+    gpuAllocated?: number; gpuAvailable?: number; gpuProduct?: string; ready: boolean; schedulable?: boolean;
+    agentPoolLabel?: string; siteLabel?: string; siteLabelConflict?: boolean; regionLabel?: string; zoneLabel?: string;
+    rdmaResources?: { name: string; capacity: number; allocatable: number }[];
+    operationalConditions?: {
+      type: string; category: 'gpu' | 'infiniband'; status: string; reason?: string; message?: string;
+      lastHeartbeatTime?: string; lastTransitionTime?: string;
+    }[] }[];
   daemonSets?: { namespace: string; name: string; ready: number; desired: number; available: number; healthy: boolean }[];
   daemonSetsError?: string;
+  nodeMetricsError?: string;
 }
 export interface NodeUtil extends Scoped {
   window: string; queriedAt: string; availability: 'ready' | 'empty';

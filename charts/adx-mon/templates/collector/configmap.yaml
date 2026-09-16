@@ -91,13 +91,6 @@ data:
       drop-metrics = {{ include "adx-mon.collectorScrapeDropMetrics" . }}
     {{- end }}
 
-    {{- if .Values.collector.gpu.dcgmScrape }}
-    # DCGM exporter GPU metrics scrape target (added by adx-mon pod annotation discovery)
-    # The DCGM exporter pods are expected to have adx-mon/scrape=true annotation.
-    {{- end }}
-
-
-
     [[prometheus-remote-write]]
       database = '{{ .Values.adx.metricsDatabase }}'
       path = '/receive'

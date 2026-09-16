@@ -35,9 +35,10 @@ type Rule struct {
 	For time.Duration `yaml:"for,omitempty"`
 	// MinSamples opts a continuous rule into coverage checks. Zero preserves
 	// optional/sparse-event behavior. SampleLabel counts distinct identities.
-	MinSamples   int           `yaml:"minSamples,omitempty"`
-	SampleLabel  string        `yaml:"sampleLabel,omitempty"`
-	MaxSampleAge time.Duration `yaml:"maxSampleAge,omitempty"`
+	MinSamples           int           `yaml:"minSamples,omitempty"`
+	SampleLabel          string        `yaml:"sampleLabel,omitempty"`
+	RequiredSampleValues []string      `yaml:"requiredSampleValues,omitempty"`
+	MaxSampleAge         time.Duration `yaml:"maxSampleAge,omitempty"`
 }
 
 // MetricSources returns the rule's explicit input families.
@@ -134,21 +135,38 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 		Reason:        rule.ConditionType + "Ok",
 		Message:       "",
 	}
+	if rule.MinSamples > 0 {
+		result.Reason = rule.ConditionType + "Observed"
+	}
 
 	var valid []scraper.Metric
 	var commonIdentities map[string]struct{}
 	matchedCount := 0
+	requiredIdentities := make(map[string]struct{}, len(rule.RequiredSampleValues))
+	for _, identity := range rule.RequiredSampleValues {
+		requiredIdentities[identity] = struct{}{}
+	}
 	maxAge := rule.MaxSampleAge
 	if maxAge == 0 {
 		maxAge = DefaultMaxSampleAge
 	}
 	for sourceIndex, name := range rule.MetricSources() {
 		matched := matchMetrics(idx, name, rule.Labels)
-		matchedCount += len(matched)
 		identities := make(map[string]struct{}, len(matched))
 		validCount := 0
+		eligibleCount := 0
 		for _, m := range matched {
 			key := metricKey(m.Name, m.Labels)
+			identity := ""
+			if rule.SampleLabel != "" {
+				identity = m.Labels[rule.SampleLabel]
+				if len(requiredIdentities) > 0 && identity != "" {
+					if _, required := requiredIdentities[identity]; !required {
+						continue
+					}
+				}
+			}
+			eligibleCount++
 			if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
 				e.breakRateContinuity(ruleIndex, rule, key)
 				continue
@@ -159,7 +177,6 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 				continue
 			}
 			if rule.SampleLabel != "" {
-				identity := m.Labels[rule.SampleLabel]
 				if identity == "" {
 					e.breakRateContinuity(ruleIndex, rule, key)
 					continue
@@ -169,6 +186,7 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 			validCount++
 			valid = append(valid, m)
 		}
+		matchedCount += eligibleCount
 		observed := validCount
 		if rule.SampleLabel != "" {
 			observed = len(identities)
@@ -182,7 +200,7 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 				}
 			}
 		}
-		if rule.MinSamples > 0 && (observed < rule.MinSamples || validCount != len(matched)) {
+		if rule.MinSamples > 0 && (observed < rule.MinSamples || validCount != eligibleCount) {
 			result.Unknown = true
 			result.Reason = "MetricCoverageUnavailable"
 			result.Message = fmt.Sprintf("metric %q has %d valid samples/identities; requires at least %d; missing, invalid, or stale input is not healthy",

@@ -337,3 +337,43 @@ func TestEvaluate_XIDInstantGaugeWithErrCode(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluate_RequiredSampleValuesFailClosed(t *testing.T) {
+	const metricName = "node_infiniband_link_downed_total"
+	engine := NewEngine([]Rule{{
+		Name:                 "ib-link-down",
+		MetricName:           metricName,
+		ConditionType:        "IBLinkDown",
+		Mode:                 "rate",
+		Threshold:            0,
+		Window:               time.Minute,
+		MinSamples:           2,
+		SampleLabel:          "device",
+		RequiredSampleValues: []string{"mlx5_ib0", "mlx5_ib1"},
+	}})
+
+	results := engine.Evaluate(nil)
+	if !results[0].Unknown {
+		t.Fatalf("empty scrape result = %+v, want Unknown", results[0])
+	}
+
+	partial := []scraper.Metric{
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_ib0", "port": "1"}, Value: 0},
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_an0", "port": "1"}, Value: 0},
+	}
+	results = engine.Evaluate(partial)
+	if !results[0].Unknown {
+		t.Fatalf("partial required coverage result = %+v, want Unknown", results[0])
+	}
+
+	complete := []scraper.Metric{
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_ib0", "port": "1"}, Value: 0},
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_ib1", "port": "1"}, Value: 0},
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_an0", "port": "1"}, Value: 99},
+	}
+	engine.Evaluate(complete)
+	results = engine.Evaluate(complete)
+	if results[0].Unknown || results[0].Firing || results[0].Reason != "IBLinkDownObserved" {
+		t.Fatalf("complete required coverage result = %+v, want observed non-firing result", results[0])
+	}
+}

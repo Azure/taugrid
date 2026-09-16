@@ -35,6 +35,12 @@ tests:
           content:
             name: metrics-collector
           any: true
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/scrape"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["adx-mon/port"]
+          value: "9100"
 
   - it: spark DaemonSet has no dcgm-exporter, keeps node-exporter (same as every other SKU)
     documentSelector:
@@ -420,6 +426,10 @@ tests:
           content:
             name: node-exporter
           any: true
+      - isNull:
+          path: spec.template.metadata.annotations["adx-mon/scrape"]
+      - isNull:
+          path: spec.template.metadata.annotations["adx-mon/port"]
 
   - it: metrics-collector sidecar mounts the per-SKU collector-config ConfigMap
     documentSelector:
@@ -441,7 +451,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-          value: 0be3ffa83eace58b977137dbdbf64c5080676385d8be54e411a4af75f4286d9f
+          value: 5857134bc5c5a8843dfb181afac22f601791937eec6edd4e12880d8dc01aca60
 
   - it: per-profile scrape target changes update only that profile checksum
     values:
@@ -452,7 +462,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/metrics-collector-config"]
-          value: fd4875588373d2452a180925bc3d744cca89b951688b81c11aa918c32cf7012f
+          value: 30877c83a5d3dec09a8ae6cff900832b39520d3e7266d8dd01cdb58a74bd91a1
 
   - it: GPU device-file and host DCGM health checks are required
     documentSelector:
@@ -519,6 +529,44 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[3]
           pattern: '^--config.custom-plugin-monitor=/custom-config/no-host-dcgm-monitor-[a-f0-9]{10}\.json$'
+
+  - it: GPU Operator-backed H100 NVL profiles do not require a host dcgmi binary
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h100-nvl-1g
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_DCGM_REQUIRED
+            value: "0"
+          any: true
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-dcgm-health
+          any: true
+
+  - it: GPU Operator-backed two-GPU H100 NVL profiles do not require a host dcgmi binary
+    values:
+      - mixed-dcgm-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-h100-nvl-2g
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NPD_DCGM_REQUIRED
+            value: "0"
+          any: true
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-dcgm-health
+          any: true
 
   - it: an invalid dcgmHealth.source fails before deployment
     set:

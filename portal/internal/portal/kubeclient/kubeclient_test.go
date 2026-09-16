@@ -30,6 +30,7 @@ func TestProfileSetGetsSingletonTauClusterThroughDynamicClient(t *testing.T) {
 			Type: profile.ConditionReady, Status: metav1.ConditionTrue, ObservedGeneration: generation,
 		}},
 	}
+
 	hash, err := profile.ProfileSetHash([]profile.ResolvedWorkloadProfile{resolved})
 	if err != nil {
 		t.Fatal(err)
@@ -72,5 +73,34 @@ func TestProfileSetGetsSingletonTauClusterThroughDynamicClient(t *testing.T) {
 	}
 	if gotPath != "/apis/tau.azure.com/v1alpha1/clusters/cluster" {
 		t.Fatalf("TauCluster GET path = %q", gotPath)
+	}
+}
+
+func TestListNodeMetricsUsesAggregatedMetricsAPI(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"apiVersion":"metrics.k8s.io/v1beta1",
+			"kind":"NodeMetricsList",
+			"metadata":{},
+			"items":[{"metadata":{"name":"gpu-node"},"timestamp":"2026-09-15T20:00:00Z","window":"15s","usage":{"cpu":"500m","memory":"1Gi"}}]
+		}`))
+	}))
+	defer server.Close()
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := NewForDynamic(client).ListNodeMetrics(context.Background())
+	if err != nil {
+		t.Fatalf("ListNodeMetrics: %v", err)
+	}
+	if gotPath != "/apis/metrics.k8s.io/v1beta1/nodes" {
+		t.Fatalf("NodeMetrics list path = %q", gotPath)
+	}
+	if !json.Valid(data) {
+		t.Fatalf("ListNodeMetrics returned invalid JSON: %s", data)
 	}
 }

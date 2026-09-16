@@ -237,6 +237,26 @@ rejects a config containing no coverage rules. Do not enable it against the
 legacy image. Source merge, approved image publication, digest pinning, and
 coverage activation are separate rollout steps.
 
+InfiniBand link-down and symbol-error rules use node-exporter's actual metric
+families, `node_infiniband_link_downed_total` and
+`node_infiniband_symbol_error_total`. For profiles with `ib_devices`, the chart
+derives the exact device names from that contract, renders them as
+`requiredSampleValues`, and requires every declared device to provide a current
+sample. Extra interfaces cannot replace a missing expected device. A
+coverage-capable collector publishes non-firing reasons
+`IBLinkDownObserved` and `IBSymbolErrorObserved`; missing devices, stale samples,
+or an incomplete rate baseline publish `Unknown`.
+
+The collector digest pinned by chart `0.1.7` predates
+`requiredSampleValues` and the coverage-aware reason contract. It ignores those
+new rule fields and continues to publish legacy `...Ok` reasons. Portal
+consumers must treat those legacy reasons as unverified, never healthy. To
+enable verified InfiniBand success, first merge the collector source, publish
+the merged-main image, verify its source revision and multi-architecture
+digest, and update `metricsCollector.image.digest`. Until that release sequence
+completes, the honest Portal state is `Unknown`; do not relax the consumer to
+make it green.
+
 The optional ConfigMap contains a reduced `dcgm-metrics.csv`: NVIDIA's normal
 telemetry fields plus only the extended ECC and aggregate NVLink replay inputs.
 It does not include per-link counters, raw CRC counters, or power/thermal
@@ -271,6 +291,13 @@ Profiles on hosts without `dcgmi`, including GPU Operator-backed H100 NVL nodes,
 must use their existing profile-specific `dcgmHealth.source: exporter` override
 and a node-local exporter URL. Do not globally disable host diagnostics on
 profiles that actually provide them.
+
+When the node-exporter sidecar is enabled, its pod template opts into adx-mon
+scrape discovery on port 9100. adx-mon watches only pods on the collector's
+node and scrapes the pod IP, so current node CPU/memory telemetry works for
+externally joined Flex nodes without relying on node-name DNS. Disabling the
+sidecar also removes these annotations; another explicit node metrics source is
+then required for ADX-backed history.
 
 ### AKS-managed exporter counters on port 19400
 
