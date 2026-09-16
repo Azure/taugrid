@@ -72,6 +72,7 @@ tests:
             - --oidc-issuer-url=https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0
             - --redirect-url=https://portal.example.com/oauth2/callback
             - --scope=openid
+            - --oidc-email-claim=sub
             - --insecure-oidc-skip-nonce=false
             - --code-challenge-method=S256
             - --email-domain=*

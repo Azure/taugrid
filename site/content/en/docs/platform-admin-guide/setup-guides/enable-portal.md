@@ -240,10 +240,13 @@ tenant IDs from an unrelated environment.
 6. On the corresponding enterprise application, set **Assignment required?**
    to **Yes**, then explicitly assign only the approved users/groups. The proxy
    requests only the standard `openid` sign-in scope; do not add profile, email,
-   offline-access or Graph permissions for this flow. Confirm the tenant permits
-   assigned users to sign in to the application, and validate the real browser
-   flow before rollout. No Graph group-membership permission is needed for this
-   shared-viewer mode; avoid group claims and unnecessary permissions.
+   offline-access or Graph permissions for this flow. The proxy maps its
+   required session identity field to the mandatory OIDC `sub` claim, so
+   assigned users without an optional Entra `email` claim can still complete
+   sign-in. Confirm the tenant permits assigned users to sign in to the
+   application, and validate the real browser flow before rollout. No Graph
+   group-membership permission is needed for this shared-viewer mode; avoid
+   group claims and unnecessary permissions.
    `--email-domain=*` does **not** grant all tenant users permission: the
    single-tenant issuer and enterprise-app assignments are the admission gates.
 7. Create the cookie Secret **outside Helm** in the release namespace using an

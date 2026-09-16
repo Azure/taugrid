@@ -496,6 +496,9 @@ release namespace are honored. Federate the browser app to
 `system:serviceaccount:<release-namespace>:<resourceName>-oauth2-proxy` using
 the cluster OIDC issuer and audience `api://AzureADTokenExchange`. The AKS
 Workload Identity webhook projects the token; no client secret is used.
+The proxy requests only `openid` and maps its required session identity field
+to the mandatory OIDC `sub` claim. Sign-in therefore does not depend on
+optional Entra `email` or `profile` claims.
 
 **Required before enablement:** Gateway API v1 CRDs/controller, cert-manager
 with Gateway support and a reviewed issuer, AKS OIDC/Workload Identity webhook,

@@ -168,6 +168,7 @@ spec:
             - {{ printf "--oidc-issuer-url=https://login.microsoftonline.com/%s/v2.0" $auth.tenantID | quote }}
             - {{ printf "--redirect-url=https://%s/oauth2/callback" $hostname | quote }}
             - --scope=openid
+            - --oidc-email-claim=sub
             - --insecure-oidc-skip-nonce=false
             - --code-challenge-method=S256
             - --email-domain=*
