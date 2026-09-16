@@ -86,6 +86,17 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) int {
+	if os.Getenv("E2E_NCCL_RDMA") == "1" {
+		if os.Getenv("NCCL_RDMA_CONFIRM") != ncclRDMAConfirmation {
+			fmt.Fprintln(os.Stderr, "NCCL/RDMA diagnostic requires the explicit confirmation token before any cluster access")
+			return 1
+		}
+		if !regexp.MustCompile(`^nccl-rdma-[a-f0-9]{32}$`).MatchString(strings.TrimSpace(os.Getenv("NCCL_RDMA_INVOCATION"))) {
+			fmt.Fprintln(os.Stderr, "NCCL/RDMA diagnostic requires a unique nccl-rdma-<32 lowercase hex> invocation marker before any cluster access")
+			return 1
+		}
+	}
+
 	kubeClient, dynamicClient, err := e2e.BuildClients()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to build K8s clients: %v\n", err)
@@ -93,6 +104,10 @@ func runTests(m *testing.M) int {
 	}
 
 	ctx := context.Background()
+	if os.Getenv("E2E_NCCL_RDMA") == "1" && !stackUsesArgoCDQueue() {
+		fmt.Fprintln(os.Stderr, "NCCL/RDMA diagnostic requires an explicit pre-provisioned namespace and LocalQueue; refusing fixture-managed stack resources")
+		return 1
+	}
 	if largeGPUUsesManagerWorkloadAccess() && !stackUsesArgoCDQueue() {
 		fmt.Fprintln(os.Stderr, "manager workload access requires the pre-provisioned ArgoCD stack namespace and queue")
 		return 1
@@ -675,9 +690,9 @@ func requireWorkersSplitEvenlyAcrossNodes(t *testing.T, tc *e2e.TestContext, pod
 		perNodeCount[pod.Spec.NodeName]++
 	}
 
-	require.Len(t, perNodeCount, wantNodes, "FineWeb workers should span exactly %d H200 nodes, got %d (%v)", wantNodes, len(perNodeCount), perNodeCount)
+	require.Len(t, perNodeCount, wantNodes, "workers should span exactly %d nodes, got %d (%v)", wantNodes, len(perNodeCount), perNodeCount)
 	for node, count := range perNodeCount {
-		require.Equal(t, perNode, count, "node %s should run exactly %d FineWeb workers, got %d", node, perNode, count)
+		require.Equal(t, perNode, count, "node %s should run exactly %d workers, got %d", node, perNode, count)
 	}
 }
 

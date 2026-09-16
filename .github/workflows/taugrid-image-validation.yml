@@ -59,16 +59,22 @@ jobs:
             make_directory: images/tau
             context: .
             dockerfile: images/tau/Dockerfile
+            smoke_command: --help
+            smoke_make: ""
           - name: TauGrid Portal
             image: taugrid-portal
             make_directory: images/taugrid-portal
             context: .
             dockerfile: images/taugrid-portal/Dockerfile
+            smoke_command: --help
+            smoke_make: ""
           - name: Tau core controller
             image: tau-core-controller
             make_directory: images/tau-core-controller
             context: .
             dockerfile: images/tau-core-controller/Dockerfile
+            smoke_command: --help
+            smoke_make: ""
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,7 +101,17 @@ jobs:
           tags: taugrid/${{ matrix.image }}:validation
 
       - name: Smoke test image
-        run: docker run --rm "taugrid/${{ matrix.image }}:validation" --help
+        env:
+          IMAGE: ${{ matrix.image }}
+          MAKE_DIRECTORY: ${{ matrix.make_directory }}
+          SMOKE_COMMAND: ${{ matrix.smoke_command }}
+          SMOKE_MAKE: ${{ matrix.smoke_make }}
+        run: |
+          if [[ -n "${SMOKE_MAKE}" ]]; then
+            make -C "${MAKE_DIRECTORY}" "${SMOKE_MAKE}" IMG="taugrid/${IMAGE}:validation"
+          else
+            docker run --rm "taugrid/${IMAGE}:validation" "${SMOKE_COMMAND}"
+          fi
 
       - name: Scan image for critical vulnerabilities
         run: |

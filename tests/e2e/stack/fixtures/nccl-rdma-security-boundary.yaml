@@ -1,0 +1,1109 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Repository source for the standard batch/v1 Indexed Job 2-GPU inter-node
+# RDMA admission boundary. APPROVED_* sentinels intentionally block activation
+# until exact platform identities and infrastructure values are supplied.
+# No Role or RoleBinding grants workload creation to an untrusted submitter.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: taugrid-rdma-diagnostic
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    tau.azure.com/nccl-rdma-security-boundary: v3
+  annotations:
+    tau.azure.com/nccl-rdma-diagnostic-approved: "true"
+    tau.azure.com/owner-role: tau-platform-admins
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nccl-rdma-shape
+  namespace: taugrid-rdma-diagnostic
+spec:
+  hard:
+    pods: "2"
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 32Gi
+    limits.memory: 64Gi
+    requests.nvidia.com/gpu: "2"
+    limits.nvidia.com/gpu: "2"
+    requests.rdma/rdma_shared_device_a: "2"
+    limits.rdma/rdma_shared_device_a: "2"
+    count/jobs.batch: "1"
+    count/workloads.kueue.x-k8s.io: "1"
+    count/configmaps: "2"
+    count/secrets: "1"
+    count/services: "1"
+    count/serviceaccounts: "2"
+    count/networkpolicies.networking.k8s.io: "1"
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: h200-rdma
+  namespace: taugrid-rdma-diagnostic
+  labels:
+    app.kubernetes.io/managed-by: platform-gitops
+    app.kubernetes.io/part-of: taugrid-rdma-diagnostics
+spec:
+  clusterQueue: APPROVED_OWNED_DIAGNOSTIC_CLUSTER_QUEUE
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-job-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: ["batch"]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["jobs", "jobs/status"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  variables:
+  - name: pod
+    expression: object.spec.template.spec
+  - name: container
+    expression: variables.pod.containers[0]
+  validations:
+  - expression: >-
+      (request.operation == "CREATE" &&
+       request.userInfo.username == "APPROVED_OPERATOR_USERNAME") ||
+      (request.operation == "UPDATE" &&
+       (
+         request.userInfo.username in [
+           "APPROVED_KUEUE_CONTROLLER_USERNAME",
+           "APPROVED_JOB_CONTROLLER_USERNAME"
+         ] ||
+         (
+           request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+           has(oldObject.metadata.deletionTimestamp) &&
+           has(oldObject.metadata.finalizers) &&
+           oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+           (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+         )
+       ))
+    message: Only the approved operator may create; only Kueue, the Job controller, or the garbage collector's deletion-finalizer transition may update the diagnostic Job.
+  - expression: >-
+      object.metadata.name == "e2e-nccl-rdma-2x1xh200" &&
+      object.metadata.namespace == "taugrid-rdma-diagnostic" &&
+      object.metadata.labels.size() == 5 &&
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      object.metadata.labels["kueue.x-k8s.io/queue-name"] == "h200-rdma" &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Job identity, queue, invocation, and ownership must be exact.
+  - expression: >-
+      has(object.spec.suspend) &&
+      (request.operation != "CREATE" || object.spec.suspend == true) &&
+      object.spec.completions == 2 &&
+      object.spec.parallelism == 2 &&
+      object.spec.completionMode == "Indexed" &&
+      object.spec.backoffLimit == 0 &&
+      object.spec.activeDeadlineSeconds == 900 &&
+      object.spec.ttlSecondsAfterFinished == 600 &&
+      (!has(object.spec.backoffLimitPerIndex) || object.spec.backoffLimitPerIndex == 0) &&
+      (!has(object.spec.maxFailedIndexes) || object.spec.maxFailedIndexes == 0) &&
+      object.spec.manualSelector == true &&
+      object.spec.selector.matchLabels.size() == 3 &&
+      object.spec.selector.matchLabels["batch.kubernetes.io/job-name"] ==
+        "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.selector.matchLabels["e2e.taugrid.azure.com/diagnostic"] ==
+        "nccl-rdma-2x1xh200" &&
+      object.spec.selector.matchLabels["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.selector.matchExpressions) ||
+       object.spec.selector.matchExpressions.size() == 0) &&
+      !has(object.spec.podFailurePolicy) &&
+      !has(object.spec.successPolicy) &&
+      (
+        (request.operation == "CREATE" && !has(object.spec.podReplacementPolicy)) ||
+        (request.operation == "UPDATE" &&
+         object.spec.podReplacementPolicy == "TerminatingOrFailed")
+      ) &&
+      !has(object.spec.managedBy)
+    message: Indexed Job shape, suspension, retries, deadline, and TTL must remain bounded.
+  - expression: >-
+      object.spec.template.metadata.labels.size() == 4 &&
+      object.spec.template.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.spec.template.metadata.labels["batch.kubernetes.io/job-name"] ==
+        "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.template.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.spec.template.metadata.labels["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      object.spec.selector.matchLabels.all(
+        key, value, object.spec.template.metadata.labels[key] == value
+      ) &&
+      (!has(object.spec.template.metadata.annotations) ||
+       object.spec.template.metadata.annotations.size() == 0) &&
+      (!has(object.spec.template.metadata.finalizers) ||
+       object.spec.template.metadata.finalizers.size() == 0) &&
+      (!has(object.spec.template.metadata.ownerReferences) ||
+       object.spec.template.metadata.ownerReferences.size() == 0) &&
+      (!has(object.spec.template.metadata.name) || object.spec.template.metadata.name == "") &&
+      (!has(object.spec.template.metadata.generateName) ||
+       object.spec.template.metadata.generateName == "") &&
+      (!has(object.spec.template.metadata.namespace) ||
+       object.spec.template.metadata.namespace == "")
+    message: PodTemplate identity fields must be exact and cannot trigger credential or sidecar injection.
+  - expression: >-
+      variables.pod.serviceAccountName == "nccl-rdma-runner" &&
+      variables.pod.automountServiceAccountToken == false &&
+      variables.pod.restartPolicy == "Never" &&
+      (!has(variables.pod.nodeName) || variables.pod.nodeName == "") &&
+      variables.pod.schedulerName == "default-scheduler" &&
+      !has(variables.pod.preemptionPolicy) &&
+      variables.pod.terminationGracePeriodSeconds == 30 &&
+      variables.pod.dnsPolicy == "ClusterFirst" &&
+      variables.pod.enableServiceLinks == false &&
+      (!has(variables.pod.priorityClassName) || variables.pod.priorityClassName == "") &&
+      (!has(variables.pod.runtimeClassName) || variables.pod.runtimeClassName == "") &&
+      (!has(variables.pod.hostNetwork) || variables.pod.hostNetwork == false) &&
+      (!has(variables.pod.hostPID) || variables.pod.hostPID == false) &&
+      (!has(variables.pod.hostIPC) || variables.pod.hostIPC == false) &&
+      (!has(variables.pod.hostAliases) || variables.pod.hostAliases.size() == 0) &&
+      (!has(variables.pod.imagePullSecrets) || variables.pod.imagePullSecrets.size() == 0) &&
+      (!has(variables.pod.schedulingGates) || variables.pod.schedulingGates.size() == 0) &&
+      !has(variables.pod.dnsConfig) &&
+      (!has(variables.pod.hostname) || variables.pod.hostname == "") &&
+      (!has(variables.pod.subdomain) || variables.pod.subdomain == "") &&
+      (!has(variables.pod.setHostnameAsFQDN) ||
+       variables.pod.setHostnameAsFQDN == false) &&
+      (!has(variables.pod.shareProcessNamespace) ||
+       variables.pod.shareProcessNamespace == false) &&
+      (!has(variables.pod.readinessGates) || variables.pod.readinessGates.size() == 0) &&
+      (!has(variables.pod.resourceClaims) || variables.pod.resourceClaims.size() == 0) &&
+      (!has(variables.pod.topologySpreadConstraints) ||
+       variables.pod.topologySpreadConstraints.size() == 0) &&
+      (!has(variables.pod.initContainers) || variables.pod.initContainers.size() == 0) &&
+      (!has(variables.pod.ephemeralContainers) || variables.pod.ephemeralContainers.size() == 0) &&
+      variables.pod.containers.size() == 1
+    message: Service account, host isolation, scheduler, and container counts must remain exact.
+  - expression: >-
+      variables.pod.securityContext.runAsNonRoot == true &&
+      variables.pod.securityContext.runAsUser == 1000 &&
+      variables.pod.securityContext.runAsGroup == 1000 &&
+      variables.pod.securityContext.fsGroup == 1000 &&
+      variables.pod.securityContext.fsGroupChangePolicy == "OnRootMismatch" &&
+      variables.pod.securityContext.seccompProfile.type == "RuntimeDefault" &&
+      (!has(variables.pod.securityContext.supplementalGroups) ||
+       variables.pod.securityContext.supplementalGroups.size() == 0) &&
+      !has(variables.pod.securityContext.supplementalGroupsPolicy) &&
+      !has(variables.pod.securityContext.seLinuxOptions) &&
+      !has(variables.pod.securityContext.windowsOptions) &&
+      !has(variables.pod.securityContext.appArmorProfile) &&
+      (!has(variables.pod.securityContext.sysctls) ||
+       variables.pod.securityContext.sysctls.size() == 0) &&
+      variables.container.securityContext.runAsNonRoot == true &&
+      variables.container.securityContext.runAsUser == 1000 &&
+      variables.container.securityContext.runAsGroup == 1000 &&
+      variables.container.securityContext.allowPrivilegeEscalation == false &&
+      variables.container.securityContext.readOnlyRootFilesystem == true &&
+      (!has(variables.container.securityContext.privileged) ||
+       variables.container.securityContext.privileged == false) &&
+      variables.container.securityContext.seccompProfile.type == "RuntimeDefault" &&
+      variables.container.securityContext.capabilities.drop == ["ALL"] &&
+      (!has(variables.container.securityContext.capabilities.add) ||
+       variables.container.securityContext.capabilities.add.size() == 0) &&
+      !has(variables.container.securityContext.procMount) &&
+      !has(variables.container.securityContext.seLinuxOptions) &&
+      !has(variables.container.securityContext.windowsOptions) &&
+      !has(variables.container.securityContext.appArmorProfile)
+    message: Pod Security Restricted UID/GID, seccomp, filesystem, and zero-capability boundary must be exact.
+  - expression: >-
+      variables.container.name == "probe" &&
+      variables.container.image ==
+        "nvcr.io/nvidia/pytorch@sha256:e14cf0da7ca0d878d0874eb81062b77df275491d4a8d030a2a7463a4e8b07f01" &&
+      variables.container.imagePullPolicy == "IfNotPresent" &&
+      variables.container.command == ["/usr/local/bin/torchrun"] &&
+      variables.container.args == [
+        "--nnodes=2",
+        "--nproc-per-node=1",
+        "--node-rank=$(JOB_COMPLETION_INDEX)",
+        "--master-addr=e2e-nccl-rdma-rank0",
+        "--master-port=29500",
+        "/opt/taugrid/torchrun-rdma-probe.py"
+      ] &&
+      (!has(variables.container.envFrom) || variables.container.envFrom.size() == 0) &&
+      (!has(variables.container.workingDir) || variables.container.workingDir == "") &&
+      (!has(variables.container.stdin) || variables.container.stdin == false) &&
+      (!has(variables.container.stdinOnce) || variables.container.stdinOnce == false) &&
+      (!has(variables.container.tty) || variables.container.tty == false) &&
+      variables.container.terminationMessagePath == "/dev/termination-log" &&
+      variables.container.terminationMessagePolicy == "File" &&
+      !has(variables.container.lifecycle) &&
+      !has(variables.container.livenessProbe) &&
+      !has(variables.container.readinessProbe) &&
+      !has(variables.container.startupProbe) &&
+      (!has(variables.container.volumeDevices) || variables.container.volumeDevices.size() == 0) &&
+      (!has(variables.container.resizePolicy) || variables.container.resizePolicy.size() == 0) &&
+      (!has(variables.container.resources.claims) ||
+       variables.container.resources.claims.size() == 0)
+    message: The direct torchrun command, exact args, and absence of alternate execution paths must be fixed.
+  - expression: >-
+      variables.container.env.size() == 15 &&
+      variables.container.env[0].name == "TAUGRID_BACKEND" &&
+      variables.container.env[0].value == "nccl" &&
+      variables.container.env[1].name == "TAUGRID_LIVE_RDMA" &&
+      variables.container.env[1].value == "1" &&
+      variables.container.env[2].name == "TAUGRID_RUN_ID" &&
+      variables.container.env[2].value ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      variables.container.env[3].name == "TAUGRID_NODE_NAME" &&
+      variables.container.env[3].valueFrom.fieldRef.apiVersion == "v1" &&
+      variables.container.env[3].valueFrom.fieldRef.fieldPath == "spec.nodeName" &&
+      variables.container.env[4].name == "JOB_COMPLETION_INDEX" &&
+      variables.container.env[4].valueFrom.fieldRef.apiVersion == "v1" &&
+      variables.container.env[4].valueFrom.fieldRef.fieldPath ==
+        "metadata.annotations['batch.kubernetes.io/job-completion-index']" &&
+      variables.container.env[5].name == "TAUGRID_AUTH_KEY_FILE" &&
+      variables.container.env[5].value == "/var/run/taugrid-auth/key" &&
+      variables.container.env[6].name == "TAUGRID_ELEMENTS" &&
+      variables.container.env[6].value == "16777216" &&
+      variables.container.env[7].name == "TAUGRID_WARMUP" &&
+      variables.container.env[7].value == "5" &&
+      variables.container.env[8].name == "TAUGRID_ITERATIONS" &&
+      variables.container.env[8].value == "20" &&
+      variables.container.env[9].name == "NCCL_DEBUG" &&
+      variables.container.env[9].value == "INFO" &&
+      variables.container.env[10].name == "NCCL_DEBUG_SUBSYS" &&
+      variables.container.env[10].value == "INIT,NET" &&
+      variables.container.env[11].name == "NCCL_IB_DISABLE" &&
+      variables.container.env[11].value == "0" &&
+      variables.container.env[12].name == "HOME" &&
+      variables.container.env[12].value == "/tmp" &&
+      variables.container.env[13].name == "TMPDIR" &&
+      variables.container.env[13].value == "/tmp" &&
+      variables.container.env[14].name == "PYTHONUNBUFFERED" &&
+      variables.container.env[14].value == "1"
+    message: The exact live NCCL, node identity, authentication, benchmark, and writable-path environment is required.
+  - expression: >-
+      variables.container.resources.requests.size() == 4 &&
+      variables.container.resources.limits.size() == 4 &&
+      string(variables.container.resources.requests["cpu"]) == "4" &&
+      string(variables.container.resources.limits["cpu"]) == "8" &&
+      string(variables.container.resources.requests["memory"]) == "16Gi" &&
+      string(variables.container.resources.limits["memory"]) == "32Gi" &&
+      string(variables.container.resources.requests["nvidia.com/gpu"]) == "1" &&
+      string(variables.container.resources.limits["nvidia.com/gpu"]) == "1" &&
+      string(variables.container.resources.requests["rdma/rdma_shared_device_a"]) == "1" &&
+      string(variables.container.resources.limits["rdma/rdma_shared_device_a"]) == "1"
+    message: Each Indexed Job pod must request exactly one H200 and one RDMA device with bounded CPU and memory.
+  - expression: >-
+      variables.pod.nodeSelector.size() == 1 &&
+      variables.pod.nodeSelector["APPROVED_H200_SELECTOR_KEY"] ==
+        "APPROVED_H200_SELECTOR_VALUE" &&
+      variables.pod.tolerations.size() == 2 &&
+      variables.pod.tolerations.exists(
+        item,
+        item.key == "nvidia.com/gpu" && item.operator == "Exists" &&
+        item.effect == "NoSchedule" && (!has(item.value) || item.value == "") &&
+        !has(item.tolerationSeconds)
+      ) &&
+      variables.pod.tolerations.exists(
+        item,
+        item.key == "sku" && item.operator == "Exists" &&
+        item.effect == "NoSchedule" && (!has(item.value) || item.value == "") &&
+        !has(item.tolerationSeconds)
+      ) &&
+      !has(variables.pod.affinity.nodeAffinity) &&
+      !has(variables.pod.affinity.podAffinity) &&
+      variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution.size() == 1 &&
+      (!has(variables.pod.affinity.podAntiAffinity
+        .preferredDuringSchedulingIgnoredDuringExecution) ||
+       variables.pod.affinity.podAntiAffinity
+        .preferredDuringSchedulingIgnoredDuringExecution.size() == 0) &&
+      variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey ==
+        "kubernetes.io/hostname" &&
+      variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0]
+        .labelSelector.matchLabels.size() == 2 &&
+      variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0]
+        .labelSelector.matchLabels["e2e.taugrid.azure.com/diagnostic"] ==
+        "nccl-rdma-2x1xh200" &&
+      variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0]
+        .labelSelector.matchLabels["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0]
+        .labelSelector.matchExpressions) ||
+       variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0]
+        .labelSelector.matchExpressions.size() == 0) &&
+      (!has(variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0].namespaces) ||
+       variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0].namespaces.size() == 0) &&
+      !has(variables.pod.affinity.podAntiAffinity
+        .requiredDuringSchedulingIgnoredDuringExecution[0].namespaceSelector)
+    message: H200 scheduling and the full distinct-host anti-affinity selector must be exact.
+  - expression: >-
+      variables.pod.volumes.size() == 4 &&
+      variables.pod.volumes[0].name == "probe" &&
+      variables.pod.volumes[0].configMap.name == "nccl-rdma-probe" &&
+      variables.pod.volumes[0].configMap.defaultMode == 292 &&
+      (!has(variables.pod.volumes[0].configMap.optional) ||
+       variables.pod.volumes[0].configMap.optional == false) &&
+      (!has(variables.pod.volumes[0].configMap.items) ||
+       variables.pod.volumes[0].configMap.items.size() == 0) &&
+      variables.pod.volumes[1].name == "auth" &&
+      variables.pod.volumes[1].secret.secretName == "nccl-rdma-auth" &&
+      variables.pod.volumes[1].secret.defaultMode == 288 &&
+      (!has(variables.pod.volumes[1].secret.optional) ||
+       variables.pod.volumes[1].secret.optional == false) &&
+      (!has(variables.pod.volumes[1].secret.items) ||
+       variables.pod.volumes[1].secret.items.size() == 0) &&
+      variables.pod.volumes[2].name == "tmp" &&
+      (!has(variables.pod.volumes[2].emptyDir.medium) ||
+       variables.pod.volumes[2].emptyDir.medium == "") &&
+      string(variables.pod.volumes[2].emptyDir.sizeLimit) == "4Gi" &&
+      variables.pod.volumes[3].name == "dshm" &&
+      variables.pod.volumes[3].emptyDir.medium == "Memory" &&
+      string(variables.pod.volumes[3].emptyDir.sizeLimit) == "16Gi" &&
+      [variables.pod.volumes[0], variables.pod.volumes[1],
+       variables.pod.volumes[2], variables.pod.volumes[3]].all(
+        volume,
+        !has(volume.awsElasticBlockStore) && !has(volume.azureDisk) &&
+        !has(volume.azureFile) && !has(volume.cephfs) && !has(volume.cinder) &&
+        !has(volume.csi) && !has(volume.downwardAPI) && !has(volume.ephemeral) &&
+        !has(volume.fc) && !has(volume.flexVolume) && !has(volume.flocker) &&
+        !has(volume.gcePersistentDisk) && !has(volume.gitRepo) &&
+        !has(volume.glusterfs) && !has(volume.hostPath) && !has(volume.image) &&
+        !has(volume.iscsi) && !has(volume.nfs) &&
+        !has(volume.persistentVolumeClaim) && !has(volume.photonPersistentDisk) &&
+        !has(volume.portworxVolume) && !has(volume.projected) &&
+        !has(volume.quobyte) && !has(volume.rbd) && !has(volume.scaleIO) &&
+        !has(volume.storageos) && !has(volume.vsphereVolume)
+      ) &&
+      !has(variables.pod.volumes[0].secret) &&
+      !has(variables.pod.volumes[1].configMap) &&
+      !has(variables.pod.volumes[2].secret) &&
+      !has(variables.pod.volumes[2].configMap) &&
+      !has(variables.pod.volumes[3].secret) &&
+      !has(variables.pod.volumes[3].configMap)
+    message: Only the exact immutable probe, HMAC key, temporary directory, and memory shared-memory volumes are allowed.
+  - expression: >-
+      variables.container.volumeMounts.size() == 4 &&
+      variables.container.volumeMounts[0].name == "probe" &&
+      variables.container.volumeMounts[0].mountPath == "/opt/taugrid" &&
+      variables.container.volumeMounts[0].readOnly == true &&
+      variables.container.volumeMounts[1].name == "auth" &&
+      variables.container.volumeMounts[1].mountPath == "/var/run/taugrid-auth" &&
+      variables.container.volumeMounts[1].readOnly == true &&
+      variables.container.volumeMounts[2].name == "tmp" &&
+      variables.container.volumeMounts[2].mountPath == "/tmp" &&
+      (!has(variables.container.volumeMounts[2].readOnly) ||
+       variables.container.volumeMounts[2].readOnly == false) &&
+      variables.container.volumeMounts[3].name == "dshm" &&
+      variables.container.volumeMounts[3].mountPath == "/dev/shm" &&
+      (!has(variables.container.volumeMounts[3].readOnly) ||
+       variables.container.volumeMounts[3].readOnly == false) &&
+      variables.container.volumeMounts.all(
+        mount,
+        (!has(mount.subPath) || mount.subPath == "") &&
+        (!has(mount.subPathExpr) || mount.subPathExpr == "") &&
+        !has(mount.mountPropagation)
+      )
+    message: Volume mounts and writable paths must be exact with no subpath or propagation bypass.
+  - expression: >-
+      variables.container.ports.size() == 1 &&
+      variables.container.ports[0].name == "rendezvous" &&
+      variables.container.ports[0].containerPort == 29500 &&
+      variables.container.ports[0].protocol == "TCP" &&
+      (!has(variables.container.ports[0].hostPort) ||
+       variables.container.ports[0].hostPort == 0) &&
+      (!has(variables.container.ports[0].hostIP) ||
+       variables.container.ports[0].hostIP == "")
+    message: Only the torchrun TCP rendezvous container port is declared; it is not NCCL socket fallback.
+  - expression: >-
+      request.operation != "UPDATE" ||
+      (
+        object.metadata.labels == oldObject.metadata.labels &&
+        (
+          (!has(object.metadata.annotations) && !has(oldObject.metadata.annotations)) ||
+          (has(object.metadata.annotations) && has(oldObject.metadata.annotations) &&
+           object.metadata.annotations == oldObject.metadata.annotations)
+        ) &&
+        (
+          (!has(object.metadata.finalizers) && !has(oldObject.metadata.finalizers)) ||
+          (has(object.metadata.finalizers) && has(oldObject.metadata.finalizers) &&
+           object.metadata.finalizers == oldObject.metadata.finalizers) ||
+          (
+            request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+            has(oldObject.metadata.deletionTimestamp) &&
+            has(oldObject.metadata.finalizers) &&
+            oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+            (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+          )
+        ) &&
+        (
+          (!has(object.metadata.ownerReferences) &&
+           !has(oldObject.metadata.ownerReferences)) ||
+          (has(object.metadata.ownerReferences) &&
+           has(oldObject.metadata.ownerReferences) &&
+           object.metadata.ownerReferences == oldObject.metadata.ownerReferences)
+        ) &&
+        object.spec.completions == oldObject.spec.completions &&
+        object.spec.parallelism == oldObject.spec.parallelism &&
+        object.spec.completionMode == oldObject.spec.completionMode &&
+        object.spec.backoffLimit == oldObject.spec.backoffLimit &&
+        object.spec.activeDeadlineSeconds == oldObject.spec.activeDeadlineSeconds &&
+        object.spec.ttlSecondsAfterFinished == oldObject.spec.ttlSecondsAfterFinished &&
+        object.spec.template == oldObject.spec.template
+      )
+    message: UPDATE may change only Kueue suspension and controller-owned status; execution and security shape are immutable.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-job-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-job-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-serviceaccount-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["serviceaccounts"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-runner" &&
+      object.metadata.labels.size() == 4 &&
+      object.automountServiceAccountToken == false &&
+      (!has(object.secrets) || object.secrets.size() == 0) &&
+      (!has(object.imagePullSecrets) || object.imagePullSecrets.size() == 0)
+    message: The dedicated ServiceAccount has no token automount, secrets, image credentials, or RBAC grant.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-serviceaccount-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-serviceaccount-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-configmap-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["configmaps"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-probe" &&
+      object.metadata.labels.size() == 4 &&
+      object.immutable == true &&
+      object.data.size() == 1 &&
+      object.data["torchrun-rdma-probe.py"] == "APPROVED_TORCHRUN_RDMA_PROBE_EXACT" &&
+      (!has(object.binaryData) || object.binaryData.size() == 0)
+    message: The immutable repository probe ConfigMap must contain only the exact approved Python source.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-configmap-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-configmap-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-secret-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["secrets"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-auth" &&
+      object.metadata.labels.size() == 4 &&
+      object.immutable == true &&
+      object.type == "Opaque" &&
+      object.data.size() == 1 &&
+      object.data["key"].size() == 32 &&
+      (!has(object.stringData) || object.stringData.size() == 0)
+    message: The immutable run-scoped Secret contains only one random 32-byte HMAC key.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-secret-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-secret-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-service-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["services"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "e2e-nccl-rdma-rank0" &&
+      object.metadata.labels.size() == 4 &&
+      object.spec.clusterIP == "None" &&
+      object.spec.selector.size() == 4 &&
+      object.spec.selector["batch.kubernetes.io/job-name"] ==
+        "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.selector["batch.kubernetes.io/job-completion-index"] == "0" &&
+      object.spec.selector["e2e.taugrid.azure.com/diagnostic"] ==
+        "nccl-rdma-2x1xh200" &&
+      object.spec.selector["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      object.spec.ports.size() == 1 &&
+      object.spec.ports[0].name == "rendezvous" &&
+      object.spec.ports[0].protocol == "TCP" &&
+      object.spec.ports[0].port == 29500 &&
+      object.spec.ports[0].targetPort == 29500 &&
+      (!has(object.spec.ports[0].nodePort) || object.spec.ports[0].nodePort == 0) &&
+      !has(object.spec.ports[0].appProtocol) &&
+      object.spec.type == "ClusterIP" &&
+      (!has(object.spec.externalName) || object.spec.externalName == "") &&
+      (!has(object.spec.externalIPs) || object.spec.externalIPs.size() == 0) &&
+      (!has(object.spec.loadBalancerIP) || object.spec.loadBalancerIP == "") &&
+      (!has(object.spec.loadBalancerSourceRanges) ||
+       object.spec.loadBalancerSourceRanges.size() == 0)
+    message: The headless Service selects only rank zero and exposes only the torchrun rendezvous port.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-service-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-service-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-networkpolicy-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: ["networking.k8s.io"]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["networkpolicies"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  validations:
+  - expression: >-
+      request.userInfo.username == "APPROVED_OPERATOR_USERNAME" ||
+      (
+        request.operation == "UPDATE" &&
+        request.userInfo.username == "APPROVED_GARBAGE_COLLECTOR_USERNAME" &&
+        has(oldObject.metadata.deletionTimestamp) &&
+        has(oldObject.metadata.finalizers) &&
+        oldObject.metadata.finalizers == ["foregroundDeletion"] &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      )
+    message: Only the approved operator or the garbage collector's deletion-finalizer transition may update support resources.
+  - expression: >-
+      object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+      object.metadata.labels["app.kubernetes.io/managed-by"] == "taugrid-e2e" &&
+      object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] == "nccl-rdma-2x1xh200" &&
+      object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+        "^nccl-rdma-[0-9a-f]{32}$"
+      ) &&
+      (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0)
+    message: Support resource labels, invocation, and ownership must be exact.
+  - expression: >-
+      object.metadata.name == "nccl-rdma-isolation" &&
+      object.metadata.labels.size() == 4 &&
+      object.spec.podSelector.matchLabels.size() == 3 &&
+      object.spec.podSelector.matchLabels["batch.kubernetes.io/job-name"] ==
+        "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/diagnostic"] ==
+        "nccl-rdma-2x1xh200" &&
+      object.spec.podSelector.matchLabels["e2e.taugrid.azure.com/invocation"] ==
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.podSelector.matchExpressions) ||
+       object.spec.podSelector.matchExpressions.size() == 0) &&
+      object.spec.policyTypes == ["Ingress", "Egress"] &&
+      object.spec.ingress.size() == 1 &&
+      object.spec.ingress[0].from.size() == 1 &&
+      (!has(object.spec.ingress[0].ports) ||
+       object.spec.ingress[0].ports.size() == 0) &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels.size() == 3 &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels[
+        "batch.kubernetes.io/job-name"
+      ] == "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/diagnostic"
+      ] == "nccl-rdma-2x1xh200" &&
+      object.spec.ingress[0].from[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/invocation"
+      ] == object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.ingress[0].from[0].podSelector.matchExpressions) ||
+       object.spec.ingress[0].from[0].podSelector.matchExpressions.size() == 0) &&
+      !has(object.spec.ingress[0].from[0].namespaceSelector) &&
+      !has(object.spec.ingress[0].from[0].ipBlock) &&
+      object.spec.egress.size() == 2 &&
+      object.spec.egress[0].to.size() == 1 &&
+      (!has(object.spec.egress[0].ports) ||
+       object.spec.egress[0].ports.size() == 0) &&
+      object.spec.egress[0].to[0].podSelector.matchLabels.size() == 3 &&
+      object.spec.egress[0].to[0].podSelector.matchLabels[
+        "batch.kubernetes.io/job-name"
+      ] == "e2e-nccl-rdma-2x1xh200" &&
+      object.spec.egress[0].to[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/diagnostic"
+      ] == "nccl-rdma-2x1xh200" &&
+      object.spec.egress[0].to[0].podSelector.matchLabels[
+        "e2e.taugrid.azure.com/invocation"
+      ] == object.metadata.labels["e2e.taugrid.azure.com/invocation"] &&
+      (!has(object.spec.egress[0].to[0].podSelector.matchExpressions) ||
+       object.spec.egress[0].to[0].podSelector.matchExpressions.size() == 0) &&
+      !has(object.spec.egress[0].to[0].namespaceSelector) &&
+      !has(object.spec.egress[0].to[0].ipBlock) &&
+      object.spec.egress[1].to.size() == 1 &&
+      object.spec.egress[1].to[0].namespaceSelector.matchLabels[
+        "kubernetes.io/metadata.name"
+      ] == "kube-system" &&
+      object.spec.egress[1].to[0].podSelector.matchLabels["k8s-app"] ==
+        "kube-dns" &&
+      object.spec.egress[1].to[0].namespaceSelector.matchLabels.size() == 1 &&
+      (!has(object.spec.egress[1].to[0].namespaceSelector.matchExpressions) ||
+       object.spec.egress[1].to[0].namespaceSelector.matchExpressions.size() == 0) &&
+      object.spec.egress[1].to[0].podSelector.matchLabels.size() == 1 &&
+      (!has(object.spec.egress[1].to[0].podSelector.matchExpressions) ||
+       object.spec.egress[1].to[0].podSelector.matchExpressions.size() == 0) &&
+      !has(object.spec.egress[1].to[0].ipBlock) &&
+      object.spec.egress[1].ports.size() == 2 &&
+      object.spec.egress[1].ports.exists(
+        port, port.protocol == "UDP" && port.port == 53 && !has(port.endPort)
+      ) &&
+      object.spec.egress[1].ports.exists(
+        port, port.protocol == "TCP" && port.port == 53 && !has(port.endPort)
+      )
+    message: NetworkPolicy permits only peer diagnostic pods and kube-system DNS.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-networkpolicy-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-networkpolicy-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-connect-deny
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CONNECT"]
+      resources: ["pods/exec", "pods/attach", "pods/portforward"]
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["UPDATE"]
+      resources: ["pods/ephemeralcontainers"]
+  validations:
+  - expression: "false"
+    message: Interactive pod access and ephemeral containers are forbidden in the diagnostic namespace.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-connect-deny
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-connect-deny
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: taugrid-nccl-rdma-generated-pods-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["pods"]
+  matchConditions:
+  - name: diagnostic-namespace-only
+    expression: object.metadata.namespace == "taugrid-rdma-diagnostic"
+  variables:
+  - name: container
+    expression: object.spec.containers[0]
+  validations:
+  - expression: request.userInfo.username == "APPROVED_JOB_CONTROLLER_USERNAME"
+    message: Only the approved Job controller may create or update generated diagnostic Pods.
+  - expression: >-
+      request.operation != "CREATE" ||
+      (
+        object.metadata.labels.size() == 5 &&
+        object.metadata.labels["app.kubernetes.io/name"] == "nccl-rdma-diagnostic" &&
+        object.metadata.labels["batch.kubernetes.io/job-name"] ==
+          "e2e-nccl-rdma-2x1xh200" &&
+        object.metadata.labels["e2e.taugrid.azure.com/diagnostic"] ==
+          "nccl-rdma-2x1xh200" &&
+        object.metadata.labels["e2e.taugrid.azure.com/invocation"].matches(
+          "^nccl-rdma-[0-9a-f]{32}$"
+        ) &&
+        object.metadata.labels["batch.kubernetes.io/job-completion-index"] in ["0", "1"] &&
+        object.metadata.annotations.size() == 1 &&
+        object.metadata.annotations["batch.kubernetes.io/job-completion-index"] ==
+          object.metadata.labels["batch.kubernetes.io/job-completion-index"] &&
+        object.metadata.generateName ==
+          "e2e-nccl-rdma-2x1xh200-" +
+          object.metadata.labels["batch.kubernetes.io/job-completion-index"] + "-" &&
+        object.metadata.name.startsWith(object.metadata.generateName) &&
+        object.metadata.finalizers == ["batch.kubernetes.io/job-tracking"] &&
+        object.metadata.ownerReferences.size() == 1 &&
+        object.metadata.ownerReferences[0].apiVersion == "batch/v1" &&
+        object.metadata.ownerReferences[0].kind == "Job" &&
+        object.metadata.ownerReferences[0].name == "e2e-nccl-rdma-2x1xh200" &&
+        object.metadata.ownerReferences[0].uid != "" &&
+        object.metadata.ownerReferences[0].controller == true &&
+        object.metadata.ownerReferences[0].blockOwnerDeletion == true
+      )
+    message: Generated Pod identity, completion index, ownership, and tracking finalizer must be exact.
+  - expression: >-
+      request.operation != "CREATE" ||
+      (
+        object.spec.serviceAccountName == "nccl-rdma-runner" &&
+        object.spec.automountServiceAccountToken == false &&
+        object.spec.restartPolicy == "Never" &&
+        object.spec.schedulerName == "default-scheduler" &&
+        object.spec.preemptionPolicy == "PreemptLowerPriority" &&
+        (!has(object.spec.nodeName) || object.spec.nodeName == "") &&
+        object.spec.hostname ==
+          "e2e-nccl-rdma-2x1xh200-" +
+          object.metadata.labels["batch.kubernetes.io/job-completion-index"] &&
+        object.spec.containers.size() == 1 &&
+        (!has(object.spec.initContainers) || object.spec.initContainers.size() == 0) &&
+        (!has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.size() == 0) &&
+        variables.container.name == "probe" &&
+        variables.container.image ==
+          "nvcr.io/nvidia/pytorch@sha256:e14cf0da7ca0d878d0874eb81062b77df275491d4a8d030a2a7463a4e8b07f01" &&
+        variables.container.command == ["/usr/local/bin/torchrun"] &&
+        variables.container.args == [
+          "--nnodes=2",
+          "--nproc-per-node=1",
+          "--node-rank=$(JOB_COMPLETION_INDEX)",
+          "--master-addr=e2e-nccl-rdma-rank0",
+          "--master-port=29500",
+          "/opt/taugrid/torchrun-rdma-probe.py"
+        ] &&
+        variables.container.securityContext.allowPrivilegeEscalation == false &&
+        variables.container.securityContext.readOnlyRootFilesystem == true &&
+        variables.container.securityContext.capabilities.drop == ["ALL"] &&
+        (!has(variables.container.securityContext.capabilities.add) ||
+         variables.container.securityContext.capabilities.add.size() == 0) &&
+        object.spec.volumes.size() == 4 &&
+        object.spec.volumes[0].name == "probe" &&
+        object.spec.volumes[0].configMap.name == "nccl-rdma-probe" &&
+        object.spec.volumes[1].name == "auth" &&
+        object.spec.volumes[1].secret.secretName == "nccl-rdma-auth" &&
+        object.spec.volumes[2].name == "tmp" &&
+        has(object.spec.volumes[2].emptyDir) &&
+        object.spec.volumes[3].name == "dshm" &&
+        object.spec.volumes[3].emptyDir.medium == "Memory" &&
+        variables.container.volumeMounts.size() == 4 &&
+        variables.container.volumeMounts[0].name == "probe" &&
+        variables.container.volumeMounts[0].readOnly == true &&
+        variables.container.volumeMounts[1].name == "auth" &&
+        variables.container.volumeMounts[1].readOnly == true &&
+        variables.container.volumeMounts[2].name == "tmp" &&
+        variables.container.volumeMounts[3].name == "dshm"
+      )
+    message: Generated Pod execution, security, volume, and mount shape must derive from the approved Job template.
+  - expression: >-
+      request.operation != "UPDATE" ||
+      (
+        object.metadata.name == oldObject.metadata.name &&
+        object.metadata.generateName == oldObject.metadata.generateName &&
+        object.metadata.labels == oldObject.metadata.labels &&
+        object.metadata.annotations == oldObject.metadata.annotations &&
+        object.metadata.ownerReferences == oldObject.metadata.ownerReferences &&
+        object.spec == oldObject.spec &&
+        (
+          (has(object.metadata.finalizers) &&
+           has(oldObject.metadata.finalizers) &&
+           object.metadata.finalizers == oldObject.metadata.finalizers) ||
+          (
+            !has(object.metadata.finalizers) &&
+            has(oldObject.metadata.finalizers) &&
+            oldObject.metadata.finalizers == ["batch.kubernetes.io/job-tracking"]
+          )
+        )
+      )
+    message: Generated Pod UPDATE may only remove the Job tracking finalizer.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: taugrid-nccl-rdma-generated-pods-boundary
+  labels:
+    app.kubernetes.io/name: nccl-rdma-diagnostic
+    app.kubernetes.io/managed-by: platform-gitops
+    tau.azure.com/nccl-rdma-security-boundary: v3
+spec:
+  policyName: taugrid-nccl-rdma-generated-pods-boundary
+  matchResources:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        tau.azure.com/nccl-rdma-security-boundary: v3
+  validationActions: ["Deny"]

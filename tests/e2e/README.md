@@ -69,6 +69,300 @@ GPU_NODE_SELECTOR_VALUE='<gpu node selector value>' \
 go test -v -timeout 35m -run '^TestTauPyEntrypointRayJobGPU$' ./stack/
 ```
 
+### Manually gated NCCL/RDMA Indexed Job diagnostic
+
+`TestNCCLRDMA2x1H200` is a repository-owned, operator-run **2-GPU inter-node
+RDMA validation**. A standard Kueue-managed `batch/v1` Indexed Job runs one
+`torchrun` process and one visible H200 on each of two hostname-anti-affined
+nodes. It proves inter-node NCCL IB transport selection, collective correctness,
+peer identity, and positive measured throughput. It is not `nccl-tests`, a
+full-node topology test, or an all-16-GPU bandwidth benchmark.
+
+The runtime is the qualified NVIDIA PyTorch linux/amd64 child manifest:
+
+- repository: `nvcr.io/nvidia/pytorch`
+- qualified tag metadata: `25.11-py3`
+- image index: `sha256:417cbf33f87b5378849df37983552cd1f8bc8b62fe1ceabe004de816a55dff21`
+- linux/amd64 child: `sha256:e14cf0da7ca0d878d0874eb81062b77df275491d4a8d030a2a7463a4e8b07f01`
+- image config: `sha256:06faed719d1bbd31d7053c96d0c94fce4f2b5f92fd95f07d60ec323c9744f118`
+- SBOM manifest/layer: `sha256:0af00f2f7dab7b4902a22efb216ee00712cafc6b0cbddcfdc445b9119e47e98c` /
+  `sha256:90cf0f3cec44196742b8ed1029608f88d82e524c3dbd863f949b5082572019ab`
+- VEX manifest/layer: `sha256:e145aacd138af26a19ed98be4b548734594d690e99892f9e046f89aa813e09b9` /
+  `sha256:72706fd66e18d27f4cc94d09b7501e6d1ce7dc2421f68e5402fd36e9e507390f`
+- signature manifest/layer:
+  `sha256:6ad472c869b3a886a0c53aba08dcef23233bab714baa5139ba7d9526a135f231` /
+  `sha256:ce5ef2dd676dea4c8e4e74af4473a803f35bd491f68788441da8e795b0512f2b`
+- CUDA 13.0.2, NCCL 2.28.8, PyTorch `2.10.0a0+b558c98`
+
+The Job executes only the child-digest reference. Repository validation rejects
+the floating tag, the parent index as a runtime image, any other repository or
+registry, and any index/child/config mismatch. TauGrid no longer builds or
+publishes a custom NCCL diagnostic image.
+
+The registry signature claim is bound to the qualified digest, but registry
+metadata alone does not establish a trusted signer or trust-root verification.
+It must not be represented as a verified signature. The VEX contains 379
+findings: 262 `exploitable`, 110 `in-triage`, and 7 `not-affected`; it contains
+no severity ratings. Those counts are explicit platform-approval input, not a
+reason to suppress or conceal findings. Image license text is present at
+`/workspace/license.txt` under the NVIDIA Software License Agreement plus
+NVIDIA AI Product Agreement terms. No OCI license label was observed.
+
+The pod is Pod Security Restricted: UID/GID 1000, non-root, RuntimeDefault
+seccomp, read-only root filesystem, no privilege escalation, and `drop: [ALL]`
+with zero added capabilities. It uses a tokenless dedicated ServiceAccount with
+no Role or RoleBinding. A dynamic smoke of the exact linux/amd64 child passed as
+UID/GID 1000 with a read-only root filesystem, default seccomp, and zero
+effective capabilities; it also observed the mlx5, verbs, RDMA CM, and UCX
+runtime components. The smoke inherited a finite 4,206,821,376-byte memlock
+soft/hard limit. The probe records both limits at process start but does not
+raise them. Actual H200 mlx5 registration, NCCL/GPUDirect behavior, AKS device
+injection, and the target runtime's inherited memlock remain live validation
+results, not offline claims.
+
+The only mounts are an immutable repository-owned ConfigMap at `/opt/taugrid`,
+a run-scoped immutable 32-byte HMAC Secret at `/var/run/taugrid-auth`, a bounded
+`/tmp` `emptyDir`, and a 16Gi memory-backed `/dev/shm`. Service-account tokens,
+PVCs, host paths, projected volumes, runtime installs, shells, and alternate
+commands are forbidden. Both ranks gather HMAC-bound run, rank, node, host, and
+nonce identities after rendezvous and independently verify both peers without
+logging key material. A NetworkPolicy allows only the exact Job pods to talk to
+each other, plus TCP/UDP DNS to the selected kube-system DNS pods. The rank-zero
+headless Service selects only completion index zero from the current invocation.
+
+Torchrun rendezvous uses control-plane TCP port 29500. That is not NCCL data
+transport: a live pass still requires `NET/IB...Using` in combined rank logs and
+rejects any `NET/Socket...Using`, verbs/device failure, missing rank receipt,
+failed HMAC verification, non-distinct actual nodes, correctness error, or
+non-positive bandwidth. Before NCCL initialization each rank selects one active
+sysfs HCA through `NCCL_IB_HCA`; the parser then requires that exact device to
+appear in that rank's sanitized `NET/IB...Using` evidence, so the artifact
+cannot attribute transport to an unrelated active HCA. The offline Gloo
+control-plane sentinel can never satisfy the live parser.
+
+`stack/fixtures/nccl-rdma-security-boundary.yaml` is the repository source for
+the required v3 admission boundary in the fixed isolated Restricted namespace
+`taugrid-rdma-diagnostic` and LocalQueue `h200-rdma`. It pins the Namespace
+approval, ResourceQuota, LocalQueue placeholder, dedicated ServiceAccount,
+exact Job and support-resource shapes, generated Job-controller Pod shape, and
+Deny bindings for interactive pod access and ephemeral containers. There is no
+workload-create Role or RoleBinding. `APPROVED_*` values must be replaced by
+explicit platform-approved identities, ClusterQueue, H200 selector, invocation,
+and exact probe source; the harness refuses unresolved values rather than
+inferring them.
+
+The Job uses `manualSelector: true` with an invocation-unique selector matching
+the exact PodTemplate labels. This prevents Job API strategy from injecting a
+controller-UID selector before admission, while the fixed Job-name,
+diagnostic, and invocation labels continue to drive the rank-zero Service and
+NetworkPolicy. A Kubernetes 1.36.2 envtest API server validates that the Job is
+accepted without generated controller-UID labels and rejects a selector that
+does not match its template. The generated-Pod policy permits only the explicit
+Job-controller identity, the two indexed Pod identities, the approved owner,
+tracking finalizer, execution image/command, Restricted security boundary, and
+four approved volumes/mounts. Pod updates may only remove the Job tracking
+finalizer. The Job template does not set `preemptionPolicy`: Kubernetes Priority
+admission rejects a copied explicit value without a PriorityClass. The
+API-defaulted generated Pod value is pinned as `PreemptLowerPriority`, while
+Kueue queue and ClusterQueue preemption remain disabled.
+
+Before any live create, the harness requires all eight VAPs and all eight Deny
+bindings to exist with the exact rendered repository specs and ownership
+labels. The five support-resource policies are intentionally split by
+ServiceAccount, ConfigMap, Secret, Service, and NetworkPolicy schema so the API
+server type-checks every CEL expression against exactly one object type. Each
+policy's status must report its active generation type-checked with no
+expression warnings. The active comparison canonicalizes only Kubernetes'
+documented all-resource defaults (`namespaceSelector: {}`, `objectSelector: {}`
+and rule `scope: "*"`) so omitted and server-defaulted forms compare equal;
+non-empty selectors and narrower scopes remain drift. Impersonated,
+non-persisting server-side probes
+must allow the exact operator Job/support resources and exact Job-controller
+Pods; Kueue must restore `spec.suspend: true` on the unsuspended Job probe.
+Malicious probes must prove denial of an untrusted Job, Secret/support update,
+arbitrary Pod with a Secret mount, pod exec, attach, port-forward, and ephemeral
+container update. DELETE remains an RBAC responsibility so Kubernetes garbage
+collection is not blocked; preflight requires the approved operator to retain
+cleanup authority and the explicit untrusted probe identity to lack DELETE on
+every protected kind. Any missing policy, drift, non-Deny binding, warning,
+denied expected path, accepted malicious path, or delete-authority mismatch
+fails preflight. Repository tests
+also install and evaluate the rendered policies on local Kubernetes 1.34 and
+1.36 envtest API servers. Those regressions require server-defaulted selectors
+and scopes to compare equal, every support policy to match exactly one
+Kubernetes schema, and exact/malicious requests to retain their expected
+admission outcomes. Separate active-boundary tests fail on any API-reported
+type-check warning. The target API server's real active policy status and the
+live Kueue webhook are still independently required.
+
+The target Namespace, LocalQueue, admission policies, and bindings must already
+exist. The namespace must already have:
+
+- `pod-security.kubernetes.io/enforce=restricted`
+- Restricted enforce/warn/audit versions set to `latest`
+- `tau.azure.com/nccl-rdma-security-boundary=v3`
+- `tau.azure.com/nccl-rdma-diagnostic-approved=true`
+- `tau.azure.com/owner-role=tau-platform-admins`
+
+The harness validates but never changes the namespace, queue, admission
+boundary, Pod Security labels, Kueue configuration, nodes, or RDMA devices. A
+non-persisting server-side Job dry-run removes `spec.suspend` and requires
+Kueue admission to restore it. The real fixture independently persists
+`spec.suspend: true`; the test waits for an admitted Workload and then for Kueue
+to unsuspend the owned Job. The referenced ClusterQueue must disable
+within-queue, cohort-reclaim, and cohort-borrow preemption.
+
+```bash
+cd tests/e2e
+export NCCL_RDMA_KUBECONFIG='<explicit kubeconfig path>'
+export NCCL_RDMA_KUBE_CONTEXT='<explicit context>'
+export E2E_STACK_NAMESPACE='taugrid-rdma-diagnostic'
+export E2E_STACK_LARGE_GPU_QUEUE='h200-rdma'
+export NCCL_RDMA_H200_SELECTOR='<key=value selecting exactly two H200 nodes>'
+export GPU_NODE_SELECTOR_KEY='<same selector key>'
+export GPU_NODE_SELECTOR_VALUE='<same selector value>'
+export NCCL_RDMA_EXPECTED_SITE='<exact Unbounded site, when site labels are present>'
+export NCCL_RDMA_EXPECTED_REGION='<optional exact topology.kubernetes.io/region constraint>'
+export NCCL_RDMA_EXPECTED_POOL='<exact kubernetes.azure.com/agentpool>'
+export NCCL_RDMA_EXPECTED_GPU_MODEL='<exact runtime GPU model, for example NVIDIA H200>'
+export NCCL_RDMA_WORKSPACE_ID='<lowercase telemetry workspace ID>'
+export NCCL_RDMA_CLUSTER='<lowercase telemetry cluster ID>'
+export NCCL_RDMA_OPERATOR_USERNAME='<exact approved operator username>'
+export NCCL_RDMA_KUEUE_CONTROLLER_USERNAME='<exact Kueue controller username>'
+export NCCL_RDMA_JOB_CONTROLLER_USERNAME='<exact Job controller username>'
+export NCCL_RDMA_GARBAGE_COLLECTOR_USERNAME='<exact garbage collector username>'
+export NCCL_RDMA_UNTRUSTED_USERNAME='<explicit distinct untrusted probe username>'
+
+# Read-only except for a non-persisting server-side admission dry-run: validates
+# access, exact active and compiled VAP/binding specs, admission allow/deny
+# probes, Restricted namespace approval, batch/Kueue integration, exact image
+# coordinates, fixed-object absence, and exactly two Ready H200 nodes. Capacity
+# accounting requires each node to retain 4 CPU, 16Gi memory, one GPU, and one
+# RDMA device for its pod. Existing non-RDMA consumers are allowed only when
+# those requests fit; any unrelated RDMA request or unassigned GPU/RDMA pod
+# fails closed. The nodes may carry only the two explicit GPU NoSchedule taints
+# tolerated by the Job. The dedicated LocalQueue and ClusterQueue must be idle,
+# the namespace must contain no Workload objects, and its Workload quota usage
+# must be zero. This does not use observed utilization or assume ownership of
+# another workload.
+./stack/harness/nccl_rdma_conformance.sh preflight
+
+# Authorized mutation: create-only for five fixed, invocation-labeled support
+# resources plus the Job, with no retry. The Go test rechecks confirmation and
+# namespace approval immediately before the Job create.
+export NCCL_RDMA_CONFIRM=create-fixed-nccl-rdma-indexed-job
+# Optional; defaults to ./rdma-validation/<validation_id>.json from the launch directory.
+export NCCL_RDMA_RESULT_PATH='<immutable result JSON path>'
+./stack/harness/nccl_rdma_conformance.sh run
+```
+
+Unbounded site topology is resolved from exact label keys only. The canonical
+`unbounded-cloud.io/site` value wins when non-empty; the deprecated
+`net.unbounded-cloud.io/site` value is used only when the canonical value is
+absent or empty. Lookalike and fuzzy keys are ignored. Conflicting canonical
+and deprecated values, partial node coverage, or node disagreement fail the
+preflight closed. If neither selected node has either exact label,
+`NCCL_RDMA_EXPECTED_SITE` must be empty or unset and Unbounded site topology is
+recorded as `not_applicable`; that absence alone does not invalidate generic
+RDMA. If a site was explicitly requested, all-absent labels are instead
+`incomplete` and cannot pass. Kubernetes region remains separate and never
+substitutes for site. It is recorded per node and as an aggregate only when both
+nodes have the same non-empty value; `NCCL_RDMA_EXPECTED_REGION` constrains it
+only when explicitly set, because one Unbounded site may span regions.
+Successful artifacts record the selected exact site label key for each node, so
+canonical and deprecated evidence have distinct placement hashes.
+
+Each pod requests 4 CPU, 16Gi memory, one H200, and one RDMA resource, with
+limits of 8 CPU, 32Gi memory, one GPU, and one RDMA resource. The 1+1 shape may
+coexist with an unrelated one-GPU workload only when request-based preflight
+still proves the complete pod request fits independently on both nodes. It does
+not depend on utilization, evict, adopt, or infer ownership of that workload.
+
+The Job has two Indexed completions, parallelism two, zero retries, a 900-second
+active deadline, and a 600-second TTL. Pass requires both owned pods to exit
+zero, completion indexes zero and one on two distinct selected nodes, one
+visible GPU per rank, NCCL backend/world size two, both authenticated peer and
+rank receipts, zero correctness error, positive `algbw`/`busbw` derived from the
+maximum rank time, and the exact live sentinel. Failure captures Job, Workload,
+pod, event, and Kueue diagnostics. Normal, partial-create, timeout, and signal
+cleanup records each UID directly from its successful API CREATE response,
+writes it as a strict JSON Lines record containing API group/version/resource,
+namespace, name, and UID to a private parent-process ledger, and uses only those
+recorded UIDs for bounded client-go Foreground DELETE calls with UID
+preconditions. Empty core API groups and empty cluster-scoped namespaces remain
+explicit fields and cannot shift parser columns. The delete helper supports
+both namespaced and cluster-scoped records. Cleanup
+initiates deletion for every recorded UID even when an earlier object is stuck,
+then checks all remaining owned UIDs until the shared deadline. INT/TERM
+handling stops and reaps the managed live-test process group before cleanup
+reads the ledger, preventing a still-running child from adding resources
+concurrently. An ambiguous CREATE error or success
+response without a UID is never adopted by name or invocation label and is
+reported as a possible leak requiring manual inspection. A replacement object
+with the same fixed name is not deleted. Cleanup reads have bounded request
+timeouts and the complete EXIT cleanup is capped at three minutes. It never
+force-applies, replaces, adopts, or name-only deletes an object.
+
+Every authorized run attempts to write one immutable, atomically finalized
+`rdma-validation.v1` / `tau.rdma_validation` JSON result. The result defaults
+to `rdma-validation/<validation_id>.json` under the harness launch directory;
+`NCCL_RDMA_RESULT_PATH` may select another new path, but an existing file is
+never replaced, and artifact creation is rejected until the bounded cleanup
+attempt has a completion timestamp. The harness requires a clean source tree
+and records the exact Git revision. `NCCL_RDMA_RUN_ID` defaults to the invocation ID and
+`NCCL_RDMA_RUN_ATTEMPT` defaults to one. Optional lowercase
+`NCCL_RDMA_PROJECT_ID`, `NCCL_RDMA_EXPERIMENT_ID`, and
+`NCCL_RDMA_RUN_GROUP_ID` values provide existing experiment joins without
+creating a separate telemetry sink.
+
+The dependency-neutral contract is owned by `core/rdmavalidation`. It records
+the requested and actual topology, successful-create object and pod UIDs,
+rank/node/GPU/RDMA identity, process-start memlock, peer authentication, exact
+image and supply-chain digests, NCCL transport and version, per-rank bandwidth
+measurements and summary statistics, correctness and exit state, cleanup, and
+content-addressed hashes of sanitized manifest, parser receipt, placement,
+image, and cleanup evidence. Tokens, the HMAC key, kubeconfig content,
+service-account credentials, arbitrary environment variables, and raw secret
+data are forbidden. The only environment projection is a fixed eight-key
+benchmark/NCCL allowlist.
+
+A `pass` requires the full two-node/two-pod/two-rank evidence set, matching
+applicable Unbounded site, Kubernetes region, pool, and H200 model, distinct GPU
+UUIDs, active RDMA device/interface evidence,
+verified HMAC peers, positive `NET/IB` evidence, no socket fallback, positive
+finite bandwidth, zero correctness errors and exits, complete evidence hashes,
+and cleanup with no remaining owned resources. Unbounded site topology may be
+`not_applicable` only when both selected nodes lack both exact supported labels.
+Partial coverage, disagreement, or conflicting canonical/deprecated labels is
+`incomplete` and produces `unknown`, while preserving any selected canonical
+value and explicit conflict evidence. A proven violation is `fail`; missing,
+ambiguous, or unverifiable evidence is `unknown`. Fail and unknown
+artifacts are still written when possible. Historical status is immutable:
+freshness is calculated separately from `observed_at`,
+`stale_after_seconds`, and `valid_until`; v1 fixes the freshness interval at
+24 hours. This point-in-time run validation is not continuous GPU health
+monitoring.
+
+`SummaryMetrics()` provides the bounded projection for a later existing
+`experiment_metrics` adapter: status (`1/-1/0`), conservative `algbw` and
+`busbw`, maximum correctness error, duration, IB observed, socket fallback
+observed, and cleanup complete. Unknown measurements are omitted. Tags are
+limited to schema, kind, status, reason, operation, and backend; node names,
+GPU UUIDs, and interfaces are never tags.
+
+The layer-one Portal projection imports the core contract and its goldens; it
+does not add a sink or UI. Before an artifact exists, the validation is exposed
+through the existing `RunRecord` lifecycle as `pending` before process start
+and `running` after start. Only a canonical immutable artifact finalized after
+cleanup makes it terminal: `pass` maps to `succeeded`, while `fail` and
+fail-closed `unknown` map to `failed`; no new lifecycle state is introduced.
+The fixed `ArtifactRecord.Type` is `rdma-validation`, with content type
+`application/vnd.tau.rdma-validation.v1+json`. Every projected summary
+`MetricRow` includes the same immutable artifact URI and canonical SHA-256 in
+the stable `tau.rdma_validation.artifact_uri` and
+`tau.rdma_validation.artifact_sha256` tags. The projection rejects a digest or
+size that does not match the canonical result bytes.
+
 The runtime monitoring test accepts
 `AI_RUNTIME_GPU_MONITORING_<FAMILY>_SELECTOR` for `A10`, `A100`, `H100`,
 `H200`, `GB200`, and `GB300`. Configure only families present in the target
@@ -93,7 +387,7 @@ AI_RUNTIME_E2E=0 go test -count=1 ./...
 | `gpu-monitoring/` | 3 | DaemonSet exists, per-SKU scrape/rules ConfigMap shape, opinionated default alert rule inventory, sidecar wiring |
 | `managedgpu/` | 1 | Warm-cluster GPU smoke jobs on selected A10/A100 nodes |
 | `scheduler/` | 2 | Kubernetes scheduler honors Tau's GPU bin-packing preferred pod affinity and packs single-device plus 2-4 GPU same-node pods onto already-occupied nodes |
-| `stack/` | 7 | Full-stack Kueue → KubeRay → Ray Data **inference** pipeline, GPU variants, **training** SGD loop, Tau Python SDK CPU/GPU entrypoint submit tests, and manual 16-GPU Ray Train nanoGPT conformance |
+| `stack/` | 8 | Full-stack Kueue → KubeRay → Ray Data **inference** pipeline, GPU variants, **training** SGD loop, Tau Python SDK CPU/GPU entrypoint submit tests, manual 16-GPU Ray Train nanoGPT conformance, and the separately gated operator-owned NCCL/RDMA Indexed Job diagnostic |
 
 The Tau Python SDK entrypoint smoke submits a CPU RayJob through
 `tau.train(entrypoint=...)` and verifies a staged pure-Python/PyTorch-shaped

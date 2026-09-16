@@ -1,0 +1,310 @@
+{
+  "schema": "rdma-validation.v1",
+  "kind": "tau.rdma_validation",
+  "validation_id": "nccl-rdma-0123456789abcdef0123456789abcdef",
+  "run_id": "nccl-rdma-0123456789abcdef0123456789abcdef",
+  "attempt": 1,
+  "workspace_id": "taugrid-rdma",
+  "cluster": "h200-validation",
+  "namespace": "taugrid-rdma-diagnostic",
+  "project_id": "taugrid",
+  "experiment_id": "rdma-validation",
+  "run_group_id": "manual",
+  "created_at": "2026-09-14T20:00:00.123456789Z",
+  "started_at": "2026-09-14T20:00:03.123456789Z",
+  "admitted_at": "2026-09-14T20:00:01.123456789Z",
+  "completed_at": "2026-09-14T20:00:11.123456789Z",
+  "observed_at": "2026-09-14T20:00:14.123456789Z",
+  "stale_after_seconds": 86400,
+  "valid_until": "2026-09-15T20:00:14.123456789Z",
+  "source": {
+    "repository": "Azure/taugrid",
+    "revision": "1111111111111111111111111111111111111111"
+  },
+  "image": {
+    "repository": "nvcr.io/nvidia/pytorch",
+    "index_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "platform_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sbom_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sbom_layer_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "vex_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "vex_layer_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "signature_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "signature_layer_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "signature_trust_verified": false
+  },
+  "requested": {
+    "topology": {
+      "node_count": 2,
+      "pod_count": 2,
+      "rank_count": 2,
+      "distinct_hostname": true,
+      "site": "westus3",
+      "pool": "h200pool",
+      "gpu_model": "NVIDIA H200"
+    },
+    "resources": {
+      "cpu_request_milli": 4000,
+      "cpu_limit_milli": 8000,
+      "memory_request_bytes": 17179869184,
+      "memory_limit_bytes": 34359738368,
+      "gpu_resource": "nvidia.com/gpu",
+      "gpu_count": 1,
+      "rdma_resource": "rdma/rdma_shared_device_a",
+      "rdma_count": 1,
+      "shared_memory_bytes": 17179869184
+    },
+    "parameters": {
+      "world_size": 2,
+      "processes_per_pod": 1,
+      "elements": 16777216,
+      "warmup": 5,
+      "iterations": 20,
+      "operation": "all_reduce",
+      "data_type": "float32"
+    }
+  },
+  "actual": {
+    "site": "westus3",
+    "pool": "h200pool",
+    "nodes": [
+      {
+        "name": "h200-a",
+        "uid": "node-uid-a",
+        "gpu_model": "NVIDIA H200",
+        "gpu_uuid": "GPU-aaaaaaaa",
+        "rdma_device": "mlx5_0",
+        "rdma_interface": "eth1",
+        "rdma_link_state": "ACTIVE"
+      },
+      {
+        "name": "h200-b",
+        "uid": "node-uid-b",
+        "gpu_model": "NVIDIA H200",
+        "gpu_uuid": "GPU-bbbbbbbb",
+        "rdma_device": "mlx5_1",
+        "rdma_interface": "eth2",
+        "rdma_link_state": "ACTIVE"
+      }
+    ]
+  },
+  "placement": {
+    "matches_request": true,
+    "distinct_nodes": true
+  },
+  "pods": [
+    {
+      "name": "probe-0",
+      "uid": "pod-uid-0",
+      "node_name": "h200-a",
+      "rank": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "probe-1",
+      "uid": "pod-uid-1",
+      "node_name": "h200-b",
+      "rank": 1,
+      "exit_code": 0
+    }
+  ],
+  "ranks": [
+    {
+      "rank": 0,
+      "pod_uid": "pod-uid-0",
+      "node_name": "h200-a",
+      "node_uid": "node-uid-a",
+      "peer_auth_verified": true,
+      "memlock_soft_bytes": 4206821376,
+      "memlock_hard_bytes": 4206821376
+    },
+    {
+      "rank": 1,
+      "pod_uid": "pod-uid-1",
+      "node_name": "h200-b",
+      "node_uid": "node-uid-b",
+      "peer_auth_verified": true,
+      "memlock_soft_bytes": 4206821376,
+      "memlock_hard_bytes": 4206821376
+    }
+  ],
+  "nccl": {
+    "version": "2.28.8",
+    "operation": "all_reduce"
+  },
+  "transport": {
+    "backend": "nccl",
+    "nccl_net": "IB",
+    "interfaces": [
+      "eth1",
+      "eth2"
+    ],
+    "socket_fallback_observed": true,
+    "positive_ib_evidence": true,
+    "evidence": [
+      "NCCL INFO NET/IB : Using mlx5_0",
+      "NCCL INFO NET/IB : Using mlx5_1"
+    ],
+    "environment": {
+      "NCCL_DEBUG": "INFO",
+      "NCCL_DEBUG_SUBSYS": "INIT,NET",
+      "NCCL_IB_DISABLE": "0",
+      "TAUGRID_BACKEND": "nccl",
+      "TAUGRID_ELEMENTS": "16777216",
+      "TAUGRID_ITERATIONS": "20",
+      "TAUGRID_LIVE_RDMA": "1",
+      "TAUGRID_WARMUP": "5"
+    }
+  },
+  "measurements": {
+    "samples": [
+      {
+        "rank": 0,
+        "elapsed_seconds": 0.18,
+        "algbw_gbps": 13.5,
+        "busbw_gbps": 13.5
+      },
+      {
+        "rank": 1,
+        "elapsed_seconds": 0.2,
+        "algbw_gbps": 12.5,
+        "busbw_gbps": 12.5
+      }
+    ],
+    "algbw_gbps": {
+      "count": 2,
+      "min": 12.5,
+      "max": 13.5,
+      "mean": 13,
+      "median": 13
+    },
+    "busbw_gbps": {
+      "count": 2,
+      "min": 12.5,
+      "max": 13.5,
+      "mean": 13,
+      "median": 13
+    },
+    "max_rank_time_seconds": 0.2
+  },
+  "correctness": {
+    "max_error": 0,
+    "error_count": 0
+  },
+  "status": "fail",
+  "reason": "socket_fallback_observed",
+  "errors": [
+    {
+      "code": "socket_fallback_observed",
+      "field": "transport.socket_fallback_observed",
+      "message": "NCCL selected socket transport"
+    }
+  ],
+  "job_exit_code": 0,
+  "rank_exits": [
+    {
+      "rank": 0,
+      "exit_code": 0
+    },
+    {
+      "rank": 1,
+      "exit_code": 0
+    }
+  ],
+  "cleanup": {
+    "state": "complete",
+    "started_at": "2026-09-14T20:00:12.123456789Z",
+    "completed_at": "2026-09-14T20:00:14.123456789Z",
+    "owned_resources": [
+      {
+        "api_version": "batch/v1",
+        "kind": "Job",
+        "namespace": "taugrid-rdma-diagnostic",
+        "name": "job",
+        "uid": "job-uid"
+      },
+      {
+        "api_version": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "namespace": "taugrid-rdma-diagnostic",
+        "name": "network",
+        "uid": "network-uid"
+      },
+      {
+        "api_version": "v1",
+        "kind": "ConfigMap",
+        "namespace": "taugrid-rdma-diagnostic",
+        "name": "probe",
+        "uid": "configmap-uid"
+      },
+      {
+        "api_version": "v1",
+        "kind": "Secret",
+        "namespace": "taugrid-rdma-diagnostic",
+        "name": "auth",
+        "uid": "secret-uid"
+      },
+      {
+        "api_version": "v1",
+        "kind": "Service",
+        "namespace": "taugrid-rdma-diagnostic",
+        "name": "rank0",
+        "uid": "service-uid"
+      },
+      {
+        "api_version": "v1",
+        "kind": "ServiceAccount",
+        "namespace": "taugrid-rdma-diagnostic",
+        "name": "runner",
+        "uid": "serviceaccount-uid"
+      }
+    ],
+    "remaining_resources": null
+  },
+  "evidence": [
+    {
+      "name": "cleanup",
+      "uri": "file://evidence/cleanup.json",
+      "sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size_bytes": 104,
+      "captured_at": "2026-09-14T20:00:14.123456789Z"
+    },
+    {
+      "name": "image-receipt",
+      "uri": "file://evidence/image-receipt.json",
+      "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size_bytes": 103,
+      "captured_at": "2026-09-14T20:00:14.123456789Z"
+    },
+    {
+      "name": "placement",
+      "uri": "file://evidence/placement.json",
+      "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size_bytes": 102,
+      "captured_at": "2026-09-14T20:00:14.123456789Z"
+    },
+    {
+      "name": "sanitized-logs",
+      "uri": "file://evidence/sanitized-logs.json",
+      "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size_bytes": 101,
+      "captured_at": "2026-09-14T20:00:14.123456789Z"
+    },
+    {
+      "name": "sanitized-manifest",
+      "uri": "file://evidence/sanitized-manifest.json",
+      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 100,
+      "captured_at": "2026-09-14T20:00:14.123456789Z"
+    }
+  ],
+  "producer": {
+    "name": "taugrid-e2e",
+    "version": "1.0.0"
+  },
+  "parser": {
+    "name": "torchrun-rdma-parser",
+    "version": "1.0.0"
+  }
+}

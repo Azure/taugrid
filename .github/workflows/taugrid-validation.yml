@@ -213,6 +213,82 @@ jobs:
           go build -o "$RUNNER_TEMP/tau-skill" ./cmd/tau
           "$RUNNER_TEMP/tau-skill-venv/bin/python" ../skills/taugrid/scripts/check_examples.py --tau "$RUNNER_TEMP/tau-skill"
 
+  rdma-admission-envtest:
+    name: RDMA admission / Kubernetes ${{ matrix.kubernetes }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        kubernetes: ["1.34.1", "1.36.2"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: tests/e2e/go.sum
+
+      - name: Install envtest assets
+        working-directory: tests/e2e
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20251103132208-67242822fa14
+          setup_envtest="$(go env GOPATH)/bin/setup-envtest"
+          assets="$("$setup_envtest" use -p path ${{ matrix.kubernetes }})"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
+
+      - name: Validate RDMA admission boundary
+        working-directory: tests/e2e
+        run: |
+          go test -count=1 . -run '^TestNCCLRDMAManualSelectorAPIServerDefaulting$'
+          go test -count=1 ./cmd/nccl-rdma-admission-check -run '^TestNCCLRDMABoundaryCompilesOnLocalAPIServer$'
+
+  rdma-admission-typecheck:
+    name: RDMA VAP type-check / Kubernetes ${{ matrix.kubernetes }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kubernetes: "1.34.11"
+            image: kindest/node:v1.34.11@sha256:44e222ee2132dab25ff87301682f89eb82c7880ea3a1bf543bfe9708fd08d67d
+          - kubernetes: "1.36.4"
+            image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: tests/e2e/go.sum
+
+      - name: Validate controller-reported VAP type checking
+        working-directory: tests/e2e
+        env:
+          KIND_NODE_IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          go install sigs.k8s.io/kind@v0.33.0
+          kind_bin="$(go env GOPATH)/bin/kind"
+          kubeconfig="$RUNNER_TEMP/rdma-vap-${{ matrix.kubernetes }}.kubeconfig"
+          cleanup() {
+            "$kind_bin" delete cluster --name rdma-vap
+          }
+          trap cleanup EXIT
+          "$kind_bin" create cluster \
+            --name rdma-vap \
+            --image "$KIND_NODE_IMAGE" \
+            --wait 2m \
+            --kubeconfig "$kubeconfig"
+          NCCL_RDMA_TYPECHECK_KUBECONFIG="$kubeconfig" \
+            go test -count=1 ./cmd/nccl-rdma-admission-check \
+              -run '^TestNCCLRDMABoundaryReportsNoTypeCheckWarnings$'
+
   cli-windows:
     name: CLI / Windows
     runs-on: windows-latest
