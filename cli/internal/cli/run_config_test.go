@@ -2178,3 +2178,69 @@ func TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage(t *testing.T) {
 		t.Errorf("%s: the MIG probe must not request nvidia.com/gpu", path)
 	}
 }
+
+func TestRunConfigRDMACarriedThroughToRenderer(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "train.py")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\nprint('train')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	profileDir := filepath.Join(dir, "profiles")
+	if err := os.Mkdir(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "test-submit.yaml"), []byte(`apiVersion: tau.azure.com/v1alpha1
+kind: Profile
+metadata:
+  name: test-submit
+spec:
+  queue: { localQueue: training-queue }
+  resources:
+    requests: { cpu: "1", memory: 1Gi }
+    gpu: { count: 8, size: l }
+  runtime:
+    image: busybox:1.36
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: rdma-e2e-config
+engine: job
+entrypoint: train.py
+execution:
+  launcher: torchrun
+  processes_per_node: 8
+compute:
+  gpus: 8
+runtime:
+  image: busybox:1.36
+  rdma:
+    enabled: true
+    shm_size: "64Gi"
+policy:
+  profile: test-submit
+  queue: training-queue
+  namespace: ray
+storage:
+  data_pvc: blob-training
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client", "--service-account", "tau-workload"})
+	for _, want := range []string{
+		"IPC_LOCK",
+		"SYS_RESOURCE",
+		"DAC_OVERRIDE",
+		"rdma/rdma_shared_device_a",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("RDMA config dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "64Gi") {
+		t.Fatalf("RDMA config dry-run missing custom shm_size 64Gi:\n%s", rendered)
+	}
+}

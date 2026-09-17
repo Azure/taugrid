@@ -215,6 +215,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		EnvSecrets:              envSecrets,
 		RedactSecrets:           o.dryRun == "client",
 		SecurityMode:            o.securityMode,
+		RDMA:                    jobrender.NormalizeRDMA(o.rdma),
 		Profile:                 profileOptions,
 		NodeSelector:            nodeSelector,
 		ClearNodeSelector:       o.clearNodeSelector,
