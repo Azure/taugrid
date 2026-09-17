@@ -131,59 +131,59 @@ BuildKit command, then run its unit and smoke tests.
 Do not publish from a contributor pull request. Release workflows own signing,
 SBOM generation, vulnerability scanning, and promotion to MCR.
 
-### Skaffold local-preview images
+### Remote ACR preview images
 
-The root [`skaffold.yaml`](skaffold.yaml) builds the complete first-party image
-set used by the Tau Release Flex preview: `tau`, `taugrid-portal`, and
-`tau-core-controller`. Every invocation evaluates and emits all three
-artifacts. It uses custom ACR Tasks builders rather than a local Docker daemon.
-The configuration is tested with Skaffold `v2.24.0` and schema
-`skaffold/v4beta14`.
+Tau Release previews build exactly three TauGrid images: `tau`,
+`taugrid-portal`, and `tau-core-controller`. The repository provides explicit
+native `linux/amd64` ACR Tasks commands and does not require Docker, QEMU,
+Skaffold, or a Kubernetes cluster.
 
-Authenticate Azure CLI to the subscription that contains
-`aksairuntime.azurecr.io`, choose a lowercase developer namespace, and build:
+Authenticate Azure CLI to the subscription containing
+`aksairuntime.azurecr.io`, then build one, several, or all named images:
 
 ```bash
-SKAFFOLD_BIN=/path/to/skaffold-v2.24.0 \
-  ./scripts/skaffold-build.sh kevin .taugrid/taugrid-images.json
+./scripts/acr-build-images.sh --namespace kevin tau
+./scripts/acr-build-images.sh --namespace kevin tau taugrid-portal
+./scripts/acr-build-images.sh \
+  --namespace kevin \
+  --output .taugrid/images.json \
+  all
 ```
 
-The wrapper obtains a short-lived ACR token with `az acr login --expose-token`,
-writes it to a temporary `DOCKER_CONFIG`, and runs `skaffold build
---file-output` with `--default-repo
-aksairuntime.azurecr.io/dev/<namespace>`. The temporary credentials are removed
-when the command exits.
+Equivalent Make targets are `acr-build-tau`, `acr-build-taugrid-portal`,
+`acr-build-tau-core-controller`, and `acr-build-all`; pass
+`DEV_NAMESPACE=<name>` and optionally `OUTPUT=<path>`.
 
-Skaffold's `inputDigest` tag policy hashes each artifact's declared dependency
-paths. Changes under `core/` rebuild all three images; CLI, portal, and
-controller-only changes rebuild only their corresponding image. Unchanged
-artifacts remain in the output and reuse their content-addressed remote cache.
-The wrapper does not accept component-selection or arbitrary Skaffold flags.
+The script has a closed image-name enum. It selects each checked-in Dockerfile
+and uploads a bounded context containing that Dockerfile plus the image's
+tracked or unignored local source, including dirty and unpushed worktree
+changes. Every invocation uses a unique `dev-<UTC>-<commit>-<pid>` tag under
+`aksairuntime.azurecr.io/dev/<namespace>/<image>`, resolves the pushed manifest
+digest, and prints the immutable `:<tag>@sha256:<digest>` reference. ACR's
+native layer cache remains available for identical inputs; the script adds no
+change detection or custom cache.
 
-Each artifact builder uploads a temporary context containing only its image
-Dockerfile and tracked or unignored local source files, so dirty and unpushed
-worktree changes are included without uploading the entire repository. In that
-temporary copy only, the builder removes redundant
-`FROM --platform=$BUILDPLATFORM`
-qualifiers because ACR Tasks already receives `--platform linux/amd64` and its
-dependency scanner cannot parse the variable form. It also removes BuildKit
-cache mounts from `RUN` instructions because ACR Tasks' hosted Docker builder
-does not enable BuildKit; the underlying build commands are unchanged.
+When `--output` is set, the script atomically writes this tool-neutral contract:
 
-The output file is the integration contract for `tr start`. A successful build
-contains exactly one entry for each `imageName`: `tau`, `taugrid-portal`, and
-`tau-core-controller`. The wrapper rejects missing, extra, duplicate, or
-non-immutable entries. Consumers must use each `tag` value verbatim. Skaffold
-resolves these values to immutable
-`aksairuntime.azurecr.io/dev/<namespace>/<image>:<input-digest>@sha256:<digest>`
-references.
-This repository intentionally provides no deployment configuration: the build
-does not read or mutate a Kubernetes cluster.
+```json
+{
+  "schemaVersion": "taugrid.azure.com/acr-build-output/v1",
+  "registry": "aksairuntime.azurecr.io",
+  "images": [
+    {
+      "name": "tau",
+      "reference": "aksairuntime.azurecr.io/dev/kevin/tau:dev-...@sha256:...",
+      "tag": "dev-...",
+      "digest": "sha256:..."
+    }
+  ]
+}
+```
 
-Validate the schema and bounded-context builder without contacting ACR:
+Validate the commands and output schema without contacting ACR:
 
 ```bash
-SKAFFOLD_BIN=/path/to/skaffold-v2.24.0 make skaffold-check
+make acr-build-check
 ```
 
 ## Portable Integration Tests

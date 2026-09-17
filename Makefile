@@ -1,7 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: help build test lint check license-headers skaffold-check \
+.PHONY: help build test lint check license-headers acr-build-check \
+	acr-build-tau acr-build-taugrid-portal acr-build-tau-core-controller acr-build-all \
 	install-tau install-tau-cli install-tau-sdk \
 	install-taugrid-portal uninstall-tau uninstall-taugrid-portal \
 	tau-docs-build tau-docs-check tau-docs-serve
@@ -28,7 +29,11 @@ help:
 	@echo "  make test                    # run Go, offline E2E, and Python tests"
 	@echo "  make lint                    # lint Go and Python source"
 	@echo "  make check                   # run build, test, lint, and license checks"
-	@echo "  make skaffold-check          # validate local-preview image build configuration"
+	@echo "  make acr-build-check         # validate remote ACR image build commands"
+	@echo "  make acr-build-tau           # build tau in ACR (DEV_NAMESPACE required)"
+	@echo "  make acr-build-taugrid-portal # build taugrid-portal in ACR"
+	@echo "  make acr-build-tau-core-controller # build tau-core-controller in ACR"
+	@echo "  make acr-build-all           # build all three preview images in ACR"
 	@echo "  make install-tau             # install the Tau CLI and optional Python SDK"
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
@@ -94,8 +99,20 @@ check:
 license-headers:
 	python3 $(REPO_ROOT)/scripts/check-license-headers.py
 
-skaffold-check:
-	$(REPO_ROOT)/scripts/ci/validate-skaffold.sh
+acr-build-check:
+	$(REPO_ROOT)/scripts/ci/validate-acr-build-images.sh
+
+acr-build-tau:
+	$(REPO_ROOT)/scripts/acr-build-images.sh --namespace "$(DEV_NAMESPACE)" $(if $(OUTPUT),--output "$(OUTPUT)") tau
+
+acr-build-taugrid-portal:
+	$(REPO_ROOT)/scripts/acr-build-images.sh --namespace "$(DEV_NAMESPACE)" $(if $(OUTPUT),--output "$(OUTPUT)") taugrid-portal
+
+acr-build-tau-core-controller:
+	$(REPO_ROOT)/scripts/acr-build-images.sh --namespace "$(DEV_NAMESPACE)" $(if $(OUTPUT),--output "$(OUTPUT)") tau-core-controller
+
+acr-build-all:
+	$(REPO_ROOT)/scripts/acr-build-images.sh --namespace "$(DEV_NAMESPACE)" $(if $(OUTPUT),--output "$(OUTPUT)") all
 
 install-tau: install-tau-cli
 	$(MAKE) -C $(TAU_SDK_DIR) install-optional PYTHON="$(PYTHON)"
