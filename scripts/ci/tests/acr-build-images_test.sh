@@ -22,6 +22,7 @@ expected_names="$(taugrid_image_names)"
 
 taugrid_image_spec tau
 [[ "$TAUGRID_IMAGE_REPOSITORY" == "tau" ]]
+[[ "$TAUGRID_IMAGE_CONTEXT" == "." ]]
 [[ "$TAUGRID_IMAGE_DOCKERFILE" == "images/tau/Dockerfile" ]]
 [[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/tau/Dockerfile cli core" ]]
 
@@ -37,6 +38,10 @@ if taugrid_image_spec unknown >/dev/null 2>&1; then
   echo "image specs accepted an unknown image" >&2
   exit 1
 fi
+[[ -z "${TAUGRID_IMAGE_REPOSITORY+x}" ]]
+[[ -z "${TAUGRID_IMAGE_CONTEXT+x}" ]]
+[[ -z "${TAUGRID_IMAGE_DOCKERFILE+x}" ]]
+[[ -z "${TAUGRID_IMAGE_SOURCE_PATHS+x}" ]]
 
 cat >"${TEST_ROOT}/az" <<'EOF'
 #!/usr/bin/env bash

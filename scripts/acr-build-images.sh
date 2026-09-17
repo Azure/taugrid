@@ -119,7 +119,12 @@ build_image() {
   taugrid_image_spec "$image"
   local dockerfile="$TAUGRID_IMAGE_DOCKERFILE"
   local repository_name="$TAUGRID_IMAGE_REPOSITORY"
+  local context="$TAUGRID_IMAGE_CONTEXT"
   local -a source_paths=("${TAUGRID_IMAGE_SOURCE_PATHS[@]}")
+  if [[ "$context" != "." ]]; then
+    echo "ACR builds require a repository-root context for ${image}" >&2
+    return 1
+  fi
 
   case "$image" in
     tau)
@@ -145,8 +150,14 @@ build_image() {
   local context_dir="${staging_root}/context"
   mkdir -p "$context_dir"
 
-  git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard \
-    -- "${source_paths[@]}" >"$file_list"
+  while IFS= read -r -d '' path; do
+    if [[ -e "$REPO_ROOT/$path" || -L "$REPO_ROOT/$path" ]]; then
+      printf '%s\0' "$path"
+    fi
+  done < <(
+    git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard \
+      -- "${source_paths[@]}"
+  ) >"$file_list"
   if [[ ! -s "$file_list" ]]; then
     echo "no source files found for ${image}" >&2
     rm -rf "$staging_root"

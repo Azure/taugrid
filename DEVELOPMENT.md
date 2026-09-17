@@ -166,7 +166,7 @@ change detection or custom cache.
 The stable component metadata is in
 [`scripts/lib/image-specs.sh`](scripts/lib/image-specs.sh). Local Kind tooling
 can source `taugrid_image_spec <name>` to reuse the repository name,
-repository-root Dockerfile, and source paths while retaining its own
+repository-root context and Dockerfile, and source paths while retaining its own
 Podman/Docker tags, build engine, and image-loading behavior. ACR is not a
 dependency of the Kind workflow.
 
