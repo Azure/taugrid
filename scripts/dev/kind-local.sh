@@ -119,12 +119,12 @@ create_cluster() {
 resolve_dependency_images() {
   "${REPO_ROOT}/scripts/ci/vendor-taugrid-dependencies.sh" "${CHART_DIR}"
   KUEUE_IMAGE="$(tau_kind_render_image \
-    "${RELEASE}" "${CHART_DIR}" "${NAMESPACE}" \
+    "${KUBE_CONTEXT}" "${RELEASE}" "${CHART_DIR}" "${NAMESPACE}" \
     charts/kueue/templates/manager/manager.yaml \
     --set components.gpuMonitoring.enabled=false \
     --set baselineQueue.enabled=false)"
   KUBERAY_IMAGE="$(tau_kind_render_image \
-    "${RELEASE}" "${CHART_DIR}" "${NAMESPACE}" \
+    "${KUBE_CONTEXT}" "${RELEASE}" "${CHART_DIR}" "${NAMESPACE}" \
     charts/kuberay-operator/templates/deployment.yaml \
     --set components.gpuMonitoring.enabled=false \
     --set baselineQueue.enabled=false)"
@@ -181,7 +181,7 @@ image_build_failed() {
 }
 
 load_images() {
-  local controller_image portal_image image node
+  local controller_image portal_image image
   local -a images
   resolve_dependency_images
   controller_image="$(controller_repository):${IMAGE_TAG}"
@@ -198,34 +198,39 @@ load_images() {
     "${ENGINE}" pull "${image}"
   done
 
-  if [[ "${ENGINE}" == "podman" ]]; then
-    while IFS= read -r node; do
-      for image in "${images[@]}"; do
-        "${ENGINE}" exec "${node}" ctr --namespace k8s.io images remove "${image}" \
-          >/dev/null 2>&1 || true
-      done
-    done < <(
-      "${ENGINE}" ps -a \
-        --filter "label=io.x-k8s.kind.cluster=${CLUSTER_NAME}" \
-        --format '{{.Names}}'
-    )
-    for image in "${images[@]}"; do
-      tau_kind_load_image "${ENGINE}" "${CLUSTER_NAME}" "${image}"
-    done
-  else
-    for image in "${images[@]}"; do
-      tau_kind_load_image "${ENGINE}" "${CLUSTER_NAME}" "${image}"
-    done
-  fi
+  for image in "${images[@]}"; do
+    tau_kind_load_image "${ENGINE}" "${CLUSTER_NAME}" "${image}"
+  done
 }
 
 install_taugrid() {
-  local controller_repo portal_repo
+  local controller_chart controller_repo portal_repo
   local -a helm_args
   controller_repo="$(controller_repository)"
   portal_repo="$(portal_repository)"
 
   "${REPO_ROOT}/scripts/ci/vendor-taugrid-dependencies.sh" "${CHART_DIR}"
+  controller_chart="$(printf '%s\n' "${CHART_DIR}"/charts/tau-core-controller-*.tgz)"
+  if [[ ! -f "${controller_chart}" ]]; then
+    echo "packaged Tau core controller chart not found under ${CHART_DIR}/charts" >&2
+    return 1
+  fi
+
+  echo "Updating TauGrid CRDs from the packaged controller chart"
+  helm show crds "${controller_chart}" |
+    kubectl --context "${KUBE_CONTEXT}" apply \
+      --field-manager=taugrid-crds \
+      --dry-run=server \
+      -f - >/dev/null
+  helm show crds "${controller_chart}" |
+    kubectl --context "${KUBE_CONTEXT}" apply \
+      --field-manager=taugrid-crds \
+      -f -
+  helm show crds "${controller_chart}" |
+    kubectl --context "${KUBE_CONTEXT}" wait \
+      --for=condition=Established \
+      --timeout=120s \
+      -f -
 
   helm_args=(
     upgrade --install "${RELEASE}" "${CHART_DIR}"

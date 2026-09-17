@@ -22,9 +22,16 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 	p.Queue = "kind-cpu"
 	options := Options{
 		Name: "tau-kind-serve", Namespace: "ray",
-		Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0", RayVersion: "2.54.0",
+		Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0", RayVersion: "2.58.0",
 		ImportPath: "serve_app:app", ServePort: 9000, Workers: 2, ShmSize: "256Mi",
-		Env:          map[string]string{"PYTHONPATH": "/opt/tau-smoke"},
+		Env: map[string]string{
+			"GRPC_DNS_RESOLVER":    "native",
+			"MKL_NUM_THREADS":      "1",
+			"NUMEXPR_NUM_THREADS":  "1",
+			"OMP_NUM_THREADS":      "1",
+			"OPENBLAS_NUM_THREADS": "1",
+			"PYTHONPATH":           "/opt/tau-smoke",
+		},
 		Volumes:      []Volume{{Name: "app", ConfigMap: "tau-kind-serve-app"}},
 		VolumeMounts: []VolumeMount{{Name: "app", MountPath: "/opt/tau-smoke", ReadOnly: true}},
 	}
@@ -41,7 +48,7 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 	worker["rayStartParams"].(map[string]any)["num-gpus"] = "0"
 	worker["rayStartParams"].(map[string]any)["object-store-memory"] = "134217728"
 	workerTemplate := worker["template"].(map[string]any)
-	for _, template := range []map[string]any{head, workerTemplate} {
+	for name, template := range map[string]map[string]any{"head": head, "worker": workerTemplate} {
 		metadata := template["metadata"].(map[string]any)
 		labels := metadata["labels"].(map[string]any)
 		for key := range p.Resources.GPU.Labels() {
@@ -52,6 +59,21 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 		pod := template["spec"].(map[string]any)
 		delete(pod, "nodeSelector")
 		container := pod["containers"].([]any)[0].(map[string]any)
+		env := map[string]string{}
+		for _, raw := range container["env"].([]any) {
+			entry := raw.(map[string]any)
+			env[entry["name"].(string)] = entry["value"].(string)
+		}
+		for _, variable := range []string{
+			"MKL_NUM_THREADS",
+			"NUMEXPR_NUM_THREADS",
+			"OMP_NUM_THREADS",
+			"OPENBLAS_NUM_THREADS",
+		} {
+			if env[variable] != "1" {
+				t.Fatalf("%s %s = %q, want 1", name, variable, env[variable])
+			}
+		}
 		if container["name"] == "ray-worker" {
 			container["resources"] = map[string]any{
 				"requests": map[string]any{"cpu": "50m", "memory": "512Mi"},

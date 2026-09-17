@@ -47,8 +47,11 @@ KIND_REMOTE_OVERRIDES := \
 	KIND_NAMESPACE="$(KIND_NAMESPACE)" \
 	KIND_RELEASE="$(KIND_RELEASE)" \
 	KIND_IMAGE_TAG="$(KIND_IMAGE_TAG)" \
-	KIND_PLATFORM="$(KIND_PLATFORM)" \
 	KIND_ENGINE="$(KIND_ENGINE)"
+KIND_REMOTE_PLATFORM_OVERRIDE :=
+ifneq ($(filter command line environment override,$(origin KIND_PLATFORM)),)
+KIND_REMOTE_PLATFORM_OVERRIDE := KIND_PLATFORM="$(KIND_PLATFORM)"
+endif
 
 help:
 	@echo "TauGrid repository targets:"
@@ -206,7 +209,7 @@ kind-sync:
 		-cf - . | ssh $(KIND_REMOTE_HOST) 'tar -xf - -C "$(KIND_REMOTE_DIR)"'
 
 kind-build-images kind-create kind-load-images kind-images kind-install kind-restart kind-up kind-status kind-test-workspace kind-down: kind-sync
-	ssh $(KIND_REMOTE_HOST) 'cd "$(KIND_REMOTE_DIR)" && bin_dir="$(KIND_REMOTE_BIN_DIR)"; if [ -n "$$bin_dir" ]; then PATH="$$bin_dir:$$PATH"; fi; make $@ $(KIND_REMOTE_OVERRIDES)'
+	ssh $(KIND_REMOTE_HOST) 'cd "$(KIND_REMOTE_DIR)" && bin_dir="$(KIND_REMOTE_BIN_DIR)"; if [ -n "$$bin_dir" ]; then PATH="$$bin_dir:$$PATH"; fi; make $@ $(KIND_REMOTE_OVERRIDES) $(KIND_REMOTE_PLATFORM_OVERRIDE)'
 
 else
 

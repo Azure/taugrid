@@ -161,6 +161,10 @@ make kind-up
 
 The workflow runs on the current machine, prefers a healthy Podman
 installation, and falls back to Docker.
+For Podman, images stream directly into each Kind node's containerd image
+store instead of being written to temporary archives. Nodes whose image ID
+already matches the host are skipped, which keeps repeated loads fast even
+for large dependency images.
 It disables GPU monitoring and GPU queue quota because Kind has no GPU device
 plugin, while keeping Kueue, KubeRay, the Tau controller, and Portal enabled.
 Kueue and KubeRay are not independently pinned by the Kind helper: it vendors

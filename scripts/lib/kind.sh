@@ -108,34 +108,67 @@ tau_kind_load_image() {
   local engine="$1"
   local cluster_name="$2"
   local image="$3"
-  local archive status
+  local host_id node node_id nodes node_count=0
 
   if [[ "${engine}" != "podman" ]]; then
     kind load docker-image "${image}" --name "${cluster_name}"
     return
   fi
 
-  archive="$(mktemp "${TMPDIR:-/tmp}/tau-kind-image.XXXXXX.tar")"
-  status=0
-  "${engine}" save --format docker-archive "${image}" >"${archive}" || status=$?
-  if [[ "${status}" -eq 0 ]]; then
-    kind load image-archive "${archive}" --name "${cluster_name}" || status=$?
+  if ! host_id="$("${engine}" image inspect --format '{{.Id}}' "${image}")"; then
+    echo "Podman image ${image} is not available on the host" >&2
+    return 1
   fi
-  rm -f -- "${archive}"
-  return "${status}"
+  host_id="${host_id#sha256:}"
+  if ! nodes="$(
+    "${engine}" ps -a \
+      --filter "label=io.x-k8s.kind.cluster=${cluster_name}" \
+      --format '{{.Names}}'
+  )"; then
+    echo "failed to list Podman nodes for Kind cluster ${cluster_name}" >&2
+    return 1
+  fi
+
+  while IFS= read -r node; do
+    [[ -n "${node}" ]] || continue
+    node_count=$((node_count + 1))
+    node_id="$("${engine}" exec "${node}" \
+      crictl inspecti -o go-template --template '{{.status.id}}' "${image}" \
+      2>/dev/null || true)"
+    if [[ "${node_id#sha256:}" == "${host_id}" ]]; then
+      echo "Image ${image} is already current on ${node}; skipping"
+      continue
+    fi
+    echo "Loading ${image} into ${node}"
+    if ! (
+      set -o pipefail
+      "${engine}" save --format oci-archive "${image}" |
+        "${engine}" exec -i "${node}" \
+          ctr --namespace=k8s.io images import --all-platforms --digests -
+    ); then
+      echo "failed to load ${image} into ${node}" >&2
+      return 1
+    fi
+  done <<<"${nodes}"
+
+  if [[ "${node_count}" -eq 0 ]]; then
+    echo "Kind cluster ${cluster_name} has no Podman nodes" >&2
+    return 1
+  fi
 }
 
 tau_kind_render_image() {
-  local release="$1"
-  local chart="$2"
-  local namespace="$3"
-  local template="$4"
-  shift 4
+  local context="$1"
+  local release="$2"
+  local chart="$3"
+  local namespace="$4"
+  local template="$5"
+  shift 5
 
   helm template "${release}" "${chart}" \
     --namespace "${namespace}" \
     "$@" \
     --show-only "${template}" |
-    kubectl create --dry-run=client -f - \
+    kubectl --context "${context}" create --dry-run=client -f - \
       -o jsonpath='{.spec.template.spec.containers[0].image}'
 }

@@ -35,7 +35,8 @@ CONTROLLER_IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 ENGINE_INFO_TIMEOUT_SECONDS="${TAU_KIND_ENGINE_INFO_TIMEOUT_SECONDS:-${TAU_KIND_DOCKER_INFO_TIMEOUT_SECONDS:-20}}"
 ENGINE_MIN_MEMORY_MIB="${TAU_KIND_ENGINE_MIN_MEMORY_MIB:-${TAU_KIND_DOCKER_MIN_MEMORY_MIB:-7680}}"
 ENGINE_RECOMMENDED_MEMORY_MIB="${TAU_KIND_ENGINE_RECOMMENDED_MEMORY_MIB:-${TAU_KIND_DOCKER_RECOMMENDED_MEMORY_MIB:-7800}}"
-KIND_NODE_TASKS_MAX="${TAU_KIND_NODE_TASKS_MAX:-1024}"
+KIND_NODE_TASKS_MAX="${TAU_KIND_NODE_TASKS_MAX:-4096}"
+KIND_NODE_PIDS_LIMIT="${TAU_KIND_NODE_PIDS_LIMIT:-8192}"
 RAY_COMPLETION_MARKER="${TAU_KIND_RAY_COMPLETION_MARKER:-tau kind ray smoke complete}"
 DIAGNOSTICS_READY=0
 
@@ -130,9 +131,19 @@ configure_kind_node_task_budget() {
     echo "TAU_KIND_NODE_TASKS_MAX must be an integer of at least 512" >&2
     return 1
   fi
+  if ! [[ "$KIND_NODE_PIDS_LIMIT" =~ ^[0-9]+$ ]] || (( KIND_NODE_PIDS_LIMIT < 2048 )); then
+    echo "TAU_KIND_NODE_PIDS_LIMIT must be an integer of at least 2048" >&2
+    return 1
+  fi
 
   local node_container="${CLUSTER_NAME}-control-plane"
-  local current
+  local current current_pids_limit
+  current_pids_limit="$("$CONTAINER_ENGINE" inspect "$node_container" --format '{{.HostConfig.PidsLimit}}')"
+  if ! [[ "$current_pids_limit" =~ ^[0-9]+$ ]] || (( current_pids_limit < KIND_NODE_PIDS_LIMIT )); then
+    echo "Raising Podman Kind node PID limit from ${current_pids_limit:-unknown} to ${KIND_NODE_PIDS_LIMIT}"
+    "$CONTAINER_ENGINE" update --pids-limit "$KIND_NODE_PIDS_LIMIT" "$node_container" >/dev/null
+  fi
+
   current="$("$CONTAINER_ENGINE" exec "$node_container" systemctl show -p DefaultTasksMax --value)"
   if [[ "$current" =~ ^[0-9]+$ ]] && (( current >= KIND_NODE_TASKS_MAX )); then
     echo "Kind node task budget: ${current}"
@@ -366,13 +377,13 @@ container_engine_preflight
 
 if [[ "${TAU_KIND_RECREATE:-0}" == "1" ]]; then
   echo "Deleting existing Kind cluster ${CLUSTER_NAME} before recreate"
-  run_with_timeout "$KIND_DELETE_TIMEOUT_SECONDS" tau_kind_delete_cluster "$CLUSTER_NAME" >/dev/null 2>&1 || true
+  run_with_timeout "$KIND_DELETE_TIMEOUT_SECONDS" kind delete cluster --name "$CLUSTER_NAME" >/dev/null 2>&1 || true
 fi
 
 echo "Checking Kind cluster ${CLUSTER_NAME}"
 if ! run_with_timeout "$KIND_GET_TIMEOUT_SECONDS" tau_kind_cluster_exists "$CONTAINER_ENGINE" "$CLUSTER_NAME"; then
   echo "Creating Kind cluster ${CLUSTER_NAME}"
-  run_with_timeout "$KIND_CREATE_TIMEOUT_SECONDS" tau_kind_create_cluster "$CLUSTER_NAME" --config "$EXAMPLE_DIR/kind-cluster.yaml"
+  run_with_timeout "$KIND_CREATE_TIMEOUT_SECONDS" kind create cluster --name "$CLUSTER_NAME" --config "$EXAMPLE_DIR/kind-cluster.yaml"
 else
   echo "Reusing existing Kind cluster ${CLUSTER_NAME}"
 fi
@@ -395,11 +406,11 @@ fi
   "$REPO_ROOT/charts/taugrid"
 
 KUEUE_IMAGE="$(tau_kind_render_image \
-  "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
+  "$KUBE_CONTEXT" "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
   charts/kueue/templates/manager/manager.yaml \
   --set components.taugridCore.enabled=false)"
 KUBERAY_IMAGE="$(tau_kind_render_image \
-  "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
+  "$KUBE_CONTEXT" "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
   charts/kuberay-operator/templates/deployment.yaml \
   --set components.taugridCore.enabled=false \
   --set kuberay-operator.priorityClassName=system-cluster-critical)"
@@ -457,6 +468,10 @@ kubectl --context "$KUBE_CONTEXT" get \
   resourceflavors.kueue.x-k8s.io,clusterqueues.kueue.x-k8s.io,workloadpriorityclasses.kueue.x-k8s.io
 
 previous_ray_uid="$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" delete workspace.tau.azure.com kind-legacy \
+  --ignore-not-found --wait=true --timeout="$WAIT_TIMEOUT"
+kubectl --context "$KUBE_CONTEXT" delete namespace kind-legacy \
+  --ignore-not-found --wait=true --timeout="$WAIT_TIMEOUT"
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete rayservice.ray.io "$RAY_SERVICE_NAME" \
   --ignore-not-found --cascade=foreground --timeout="$WAIT_TIMEOUT"
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete job "$JOB_NAME" --ignore-not-found
