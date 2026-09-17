@@ -82,6 +82,31 @@ for image in document["images"]:
     assert re.search(r"@sha256:[0-9a-f]{64}$", image["reference"])
 PY
 
+readonly COMPLETE_OUTPUT="${TEST_ROOT}/complete-images.json"
+: >"$BUILDS"
+AZ_BIN="${TEST_ROOT}/az" AZ_BUILDS_FILE="$BUILDS" \
+  "${REPO_ROOT}/scripts/acr-build-images.sh" \
+  --namespace pr-123 \
+  --output "$COMPLETE_OUTPUT" \
+  all >/dev/null
+python3 "${REPO_ROOT}/scripts/ci/validate-acr-build-output.py" \
+  "$COMPLETE_OUTPUT" \
+  pr-123
+python3 - "$COMPLETE_OUTPUT" "${TEST_ROOT}/mutable-images.json" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1]))
+document["images"][0]["reference"] = document["images"][0]["reference"].split("@")[0]
+json.dump(document, open(sys.argv[2], "w"))
+PY
+if python3 "${REPO_ROOT}/scripts/ci/validate-acr-build-output.py" \
+  "${TEST_ROOT}/mutable-images.json" \
+  pr-123 >/dev/null 2>&1; then
+  echo "output validator accepted a mutable image reference" >&2
+  exit 1
+fi
+
 : >"$BUILDS"
 AZ_BIN="${TEST_ROOT}/az" AZ_BUILDS_FILE="$BUILDS" \
   "${REPO_ROOT}/scripts/acr-build-images.sh" --namespace tester all >/dev/null

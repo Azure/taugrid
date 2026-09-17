@@ -186,6 +186,20 @@ Validate the commands and output schema without contacting ACR:
 make acr-build-check
 ```
 
+For same-repository pull requests that change one of the three image build
+contexts, [TauGrid PR Images](.github/workflows/taugrid-pr-images.yml) checks
+out the exact PR head revision, authenticates to Azure through GitHub OIDC,
+and invokes the same script with `--namespace pr-<number> --output <path> all`.
+The workflow uploads the validated v1 JSON as
+`taugrid-pr-<number>-images` and writes all three immutable references to the
+job summary. A newer revision reuses the same per-PR repository namespace but
+always receives unique tags and digest-qualified deployment references.
+
+Fork pull requests never receive Azure credentials or execute the remote build.
+Their workflow job records an explicit skip reason instead. The workflow only
+builds and publishes developer images; it does not deploy to Flex or invoke
+Tau Release.
+
 ## Portable Integration Tests
 
 Prefer offline rendering, unit tests, and Kind for pull-request validation.

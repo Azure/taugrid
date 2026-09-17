@@ -1,0 +1,106 @@
+name: TauGrid PR Images
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/taugrid-pr-images.yml
+      - .gitignore
+      - cli/**
+      - controllers/tau-core/**
+      - core/**
+      - images/tau/**
+      - images/tau-core-controller/**
+      - images/taugrid-portal/**
+      - portal/**
+      - scripts/acr-build-images.sh
+      - scripts/ci/tests/acr-build-images_test.sh
+      - scripts/ci/tests/taugrid-pr-images-workflow_test.py
+      - scripts/ci/validate-acr-build-images.sh
+      - scripts/ci/validate-acr-build-output.py
+
+concurrency:
+  group: taugrid-pr-images-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fork:
+    name: Fork PR notice
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain credentialed build skip
+        run: |
+          {
+            echo "### TauGrid developer images"
+            echo
+            echo "Skipped the credentialed ACR build because this pull request originates from a fork."
+            echo "Privileged Azure credentials are never exposed to fork pull request code."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build developer images
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out pull request revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_E2E_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_E2E_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_E2E_SUBSCRIPTION_ID }}
+
+      - name: Build all TauGrid developer images
+        env:
+          AZURE_CORE_OUTPUT: none
+          OUTPUT_FILE: ${{ runner.temp }}/taugrid-pr-images/images.json
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          ./scripts/acr-build-images.sh \
+            --namespace "pr-${PR_NUMBER}" \
+            --output "$OUTPUT_FILE" \
+            all
+          python3 scripts/ci/validate-acr-build-output.py \
+            "$OUTPUT_FILE" \
+            "pr-${PR_NUMBER}"
+
+      - name: Summarize immutable image references
+        env:
+          OUTPUT_FILE: ${{ runner.temp }}/taugrid-pr-images/images.json
+        run: |
+          python3 - "$OUTPUT_FILE" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json
+          import sys
+
+          document = json.load(open(sys.argv[1]))
+          with open(sys.argv[2], "a") as summary:
+              summary.write("### TauGrid developer images\n\n")
+              summary.write("| Image | Immutable reference |\n")
+              summary.write("|---|---|\n")
+              for image in document["images"]:
+                  summary.write(f"| `{image['name']}` | `{image['reference']}` |\n")
+          PY
+
+      - name: Upload immutable image map
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: taugrid-pr-${{ github.event.pull_request.number }}-images
+          path: ${{ runner.temp }}/taugrid-pr-images/images.json
+          if-no-files-found: error
+          retention-days: 14
