@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: help build test lint check license-headers \
+.PHONY: help build test lint check license-headers skaffold-check \
 	install-tau install-tau-cli install-tau-sdk \
 	install-taugrid-portal uninstall-tau uninstall-taugrid-portal \
 	tau-docs-build tau-docs-check tau-docs-serve
@@ -28,6 +28,7 @@ help:
 	@echo "  make test                    # run Go, offline E2E, and Python tests"
 	@echo "  make lint                    # lint Go and Python source"
 	@echo "  make check                   # run build, test, lint, and license checks"
+	@echo "  make skaffold-check          # validate local-preview image build configuration"
 	@echo "  make install-tau             # install the Tau CLI and optional Python SDK"
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
@@ -92,6 +93,9 @@ check:
 
 license-headers:
 	python3 $(REPO_ROOT)/scripts/check-license-headers.py
+
+skaffold-check:
+	$(REPO_ROOT)/scripts/ci/validate-skaffold.sh
 
 install-tau: install-tau-cli
 	$(MAKE) -C $(TAU_SDK_DIR) install-optional PYTHON="$(PYTHON)"
