@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TAU_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${TAU_DIR}/.." && pwd)"
+source "${REPO_ROOT}/scripts/lib/kind.sh"
 EXAMPLE_DIR="${REPO_ROOT}/examples/kind-smoke"
 
 CLUSTER_NAME="${TAU_KIND_CLUSTER_NAME:-tau-kind}"
@@ -24,18 +25,11 @@ TAU_BIN="${TAU_BIN:-${TAU_DIR}/bin/tau}"
 KIND_GET_TIMEOUT_SECONDS="${TAU_KIND_GET_TIMEOUT_SECONDS:-30}"
 KIND_DELETE_TIMEOUT_SECONDS="${TAU_KIND_DELETE_TIMEOUT_SECONDS:-180}"
 KIND_CREATE_TIMEOUT_SECONDS="${TAU_KIND_CREATE_TIMEOUT_SECONDS:-600}"
-if [[ -n "${TAU_KIND_CONTAINER_ENGINE:-}" ]]; then
-  CONTAINER_ENGINE="${TAU_KIND_CONTAINER_ENGINE}"
-elif [[ "${KIND_EXPERIMENTAL_PROVIDER:-}" == "podman" ]]; then
-  CONTAINER_ENGINE="podman"
-else
-  CONTAINER_ENGINE="docker"
-fi
+CONTAINER_ENGINE="$(tau_kind_select_engine "${TAU_KIND_CONTAINER_ENGINE:-}" docker)"
+tau_kind_configure_provider "${CONTAINER_ENGINE}"
 CONTROLLER_IMAGE_REPOSITORY="${TAU_KIND_CONTROLLER_IMAGE_REPOSITORY:-tau-core-controller}"
 CONTROLLER_IMAGE_TAG="${TAU_KIND_CONTROLLER_IMAGE_TAG:-kind-e2e}"
-if [[ "${CONTAINER_ENGINE}" == "podman" && "${CONTROLLER_IMAGE_REPOSITORY}" != */* ]]; then
-  CONTROLLER_IMAGE_REPOSITORY="localhost/${CONTROLLER_IMAGE_REPOSITORY}"
-fi
+CONTROLLER_IMAGE_REPOSITORY="$(tau_kind_qualify_image "${CONTAINER_ENGINE}" "${CONTROLLER_IMAGE_REPOSITORY}")"
 CONTROLLER_IMAGE="${CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_IMAGE_TAG}"
 CONTROLLER_IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 ENGINE_INFO_TIMEOUT_SECONDS="${TAU_KIND_ENGINE_INFO_TIMEOUT_SECONDS:-${TAU_KIND_DOCKER_INFO_TIMEOUT_SECONDS:-20}}"
@@ -45,15 +39,8 @@ KIND_NODE_TASKS_MAX="${TAU_KIND_NODE_TASKS_MAX:-1024}"
 RAY_COMPLETION_MARKER="${TAU_KIND_RAY_COMPLETION_MARKER:-tau kind ray smoke complete}"
 DIAGNOSTICS_READY=0
 
-need() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "missing required tool: $1" >&2
-    exit 127
-  fi
-}
-
 for tool in kind kubectl helm go "$CONTAINER_ENGINE"; do
-  need "$tool"
+  tau_kind_need "$tool"
 done
 
 run_with_timeout() {
@@ -111,20 +98,7 @@ container_engine_preflight() {
 }
 
 load_controller_image() {
-  if [[ "$CONTAINER_ENGINE" == "podman" ]]; then
-    local archive status
-    archive="$(mktemp "${TMPDIR:-/tmp}/tau-kind-controller.XXXXXX.tar")"
-    status=0
-    podman save --format docker-archive -o "$archive" "$CONTROLLER_IMAGE" || status=$?
-    if [[ "$status" -eq 0 ]]; then
-      KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive "$archive" --name "$CLUSTER_NAME" || status=$?
-    fi
-    rm -f "$archive"
-    return "$status"
-  fi
-
-  KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" \
-    kind load docker-image "$CONTROLLER_IMAGE" --name "$CLUSTER_NAME"
+  tau_kind_load_image "${CONTAINER_ENGINE}" "${CLUSTER_NAME}" "${CONTROLLER_IMAGE}"
 }
 
 wait_for_taucluster_profiles() {
@@ -392,14 +366,13 @@ container_engine_preflight
 
 if [[ "${TAU_KIND_RECREATE:-0}" == "1" ]]; then
   echo "Deleting existing Kind cluster ${CLUSTER_NAME} before recreate"
-  run_with_timeout "$KIND_DELETE_TIMEOUT_SECONDS" kind delete cluster --name "$CLUSTER_NAME" >/dev/null 2>&1 || true
+  run_with_timeout "$KIND_DELETE_TIMEOUT_SECONDS" tau_kind_delete_cluster "$CLUSTER_NAME" >/dev/null 2>&1 || true
 fi
 
 echo "Checking Kind cluster ${CLUSTER_NAME}"
-kind_clusters="$(run_with_timeout "$KIND_GET_TIMEOUT_SECONDS" kind get clusters)"
-if ! grep -qx "$CLUSTER_NAME" <<<"$kind_clusters"; then
+if ! run_with_timeout "$KIND_GET_TIMEOUT_SECONDS" tau_kind_cluster_exists "$CONTAINER_ENGINE" "$CLUSTER_NAME"; then
   echo "Creating Kind cluster ${CLUSTER_NAME}"
-  run_with_timeout "$KIND_CREATE_TIMEOUT_SECONDS" kind create cluster --name "$CLUSTER_NAME" --config "$EXAMPLE_DIR/kind-cluster.yaml"
+  run_with_timeout "$KIND_CREATE_TIMEOUT_SECONDS" tau_kind_create_cluster "$CLUSTER_NAME" --config "$EXAMPLE_DIR/kind-cluster.yaml"
 else
   echo "Reusing existing Kind cluster ${CLUSTER_NAME}"
 fi
@@ -420,6 +393,25 @@ fi
 
 "$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
   "$REPO_ROOT/charts/taugrid"
+
+KUEUE_IMAGE="$(tau_kind_render_image \
+  "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
+  charts/kueue/templates/manager/manager.yaml \
+  --set components.taugridCore.enabled=false)"
+KUBERAY_IMAGE="$(tau_kind_render_image \
+  "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
+  charts/kuberay-operator/templates/deployment.yaml \
+  --set components.taugridCore.enabled=false \
+  --set kuberay-operator.priorityClassName=system-cluster-critical)"
+JOB_IMAGE="$(awk '$1 == "image:" { print $2; exit }' "$EXAMPLE_DIR/tau.yaml")"
+RAY_IMAGE="$(awk '$1 == "image:" { print $2; exit }' "$EXAMPLE_DIR/tau-ray.yaml")"
+
+for image in "$KUEUE_IMAGE" "$KUBERAY_IMAGE" "$JOB_IMAGE" "$RAY_IMAGE"; do
+  preload_image="$(tau_kind_expand_registry_image "$image")"
+  echo "Preloading ${preload_image} into Kind"
+  "$CONTAINER_ENGINE" pull "$preload_image"
+  tau_kind_load_image "$CONTAINER_ENGINE" "$CLUSTER_NAME" "$preload_image"
+done
 
 install_taugrid() {
   "$TAU_BIN" cluster install \
@@ -561,5 +553,5 @@ kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" exec "$head_pod" -- python3 -c
 echo "Tau Kind smoke passed on context ${KUBE_CONTEXT} (Job + RayJob + RayService + legacy CRD upgrade)"
 
 if [[ "${TAU_KIND_DELETE_CLUSTER:-0}" == "1" ]]; then
-  kind delete cluster --name "$CLUSTER_NAME"
+  tau_kind_delete_cluster "$CLUSTER_NAME"
 fi

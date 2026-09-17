@@ -150,6 +150,76 @@ TauGrid first-party images are published under the following MCR repositories:
 
 Use the versioned tag or immutable digest documented by each release rather than a mutable `latest` tag.
 
+### Local Kind development
+
+Build the current controller and portal sources, load them into a local Kind
+cluster, and install the TauGrid chart with local-only image pull policies:
+
+```bash
+make kind-up
+```
+
+The workflow runs on the current machine, prefers a healthy Podman
+installation, and falls back to Docker.
+It disables GPU monitoring and GPU queue quota because Kind has no GPU device
+plugin, while keeping Kueue, KubeRay, the Tau controller, and Portal enabled.
+Kueue and KubeRay are not independently pinned by the Kind helper: it vendors
+the TauGrid Helm dependencies, renders their Deployments, and preloads the
+exact images selected by those charts. This keeps local testing aligned with
+the AKS-packaged dependencies in `charts/taugrid/Chart.yaml` rather than with
+an assumed upstream image.
+An 8 GiB or larger Podman machine or Docker VM is recommended for the full
+stack. The workflow warns when the engine reports less memory but does not
+block cluster creation.
+The cluster is reused across runs so rebuilding after a source change is the
+same command.
+
+```bash
+make kind-status
+make kind-down
+```
+
+The Makefile also exposes each step for faster iteration and troubleshooting:
+
+```bash
+make kind-build-images
+make kind-create
+make kind-load-images
+make kind-install
+make kind-restart
+make kind-test-workspace
+```
+
+`make kind-images` runs the first three steps. Override the engine, cluster,
+or development image tag using normal Make variables:
+
+```bash
+make kind-up KIND_ENGINE=docker
+make kind-up KIND_CLUSTER_NAME=my-taugrid KIND_IMAGE_TAG=my-change
+```
+
+For a remote development host, opt in explicitly and choose a per-user
+workspace path. The container engine, Kind, Helm, and kubectl must all be
+available on that host:
+
+```bash
+make kind-up \
+  KIND_EXECUTION=remote \
+  KIND_REMOTE_HOST=my-dev-host \
+  KIND_REMOTE_DIR=.local/state/taugrid-kind-dev
+```
+
+`make kind-test-workspace` builds the local `tau` CLI, creates a real
+`TauWorkspace`, waits for the controller to make it Ready, and verifies that
+the installed Kueue API reports an active `jobqueue` LocalQueue in the
+workspace namespace. It then deletes the workspace and verifies that the
+controller-owned LocalQueue is removed.
+
+`make kind-up` always restarts the controller and Portal Deployments after
+loading the local `:dev` images. This is required because loading a replacement
+under the same tag updates Kind's image store but does not change the
+Deployment pod template or trigger a Kubernetes rollout by itself.
+
 ## Helm Charts
 
 TauGrid-owned charts are published as public OCI artifacts under
