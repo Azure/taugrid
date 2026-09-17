@@ -969,7 +969,7 @@ func TestRayBoardServesSnapshot(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=ray", nil))
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=ray&window=24h", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -1018,14 +1018,14 @@ func TestRayBoardServesScopedDurableHistory(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=ray", nil))
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=ray&window=24h", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"historyState":"available"`) ||
 		!strings.Contains(rec.Body.String(), "completed-ray") || strings.Contains(rec.Body.String(), "other-namespace") ||
 		strings.Contains(rec.Body.String(), "other-cluster") || strings.Contains(rec.Body.String(), "other-kind") {
 		t.Fatalf("ray response = %d %s", rec.Code, rec.Body.String())
 	}
 	if history.calls != 1 || history.scope.Cluster != "cluster-a" || history.scope.Namespace != "ray" || history.scope.WorkspaceID != "default" ||
-		history.scope.Table != "TauExpRunLifecycle" || history.scope.Limit != 25 {
+		history.scope.Table != "TauExpRunLifecycle" || history.scope.Limit != 25 || history.scope.Window != "24h0m0s" {
 		t.Fatalf("history scope = %+v (calls=%d)", history.scope, history.calls)
 	}
 
@@ -1052,15 +1052,52 @@ func TestRayHistoryPinsSingleWorkspaceDurableScope(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?workspace=other-workspace&namespace=other-namespace&cluster=other-cluster", nil))
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?workspace=other-workspace&namespace=other-namespace&cluster=other-cluster&start=2026-09-16T00%3A00%3A00Z&end=2026-09-17T09%3A00%3A00Z", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if history.timelineCalls != 1 || history.resourceUID != "uid-1" ||
 		history.timelineScope.Cluster != "cluster-a" || history.timelineScope.Namespace != "ray" || history.timelineScope.WorkspaceID != "taugrid-default" ||
-		history.timelineScope.Table != "TauExpRunLifecycle" || history.timelineScope.Kind != "RayJob" || history.timelineScope.Limit != 25 {
+		history.timelineScope.Table != "TauExpRunLifecycle" || history.timelineScope.Kind != "RayJob" || history.timelineScope.Limit != 25 ||
+		history.timelineScope.Start.IsZero() || history.timelineScope.End.IsZero() {
 		t.Fatalf("timeline scope = %+v, resourceUID=%q, calls=%d", history.timelineScope, history.resourceUID, history.timelineCalls)
 	}
+
+	t.Run("invalid ranges stop before history reads", func(t *testing.T) {
+		tests := []struct {
+			name string
+			path string
+			ray  bool
+		}{
+			{name: "runs", path: "/api/portal/runs?window=bad"},
+			{name: "ray", path: "/api/portal/ray?start=bad&end=2026-09-17T09%3A00%3A00Z", ray: true},
+			{name: "ray timeline", path: "/api/portal/ray/history/uid-1?window=0s"},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+					ResourceUID: "uid-1", Namespace: "ray", Cluster: "cluster-a", Kind: "RayJob",
+				}}}
+				opts := Options{
+					Stellar: expapi.Options{Source: "kusto"},
+					Cluster: ClusterOptions{Cluster: "cluster-a"},
+					Runs:    RunsOptions{Reader: &stubRunsReader{}, Namespace: "ray", History: history},
+				}
+				if test.ray {
+					opts.Ray = RayOptions{Reader: &stubRayReader{}, Namespace: "ray"}
+				}
+				server, err := NewServer(opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, test.path, nil))
+				if rec.Code != http.StatusBadRequest || history.calls != 0 || history.timelineCalls != 0 {
+					t.Fatalf("status=%d listCalls=%d timelineCalls=%d body=%s", rec.Code, history.calls, history.timelineCalls, rec.Body.String())
+				}
+			})
+		}
+	})
 }
 
 func TestRayHistoryAllowsSingleWorkspaceClusterWideDurableScope(t *testing.T) {

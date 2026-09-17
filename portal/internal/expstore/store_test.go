@@ -467,6 +467,39 @@ func TestSearchExperimentsAndExplicitRunAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("searches respect inclusive range", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, err := Init(ctx, filepath.Join(t.TempDir(), "store"), InitOptions{
+			Name: "range-experiment", Project: "tau", Group: "baseline",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		for _, run := range []RunRecord{
+			{RunID: "inside", Project: "tau", RunGroupID: "baseline", State: "succeeded", CreatedAt: "2026-06-10T00:00:00Z"},
+			{RunID: "outside", Project: "tau", RunGroupID: "baseline", State: "succeeded", CreatedAt: "2026-06-20T00:00:00Z"},
+		} {
+			if _, err := store.RecordRunData(ctx, RecordRunDataOptions{Run: run}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		runs, err := store.SearchRuns(ctx, RunSearchOptions{Project: "tau", Start: "2026-06-10T00:00:00Z", End: "2026-06-10T00:00:01Z"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.Runs) != 1 || runs.Runs[0].RunID != "inside" {
+			t.Fatalf("range-filtered runs = %+v", runs.Runs)
+		}
+		experiments, err := store.SearchExperiments(ctx, ExperimentSearchOptions{Project: "tau", Start: "2026-06-10T00:00:00Z", End: "2026-06-10T00:00:01Z"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(experiments.Experiments) != 1 || experiments.Experiments[0].ExperimentID != "range-experiment" {
+			t.Fatalf("range-filtered experiments = %+v", experiments.Experiments)
+		}
+	})
 	defer store.Close()
 
 	for _, runID := range []string{"seed-1", "seed-2"} {

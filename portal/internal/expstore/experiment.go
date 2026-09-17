@@ -296,6 +296,21 @@ func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchO
 ))`)
 		args = append(args, since, since)
 	}
+	if opts.Start != "" && opts.End != "" {
+		clauses = append(clauses, `(
+  (e.updated_at >= ? AND e.updated_at <= ?)
+  OR EXISTS (
+    SELECT 1 FROM workspace_run_experiments re
+    JOIN runs r ON r.run_id = re.run_id
+    WHERE re.experiment_id = e.experiment_id AND (
+      (r.created_at >= ? AND r.created_at <= ?) OR
+      (r.started_at != '' AND r.started_at >= ? AND r.started_at <= ?) OR
+      (r.completed_at != '' AND r.completed_at >= ? AND r.completed_at <= ?)
+    )
+  )
+)`)
+		args = append(args, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End)
+	}
 	where := ""
 	if len(clauses) > 0 {
 		where = "WHERE " + strings.Join(clauses, " AND ")

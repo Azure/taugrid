@@ -1641,6 +1641,10 @@ func runSearchOptionsFromRequest(r *http.Request, workspace string) (expstore.Ru
 		}
 		limit = parsed
 	}
+	start, end, since, err := parseHistoricalRangeQuery(r)
+	if err != nil {
+		return expstore.RunSearchOptions{}, err
+	}
 	minStep, err := optionalInt64Query(r, "min_step")
 	if err != nil {
 		return expstore.RunSearchOptions{}, err
@@ -1668,7 +1672,9 @@ func runSearchOptionsFromRequest(r *http.Request, workspace string) (expstore.Ru
 		Tags:          tags,
 		MetricNames:   compactStrings(metricNames),
 		MetricFilters: metricFilters,
-		Since:         strings.TrimSpace(q.Get("since")),
+		Since:         since,
+		Start:         start,
+		End:           end,
 		Limit:         limit,
 		MinStep:       minStep,
 	}, nil
@@ -1683,6 +1689,10 @@ func experimentSearchOptionsFromRequest(r *http.Request, workspace string) (exps
 			return expstore.ExperimentSearchOptions{}, fmt.Errorf("limit must be an integer")
 		}
 		limit = parsed
+	}
+	start, end, since, err := parseHistoricalRangeQuery(r)
+	if err != nil {
+		return expstore.ExperimentSearchOptions{}, err
 	}
 	metricNames := append([]string{}, q["metric_name"]...)
 	if len(metricNames) == 0 {
@@ -1704,7 +1714,9 @@ func experimentSearchOptionsFromRequest(r *http.Request, workspace string) (exps
 		Tags:          tags,
 		MetricNames:   compactStrings(metricNames),
 		MetricFilters: metricFilters,
-		Since:         strings.TrimSpace(q.Get("since")),
+		Since:         since,
+		Start:         start,
+		End:           end,
 		Limit:         limit,
 	}, nil
 }
@@ -1745,6 +1757,46 @@ func compactStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+func parseHistoricalRangeQuery(r *http.Request) (start string, end string, since string, err error) {
+	q := r.URL.Query()
+	since = strings.TrimSpace(q.Get("since"))
+	window := strings.TrimSpace(q.Get("window"))
+	start = strings.TrimSpace(q.Get("start"))
+	end = strings.TrimSpace(q.Get("end"))
+	if since != "" && (window != "" || start != "" || end != "") {
+		return "", "", "", fmt.Errorf("since cannot be combined with window/start/end")
+	}
+	if window != "" {
+		if start != "" || end != "" {
+			return "", "", "", fmt.Errorf("window cannot be combined with start/end")
+		}
+		d, parseErr := time.ParseDuration(window)
+		if parseErr != nil || d <= 0 || d > 30*24*time.Hour {
+			return "", "", "", fmt.Errorf("window must be a positive duration no greater than 30d")
+		}
+		now := time.Now().UTC()
+		return now.Add(-d).Format(time.RFC3339), now.Format(time.RFC3339), "", nil
+	}
+	if start == "" && end == "" {
+		return "", "", since, nil
+	}
+	if start == "" || end == "" {
+		return "", "", "", fmt.Errorf("start and end must be provided together")
+	}
+	startTime, parseErr := time.Parse(time.RFC3339, start)
+	if parseErr != nil {
+		return "", "", "", fmt.Errorf("start must be RFC3339")
+	}
+	endTime, parseErr := time.Parse(time.RFC3339, end)
+	if parseErr != nil {
+		return "", "", "", fmt.Errorf("end must be RFC3339")
+	}
+	if !endTime.After(startTime) || endTime.Sub(startTime) > 30*24*time.Hour {
+		return "", "", "", fmt.Errorf("range must be positive and no greater than 30d")
+	}
+	return startTime.UTC().Format(time.RFC3339), endTime.UTC().Format(time.RFC3339), "", nil
 }
 
 func optionalInt64Query(r *http.Request, name string) (*int64, error) {

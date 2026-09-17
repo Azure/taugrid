@@ -290,6 +290,10 @@ func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (stri
 		clauses = append(clauses, "r.created_at >= ?")
 		args = append(args, since)
 	}
+	if opts.Start != "" && opts.End != "" {
+		clauses = append(clauses, "r.created_at >= ? AND r.created_at <= ?")
+		args = append(args, opts.Start, opts.End)
+	}
 	if opts.Query != "" {
 		like := "%" + strings.ToLower(opts.Query) + "%"
 		clauses = append(clauses, `(lower(r.run_id) LIKE ? OR lower(r.project) LIKE ? OR lower(r.run_group_id) LIKE ? OR lower(coalesce(r.owner, '')) LIKE ? OR lower(coalesce(r.result_uri, '')) LIKE ? OR lower(coalesce(g.name, '')) LIKE ? OR EXISTS (

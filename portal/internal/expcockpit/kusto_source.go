@@ -486,7 +486,7 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 	if err != nil {
 		return expstore.ExperimentSearchResult{}, err
 	}
-	if strings.TrimSpace(opts.Since) == "" && s.hasRemoteQuery() {
+	if strings.TrimSpace(opts.Since) == "" && opts.Start == "" && opts.End == "" && s.hasRemoteQuery() {
 		opts.Since = s.effectiveDiscoverySince()
 	}
 	if s.hasRemoteQuery() {
@@ -504,9 +504,9 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 		return expstore.ExperimentSearchResult{}, err
 	}
 	rows = filterKustoRowsByProjects(rows, rawProjects)
-	if opts.Since != "" {
+	if opts.Since != "" || opts.Start != "" || opts.End != "" {
 		var sinceWarnings []string
-		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since)
+		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since, opts.Start, opts.End)
 		if err != nil {
 			return expstore.ExperimentSearchResult{}, err
 		}
@@ -550,7 +550,7 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 	if err != nil {
 		return expstore.RunSearchResult{}, err
 	}
-	if strings.TrimSpace(opts.Since) == "" && s.hasRemoteQuery() {
+	if strings.TrimSpace(opts.Since) == "" && opts.Start == "" && opts.End == "" && s.hasRemoteQuery() {
 		opts.Since = s.effectiveTargetSince()
 	}
 	rows, warnings, err := s.loadRowsForRunSearch(ctx, opts)
@@ -563,9 +563,9 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 		return expstore.RunSearchResult{}, err
 	}
 	rows = filterKustoRowsByProjects(rows, rawProjects)
-	if opts.Since != "" {
+	if opts.Since != "" || opts.Start != "" || opts.End != "" {
 		var sinceWarnings []string
-		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since)
+		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since, opts.Start, opts.End)
 		if err != nil {
 			return expstore.RunSearchResult{}, err
 		}
@@ -935,6 +935,8 @@ func (s KustoSource) loadRowsForRunSearch(ctx context.Context, opts expstore.Run
 			Project:     opts.Project,
 			MetricNames: opts.MetricNames,
 			Since:       opts.Since,
+			Start:       opts.Start,
+			End:         opts.End,
 			Limit:       opts.Limit,
 		}
 		rows, err := s.runKustoExperimentSearchCommand(ctx, searchOpts)
@@ -1044,12 +1046,18 @@ func (s KustoSource) runKustoExperimentSearchCommand(ctx context.Context, opts e
 	if targetPoints == 0 {
 		targetPoints = expkusto.DefaultTargetPoints
 	}
+	start, end, err := parseKustoRangeOptions(opts.Start, opts.End)
+	if err != nil {
+		return nil, err
+	}
 	query, err := expkusto.BuildExperimentSearchQuery(expkusto.MetricsQueryOptions{
 		WorkspaceID:  s.WorkspaceID,
 		Projects:     projects,
 		Target:       opts.Target,
 		MetricNames:  metricNamesWithKustoRunStatus(opts.MetricNames),
-		Since:        firstNonEmptyString(strings.TrimSpace(opts.Since), s.effectiveDiscoverySince()),
+		Since:        strings.TrimSpace(opts.Since),
+		Start:        start,
+		End:          end,
 		Ingestion:    s.Ingestion,
 		TargetPoints: targetPoints,
 		Limit:        opts.Limit,
@@ -1058,6 +1066,27 @@ func (s KustoSource) runKustoExperimentSearchCommand(ctx context.Context, opts e
 		return nil, err
 	}
 	return s.executeKustoQueryCommand(ctx, query)
+}
+
+func parseKustoRangeOptions(start, end string) (time.Time, time.Time, error) {
+	if start == "" && end == "" {
+		return time.Time{}, time.Time{}, nil
+	}
+	if start == "" || end == "" {
+		return time.Time{}, time.Time{}, fmt.Errorf("start and end must be provided together")
+	}
+	startTime, err := time.Parse(time.RFC3339, start)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("start must be RFC3339")
+	}
+	endTime, err := time.Parse(time.RFC3339, end)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("end must be RFC3339")
+	}
+	if !endTime.After(startTime) || endTime.Sub(startTime) > 30*24*time.Hour {
+		return time.Time{}, time.Time{}, fmt.Errorf("range must be positive and no greater than 30d")
+	}
+	return startTime.UTC(), endTime.UTC(), nil
 }
 
 func (s KustoSource) executeKustoQueryCommand(ctx context.Context, query string) ([]KustoMetricRow, error) {
@@ -1886,7 +1915,43 @@ func compareKustoMetricFilterValue(left float64, op string, right float64) bool 
 	}
 }
 
-func filterKustoRowsSince(rows []KustoMetricRow, since string) ([]KustoMetricRow, []string, error) {
+func filterKustoRowsSince(rows []KustoMetricRow, since, start, end string) ([]KustoMetricRow, []string, error) {
+	if start != "" || end != "" {
+		if since != "" {
+			return nil, nil, fmt.Errorf("since cannot be combined with start/end")
+		}
+		if start == "" || end == "" {
+			return nil, nil, fmt.Errorf("start and end must be provided together")
+		}
+		startTime, err := time.Parse(time.RFC3339, start)
+		if err != nil {
+			return nil, nil, fmt.Errorf("start must be RFC3339")
+		}
+		endTime, err := time.Parse(time.RFC3339, end)
+		if err != nil {
+			return nil, nil, fmt.Errorf("end must be RFC3339")
+		}
+		if !endTime.After(startTime) || endTime.Sub(startTime) > 30*24*time.Hour {
+			return nil, nil, fmt.Errorf("range must be positive and no greater than 30d")
+		}
+		out := make([]KustoMetricRow, 0, len(rows))
+		skippedInvalidTime := 0
+		for _, row := range rows {
+			wallTime, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(row.WallTime))
+			if parseErr != nil {
+				skippedInvalidTime++
+				continue
+			}
+			if !wallTime.Before(startTime) && !wallTime.After(endTime) {
+				out = append(out, row)
+			}
+		}
+		warnings := []string{}
+		if skippedInvalidTime > 0 {
+			warnings = append(warnings, fmt.Sprintf("source=kusto skipped %d rows with unparsable wall_time while applying historical range", skippedInvalidTime))
+		}
+		return out, warnings, nil
+	}
 	cutoff, err := parseKustoSince(since, time.Now())
 	if err != nil {
 		return nil, nil, err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
 )
@@ -30,6 +31,8 @@ type MetricsQueryOptions struct {
 	StartStep                   *int64
 	EndStep                     *int64
 	Since                       string
+	Start                       time.Time
+	End                         time.Time
 	Ingestion                   string
 	TargetPoints                int
 	Limit                       int
@@ -74,6 +77,9 @@ type RunHistoryQueryOptions struct {
 	WorkspaceID string
 	Kind        string
 	Limit       int
+	Window      string
+	Start       time.Time
+	End         time.Time
 }
 
 func BuildMetricsQuery(opts MetricsQueryOptions) (string, error) {
@@ -158,7 +164,15 @@ func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	if opts.Ingestion == "" {
 		opts.Ingestion = "projection"
 	}
-	if opts.Since == "" {
+	if opts.Since != "" && (!opts.Start.IsZero() || !opts.End.IsZero()) {
+		return "", fmt.Errorf("use either since or start/end, not both")
+	}
+	if !opts.Start.IsZero() || !opts.End.IsZero() {
+		if opts.Start.IsZero() || opts.End.IsZero() || !opts.End.After(opts.Start) || opts.End.Sub(opts.Start) > 30*24*time.Hour {
+			return "", fmt.Errorf("start/end must define a positive range no greater than 30d")
+		}
+	}
+	if opts.Since == "" && opts.Start.IsZero() && opts.End.IsZero() {
 		opts.Since = "7d"
 	}
 	if opts.Ingestion != "projection" && opts.Ingestion != "remote-write" {
@@ -186,6 +200,10 @@ func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	writeMetricFilters(&b, opts)
 	if opts.Since != "" {
 		fmt.Fprintf(&b, "| where wall_time > ago(%s)\n", kqlDuration(opts.Since))
+	}
+	if !opts.Start.IsZero() {
+		fmt.Fprintf(&b, "| where wall_time between (datetime(%s) .. datetime(%s))\n",
+			opts.Start.UTC().Format(time.RFC3339), opts.End.UTC().Format(time.RFC3339))
 	}
 	b.WriteString("| where isnotnull(step) and isnotnull(value)\n")
 	b.WriteString(");\n")
@@ -289,6 +307,7 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	opts.LocalQueue = strings.TrimSpace(opts.LocalQueue)
 	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
 	opts.Kind = strings.TrimSpace(opts.Kind)
+	opts.Window = strings.TrimSpace(opts.Window)
 	if opts.Limit == 0 {
 		opts.Limit = 200
 	}
@@ -316,6 +335,9 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	}
 	if opts.Kind != "" {
 		fmt.Fprintf(&b, "| where tolower(owning_resource_kind) == %s\n", kqlString(strings.ToLower(opts.Kind)))
+	}
+	if err := appendHistoricalRange(&b, opts.Window, opts.Start, opts.End); err != nil {
+		return "", err
 	}
 	b.WriteString("| extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))\n")
 	b.WriteString("| where isnotempty(durable_identity)\n")
@@ -373,12 +395,38 @@ func BuildRunHistoryTimelineQuery(opts RunHistoryQueryOptions, resourceUID strin
 	if kind := strings.TrimSpace(opts.Kind); kind != "" {
 		fmt.Fprintf(&b, "| where tolower(owning_resource_kind) == %s\n", kqlString(strings.ToLower(kind)))
 	}
+	if err := appendHistoricalRange(&b, strings.TrimSpace(opts.Window), opts.Start, opts.End); err != nil {
+		return "", err
+	}
 	fmt.Fprintf(&b, "| where resource_uid == %s\n", kqlString(resourceUID))
 	b.WriteString("| project observed_at, observation_id, run_id, durable_id, workspace_id, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, resource_uid, submit_time, created_time, kueue_admitted_time, pod_start_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, tau_command, result_path, result_pvc\n")
 	b.WriteString("| order by observed_at desc\n")
 	fmt.Fprintf(&b, "| take %d\n", opts.Limit)
 	b.WriteString("| order by observed_at asc\n")
 	return b.String(), nil
+}
+
+func appendHistoricalRange(b *strings.Builder, window string, start, end time.Time) error {
+	switch {
+	case window != "" && (!start.IsZero() || !end.IsZero()):
+		return fmt.Errorf("use either window or start/end, not both")
+	case window != "":
+		d, err := time.ParseDuration(window)
+		if err != nil || d <= 0 || d > 30*24*time.Hour {
+			return fmt.Errorf("window must be a positive duration no greater than 30d")
+		}
+		fmt.Fprintf(b, "| where observed_at > ago(%s)\n", window)
+	case !start.IsZero() || !end.IsZero():
+		if start.IsZero() || end.IsZero() {
+			return fmt.Errorf("custom history range requires both start and end")
+		}
+		if !end.After(start) || end.Sub(start) > 30*24*time.Hour {
+			return fmt.Errorf("custom history range must be positive and no greater than 30d")
+		}
+		fmt.Fprintf(b, "| where observed_at between (datetime(%s) .. datetime(%s))\n",
+			start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
+	}
+	return nil
 }
 
 func buildRemoteWriteMetricsQuery(opts MetricsQueryOptions) string {
@@ -412,6 +460,10 @@ func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []
 	b.WriteString(DefaultRemoteWriteTable + "\n")
 	if opts.Since != "" {
 		fmt.Fprintf(&b, "| where Timestamp > ago(%s)\n", kqlDuration(opts.Since))
+	}
+	if !opts.Start.IsZero() {
+		fmt.Fprintf(&b, "| where Timestamp between (datetime(%s) .. datetime(%s))\n",
+			opts.Start.UTC().Format(time.RFC3339), opts.End.UTC().Format(time.RFC3339))
 	}
 	b.WriteString("| extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), project_id=tostring(Labels['project']), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)\n")
 	writeProjectFilter(&b, "project_id", projects)

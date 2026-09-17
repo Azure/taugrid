@@ -92,6 +92,53 @@ func TestWorkspaceScopeIsParsedForExperimentAndRunSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Run("historical range search options", func(t *testing.T) {
+		custom := httptest.NewRequest(http.MethodGet, "/api/stellar/runs?start=2026-09-16T00:00:00Z&end=2026-09-17T09:00:00Z", nil)
+		opts, err := runSearchOptionsFromRequest(custom, "sample")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Start != "2026-09-16T00:00:00Z" || opts.End != "2026-09-17T09:00:00Z" || opts.Since != "" {
+			t.Fatalf("run range options = %+v", opts)
+		}
+		window := httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?window=24h", nil)
+		experimentOpts, err := experimentSearchOptionsFromRequest(window, "sample")
+		if err != nil {
+			t.Fatal(err)
+		}
+		start, startErr := time.Parse(time.RFC3339, experimentOpts.Start)
+		end, endErr := time.Parse(time.RFC3339, experimentOpts.End)
+		if startErr != nil || endErr != nil || end.Sub(start) != 24*time.Hour {
+			t.Fatalf("experiment window options = %+v, errors=%v/%v", experimentOpts, startErr, endErr)
+		}
+	})
+
+	t.Run("historical range rejects invalid input", func(t *testing.T) {
+		for _, raw := range []string{
+			"/api/stellar/runs?window=bad",
+			"/api/stellar/runs?window=24h&start=2026-09-16T00:00:00Z&end=2026-09-17T00:00:00Z",
+			"/api/stellar/runs?since=24h&window=24h",
+			"/api/stellar/runs?start=2026-09-16T00:00:00Z",
+			"/api/stellar/runs?start=2026-09-17T00:00:00Z&end=2026-09-16T00:00:00Z",
+		} {
+			if _, err := runSearchOptionsFromRequest(httptest.NewRequest(http.MethodGet, raw, nil), "sample"); err == nil {
+				t.Fatalf("expected range validation error for %s", raw)
+			}
+		}
+	})
+	t.Run("historical range endpoint returns 400", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/stellar/runs?window=bad",
+			"/api/stellar/experiments?start=2026-09-16T00:00:00Z",
+		} {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		}
+	})
+
 	req := httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?workspace=sample", nil)
 	workspace, err := server.resolveWorkspace(req)
 	if err != nil {

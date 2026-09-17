@@ -976,6 +976,11 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	window, start, end, err := parseHistoricalRange(r.URL.Query())
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
 	if s.ray.Reader == nil {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "ray board unavailable: portal started without Kubernetes access")
 		return
@@ -1006,6 +1011,9 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 			Namespace:   historyNamespace,
 			WorkspaceID: historyWorkspaceID,
 			Limit:       s.runs.HistoryLimit,
+			Window:      historicalWindowValue(window, start),
+			Start:       start,
+			End:         end,
 		},
 	})
 	if err != nil {
@@ -1028,6 +1036,11 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	window, start, end, err := parseHistoricalRange(r.URL.Query())
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
 	resourceUID := strings.TrimPrefix(r.URL.Path, "/api/portal/ray/history/")
 	if resourceUID == "" || strings.Contains(resourceUID, "/") {
 		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/ray/history/{resourceUID}")
@@ -1041,6 +1054,7 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	historyScope := runs.HistoryScope{
 		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: scope.Namespace,
 		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Kind: "RayJob", Limit: s.runs.HistoryLimit,
+		Window: historicalWindowValue(window, start), Start: start, End: end,
 	}
 	if !scope.Managed {
 		historyScope.Cluster = s.singleWorkspaceScope.Cluster
@@ -1148,6 +1162,7 @@ func parseHistoricalRange(q url.Values) (time.Duration, time.Time, time.Time, er
 		if startValue != "" || endValue != "" {
 			return 0, time.Time{}, time.Time{}, fmt.Errorf("use either window or start/end, not both")
 		}
+
 		window, err := time.ParseDuration(windowValue)
 		if err != nil || window <= 0 || window > maxHistoricalWindow {
 			return 0, time.Time{}, time.Time{}, fmt.Errorf("window must be a positive duration no greater than %s", maxHistoricalWindow)
@@ -1177,6 +1192,13 @@ func parseHistoricalRange(q url.Values) (time.Duration, time.Time, time.Time, er
 	return end.Sub(start), start.UTC(), end.UTC(), nil
 }
 
+func historicalWindowValue(window time.Duration, start time.Time) string {
+	if window <= 0 || !start.IsZero() {
+		return ""
+	}
+	return window.String()
+}
+
 // batch/v1 Jobs and ray.io RayJobs — with name, kind, status, and age. It reads
 // via the same Kubernetes reader as Jobs/Ray/Nodes. When the board has no reader
 // (portal started without cluster access) it returns 503; only when *both*
@@ -1190,6 +1212,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	scope, ok := s.localWorkspaceScope(w, r)
 	if !ok {
+		return
+	}
+	window, start, end, err := parseHistoricalRange(r.URL.Query())
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
 		return
 	}
 	if s.runs.Reader == nil {
@@ -1225,6 +1252,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			LocalQueue:  scope.LocalQueue,
 			WorkspaceID: historyWorkspaceID,
 			Limit:       s.runs.HistoryLimit,
+			Window:      historicalWindowValue(window, start),
+			Start:       start,
+			End:         end,
 		},
 	})
 	if err != nil {

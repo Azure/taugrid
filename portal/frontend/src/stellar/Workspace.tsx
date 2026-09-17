@@ -6,12 +6,13 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { boardScopeKey, experimentsAPI, readableQuery, requestRejected, staleReadMessage, useBoard, useScopedURL, useWorkspace } from '../data';
 import { Empty, Note, PageTitle } from '../components';
 import { ChartWorkbench } from './ChartWorkbench';
+import { TimeRangeControls, useHistoricalRange } from '../time-range';
 import { ResearchEvidence } from './ResearchEvidence';
 import { LaunchSummary } from './LaunchSummary';
 import { labelGroups } from './evidence-helpers';
 import { stellarURL } from './api';
 import {
-  defaultMetrics, defaultSections, filterRuns, MAX_PINS, MAX_RUNS, mergeRuns, metricList, preferenceKey, readPreferences,
+  defaultMetrics, defaultSections, filterRuns, MAX_PINS, MAX_RUNS, metricList, preferenceKey, readPreferences,
   refreshEnabled, RUN_PAGE_SIZE, runLifecycle, runTimestamp, savePreferences, scopeIdentity, sectionsFromURL,
   type RunFilters, type Section,
 } from './state';
@@ -113,7 +114,8 @@ export function StellarWorkspace() {
       <p>{scope.experimentsNative?.reason || 'Configure an authorized same-origin experiment backend for this workspace. A legacy remote page URL is not a trusted data connection.'}</p>
       <p>No local experiment data was used. Jobs remain available in the Workloads tab.</p></div></>;
   return <div className="stellar-workspace" key={scopeIdentity(scope)}>
-    <Note>Experiments uses experiment/project/tag search plus run, metric, and step filters. The Portal historical time range does not apply because these APIs do not accept shared start/end bounds.</Note>
+    <Note>Historical range applies to discovery and run search. Local run lists use creation time; local experiment discovery uses experiment updates or child-run lifecycle timestamps; ADX-backed searches use metric row time. Metric step-series remains step-based.</Note>
+    <TimeRangeControls defaultWindow="168h"/>
     <StellarHeader target={target}/>
     {target ? <TargetWorkspace key={target + ':' + (params.get('project') || '')} target={target}/> : <ExperimentDiscovery/>}
   </div>;
@@ -124,7 +126,8 @@ function experimentKey(project: string, target: string) {
 function ExperimentDiscovery() {
   const { params, update } = useURLState();
   const search = params.get('experiment_q') || '', project = params.get('experiment_project') ?? params.get('project') ?? '', tag = params.get('experiment_tag') || '';
-  const query = readableQuery(useBoard<ExperimentSearchResult>(stellarURL('experiments', { q: search.trim(), project, tag, limit: 100 })));
+  const range = useHistoricalRange('168h');
+  const query = readableQuery(useBoard<ExperimentSearchResult>(stellarURL('experiments', { q: search.trim(), project, tag, limit: 100, ...Object.fromEntries(new URLSearchParams(range.api)) })));
   const [target, setTarget] = useState('');
   const expanded = new Set((params.get('experiments') || '').split(',').filter(Boolean));
   return <div className="stellar-discovery">
@@ -189,7 +192,8 @@ function latestRunValue(run: Run, snapshot: Snapshot | undefined, metric: string
   return value !== undefined && Number.isFinite(value) ? value.toFixed(3) : '—';
 }
 function ExperimentRuns({ target, project }: { target: string; project: string }) {
-  const query = readableQuery(useBoard<RunSearchResult>(stellarURL('runs', { target, project, limit: RUN_PAGE_SIZE })));
+  const range = useHistoricalRange('168h');
+  const query = readableQuery(useBoard<RunSearchResult>(stellarURL('runs', { target, project, limit: RUN_PAGE_SIZE, ...Object.fromEntries(new URLSearchParams(range.api)) })));
   const { update } = useURLState();
   return <QueryResult query={query} name={`Runs for ${target}`}>{data => <ul className="stellar-preview-runs">{data.runs?.map(run => <li key={run.run_id}>
     <button type="button" className="stellar-link" onClick={() => update({ target: run.run_id, project }, false)}>{run.run_id}</button> <span>{runLifecycle(run).replaceAll('_', ' ')}</span>
@@ -197,6 +201,7 @@ function ExperimentRuns({ target, project }: { target: string; project: string }
 }
 function TargetWorkspace({ target }: { target: string }) {
   const { scope } = useWorkspace(), { params, update } = useURLState();
+  const range = useHistoricalRange('168h');
   const key = preferenceKey(scope, (params.get('project') || '') + ':' + target);
   const [saved, setSaved] = useState(() => readPreferences(key));
   const [limit, setLimit] = useState(RUN_PAGE_SIZE);
@@ -213,7 +218,7 @@ function TargetWorkspace({ target }: { target: string }) {
     return () => media.removeEventListener('change', changed);
   }, []);
   const query = readableQuery(useBoard<Snapshot>(stellarURL('snapshot', { target, mode: 'summary', project: params.get('project') || undefined })));
-  const more = readableQuery(useBoard<RunSearchResult>(stellarURL('runs', { target, limit, project: params.get('project') || undefined }), limit > RUN_PAGE_SIZE));
+  const more = readableQuery(useBoard<RunSearchResult>(stellarURL('runs', { target, limit, project: params.get('project') || undefined, ...Object.fromEntries(new URLSearchParams(range.api)) })));
   useEffect(() => {
     if (requestRejected(more.error) || requestRejected(query.error)) setPreviousPage(undefined);
     else if (more.data) setPreviousPage({ data: more.data, dataUpdatedAt: more.dataUpdatedAt });
@@ -239,13 +244,13 @@ function TargetWorkspace({ target }: { target: string }) {
     lifecycle: (params.get('lifecycle') || '').replace(/^stale$/, 'not_responding'),
     updated: params.get('updated') || '', sort: params.get('updated_sort') || '' };
   const page = requestRejected(more.error) || !query.data ? undefined : more.data || previousPage?.data;
-  const runs = query.data ? mergeRuns(query.data.runs || [], page?.runs || []) : [];
+  const runs = query.data ? page?.runs || [] : [];
   const augmentedSnapshot = query.data ? { ...query.data, runs: runs.map(run =>
     'systems' in run ? run : { ...run, systems: [], observe_cli: '' }) } : undefined;
   const listed = filterRuns(runs, filters);
   const visibleRunIds = listed.filter(run => !hidden.has(run.run_id)).map(run => run.run_id);
-  const total = Math.max(query.data?.status?.runs || 0, page?.total || 0, runs.length);
-  const canLoad = limit < MAX_RUNS && (page ? page.truncated : total > runs.length || runs.length >= RUN_PAGE_SIZE);
+  const total = Math.max(page?.total || 0, runs.length);
+  const canLoad = limit < MAX_RUNS && !!page?.truncated;
   function setMetrics(next: string[]) {
     const pins = metricList(next);
     setSaved(value => ({ ...value, metrics: pins }));
