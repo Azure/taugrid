@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { boardScopeKey, experimentsAPI, readableQuery, requestRejected, staleReadMessage, useBoard, useScopedURL, useWorkspace } from '../data';
-import { Empty, PageTitle } from '../components';
+import { Empty, Note, PageTitle } from '../components';
 import { ChartWorkbench } from './ChartWorkbench';
 import { ResearchEvidence } from './ResearchEvidence';
 import { LaunchSummary } from './LaunchSummary';
@@ -113,6 +113,7 @@ export function StellarWorkspace() {
       <p>{scope.experimentsNative?.reason || 'Configure an authorized same-origin experiment backend for this workspace. A legacy remote page URL is not a trusted data connection.'}</p>
       <p>No local experiment data was used. Jobs remain available in the Workloads tab.</p></div></>;
   return <div className="stellar-workspace" key={scopeIdentity(scope)}>
+    <Note>Experiments uses experiment/project/tag search plus run, metric, and step filters. The Portal historical time range does not apply because these APIs do not accept shared start/end bounds.</Note>
     <StellarHeader target={target}/>
     {target ? <TargetWorkspace key={target + ':' + (params.get('project') || '')} target={target}/> : <ExperimentDiscovery/>}
   </div>;

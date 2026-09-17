@@ -38,6 +38,7 @@ export function BoardResult<T>({ query: result, label, children, hint = '', part
       : query.error ? (hasData ? 'Stale snapshot; refresh failed.' : 'Unavailable.')
         : partial ? 'Some sources unavailable; see section diagnostics.'
           : query.isStale ? 'Stale snapshot; refresh for current data.' : 'Snapshot; not live.';
+  const errorMessage = query.error && readableBoardError(query.error, label);
   return <section className="data-panel" aria-label={label}>
     <div className="panel-status">
       <span role="status">{label}: {status}{!embedded && hasData && query.dataUpdatedAt > 0 && <>
@@ -47,10 +48,29 @@ export function BoardResult<T>({ query: result, label, children, hint = '', part
         onClick={() => { void query.refetch(); }}>{query.isFetching ? 'Refreshing…' : action}</button>}
     </div>
     <div aria-busy={query.isFetching}>
-      {query.error && <div className="empty warn" role="alert">{label} {hasData ? 'refresh failed' : 'unavailable'}: {query.error.message}{hint}. {staleReadMessage(query)}</div>}
+      {query.error && <div className="empty warn board-error" role="alert">
+        <strong>{label} {hasData ? 'refresh failed' : 'unavailable'}.</strong>
+        <span>{errorMessage}{hint} {staleReadMessage(query)}</span>
+        {errorMessage !== query.error.message && <details><summary>Technical details</summary><code>{query.error.message}</code></details>}
+      </div>}
       {query.data !== undefined && children(query.data)}
     </div>
   </section>;
+}
+function readableBoardError(error: Error, label: string): string {
+  if (/no such host|dns|lookup .*host|server misbehaving/i.test(error.message)) {
+    return 'Azure Data Explorer cannot be reached because its DNS endpoint is unavailable. The cluster may still be stopped; retry after it finishes starting.';
+  }
+  if (/cluster.*stopped|stopped.*cluster/i.test(error.message)) {
+    return 'Azure Data Explorer is stopped. Start the cluster, wait for it to become available, then retry.';
+  }
+  if (/without (a )?Kusto query/i.test(error.message)) {
+    return `${label} has no Azure Data Explorer query source configured.`;
+  }
+  if (/timed? ?out|deadline exceeded|context deadline/i.test(error.message)) {
+    return 'The data source did not respond before the request deadline. Retry after it finishes starting.';
+  }
+  return error.message;
 }
 export function ScopedLink({ to, children, className, title, external = false }: { to: string; children: ReactNode; className?: string; title?: string; external?: boolean }) {
   const scoped = useScopedURL();

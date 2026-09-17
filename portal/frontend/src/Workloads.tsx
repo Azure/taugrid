@@ -45,6 +45,7 @@ export function RunsBoard() {
   const query = useBoard<Runs>('/api/portal/runs');
   return <><div className="page-head"><div><PageTitle title="Jobs">Tau-managed training and inference workloads.</PageTitle></div>
     <button className="btn-primary" disabled title="Submission from the portal is coming soon — the portal is read-only today.">+ Submit new</button></div>
+    <Note>Running and queued workloads are real-time Kubernetes snapshots. Recent durable run history uses the server-configured workspace scope and row limit; custom historical time filtering is not supported.</Note>
     <BoardResult query={query} label="Jobs board" hint={kubeHint}>{snap => {
       const runs = snap.runs || [];
       const groups = [
@@ -70,6 +71,7 @@ export function JobDetailBoard() {
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
   const active = ['overview', 'pods', 'events', 'results'].includes(requested) ? requested : 'overview';
   return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to="/portal/runs" className="back">← Back to Jobs</ScopedLink></div>
+    <Note>Object, Kueue, pod, and event sections are current Kubernetes snapshots. Durable lifecycle/results show the retained record for this run; historical time filtering is not supported.</Note>
     {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
       <div className="detail-meta"><Status value={snap.kind} tone="kind"/><Status value={snap.status}/>
         {snap.resourceRelease && <span className={'badge' + (snap.resourceRelease.computeState === 'reusable' ? '' : ' warn')} title={snap.resourceRelease.message}>quota {snap.resourceRelease.quotaState || 'unknown'} · compute {snap.resourceRelease.computeState || 'unknown'}</span>}
@@ -108,6 +110,7 @@ function JobOverview({ snap }: { snap: JobDetail }) {
 export function RayBoard() {
   const query = useBoard<Ray>('/api/portal/ray');
   return <><PageTitle title="Ray">Per-cluster Ray dashboards discovered from &lt;cluster&gt;-head-svc Services, via /api/portal/ray. The dashboard is proxied live by the portal and is only available while the RayCluster is running; finished RayJobs remain visible under RayJob history.</PageTitle>
+    <Note>Ray dashboards and cluster discovery are real-time Kubernetes surfaces with no historical filtering. RayJob history uses the server-configured durable-history scope and row limit; custom time filtering is not supported.</Note>
     <BoardResult query={query} label="Ray board" hint={kubeHint}>{snap => <><Note>clusters: {snap.total ?? 0}</Note>
       {!snap.clusters?.length ? <Empty>No Ray clusters found. Either no RayClusters are running, or the portal has no Kubernetes access.</Empty>
         : <Table headers={['Cluster', 'Namespace', 'Service', 'Type', 'Dashboard']} rows={snap.clusters.map(c => [text(c.name), text(c.namespace), text(c.service), text(c.type),
@@ -121,6 +124,7 @@ export function RayHistoryBoard() {
   const { resourceUID = '' } = useParams();
   const query = useBoard<RayHistory>('/api/portal/ray/history/' + encodeURIComponent(resourceUID), !!resourceUID);
   return <><ScopedLink to="/portal/ray" className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
+    <Note>This page shows all retained lifecycle observations returned for one resource UID. Custom historical time filtering is not supported.</Note>
     <BoardResult query={query} label="Durable RayJob history">{snap => {
       const last = snap.events?.at(-1);
       return !last ? <Empty>No durable lifecycle observations found.</Empty> : <><h2>Durable run metadata</h2><KV rows={[

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 )
@@ -128,6 +129,19 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("KQL missing %q:\n%s", want, kql)
 		}
+	}
+}
+
+func TestBuildKQLCustomBounds(t *testing.T) {
+	start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
+	kql := buildKQL(Options{Window: end.Sub(start), Start: start, End: end})
+	want := "Timestamp >= datetime(2026-09-16T00:00:00Z) and Timestamp <= datetime(2026-09-17T09:00:00Z)"
+	if strings.Count(kql, want) != 3 {
+		t.Fatalf("custom bounds must scope CPU and both memory legs:\n%s", kql)
+	}
+	if strings.Contains(kql, "ago(") {
+		t.Fatalf("custom bounds must not use a relative window:\n%s", kql)
 	}
 }
 

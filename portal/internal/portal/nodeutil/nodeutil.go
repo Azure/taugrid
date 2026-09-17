@@ -58,6 +58,8 @@ const maxSamplesPerCore = 4096
 // back to the frontend as the row's instance field.
 type Options struct {
 	Window   time.Duration
+	Start    time.Time
+	End      time.Time
 	Cluster  string
 	Instance string
 }
@@ -121,6 +123,11 @@ func queryWindow(opts Options) time.Duration {
 // Unioning latest memory readings retains nodes with no CPU observations.
 func buildKQL(opts Options) string {
 	seconds := int64(queryWindow(opts) / time.Second)
+	timeFilter := fmt.Sprintf("Timestamp > ago(%ds) and Timestamp <= now()", seconds)
+	if !opts.Start.IsZero() && !opts.End.IsZero() {
+		timeFilter = fmt.Sprintf("Timestamp >= datetime(%s) and Timestamp <= datetime(%s)",
+			opts.Start.UTC().Format(time.RFC3339Nano), opts.End.UTC().Format(time.RFC3339Nano))
+	}
 
 	// scope is the optional cluster/host filter appended to each table leg so the
 	// CPU and memory sides see the same nodes. Host is node-exporter's node key;
@@ -135,7 +142,7 @@ func buildKQL(opts Options) string {
 
 	var b strings.Builder
 	b.WriteString("let cpuSamples = NodeCpuSecondsTotal\n")
-	fmt.Fprintf(&b, "  | where Timestamp > ago(%ds) and Timestamp <= now() and tostring(Labels.mode) == 'idle'\n", seconds)
+	fmt.Fprintf(&b, "  | where %s and tostring(Labels.mode) == 'idle'\n", timeFilter)
 	b.WriteString(scope.String())
 	b.WriteString("  | extend cpu = tostring(Labels.cpu);\n")
 	b.WriteString("let cpuSampleCount = toscalar(cpuSamples | count);\n")
@@ -143,12 +150,12 @@ func buildKQL(opts Options) string {
 	fmt.Fprintf(&b, "  | summarize samples = make_list(bag_pack('timestamp', Timestamp, 'value', todouble(Value)), %d), sampleCount = count() by Cluster, Host, cpu\n", maxSamplesPerCore)
 	b.WriteString("  | project Cluster, instance = Host, ['kind'] = 'cpu', cpu, samples, sampleCount;\n")
 	b.WriteString("let memTotal = NodeMemoryMemTotalBytes\n")
-	fmt.Fprintf(&b, "  | where Timestamp > ago(%ds) and Timestamp <= now()\n", seconds)
+	fmt.Fprintf(&b, "  | where %s\n", timeFilter)
 	b.WriteString(scope.String())
 	b.WriteString("  | summarize arg_max(Timestamp, Value) by Cluster, Host\n")
 	b.WriteString("  | project Cluster, instance = Host, ['kind'] = 'memory_total', memoryValue = todouble(Value), memoryTimestamp = Timestamp;\n")
 	b.WriteString("let memAvail = NodeMemoryMemAvailableBytes\n")
-	fmt.Fprintf(&b, "  | where Timestamp > ago(%ds) and Timestamp <= now()\n", seconds)
+	fmt.Fprintf(&b, "  | where %s\n", timeFilter)
 	b.WriteString(scope.String())
 	b.WriteString("  | summarize arg_max(Timestamp, Value) by Cluster, Host\n")
 	b.WriteString("  | project Cluster, instance = Host, ['kind'] = 'memory_available', memoryValue = todouble(Value), memoryTimestamp = Timestamp;\n")

@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/queue"
@@ -697,6 +699,77 @@ func TestClusterBoardServesSnapshot(t *testing.T) {
 	// The ?instance= filter must reach the KQL builder.
 	if !strings.Contains(q.lastKQL, "instance == @'node-0'") {
 		t.Fatalf("instance filter not applied to KQL:\n%s", q.lastKQL)
+	}
+}
+
+func TestHistoricalRangeValidation(t *testing.T) {
+	validStart := "2026-09-16T00:00:00Z"
+	validEnd := "2026-09-17T09:00:00Z"
+	tests := []struct {
+		name      string
+		query     string
+		wantError string
+		want      time.Duration
+	}{
+		{name: "duration", query: "window=24h", want: 24 * time.Hour},
+		{name: "custom", query: "start=" + url.QueryEscape(validStart) + "&end=" + url.QueryEscape(validEnd), want: 33 * time.Hour},
+		{name: "malformed duration", query: "window=tomorrow", wantError: "window must be"},
+		{name: "zero duration", query: "window=0s", wantError: "window must be"},
+		{name: "duration too long", query: "window=721h", wantError: "window must be"},
+		{name: "missing end", query: "start=" + url.QueryEscape(validStart), wantError: "requires both"},
+		{name: "mixed", query: "window=1h&start=" + url.QueryEscape(validStart) + "&end=" + url.QueryEscape(validEnd), wantError: "either window or start/end"},
+		{name: "malformed start", query: "start=bad&end=" + url.QueryEscape(validEnd), wantError: "start must be"},
+		{name: "reverse custom", query: "start=" + url.QueryEscape(validEnd) + "&end=" + url.QueryEscape(validStart), wantError: "end must be after start"},
+		{name: "custom too long", query: "start=2026-08-01T00%3A00%3A00Z&end=" + url.QueryEscape(validEnd), wantError: "must not exceed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			values, err := url.ParseQuery(tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			window, start, end, err := parseHistoricalRange(values)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("error = %v, want containing %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseHistoricalRange: %v", err)
+			}
+			if window != tc.want {
+				t.Fatalf("window = %s, want %s", window, tc.want)
+			}
+			if tc.name == "custom" && (start.Format(time.RFC3339) != validStart || end.Format(time.RFC3339) != validEnd) {
+				t.Fatalf("bounds = %s to %s, want %s to %s", start, end, validStart, validEnd)
+			}
+		})
+	}
+}
+
+func TestHistoricalHandlersRejectInvalidRanges(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		opts Options
+	}{
+		{name: "cluster", path: "/api/portal/cluster?window=bad", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cluster: ClusterOptions{Querier: &stubClusterQuerier{}}}},
+		{name: "cost", path: "/api/portal/cost?start=bad&end=2026-09-17T09%3A00%3A00Z", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cost: CostOptions{Querier: &stubCostQuerier{}}}},
+		{name: "node util", path: "/api/portal/nodeutil?window=1h&start=2026-09-16T00%3A00%3A00Z&end=2026-09-17T09%3A00%3A00Z", opts: Options{Stellar: expapi.Options{Source: "kusto"}, NodeUtil: NodeUtilOptions{Querier: &stubClusterQuerier{}}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, err := NewServer(tc.opts)
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
