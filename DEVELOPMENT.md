@@ -131,68 +131,6 @@ BuildKit command, then run its unit and smoke tests.
 Do not publish from a contributor pull request. Release workflows own signing,
 SBOM generation, vulnerability scanning, and promotion to MCR.
 
-### Remote ACR preview images
-
-Tau Release previews build exactly three TauGrid images: `tau`,
-`taugrid-portal`, and `tau-core-controller`. The repository provides explicit
-native `linux/amd64` ACR Tasks commands and does not require Docker, QEMU,
-Skaffold, or a Kubernetes cluster.
-
-Authenticate Azure CLI to the subscription containing
-`aksairuntime.azurecr.io`, then build one, several, or all named images:
-
-```bash
-./scripts/acr-build-images.sh --namespace kevin tau
-./scripts/acr-build-images.sh --namespace kevin tau taugrid-portal
-./scripts/acr-build-images.sh \
-  --namespace kevin \
-  --output .taugrid/images.json \
-  all
-```
-
-Equivalent Make targets are `acr-build-tau`, `acr-build-taugrid-portal`,
-`acr-build-tau-core-controller`, and `acr-build-all`; pass
-`DEV_NAMESPACE=<name>` and optionally `OUTPUT=<path>`.
-
-The script has a closed image-name enum. It selects each checked-in Dockerfile
-and uploads a bounded context containing that Dockerfile plus the image's
-tracked or unignored local source, including dirty and unpushed worktree
-changes. Every invocation uses a unique `dev-<UTC>-<commit>-<pid>` tag under
-`aksairuntime.azurecr.io/dev/<namespace>/<image>`, resolves the pushed manifest
-digest, and prints the immutable `:<tag>@sha256:<digest>` reference. ACR's
-native layer cache remains available for identical inputs; the script adds no
-change detection or custom cache.
-
-The stable component metadata is in
-[`scripts/lib/image-specs.sh`](scripts/lib/image-specs.sh). Local Kind tooling
-can source `taugrid_image_spec <name>` to reuse the repository name,
-repository-root context and Dockerfile, and source paths while retaining its own
-Podman/Docker tags, build engine, and image-loading behavior. ACR is not a
-dependency of the Kind workflow.
-
-When `--output` is set, the script atomically writes this tool-neutral contract:
-
-```json
-{
-  "schemaVersion": "taugrid.azure.com/acr-build-output/v1",
-  "registry": "aksairuntime.azurecr.io",
-  "images": [
-    {
-      "name": "tau",
-      "reference": "aksairuntime.azurecr.io/dev/kevin/tau:dev-...@sha256:...",
-      "tag": "dev-...",
-      "digest": "sha256:..."
-    }
-  ]
-}
-```
-
-Validate the commands and output schema without contacting ACR:
-
-```bash
-make acr-build-check
-```
-
 ## Portable Integration Tests
 
 Prefer offline rendering, unit tests, and Kind for pull-request validation.
