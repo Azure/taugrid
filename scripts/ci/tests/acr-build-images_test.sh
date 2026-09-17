@@ -10,10 +10,33 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd -P)"
 readonly REPO_ROOT
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/taugrid-acr-test.XXXXXX")"
 readonly TEST_ROOT
+# shellcheck source=scripts/lib/image-specs.sh
+source "${REPO_ROOT}/scripts/lib/image-specs.sh"
 cleanup() {
   rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
+
+expected_names="$(taugrid_image_names)"
+[[ "$expected_names" == $'tau\ntaugrid-portal\ntau-core-controller' ]]
+
+taugrid_image_spec tau
+[[ "$TAUGRID_IMAGE_REPOSITORY" == "tau" ]]
+[[ "$TAUGRID_IMAGE_DOCKERFILE" == "images/tau/Dockerfile" ]]
+[[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/tau/Dockerfile cli core" ]]
+
+taugrid_image_spec taugrid-portal
+[[ "$TAUGRID_IMAGE_DOCKERFILE" == "images/taugrid-portal/Dockerfile" ]]
+[[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/taugrid-portal/Dockerfile portal core" ]]
+
+taugrid_image_spec tau-core-controller
+[[ "$TAUGRID_IMAGE_DOCKERFILE" == "images/tau-core-controller/Dockerfile" ]]
+[[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/tau-core-controller/Dockerfile controllers/tau-core core" ]]
+
+if taugrid_image_spec unknown >/dev/null 2>&1; then
+  echo "image specs accepted an unknown image" >&2
+  exit 1
+fi
 
 cat >"${TEST_ROOT}/az" <<'EOF'
 #!/usr/bin/env bash
@@ -89,23 +112,23 @@ AZ_BIN="${TEST_ROOT}/az" AZ_BUILDS_FILE="$BUILDS" \
   --namespace pr-123 \
   --output "$COMPLETE_OUTPUT" \
   all >/dev/null
-python3 "${REPO_ROOT}/scripts/ci/validate-acr-build-output.py" \
-  "$COMPLETE_OUTPUT" \
-  pr-123
-python3 - "$COMPLETE_OUTPUT" "${TEST_ROOT}/mutable-images.json" <<'PY'
+python3 - "$COMPLETE_OUTPUT" <<'PY'
 import json
+import re
 import sys
 
 document = json.load(open(sys.argv[1]))
-document["images"][0]["reference"] = document["images"][0]["reference"].split("@")[0]
-json.dump(document, open(sys.argv[2], "w"))
+assert document["schemaVersion"] == "taugrid.azure.com/acr-build-output/v1"
+assert document["registry"] == "aksairuntime.azurecr.io"
+assert {image["name"] for image in document["images"]} == {
+    "tau",
+    "taugrid-portal",
+    "tau-core-controller",
+}
+for image in document["images"]:
+    assert image["reference"].endswith(f":{image['tag']}@{image['digest']}")
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", image["digest"])
 PY
-if python3 "${REPO_ROOT}/scripts/ci/validate-acr-build-output.py" \
-  "${TEST_ROOT}/mutable-images.json" \
-  pr-123 >/dev/null 2>&1; then
-  echo "output validator accepted a mutable image reference" >&2
-  exit 1
-fi
 
 : >"$BUILDS"
 AZ_BIN="${TEST_ROOT}/az" AZ_BUILDS_FILE="$BUILDS" \

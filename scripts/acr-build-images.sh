@@ -11,6 +11,8 @@ readonly REPO_ROOT
 readonly ACR_NAME="aksairuntime"
 readonly ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
 readonly AZ="${AZ_BIN:-az}"
+# shellcheck source=scripts/lib/image-specs.sh
+source "${SCRIPT_DIR}/lib/image-specs.sh"
 
 usage() {
   cat <<'EOF'
@@ -85,9 +87,9 @@ for image in "${IMAGES[@]}"; do
       add_image "$image"
       ;;
     all)
-      add_image tau
-      add_image taugrid-portal
-      add_image tau-core-controller
+      while IFS= read -r image_name; do
+        add_image "$image_name"
+      done < <(taugrid_image_names)
       ;;
     *)
       echo "unsupported image: ${image}" >&2
@@ -112,14 +114,15 @@ trap cleanup EXIT
 
 build_image() {
   local image="$1"
-  local dockerfile
-  local -a source_paths
   local -a build_args=()
+
+  taugrid_image_spec "$image"
+  local dockerfile="$TAUGRID_IMAGE_DOCKERFILE"
+  local repository_name="$TAUGRID_IMAGE_REPOSITORY"
+  local -a source_paths=("${TAUGRID_IMAGE_SOURCE_PATHS[@]}")
 
   case "$image" in
     tau)
-      dockerfile="images/tau/Dockerfile"
-      source_paths=("images/tau/Dockerfile" "cli" "core")
       build_args=(
         --build-arg "VERSION=${BUILD_TAG}"
         --build-arg "COMMIT=${COMMIT}"
@@ -127,18 +130,13 @@ build_image() {
       )
       ;;
     taugrid-portal)
-      dockerfile="images/taugrid-portal/Dockerfile"
-      source_paths=("images/taugrid-portal/Dockerfile" "portal" "core")
       build_args=(
         --build-arg "VERSION=${BUILD_TAG}"
         --build-arg "COMMIT=${COMMIT}"
         --build-arg "DATE=${DATE}"
       )
       ;;
-    tau-core-controller)
-      dockerfile="images/tau-core-controller/Dockerfile"
-      source_paths=("images/tau-core-controller/Dockerfile" "controllers/tau-core" "core")
-      ;;
+    tau-core-controller) ;;
   esac
 
   local staging_root
@@ -176,7 +174,7 @@ content = re.sub(
 dockerfile.write_text(content)
 PY
 
-  local repository="dev/${DEV_NAMESPACE}/${image}"
+  local repository="dev/${DEV_NAMESPACE}/${repository_name}"
   (
     cd "$context_dir"
     "$AZ" acr build \

@@ -163,6 +163,13 @@ digest, and prints the immutable `:<tag>@sha256:<digest>` reference. ACR's
 native layer cache remains available for identical inputs; the script adds no
 change detection or custom cache.
 
+The stable component metadata is in
+[`scripts/lib/image-specs.sh`](scripts/lib/image-specs.sh). Local Kind tooling
+can source `taugrid_image_spec <name>` to reuse the repository name,
+repository-root Dockerfile, and source paths while retaining its own
+Podman/Docker tags, build engine, and image-loading behavior. ACR is not a
+dependency of the Kind workflow.
+
 When `--output` is set, the script atomically writes this tool-neutral contract:
 
 ```json
@@ -185,22 +192,6 @@ Validate the commands and output schema without contacting ACR:
 ```bash
 make acr-build-check
 ```
-
-For same-repository pull requests that change one of the three image build
-contexts, [TauGrid PR Images](.github/workflows/taugrid-pr-images.yml) checks
-out the exact PR head revision, authenticates to Azure through GitHub OIDC,
-and invokes the same script with `--namespace pr-<number> --output <path> all`.
-The workflow uploads the validated v1 JSON as
-`taugrid-pr-<number>-images` and writes all three immutable references to the
-job summary. A newer revision reuses the same per-PR repository namespace but
-always receives unique tags and digest-qualified deployment references.
-
-Fork pull requests never receive Azure credentials or execute the remote build.
-Their workflow job records an explicit skip reason instead. The workflow only
-builds and publishes developer images; it does not deploy to Flex or invoke
-Tau Release. Same-repository PRs also record an explicit skip when the three
-documented Azure OIDC secrets are not configured; once all three are available,
-the credentialed steps run automatically.
 
 ## Portable Integration Tests
 
