@@ -18,6 +18,8 @@ required = [
     "secrets.AZURE_E2E_CLIENT_ID",
     "secrets.AZURE_E2E_TENANT_ID",
     "secrets.AZURE_E2E_SUBSCRIPTION_ID",
+    "steps.azure-config.outputs.available == 'true'",
+    "Skipped the ACR build because the repository Azure OIDC secrets are not configured.",
     "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906",
     '--namespace "pr-${PR_NUMBER}"',
     "--output \"$OUTPUT_FILE\"",

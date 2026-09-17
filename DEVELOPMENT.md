@@ -198,7 +198,9 @@ always receives unique tags and digest-qualified deployment references.
 Fork pull requests never receive Azure credentials or execute the remote build.
 Their workflow job records an explicit skip reason instead. The workflow only
 builds and publishes developer images; it does not deploy to Flex or invoke
-Tau Release.
+Tau Release. Same-repository PRs also record an explicit skip when the three
+documented Azure OIDC secrets are not configured; once all three are available,
+the credentialed steps run automatically.
 
 ## Portable Integration Tests
 
