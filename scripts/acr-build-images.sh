@@ -145,7 +145,7 @@ build_image() {
   esac
 
   local staging_root
-  staging_root="$(mktemp -d "${TMPDIR:-/tmp}/taugrid-acr-build.XXXXXX")"
+  staging_root="$(mktemp -d "${RESULTS_DIR}/build.XXXXXX")"
   local file_list="${staging_root}/files"
   local context_dir="${staging_root}/context"
   mkdir -p "$context_dir"
