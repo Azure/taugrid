@@ -187,6 +187,143 @@ but removes the matching temporary event rule. The check returns NPD's
 Unknown exit status rather than incorrectly publishing `DcgmHealthOk`; the
 detailed rollout semantics are documented below.
 
+### Continuous GPU metric coverage
+
+`DcgmExporterUnavailable=False` proves HTTP reachability, not that every
+physical GPU supplied every health field used by the rules. The default
+NVIDIA/AKS profile provides general telemetry, XID, PCIe replay, and
+row-remapping fields, but does not enable the deeper ECC and NVLink counters.
+
+Those deeper rules are disabled by default. Opt in only after verifying that
+the target GPU generation and DCGM version support the reduced field set:
+
+```yaml
+metricsCollector:
+  extendedHealthChecks: true
+```
+
+The extended set covers volatile and retired-page ECC, aggregate NVLink replay,
+and Grace CPU ECC. The retired-page rules use `DCGM_FI_DEV_RETIRED_DBE` and
+`DCGM_FI_DEV_RETIRED_SBE`; aggregate ECC totals are not treated as retired
+pages. Grace CPU ECC uses node-exporter's `node_memory_ECC_*` metrics rather
+than nonexistent DCGM fields. Raw NVLink CRC and power/thermal throttling
+duration rules are deliberately excluded: individual increments do not
+provide a portable hardware-health threshold across GPU generations.
+
+For fail-closed per-GPU coverage, publish and pin a collector image with the
+metric-coverage contract, then additionally set:
+
+```yaml
+metricsCollector:
+  extendedHealthChecks: true
+  requireMetricCoverage: true
+dcgmExporterMetrics:
+  enabled: true
+  namespace: gpu-operator
+  name: gpu-monitoring-dcgm-metrics
+```
+
+The continuous rules marked `perGpu: true` then require `num_gpus` distinct
+`UUID` values for their profile. The marker is chart-only; the rendered rule
+fields are `minSamples` and `sampleLabel`. Sparse XID event selectors remain
+optional. Missing or incomplete continuous readings become Kubernetes
+`Unknown`, not `False/...Ok`; rate baselines also need consecutive
+observations. Known faults remain `True` even if another device lacks data.
+
+Coverage defaults **off** because the currently pinned public collector digest
+predates this support. Enabling it adds `--require-metric-coverage`: old images
+reject the flag instead of silently ignoring coverage fields, and the new image
+rejects a config containing no coverage rules. Do not enable it against the
+legacy image. Source merge, approved image publication, digest pinning, and
+coverage activation are separate rollout steps.
+
+InfiniBand link-down and symbol-error rules use node-exporter's actual metric
+families, `node_infiniband_link_downed_total` and
+`node_infiniband_symbol_error_total`. For profiles with `ib_devices`, the chart
+derives the exact device names from that contract, renders them as
+`requiredSampleValues`, and requires every declared device to provide a current
+sample. Extra interfaces cannot replace a missing expected device. A
+coverage-capable collector publishes non-firing reasons
+`IBLinkDownObserved` and `IBSymbolErrorObserved`; missing devices, stale samples,
+or an incomplete rate baseline publish `Unknown`.
+
+The collector digest pinned by chart `0.1.7` predates
+`requiredSampleValues` and the coverage-aware reason contract. It ignores those
+new rule fields and continues to publish legacy `...Ok` reasons. Portal
+consumers must treat those legacy reasons as unverified, never healthy. To
+enable verified InfiniBand success, first merge the collector source, publish
+the merged-main image, verify its source revision and multi-architecture
+digest, and update `metricsCollector.image.digest`. Until that release sequence
+completes, the honest Portal state is `Unknown`; do not relax the consumer to
+make it green.
+
+The optional ConfigMap contains a reduced `dcgm-metrics.csv`: NVIDIA's normal
+telemetry fields plus only the extended ECC and aggregate NVLink replay inputs.
+It does not include per-link counters, raw CRC counters, or power/thermal
+throttling-duration fields. Enabling the ConfigMap requires
+`extendedHealthChecks: true`, but it still does **not** change another release's
+exporter or a GPU Operator `ClusterPolicy`. The exporter owner must separately
+reference it, for example:
+
+```yaml
+spec:
+  dcgmExporter:
+    config:
+      name: gpu-monitoring-dcgm-metrics
+    service:
+      internalTrafficPolicy: Local
+```
+
+The ConfigMap must be in the exporter's namespace. For a standalone NVIDIA
+exporter chart, use its corresponding custom-metrics ConfigMap setting.
+Confirm the running exporter loaded the file and emits finite samples for
+every physical GPU; a field's presence in CSV is not proof of hardware/DCGM
+support. Unsupported fields must remain visibly unknown, not be replaced with
+fabricated zeros. This is continuous telemetry, not a burn-in or bandwidth test.
+
+For the two-GPU H100 NVL topology, the NVLink check accepts NVIDIA's indented
+output and only excludes the six explicitly expected inactive links. Unexpected
+inactive links still fail. A successful empty topology query on the explicit
+single-GPU H100 NVL profile returns Unknown, not a hardware-link fault or a
+fabricated healthy result. Query failures and empty multi-GPU topology still fail.
+
+Profiles on hosts without `dcgmi`, including GPU Operator-backed H100 NVL nodes,
+must use their existing profile-specific `dcgmHealth.source: exporter` override
+and a node-local exporter URL. Do not globally disable host diagnostics on
+profiles that actually provide them.
+
+When the node-exporter sidecar is enabled, its pod template opts into adx-mon
+scrape discovery on port 9100. adx-mon watches only pods on the collector's
+node and scrapes the pod IP, so current node CPU/memory telemetry works for
+externally joined Flex nodes without relying on node-name DNS. Disabling the
+sidecar also removes these annotations; another explicit node metrics source is
+then required for ADX-backed history.
+
+### AKS-managed exporter counters on port 19400
+
+AKS driver installation alone does not install host DCGM. The
+[managed GPU profile](https://learn.microsoft.com/azure/aks/aks-managed-gpu-nodes)
+also provides DCGM, its host engine, and the exporter on **19400**. A GPU
+Operator exporter running in a container does not imply that `/usr/bin/dcgmi`
+exists on the host. Check the actual node-pool install profile, host packages,
+and service state before choosing `host-dcgmi`; do not install a second GPU
+stack to satisfy a mismatched monitoring profile.
+
+The managed exporter can be reachable while its package-provided
+`/etc/dcgm-exporter/default-counters.csv` omits the continuous health inputs.
+Changing the scrape port does not fix missing fields, and AKS currently exposes
+no supported API for replacing that collector list. TauGrid therefore does not
+modify the managed systemd unit or package-owned CSV.
+
+To use `extendedHealthChecks` on AKS, run a separately managed DCGM exporter on
+the normal user-owned port 9400 and point its configuration at the optional
+ConfigMap. Configure the collector's profile-specific exporter URL to reach the
+node-local Service and use `internalTrafficPolicy: Local`. A driver-only node
+pool with a declaratively managed exporter is another supported ownership
+model. Do not install overlapping GPU Operator driver, device-plugin, or
+host-engine components alongside the AKS-managed GPU stack merely to obtain
+additional metrics.
+
 ### Host DCGM health-watch ownership
 
 Profiles whose effective `dcgmHealth.source` is `host-dcgmi` own the
@@ -243,10 +380,11 @@ dcgmHealth:
 no configurable `required`, `availabilityCondition`, condition name, or
 debounce. Both values require literal `metricsCollector.enabled: true` —
 every accepted profile's contract includes the fixed `DcgmExporterUnavailable`
-scrape target and every `DCGM_*` collector rule, and the collector is the
-only component that renders them. Disabling DCGM health monitoring entirely
-means disabling the gpu-monitoring component or chart release itself; there
-is no per-profile opt-out.
+scrape target and the baseline collector rules. Rules requiring non-default
+DCGM fields render only with `metricsCollector.extendedHealthChecks: true`.
+The collector is the only component that renders them. Disabling DCGM health
+monitoring entirely means disabling the gpu-monitoring component or chart
+release itself; there is no per-profile opt-out.
 
 | `source` | Runs host `dcgmi` | Scrapes exporter | Cross-cloud mapping |
 | --- | --- | --- | --- |

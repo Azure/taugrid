@@ -9,14 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 WORKDIR /src/controllers/tau-core
 COPY controllers/tau-core/go.mod controllers/tau-core/go.sum ./
 COPY core/go.mod core/go.sum ../../core/
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY controllers/tau-core ./
 COPY core ../../core
 
 # CGO required for systemcrypto FIPS build; buildx sets TARGETOS/TARGETARCH per platform.
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
     go build -buildvcs=false -ldflags '-s -w' -o /tau-core-controller ./cmd/controller
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0

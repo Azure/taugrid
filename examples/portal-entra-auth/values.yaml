@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# MERGE FRAGMENT, not a complete TauGrid installation configuration.
+# Merge into the cluster's COMPLETE canonical umbrella values and pass that
+# file on EVERY tau cluster install/upgrade (--reset-values otherwise resets
+# unrelated components). Replace the example hostname, IDs and issuer name.
+# See site/content/en/docs/platform-admin-guide/setup-guides/enable-portal.md.
+taugrid-core:
+  portal:
+    enabled: true
+    # Existing Portal backend identity/RBAC/ADX settings remain unchanged.
+    access:
+      mode: authenticated-proxy
+      externalURL: https://portal.example.com
+    entraAuth:
+      enabled: true
+      # Dedicated single-tenant Web app registration, NOT the ADX identity.
+      tenantID: 11111111-1111-1111-1111-111111111111
+      clientID: 22222222-2222-2222-2222-222222222222
+      # Externally created in the Helm release namespace; no inline secrets.
+      cookieSecret:
+        name: portal-cookie
+        key: cookie-secret
+      gatewayClassName: istio
+      issuerRef:
+        name: portal-issuer
+        kind: ClusterIssuer
+        group: cert-manager.io
+      # Required: an approved build containing the oauth2-proxy callback-log
+      # privacy fix, pinned by digest. Prefer an MCR-hosted image.
+      image:
+        repository: mcr.microsoft.com/replace-with-approved-repository
+        tag: ""
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

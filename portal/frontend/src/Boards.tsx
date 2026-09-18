@@ -19,8 +19,8 @@ function InfrastructureOverview({ platform }: { platform: boolean }) {
   return <><PageTitle title="Overview">{platform ? 'Fleet health & capacity at a glance.' : 'Your training workloads at a glance.'}</PageTitle>
     <Note>Overview combines real-time Kubernetes state with backend-default ADX summaries. Historical range controls apply on Fleet Health, Fleet Utilization, and Cost; this page does not apply range parameters.</Note>
     {platform && <BoardResult query={nodes} label="Fleet inventory">{f => <div className="stats">
-      <Stat href="/portal/fleet?view=compute" label="Total nodes" value={f.readyNodes} of={f.totalNodes} sub="ready / total"/>
-      <Stat href="/portal/fleet?view=compute" label="Total GPUs" value={f.totalGPUs} sub={`${f.gpuNodes} GPU nodes`}/>
+      <Stat href="/portal/fleet" label="Total nodes" value={f.readyNodes} of={f.totalNodes} sub="ready / total"/>
+      <Stat href="/portal/fleet" label="Total GPUs" value={f.totalGPUs} sub={`${f.gpuNodes} GPU nodes`}/>
     </div>}</BoardResult>}
     <BoardResult query={query} label={platform ? 'Queue capacity' : 'Workload admission'}
       partial={!!query.data?.cards.queueUnavailable || !!query.data?.runningUnavailable}>{data => {
@@ -47,10 +47,10 @@ function InfrastructureOverview({ platform }: { platform: boolean }) {
       const health = gpus.filter(g => typeof g.healthy === 'boolean');
       const errors = health.filter(g => g.healthy === false).length;
       return <div className="stats">{platform
-        ? <Stat href="/portal/fleet?view=health" label="Unhealthy observed GPUs" value={errors} tone={errors > 0 ? 'bad' : undefined}
+        ? <Stat href="/portal/fleet" label="Unhealthy observed GPUs" value={errors} tone={errors > 0 ? 'bad' : undefined}
           sub={`${health.length} / ${gpus.length} returned GPUs have health observations · window ${snap.window || '—'}`}
           unavailable={!health.length ? 'No GPU health observations; health is unknown.' : undefined}/>
-        : <Stat href="/portal/fleet?view=util" label="Avg measured utilization" value={summary.average === null ? '—' : `${n1(summary.average)}%`}
+        : <Stat href="/portal/fleet" label="Avg measured utilization" value={summary.average === null ? '—' : `${n1(summary.average)}%`}
           sub={`${summary.observed} / ${summary.total} returned GPUs measured · window ${snap.window || '—'}`}
           unavailable={!summary.observed ? 'No GPU utilization observations in this window.' : undefined}/>}
       </div>;

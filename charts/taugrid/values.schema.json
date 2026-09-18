@@ -2,6 +2,26 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "taugrid-core": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "portal": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "entraAuth": {
+              "description": "Opt-in Portal Entra authentication; the taugrid-core dependency validates the complete configuration.",
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
     "global": {
       "type": "object",
       "properties": {

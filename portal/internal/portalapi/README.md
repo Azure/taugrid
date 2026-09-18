@@ -24,8 +24,7 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
 - **Boards** — each `internal/portal/{cluster,cost,jobs,ray,nodes,runs}` package
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
-  `kubeclient` reader) and Kusto (Cluster/Cost share a `kustoquery` shell-out
-  querier).
+  `kubeclient` reader) and Kusto (Cluster/Cost/Node Utilization share a `kustoquery` querier).
 - **Soft-degrade contract** — a handler with a nil data source returns **503**;
   a `Board()` error returns **502**; an empty-but-successful result is a normal
   **200**. Boards light up together per source family, so a portal without
@@ -106,9 +105,7 @@ Experiments opens its native dashboard directly.
 |---|---|---|---|---|
 | Workloads | Jobs | `/portal/runs` | `runs.Board` → `/api/portal/runs` (batch Jobs + ray.io RayJobs) | ② |
 | Workloads | Services | `/portal/services` | none — placeholder (Ray Serve / KServe) | ③ |
-| Platform | Fleet › Health | `/portal/fleet?view=health` | `cluster.Board` (per-GPU health, Kusto) | ① (IB/NPD/AlertRule = ③) |
-| Platform | Fleet › Utilization | `/portal/fleet?view=util` | reuses `/api/portal/cluster`, re-sorted by util%, + node CPU/mem (`nodeutil.Board` → `/api/portal/nodeutil`, Kusto) | ① (heatmap/per-team = ③) |
-| Platform | Fleet › Compute | `/portal/fleet?view=compute` | `nodes.Board` (hardware inventory, K8s) | ① |
+| Platform | Fleet | `/portal/fleet` | unified `nodes.Board` inventory, `cluster.Board` per-GPU telemetry, `nodeutil.Board` CPU/memory, and continuous Node conditions | ① + ② |
 | Platform | Kueue | `/portal/jobs` | `jobs.Board` (Kueue queue snapshot) | ① (PriorityClass = ③) |
 | Platform | Ray | `/portal/ray` | `ray.Board` (dashboard Services, K8s) | ① |
 | Platform | Observability | `/portal/observability` | none — placeholder | ③ |
@@ -118,9 +115,64 @@ Experiments opens its native dashboard directly.
 Workloads and Platform retain their `/portal` overview landings; Experiments
 goes directly to `/portal/experiments`, without a separate overview page.
 The overview API remains available for existing board consumers.
-The three Fleet boards share one page via in-page sub-tabs (Health |
-Utilization | Compute); the legacy `/portal/{cluster,gpu,nodes}` paths still
-resolve to the matching Fleet sub-tab so existing deep-links keep working.
+Fleet capacity, GPU and node utilization, continuous health, and InfiniBand
+evidence share one site-aware operational map. The legacy
+`/portal/{cluster,gpu,nodes}` paths and old `?view=` links still resolve to the
+unified Fleet page; an `instance` query focuses the inline per-GPU detail table.
+
+## Fleet InfiniBand evidence
+
+The Fleet page combines authorized Kubernetes node inventory and current
+Metrics Server CPU/memory usage, per-GPU ADX telemetry, historical ADX node
+utilization, and continuous GPU/NVLink and InfiniBand Node conditions in one
+operational dashboard. Inventory, telemetry, and utilization refresh and retry
+together while retaining independent freshness and failure status. Current
+Metrics Server samples are preferred on exact inventory nodes; exact ADX node
+rows are a fallback, while mismatched telemetry remains visible as independent
+source evidence.
+
+The inventory reader selects the exact canonical `unbounded-cloud.io/site`
+label first and the exact deprecated `net.unbounded-cloud.io/site` migration
+label only when the canonical value is empty. It never performs fuzzy label
+matching or substitutes region, zone, or pool for site identity. If no GPU node
+has either supported label, the map remains grouped by ordinary region and pool
+placement without presenting an Unbounded site visualization. Partial coverage
+keeps every unlabeled GPU node in an explicit Unknown bucket and reports the
+coverage gap. When both exact labels are non-empty and disagree, inventory
+preserves the canonical value and source key while reporting the conflict.
+
+Region, zone, and pool remain separate placement fields. Nodes are
+RDMA-advertised only when status exposes a positive `rdma/*` capacity or
+allocatable resource. The site label is a topology boundary, not CNI health,
+and RDMA capability is not health. Node cards separately show Ready and
+scheduling state, NVIDIA model, GPU capacity and allocation, utilization, and
+continuous condition evidence.
+
+GPU allocation requires cluster-wide Pod visibility. Counts include active,
+scheduled, non-terminal Pods and Kubernetes init/restartable-init scheduling
+semantics. Free capacity is reported only for Ready, non-cordoned nodes. Missing
+or unauthorized Pod visibility, MIG, and DRA allocation cases fail closed to
+Unknown instead of presenting zero assignments or free GPUs.
+
+Current CPU and memory utilization similarly require cluster-wide access to
+`metrics.k8s.io/v1beta1` Node metrics. Missing, unauthorized, or malformed
+samples preserve inventory, surface an explicit error, and fall back only to an
+exact cluster-plus-instance ADX match. Missing per-GPU telemetry does not create
+empty load and temperature tiles; the node's Telemetry status remains Unknown.
+
+Continuous GPU/NVLink and InfiniBand evidence comes from an explicit allowlist
+of monitoring-owned Kubernetes Node condition families. A condition family is
+**Observed OK** only when every required family appears exactly once with a
+fresh `False` observation. A fresh `True` condition is **Fault** and takes
+precedence over missing coverage in another family. Missing, duplicate,
+malformed, stale, future-dated, or `Unknown` evidence stays **Unknown**. The
+Portal uses a 15-minute freshness window and tolerates at most one minute of
+future clock skew. Evaluation is keyed by condition type, so condition ordering
+does not affect the result.
+
+Per-GPU ADX telemetry reports whether every expected inventory GPU has a
+complete row-remap verdict; it is not presented as comprehensive GPU health.
+Each node links to the inline Fleet GPU detail table for the underlying metrics.
 
 ## Data interpretation and recovery
 
@@ -194,11 +246,9 @@ source for today**. They are listed here — not implemented — so the gap betw
    exists. Per-user attribution and budget burn still need their own identity,
    budget, and reporting contracts; utilization alone cannot supply them.
 
-2. **Fleet Health depth — InfiniBand / NPD / AlertRule.** Today's Fleet Health is
-   per-GPU DCGM health. The proposal's richer signals are not portal-readable:
-   - **InfiniBand port/flap** state lives in a node-local file written by
-     `check_ib_flaps.sh`; it must first be surfaced as a node condition (via the
-     collector) or pushed to ADX before a board can read it.
+2. **Fleet depth — NPD and AlertRule.** The unified Fleet map now reads
+   continuous GPU, NVLink, and InfiniBand Node conditions. Two richer signals
+   remain unavailable:
    - **NPD** DaemonSet health would need a Kubernetes read of NPD pods/conditions.
    - **AlertRule** evaluation would need to read adx-mon AlertRule CRDs and their
      firing state.

@@ -326,16 +326,55 @@ portal:
     auth:
       userHeader: X-MS-CLIENT-PRINCIPAL-NAME
       groupsHeader: X-MS-CLIENT-PRINCIPAL-GROUPS
-  # Researcher-facing browser access is owned by the platform, not this chart.
-  # The chart always keeps the Service ClusterIP-only. A platform may put an
-  # Entra-aware HTTPS ingress/reverse proxy in front of it, then declare that
-  # reviewed endpoint here. The proxy must prevent direct backend access, strip
-  # caller-supplied identity headers, and inject only verified identity claims.
+  # Always ClusterIP-only. Declare the reviewed HTTPS endpoint for an external
+  # authentication proxy, or opt into the chart-managed entraAuth proxy below.
+  # Workspace-directory authorization requires an external proxy with a
+  # verified, spoof-resistant mapping to the configured identity headers.
   access:
     # cluster-internal: no supported researcher browser endpoint.
     # authenticated-proxy: platform-owned HTTPS endpoint with authentication.
     mode: cluster-internal
     externalURL: ""
+  # Opt-in shared Portal viewer login, NOT per-user/workspace authorization.
+  # Requires Gateway API v1 + a compatible controller, cert-manager with Gateway
+  # support, an operator-owned issuer, AKS Workload Identity, Entra app/federation,
+  # enterprise-app assignment, DNS, and an existing cookie Secret. Installs no
+  # controller, issuer, Azure resource, mesh policy, or direct Ray route.
+  entraAuth:
+    enabled: false
+    # Single-tenant WEB app registration, also the proxy's workload identity.
+    # This is separate from portal.serviceAccount's backend ADX query identity.
+    tenantID: ""
+    clientID: ""
+    # Set access.mode=authenticated-proxy and access.externalURL=https://portal.example.com.
+    # Only an origin (optional trailing /) is supported; callback is /oauth2/callback.
+    # Federate system:serviceaccount:<release-namespace>:<resourceName>-oauth2-proxy
+    # to the app with this cluster's OIDC issuer and api://AzureADTokenExchange.
+    cookieSecret:
+      # Existing Secret in the release namespace holding a URL-safe base64-encoded
+      # random 32-byte cookie key. Never put the secret value in Helm values.
+      name: ""
+      key: cookie-secret
+    gatewayClassName: istio
+    issuerRef:
+      name: ""
+      kind: ClusterIssuer
+      group: cert-manager.io
+    image:
+      # Required when enabled: use an approved image containing the callback-log
+      # privacy fix documented in the Portal setup guide, pinned by digest.
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    imagePullSecrets: []
+    replicaCount: 2
+    resources:
+      requests: { cpu: "100m", memory: 128Mi }
+      limits: { cpu: "500m", memory: 256Mi }
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
   kusto:
     # Nonempty endpoint/database override global.adx.queryConnection per field.
     endpoint: ""

@@ -19,9 +19,10 @@ import (
 
 // Metric represents a single scraped metric sample.
 type Metric struct {
-	Name   string
-	Labels map[string]string
-	Value  float64
+	Name      string
+	Labels    map[string]string
+	Value     float64
+	Timestamp time.Time
 }
 
 // ScrapeTarget defines an endpoint to scrape.
@@ -250,7 +251,7 @@ func parseLine(line string) (Metric, error) {
 			return m, fmt.Errorf("invalid line")
 		}
 		m.Name = parts[0]
-		line = parts[1]
+		line = strings.Join(parts[1:], " ")
 	}
 
 	// Parse value (ignore optional timestamp).
@@ -264,6 +265,13 @@ func parseLine(line string) (Metric, error) {
 		return m, fmt.Errorf("parsing value: %w", err)
 	}
 	m.Value = val
+	if len(parts) > 1 {
+		millis, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return m, fmt.Errorf("parsing timestamp: %w", err)
+		}
+		m.Timestamp = time.UnixMilli(millis)
+	}
 
 	return m, nil
 }

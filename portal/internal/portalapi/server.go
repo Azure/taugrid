@@ -368,7 +368,6 @@ func (s *Server) routes() {
 	// Trailing slash keeps the per-job detail route
 	// ("/api/portal/runs/{namespace}/{name}") distinct from the runs list above.
 	s.mux.HandleFunc("/api/portal/runs/", s.handleJobDetail)
-
 	// KueueViz "Kueue (Live)" board — reverse-proxied under
 	// /api/portal/kueueviz/. The frontend/env.js/asset routes are embedded in a
 	// same-origin iframe, so wrap them with framedSameOrigin to relax any DENY
@@ -1097,8 +1096,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "nodes board unavailable: portal started without Kubernetes access")
 		return
 	}
-	includeDaemonSets := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
-	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{IncludeDaemonSets: includeDaemonSets})
+	includeClusterWide := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
+	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{
+		IncludeDaemonSets:  includeClusterWide,
+		IncludeAllocations: includeClusterWide,
+		IncludeMetrics:     includeClusterWide,
+	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
@@ -1109,8 +1112,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // handleNodeUtil serves the node resource-utilization board: per-node CPU
 // utilization (from the node_cpu_idle_seconds counter delta) and memory-used
 // percentage (from node_memory_total/available), from the Metrics ADX database
-// via NodeHealth(). It is the CPU/memory sibling of the Cluster Health board,
-// rendered beneath the per-GPU table on the Utilization page. Optional
+// via the raw node-exporter tables. It is the CPU/memory sibling of the Cluster
+// Health board, rendered beneath the per-GPU table on the Utilization page. Optional
 // ?window= or ?start=&end= selects a historical range; cluster and instance
 // scope the query. When the board has no Kusto
 // querier (portal started without --kusto-query-command) it returns 503; a

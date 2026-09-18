@@ -1224,6 +1224,17 @@ func (stubNodesReader) ListNodes(_ context.Context) ([]byte, error) {
 func (stubNodesReader) ListDaemonSets(_ context.Context) ([]byte, error) {
 	return []byte(`{"items":[{"metadata":{"namespace":"gpu-monitoring","name":"dcgm-exporter"},"status":{"desiredNumberScheduled":2,"numberReady":1,"numberAvailable":1}}]}`), nil
 }
+func (stubNodesReader) ListPods(_ context.Context, _ string) ([]byte, error) {
+	return []byte(`{"items":[
+	  {"spec":{"nodeName":"aks-h100pool-1","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},"status":{"phase":"Running"}}
+	]}`), nil
+}
+func (stubNodesReader) ListNodeMetrics(_ context.Context) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":%q,"window":"15s",
+	   "usage":{"cpu":"4","memory":"164987136Ki"}}
+	]}`, time.Now().UTC().Format(time.RFC3339Nano))), nil
+}
 
 func TestNodesBoardServesSnapshot(t *testing.T) {
 	server, err := NewServer(Options{
@@ -1240,10 +1251,19 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		TotalNodes int `json:"totalNodes"`
-		GPUNodes   int `json:"gpuNodes"`
-		TotalGPUs  int `json:"totalGPUs"`
-		SKUs       []struct {
+		TotalNodes         int   `json:"totalNodes"`
+		GPUNodes           int   `json:"gpuNodes"`
+		TotalGPUs          int   `json:"totalGPUs"`
+		GPUAllocationKnown bool  `json:"gpuAllocationKnown"`
+		GPUSchedulable     int64 `json:"gpuSchedulable"`
+		GPUAllocated       int64 `json:"gpuAllocated"`
+		GPUAvailable       int64 `json:"gpuAvailable"`
+		Nodes              []struct {
+			Name          string   `json:"name"`
+			CPUUtilPct    *float64 `json:"cpuUtilPct"`
+			MemoryUsedPct *float64 `json:"memUsedPct"`
+		} `json:"nodes"`
+		SKUs []struct {
 			SKU  string `json:"sku"`
 			GPUs int    `json:"gpus"`
 		} `json:"skus"`
@@ -1259,6 +1279,15 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 	}
 	if got.TotalNodes != 2 || got.GPUNodes != 1 || got.TotalGPUs != 1 {
 		t.Fatalf("snapshot = %+v, want 2 nodes / 1 gpu-node / 1 gpu", got)
+	}
+	if !got.GPUAllocationKnown || got.GPUSchedulable != 1 || got.GPUAllocated != 1 || got.GPUAvailable != 0 {
+		t.Fatalf("GPU allocation = known %t, schedulable %d, allocated %d, available %d; want true/1/1/0",
+			got.GPUAllocationKnown, got.GPUSchedulable, got.GPUAllocated, got.GPUAvailable)
+	}
+	if len(got.Nodes) != 2 || got.Nodes[0].Name != "aks-h100pool-1" ||
+		got.Nodes[0].CPUUtilPct == nil || *got.Nodes[0].CPUUtilPct != 10 ||
+		got.Nodes[0].MemoryUsedPct == nil || *got.Nodes[0].MemoryUsedPct != 50 {
+		t.Fatalf("current node metrics = %+v, want h100 node at 10%% CPU / 50%% memory", got.Nodes)
 	}
 	// GPU SKU sorts first in the rollup.
 	if len(got.SKUs) != 2 || got.SKUs[0].SKU != "Standard_NC40ads_H100_v5" || got.SKUs[0].GPUs != 1 {
@@ -1847,8 +1876,9 @@ func TestSingleWorkspaceNamespaceOverridesPreserveConfiguredSemantics(t *testing
 }
 
 type scopedPortalReader struct {
-	namespaces     []string
-	daemonSetCalls int
+	namespaces      []string
+	daemonSetCalls  int
+	nodeMetricCalls int
 }
 
 func (r *scopedPortalReader) record(namespace string) {
@@ -1888,6 +1918,10 @@ func (r *scopedPortalReader) ListNodes(context.Context) ([]byte, error) {
 }
 func (r *scopedPortalReader) ListDaemonSets(context.Context) ([]byte, error) {
 	r.daemonSetCalls++
+	return []byte(`{"items":[]}`), nil
+}
+func (r *scopedPortalReader) ListNodeMetrics(context.Context) ([]byte, error) {
+	r.nodeMetricCalls++
 	return []byte(`{"items":[]}`), nil
 }
 
@@ -1995,6 +2029,10 @@ func TestManagedWorkspaceSwitchScopesEveryBoard(t *testing.T) {
 					}
 				}
 			}
+			if board == "nodes" && body["gpuAllocationKnown"] != false {
+				t.Fatalf("%s/nodes gpuAllocationKnown = %v, want false without cluster-wide Pod authorization",
+					workspace.id, body["gpuAllocationKnown"])
+			}
 			for _, kql := range querier.kqls[kqlStart:] {
 				if !strings.Contains(kql, "Cluster == @'cluster-a'") {
 					t.Fatalf("%s/%s KQL missing resolved cluster filter:\n%s", workspace.id, board, kql)
@@ -2020,6 +2058,9 @@ func TestManagedWorkspaceSwitchScopesEveryBoard(t *testing.T) {
 	}
 	if reader.daemonSetCalls != 0 {
 		t.Fatalf("workspace-rbac requests read cluster-wide DaemonSets %d times", reader.daemonSetCalls)
+	}
+	if reader.nodeMetricCalls != 0 {
+		t.Fatalf("workspace-rbac requests read cluster-wide Node metrics %d times", reader.nodeMetricCalls)
 	}
 }
 
@@ -2473,6 +2514,19 @@ func TestClusterWideWorkspaceCanReadRuntimeDaemonSets(t *testing.T) {
 	}
 	if reader.daemonSetCalls != 1 {
 		t.Fatalf("cluster-wide workspace read DaemonSets %d times, want 1", reader.daemonSetCalls)
+	}
+	if reader.nodeMetricCalls != 1 {
+		t.Fatalf("cluster-wide workspace read Node metrics %d times, want 1", reader.nodeMetricCalls)
+	}
+	foundClusterWidePods := false
+	for _, namespace := range reader.namespaces {
+		if namespace == "" {
+			foundClusterWidePods = true
+			break
+		}
+	}
+	if !foundClusterWidePods {
+		t.Fatalf("cluster-wide workspace pod namespaces = %v, want an all-namespaces read", reader.namespaces)
 	}
 }
 

@@ -87,8 +87,9 @@ collector:
     # targets even when stored release values are replayed. Both controllers
     # use node-local annotation discovery to preserve HA replica identity.
     extraStaticTargets: []
-    # NOTE: DCGM exporter is discovered via pod annotations (adx-mon/scrape=true)
-    # rather than a static target, since it uses containerPort (not hostPort).
+    # DCGM routing is deployment-specific in mixed GPU-stack clusters. Use an
+    # anchored static target for host exporters and adx-mon scrape annotations
+    # on GPU Operator's exporter pods.
 
 # -- Enable all pre-built Function CRDs
 functions:

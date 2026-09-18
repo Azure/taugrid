@@ -65,6 +65,13 @@ resource "helm_release" "gpu_operator" {
         enabled = false
       }
       daemonsets = {
+        # adx-mon watches only pods on the collector's node. The GPU Operator
+        # version pinned by this module exposes common operand annotations, so
+        # the declared port limits discovery to dcgm-exporter.
+        annotations = {
+          "adx-mon/scrape" = "true"
+          "adx-mon/port"   = "9400"
+        }
         tolerations = [
           {
             key      = "sku"

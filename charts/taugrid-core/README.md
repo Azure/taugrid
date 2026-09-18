@@ -375,7 +375,9 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
   `portal.serviceAccount.create=true`) to create a ClusterRole granting read
   access to core `services` (Ray dashboard discovery), `pods`, `events`, and
   RayClusters (Job detail ownership), core `nodes` (Cluster Nodes hardware
-  inventory), and Kueue `localqueues`/`clusterqueues`/`workloads` (queue depth).
+  inventory), aggregated `metrics.k8s.io` Node metrics (current Fleet CPU and
+  memory utilization), and Kueue `localqueues`/`clusterqueues`/`workloads`
+  (queue depth).
   Without the RBAC, those boards return 502 with the API server's forbidden
   error and the rest of the portal still serves; 503 is reserved for a portal
   that could not build a Kubernetes client at all.
@@ -411,10 +413,11 @@ for source, authentication, network, and report-document constraints.
 
 ### Researcher browser access
 
-This chart does not install an ingress controller, Gateway, DNS record,
-certificate, or authentication proxy. Those resources are platform-owned
-because their identity, network, and certificate policies vary by environment.
-A supported researcher endpoint has all of these properties:
+By default this chart installs no browser exposure. Platforms can either opt
+into the [chart-managed Entra proxy](#opt-in-entra-authentication) below or
+maintain their own authenticated proxy. Controllers, DNS, identity, issuer
+policy and network isolation remain platform-owned in both cases.
+A supported externally managed researcher endpoint has all of these properties:
 
 1. A stable HTTPS URL and trusted certificate.
 2. Entra-aware authentication before any Portal route is served.
@@ -427,7 +430,7 @@ A supported researcher endpoint has all of these properties:
    browser URL in `portal.access.externalURL`.
 
 The access values declare the deployment contract and fail unsafe chart
-configurations; they do not provision or probe the external proxy.
+configurations; alone they do not provision or probe an external proxy.
 
 Until that platform path exists, keep
 `portal.access.mode=cluster-internal` and leave `externalURL` empty. In that
@@ -435,6 +438,60 @@ state there is intentionally no supported researcher browser signoff.
 `kubectl port-forward` is an operator diagnostic only and must not be used as
 researcher acceptance evidence. Historical IP addresses are not an endpoint
 contract.
+
+### Opt-in Entra authentication
+
+`portal.entraAuth.enabled` defaults to `false`. When enabled, the chart adds a
+dedicated workload-identity oauth2-proxy, Certificate, Gateway, and HTTPRoute in
+the release namespace. Every public path terminates at oauth2-proxy; its only
+upstream is the existing Portal ClusterIP Service. Ray views served through
+Portal remain behind the same login.
+
+This mode provides **shared viewer authentication**, not per-user data
+authorization. Every admitted viewer receives the read scope of Portal's
+existing Kubernetes and ADX identities. The chart rejects workspace-directory
+authentication because it cannot provide the required trusted identity-header
+mapping.
+
+Minimum configuration:
+
+| Field | Requirement |
+|---|---|
+| `portal.access.mode` | `authenticated-proxy` |
+| `portal.access.externalURL` | HTTPS origin with no port, query, or path |
+| `portal.entraAuth.tenantID`, `.clientID` | Single-tenant Entra Web app UUIDs |
+| `portal.entraAuth.cookieSecret` | Existing release-namespace Secret with a random 32-byte key |
+| `portal.entraAuth.gatewayClassName`, `.issuerRef` | Existing Gateway controller and cert-manager issuer |
+| `portal.entraAuth.image` | Approved callback-log-safe image pinned by `sha256:` digest; tags are rejected |
+
+The generated callback is
+`<portal.access.externalURL>/oauth2/callback`. The Entra federated credential
+subject is
+`system:serviceaccount:<release-namespace>:<portal.resourceName>-oauth2-proxy`
+with audience `api://AzureADTokenExchange`. The proxy requests only `openid`
+and uses the mandatory `sub` claim for its session identity; it does not require
+optional `email` or `profile` claims.
+
+Security invariants:
+
+- Portal remains ClusterIP-only with no direct public or Ray Service route.
+- Client and cookie secrets are never accepted inline in Helm values.
+- Cookies are host-only, Secure, HttpOnly, SameSite=Lax, and contain no OAuth
+  access, refresh, or ID tokens.
+- Request logging is disabled. The image must include the callback-log privacy
+  fix; stock oauth2-proxy v7.15.2 can log callback queries, cookies, and
+  authorization headers on missing-CSRF failures.
+- ClusterIP is not network isolation. Operators must restrict in-cluster access
+  to both Portal and oauth2-proxy and restrict who can attach Gateway routes.
+
+For prerequisites, Entra configuration, complete values, acceptance checks, and
+rollback, use the
+[setup guide](../../site/content/en/docs/platform-admin-guide/setup-guides/enable-portal.md#opt-into-chart-managed-entra-browser-login)
+and [umbrella example](../../examples/portal-entra-auth/values.yaml). Merge the
+example into the release's complete canonical values file and retain those
+values on every `tau cluster install` upgrade.
+
+### Browser signoff
 
 Browser signoff uses only the declared URL:
 
