@@ -557,6 +557,9 @@ func (c Config) ValidateDirect() error {
 	if err := c.Runtime.Security.Validate(); err != nil {
 		return err
 	}
+	if err := ValidateRDMA(c.Runtime.RDMA); err != nil {
+		return err
+	}
 	if err := ValidateLiteralEnvPayloads(c.Runtime.Env); err != nil {
 		return err
 	}
