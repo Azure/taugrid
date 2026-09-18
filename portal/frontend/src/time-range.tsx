@@ -35,43 +35,88 @@ function timestampLabel(value: string, timezone: Timezone) {
   return rendered + (timezone === 'utc' ? ' UTC' : '');
 }
 
+function historicalWindowMilliseconds(value: string) {
+  const input = value.startsWith('+') ? value.slice(1) : value;
+  if (!input) return null;
+  const units: Record<string, number> = {
+    ns: 1e-6, us: 1e-3, 'µs': 1e-3, 'μs': 1e-3, ms: 1,
+    s: 1000, m: 60_000, h: 3_600_000,
+  };
+  const segment = /(?:\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gy;
+  let total = 0;
+  let offset = 0;
+  for (let match = segment.exec(input); match; match = segment.exec(input)) {
+    if (match.index !== offset) return null;
+    total += Number.parseFloat(match[0]) * units[match[1]];
+    offset = segment.lastIndex;
+  }
+  return offset === input.length && total > 0 && total <= 720 * 3_600_000 ? total : null;
+}
+
 export function useHistoricalRange(defaultWindow: string) {
   const location = useLocation();
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const custom = params.has('start') || params.has('end');
-  const requested = params.get('window') || defaultWindow;
-  const window = presets.some(([value]) => value === requested) ? requested : defaultWindow;
+  const windowValues = params.getAll('window');
+  const startValues = params.getAll('start');
+  const endValues = params.getAll('end');
+  const hasWindow = windowValues.length > 0;
+  const hasCustom = startValues.length > 0 || endValues.length > 0;
+  const custom = hasCustom && !hasWindow;
+  const requested = hasWindow ? windowValues[0] : defaultWindow;
+  const validWindow = historicalWindowMilliseconds(requested) !== null;
+  const window = requested;
   const start = params.get('start') || '';
   const end = params.get('end') || '';
   const timezone: Timezone = params.get('tz') === 'utc' ? 'utc' : 'local';
-  const api = custom
-    ? new URLSearchParams({ start, end }).toString()
-    : new URLSearchParams({ window }).toString();
+  const apiParams = new URLSearchParams();
+  for (const key of ['window', 'start', 'end'] as const) {
+    for (const value of params.getAll(key)) apiParams.append(key, value);
+  }
+
+  if (!hasWindow && !hasCustom) apiParams.set('window', defaultWindow);
+  const api = apiParams.toString();
+  let invalid = '';
+  if (windowValues.length > 1 || startValues.length > 1 || endValues.length > 1) {
+    invalid = 'Historical range parameters must not be repeated.';
+  } else if (hasWindow && hasCustom) {
+    invalid = 'Use either a preset window or custom start and end timestamps, not both.';
+  } else if (hasWindow && !validWindow) {
+    invalid = `Unsupported historical window: ${requested}.`;
+  } else if (hasCustom && (!start || !end)) {
+    invalid = 'Custom historical ranges require both start and end timestamps.';
+  }
   const startLabel = timestampLabel(start, timezone);
   const endLabel = timestampLabel(end, timezone);
-  const label = custom
+  const label = invalid ? 'Invalid historical range'
+    : custom
     ? startLabel && endLabel ? `${startLabel} to ${endLabel}` : 'Incomplete or invalid custom range'
     : presets.find(([value]) => value === window)?.[1] || window;
-  return { api, custom, window, start, end, timezone, label };
+  return { api, custom, window, start, end, timezone, label, invalid };
+}
+
+export function withHistoricalRange(url: string, api: string) {
+  if (!api) return url;
+  return url + (url.includes('?') ? '&' : '?') + api;
 }
 
 export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) {
   const location = useLocation();
   const navigate = useNavigate();
   const active = useHistoricalRange(defaultWindow);
-  const [mode, setMode] = useState(active.custom ? 'custom' : active.window);
+  const selectableWindow = presets.some(([value]) => value === active.window) ? active.window : defaultWindow;
+  const [mode, setMode] = useState(active.custom && !active.invalid ? 'custom' : selectableWindow);
   const [timezone, setTimezone] = useState<Timezone>(active.timezone);
   const [start, setStart] = useState(() => initialInput(active.start, new Date(Date.now() - 60 * 60 * 1000), active.timezone));
   const [end, setEnd] = useState(() => initialInput(active.end, new Date(), active.timezone));
   const [error, setError] = useState('');
 
   useEffect(() => {
-    setMode(active.custom ? 'custom' : active.window);
+    setMode(active.custom && !active.invalid ? 'custom' : selectableWindow);
     setTimezone(active.timezone);
     if (active.start && Number.isFinite(new Date(active.start).getTime())) setStart(inputValue(new Date(active.start), active.timezone));
     if (active.end && Number.isFinite(new Date(active.end).getTime())) setEnd(inputValue(new Date(active.end), active.timezone));
     setError('');
-  }, [active.custom, active.end, active.start, active.timezone, active.window]);
+  }, [active.custom, active.end, active.invalid, active.start, active.timezone, active.window, selectableWindow]);
 
   const apply = () => {
     const next = new URLSearchParams(location.search);
@@ -121,6 +166,7 @@ export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) 
       <button type="button" className="btn-primary" onClick={apply}>Apply</button>
     </div>
     <p className="time-range-active"><strong>Active window:</strong> <output>{active.label}</output>. Requested range and observed coverage are reported separately.</p>
+    {active.invalid && <p className="warn time-range-error" role="alert">{active.invalid} Select a valid range and apply it.</p>}
     {error && <p className="warn time-range-error" role="alert">{error}</p>}
   </section>;
 }

@@ -6,7 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { boardScopeKey, experimentsAPI, readableQuery, requestRejected, staleReadMessage, useBoard, useScopedURL, useWorkspace } from '../data';
 import { Empty, Note, PageTitle } from '../components';
 import { ChartWorkbench } from './ChartWorkbench';
-import { TimeRangeControls, useHistoricalRange } from '../time-range';
+import { TimeRangeControls, useHistoricalRange, withHistoricalRange } from '../time-range';
 import { ResearchEvidence } from './ResearchEvidence';
 import { LaunchSummary } from './LaunchSummary';
 import { labelGroups } from './evidence-helpers';
@@ -127,7 +127,7 @@ function ExperimentDiscovery() {
   const { params, update } = useURLState();
   const search = params.get('experiment_q') || '', project = params.get('experiment_project') ?? params.get('project') ?? '', tag = params.get('experiment_tag') || '';
   const range = useHistoricalRange('168h');
-  const query = readableQuery(useBoard<ExperimentSearchResult>(stellarURL('experiments', { q: search.trim(), project, tag, limit: 100, ...Object.fromEntries(new URLSearchParams(range.api)) })));
+  const query = readableQuery(useBoard<ExperimentSearchResult>(withHistoricalRange(stellarURL('experiments', { q: search.trim(), project, tag, limit: 100 }), range.api)));
   const [target, setTarget] = useState('');
   const expanded = new Set((params.get('experiments') || '').split(',').filter(Boolean));
   return <div className="stellar-discovery">
@@ -174,7 +174,8 @@ function ExperimentDiscovery() {
 }
 function RecentExperiments({ target }: { target: string }) {
   const { params, update } = useURLState();
-  const query = readableQuery(useBoard<ExperimentSearchResult>(stellarURL('experiments', { limit: 100 })));
+  const range = useHistoricalRange('168h');
+  const query = readableQuery(useBoard<ExperimentSearchResult>(withHistoricalRange(stellarURL('experiments', { limit: 100 }), range.api)));
   return <section className="stellar-recent-experiments"><div><strong>Recent experiments</strong><button type="button" className="stellar-link" onClick={() => void query.refetch()}>refresh</button></div>
     {query.error && <p role="alert" className="warn">Recent experiments unavailable: {query.error.message} {staleReadMessage(query)}</p>}
     {(query.data?.experiments || []).slice(0, 8).map(experiment => <button type="button" className={target === experiment.experiment_id && (params.get('project') || '') === experiment.project ? 'selected' : ''}
@@ -193,7 +194,7 @@ function latestRunValue(run: Run, snapshot: Snapshot | undefined, metric: string
 }
 function ExperimentRuns({ target, project }: { target: string; project: string }) {
   const range = useHistoricalRange('168h');
-  const query = readableQuery(useBoard<RunSearchResult>(stellarURL('runs', { target, project, limit: RUN_PAGE_SIZE, ...Object.fromEntries(new URLSearchParams(range.api)) })));
+  const query = readableQuery(useBoard<RunSearchResult>(withHistoricalRange(stellarURL('runs', { target, project, limit: RUN_PAGE_SIZE }), range.api)));
   const { update } = useURLState();
   return <QueryResult query={query} name={`Runs for ${target}`}>{data => <ul className="stellar-preview-runs">{data.runs?.map(run => <li key={run.run_id}>
     <button type="button" className="stellar-link" onClick={() => update({ target: run.run_id, project }, false)}>{run.run_id}</button> <span>{runLifecycle(run).replaceAll('_', ' ')}</span>
@@ -218,7 +219,7 @@ function TargetWorkspace({ target }: { target: string }) {
     return () => media.removeEventListener('change', changed);
   }, []);
   const query = readableQuery(useBoard<Snapshot>(stellarURL('snapshot', { target, mode: 'summary', project: params.get('project') || undefined })));
-  const more = readableQuery(useBoard<RunSearchResult>(stellarURL('runs', { target, limit, project: params.get('project') || undefined, ...Object.fromEntries(new URLSearchParams(range.api)) })));
+  const more = readableQuery(useBoard<RunSearchResult>(withHistoricalRange(stellarURL('runs', { target, limit, project: params.get('project') || undefined }), range.api)));
   useEffect(() => {
     if (requestRejected(more.error) || requestRejected(query.error)) setPreviousPage(undefined);
     else if (more.data) setPreviousPage({ data: more.data, dataUpdatedAt: more.dataUpdatedAt });

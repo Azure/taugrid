@@ -10,7 +10,8 @@ import { TimeRangeControls, useHistoricalRange } from './time-range';
 const kubeHint = ' — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).';
 function RunName({ run, namespace }: { run: Run; namespace?: string }) {
   const ns = run.namespace || namespace;
-  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name)}>{run.name}</ScopedLink> : text(run.name);
+  const range = useHistoricalRange('24h');
+  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name) + '?' + range.api}>{run.name}</ScopedLink> : text(run.name);
 }
 function Status({ value, tone = '' }: { value?: string; tone?: string }) { return <span className={'badge ' + tone}>{text(value)}</span>; }
 function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiagnostic; label: string; children: ReactNode }) {
@@ -69,11 +70,12 @@ export function RunsBoard() {
 }
 export function JobDetailBoard() {
   const { namespace = '', name = '' } = useParams();
+  const range = useHistoricalRange('24h');
   const query = useBoard<JobDetail>('/api/portal/runs/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(name), !!namespace && !!name, retainJobSections);
   const partial = Object.values(query.data?.diagnostics || {}).some(diagnostic => diagnostic.state === 'unavailable');
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
   const active = ['overview', 'pods', 'events', 'results'].includes(requested) ? requested : 'overview';
-  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to="/portal/runs" className="back">← Back to Jobs</ScopedLink></div>
+  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to={'/portal/runs?' + range.api} className="back">← Back to Jobs</ScopedLink></div>
     <Note>Object, Kueue, pod, and event sections are current Kubernetes snapshots. Durable lifecycle/results show the retained record for this run; historical time filtering is not supported.</Note>
     {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
       <div className="detail-meta"><Status value={snap.kind} tone="kind"/><Status value={snap.status}/>

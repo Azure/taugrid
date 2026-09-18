@@ -118,6 +118,8 @@ func TestWorkspaceScopeIsParsedForExperimentAndRunSearch(t *testing.T) {
 			"/api/stellar/runs?window=bad",
 			"/api/stellar/runs?window=24h&start=2026-09-16T00:00:00Z&end=2026-09-17T00:00:00Z",
 			"/api/stellar/runs?since=24h&window=24h",
+			"/api/stellar/runs?window=1h&window=24h",
+			"/api/stellar/runs?start=2026-09-16T00:00:00Z&start=2026-09-16T01:00:00Z&end=2026-09-17T00:00:00Z",
 			"/api/stellar/runs?start=2026-09-16T00:00:00Z",
 			"/api/stellar/runs?start=2026-09-17T00:00:00Z&end=2026-09-16T00:00:00Z",
 		} {

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,6 +27,7 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/expapi"
+	"github.com/Azure/taugrid/portal/internal/historyrange"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
 	"github.com/Azure/taugrid/portal/internal/portal/cost"
 	"github.com/Azure/taugrid/portal/internal/portal/jobdetail"
@@ -1019,6 +1021,9 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
+	if snapshot.HistoryError != nil {
+		logHistoricalFailure("RayJob list", scope, snapshot.HistoryError)
+	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0 && len(snapshot.History) == 0))
 }
 
@@ -1061,6 +1066,7 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := reader.GetHistoryTimeline(r.Context(), historyScope, resourceUID)
 	if err != nil {
+		logHistoricalFailure("RayJob timeline", scope, err)
 		writeScopedError(w, http.StatusBadGateway, scope, "durable RayJob history query failed")
 		return
 	}
@@ -1154,45 +1160,9 @@ func (s *Server) handleNodeUtil(w http.ResponseWriter, r *http.Request) {
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(len(snapshot.Nodes) == 0))
 }
 
-const maxHistoricalWindow = 30 * 24 * time.Hour
-
 func parseHistoricalRange(q url.Values) (time.Duration, time.Time, time.Time, error) {
-	windowValue := q.Get("window")
-	startValue := q.Get("start")
-	endValue := q.Get("end")
-
-	if windowValue != "" {
-		if startValue != "" || endValue != "" {
-			return 0, time.Time{}, time.Time{}, fmt.Errorf("use either window or start/end, not both")
-		}
-
-		window, err := time.ParseDuration(windowValue)
-		if err != nil || window <= 0 || window > maxHistoricalWindow {
-			return 0, time.Time{}, time.Time{}, fmt.Errorf("window must be a positive duration no greater than %s", maxHistoricalWindow)
-		}
-		return window, time.Time{}, time.Time{}, nil
-	}
-	if startValue == "" && endValue == "" {
-		return 0, time.Time{}, time.Time{}, nil
-	}
-	if startValue == "" || endValue == "" {
-		return 0, time.Time{}, time.Time{}, fmt.Errorf("custom history range requires both start and end RFC3339 timestamps")
-	}
-	start, err := time.Parse(time.RFC3339, startValue)
-	if err != nil {
-		return 0, time.Time{}, time.Time{}, fmt.Errorf("start must be an RFC3339 timestamp")
-	}
-	end, err := time.Parse(time.RFC3339, endValue)
-	if err != nil {
-		return 0, time.Time{}, time.Time{}, fmt.Errorf("end must be an RFC3339 timestamp")
-	}
-	if !end.After(start) {
-		return 0, time.Time{}, time.Time{}, fmt.Errorf("end must be after start")
-	}
-	if end.Sub(start) > maxHistoricalWindow {
-		return 0, time.Time{}, time.Time{}, fmt.Errorf("custom history range must not exceed %s", maxHistoricalWindow)
-	}
-	return end.Sub(start), start.UTC(), end.UTC(), nil
+	parsed, err := historyrange.Parse(q, false)
+	return parsed.Window, parsed.Start, parsed.End, err
 }
 
 func historicalWindowValue(window time.Duration, start time.Time) string {
@@ -1261,11 +1231,24 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
+		if snapshot.HistoryError != nil {
+			logHistoricalFailure("run list", scope, snapshot.HistoryError)
+			writeScopedError(w, http.StatusBadGateway, scope, "live and durable run data are unavailable")
+			return
+		}
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
+	if snapshot.HistoryError != nil {
+		logHistoricalFailure("run list", scope, snapshot.HistoryError)
+	}
 	s.annotateMultiKueueRuns(r.Context(), &snapshot, namespace)
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0))
+}
+
+func logHistoricalFailure(surface string, scope WorkspaceScope, err error) {
+	log.Printf("portalapi: durable history failure surface=%q cluster=%q namespace=%q workspace=%q: %v",
+		surface, scope.Cluster, scope.Namespace, scope.WorkspaceID, err)
 }
 
 // annotateMultiKueueRuns adds observation-only execution identity from

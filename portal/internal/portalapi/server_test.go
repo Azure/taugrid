@@ -4,10 +4,12 @@
 package portalapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -718,6 +720,8 @@ func TestHistoricalRangeValidation(t *testing.T) {
 		{name: "duration too long", query: "window=721h", wantError: "window must be"},
 		{name: "missing end", query: "start=" + url.QueryEscape(validStart), wantError: "requires both"},
 		{name: "mixed", query: "window=1h&start=" + url.QueryEscape(validStart) + "&end=" + url.QueryEscape(validEnd), wantError: "either window or start/end"},
+		{name: "repeated window", query: "window=1h&window=24h", wantError: "exactly once"},
+		{name: "empty window", query: "window=", wantError: "window must be"},
 		{name: "malformed start", query: "start=bad&end=" + url.QueryEscape(validEnd), wantError: "start must be"},
 		{name: "reverse custom", query: "start=" + url.QueryEscape(validEnd) + "&end=" + url.QueryEscape(validStart), wantError: "end must be after start"},
 		{name: "custom too long", query: "start=2026-08-01T00%3A00%3A00Z&end=" + url.QueryEscape(validEnd), wantError: "must not exceed"},
@@ -757,6 +761,7 @@ func TestHistoricalHandlersRejectInvalidRanges(t *testing.T) {
 		{name: "cluster", path: "/api/portal/cluster?window=bad", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cluster: ClusterOptions{Querier: &stubClusterQuerier{}}}},
 		{name: "cost", path: "/api/portal/cost?start=bad&end=2026-09-17T09%3A00%3A00Z", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cost: CostOptions{Querier: &stubCostQuerier{}}}},
 		{name: "node util", path: "/api/portal/nodeutil?window=1h&start=2026-09-16T00%3A00%3A00Z&end=2026-09-17T09%3A00%3A00Z", opts: Options{Stellar: expapi.Options{Source: "kusto"}, NodeUtil: NodeUtilOptions{Querier: &stubClusterQuerier{}}}},
+		{name: "repeated cost window", path: "/api/portal/cost?window=1h&window=24h", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cost: CostOptions{Querier: &stubCostQuerier{}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1190,6 +1195,36 @@ func TestRayHistoryReportsInvalidAndUnavailableStates(t *testing.T) {
 				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestRunsCombinedFailureSanitizesAndLogsHistoryError(t *testing.T) {
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Cluster: "cluster-a"},
+		Runs: RunsOptions{
+			Reader:  failingRunsReader{},
+			History: &scopedHistoryReader{listErr: errors.New("secret backend detail")},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret backend detail") || !strings.Contains(rec.Body.String(), "live and durable run data are unavailable") {
+		t.Fatalf("client response was not sanitized: %s", rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "secret backend detail") || !strings.Contains(logs.String(), `surface="run list"`) {
+		t.Fatalf("server log missing history cause and surface: %s", logs.String())
 	}
 }
 
@@ -1644,6 +1679,7 @@ func TestRunsBoardDistinguishesUnconfiguredAndUnavailableStellar(t *testing.T) {
 
 type scopedHistoryReader struct {
 	rows          []runs.Run
+	listErr       error
 	timeline      []runs.LifecycleEvent
 	timelineErr   error
 	calls         int
@@ -1656,7 +1692,17 @@ type scopedHistoryReader struct {
 func (r *scopedHistoryReader) ListHistory(_ context.Context, scope runs.HistoryScope) ([]runs.Run, error) {
 	r.calls++
 	r.scope = scope
-	return r.rows, nil
+	return r.rows, r.listErr
+}
+
+type failingRunsReader struct{}
+
+func (failingRunsReader) ListJobs(context.Context, string) ([]byte, error) {
+	return nil, errors.New("jobs unavailable")
+}
+
+func (failingRunsReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return nil, errors.New("rayjobs unavailable")
 }
 
 func (r *scopedHistoryReader) GetHistoryTimeline(_ context.Context, scope runs.HistoryScope, resourceUID string) ([]runs.LifecycleEvent, error) {

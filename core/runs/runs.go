@@ -107,6 +107,7 @@ type Snapshot struct {
 	Runs              []Run  `json:"runs"`
 	HistoryState      string `json:"historyState"`
 	HistoryDiagnostic string `json:"historyDiagnostic,omitempty"`
+	HistoryError      error  `json:"-"`
 }
 
 // Board lists Jobs and RayJobs via the Reader and aggregates them. Each source
@@ -158,6 +159,7 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	if err != nil {
 		snap.HistoryState = historyStateUnavailable
 		snap.HistoryDiagnostic = "durable run history query failed"
+		snap.HistoryError = err
 		snap.Total = len(snap.Runs)
 		if liveUnavailable {
 			return snap, fmt.Errorf("list live and durable runs: jobs: %v; rayjobs: %v; history: %w", jobsErr, rayErr, err)
