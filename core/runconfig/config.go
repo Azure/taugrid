@@ -1015,10 +1015,6 @@ func (c Config) ValidateExecution(engine string) error {
 			return fmt.Errorf("storage.image_assets requires engine: job")
 		}
 	}
-	if c.Runtime.RDMA.Enabled && !c.LooksLikeManagedWorkflow() && engine != EngineJob {
-		return fmt.Errorf("runtime.rdma requires engine: job; direct RayJob configs do not support RDMA injection")
-	}
-
 	var launcher string
 	if c.Execution.Launcher != nil {
 		launcher = strings.ToLower(strings.TrimSpace(*c.Execution.Launcher))

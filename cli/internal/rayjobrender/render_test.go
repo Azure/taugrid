@@ -91,6 +91,55 @@ func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
 	}
 }
 
+func TestRenderRDMAAppliesToWorkersOnly(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "rdma-ray",
+		Namespace:     "tau",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       2,
+		GPUsPerWorker: 8,
+		RDMA: runconfig.NormalizedRDMA{
+			Enabled:      true,
+			ResourceName: "rdma/rdma_shared_device_a",
+			Count:        1,
+		},
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rayJob := decodeDocs(t, out)[0]
+	cluster := rayJob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headPod := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	headContainer := headPod["containers"].([]any)[0].(map[string]any)
+	if _, exists := headContainer["securityContext"]; exists {
+		t.Fatalf("head must not receive RDMA securityContext: %v", headContainer["securityContext"])
+	}
+	headResources := headContainer["resources"].(map[string]any)
+	if _, exists := headResources["requests"].(map[string]any)["rdma/rdma_shared_device_a"]; exists {
+		t.Fatalf("head must not request RDMA resources: %v", headResources)
+	}
+
+	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	workerContainer := workerPod["containers"].([]any)[0].(map[string]any)
+	securityContext := workerContainer["securityContext"].(map[string]any)
+	if fmt.Sprint(securityContext["runAsUser"]) != "0" {
+		t.Fatalf("worker runAsUser = %v, want 0", securityContext["runAsUser"])
+	}
+	capabilities := securityContext["capabilities"].(map[string]any)["add"].([]any)
+	if got := fmt.Sprint(capabilities); got != "[IPC_LOCK SYS_RESOURCE DAC_OVERRIDE]" {
+		t.Fatalf("worker RDMA capabilities = %s", got)
+	}
+	workerResources := workerContainer["resources"].(map[string]any)
+	for _, field := range []string{"requests", "limits"} {
+		if got := workerResources[field].(map[string]any)["rdma/rdma_shared_device_a"]; got != "1" {
+			t.Fatalf("worker %s RDMA resource = %v, want 1", field, got)
+		}
+	}
+}
+
 func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	out, err := Render(Options{
 		Name:               "ray-smoke",
