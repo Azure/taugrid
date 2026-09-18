@@ -54,8 +54,8 @@ function InfrastructureOverview({ platform }: { platform: boolean }) {
       </div>;
     }}</BoardResult>
     {platform && <BoardResult query={costs} label="GPU cost">{cost => <div className="stats">
-      <Stat href="/portal/cost" label="GPU-hours" value={n1(cost.gpuHoursAvailable ? cost.totalGPUHours : null)}
-        sub={`${allocationCoverage(cost.costCoverage, 'gpuHoursSamples')} · window ${cost.window || '—'}`}/>
+      <Stat href="/portal/cost" label="Estimated cost" value={cost.costAvailable ? '$' + cost.totalEstimatedCostUSD.toFixed(2) : '—'}
+        sub={`${allocationCoverage(cost.costCoverage, 'costSamples')} · window ${cost.window || '—'}`}/>
       <Stat href="/portal/cost" label="Observed idle GPUs" value={cost.idleAvailable ? cost.idleGPUs.length : '—'}
         tone={cost.idleAvailable && cost.idleGPUs.length > 0 ? 'warn' : undefined} sub={idleCoverage(cost)}/>
     </div>}</BoardResult>}
