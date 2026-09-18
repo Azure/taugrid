@@ -1015,6 +1015,9 @@ func (c Config) ValidateExecution(engine string) error {
 			return fmt.Errorf("storage.image_assets requires engine: job")
 		}
 	}
+	if c.Runtime.RDMA.Enabled && c.Workflow.File != "" {
+		return fmt.Errorf("runtime.rdma cannot be set with workflow.file; configure runtime.rdma in the referenced managed manifest")
+	}
 	var launcher string
 	if c.Execution.Launcher != nil {
 		launcher = strings.ToLower(strings.TrimSpace(*c.Execution.Launcher))

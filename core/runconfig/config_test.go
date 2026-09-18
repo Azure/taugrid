@@ -521,6 +521,14 @@ func TestValidateExecutionAcceptsRDMAForJobAndRayJob(t *testing.T) {
 	if err := managed.ValidateExecution(""); err != nil {
 		t.Fatalf("ValidateExecution(managed rayjob) unexpected error: %v", err)
 	}
+
+	wrapper := Config{
+		Workflow: Workflow{File: "managed.yaml"},
+		Runtime:  Runtime{RDMA: RDMA{Enabled: true}},
+	}
+	if err := wrapper.ValidateExecution(""); err == nil || !strings.Contains(err.Error(), "configure runtime.rdma in the referenced managed manifest") {
+		t.Fatalf("ValidateExecution(workflow wrapper) error = %v, want runtime.rdma placement guidance", err)
+	}
 }
 
 func TestParseKeepsManagedManifestPassThrough(t *testing.T) {
