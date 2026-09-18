@@ -122,14 +122,14 @@ export function RayBoard() {
           c.proxyPath ? (c.available ? <ScopedLink to={c.proxyPath} external className="back">open ↗</ScopedLink> : <span className="back disabled-link" title="Ray dashboard unreachable: head pod not Ready">open ↗</span>) : <span className="warn">—</span>])}/>}
       <h2>RayJob history</h2><Note>history: {snap.historyState || 'live-only'}</Note><HistoryDiagnostic state={snap.historyState} diagnostic={snap.historyDiagnostic} ray/>
       {!snap.history?.length ? <Empty>{snap.historyState === 'available' ? 'No durable RayJob records in this scope yet.' : 'Durable RayJob history is not configured for this portal; only live dashboards are shown.'}</Empty>
-        : <Table headers={['Name', 'Namespace', 'Status', 'Age', 'Run ID']} rows={snap.history.map(r => [r.resourceUid && r.name ? <ScopedLink to={'/portal/ray/history/' + encodeURIComponent(r.resourceUid)}>{r.name}</ScopedLink> : text(r.name), r.namespace || snap.namespace || '—', <Status value={r.status}/>, text(r.age), text(r.runId)])}/>}
+        : <Table headers={['Name', 'Namespace', 'Status', 'Age', 'Run ID']} rows={snap.history.map(r => [r.resourceUid && r.name ? <ScopedLink to={'/portal/ray/history/' + encodeURIComponent(r.resourceUid) + '?' + range.api}>{r.name}</ScopedLink> : text(r.name), r.namespace || snap.namespace || '—', <Status value={r.status}/>, text(r.age), text(r.runId)])}/>}
     </>}</BoardResult></>;
 }
 export function RayHistoryBoard() {
   const { resourceUID = '' } = useParams();
   const range = useHistoricalRange('24h');
   const query = useBoard<RayHistory>('/api/portal/ray/history/' + encodeURIComponent(resourceUID) + '?' + range.api, !!resourceUID);
-  return <><ScopedLink to="/portal/ray" className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
+  return <><ScopedLink to={'/portal/ray?' + range.api} className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
     <TimeRangeControls defaultWindow="24h"/>
     <Note>This page filters retained lifecycle events by <code>observedAt</code> within the selected range.</Note>
     <BoardResult query={query} label="Durable RayJob history">{snap => {
