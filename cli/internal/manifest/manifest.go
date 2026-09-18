@@ -276,7 +276,6 @@ func (m *Manifest) Validate() error {
 	return validateModelMetadata(m.Model)
 }
 
-
 func validateComputeResourceFields(m *Manifest) error {
 	if m.Compute.CPUs < 0 {
 		return fmt.Errorf("compute.cpus: want ≥ 1 when set, got %d", m.Compute.CPUs)
