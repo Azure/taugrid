@@ -5,7 +5,11 @@
 {{- $kusto := deepCopy (default dict $portal.kusto) -}}
 {{- $runHistory := default dict $portal.runHistory -}}
 {{- $experimentCatalog := default dict $portal.experimentCatalog -}}
+{{- $catalogReadSource := lower (default "legacy" $experimentCatalog.readSource) -}}
 {{- $catalogShadowRead := default dict $experimentCatalog.shadowRead -}}
+{{- if not (has $catalogReadSource (list "legacy" "functions")) -}}
+{{- fail "portal.experimentCatalog.readSource must be one of: legacy, functions" -}}
+{{- end -}}
 {{- $jobs := default dict $portal.jobs -}}
 {{- $jobsScopeModeConfigured := ne (trim (default "" $jobs.scopeMode)) "" -}}
 {{- $jobsScopeMode := lower (default "disabled" $jobs.scopeMode) -}}
@@ -372,6 +376,8 @@ spec:
             - --kusto-query-arg
             - {{ $arg | quote }}
             {{- end }}
+            - --kusto-experiment-catalog-read-source
+            - {{ $catalogReadSource | quote }}
             {{- if $runHistory.enabled }}
             - --run-history-enabled
             - --run-history-table

@@ -69,13 +69,13 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   DENY`; the mount relaxes that blanket `DENY` to `SAMEORIGIN` while leaving
   stricter per-route headers untouched.
 
-  Kusto discovery calls the stable `TauExpSeriesCatalogRows()` and
-  `TauExpRunCatalogRows()` functions. `adx-mon` selects their `legacy`, `dual`,
-  or `typed` implementation at Helm deployment time through
-  `functions.experimentCatalogSource`; Portal has no runtime catalog-mode
-  switch. The separate `CatalogShadowRead` option remains legacy-path
-  diagnostics. Raw `ExperimentMetrics` is queried only for exact bounded chart
-  points. Dashboard-shaped snapshot routes and API aliases remain compatibility
+  `portal.experimentCatalog.readSource=legacy` keeps canonical discovery on
+  bounded raw `ExperimentMetrics` queries without requiring catalog Function
+  CRs. Setting it to `functions` explicitly switches canonical discovery to
+  `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()` and surfaces their
+  failures. `adx-mon` independently selects those functions' `legacy`, `dual`,
+  or `typed` implementation through `functions.experimentCatalogSource`. The
+  separate `CatalogShadowRead` option remains diagnostics-only. Dashboard-shaped snapshot routes and API aliases remain compatibility
   surfaces, return deprecation headers, and are not used by the native React
   workflow.
 

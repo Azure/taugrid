@@ -212,7 +212,7 @@ spec:
           workspace_id = tostring(catalog_workspace_id),
           cluster = tostring(catalog_cluster),
           source_store_id = metric_source_store_id,
-          project = tostring(catalog_project),
+          ['project'] = tostring(catalog_project),
           experiment_id = tostring(catalog_experiment_id),
           run_group_id = tostring(catalog_run_group_id),
           run_id = tostring(catalog_run_id),

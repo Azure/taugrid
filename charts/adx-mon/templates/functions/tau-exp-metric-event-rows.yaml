@@ -21,7 +21,7 @@ spec:
           cluster = tostring(cluster),
           namespace = tostring(namespace),
           source_store_id = tostring(source_store_id),
-          project = tostring(['project']),
+          ['project'] = tostring(['project']),
           experiment_id = tostring(experiment_id),
           run_group_id = tostring(run_group_id),
           run_id = tostring(run_id),

@@ -49,3 +49,43 @@ tests:
         documentSelector:
           path: kind
           value: Deployment
+
+  - it: serves legacy experiment discovery by default
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-experiment-catalog-read-source
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: legacy
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: enables function-backed canonical discovery explicitly
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.experimentCatalog.readSource: functions
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: functions
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: rejects an unknown experiment catalog read source
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.experimentCatalog.readSource: fallback
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.experimentCatalog.readSource must be one of: legacy, functions"

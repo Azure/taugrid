@@ -352,6 +352,13 @@ Enable it only after adx-mon has created and backfilled
 failure never becomes a successful fallback response and never replaces the
 legacy result in this layer.
 
+`portal.experimentCatalog.readSource` controls authoritative canonical
+discovery and defaults to `legacy`, which uses bounded raw
+`ExperimentMetrics` queries without requiring the catalog Function CRs. Set it
+to `functions` only after `TauExpSeriesCatalogRows()` and
+`TauExpRunCatalogRows()` reconcile successfully. Function-backed read failures
+remain visible to clients; Portal never silently downgrades them to legacy.
+
 Layer 2B keeps this Portal contract unchanged. adx-mon may ingest
 `TauExpMetricEventsV1` and set `functions.experimentCatalogSource=dual` for
 typed/legacy parity while Portal continues serving the legacy discovery path.

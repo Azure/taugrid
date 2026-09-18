@@ -42,6 +42,21 @@ func TestPortalExperimentCatalogShadowReadIsExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestPortalExperimentCatalogReadSourceDefaultsToLegacy(t *testing.T) {
+	cmd := newPortalCmd()
+	serve, _, err := cmd.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := serve.Flags().Lookup("kusto-experiment-catalog-read-source")
+	if flag == nil {
+		t.Fatal("portal serve is missing --kusto-experiment-catalog-read-source")
+	}
+	if flag.DefValue != "legacy" {
+		t.Fatalf("--kusto-experiment-catalog-read-source default = %q, want legacy", flag.DefValue)
+	}
+}
+
 func TestPortalRunHistoryRequiresKustoSource(t *testing.T) {
 	cmd := newPortalCmd()
 	var stderr bytes.Buffer

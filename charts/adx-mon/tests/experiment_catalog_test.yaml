@@ -162,6 +162,12 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: 'summarize[\s\S]*by workspace_id, cluster, source_store_id, \['
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\] = \\['project'\\]"
+      - notMatchRegex:
+          path: spec.body
+          pattern: '(^|\n)[[:space:]]+project ='
 
   - it: unions and deduplicates legacy and typed series during shadow delivery
     template: templates/functions/tau-exp-series-catalog-rows.yaml
@@ -238,6 +244,12 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: 'experiment_tracking'
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\] = tostring\\(catalog_project\\)"
+      - notMatchRegex:
+          path: spec.body
+          pattern: '(^|\n)[[:space:]]+project ='
 
   - it: unions and deduplicates metric run evidence during shadow delivery
     template: templates/functions/tau-exp-run-catalog-rows.yaml

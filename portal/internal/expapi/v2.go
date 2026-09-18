@@ -166,9 +166,6 @@ type v2Error struct {
 	Retryable      bool   `json:"retryable"`
 }
 
-// v2CatalogSource is intentionally mode-independent. Helm selects the backing
-// implementation of the stable catalog functions; Go consumes only their
-// contract and does not model legacy/dual/typed selection.
 type v2CatalogSource interface {
 	searchExperiments(context.Context, string, expstore.ExperimentSearchOptions) (v2ExperimentCatalogResult, error)
 	searchRuns(context.Context, string, expstore.RunSearchOptions) (runSearchResponse, error)
@@ -177,6 +174,58 @@ type v2CatalogSource interface {
 type v2ExperimentCatalogResult struct {
 	Result        expstore.ExperimentSearchResult
 	ServedSources []string
+}
+
+// legacyCatalogSource preserves the bounded raw ExperimentMetrics discovery
+// path while stable catalog functions are being deployed and verified.
+type legacyCatalogSource struct {
+	server *Server
+}
+
+func (a legacyCatalogSource) searchExperiments(ctx context.Context, source string, opts expstore.ExperimentSearchOptions) (v2ExperimentCatalogResult, error) {
+	localSearch := func() (expstore.ExperimentSearchResult, error) {
+		return a.server.searchLocalExperiments(ctx, opts)
+	}
+	kustoSearch := func() (expstore.ExperimentSearchResult, error) {
+		return a.server.baseKustoSource().SearchExperiments(ctx, opts)
+	}
+	switch source {
+	case "local":
+		result, err := localSearch()
+		return v2ExperimentCatalogResult{Result: result, ServedSources: []string{"local"}}, err
+	case "kusto":
+		result, err := kustoSearch()
+		return v2ExperimentCatalogResult{Result: result, ServedSources: []string{"kusto"}}, err
+	case "auto":
+		return searchAutoExperimentCatalogs(ctx, a.server.hasKustoSource(), opts.Limit, localSearch, kustoSearch)
+	default:
+		return v2ExperimentCatalogResult{}, fmt.Errorf("unsupported Stellar source %q", source)
+	}
+}
+
+func (a legacyCatalogSource) searchRuns(ctx context.Context, source string, opts expstore.RunSearchOptions) (runSearchResponse, error) {
+	localSearch := func() (runSearchResponse, error) {
+		return a.server.searchRuns(ctx, "local", opts)
+	}
+	kustoSearch := func() (runSearchResponse, error) {
+		result, err := a.server.baseKustoSource().SearchRuns(ctx, opts)
+		return withRunSource(result, "kusto"), err
+	}
+	switch source {
+	case "local":
+		return localSearch()
+	case "kusto":
+		return kustoSearch()
+	case "auto":
+		result, warnings, err := searchAutoSources(ctx, a.server.hasKustoSource(), "run", localSearch, kustoSearch,
+			func(local, kusto runSearchResponse) runSearchResponse {
+				return mergeRunSearchResults(local, kusto, opts.Limit)
+			})
+		result.Warnings = append(result.Warnings, warnings...)
+		return result, err
+	default:
+		return runSearchResponse{}, fmt.Errorf("unsupported Stellar source %q", source)
+	}
 }
 
 // stableFunctionCatalogSource sends Kusto discovery through
@@ -294,7 +343,14 @@ func (s *Server) v2CatalogSource() v2CatalogSource {
 	if s.v2Catalog != nil {
 		return s.v2Catalog
 	}
-	return stableFunctionCatalogSource{server: s}
+	return s.configuredV2CatalogSource()
+}
+
+func (s *Server) configuredV2CatalogSource() v2CatalogSource {
+	if s.kustoExperimentCatalogReadSource == "functions" {
+		return stableFunctionCatalogSource{server: s}
+	}
+	return legacyCatalogSource{server: s}
 }
 
 func newV2CursorKey(workspace, source string) []byte {

@@ -24,6 +24,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/Azure/taugrid/core/expkusto"
+	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/portal/internal/blobstore"
 	"github.com/Azure/taugrid/portal/internal/expcockpit"
@@ -335,6 +336,99 @@ func TestV2CatalogSourceSeamIsModeIndependent(t *testing.T) {
 		response.Experiments[0].ExperimentID != "adapter-experiment" ||
 		response.Experiments[0].Project != "adapter-project" {
 		t.Fatalf("canonical search did not use catalog seam: calls=%d response=%+v", catalog.experimentCalls, response)
+	}
+}
+
+func TestV2LegacyCatalogReadSourceDoesNotRequireFunctions(t *testing.T) {
+	var queries []string
+	server, err := NewServer(Options{
+		Source:                           "kusto",
+		Workspace:                        "workspace-a",
+		KustoIngestion:                   "remote-write",
+		KustoAllowedProjects:             []string{"project-a"},
+		KustoExperimentCatalogReadSource: "legacy",
+		KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+			queries = append(queries, query)
+			if strings.Contains(query, "TauExpRunCatalogRows()") ||
+				strings.Contains(query, "TauExpSeriesCatalogRows()") {
+				return "", errors.New("catalog function must not be queried in legacy mode")
+			}
+			return "[]", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?project=project-a&limit=10",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2ExperimentSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Experiments) != 0 || response.Metadata.Availability.State != "available" {
+		t.Fatalf("legacy empty result = %+v", response)
+	}
+	runs := httptest.NewRecorder()
+	server.Handler().ServeHTTP(runs, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/experiment-a/runs?project=project-a&limit=10",
+		nil,
+	))
+	if runs.Code != http.StatusOK {
+		t.Fatalf("runs status = %d, body=%s", runs.Code, runs.Body.String())
+	}
+	joined := strings.Join(queries, "\n")
+	if !strings.Contains(joined, exptelemetry.RemoteWriteTable) ||
+		!strings.Contains(joined, "project_id=tostring(Labels['project'])") ||
+		strings.Contains(joined, "['project']=project,") {
+		t.Fatalf("legacy discovery generated unexpected KQL:\n%s", joined)
+	}
+}
+
+func TestV2FunctionCatalogReadSourceSurfacesFunctionFailure(t *testing.T) {
+	var query string
+	server, err := NewServer(Options{
+		Source:                           "kusto",
+		Workspace:                        "workspace-a",
+		KustoAllowedProjects:             []string{"project-a"},
+		KustoExperimentCatalogReadSource: "functions",
+		KustoNativeQuery: func(_ context.Context, generated string) (string, error) {
+			query = generated
+			return "", errors.New("Kusto query response reported errors: catalog function unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?project=project-a&limit=10",
+		nil,
+	))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(query, exptelemetry.RunCatalogRowsFunction+"()") {
+		t.Fatalf("function-backed discovery did not query the stable run catalog:\n%s", query)
+	}
+}
+
+func TestNewServerRejectsUnknownCatalogReadSource(t *testing.T) {
+	if _, err := NewServer(Options{
+		StorePath:                        seedExpAPIStore(t, 1),
+		KustoExperimentCatalogReadSource: "fallback",
+	}); err == nil || !strings.Contains(err.Error(), "must be legacy or functions") {
+		t.Fatalf("NewServer error = %v", err)
 	}
 }
 

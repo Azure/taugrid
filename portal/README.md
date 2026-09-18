@@ -133,10 +133,14 @@ The native UI uses only the narrow canonical reads:
 
 List reads use bounded limits and opaque query-bound cursors. Responses carry
 freshness, provenance, availability, partial-result warnings, and typed errors.
-Discovery and catalog reads call the stable `TauExpSeriesCatalogRows()` and
-`TauExpRunCatalogRows()` contracts. The `adx-mon` Helm value
-`functions.experimentCatalogSource` selects their deployment-time implementation
-(`legacy`, `dual`, or `typed`); Portal does not model that mode in Go.
+The Portal value `portal.experimentCatalog.readSource` selects authoritative
+canonical discovery. `legacy` (the default) uses bounded raw
+`ExperimentMetrics` queries and does not require catalog Function CRs.
+`functions` calls the stable `TauExpSeriesCatalogRows()` and
+`TauExpRunCatalogRows()` contracts and surfaces any ADX/function failure. When
+function reads are enabled, the `adx-mon` value
+`functions.experimentCatalogSource` selects their implementation (`legacy`,
+`dual`, or `typed`).
 `--kusto-experiment-catalog-shadow-read` remains a separate diagnostic for the
 legacy dashboard path and is not used by canonical reads. Raw
 `ExperimentMetrics` remains limited to exact chart-point queries.
@@ -153,13 +157,16 @@ legacy HTML renderer is deferred until their CLI/TUI/report consumers migrate.
 
 Roll out the stacked experiment architecture in this order:
 
-1. Install the typed ADX event and stable catalog functions while
+1. Keep `portal.experimentCatalog.readSource=legacy` while installing the typed
+   ADX event and stable catalog functions with
    `functions.experimentCatalogSource=legacy`.
 2. Deploy the standalone collector and validate typed delivery/parity without
    making it required for portal reads.
-3. Deploy this Portal/API/UI layer; canonical discovery calls the stable
-   functions and chart points remain exact raw-metric reads.
-4. Change the Helm catalog source to `dual`, monitor parity, missing/extra
+3. Deploy this Portal/API/UI layer; canonical discovery remains on bounded
+   legacy queries and chart points remain exact raw-metric reads.
+4. After the Function CRs are healthy, set
+   `portal.experimentCatalog.readSource=functions`, then change the ADX catalog
+   source to `dual` and monitor parity, missing/extra
    identities, duplicates, freshness, lifecycle-only visibility, and query cost.
 5. Change selected environments to `typed` after parity gates pass. Roll back
    immediately by restoring the Helm value to `legacy`; no Portal change is

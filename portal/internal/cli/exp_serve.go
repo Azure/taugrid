@@ -43,6 +43,7 @@ type expServeOptions struct {
 	kustoQueryCommand      string
 	kustoQueryArgs         []string
 	kustoTargetPoints      int
+	kustoCatalogReadSource string
 	kustoCatalogShadowRead bool
 	maxRuns                int
 	maxMetricRows          int
@@ -109,6 +110,7 @@ func defaultExpServeOptions() expServeOptions {
 		kustoMaxDiscoverySince: "365d",
 		kustoTargetSince:       "365d",
 		kustoTargetPoints:      12000,
+		kustoCatalogReadSource: "legacy",
 		maxRuns:                expapi.DefaultMaxRuns,
 		maxMetricRows:          expapi.DefaultMaxMetricRows,
 		timeout:                expapi.DefaultRequestTimeout,
@@ -138,6 +140,7 @@ func addExpServeFlags(cmd *cobra.Command, opts *expServeOptions, includeOpen boo
 	cmd.Flags().StringVar(&opts.kustoMaxDiscoverySince, "max-discovery-since", "365d", "maximum allowed lookback for unscoped broad Kusto experiment discovery")
 	cmd.Flags().StringVar(&opts.kustoTargetSince, "target-since", "365d", "default lookback for targeted live Kusto dashboard queries")
 	cmd.Flags().IntVar(&opts.kustoTargetPoints, "kusto-target-points", 12000, "target downsampled points for live Kusto metrics queries")
+	cmd.Flags().StringVar(&opts.kustoCatalogReadSource, "kusto-experiment-catalog-read-source", "legacy", "authoritative canonical Kusto discovery path: legacy or functions")
 	cmd.Flags().BoolVar(&opts.kustoCatalogShadowRead, "kusto-experiment-catalog-shadow-read", false, "query the typed ADX experiment catalog for parity diagnostics while continuing to serve legacy discovery")
 	cmd.Flags().StringVar(&opts.kustoQueryCommand, "kusto-query-command", "", "executable that runs generated KQL and emits Stellar row JSONL/JSON or Kusto REST JSON; KQL is passed on stdin unless an arg contains {query}")
 	cmd.Flags().StringArrayVar(&opts.kustoQueryArgs, "kusto-query-arg", nil, "argument for --kusto-query-command; supports {endpoint}, {database}, and {query} placeholders")
@@ -174,31 +177,32 @@ func newExpServerFromOptions(storePath *string, opts expServeOptions) (*expapi.S
 // so the two commands stay flag-compatible.
 func (opts expServeOptions) toExpapiOptions(storePath *string) expapi.Options {
 	return expapi.Options{
-		StorePath:              storePathValue(storePath),
-		DefaultTarget:          opts.defaultTarget,
-		DefaultMetric:          opts.metric,
-		Source:                 opts.source,
-		KustoMetricsFile:       opts.kustoMetricsFile,
-		KustoProject:           opts.kustoProject,
-		Workspace:              opts.workspace,
-		KustoWorkspace:         opts.kustoWorkspace,
-		KustoAllowedProjects:   opts.kustoAllowedProjects,
-		KustoFeaturedProjects:  opts.kustoFeaturedProjects,
-		KustoEndpoint:          opts.kustoEndpoint,
-		KustoDatabase:          opts.kustoDatabase,
-		KustoIngestion:         opts.kustoIngestion,
-		KustoSince:             opts.kustoSince,
-		KustoDiscoverySince:    opts.kustoDiscoverySince,
-		KustoMaxDiscoverySince: opts.kustoMaxDiscoverySince,
-		KustoTargetSince:       opts.kustoTargetSince,
-		KustoQueryCommand:      opts.kustoQueryCommand,
-		KustoQueryArgs:         opts.kustoQueryArgs,
-		KustoNativeQuery:       opts.nativeKustoQuery(),
-		KustoTargetPoints:      opts.kustoTargetPoints,
-		KustoCatalogShadowRead: opts.kustoCatalogShadowRead,
-		MaxRuns:                opts.maxRuns,
-		MaxMetricRows:          opts.maxMetricRows,
-		RequestTimeout:         opts.timeout,
+		StorePath:                        storePathValue(storePath),
+		DefaultTarget:                    opts.defaultTarget,
+		DefaultMetric:                    opts.metric,
+		Source:                           opts.source,
+		KustoMetricsFile:                 opts.kustoMetricsFile,
+		KustoProject:                     opts.kustoProject,
+		Workspace:                        opts.workspace,
+		KustoWorkspace:                   opts.kustoWorkspace,
+		KustoAllowedProjects:             opts.kustoAllowedProjects,
+		KustoFeaturedProjects:            opts.kustoFeaturedProjects,
+		KustoEndpoint:                    opts.kustoEndpoint,
+		KustoDatabase:                    opts.kustoDatabase,
+		KustoIngestion:                   opts.kustoIngestion,
+		KustoSince:                       opts.kustoSince,
+		KustoDiscoverySince:              opts.kustoDiscoverySince,
+		KustoMaxDiscoverySince:           opts.kustoMaxDiscoverySince,
+		KustoTargetSince:                 opts.kustoTargetSince,
+		KustoQueryCommand:                opts.kustoQueryCommand,
+		KustoQueryArgs:                   opts.kustoQueryArgs,
+		KustoNativeQuery:                 opts.nativeKustoQuery(),
+		KustoTargetPoints:                opts.kustoTargetPoints,
+		KustoExperimentCatalogReadSource: opts.kustoCatalogReadSource,
+		KustoCatalogShadowRead:           opts.kustoCatalogShadowRead,
+		MaxRuns:                          opts.maxRuns,
+		MaxMetricRows:                    opts.maxMetricRows,
+		RequestTimeout:                   opts.timeout,
 	}
 }
 

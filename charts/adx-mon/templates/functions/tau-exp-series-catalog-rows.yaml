@@ -85,7 +85,7 @@ spec:
           workspace_id,
           cluster,
           source_store_id,
-          project = ['project'],
+          ['project'] = ['project'],
           experiment_id,
           run_group_id,
           run_id,

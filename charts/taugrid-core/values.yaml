@@ -388,6 +388,9 @@ portal:
     queryCommand: ""
     queryArgs: []
   experimentCatalog:
+    # Authoritative canonical discovery path. Keep legacy until the stable ADX
+    # catalog functions are deployed and healthy; functions fails closed.
+    readSource: legacy
     # Layer 1 keeps legacy raw ExperimentMetrics discovery authoritative and
     # only compares the typed ADX catalog in bounded background queries.
     shadowRead:

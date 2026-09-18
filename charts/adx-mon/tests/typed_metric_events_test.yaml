@@ -91,6 +91,12 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: 'tags = todynamic\(tags\)'
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\] = tostring\\(\\['project'\\]\\)"
+      - notMatchRegex:
+          path: spec.body
+          pattern: '(^|\n)[[:space:]]+project ='
 
   - it: keeps parity and observability query assets default off
     template: templates/functions/tau-exp-metric-delivery-parity-rows.yaml

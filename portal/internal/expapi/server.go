@@ -77,6 +77,10 @@ type Options struct {
 	KustoNativeQuery  func(ctx context.Context, query string) (string, error)
 	KustoQueryArgs    []string
 	KustoTargetPoints int
+	// KustoExperimentCatalogReadSource selects the authoritative Kusto
+	// discovery path for canonical v2 reads: legacy raw metrics or stable
+	// catalog functions. Shadow reads remain an independent diagnostic.
+	KustoExperimentCatalogReadSource string
 	// KustoCatalogShadowRead compares typed catalog discovery with the legacy
 	// raw-metrics path but never serves the catalog result.
 	KustoCatalogShadowRead bool
@@ -135,33 +139,34 @@ func (s *Server) resolveWorkspace(r *http.Request) (string, error) {
 }
 
 type Server struct {
-	storeRoot              string
-	defaultTarget          string
-	defaultMetric          string
-	source                 string
-	kustoMetricsFile       string
-	kustoProject           string
-	workspace              string
-	kustoAllowedProjects   []string
-	kustoFeaturedProjects  []string
-	kustoEndpoint          string
-	kustoDatabase          string
-	kustoIngestion         string
-	kustoSince             string
-	kustoDiscoverySince    string
-	kustoMaxDiscoverySince string
-	kustoTargetSince       string
-	kustoQueryCommand      string
-	kustoQueryArgs         []string
-	kustoNativeQuery       func(ctx context.Context, query string) (string, error)
-	kustoTargetPoints      int
-	kustoCatalogShadowRead bool
-	maxRuns                int
-	maxMetricRows          int
-	requestTimeout         time.Duration
-	cursorKey              []byte
-	v2Catalog              v2CatalogSource
-	mux                    *http.ServeMux
+	storeRoot                        string
+	defaultTarget                    string
+	defaultMetric                    string
+	source                           string
+	kustoMetricsFile                 string
+	kustoProject                     string
+	workspace                        string
+	kustoAllowedProjects             []string
+	kustoFeaturedProjects            []string
+	kustoEndpoint                    string
+	kustoDatabase                    string
+	kustoIngestion                   string
+	kustoSince                       string
+	kustoDiscoverySince              string
+	kustoMaxDiscoverySince           string
+	kustoTargetSince                 string
+	kustoQueryCommand                string
+	kustoQueryArgs                   []string
+	kustoNativeQuery                 func(ctx context.Context, query string) (string, error)
+	kustoTargetPoints                int
+	kustoExperimentCatalogReadSource string
+	kustoCatalogShadowRead           bool
+	maxRuns                          int
+	maxMetricRows                    int
+	requestTimeout                   time.Duration
+	cursorKey                        []byte
+	v2Catalog                        v2CatalogSource
+	mux                              *http.ServeMux
 }
 
 func NewServer(opts Options) (*Server, error) {
@@ -171,6 +176,10 @@ func NewServer(opts Options) (*Server, error) {
 	}
 	if source == "" {
 		source = "local"
+	}
+	catalogReadSource, err := normalizeKustoExperimentCatalogReadSource(opts.KustoExperimentCatalogReadSource)
+	if err != nil {
+		return nil, err
 	}
 	root := strings.TrimSpace(opts.StorePath)
 	if source == "kusto" && root == "" {
@@ -198,36 +207,48 @@ func NewServer(opts Options) (*Server, error) {
 		opts.RequestTimeout = DefaultRequestTimeout
 	}
 	s := &Server{
-		storeRoot:              root,
-		defaultTarget:          strings.TrimSpace(opts.DefaultTarget),
-		defaultMetric:          strings.TrimSpace(opts.DefaultMetric),
-		source:                 source,
-		kustoMetricsFile:       strings.TrimSpace(opts.KustoMetricsFile),
-		kustoProject:           strings.TrimSpace(opts.KustoProject),
-		workspace:              defaultWorkspace(opts),
-		kustoAllowedProjects:   compactStrings(opts.KustoAllowedProjects),
-		kustoFeaturedProjects:  compactStrings(opts.KustoFeaturedProjects),
-		kustoEndpoint:          strings.TrimSpace(opts.KustoEndpoint),
-		kustoDatabase:          strings.TrimSpace(opts.KustoDatabase),
-		kustoIngestion:         strings.TrimSpace(opts.KustoIngestion),
-		kustoSince:             strings.TrimSpace(opts.KustoSince),
-		kustoDiscoverySince:    strings.TrimSpace(opts.KustoDiscoverySince),
-		kustoMaxDiscoverySince: strings.TrimSpace(opts.KustoMaxDiscoverySince),
-		kustoTargetSince:       strings.TrimSpace(opts.KustoTargetSince),
-		kustoQueryCommand:      strings.TrimSpace(opts.KustoQueryCommand),
-		kustoQueryArgs:         append([]string(nil), opts.KustoQueryArgs...),
-		kustoNativeQuery:       opts.KustoNativeQuery,
-		kustoTargetPoints:      opts.KustoTargetPoints,
-		kustoCatalogShadowRead: opts.KustoCatalogShadowRead,
-		maxRuns:                opts.MaxRuns,
-		maxMetricRows:          opts.MaxMetricRows,
-		requestTimeout:         opts.RequestTimeout,
-		cursorKey:              newV2CursorKey(defaultWorkspace(opts), source),
-		mux:                    http.NewServeMux(),
+		storeRoot:                        root,
+		defaultTarget:                    strings.TrimSpace(opts.DefaultTarget),
+		defaultMetric:                    strings.TrimSpace(opts.DefaultMetric),
+		source:                           source,
+		kustoMetricsFile:                 strings.TrimSpace(opts.KustoMetricsFile),
+		kustoProject:                     strings.TrimSpace(opts.KustoProject),
+		workspace:                        defaultWorkspace(opts),
+		kustoAllowedProjects:             compactStrings(opts.KustoAllowedProjects),
+		kustoFeaturedProjects:            compactStrings(opts.KustoFeaturedProjects),
+		kustoEndpoint:                    strings.TrimSpace(opts.KustoEndpoint),
+		kustoDatabase:                    strings.TrimSpace(opts.KustoDatabase),
+		kustoIngestion:                   strings.TrimSpace(opts.KustoIngestion),
+		kustoSince:                       strings.TrimSpace(opts.KustoSince),
+		kustoDiscoverySince:              strings.TrimSpace(opts.KustoDiscoverySince),
+		kustoMaxDiscoverySince:           strings.TrimSpace(opts.KustoMaxDiscoverySince),
+		kustoTargetSince:                 strings.TrimSpace(opts.KustoTargetSince),
+		kustoQueryCommand:                strings.TrimSpace(opts.KustoQueryCommand),
+		kustoQueryArgs:                   append([]string(nil), opts.KustoQueryArgs...),
+		kustoNativeQuery:                 opts.KustoNativeQuery,
+		kustoTargetPoints:                opts.KustoTargetPoints,
+		kustoExperimentCatalogReadSource: catalogReadSource,
+		kustoCatalogShadowRead:           opts.KustoCatalogShadowRead,
+		maxRuns:                          opts.MaxRuns,
+		maxMetricRows:                    opts.MaxMetricRows,
+		requestTimeout:                   opts.RequestTimeout,
+		cursorKey:                        newV2CursorKey(defaultWorkspace(opts), source),
+		mux:                              http.NewServeMux(),
 	}
-	s.v2Catalog = stableFunctionCatalogSource{server: s}
+	s.v2Catalog = s.configuredV2CatalogSource()
 	s.routes()
 	return s, nil
+}
+
+func normalizeKustoExperimentCatalogReadSource(value string) (string, error) {
+	switch value = strings.ToLower(strings.TrimSpace(value)); value {
+	case "", "legacy":
+		return "legacy", nil
+	case "functions":
+		return value, nil
+	default:
+		return "", fmt.Errorf("--kusto-experiment-catalog-read-source must be legacy or functions")
+	}
 }
 
 func (s *Server) Handler() http.Handler {
