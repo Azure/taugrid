@@ -21,6 +21,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/portal/internal/expstore"
 	"github.com/Azure/taugrid/portal/internal/portalbin"
@@ -330,6 +331,8 @@ type RunView struct {
 	Events                   []EventView       `json:"events,omitempty"`
 	Observations             []ObservationView `json:"observations,omitempty"`
 	ObserveCLI               string            `json:"observe_cli"`
+
+	Launch *experiment.Launch `json:"launch,omitempty"`
 }
 
 type FieldView struct {
@@ -3546,6 +3549,12 @@ func attachRunSearchMetadata(ctx context.Context, store *expstore.Store, runs []
 		run.Successful = classification.Successful
 		run.SuccessReasons = classification.Reasons
 		run.Tags = runTags
+		run.Launch = experiment.ParseLaunch(runTags[experiment.LaunchTag])
+		if run.Launch != nil {
+			run.Tags[experiment.LaunchTag] = run.Launch.Tag()
+		} else {
+			delete(run.Tags, experiment.LaunchTag)
+		}
 		run.MetricNames = metricSummaryNames(runSummaries)
 		latestMetricAt := time.Time{}
 		if updatedAt := latestMetricSummaryUpdatedAt(runSummaries); updatedAt != "" {

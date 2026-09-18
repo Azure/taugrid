@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.7-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
@@ -9,14 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 WORKDIR /src/controllers/tau-core
 COPY controllers/tau-core/go.mod controllers/tau-core/go.sum ./
 COPY core/go.mod core/go.sum ../../core/
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY controllers/tau-core ./
 COPY core ../../core
 
 # CGO required for systemcrypto FIPS build; buildx sets TARGETOS/TARGETARCH per platform.
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
     go build -buildvcs=false -ldflags '-s -w' -o /tau-core-controller ./cmd/controller
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0

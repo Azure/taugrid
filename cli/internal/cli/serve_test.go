@@ -5,9 +5,193 @@ package cli
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/yaml"
 )
+
+func TestApplyCheckpointMountPaths(t *testing.T) {
+	for _, tt := range []struct {
+		name, checkpoint, want string
+		wantErr                bool
+	}{
+		{"workspace", "projects/taugrid-default/runs/train/checkpoints/last.pt", "/data/projects/taugrid-default/runs/train/checkpoints/last.pt", false},
+		{"workspace dot prefix", "./projects/ws/runs/train/checkpoints/last.pt", "/data/projects/ws/runs/train/checkpoints/last.pt", false},
+		{"legacy", "finetunes/run/checkpoints/best.pt", "/data/checkpoints/finetunes/run/checkpoints/best.pt", false},
+		{"prefix boundary", "projects-old/model.pt", "/data/checkpoints/projects-old/model.pt", false},
+		{"absolute workspace", "/data/projects/ws/runs/train/checkpoints/last.pt", "/data/projects/ws/runs/train/checkpoints/last.pt", false},
+		{"absolute legacy", "/data/checkpoints/train/last.pt", "/data/checkpoints/train/last.pt", false},
+		{"absolute custom", "/models/last.pt", "/models/last.pt", false},
+		{"relative escape", "../last.pt", "", true},
+		{"workspace escape", "projects/ws/../../last.pt", "", true},
+		{"internal traversal", "projects/ws/runs/../other/last.pt", "", true},
+		{"absolute escape", "/data/../last.pt", "", true},
+		{"nul", "projects/ws/\x00last.pt", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env, volumes, mounts, err := applyCheckpointMount(nil, nil, nil, tt.checkpoint, "blob-training")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected invalid checkpoint to fail")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if env["TAU_MODEL_PATH"] != tt.want {
+				t.Fatalf("TAU_MODEL_PATH = %q, want %q", env["TAU_MODEL_PATH"], tt.want)
+			}
+			if len(volumes) != 1 || volumes[0].PVC != "blob-training" ||
+				len(mounts) != 1 || mounts[0].MountPath != "/data" || mounts[0].SubPath != "" {
+				t.Fatalf("checkpoint must mount PVC root at /data: volumes=%+v mounts=%+v", volumes, mounts)
+			}
+		})
+	}
+}
+
+func TestServeDeployWorkspaceCheckpoint(t *testing.T) {
+	for _, kind := range []string{"deployment", "rayservice"} {
+		t.Run(kind, func(t *testing.T) {
+			cmd := newConnectedServeTestRoot(t)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{"serve", "deploy", "workspace-model", "--kind=" + kind,
+				"--profile", "model-serve", "--image", "test:v1", "--dry-run=client", "-n", "tau",
+				"--checkpoint", "projects/ws/runs/train/checkpoints/last.pt", "--checkpoint-pvc", "training-data"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			pod := serveTestPodSpec(t, out.Bytes(), kind)
+			container := pod.Containers[0]
+			found := false
+			for _, env := range container.Env {
+				if env.Name == "TAU_MODEL_PATH" {
+					found = env.Value == "/data/projects/ws/runs/train/checkpoints/last.pt"
+				}
+			}
+			if !found {
+				t.Fatalf("workspace checkpoint missing: %+v", container.Env)
+			}
+			if len(pod.Volumes) != 1 || pod.Volumes[0].PersistentVolumeClaim == nil ||
+				pod.Volumes[0].PersistentVolumeClaim.ClaimName != "training-data" ||
+				len(container.VolumeMounts) != 1 || container.VolumeMounts[0].MountPath != "/data" ||
+				container.VolumeMounts[0].SubPath != "" {
+				t.Fatalf("expected full checkpoint PVC at /data: %+v", pod)
+			}
+		})
+	}
+}
+
+func serveTestPodSpec(t *testing.T, manifest []byte, kind string) corev1.PodSpec {
+	t.Helper()
+	var doc struct {
+		Spec struct {
+			Template         corev1.PodTemplateSpec `json:"template"`
+			RayClusterConfig struct {
+				HeadGroupSpec struct {
+					Template corev1.PodTemplateSpec `json:"template"`
+				} `json:"headGroupSpec"`
+			} `json:"rayClusterConfig"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(manifest, &doc); err != nil {
+		t.Fatal(err)
+	}
+	pod := doc.Spec.Template.Spec
+	if kind == "rayservice" {
+		pod = doc.Spec.RayClusterConfig.HeadGroupSpec.Template.Spec
+	}
+	if len(pod.Containers) == 0 {
+		t.Fatal("rendered manifest has no serving container")
+	}
+	return pod
+}
+
+func TestServeDeployContainerCommand(t *testing.T) {
+	script := "pip install 'foo[serve]==1.2' &&\nexec python serve.py --label \"hello, world\""
+	for _, tt := range []struct {
+		name    string
+		flags   []string
+		command []string
+		args    []string
+	}{
+		{name: "image defaults"},
+		{name: "explicit shell", flags: []string{"--command", "/bin/sh", "--command", "-c", "--arg", script},
+			command: []string{"/bin/sh", "-c"}, args: []string{script}},
+		{name: "literal arguments", flags: []string{"--arg=hello, world", "--arg=", "--arg=$(id); echo nope"},
+			args: []string{"hello, world", "", "$(id); echo nope"}},
+		{name: "command only", flags: []string{"--command=/app/server"}, command: []string{"/app/server"}},
+		{name: "legacy with command", flags: []string{"--command=python", "--args=serve.py --port 8080"},
+			command: []string{"python"}, args: []string{"serve.py", "--port", "8080"}},
+		{name: "legacy shell remains literal", flags: []string{"--args=pip install foo && python serve.py"},
+			args: []string{"pip", "install", "foo", "&&", "python", "serve.py"}},
+		{name: "legacy quote behavior", flags: []string{"--args=--label 'hello world'"},
+			args: []string{"--label", "'hello", "world'"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newConnectedServeTestRoot(t)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			flags := []string{"serve", "deploy", "custom-server", "--kind=deployment",
+				"--profile=model-serve", "--image=test:v1", "--dry-run=client", "-n", "tau"}
+			cmd.SetArgs(append(flags, tt.flags...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			container := serveTestPodSpec(t, out.Bytes(), "deployment").Containers[0]
+			if !reflect.DeepEqual(container.Command, tt.command) || !reflect.DeepEqual(container.Args, tt.args) {
+				t.Fatalf("command=%q args=%q, want command=%q args=%q", container.Command, container.Args, tt.command, tt.args)
+			}
+		})
+	}
+}
+
+func TestServeDeployRayLegacyArgsPreserveStartup(t *testing.T) {
+	cmd := newConnectedServeTestRoot(t)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"serve", "deploy", "ray-server", "--kind=rayservice",
+		"--profile=model-serve", "--image=test:v1", "--dry-run=client", "-n", "tau",
+		"--args=--model /ckpt --label 'hello world'"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	container := serveTestPodSpec(t, out.Bytes(), "rayservice").Containers[0]
+	want := []string{"--model", "/ckpt", "--label", "'hello", "world'"}
+	if len(container.Command) != 0 || !reflect.DeepEqual(container.Args, want) {
+		t.Fatalf("legacy Ray head command/args changed: command=%q args=%q", container.Command, container.Args)
+	}
+}
+
+func TestServeDeployRejectsInvalidCommandFlags(t *testing.T) {
+	for _, tt := range []struct {
+		name, wantErr string
+		flags         []string
+	}{
+		{"mixed args", "--arg conflicts with --args", []string{"--kind=deployment", "--args=one", "--arg=two"}},
+		{"explicit empty legacy args", "--arg conflicts with --args", []string{"--kind=deployment", "--args=", "--arg=two"}},
+		{"empty command", "--command requires a non-empty executable", []string{"--kind=deployment", "--command="}},
+		{"blank command", "--command requires a non-empty executable", []string{"--kind=deployment", "--command= "}},
+		{"default Ray command", "require --kind=deployment", []string{"--command=sh"}},
+		{"Ray command", "require --kind=deployment", []string{"--kind=rayservice", "--command=sh"}},
+		{"Ray args", "require --kind=deployment", []string{"--kind=rayservice", "--arg=hello"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newServeDeployCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs(append([]string{"custom-server", "--profile=model-serve", "--dry-run=client"}, tt.flags...))
+			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error=%v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
 
 func TestApplyCheckpointMount(t *testing.T) {
 	env, volumes, mounts, err := applyCheckpointMount(nil, nil, nil, "finetunes/run/checkpoints/best.safetensors", "blob-training")

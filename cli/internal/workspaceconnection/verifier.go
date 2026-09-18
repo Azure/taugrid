@@ -65,7 +65,8 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		)
 	}
 	if workspaceAuthorizationMode == AuthorizationModeWorkspaceRBAC &&
-		strings.TrimSpace(workspace.Spec.Role) != descriptor.Authorization.RequiredRole {
+		(!tauworkspace.IsResearcherRole(strings.TrimSpace(workspace.Spec.Role)) ||
+			!tauworkspace.IsResearcherRole(descriptor.Authorization.RequiredRole)) {
 		return Verification{}, fmt.Errorf(
 			"workspace connection required role %q does not match TauWorkspace %q role %q",
 			descriptor.Authorization.RequiredRole,
@@ -112,6 +113,11 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		{verb: "list", resource: "rayjobs.ray.io", namespace: namespace},
 		{verb: "patch", resource: "rayjobs.ray.io", namespace: namespace},
 		{verb: "delete", resource: "rayjobs.ray.io", namespace: namespace},
+		{verb: "create", resource: "rayservices.ray.io", namespace: namespace},
+		{verb: "get", resource: "rayservices.ray.io", namespace: namespace},
+		{verb: "list", resource: "rayservices.ray.io", namespace: namespace},
+		{verb: "patch", resource: "rayservices.ray.io", namespace: namespace},
+		{verb: "delete", resource: "rayservices.ray.io", namespace: namespace},
 		{verb: "get", resource: "pods", namespace: namespace},
 		{verb: "list", resource: "pods", namespace: namespace},
 		{verb: "get", resource: "pods/log", namespace: namespace},

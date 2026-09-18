@@ -166,8 +166,8 @@ preserve_kueue_crd_retention() (
   local crd
   local patched=0
 
-  # Kueue 0.18.2 used this policy, so restoring it in 0.19.0 also makes a
-  # direct enabled-to-disabled upgrade retain the CRDs owned by the old release.
+  # Kueue 0.18.2 used this policy, so restoring it in newer vendored charts also
+  # makes a direct enabled-to-disabled upgrade retain CRDs owned by the release.
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/taugrid-kueue.XXXXXX")"
   trap 'rm -rf "$work_dir"' EXIT
   tar -xzf "$archive" -C "$work_dir"

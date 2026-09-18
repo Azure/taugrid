@@ -319,6 +319,10 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		o.configHash,
 	)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
+	capture = addLaunchMetadata(capture, opts.GPUClass, resolvedProfileName, o.script, o.launcher, max(1, o.nodes), gpuCountFromProfile(p))
+	// Direct Job rendering only supports the standard device-plugin resource.
+	capture = addLaunchGPUResources(capture, "device-plugin", "")
+	opts.MetricsOffload.Tags = addLaunchTag(opts.MetricsOffload.Tags, capture)
 	opts.Labels, opts.Annotations = experiment.MergeMetadata(opts.Labels, opts.Annotations, capture)
 	opts.Labels = workloadmeta.StampWorkspace(opts.Labels, o.workspace)
 	if o.submissionID != "" {

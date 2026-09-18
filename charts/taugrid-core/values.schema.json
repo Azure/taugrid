@@ -3,8 +3,104 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "portal": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "access": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "mode": { "type": "string" },
+            "externalURL": { "type": "string" }
+          }
+        },
+        "entraAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "tenantID": { "type": "string" },
+            "clientID": { "type": "string" },
+            "cookieSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "key"],
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string" }
+              }
+            },
+            "gatewayClassName": { "type": "string" },
+            "issuerRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "kind", "group"],
+              "properties": {
+                "name": { "type": "string" },
+                "kind": { "type": "string", "enum": ["Issuer", "ClusterIssuer"] },
+                "group": { "type": "string", "const": "cert-manager.io" }
+              }
+            },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" },
+                "digest": { "type": "string" },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": ["Always", "IfNotPresent", "Never"]
+                }
+              }
+            },
+            "imagePullSecrets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "minLength": 1 } }
+              }
+            },
+            "replicaCount": { "type": "integer", "minimum": 1 },
+            "resources": { "type": "object" },
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array", "items": { "type": "object" } },
+            "affinity": { "type": "object" }
+          }
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "endpoint": { "type": "string" },
+        "database": { "type": "string" },
+        "cluster": { "type": "string" }
+      }
+    },
     "global": {
       "type": "object",
+      "properties": {
+        "adx": {
+          "type": "object",
+          "properties": {
+            "queryConnection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "endpoint": { "type": "string" },
+                "database": { "type": "string" },
+                "clientID": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
       "additionalProperties": true
     }
   }

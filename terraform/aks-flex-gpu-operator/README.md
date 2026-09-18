@@ -144,35 +144,46 @@ gpu-monitoring:
 ```
 
 For a mixed cluster, keep the global source for the other GPU stack and override
-only each GPU Operator-backed Flex profile:
+every profile whose nodes are owned by GPU Operator:
 
 ```yaml
 gpu-monitoring:
   gpuSkus:
+    h100-nvl-1g:
+      dcgmHealth:
+        source: exporter
+        exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+    h100-nvl-2g:
+      dcgmHealth:
+        source: exporter
+        exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
     h200:
       dcgmHealth:
         source: exporter
         exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
 ```
 
-Replace `h200` with the TauGrid GPU profile used by the Flex nodes. Do not point
-managed GPU profiles at this Service: `internalTrafficPolicy: Local` correctly
-has no endpoint on nodes excluded from GPU Operator.
+Keep only the profiles GPU Operator actually owns. Do not point managed GPU
+profiles at this Service: `internalTrafficPolicy: Local` correctly has no
+endpoint on nodes excluded from GPU Operator. A profile left on `host-dcgmi`
+will run the host `dcgmi` initializer and remain unavailable on nodes where
+GPU Operator owns DCGM instead.
 
-When adx-mon is enabled for Fleet and Cost telemetry, add a node-local static
-scrape target for the Operator exporter. Scope `hostRegex` to the Flex node
-names so collectors on excluded GPU nodes do not scrape the Service:
+When adx-mon is enabled for Fleet and Cost telemetry, the module adds the
+supported scrape annotations to GPU Operator operand DaemonSets:
 
 ```yaml
-collector:
-  prometheusScrape:
-    extraStaticTargets:
-      - hostRegex: '^flex-.*'
-        url: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
-        namespace: gpu-operator
-        pod: nvidia-dcgm-exporter
-        container: nvidia-dcgm-exporter
+daemonsets:
+  annotations:
+    adx-mon/scrape: "true"
+    adx-mon/port: "9400"
 ```
+
+adx-mon watches only pods scheduled on its own node. The pinned GPU Operator
+version exposes common rather than exporter-specific annotations, but only the
+DCGM exporter declares port 9400, so other operand pods do not become scrape
+targets. Do not add a static exporter Service target in parallel because
+adx-mon does not deduplicate static and pod-discovered targets.
 
 Then install or upgrade TauGrid through `tau cluster install`; do not enable the
 `terraform/aks` root's `self_managed` device-plugin/DCGM path on the same

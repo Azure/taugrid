@@ -36,15 +36,17 @@ func (s *scriptedQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row
 }
 
 var workspaceRows = []kustoquery.Row{
-	{"workspace": "research-lab", "namespace": "research", "GpuHours": 120.5, "EstimatedCostUSD": 442.24, "PeakGpus": 8.0, "AvgUtil": 71.0},
-	{"workspace": "infra-lab", "namespace": "infra", "GpuHours": 12.0, "EstimatedCostUSD": 44.04, "PeakGpus": 2.0, "AvgUtil": 15.0},
+	{"workspace": "research-lab", "namespace": "research", "GpuHours": 120.5, "EstimatedCostUSD": 442.24, "PeakGpus": 8.0, "AvgUtil": 71.0,
+		"ObservedSamples": 20.0, "GPUHoursSamples": 20.0, "CostSamples": 20.0, "UtilizationSamples": 240.0},
+	{"workspace": "infra-lab", "namespace": "infra", "GpuHours": 12.0, "EstimatedCostUSD": 44.04, "PeakGpus": 2.0, "AvgUtil": 15.0,
+		"ObservedSamples": 10.0, "GPUHoursSamples": 10.0, "CostSamples": 10.0, "UtilizationSamples": 50.0},
 }
 
 var idleRows = []kustoquery.Row{
 	{"instance": "node-3", "gpu": "2", "modelName": "A100", "namespace": "infra", "pod": "idle-pod",
-		"AvgUtil": 3.5, "Samples": 240.0},
+		"AvgUtil": 3.5, "Samples": 240.0, "ObservedSamples": 250.0},
 	{"instance": "node-9", "gpu": "0", "modelName": "H100", "namespace": "", "pod": "",
-		"AvgUtil": "12", "Samples": "50"}, // numeric strings (Kusto tostring())
+		"AvgUtil": "12", "Samples": "50", "ObservedSamples": "50"}, // numeric strings (Kusto tostring())
 }
 
 func TestBoardAssemblesBothQueries(t *testing.T) {
@@ -69,7 +71,7 @@ func TestBoardAssemblesBothQueries(t *testing.T) {
 		snap.Workspaces[0].GPUHours != 120.5 || snap.Workspaces[0].PeakGPUs != 8 {
 		t.Fatalf("workspace[0] = %#v, want research-lab 120.5h/8gpu", snap.Workspaces[0])
 	}
-	if snap.Workspaces[0].AvgUtilPct != 71 || snap.Workspaces[0].EstimatedCostUSD != 442.24 {
+	if snap.Workspaces[0].AvgUtilPct == nil || *snap.Workspaces[0].AvgUtilPct != 71 || snap.Workspaces[0].EstimatedCostUSD != 442.24 {
 		t.Fatalf("workspace[0] metrics = %#v", snap.Workspaces[0])
 	}
 	if snap.TotalGPUHours != 132.5 {
@@ -183,25 +185,25 @@ func TestBuildWorkspaceKQLClusterScopeExcludesUnattributableLegacyRows(t *testin
 }
 
 func TestBuildIdleKQLThreshold(t *testing.T) {
-	kql := buildIdleKQL(DefaultWindow, DefaultIdleThresholdPct, "", "")
-	if !strings.Contains(kql, "where AvgUtil < 20 and Samples > 10") {
-		t.Fatalf("idle KQL threshold clause wrong:\n%s", kql)
+	kql := buildIdleKQL(DefaultWindow, "", "")
+	// Classification now happens after querying, so the query must retain all GPUs.
+	if strings.Contains(kql, "| where AvgUtil") || strings.Contains(kql, "| where Samples") {
+		t.Fatalf("idle KQL must not apply the classification threshold:\n%s", kql)
 	}
 	if strings.Contains(kql, "Cluster ==") {
 		t.Fatalf("unscoped idle KQL should have no cluster filter:\n%s", kql)
 	}
 }
 
-// TestBoardCustomThreshold verifies a non-default threshold reaches the idle KQL.
+// TestBoardCustomThreshold verifies classification uses the requested threshold.
 func TestBoardCustomThreshold(t *testing.T) {
-	q := &scriptedQuerier{results: [][]kustoquery.Row{nil, nil}}
-	_, err := Board(context.Background(), q, Options{IdleThresholdPct: 5})
+	q := &scriptedQuerier{results: [][]kustoquery.Row{nil, idleRows}}
+	snap, err := Board(context.Background(), q, Options{IdleThresholdPct: 5})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
-	// kqls[1] is the idle query.
-	if len(q.kqls) != 2 || !strings.Contains(q.kqls[1], "AvgUtil < 5 and") {
-		t.Fatalf("custom threshold not applied: %v", q.kqls)
+	if len(snap.IdleGPUs) != 1 || snap.IdleGPUs[0].Instance != "node-3" {
+		t.Fatalf("custom threshold not applied: %+v", snap)
 	}
 }
 
@@ -221,7 +223,7 @@ func TestBuildKQLClusterScope(t *testing.T) {
 	if !strings.Contains(nsKQL, "Cluster == @'taugrid-flex'") {
 		t.Fatalf("namespace KQL missing cluster scope:\n%s", nsKQL)
 	}
-	idleKQL := buildIdleKQL(DefaultWindow, DefaultIdleThresholdPct, "", "taugrid-flex")
+	idleKQL := buildIdleKQL(DefaultWindow, "", "taugrid-flex")
 	if !strings.Contains(idleKQL, "Cluster == @'taugrid-flex'") {
 		t.Fatalf("idle KQL missing cluster scope:\n%s", idleKQL)
 	}
@@ -263,8 +265,8 @@ func TestBoardEnforcesNamespaceOnEveryQueryAndResult(t *testing.T) {
 			{"workspace": "beta", "namespace": "team-beta", "GpuHours": 99.0, "PeakGpus": 8.0, "AvgUtil": 90.0},
 		},
 		{
-			{"instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "alpha-pod", "AvgUtil": 4.0, "Samples": 20.0},
-			{"instance": "beta-node", "gpu": "0", "namespace": "team-beta", "pod": "beta-pod", "AvgUtil": 1.0, "Samples": 20.0},
+			{"Cluster": "cluster-a", "instance": "alpha-node", "gpu": "0", "namespace": "team-alpha", "pod": "alpha-pod", "AvgUtil": 4.0, "Samples": 20.0, "ObservedSamples": 20.0},
+			{"Cluster": "cluster-a", "instance": "beta-node", "gpu": "0", "namespace": "team-beta", "pod": "beta-pod", "AvgUtil": 1.0, "Samples": 20.0, "ObservedSamples": 20.0},
 		},
 	}}
 	snap, err := Board(context.Background(), q, Options{Namespace: "team-alpha", Cluster: "cluster-a"})

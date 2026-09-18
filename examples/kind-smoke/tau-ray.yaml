@@ -2,9 +2,11 @@ name: tau-kind-ray
 engine: rayjob
 entrypoint: ray_train.py
 runtime:
-  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0
   env:
     KIND_RAY_MARKER: tau-kind-ray
+    # gRPC's c-ares resolver cannot reach headless-service DNS through Podman Kind.
+    GRPC_DNS_RESOLVER: native
 compute:
   workers: 2
   gpus_per_worker: 0

@@ -10,7 +10,7 @@ spec:
   kubernetesSubject:
     kind: Group
     name: aurora-researchers
-  role: tau-researcher-v1
+  role: researcher
   target:
     namespace: aurora
     createNamespace: true

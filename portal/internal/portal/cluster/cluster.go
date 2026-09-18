@@ -16,6 +16,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -53,24 +54,24 @@ type Options struct {
 }
 
 // GPU is one GPU's latest health sample. Counter metrics (remapped rows) keep
-// their raw values; Healthy is false when the GPU shows uncorrectable remapped
-// rows or a row-remap failure.
+// their raw values. Healthy is unknown unless both error counters are measured
+// or either counter establishes a failure.
 type GPU struct {
-	Cluster                   string  `json:"cluster,omitempty"`
-	Instance                  string  `json:"instance"`
-	GPU                       string  `json:"gpu"`
-	ModelName                 string  `json:"modelName,omitempty"`
-	Namespace                 string  `json:"namespace,omitempty"`
-	Pod                       string  `json:"pod,omitempty"`
-	UtilizationPct            float64 `json:"utilizationPct"`
-	TemperatureCelsius        float64 `json:"temperatureCelsius"`
-	PowerWatts                float64 `json:"powerWatts"`
-	MemoryUsedMB              float64 `json:"memoryUsedMB"`
-	MemoryFreeMB              float64 `json:"memoryFreeMB"`
-	CorrectableRemappedRows   float64 `json:"correctableRemappedRows"`
-	UncorrectableRemappedRows float64 `json:"uncorrectableRemappedRows"`
-	RowRemapFailure           float64 `json:"rowRemapFailure"`
-	Healthy                   bool    `json:"healthy"`
+	Cluster                   string   `json:"cluster,omitempty"`
+	Instance                  string   `json:"instance"`
+	GPU                       string   `json:"gpu"`
+	ModelName                 string   `json:"modelName,omitempty"`
+	Namespace                 string   `json:"namespace,omitempty"`
+	Pod                       string   `json:"pod,omitempty"`
+	UtilizationPct            *float64 `json:"utilizationPct"`
+	TemperatureCelsius        *float64 `json:"temperatureCelsius"`
+	PowerWatts                *float64 `json:"powerWatts"`
+	MemoryUsedMB              *float64 `json:"memoryUsedMB"`
+	MemoryFreeMB              *float64 `json:"memoryFreeMB"`
+	CorrectableRemappedRows   *float64 `json:"correctableRemappedRows"`
+	UncorrectableRemappedRows *float64 `json:"uncorrectableRemappedRows"`
+	RowRemapFailure           *float64 `json:"rowRemapFailure"`
+	Healthy                   *bool    `json:"healthy"`
 }
 
 // ModelCount is the GPU count for one model, for the model-distribution summary.
@@ -79,13 +80,18 @@ type ModelCount struct {
 	GPUs      int    `json:"gpus"`
 }
 
-// Snapshot is the Cluster Health board payload: per-GPU rows plus rollup counts.
+// Snapshot is the Cluster Health board payload. TotalGPUs counts observed rows,
+// not inventory. HealthObservedGPUs counts known verdicts; unknowns are not errors.
 type Snapshot struct {
-	Window    string       `json:"window"`
-	TotalGPUs int          `json:"totalGPUs"`
-	ErrorGPUs int          `json:"errorGPUs"`
-	Models    []ModelCount `json:"models"`
-	GPUs      []GPU        `json:"gpus"`
+	Window                  string       `json:"window"`
+	TotalGPUs               int          `json:"totalGPUs"`
+	ErrorGPUs               int          `json:"errorGPUs"`
+	TelemetryAvailable      bool         `json:"telemetryAvailable"`
+	UtilizationObservedGPUs int          `json:"utilizationObservedGPUs"`
+	HealthObservedGPUs      int          `json:"healthObservedGPUs"`
+	UnknownHealthGPUs       int          `json:"unknownHealthGPUs"`
+	Models                  []ModelCount `json:"models"`
+	GPUs                    []GPU        `json:"gpus"`
 }
 
 // Board runs the GpuHealth() pivot via the Querier and aggregates the rows into
@@ -155,14 +161,35 @@ func aggregate(rows []kustoquery.Row, opts Options) Snapshot {
 	}
 	modelIndex := map[string]int{}
 	for _, row := range rows {
+		if opts.Cluster != "" && row.Str("Cluster") != opts.Cluster {
+			continue
+		}
 		if opts.Namespace != "" && row.Str("namespace") != opts.Namespace {
 			continue
 		}
 		gpu := parseGPU(row)
 		snap.GPUs = append(snap.GPUs, gpu)
 		snap.TotalGPUs++
-		if !gpu.Healthy {
-			snap.ErrorGPUs++
+		if gpu.UtilizationPct != nil {
+			snap.UtilizationObservedGPUs++
+		}
+		if gpu.Healthy == nil {
+			snap.UnknownHealthGPUs++
+		} else {
+			snap.HealthObservedGPUs++
+			if !*gpu.Healthy {
+				snap.ErrorGPUs++
+			}
+		}
+		for _, value := range []*float64{
+			gpu.UtilizationPct, gpu.TemperatureCelsius, gpu.PowerWatts,
+			gpu.MemoryUsedMB, gpu.MemoryFreeMB, gpu.CorrectableRemappedRows,
+			gpu.UncorrectableRemappedRows, gpu.RowRemapFailure,
+		} {
+			if value != nil {
+				snap.TelemetryAvailable = true
+				break
+			}
 		}
 		model := gpu.ModelName
 		if model == "" {
@@ -184,16 +211,29 @@ func aggregate(rows []kustoquery.Row, opts Options) Snapshot {
 	return snap
 }
 
-// parseGPU reads one pivoted row into a GPU. Missing metric columns default to
-// 0 (Row.Num reports ok=false), so a GPU that reported no remapped-row counter
-// is treated as zero errors, not unhealthy.
+// parseGPU preserves missing, invalid, and non-finite metrics as null.
 func parseGPU(row kustoquery.Row) GPU {
-	num := func(col string) float64 {
-		v, _ := row.Num(col)
-		return v
+	num := func(col string) *float64 {
+		v, ok := row.Num(col)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+			return nil
+		}
+		return &v
 	}
 	uncorrectable := num("uncorrectable_remapped_rows")
 	failure := num("row_remap_failure")
+	var healthy *bool
+	if (uncorrectable != nil && *uncorrectable > 0) || (failure != nil && *failure > 0) {
+		value := false
+		healthy = &value
+	} else if uncorrectable != nil && failure != nil {
+		value := true
+		healthy = &value
+	}
+	util := num("gpu_utilization")
+	if util != nil && *util > 100 {
+		util = nil
+	}
 	return GPU{
 		Cluster:                   row.Str("Cluster"),
 		Instance:                  row.Str("instance"),
@@ -201,7 +241,7 @@ func parseGPU(row kustoquery.Row) GPU {
 		ModelName:                 row.Str("modelName"),
 		Namespace:                 row.Str("namespace"),
 		Pod:                       row.Str("pod"),
-		UtilizationPct:            num("gpu_utilization"),
+		UtilizationPct:            util,
 		TemperatureCelsius:        num("gpu_temperature_celsius"),
 		PowerWatts:                num("gpu_power_watts"),
 		MemoryUsedMB:              num("fb_memory_used_mb"),
@@ -209,6 +249,6 @@ func parseGPU(row kustoquery.Row) GPU {
 		CorrectableRemappedRows:   num("correctable_remapped_rows"),
 		UncorrectableRemappedRows: uncorrectable,
 		RowRemapFailure:           failure,
-		Healthy:                   uncorrectable == 0 && failure == 0,
+		Healthy:                   healthy,
 	}
 }

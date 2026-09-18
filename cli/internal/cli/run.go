@@ -15,11 +15,12 @@ import (
 	"github.com/Azure/taugrid/cli/internal/artifactpublish"
 	"github.com/Azure/taugrid/cli/internal/manifest"
 	"github.com/Azure/taugrid/cli/internal/onboarding"
-	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
+
+var fetchRunWorkspace = fetchWorkspace
 
 func newRunCmd() *cobra.Command {
 	return newRunCmdWithConnectionFactory(defaultRunConnectionEnsurer)
@@ -131,28 +132,40 @@ See: tau run explain-config`,
 					return err
 				}
 			} else {
-				connectionEnsurer := connectionFactory(cmd)
-				var connection workspaceconnection.ActiveConnection
-				targetOptions, connection, err = applyLiveRunConnection(
-					cmd.Context(),
-					targetOptions,
-					resolution.Connection,
-					connectionEnsurer,
-				)
+				workspaceResolver := newActiveWorkspaceResolver(connectionFactory, fetchRunWorkspace)
+				activeWorkspace, resolveErr := workspaceResolver.Resolve(cmd, activeWorkspaceRequest{
+					Source:              resolution.Connection,
+					Workspace:           targetOptions.workspace,
+					WorkspaceExplicit:   targetOptions.workspaceExplicit,
+					KubeContext:         targetOptions.kubeContext,
+					KubeContextExplicit: targetOptions.kubeContextExplicit,
+					KubeContextFromFlag: targetOptions.kubeContextFromFlag,
+					Namespace:           targetOptions.namespace,
+					Queue:               targetOptions.queue,
+				})
+				err = resolveErr
 				if err != nil {
 					return err
 				}
-				restoreKubeconfig, err := useKubeconfig(connection.KubeconfigPath)
-				if err != nil {
-					return err
-				}
-				defer restoreKubeconfig()
-				effectiveSystemNamespace := systemNamespaceForConnection(cmd, connection)
+				defer activeWorkspace.Restore()
+				connection := activeWorkspace.Connection
+				targetOptions.workspace = firstNonEmpty(activeWorkspace.Placement.Workspace, targetOptions.workspace)
+				targetOptions.kubeContext = firstNonEmpty(activeWorkspace.Context, targetOptions.kubeContext)
 				// TauGrid v0 activates exactly one workspace per cluster, so a
 				// researcher should not have to name it. Connected profile
 				// resolution remains fail-closed; only workspace-name discovery
 				// is best-effort for clusters without a TauWorkspace.
-				if strings.TrimSpace(targetOptions.workspace) == "" && targetOptions.dryRun != "client" {
+				if activeWorkspace.Connected {
+					targetOptions, err = applyWorkspaceDefaultsWithConnection(
+						targetOptions,
+						activeWorkspace.Workspace,
+						name,
+						connection,
+					)
+					if err != nil {
+						return err
+					}
+				} else if strings.TrimSpace(targetOptions.workspace) == "" && targetOptions.dryRun != "client" {
 					discovered, derr := discoverPrimaryWorkspace(cmd, targetOptions.kubeContext)
 					if derr != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not resolve this cluster's workspace automatically: %v\n", derr)
@@ -160,12 +173,17 @@ See: tau run explain-config`,
 						targetOptions.workspace = discovered.Metadata.Name
 					}
 				}
-				if targetOptions.workspace != "" && targetOptions.dryRun != "client" {
-					workspaceStatus, err := fetchWorkspace(cmd, targetOptions.kubeContext, effectiveSystemNamespace, targetOptions.workspace)
+				if !activeWorkspace.Connected && targetOptions.workspace != "" && targetOptions.dryRun != "client" {
+					workspaceStatus, err := fetchRunWorkspace(
+						cmd,
+						targetOptions.kubeContext,
+						systemNamespaceForConnection(cmd, connection),
+						targetOptions.workspace,
+					)
 					if err != nil {
 						return err
 					}
-					targetOptions, err = applyWorkspaceDefaults(targetOptions, workspaceStatus, name)
+					targetOptions, err = applyWorkspaceDefaultsWithConnection(targetOptions, workspaceStatus, name, connection)
 					if err != nil {
 						return err
 					}

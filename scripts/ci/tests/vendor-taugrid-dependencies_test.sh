@@ -166,12 +166,12 @@ assert_invalid 1.2.3+build+1 1.2.3 "build metadata must contain non-empty"
 assert_invalid 1.2.3 1.2.3-01 "reference chart version"
 
 retention_chart="$TEST_ROOT/kueue"
-retention_archive="$TEST_ROOT/kueue-0.19.0.tgz"
+retention_archive="$TEST_ROOT/kueue-0.19.2.tgz"
 mkdir -p "$retention_chart/templates/crd"
 cat >"$retention_chart/Chart.yaml" <<'EOF'
 apiVersion: v2
 name: kueue
-version: 0.19.0
+version: 0.19.2
 EOF
 for name in workloads clusterqueues; do
   cat >"$retention_chart/templates/crd/${name}.yaml" <<EOF

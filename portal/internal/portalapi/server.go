@@ -5,9 +5,9 @@
 // surface that aggregates and cross-links the runtime's existing dashboards.
 //
 // The portal owns the /portal frontend shell and the /api/portal/* board APIs.
-// In single-workspace mode it mounts the existing Stellar server
-// (internal/expapi) unchanged. Managed workspace mode fails closed unless the
-// workspace points to an explicit HTTPS experiment endpoint.
+// In single-workspace mode it reuses the fixed-workspace Stellar backend
+// (internal/expapi). Managed workspace mode fails closed unless the
+// workspace has an explicitly configured experiment source or trusted backend.
 package portalapi
 
 import (
@@ -175,6 +175,7 @@ type Server struct {
 	mux                   *http.ServeMux
 	stellar               *expapi.Server
 	stellarKustoAvailable bool
+	stellarBackendTimeout time.Duration
 	jobs                  JobsOptions
 	cluster               ClusterOptions
 	cost                  CostOptions
@@ -234,7 +235,7 @@ func NewServer(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	singleWorkspace := firstNonEmpty(opts.Stellar.Workspace, "default")
+	singleWorkspace := stellar.Workspace()
 	singleWorkspaceCluster := firstNonEmpty(opts.Cluster.Cluster, opts.Cost.Cluster, opts.NodeUtil.Cluster)
 	if opts.Runs.History != nil && opts.WorkspaceDirectory == nil && singleWorkspaceCluster == "" {
 		return nil, fmt.Errorf("durable run history requires an explicit cluster scope when no workspace directory is configured")
@@ -275,6 +276,9 @@ func kustoStellarAvailable(opts expapi.Options) bool {
 }
 
 func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceState {
+	if scope.experimentsBackend != nil {
+		return runs.ExperimentSurfaceAvailable
+	}
 	experimentsURL := strings.TrimSpace(scope.ExperimentsURL)
 	if experimentsURL == "" {
 		return runs.ExperimentSurfaceUnconfigured
@@ -301,17 +305,27 @@ func (s *Server) Handler() http.Handler {
 // Serve runs the portal HTTP server on the listener until ctx is cancelled.
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	httpServer := &http.Server{Handler: s.Handler()}
+	serveErr := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
+		serveErr <- httpServer.Serve(listener)
+	}()
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
-	}()
-	err := httpServer.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+		// Serve returns as soon as Shutdown closes the listener, before active
+		// requests have drained. Wait for Shutdown itself before returning.
+		err := httpServer.Shutdown(shutdownCtx)
+		if err != nil {
+			err = fmt.Errorf("shut down portal HTTP server: %w", errors.Join(err, httpServer.Close()))
+		}
+		if serveErr := <-serveErr; !errors.Is(serveErr, http.ErrServerClosed) {
+			err = errors.Join(err, serveErr)
+		}
+		return err
 	}
-	return err
 }
 
 // ListenAndServe binds addr and serves until ctx is cancelled.
@@ -340,13 +354,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/portal/ray", s.handleRay)
 	s.mux.HandleFunc("/api/portal/ray/history/", s.handleRayHistory)
 	s.mux.HandleFunc("/api/portal/ray/proxy/", s.handleRayProxy)
-	// Ray dashboard SPA root-absolute assets. The dashboard fetches these from the
-	// origin root (/api, /static, ...), so they carry no proxy prefix; the asset
-	// handler uses the ray_target cookie set by handleRayProxy to pick the upstream
-	// head Service. Registered on the exact Ray dashboard prefixes to avoid
-	// shadowing the portal's own routes.
-	for _, p := range rayAssetPrefixes {
-		s.mux.HandleFunc(p, s.handleRayAsset)
+	s.mux.HandleFunc(rayWorkspaceProxyPrefix, s.handleRayProxy)
+	// Ray 2.56 has one root-absolute profiling-capability fetch. Profiling is
+	// disabled by Portal policy regardless of target; this never queries Ray.
+	s.mux.HandleFunc("/api/profiling_enabled", handleRayProfilingDisabled)
+	for _, p := range rayUnscopedPrefixes {
+		s.mux.HandleFunc(p, handleRayUnscoped)
 	}
 	s.mux.HandleFunc("/api/portal/nodes", s.handleNodes)
 	s.mux.HandleFunc("/api/portal/nodeutil", s.handleNodeUtil)
@@ -354,7 +367,6 @@ func (s *Server) routes() {
 	// Trailing slash keeps the per-job detail route
 	// ("/api/portal/runs/{namespace}/{name}") distinct from the runs list above.
 	s.mux.HandleFunc("/api/portal/runs/", s.handleJobDetail)
-
 	// KueueViz "Kueue (Live)" board — reverse-proxied under
 	// /api/portal/kueueviz/. The frontend/env.js/asset routes are embedded in a
 	// same-origin iframe, so wrap them with framedSameOrigin to relax any DENY
@@ -576,13 +588,22 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	view := r.URL.Query().Get("view")
+	if view != "" && view != "workloads" {
+		http.Error(w, "unsupported overview view: expected workloads or no view", http.StatusBadRequest)
+		return
+	}
 	scope, ok := s.localWorkspaceScope(w, r)
 	if !ok {
 		return
 	}
 	resp := overviewResponse{Boards: s.boardsForScope(scope), Running: []runningItem{}}
 	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
-	s.resolveCards(r.Context(), &resp, scope)
+	if view == "workloads" {
+		s.resolveQueueCard(r.Context(), &resp, scope)
+	} else {
+		s.resolveCards(r.Context(), &resp, scope)
+	}
 	s.resolveRunning(r.Context(), &resp, scope)
 	writeScopedJSON(w, http.StatusOK, resp, scope, "ready")
 }
@@ -636,23 +657,7 @@ func (s *Server) resolveCards(ctx context.Context, resp *overviewResponse, scope
 		resp.Cards.Health = &healthCard{TotalGPUs: snap.TotalGPUs, ErrorGPUs: snap.ErrorGPUs}
 	}
 
-	// Queue (Jobs) — Kubernetes-backed. Sum the per-group counters into one
-	// fleet-wide headline (the same rollup the Jobs page renders per row).
-	if jobsMode(s.jobs) == JobsScopeDisabled {
-		resp.Cards.QueueUnavailable = "computed Jobs board disabled"
-	} else if s.jobs.Reader == nil {
-		resp.Cards.QueueUnavailable = "portal started without Kubernetes access"
-	} else if jobScopes, err := s.resolvedJobScopes(scope); err != nil {
-		resp.Cards.QueueUnavailable = err.Error()
-	} else if snap, err := jobs.Board(ctx, s.jobs.Reader, jobs.Options{Scopes: jobScopes}); err != nil {
-		resp.Cards.QueueUnavailable = err.Error()
-	} else {
-		summary := jobs.Summarize(snap.Snapshot)
-		resp.Cards.Queue = &queueCard{
-			Pending: summary.Pending, Admitted: summary.Admitted,
-			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
-		}
-	}
+	s.resolveQueueCard(ctx, resp, scope)
 
 	// Cost — Kusto-backed.
 	if s.cost.Querier == nil {
@@ -676,6 +681,24 @@ func (s *Server) resolveCards(ctx context.Context, resp *overviewResponse, scope
 		resp.Cards.RayUnavailable = err.Error()
 	} else {
 		resp.Cards.Ray = &rayCard{Clusters: snap.Total}
+	}
+}
+
+func (s *Server) resolveQueueCard(ctx context.Context, resp *overviewResponse, scope WorkspaceScope) {
+	if jobsMode(s.jobs) == JobsScopeDisabled {
+		resp.Cards.QueueUnavailable = "computed Jobs board disabled"
+	} else if s.jobs.Reader == nil {
+		resp.Cards.QueueUnavailable = "portal started without Kubernetes access"
+	} else if jobScopes, err := s.resolvedJobScopes(scope); err != nil {
+		resp.Cards.QueueUnavailable = err.Error()
+	} else if snap, err := jobs.Board(ctx, s.jobs.Reader, jobs.Options{Scopes: jobScopes}); err != nil {
+		resp.Cards.QueueUnavailable = err.Error()
+	} else {
+		summary := jobs.Summarize(snap.Snapshot)
+		resp.Cards.Queue = &queueCard{
+			Pending: summary.Pending, Admitted: summary.Admitted,
+			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
+		}
 	}
 }
 
@@ -1055,8 +1078,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "nodes board unavailable: portal started without Kubernetes access")
 		return
 	}
-	includeDaemonSets := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
-	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{IncludeDaemonSets: includeDaemonSets})
+	includeClusterWide := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
+	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{
+		IncludeDaemonSets:  includeClusterWide,
+		IncludeAllocations: includeClusterWide,
+		IncludeMetrics:     includeClusterWide,
+	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
@@ -1067,8 +1094,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // handleNodeUtil serves the node resource-utilization board: per-node CPU
 // utilization (from the node_cpu_idle_seconds counter delta) and memory-used
 // percentage (from node_memory_total/available), from the Metrics ADX database
-// via NodeHealth(). It is the CPU/memory sibling of the Cluster Health board,
-// rendered beneath the per-GPU table on the Utilization page. Optional
+// via the raw node-exporter tables. It is the CPU/memory sibling of the Cluster
+// Health board, rendered beneath the per-GPU table on the Utilization page. Optional
 // ?window=&cluster=&instance= scope the query. When the board has no Kusto
 // querier (portal started without --kusto-query-command) it returns 503; a
 // query failure returns 502.
@@ -1237,7 +1264,12 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "job detail unavailable: reader does not support single-object reads")
 		return
 	}
-	snapshot, err := jobdetail.Detail(r.Context(), reader, s.cluster.Querier, jobdetail.Options{Namespace: ns, Name: name})
+	opts := jobdetail.Options{Namespace: ns, Name: name}
+	if scope.Managed {
+		opts.WorkspaceID = scope.WorkspaceID
+		opts.Cluster = scope.Cluster
+	}
+	snapshot, err := jobdetail.Detail(r.Context(), reader, s.cluster.Querier, opts)
 	if err != nil {
 		if errors.Is(err, jobdetail.ErrNotFound) {
 			writeScopedError(w, http.StatusNotFound, scope, err.Error())

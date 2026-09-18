@@ -61,6 +61,57 @@ func addRunWorkspaceMetadata(metadata experiment.Metadata, workspaceID, resultSc
 	return metadata
 }
 
+func addLaunchMetadata(metadata experiment.Metadata, gpuClass, profileName, entrypoint, launcher string, workers, gpusPerWorker int) experiment.Metadata {
+	total := workers * gpusPerWorker
+	metadata.Launch = &experiment.Launch{
+		Version: 1, WorkloadKind: metadata.WorkloadKind,
+		GPUsPerWorker: &gpusPerWorker, Workers: &workers, GPUTotal: &total,
+		GPUClass: gpuClass, Image: metadata.Image, Entrypoint: entrypoint, Launcher: launcher,
+		Profile: profileName, Workspace: metadata.WorkspaceID, Namespace: metadata.Namespace,
+		TauCommand: metadata.TauCommand,
+	}
+	if workers < 0 || gpusPerWorker < 0 || (workers != 0 && total/workers != gpusPerWorker) {
+		metadata.Launch.GPUTotal = nil
+	}
+	return metadata
+}
+
+// mode and migProfile must be the resolved renderer inputs, not queue/profile hints.
+func addLaunchGPUResources(metadata experiment.Metadata, mode, migProfile string) experiment.Metadata {
+	launch := metadata.Launch
+	if launch == nil {
+		return metadata
+	}
+	launch.GPUResourceMode = mode
+	if launch.GPUsPerWorker != nil && *launch.GPUsPerWorker == 0 {
+		launch.GPUResourceMode = "none"
+		return metadata
+	}
+	switch mode {
+	case "device-plugin":
+		launch.GPUResourceName = "nvidia.com/gpu"
+	case "mig":
+		launch.MIGProfile = strings.TrimSpace(migProfile)
+		launch.GPUResourceName = "nvidia.com/mig-" + launch.MIGProfile
+	}
+	return metadata
+}
+
+func addLaunchTag(tags map[string]string, metadata experiment.Metadata) map[string]string {
+	out := make(map[string]string, len(tags)+1)
+	for key, value := range tags {
+		if key != experiment.LaunchTag {
+			out[key] = value
+		}
+	}
+	if metadata.Launch != nil {
+		if value := metadata.Launch.Tag(); value != "" {
+			out[experiment.LaunchTag] = value
+		}
+	}
+	return out
+}
+
 func directJobPayloadAnnotation(scriptPath string, source *runconfig.Source) (string, string, error) {
 	if source != nil {
 		identity := strings.Join([]string{source.Image, source.Path, scriptPath}, "\n")

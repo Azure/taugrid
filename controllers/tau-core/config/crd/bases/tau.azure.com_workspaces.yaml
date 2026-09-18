@@ -162,10 +162,11 @@ spec:
                 type: string
               role:
                 description: |-
-                  Role is the researcher authorization role bound in the target namespace.
-                  The controller implements exactly one role, so the API accepts only that
-                  value rather than silently degrading unknown ones at reconcile time.
+                  Role is the logical researcher role. The legacy tau-researcher-v1 alias
+                  remains valid; both names bind the existing tau-researcher-v1 ClusterRole.
+                  No other role or arbitrary ClusterRole can be selected.
                 enum:
+                - researcher
                 - tau-researcher-v1
                 type: string
               target:

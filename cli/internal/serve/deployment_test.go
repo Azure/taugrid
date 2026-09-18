@@ -5,6 +5,7 @@ package serve
 
 import (
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -69,6 +70,23 @@ func getPath(t *testing.T, m map[string]any, keys ...string) any {
 		cur = cm[k]
 	}
 	return cur
+}
+
+func TestRenderDeployment_LiteralCommandAndArgs(t *testing.T) {
+	script := "pip install foo &&\nexec python serve.py --label 'hello, world'"
+	b, err := RenderDeployment(deployBaseProfile(), DeploymentOptions{
+		Name: "custom-server", Namespace: "tau",
+		Command: []string{"/bin/sh", "-c"}, Args: []string{script, ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	containers := getPath(t, decodeOne(t, b), "spec", "template", "spec", "containers").([]any)
+	container := containers[0].(map[string]any)
+	if !reflect.DeepEqual(container["command"], []any{"/bin/sh", "-c"}) ||
+		!reflect.DeepEqual(container["args"], []any{script, ""}) {
+		t.Fatalf("literal command/args changed: %+v", container)
+	}
 }
 
 func TestRenderDeployment_Defaults(t *testing.T) {

@@ -76,6 +76,194 @@ func TestEvaluate_RateThreshold(t *testing.T) {
 	}
 }
 
+func TestEvaluate_RateScrapeGapPreservesOptionalHistory(t *testing.T) {
+	const metricName = "node_memory_ECC_correctable_total"
+	labels := map[string]string{"node": "grace-0"}
+	rules := []Rule{
+		{
+			Name:          "optional-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryErrors",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			For:           5 * time.Minute,
+		},
+		{
+			Name:          "covered-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryCoverage",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			MinSamples:    1,
+			SampleLabel:   "node",
+			MaxSampleAge:  2 * time.Minute,
+		},
+	}
+	engine := NewEngine(rules)
+
+	engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 0},
+	})
+	key := metricKey(metricName, labels)
+	engine.mu.Lock()
+	engine.history[key][0].time = time.Now().Add(-6 * time.Minute)
+	engine.mu.Unlock()
+
+	engine.Evaluate(nil)
+
+	results := engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	if results[0].Firing {
+		t.Fatal("optional rule fired before its debounce elapsed")
+	}
+	if !results[1].Unknown {
+		t.Fatal("coverage rule treated the first post-gap observation as continuous")
+	}
+
+	engine.mu.Lock()
+	engine.pending["GraceCPUCorrectableMemoryErrors"] = time.Now().Add(-6 * time.Minute)
+	engine.mu.Unlock()
+
+	results = engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	if !results[0].Firing {
+		t.Fatal("optional rule lost the pre-gap baseline and missed the counter increase")
+	}
+	if results[1].Unknown || results[1].Firing {
+		t.Fatalf("coverage rule result = %+v, want known and not firing after two post-gap observations", results[1])
+	}
+}
+
+func TestEvaluate_RateScrapeGapPreservesOptionalPending(t *testing.T) {
+	const metricName = "node_memory_ECC_correctable_total"
+	labels := map[string]string{"node": "grace-0"}
+	engine := NewEngine([]Rule{
+		{
+			Name:          "optional-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryErrors",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			For:           5 * time.Minute,
+		},
+		{
+			Name:          "covered-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryCoverage",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			MinSamples:    1,
+			SampleLabel:   "node",
+			MaxSampleAge:  2 * time.Minute,
+		},
+	})
+
+	engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 0},
+	})
+	key := metricKey(metricName, labels)
+	engine.mu.Lock()
+	engine.history[key][0].time = time.Now().Add(-6 * time.Minute)
+	engine.mu.Unlock()
+
+	engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	engine.mu.Lock()
+	engine.pending["GraceCPUCorrectableMemoryErrors"] = time.Now().Add(-6 * time.Minute)
+	engine.mu.Unlock()
+
+	engine.Evaluate(nil)
+	engine.mu.Lock()
+	_, pending := engine.pending["GraceCPUCorrectableMemoryErrors"]
+	engine.mu.Unlock()
+	if !pending {
+		t.Fatal("optional rule lost its debounce state during the scrape gap")
+	}
+
+	results := engine.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	if !results[0].Firing {
+		t.Fatal("optional rule restarted its debounce after the scrape gap")
+	}
+	if !results[1].Unknown {
+		t.Fatal("coverage rule treated the first post-gap observation as continuous")
+	}
+}
+
+func TestEvaluate_RateRestartPreservesOptionalHistory(t *testing.T) {
+	const metricName = "node_memory_ECC_correctable_total"
+	labels := map[string]string{"node": "grace-0"}
+	rules := []Rule{
+		{
+			Name:          "optional-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryErrors",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			For:           5 * time.Minute,
+		},
+		{
+			Name:          "covered-ecc-rate",
+			MetricName:    metricName,
+			ConditionType: "GraceCPUCorrectableMemoryCoverage",
+			Mode:          "rate",
+			Threshold:     10,
+			Window:        10 * time.Minute,
+			MinSamples:    1,
+			SampleLabel:   "node",
+			MaxSampleAge:  2 * time.Minute,
+		},
+	}
+
+	beforeRestart := NewEngine(rules)
+	beforeRestart.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 0},
+	})
+	key := metricKey(metricName, labels)
+	beforeRestart.mu.Lock()
+	beforeRestart.history[key][0].time = time.Now().Add(-6 * time.Minute)
+	beforeRestart.mu.Unlock()
+	history, pending := beforeRestart.ExportState()
+
+	afterRestart := NewEngine(rules)
+	afterRestart.RestoreState(history, pending)
+	results := afterRestart.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	afterRestart.mu.Lock()
+	_, optionalPending := afterRestart.pending["GraceCPUCorrectableMemoryErrors"]
+	afterRestart.mu.Unlock()
+	if !optionalPending {
+		t.Fatal("optional rule did not use the restored baseline after restart")
+	}
+	if !results[1].Unknown {
+		t.Fatal("coverage rule used pre-restart history as continuous evidence")
+	}
+
+	afterRestart.mu.Lock()
+	afterRestart.pending["GraceCPUCorrectableMemoryErrors"] = time.Now().Add(-6 * time.Minute)
+	afterRestart.mu.Unlock()
+
+	results = afterRestart.Evaluate([]scraper.Metric{
+		{Name: metricName, Labels: labels, Value: 20},
+	})
+	if !results[0].Firing {
+		t.Fatal("optional rule missed the counter increase from the restored baseline")
+	}
+	if results[1].Unknown || results[1].Firing {
+		t.Fatalf("coverage rule result = %+v, want known and not firing after two post-restart observations", results[1])
+	}
+}
+
 func TestEvaluate_ForDuration(t *testing.T) {
 	engine := NewEngine([]Rule{
 		{Name: "nvlink-bw", MetricName: "DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL", ConditionType: "NVLinkBandwidthLow", Mode: "instant", Threshold: -1, For: 5 * time.Minute},
@@ -147,5 +335,45 @@ func TestEvaluate_XIDInstantGaugeWithErrCode(t *testing.T) {
 				t.Errorf("firing = %t, want %t", results[0].Firing, tt.wantFiring)
 			}
 		})
+	}
+}
+
+func TestEvaluate_RequiredSampleValuesFailClosed(t *testing.T) {
+	const metricName = "node_infiniband_link_downed_total"
+	engine := NewEngine([]Rule{{
+		Name:                 "ib-link-down",
+		MetricName:           metricName,
+		ConditionType:        "IBLinkDown",
+		Mode:                 "rate",
+		Threshold:            0,
+		Window:               time.Minute,
+		MinSamples:           2,
+		SampleLabel:          "device",
+		RequiredSampleValues: []string{"mlx5_ib0", "mlx5_ib1"},
+	}})
+
+	results := engine.Evaluate(nil)
+	if !results[0].Unknown {
+		t.Fatalf("empty scrape result = %+v, want Unknown", results[0])
+	}
+
+	partial := []scraper.Metric{
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_ib0", "port": "1"}, Value: 0},
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_an0", "port": "1"}, Value: 0},
+	}
+	results = engine.Evaluate(partial)
+	if !results[0].Unknown {
+		t.Fatalf("partial required coverage result = %+v, want Unknown", results[0])
+	}
+
+	complete := []scraper.Metric{
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_ib0", "port": "1"}, Value: 0},
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_ib1", "port": "1"}, Value: 0},
+		{Name: metricName, Labels: map[string]string{"device": "mlx5_an0", "port": "1"}, Value: 99},
+	}
+	engine.Evaluate(complete)
+	results = engine.Evaluate(complete)
+	if results[0].Unknown || results[0].Firing || results[0].Reason != "IBLinkDownObserved" {
+		t.Fatalf("complete required coverage result = %+v, want observed non-firing result", results[0])
 	}
 }

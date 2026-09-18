@@ -33,6 +33,15 @@ value: 1000
 description: Default Kueue priority for local Tau Kind smoke jobs.
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: kind-serve-priority
+  labels:
+    tau.azure.com/managed-by: tau-kind-smoke
+value: 2000
+description: Distinct workload priority for the RayService smoke.
+---
+apiVersion: kueue.x-k8s.io/v1beta2
 kind: Topology
 metadata:
   name: kind-cpu

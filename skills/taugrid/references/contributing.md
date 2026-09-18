@@ -1,74 +1,94 @@
-# Contributing to TauGrid
+# Contributing and maintaining this skill
 
-For people changing this repository's Go code. Users of the `tau` binary do not
-need any of this.
+Read the checkout's `AGENTS.md` and relevant component guidance first. The
+source tree is a multi-module Go repository with a Python SDK and React
+frontend, not just three Go modules.
 
-## Module layout
+| Path | Responsibility |
+| --- | --- |
+| `cli/` | `tau`, `tau-gen`, command routing, rendering, submission, lifecycle |
+| `core/` | Shared run schema, profiles, status, metadata, Kubernetes clients |
+| `portal/` | `taugrid-portal`, expstore, APIs, embedded frontend |
+| `portal/frontend/` | React/TypeScript UI; rebuild embedded assets for UI changes |
+| `controllers/tau-core/` | TauCluster, TauWorkspace, and quota reconciliation/CRDs |
+| `monitoring/gpu-health-checker/`, `monitoring/gpu-metrics-collector/` | Independent Go modules |
+| `tests/e2e/` | Portable tests; `AI_RUNTIME_E2E=0` keeps cluster tests disabled |
+| `sdk/python/python/` | Optional independently versioned Python SDK |
+| `site/content/en/docs/` | User documentation; verify against source |
 
-Three Go modules, split so the researcher CLI does not link the portal's web
-surface (~39k lines of embedded assets, SQLite/Parquet store, and Kusto stack
-that only the long-running servers need).
+CLI and Portal use a Go module replacement pointing at `../core`, not
+`../taucore`. Use `.go-version` and component Makefiles as the toolchain
+authority. `core/workloadmeta` owns shared `tau.azure.com/*` constants; avoid
+duplicating literals in production code. Regenerate CRDs with controller
+`make manifests`, never hand-edit generated output.
 
-Cross-module `internal/` imports are illegal in Go, so shared code sits at the
-**root** of `core`, not under `internal/`.
+## Evidence map
 
-| Path | Contents |
-|---|---|
-| `cli` | The `tau` CLI: `internal/cli`, renderers, run lifecycle |
-| `core` | Shared: `status`, `queue`, `runconfig`, `topology`, `resourceprofile`, `workloadmeta`, `kube`, `version` |
-| `portal` | Stellar + Portal: `expstore`, `expcockpit`, `portalapi`, `autocapture` |
-| `sdk/python` | Python SDK; delegates execution to the Go CLI |
-| `site/content/en/docs` | Hugo/Docsy user documentation |
+| Skill contract | Source / regression coverage |
+| --- | --- |
+| Roots, run flags, target vs subcommand | `cli/internal/cli/command_tree_test.go`, `run.go`, `run_config_commands.go` |
+| Direct field statuses and engine validation | `core/runconfig/config.go`, `schema.go`, `cli/internal/cli/run_config.go` |
+| Authoritative profiles and snapshot-only offline mode | `core/resourceprofile/`, `cli/internal/cli/run_workload_profile.go`, `run_workload_profile_test.go` |
+| Connection trust and workspace target | `cli/internal/workspaceconnection/`, `cli/internal/cli/active_workspace.go`, `workspace_connection_test.go` |
+| Create/adopt and PVC warning semantics | `cli/internal/workspace/`, `cli/internal/cli/workspace_create.go`, `workspace_adopt.go`, `workspace_data_pvc_test.go` |
+| Workspace phase and quota mutation | `controllers/tau-core/internal/controller/conditions.go`, `quota_request_controller.go` |
+| Serve workspace binding, checkpoint paths, literal argv | `cli/internal/cli/serve.go`, `serve_target.go`, `serve_test.go` |
+| Historical/discovered logs | `cli/internal/cli/run_logs_discovery.go`, `run_logs_connection_test.go`, `run_logs_missing_run_test.go` |
+| SDK-generated configs and serving wrappers | `sdk/python/python/tau/workloads.py`, `cli.py`, `serve.py` |
 
-There is no `go.work`. Both consumer modules use `require` + `replace
-../taucore`, so they are not independently `go get`-able — fine, since they are
-never published.
+## Validate without changing the user's tools
 
-## CI guards you can trip
-
-| Guard | Fails when |
-|---|---|
-| `command_tree_test.go` | The public root set changes, or `experiment`/`portal` reappear in `tau` |
-| `staticcheck` | Unreferenced code, or any other enabled check; see `staticcheck.conf` at the repo root |
-| `TestNoInlineTauKeyLiterals` | Any file outside `workloadmeta` writes a `tau.azure.com/*` key as a string literal |
-
-`workloadmeta` declares every `tau.azure.com/*` label, annotation, and
-finalizer exactly once. That guard exists because of real incidents: a README
-documented a key long after the code emitted a different one, so every
-documented `kubectl` command matched zero pods; and an admission policy kept
-matching a key the CLI had stopped emitting, silently disabling the policy with
-no error. Import the constant — never retype the string, and never derive one
-key from another by prefix matching (`LabelProfile` and the `profile-*`
-profiler annotations share a prefix by accident and are unrelated contracts).
-
-## Verifying a change
-
-Compilation is not proof a feature works. Rebuild and run the real command:
+Build into the checkout rather than installing over a user's binary:
 
 ```bash
-make install-tau-cli          # or make install-taugrid-portal
-tau <the subcommand you changed>
+make -C cli build
+cli/bin/tau version
+cli/bin/tau run explain-config
+python3 skills/taugrid/scripts/check_examples.py --tau cli/bin/tau
+python3 scripts/check-license-headers.py
+git diff --check
 ```
 
-For runtime features (multi-node rendezvous, GPU placement, storage mounts), a
-dry-run render is still not proof — those fail in ways only a real cluster
-surfaces. Submit an actual job.
+The skill checker needs Python 3.10+, PyYAML, and Git. It checks bundled Markdown
+links and command/flag examples using help only, validates every complete
+direct YAML example, and stages stub scripts in a temporary directory. These
+default checks do not render workloads and do not depend on local test files.
+The checker never submits workloads or executes the training scripts.
 
-## Editing this skill
+For rendering checks, pass an explicit `--snapshot <fixture-file>`. The fixture
+must contain the illustrative `cpu`, `training-1gpu`, and `training-2x8`
+profiles with their documented cardinalities and authorize namespace
+`skill-tests`, team `research`, and lane `training`. Metrics examples receive
+a synthetic workspace identity because snapshot mode skips live resolution.
+The checker reports validation and rendering counts separately; it does not
+prove image compatibility, training behavior, live profiles, connected serving,
+or storage. Optional SDK proxy flags and portal commands are not executed.
 
-Re-run the example checker after touching any YAML block. A config that does
-not validate gets copy-pasted and fails on the user's first attempt:
+The Go CI job runs the default checks against a freshly built CLI, so
+command/schema changes can catch stale examples. Rendering still needs a
+separately supplied fixture. Do not treat a parser-only check or an empty
+example set as rendering proof.
+
+Run component tests for behavior being changed:
 
 ```bash
-python3 skills/taugrid/scripts/check_examples.py
+cd cli
+go test -count=1 ./internal/cli
 ```
 
-Both `SKILL.md` and the references state contracts that the CLI enforces. When
-they disagree with the implementation, the implementation wins — verify with
-`tau run schema -o json` and fix the skill.
+For broader changes use the repository's `make check`; it forces offline
+portable E2E. Live cluster tests, image builds/pushes, installation, and
+deployment require separate authorization. An offline render is not runtime
+proof, but a documentation task is not permission to submit a real GPU job.
 
-`site/` docs are not automatically correct either, and the fix belongs there
-rather than as a permanent divergence in this skill. The `StorageReady` claim
-was corrected in `site/` alongside this skill; if you find another mismatch,
-verify it against source first — a "known doc bug" repeated from memory is how
-the wrong version spreads.
+## Review the skill as behavior, not a copied manual
+
+Keep the entrypoint short and route conditional details to references. Cover
+real tasks: offline rendering, CPU evaluation, multi-node DDP, Ray project
+shipping, workspace adoption, literal serving arguments, and historical logs.
+Distinguish schema acceptance from dispatch, live readiness, and execution.
+
+When source and site documentation disagree, identify the precise source/test
+contract. Fix documentation within the requested scope and flag any remaining
+product inconsistency; do not repeat a remembered bug as current fact.
+The local helper tests are not independent agent usability evaluation.

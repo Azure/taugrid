@@ -1,0 +1,522 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+suite: Opt-in shared Portal Entra viewer authentication
+templates:
+  - templates/portal-entra-auth.yaml
+values:
+  - portal-entra-auth-values.yaml
+release:
+  namespace: tau-system
+tests:
+  - it: renders nothing when explicitly disabled
+    set:
+      portal.entraAuth.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders only the six authentication resources
+    asserts:
+      - hasDocuments:
+          count: 6
+
+  - it: gives the proxy its own federated identity without Kubernetes API credentials or RBAC
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tau-portal-oauth2-proxy
+      - equal:
+          path: metadata.namespace
+          value: tau-system
+      - equal:
+          path: metadata.annotations
+          value:
+            azure.workload.identity/client-id: 22222222-2222-2222-2222-222222222222
+            azure.workload.identity/tenant-id: 11111111-1111-1111-1111-111111111111
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: authenticates with the pinned secretless provider and protects the real Portal upstream
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tau-portal-oauth2-proxy
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: tau-portal-oauth2-proxy
+      - equal:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/oauth2-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      # Exact args guard against added auth skips, wildcard cookies, token
+      # forwarding, request-query logging and accidental health bypasses.
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --http-address=0.0.0.0:4180
+            - --provider=entra-id
+            - --entra-id-federated-token-auth=true
+            - --client-id=22222222-2222-2222-2222-222222222222
+            - --oidc-issuer-url=https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0
+            - --redirect-url=https://portal.example.com/oauth2/callback
+            - --scope=openid
+            - --oidc-email-claim=sub
+            - --insecure-oidc-skip-nonce=false
+            - --code-challenge-method=S256
+            - --email-domain=*
+            - --skip-provider-button=true
+            - --reverse-proxy=true
+            - --upstream=http://tau-portal.tau-system.svc:80/
+            - --cookie-name=__Host-taugrid-portal
+            - --cookie-path=/
+            - --cookie-secure=true
+            - --cookie-httponly=true
+            - --cookie-samesite=lax
+            - --cookie-expire=1h
+            - --cookie-refresh=0
+            - --session-cookie-minimal=true
+            - --pass-user-headers=false
+            - --pass-access-token=false
+            - --pass-authorization-header=false
+            - --set-authorization-header=false
+            - --request-logging=false
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: portal-cookie
+                  key: cookie-secret
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: applies restricted security contexts and internal proxy health probes
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value: { path: /ready, port: http }
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value: { path: /ping, port: http }
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+
+  - it: exposes only the proxy with a ClusterIP Service and release-scoped selector
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.selector.app
+          value: tau-portal-oauth2-proxy
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - equal:
+          path: spec.ports
+          value: [{ name: http, port: 4180, targetPort: http }]
+
+  - it: requests a certificate for exactly the single Portal hostname
+    documentSelector:
+      path: kind
+      value: Certificate
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: spec
+          value:
+            secretName: tau-portal-entra-tls
+            dnsNames: [portal.example.com]
+            issuerRef:
+              name: portal-issuer
+              kind: ClusterIssuer
+              group: cert-manager.io
+
+  - it: reserves HTTP for solver routes and terminates HTTPS with the generated certificate
+    documentSelector:
+      path: kind
+      value: Gateway
+    asserts:
+      - equal:
+          path: apiVersion
+          value: gateway.networking.k8s.io/v1
+      - equal:
+          path: spec
+          value:
+            gatewayClassName: istio
+            listeners:
+              - name: http
+                hostname: portal.example.com
+                port: 80
+                protocol: HTTP
+                allowedRoutes:
+                  namespaces: { from: Same }
+                  kinds: [{ kind: HTTPRoute }]
+              - name: https
+                hostname: portal.example.com
+                port: 443
+                protocol: HTTPS
+                tls:
+                  mode: Terminate
+                  certificateRefs: [{ kind: Secret, name: tau-portal-entra-tls }]
+                allowedRoutes:
+                  namespaces: { from: Same }
+                  kinds: [{ kind: HTTPRoute }]
+
+  - it: sends every HTTPS path only to oauth2-proxy without public Portal or Ray backend routes
+    documentSelector:
+      path: kind
+      value: HTTPRoute
+    asserts:
+      - equal:
+          path: apiVersion
+          value: gateway.networking.k8s.io/v1
+      - equal:
+          path: spec
+          value:
+            parentRefs:
+              - name: tau-portal-entra
+                sectionName: https
+            hostnames: [portal.example.com]
+            rules:
+              - matches:
+                  - path: { type: PathPrefix, value: / }
+                backendRefs:
+                  - name: tau-portal-oauth2-proxy
+                    port: 4180
+
+  - it: honors custom names namespace service port and a trailing origin slash
+    release:
+      namespace: custom-system
+    set:
+      portal.resourceName: team-portal
+      portal.serviceName: portal-backend
+      portal.service.port: 9090
+      portal.service.targetPort: 8088
+      portal.access.externalURL: https://view.example.org/
+      portal.entraAuth.cookieSecret.name: team-cookie
+      portal.entraAuth.cookieSecret.key: key
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: team-portal-oauth2-proxy
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: team-portal-oauth2-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --upstream=http://portal-backend.custom-system.svc:9090/
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redirect-url=https://view.example.org/oauth2/callback
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef
+          value: { name: team-cookie, key: key }
+
+  - it: supports a preinstalled alternative controller and namespaced issuer
+    set:
+      portal.resourceName: team-portal
+      portal.entraAuth.gatewayClassName: existing-gateway-controller
+      portal.entraAuth.issuerRef.kind: Issuer
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: existing-gateway-controller
+        documentSelector:
+          path: kind
+          value: Gateway
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+        documentSelector:
+          path: kind
+          value: Certificate
+      - notExists:
+          path: spec.tls
+        documentSelector:
+          path: kind
+          value: HTTPRoute
+      - equal:
+          path: spec.parentRefs[0].name
+          value: team-portal-entra
+        documentSelector:
+          path: kind
+          value: HTTPRoute
+
+  - it: allows image digest resources and scheduling overrides without arbitrary auth args
+    set:
+      portal.entraAuth.image.repository: registry.example.com/oauth2-proxy
+      portal.entraAuth.image.tag: ""
+      portal.entraAuth.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      portal.entraAuth.imagePullSecrets: [{ name: registry-pull }]
+      portal.entraAuth.replicaCount: 3
+      portal.entraAuth.resources.requests.cpu: 200m
+      portal.entraAuth.nodeSelector: { role: system }
+      portal.entraAuth.tolerations: [{ key: system, operator: Exists }]
+      portal.entraAuth.affinity: { nodeAffinity: {} }
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/oauth2-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value: [{ name: registry-pull }]
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value: { role: system }
+      - equal:
+          path: spec.template.spec.tolerations
+          value: [{ key: system, operator: Exists }]
+      - equal:
+          path: spec.template.spec.affinity
+          value: { nodeAffinity: {} }
+
+  - it: rejects enabling with no approved callback-log-safe image
+    set:
+      portal.entraAuth.image.repository: ""
+      portal.entraAuth.image.digest: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.image.repository must name an approved oauth2-proxy image containing the callback-log privacy fix
+
+  - it: rejects enablement when Portal is disabled
+    set:
+      portal.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.enabled=true requires portal.enabled=true
+
+  - it: rejects string booleans
+    set:
+      portal.entraAuth.enabled: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "entraAuth/enabled.*|entraAuth.enabled must be a boolean"
+
+  - it: rejects zero replicas instead of deploying an unavailable proxy
+    set:
+      portal.entraAuth.replicaCount: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "entraAuth/replicaCount.*|entraAuth.replicaCount must be a positive integer"
+
+  - it: rejects direct public backend exposure
+    set:
+      portal.service.type: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorMessage: "portal.service.type must remain ClusterIP; expose Portal only through a platform-owned authenticated HTTPS proxy"
+
+  - it: rejects a conflicting internal access declaration
+    set:
+      portal.access.mode: cluster-internal
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.enabled=true requires portal.access.mode=authenticated-proxy
+
+  - it: rejects a missing hostname
+    set:
+      portal.access.externalURL: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: rejects a plaintext URL
+    set:
+      portal.access.externalURL: http://portal.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: rejects a path-based URL instead of silently changing the callback
+    set:
+      portal.access.externalURL: https://portal.example.com/portal
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: rejects a custom public port
+    set:
+      portal.access.externalURL: https://portal.example.com:8443
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: rejects query parameters
+    set:
+      portal.access.externalURL: https://portal.example.com?redirect=example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: rejects a fragment
+    set:
+      portal.access.externalURL: https://portal.example.com/#fragment
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: rejects IP addresses as Gateway hostnames
+    set:
+      portal.access.externalURL: https://192.0.2.1
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth requires portal.access.externalURL to be an HTTPS origin with a lowercase DNS hostname, no port, and no path other than /
+
+  - it: requires a tenant UUID rather than a common multi-tenant issuer
+    set:
+      portal.entraAuth.tenantID: common
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.tenantID must be a UUID
+
+  - it: rejects numeric tenant IDs instead of coercing them
+    set:
+      portal.entraAuth.tenantID: 123
+    asserts:
+      - failedTemplate:
+          errorPattern: "entraAuth/tenantID.*|entraAuth.tenantID must be a UUID"
+
+  - it: rejects inline client secrets
+    set:
+      portal.entraAuth.clientSecret: forbidden
+    asserts:
+      - failedTemplate:
+          errorPattern: "clientSecret"
+
+  - it: rejects inline cookie secrets
+    set:
+      portal.entraAuth.cookieSecret.value: forbidden
+    asserts:
+      - failedTemplate:
+          errorPattern: "value"
+
+  - it: rejects arbitrary auth bypass arguments
+    set:
+      portal.entraAuth.extraArgs: ["--skip-auth-route=^/"]
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraArgs"
+
+  - it: requires the browser app client ID
+    set:
+      portal.entraAuth.clientID: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.clientID must be a UUID
+
+  - it: requires an externally managed cookie Secret
+    set:
+      portal.entraAuth.cookieSecret.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.cookieSecret.name must be a nonempty Kubernetes name
+
+  - it: requires a cookie Secret data key
+    set:
+      portal.entraAuth.cookieSecret.key: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.cookieSecret.key must be a nonempty Secret data key
+
+  - it: requires an operator-owned issuer
+    set:
+      portal.entraAuth.issuerRef.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.issuerRef.name must be a nonempty Kubernetes name
+
+  - it: rejects workspace header trust even without a separate auth flag
+    set:
+      portal.workspaceDirectory.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth does not support portal.workspaceDirectory.enabled or portal.workspaceDirectory.auth.enabled; verified workspace identity-header mapping is not provided
+
+  - it: rejects explicit workspace header authentication
+    set:
+      portal.workspaceDirectory.auth.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth does not support portal.workspaceDirectory.enabled or portal.workspaceDirectory.auth.enabled; verified workspace identity-header mapping is not provided
+
+  - it: rejects a backend name that would loop into the proxy
+    set:
+      portal.serviceName: tau-portal-oauth2-proxy
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.serviceName must not equal the generated oauth2-proxy Service name
+
+  - it: rejects reuse of the generated certificate Secret for cookies
+    set:
+      portal.entraAuth.cookieSecret.name: tau-portal-entra-tls
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.cookieSecret.name must not equal the generated TLS Secret name
+
+  - it: keeps the browser and backend ServiceAccounts separate
+    set:
+      portal.serviceAccount.name: tau-portal-oauth2-proxy
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.serviceAccount.name must not equal the dedicated oauth2-proxy ServiceAccount name

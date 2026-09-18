@@ -42,6 +42,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONTROLLER_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${CONTROLLER_DIR}/../.." && pwd)"
+source "${REPO_ROOT}/scripts/lib/kind.sh"
 TAU_DIR="${REPO_ROOT}/cli"
 APP_BASE_DIR="${REPO_ROOT}/charts/tau-core-controller"
 IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
@@ -58,27 +59,13 @@ ROLLOUT_WAIT_SECONDS="${TAU_CORE_KIND_ROLLOUT_WAIT_SECONDS:-180}"
 DELETE_CLUSTER="${TAU_CORE_KIND_DELETE_CLUSTER:-}"
 RECREATE_CLUSTER="${TAU_CORE_KIND_RECREATE:-0}"
 LOCAL_IMAGE="${TAU_CORE_KIND_LOCAL_IMAGE:-tau-core-controller:kind-e2e}"
+WORKLOAD_IMAGE="${TAU_CORE_KIND_WORKLOAD_IMAGE:-mcr.microsoft.com/azurelinux/base/core:3.0}"
 STATIC_ONLY="${TAU_CORE_KIND_STATIC_ONLY:-0}"
-if [[ -n "${TAU_CORE_KIND_CONTAINER_ENGINE:-}" ]]; then
-  CONTAINER_ENGINE="${TAU_CORE_KIND_CONTAINER_ENGINE}"
-elif [[ "${KIND_EXPERIMENTAL_PROVIDER:-}" == "podman" ]]; then
-  CONTAINER_ENGINE="podman"
-else
-  CONTAINER_ENGINE="docker"
-fi
-if [[ "${CONTAINER_ENGINE}" == "podman" && "${LOCAL_IMAGE}" != */* ]]; then
-  # Podman canonicalizes unqualified local names under the localhost registry.
-  LOCAL_IMAGE="localhost/${LOCAL_IMAGE}"
-fi
+CONTAINER_ENGINE="$(tau_kind_select_engine "${TAU_CORE_KIND_CONTAINER_ENGINE:-}" docker)"
+tau_kind_configure_provider "${CONTAINER_ENGINE}"
+LOCAL_IMAGE="$(tau_kind_qualify_image "${CONTAINER_ENGINE}" "${LOCAL_IMAGE}")"
 SCRATCH_DIR="${CONTROLLER_DIR}/.kind-e2e-scratch"
 CREATED_CLUSTER=0
-
-need() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "missing required tool: $1" >&2
-    exit 127
-  fi
-}
 
 # Bounded wrapper: prefer GNU coreutils `timeout` (Linux CI), fall back to
 # macOS's `gtimeout` (Homebrew coreutils) if present, else run unbounded (the
@@ -114,23 +101,13 @@ wait_for_gpu_series() {
 }
 
 load_local_image() {
-  if [[ "${CONTAINER_ENGINE}" == "podman" ]]; then
-    local archive="${SCRATCH_DIR}/controller-image.tar"
-    # kind's Podman provider still shells out to `docker image inspect` for
-    # docker-image loads. An OCI-independent archive avoids requiring Docker.
-    podman save --format docker-archive -o "${archive}" "${LOCAL_IMAGE}"
-    KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive "${archive}" --name "${CLUSTER_NAME}"
-    return
-  fi
-
-  KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" \
-    kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
+  tau_kind_load_image "${CONTAINER_ENGINE}" "${CLUSTER_NAME}" "${LOCAL_IMAGE}"
 }
 
 cleanup() {
   local status=$?
   if [[ "${DELETE_CLUSTER}" == "1" || ( -z "${DELETE_CLUSTER}" && "${CREATED_CLUSTER}" == "1" ) ]]; then
-    KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" kind delete cluster --name "${CLUSTER_NAME}" >/dev/null 2>&1 || true
+    tau_kind_delete_cluster "${CLUSTER_NAME}" >/dev/null 2>&1 || true
   fi
   rm -rf "${SCRATCH_DIR}"
   return "${status}"
@@ -207,7 +184,7 @@ fi
 # ---------------------------------------------------------------------------
 
 for tool in kind kubectl go python3 "${CONTAINER_ENGINE}" sed; do
-  need "${tool}"
+  tau_kind_need "${tool}"
 done
 
 echo "== checking ${CONTAINER_ENGINE} engine reachability (bounded 15s) =="
@@ -220,12 +197,12 @@ fi
 rm -rf "${SCRATCH_DIR}"
 mkdir -p "${SCRATCH_DIR}"
 
-if ! KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" kind get clusters | grep -qx "${CLUSTER_NAME}"; then
-  KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" kind create cluster --name "${CLUSTER_NAME}" --wait 120s
+if ! tau_kind_cluster_exists "${CONTAINER_ENGINE}" "${CLUSTER_NAME}"; then
+  tau_kind_create_cluster "${CLUSTER_NAME}" --wait 120s
   CREATED_CLUSTER=1
 elif [[ "${RECREATE_CLUSTER}" == "1" ]]; then
-  KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" kind delete cluster --name "${CLUSTER_NAME}"
-  KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}" kind create cluster --name "${CLUSTER_NAME}" --wait 120s
+  tau_kind_delete_cluster "${CLUSTER_NAME}"
+  tau_kind_create_cluster "${CLUSTER_NAME}" --wait 120s
   CREATED_CLUSTER=1
 fi
 
@@ -239,8 +216,8 @@ kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 # LocalQueue at v1beta2 (matching the production Kueue API). Both
 # schemas are intentionally x-kubernetes-preserve-unknown-fields so the
 # default "None" conversion strategy is a lossless passthrough between them.
-# RayJob is present so the researcher connection verifier can prove that the
-# workspace role covers every workload type supported by the Tau CLI.
+# RayJob and RayService are present so the researcher connection verifier can
+# check both workload types without installing a KubeRay controller.
 cat >"${SCRATCH_DIR}/mock-workload-crds.yaml" <<'YAML'
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -395,8 +372,32 @@ spec:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: rayservices.ray.io
+spec:
+  group: ray.io
+  names:
+    kind: RayService
+    listKind: RayServiceList
+    plural: rayservices
+    singular: rayservice
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
 YAML
 kubectl apply -f "${SCRATCH_DIR}/mock-workload-crds.yaml"
+kubectl wait --for=condition=Established \
+  -f "${SCRATCH_DIR}/mock-workload-crds.yaml" \
+  --timeout="${WAIT_SECONDS}s"
 
 # --- Establish the Tau APIs before applying the same full kustomization ArgoCD
 # applies. kubectl's RESTMapper cannot discover a CRD and its TauCluster
@@ -410,13 +411,16 @@ kubectl wait --for=condition=Established \
   --timeout="${WAIT_SECONDS}s"
 kubectl apply -k "${APP_BASE_DIR}"
 
-# --- Build and load the controller image locally; no external mutable
-# image is introduced, and no network access is required after this point.
+# --- Build and load the controller plus the pinned workload fixture. Loading
+# both makes the live assertions deterministic even when Kind nodes have no
+# registry egress.
 "${CONTAINER_ENGINE}" build \
   --file "${IMAGE_DOCKERFILE}" \
   --tag "${LOCAL_IMAGE}" \
   "${REPO_ROOT}"
 load_local_image
+"${CONTAINER_ENGINE}" pull "${WORKLOAD_IMAGE}"
+tau_kind_load_image "${CONTAINER_ENGINE}" "${CLUSTER_NAME}" "${WORKLOAD_IMAGE}"
 
 # Overlay the Deployment with the locally-built image and
 # imagePullPolicy: Never so nothing tries to reach the network, plus
@@ -610,7 +614,7 @@ spec:
   kubernetesSubject:
     kind: Group
     name: ${WORKSPACE_GROUP}
-  role: tau-researcher-v1
+  role: researcher
   target:
     namespace: ${TARGET_NAMESPACE}
     createNamespace: true
@@ -719,6 +723,10 @@ kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}
 echo "== RBAC boundary checks for the researcher subject =="
 kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+for verb in create get list watch delete patch update; do
+  kubectl auth can-i "${verb}" rayservices.ray.io -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
+  [[ "$(kubectl auth can-i "${verb}" rayservices.ray.io -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
+done
 kubectl auth can-i create configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get configmaps -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
@@ -814,7 +822,7 @@ access:
   method: kubeconfig
 authorization:
   mode: workspace-rbac
-  requiredRole: tau-researcher-v1
+  requiredRole: researcher
 requirements:
   minTauVersion: 0.3.0
 network:
@@ -827,12 +835,12 @@ set -eu
 echo rune-project-train-ok
 SH
 chmod +x "${tau_home}/train.sh"
-cat >"${tau_home}/tau/train.yaml" <<'YAML'
+cat >"${tau_home}/tau/train.yaml" <<YAML
 name: project-train
 engine: job
 entrypoint: ../train.sh
 runtime:
-  image: mcr.microsoft.com/azurelinux/base/core:3.0
+  image: ${WORKLOAD_IMAGE}
 compute:
   gpus: 0
   cpu_request: 50m
@@ -928,13 +936,15 @@ kubectl -n "${TARGET_NAMESPACE}" wait --for=condition=complete "job/${train_job}
 (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run status "${train_job}"
+    "${tau_home}/tau-bin" run status "${train_job}" \
+      -n "${TARGET_NAMESPACE}" --context "${KUBE_CONTEXT}"
 ) >"${tau_home}/status.out"
 grep -q "Job ${TARGET_NAMESPACE}/${train_job}" "${tau_home}/status.out"
 (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
-    "${tau_home}/tau-bin" run logs "${train_job}"
+    "${tau_home}/tau-bin" run logs "${train_job}" \
+      -n "${TARGET_NAMESPACE}" --context "${KUBE_CONTEXT}"
 ) >"${tau_home}/logs.out"
 grep -q rune-project-train-ok "${tau_home}/logs.out"
 

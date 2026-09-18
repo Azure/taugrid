@@ -195,6 +195,12 @@ func (d Descriptor) Validate() error {
 		if strings.TrimSpace(d.Authorization.RequiredRole) == "" {
 			return fmt.Errorf("workspace connection authorization.requiredRole is required for mode %s", AuthorizationModeWorkspaceRBAC)
 		}
+		if !tauworkspace.IsResearcherRole(d.Authorization.RequiredRole) {
+			return fmt.Errorf(
+				"workspace connection authorization.requiredRole must be %q (legacy alias %q)",
+				tauworkspace.DefaultResearcherRole, tauworkspace.LegacyResearcherRole,
+			)
+		}
 	default:
 		return fmt.Errorf(
 			"workspace connection authorization.mode must be one of: %s, %s",

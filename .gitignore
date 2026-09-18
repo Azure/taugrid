@@ -33,3 +33,7 @@ go.work.sum
 
 # Helm dependency archives generated during validation and packaging
 charts/taugrid/charts
+
+# Portal frontend dependencies and local build metadata
+portal/frontend/node_modules/
+portal/frontend/*.tsbuildinfo

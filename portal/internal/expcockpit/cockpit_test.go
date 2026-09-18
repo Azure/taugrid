@@ -385,7 +385,7 @@ func TestFocusedSeriesResolutionFrontendSource(t *testing.T) {
 		`{ value: "50", label: "Every 50 steps" }`,
 		`url.searchParams.set("step_interval", String(options.stepInterval));`,
 		`url.searchParams.set("step_interval", state.focusedSeriesControls.stepInterval);`,
-		`stepInterval: normalizeStepIntervalControl(url.searchParams.get("step_interval"))`,
+		`const stepInterval = normalizeStepIntervalControl(url.searchParams.get("step_interval"));`,
 		"function focusedSeriesStepInterval(controls, options = {})",
 		"function autoFocusedSeriesStepInterval(options = {})",
 		"Math.abs(end - start) <= 2000 ? 20 : 50",
@@ -796,7 +796,7 @@ func TestResearcherDashboardPresetRendersGraphFirst(t *testing.T) {
 		`defaultTitle: "Metric catalog"`,
 		`defaultTitle: "Error analysis"`,
 		`defaultTitle: "Reproducibility / evidence"`,
-		"renderDashboardSections(snapshot)",
+		"dashboardSectionByID(id).render(snapshot)",
 		"visibleDashboardSectionIDs()",
 	} {
 		if !strings.Contains(source, want) {
@@ -912,11 +912,11 @@ func TestStellarLandingFrontendSource(t *testing.T) {
 		"state.landingProjectFilter = event.target.value;",
 		"state.landingTagFilter = event.target.value;",
 		`state.landingTagFilter = text(url.searchParams.get("experiment_tag"), "");`,
-		"const fromLanding = !state.target;",
+		"function restoreTargetPreferences(url, nextTarget)",
 		"state.selectedMetrics = [];",
 		"if (!state.target) {",
 		`url.searchParams.delete("target");`,
-		`url.searchParams.delete("pinned");`,
+		`url.searchParams.set("pinned", state.selectedMetrics.join(","));`,
 		"  fetchSnapshot().catch(renderError);\n  startAutoRefresh();",
 	} {
 		if !strings.Contains(source, want) {

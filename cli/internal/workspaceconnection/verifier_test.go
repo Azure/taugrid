@@ -116,7 +116,8 @@ func TestKubectlVerifierRejectsStaleReadyGeneration(t *testing.T) {
 	}
 }
 
-func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *testing.T) {
+func workspaceRBACVerifierFixture(t *testing.T) (Descriptor, *verifierFakeRunner) {
+	t.Helper()
 	descriptor, err := Parse([]byte(validDescriptorYAML))
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +153,11 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 		"-n sample auth can-i list rayjobs.ray.io":                 "yes\n",
 		"-n sample auth can-i patch rayjobs.ray.io":                "yes\n",
 		"-n sample auth can-i delete rayjobs.ray.io":               "yes\n",
+		"-n sample auth can-i create rayservices.ray.io":           "yes\n",
+		"-n sample auth can-i get rayservices.ray.io":              "yes\n",
+		"-n sample auth can-i list rayservices.ray.io":             "yes\n",
+		"-n sample auth can-i patch rayservices.ray.io":            "yes\n",
+		"-n sample auth can-i delete rayservices.ray.io":           "yes\n",
 		"-n sample auth can-i get pods":                            "yes\n",
 		"-n sample auth can-i list pods":                           "yes\n",
 		"-n sample auth can-i get pods/log":                        "yes\n",
@@ -159,6 +165,11 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 		"-n sample auth can-i get workloads.kueue.x-k8s.io":        "yes\n",
 		"-n sample auth can-i list workloads.kueue.x-k8s.io":       "yes\n",
 	}}
+	return descriptor, runner
+}
+
+func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *testing.T) {
+	descriptor, runner := workspaceRBACVerifierFixture(t)
 	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
 
 	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
@@ -183,6 +194,11 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 		"-n sample auth can-i list rayjobs.ray.io",
 		"-n sample auth can-i patch rayjobs.ray.io",
 		"-n sample auth can-i delete rayjobs.ray.io",
+		"-n sample auth can-i create rayservices.ray.io",
+		"-n sample auth can-i get rayservices.ray.io",
+		"-n sample auth can-i list rayservices.ray.io",
+		"-n sample auth can-i patch rayservices.ray.io",
+		"-n sample auth can-i delete rayservices.ray.io",
 		"-n sample auth can-i get pods",
 		"-n sample auth can-i list pods",
 		"-n sample auth can-i get pods/log",
@@ -192,6 +208,25 @@ func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *test
 	} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("workspace-rbac verification did not check %q:\n%s", want, calls)
+		}
+	}
+}
+
+func TestKubectlVerifierRejectsMissingRayServicePermission(t *testing.T) {
+	for _, role := range []string{"researcher", "tau-researcher-v1"} {
+		for _, verb := range []string{"create", "get", "list", "patch", "delete"} {
+			t.Run(role+"/"+verb, func(t *testing.T) {
+				descriptor, runner := workspaceRBACVerifierFixture(t)
+				descriptor.Authorization.RequiredRole = role
+				runner.responses["-n sample auth can-i "+verb+" rayservices.ray.io"] = "no\n"
+				verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+				_, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+				want := fmt.Sprintf("workspace %q is missing required permission: %s rayservices.ray.io in namespace %s (expected role %s)",
+					descriptor.Workspace, verb, "sample", role)
+				if err == nil || err.Error() != want {
+					t.Fatalf("Verify: got %v, want %q", err, want)
+				}
+			})
 		}
 	}
 }
@@ -227,6 +262,69 @@ func TestKubectlVerifierReportsMissingPermission(t *testing.T) {
 	_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err == nil || !strings.Contains(err.Error(), "create jobs.batch") || !strings.Contains(err.Error(), "tau-researcher-v1") {
 		t.Fatalf("expected actionable permission error, got %v", err)
+	}
+}
+
+func TestKubectlVerifierResearcherRoleCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		actual     string
+		required   string
+		permission string
+		wantError  string
+	}{
+		{"logical", "researcher", "researcher", "yes", ""},
+		{"legacy", "tau-researcher-v1", "tau-researcher-v1", "yes", ""},
+		{"legacy workspace", "tau-researcher-v1", "researcher", "yes", ""},
+		{"legacy descriptor", "researcher", "tau-researcher-v1", "yes", ""},
+		{"unknown workspace role", "admin", "researcher", "yes", "does not match"},
+		{"unknown required role", "researcher", "admin", "yes", "does not match"},
+		{"matching unknown roles", "admin", "admin", "yes", "does not match"},
+		{"missing workspace role", "", "researcher", "yes", "does not match"},
+		{"alias cannot bypass permissions", "tau-researcher-v1", "researcher", "no", "missing required permission"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			descriptor, err := Parse([]byte(validDescriptorYAML))
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptor.Authorization = AuthorizationDescriptor{Mode: AuthorizationModeWorkspaceRBAC, RequiredRole: tc.required}
+			runner := &verifierFakeRunner{responses: map[string]string{
+				"-n tau-system get workspace.tau.azure.com sample -o json": fmt.Sprintf(`{
+				  "metadata":{"name":"sample","uid":"workspace-uid","generation":1},
+				  "spec":{"authorization":{"mode":"workspace-rbac"},"role":%q,"queue":"jobqueue"},
+				  "status":{"phase":"Ready","observedGeneration":1,
+				    "target":{"resolvedNamespace":"sample"},"queue":{"localQueue":"jobqueue"}}
+				}`, tc.actual),
+				"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name": "localqueue.kueue.x-k8s.io/jobqueue",
+			}}
+			for resource, verbs := range map[string][]string{
+				"jobs.batch":                 {"create", "get", "list", "patch", "delete"},
+				"rayjobs.ray.io":             {"create", "get", "list", "patch", "delete"},
+				"rayservices.ray.io":         {"create", "get", "list", "patch", "delete"},
+				"pods":                       {"get", "list"},
+				"pods/log":                   {"get"},
+				"localqueues.kueue.x-k8s.io": {"get"},
+				"workloads.kueue.x-k8s.io":   {"get", "list"},
+			} {
+				for _, verb := range verbs {
+					runner.responses["-n sample auth can-i "+verb+" "+resource] = tc.permission
+				}
+			}
+			verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+			_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("expected %q, got %v", tc.wantError, err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			probed := strings.Contains(strings.Join(runner.calls, "\n"), "auth can-i")
+			if probed != (tc.wantError != "does not match") {
+				t.Fatalf("permission probes = %v, unexpected calls: %v", probed, runner.calls)
+			}
+		})
 	}
 }
 

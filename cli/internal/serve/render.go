@@ -1,29 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package serve renders a tau Profile + user options into a KubeRay
-// RayService manifest. North-star §1 / §5 — serving.
-//
-// V0 scope:
-//   - RayService CR with a single headGroup (no workerGroup). This is the
-//     simplest KubeRay shape that proves the admission → head-pod-up →
-//     HTTP-200-on-/healthz loop end-to-end. Workers come when there's
-//     real traffic pressure to justify scale-out; today users
-//     run a single-pod serve.
-//   - Kueue queue label (kueue.x-k8s.io/queue-name) from profile. Kueue
-//     RayService integration is enabled cluster-side; labelling
-//     the parent CR is how admission is requested.
-//
-// V0 non-goals (deliberate, see anti-pattern #6 — ship all 5 commands
-// before the surface is locked):
-//   - Multi-replica workerGroupSpecs (template left in bash CLI; port
-//     when needed).
-//   - vLLM tensor-parallelism auto-configuration from profile. The image
-//     is the user's serve container today; they pass --args or bake it.
-//   - RayService status/scale/delete subcommands — stubs still.
+// Package serve renders profile-bound serving workloads. Distributed
+// RayServices use a CPU head and a fixed pool of GPU worker Pods.
 package serve
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -52,7 +35,7 @@ type Options struct {
 	Replicas    int    // serve deployment replicas when ReplicasSet is true
 	ReplicasSet bool   // render a Ray Serve deployment override
 	ImportPath  string // Ray Serve import path (default serve:app)
-	ServePort   int    // head pod serve port (default 8000)
+	ServePort   int    // Serve HTTP port on head and workers (default 8000)
 	RayVersion  string // default 2.40.0
 	Args        []string
 	Env         map[string]string
@@ -65,12 +48,18 @@ type Options struct {
 	Volumes      []Volume
 
 	Autoscaling *AutoscalingOptions
+	Workers     int32          // profile workerCount; >1 uses a CPU head plus GPU workers
+	ShmSize     string         // optional memory-backed /dev/shm capacity
+	AppArgs     map[string]any // optional application-builder arguments
 }
 
 // Render turns a resolved Profile + Options into a single-document YAML
 // RayService manifest ready for `kubectl apply -f -`.
 func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
+		return nil, err
+	}
+	if err := validateRayWorkerOptions(p, o); err != nil {
 		return nil, err
 	}
 
@@ -93,6 +82,12 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	env, err := envspec.Merge(envspec.FromMap(o.Env), o.EnvVars)
 	if err != nil {
 		return nil, err
+	}
+	if o.Workers > 1 {
+		env, err = distributedRayEnvironment(env, o.Workers, p.Resources.GPU.Count)
+		if err != nil {
+			return nil, err
+		}
 	}
 	runtimePip, err := resolveRuntimePip(o.RuntimePip)
 	if err != nil {
@@ -135,11 +130,17 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render RayService topology: %w", err)
 	}
+	for k, v := range topoPlan.Labels {
+		labels[k] = v
+	}
 	for k, v := range topoPlan.Annotations {
 		headPodAnnotations[k] = v
 	}
 
 	headPodSpec := map[string]any{}
+	if topoPlan.PodPriorityClassName != "" {
+		headPodSpec["priorityClassName"] = topoPlan.PodPriorityClassName
+	}
 
 	headContainer := map[string]any{
 		"name":  "ray-head",
@@ -162,10 +163,10 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	// Resources: CPU/memory requests from profile, plus device-plugin GPUs.
 	resources := map[string]any{}
 	if p.Resources.Requests != nil {
-		resources["requests"] = p.Resources.Requests
+		resources["requests"] = copyResources(p.Resources.Requests)
 	}
 	if p.Resources.Limits != nil {
-		resources["limits"] = p.Resources.Limits
+		resources["limits"] = copyResources(p.Resources.Limits)
 	}
 	profile.AddGPUResources(resources, gpu.Count)
 	if len(resources) > 0 {
@@ -181,12 +182,24 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if len(o.Volumes) > 0 {
 		headPodSpec["volumes"] = volumesToAny(o.Volumes)
 	}
+	addRaySharedMemory(headPodSpec, headContainer, o)
 
 	var serveConfig strings.Builder
+	fmt.Fprintf(&serveConfig, "http_options:\n  host: 0.0.0.0\n  port: %d\n", port)
 	fmt.Fprintf(&serveConfig, "applications:\n")
 	fmt.Fprintf(&serveConfig, "  - name: default\n")
 	fmt.Fprintf(&serveConfig, "    route_prefix: /\n")
 	fmt.Fprintf(&serveConfig, "    import_path: %s\n", importPath)
+	if o.AppArgs != nil {
+		raw, err := yaml.Marshal(o.AppArgs)
+		if err != nil {
+			return nil, fmt.Errorf("marshal Ray Serve application arguments: %w", err)
+		}
+		fmt.Fprintln(&serveConfig, "    args:")
+		for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+			fmt.Fprintf(&serveConfig, "      %s\n", line)
+		}
+	}
 	directEnv := envspec.DirectMap(env)
 	if len(runtimePip) > 0 || len(directEnv) > 0 {
 		fmt.Fprintf(&serveConfig, "    runtime_env:\n")
@@ -226,44 +239,43 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		fmt.Fprintf(&serveConfig, "        num_replicas: %d\n", o.Replicas)
 	}
 
-	rayService := map[string]any{
-		"apiVersion": "ray.io/v1",
-		"kind":       "RayService",
-		"metadata": map[string]any{
-			"name":        o.Name,
-			"namespace":   o.Namespace,
-			"labels":      labels,
-			"annotations": rootAnnotations,
-		},
-		"spec": map[string]any{
-			"serveConfigV2": serveConfig.String(),
-			"rayClusterConfig": map[string]any{
-				"rayVersion": rayVersion,
-				"headGroupSpec": map[string]any{
-					"rayStartParams": map[string]any{
-						"dashboard-host": "0.0.0.0",
-					},
-					"template": map[string]any{
-						"metadata": map[string]any{
-							"labels":      headPodLabels,
-							"annotations": headPodAnnotations,
-						},
-						"spec": headPodSpec,
-					},
-				},
+	metadata := map[string]any{
+		"name": o.Name, "namespace": o.Namespace, "labels": labels,
+	}
+	if len(rootAnnotations) > 0 {
+		metadata["annotations"] = rootAnnotations
+	}
+	headMetadata := map[string]any{"labels": headPodLabels}
+	if len(headPodAnnotations) > 0 {
+		headMetadata["annotations"] = headPodAnnotations
+	}
+	rayCluster := map[string]any{
+		"rayVersion": rayVersion,
+		"headGroupSpec": map[string]any{
+			"rayStartParams": map[string]any{
+				"dashboard-host": "0.0.0.0",
+			},
+			"template": map[string]any{
+				"metadata": headMetadata,
+				"spec":     headPodSpec,
 			},
 		},
 	}
-	if len(rootAnnotations) == 0 {
-		delete(rayService["metadata"].(map[string]any), "annotations")
+	if o.Workers > 1 {
+		rayCluster = distributedRayCluster(p, o, image, rayVersion, port, env, topoPlan)
 	}
-	if len(headPodAnnotations) == 0 {
-		tmpl := rayService["spec"].(map[string]any)["rayClusterConfig"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)
-		delete(tmpl["metadata"].(map[string]any), "annotations")
+	rayService := map[string]any{
+		"apiVersion": "ray.io/v1",
+		"kind":       "RayService",
+		"metadata":   metadata,
+		"spec": map[string]any{
+			"serveConfigV2":    serveConfig.String(),
+			"rayClusterConfig": rayCluster,
+		},
 	}
 
 	var buf strings.Builder
-	enc := yaml.NewEncoder(&yamlWriter{b: &buf})
+	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(rayService); err != nil {
 		return nil, fmt.Errorf("marshal RayService: %w", err)
@@ -284,6 +296,17 @@ func (o Options) validate() error {
 	}
 	if o.ReplicasSet && o.Autoscaling != nil {
 		return errors.New("Replicas and Autoscaling are mutually exclusive")
+	}
+	if o.AppArgs != nil {
+		if strings.TrimSpace(o.ImportPath) == "" {
+			return errors.New("application arguments require an explicit import path")
+		}
+		if o.ReplicasSet || o.Autoscaling != nil || len(o.Args) > 0 {
+			return errors.New("application arguments cannot be combined with CLI deployment overrides or legacy args")
+		}
+		if _, err := json.Marshal(o.AppArgs); err != nil {
+			return fmt.Errorf("application arguments must contain JSON-compatible values: %w", err)
+		}
 	}
 	if o.Autoscaling != nil {
 		if err := o.Autoscaling.Validate(); err != nil {
@@ -323,12 +346,6 @@ func resolveImage(p profile.Profile, o Options) (string, error) {
 	}
 	return "", fmt.Errorf("no image: profile %q declares no runtime image and --image was not set", p.Name)
 }
-
-// yamlWriter is a minimal io.Writer → strings.Builder adapter that lets
-// us use yaml.Encoder (which needs io.Writer) into a Builder.
-type yamlWriter struct{ b *strings.Builder }
-
-func (w *yamlWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
 
 func stringsToAny(ss []string) []any {
 	out := make([]any, len(ss))

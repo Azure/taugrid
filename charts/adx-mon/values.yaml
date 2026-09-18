@@ -316,7 +316,8 @@ collector:
       - "kusto.table"
   # -- GPU-specific scrape configuration
   gpu:
-    # -- Enable DCGM exporter scrape target
+    # -- Enable GPU telemetry support. Exporter routing remains explicit because
+    # mixed clusters can use different DCGM owners on different nodes.
     dcgmScrape: true
     # -- Kernel dmesg target for XID/ECC/NVLink errors
     # -- Collect kernel logs via journald _TRANSPORT=kernel filter (no privilege escalation needed)

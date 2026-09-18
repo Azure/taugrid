@@ -2,7 +2,7 @@
 {{- $portal := .Values.portal -}}
 {{- $systemNamespace := .Release.Namespace -}}
 {{- $source := lower (default "kusto" $portal.source) -}}
-{{- $kusto := default dict $portal.kusto -}}
+{{- $kusto := deepCopy (default dict $portal.kusto) -}}
 {{- $runHistory := default dict $portal.runHistory -}}
 {{- $jobs := default dict $portal.jobs -}}
 {{- $jobsScopeModeConfigured := ne (trim (default "" $jobs.scopeMode)) "" -}}
@@ -21,7 +21,30 @@
 {{- $externalURLParts = urlParse $externalURL -}}
 {{- end -}}
 {{- $rbac := default dict $portal.rbac -}}
-{{- $serviceAccount := default dict $portal.serviceAccount -}}
+{{- $serviceAccount := deepCopy (default dict $portal.serviceAccount) -}}
+{{- if eq $source "kusto" -}}
+{{- $connection := include "taugrid-core.adxQueryConnection" . | fromJson -}}
+{{- if $connection.endpoint -}}
+{{- $_ := set $kusto "endpoint" (default $connection.endpoint $kusto.endpoint) -}}
+{{- $_ := set $kusto "database" (default $connection.database $kusto.database) -}}
+{{- $annotations := default dict $serviceAccount.annotations -}}
+{{- $clientIDKey := "azure.workload.identity/client-id" -}}
+{{- if hasKey $annotations $clientIDKey -}}
+{{- if not (trim (default "" (index $annotations $clientIDKey))) -}}
+{{- fail "portal.serviceAccount.annotations.azure.workload.identity/client-id must not be empty when global.adx.queryConnection is configured" -}}
+{{- end -}}
+{{- if and (not $serviceAccount.create) (not $serviceAccount.name) -}}
+{{- fail "global.adx.queryConnection requires a dedicated Portal serviceAccount: enable portal.serviceAccount.create or name an existing annotated serviceAccount" -}}
+{{- end -}}
+{{- else -}}
+{{- if not $serviceAccount.create -}}
+{{- fail "inheriting global.adx.queryConnection.clientID requires portal.serviceAccount.create=true; for an existing serviceAccount, set its name and explicit portal.serviceAccount.annotations.azure.workload.identity/client-id to match the provisioned annotation" -}}
+{{- end -}}
+{{- $_ := set $annotations $clientIDKey $connection.clientID -}}
+{{- end -}}
+{{- $_ := set $serviceAccount "annotations" $annotations -}}
+{{- end -}}
+{{- end -}}
 {{- $resourceName := default "tau-portal" $portal.resourceName -}}
 {{- $serviceName := default $resourceName $portal.serviceName -}}
 {{- $serviceAccountName := default $resourceName $serviceAccount.name -}}
@@ -136,11 +159,19 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # Job detail: surface namespaced scheduling, image-pull, and failure Events.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   # Cluster Nodes board: read node hardware inventory (SKU, agentpool,
   # CPU/memory/GPU capacity) from cluster-scoped Node objects.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  # Fleet Compute current CPU/memory utilization from Metrics Server.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
   # Fleet Compute runtime-plumbing summary: GPU/runtime DaemonSet readiness.
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
@@ -154,12 +185,13 @@ rules:
     resources: ["clusters"]
     resourceNames: ["cluster"]
     verbs: ["get"]
-  # Runs board: list submitted RayJobs and batch Jobs in the workload namespace.
+  # Runs board and Job detail: read submitted RayJobs, their RayClusters, and
+  # batch Jobs in the workload namespace.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["ray.io"]
-    resources: ["rayjobs"]
+    resources: ["rayjobs", "rayclusters"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

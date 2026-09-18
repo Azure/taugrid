@@ -47,6 +47,9 @@ var (
 	nodeGVR = schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "nodes",
 	}
+	nodeMetricsGVR = schema.GroupVersionResource{
+		Group: "metrics.k8s.io", Version: "v1beta1", Resource: "nodes",
+	}
 	jobGVR = schema.GroupVersionResource{
 		Group: "batch", Version: "v1", Resource: "jobs",
 	}
@@ -54,6 +57,9 @@ var (
 	// the repo's kuberay-operator chart, matching `kubectl get rayjobs.ray.io`.
 	rayJobGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayjobs",
+	}
+	rayClusterGVR = schema.GroupVersionResource{
+		Group: "ray.io", Version: "v1", Resource: "rayclusters",
 	}
 	podGVR = schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "pods",
@@ -149,6 +155,13 @@ func (c *Client) ListNodes(ctx context.Context) ([]byte, error) {
 	return c.listRaw(ctx, nodeGVR, "")
 }
 
+// ListNodeMetrics returns current cluster-scoped Node CPU and memory usage from
+// Metrics Server. The Fleet board treats this as optional current evidence and
+// preserves inventory when the aggregated API is unavailable.
+func (c *Client) ListNodeMetrics(ctx context.Context) ([]byte, error) {
+	return c.listRaw(ctx, nodeMetricsGVR, "")
+}
+
 // ListDaemonSets returns DaemonSets across all namespaces for the Fleet Compute
 // runtime-plumbing summary.
 func (c *Client) ListDaemonSets(ctx context.Context) ([]byte, error) {
@@ -169,9 +182,8 @@ func (c *Client) ListRayJobs(ctx context.Context, namespace string) ([]byte, err
 	return c.listRaw(ctx, rayJobGVR, namespace)
 }
 
-// ListPods returns the namespaced core Pods list as raw JSON. The job detail
-// page filters these to a run's pods (by ray.io/cluster or tau.azure.com/job) to
-// report per-pod phase, node placement, and restart counts.
+// ListPods returns the namespaced core Pods list as raw JSON. Job detail uses
+// labels to discover candidates and controller owner UIDs to prove ownership.
 func (c *Client) ListPods(ctx context.Context, namespace string) ([]byte, error) {
 	return c.listRaw(ctx, podGVR, namespace)
 }
@@ -192,6 +204,12 @@ func (c *Client) GetJob(ctx context.Context, namespace, name string) ([]byte, er
 // not installed) surfaces as a get error, which the detail page tolerates.
 func (c *Client) GetRayJob(ctx context.Context, namespace, name string) ([]byte, error) {
 	return c.getRaw(ctx, rayJobGVR, namespace, name)
+}
+
+// GetRayCluster returns one RayCluster so Job detail can verify that the
+// cluster and its Pods belong to the current RayJob incarnation.
+func (c *Client) GetRayCluster(ctx context.Context, namespace, name string) ([]byte, error) {
+	return c.getRaw(ctx, rayClusterGVR, namespace, name)
 }
 
 // getRaw fetches a single namespaced object by name and returns its JSON bytes.

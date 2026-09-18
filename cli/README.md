@@ -102,6 +102,33 @@ terminating workspace is refused. The controller also blocks extra workspace
 objects from activating if they bypass the CLI. A reviewed manifest delivered
 through Helm, Kustomize, or ArgoCD remains supported.
 
+New workspaces and connection descriptors use the logical role `researcher`.
+The updated workspace CRD and CLI also accept the legacy `tau-researcher-v1`
+alias, with identical RBAC permissions. `tau cluster install` updates TauGrid's
+own CRDs from the selected chart before upgrading an existing Helm release.
+The workspace schema accepts both names; existing CRs are retained and
+compatible workspaces are not renamed by `create`. `adopt` uses cluster-wide
+authorization and does not emit a researcher role.
+
+Direct `helm upgrade` does not update existing CRDs. For that path, review and
+apply the CRD from a checkout matching the target release before upgrading the
+chart and its RBAC:
+
+```bash
+kubectl --context <admin-context> diff -f charts/tau-core-controller/crds/tau.azure.com_workspaces.yaml
+kubectl --context <admin-context> apply -f charts/tau-core-controller/crds/tau.azure.com_workspaces.yaml
+kubectl --context <admin-context> wait --for=condition=Established \
+  crd/workspaces.tau.azure.com --timeout=120s
+```
+
+CRD changes are not rolled back by Helm's `--atomic` option. Use backward-compatible
+release schemas; manage third-party Kueue/KubeRay CRD migrations separately.
+
+The updated researcher ClusterRole also grants RayService lifecycle permissions
+in the workspace namespace. Install the updated Helm or Kustomize RBAC before
+connecting with this CLI: workspace-RBAC verification now checks RayService
+create/get/list/patch/delete permissions in addition to Job and RayJob access.
+
 StorageClasses, durable PVCs, Azure identities, federation, and Azure role
 assignments remain platform-owned. `--service-account` plus
 `--workload-identity-client-id` asks the controller to reconcile only the

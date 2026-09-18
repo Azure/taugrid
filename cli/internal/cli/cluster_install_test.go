@@ -204,6 +204,8 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 		case len(args) > 1 && args[0] == "get" && args[1] == "values":
 			_, _ = io.WriteString(out, "{}")
 			return nil
+		case len(args) > 0 && args[0] == "template":
+			return nil
 		}
 		upgrades++
 		return nil

@@ -13,22 +13,26 @@ aliases:
 
 - `--kind=rayservice` (default) for a Ray Serve application; KubeRay must be
   installed and the image must expose the specified Python import path.
+  Multi-worker profiles use a CPU head plus a fixed GPU worker pool.
 - `--kind=deployment` for a plain Kubernetes Deployment such as a raw vLLM,
   TGI, Triton, or custom HTTP server.
 
-You need a platform-provided serving profile, a pinned image, the target
-namespace/context, and a checkpoint visible from the serving PVC when the
-endpoint loads model state.
+You need an active repository workspace connection, a platform-provided
+serving profile, a pinned image, and a checkpoint visible from the serving
+PVC when the endpoint loads model state.
 
-Served workloads are admitted through Kueue. `tau serve` resolves the
-platform-managed default LocalQueue from the target namespace and stamps it on
-the workload automatically, handling queue selection on the researcher's behalf. If the namespace has no usable
-default LocalQueue, deployment fails with an onboarding error rather than
-creating pods Kueue never admits.
+Served workloads are admitted through Kueue. `tau serve deploy` resolves the
+active repository connection and its live TauWorkspace, then uses that
+workspace's namespace and LocalQueue. It verifies queue access, ClusterQueue
+bindings, and serving-profile applicability before rendering or applying the
+workload. Namespace team/default-queue labels are not the source of workspace
+identity or placement.
 
 ## Render before deployment
 
-Use a resolved checkpoint path for an offline client dry-run:
+Use a resolved checkpoint path for a client dry-run. This still requires a
+connected workspace to resolve placement and authorization; it does not apply
+the rendered workload:
 
 ```bash
 tau serve deploy <service-name> \
@@ -43,9 +47,22 @@ tau serve deploy <service-name> \
   --dry-run=client
 ```
 
-`--checkpoint` mounts the selected PVC at `/data`, resolves relative paths
-under `/data/checkpoints`, and sets `TAU_MODEL_PATH`. Your application still
-owns how it loads the model and handles requests.
+`--checkpoint` mounts the selected PVC root at `/data` (without a workspace
+subdirectory mount) and sets `TAU_MODEL_PATH`:
+
+| Checkpoint input | `TAU_MODEL_PATH` |
+| --- | --- |
+| `projects/<workspace>/runs/<run>/checkpoints/last.pt` | `/data/projects/<workspace>/runs/<run>/checkpoints/last.pt` |
+| `finetunes/<run>/checkpoints/best.pt` (legacy relative path) | `/data/checkpoints/finetunes/<run>/checkpoints/best.pt` |
+| `/data/projects/<workspace>/runs/<run>/checkpoints/last.pt` (absolute path) | Unchanged |
+
+Other relative paths continue to resolve under `/data/checkpoints`. Absolute
+paths are preserved, including custom container paths; if an absolute path is
+outside `/data`, your image or additional mounts must make it available.
+Paths containing a `..` component are rejected, even if they would resolve
+back inside `/data`. No filesystem lookup or active-workspace inference is
+performed: use the PVC containing the training output and its actual path.
+Your application still owns how it loads the model and handles requests.
 
 ## Deploy and inspect
 
@@ -100,6 +117,126 @@ when the container listens on a port, and `--readiness-path` /
 path needs a port from `--service-port`, `--service-target-port`, or
 `--deployment-port`.
 
+## Container commands and arguments
+
+For `--kind=deployment`, omit command/argument flags to keep the image's
+`ENTRYPOINT` and `CMD`. The legacy `--args` flag still splits on whitespace;
+it does not understand shell quoting or automatically execute shell operators.
+Use repeatable `--arg` for literal arguments containing spaces, commas, quotes,
+or newlines. `--arg` and `--args` are mutually exclusive.
+
+Repeat `--command` for each element of the container's command (the executable
+first). These flags set Kubernetes `command` and `args` directly, without
+splitting each value or detecting shell syntax:
+
+```bash
+tau serve deploy custom-server \
+  --kind=deployment \
+  --profile <serve-profile> \
+  --image <pinned-image> \
+  --command /bin/sh --command -c \
+  --arg 'pip install foo && exec python serve.py' \
+  --namespace <namespace> \
+  --dry-run=client
+```
+
+This explicitly opts into shell execution. The image must contain `/bin/sh`,
+Python, and pip, and runtime installation requires package-index access.
+Prefer baking dependencies into a pinned image for reproducible startup.
+Single quotes above keep your local shell from expanding the script;
+`exec` lets the server receive container termination signals directly.
+For a non-shell entrypoint, use e.g. `--command python --arg serve.py
+--arg=--label --arg 'hello, world'`. Use `--arg=<value>` when an argument
+begins with a dash.
+
+`--command` and `--arg` are rejected for `--kind=rayservice`. KubeRay owns
+Ray head startup and can combine head-container command/args with its generated
+`ray start` command; a long-running application script there could prevent
+Ray from starting. Existing `--args` rendering is retained for compatibility,
+but it is not an application argv or literal-shell-safety contract for
+RayService. Use `--import-path` for the Ray Serve application,
+`--app-args` for application-builder arguments, `--runtime-pip` for its Python
+dependencies, and `--env` for environment configuration.
+Arbitrary non-Ray server scripts belong in `--kind=deployment`, not the Ray
+head startup sequence. Multi-node RayServices reject legacy `--args` rather
+than mixing an inference-server command into `ray start`.
+
+## Ray Serve application builders
+
+Use `--app-args <file>` with an explicit `--import-path` to pass a JSON or
+YAML object to a Ray Serve application builder, including Ray Serve LLM:
+
+```bash
+tau serve deploy model-api \
+  --kind=rayservice \
+  --profile <serve-profile> \
+  --image <compatible-ray-vllm-image> \
+  --ray-version <ray-version-in-image> \
+  --import-path ray.serve.llm:build_openai_app \
+  --app-args <llm-config.json> \
+  --context <context> \
+  --namespace <namespace> \
+  --dry-run=client
+```
+
+The argument object is embedded under `applications[].args` in
+`serveConfigV2`. It must be one document, no larger than 1 MiB, with
+JSON-compatible values. It is visible in the rendered manifest: do not put
+credentials in it; use `--env-secret` references when supported by the app.
+
+With `--app-args`, configure builder-owned deployments inside that object.
+CLI `--replicas`, `--min-replicas`, `--max-replicas`, `--target-qps`,
+`--scale-down-delay`, and legacy `--args` are rejected. For example, Ray Serve
+LLM uses `llm_configs[].deployment_config.num_replicas`; Tau does not inject
+a deployment named `default` over the native builder's generated names.
+Without `--app-args`, existing deployment overrides remain available.
+
+## Distributed model instances
+
+For workspace-RBAC connections, install the updated researcher ClusterRole.
+It grants RayService lifecycle permissions through the workspace's namespaced
+RoleBinding; both `researcher` and `tau-researcher-v1` use this role. The CLI
+checks create/get/list/patch/delete permissions when verifying the connection.
+
+For `--kind=rayservice`, a profile with `workerCount > 1` creates a CPU-only
+Ray head and that many GPU worker Pods. `workerCount` excludes the head, and
+`gpusPerWorker` is the GPU request for each worker. Optional `--nodes` and
+`--gpus` assert these values; neither overrides the profile. Distributed
+profiles require `mode: fixed`, `placement: multi-node-nccl`, and
+`executionTarget: singleCluster`.
+
+The worker pool has fixed `replicas`, `minReplicas`, and `maxReplicas`.
+Application `--replicas` and autoscaling settings operate within that pool;
+they do not silently increase Kubernetes GPU allocations. The CPU head
+advertises zero logical CPUs and GPUs for application scheduling, so model
+actors run on workers. It does not inherit GPU-specific TAS annotations.
+
+`--shm-size 32Gi` mounts a memory-backed `/dev/shm` on the head and workers.
+Model mounts and environment/secret references reach both templates.
+Ray-cluster-scoped worker anti-affinity keeps GPU workers on different
+hostnames and requires Kubernetes support for `matchLabelKeys`.
+
+Use `--import-path` to select a Ray Serve application. Tau injects
+`TAU_SERVE_NODES` and `TAU_SERVE_GPUS_PER_NODE` from the profile into the
+distributed application environment. Applications can use those values to
+validate their placement-group and engine configuration. KubeRay still owns
+Ray process startup and creates the head and serving Services.
+
+For offline review, `--workload-profile-snapshot <file>` accepts a validated
+`TauWorkloadProfileSnapshot` with `--dry-run=client` and an explicit
+`--namespace`. Do not combine it with `--context`. This path does not connect
+to Kubernetes, verify a workspace, or resolve checkpoint references. Its
+output is marked `tau.azure.com/workload-profile-source: snapshot` and cannot
+authorize server dry-run or apply. Without a snapshot, the connected workspace
+and authoritative-profile checks remain mandatory.
+
+Model-specific images, configuration, and deployment scripts belong to the
+application project. Tau renders the authorized worker pool and application
+arguments; it does not bundle or qualify an inference engine. Check the
+chosen image's Ray version, model support, and application imports separately.
+Model staging, quota, node capacity, and full-context inference are not proven
+by rendering, image publication, or import checks.
+
 ## Scale or remove
 
 Plain Deployments can be scaled directly:
@@ -115,6 +252,13 @@ tau serve scale <service-name> \
 RayService scaling goes through redeploy: because its Serve config is a
 serialized field, redeploy a RayService with `--replicas` to change the count, or
 set `--min-replicas` and `--max-replicas` when creating it.
+For application builders using `--app-args`, change the deployment settings
+inside the argument file and redeploy instead of using those CLI overrides.
+
+For multi-worker RayService, size that fixed worker pool for the application's
+GPU demand. RayService cluster upgrades can temporarily require both old and
+new worker pools; plan the extra capacity or a separately approved
+stop-and-redeploy procedure.
 
 Remove either kind explicitly:
 
@@ -125,6 +269,9 @@ tau serve delete <service-name> \
   --context <context>
 ```
 
-Serving reads the namespace and context you pass explicitly, sourced from the
-platform handoff, rather than from `tau/workspace.connection.yaml`. The project image must
-provide the configured import path and all runtime dependencies.
+Deploy uses the active repository workspace connection, including
+`tau/workspace.connection.yaml` when present. Explicit `--namespace` and
+`--context` must agree with that connection's resolved target; they cannot
+redirect a deploy into a different workspace. Status, scale, and delete still
+use their explicit namespace/context flags. The project image must provide
+the configured import path and all runtime dependencies.

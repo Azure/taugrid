@@ -17,7 +17,8 @@ import (
 
 const (
 	DefaultWorkspaceQueue = "jobqueue"
-	DefaultResearcherRole = "tau-researcher-v1"
+	DefaultResearcherRole = "researcher"
+	LegacyResearcherRole  = "tau-researcher-v1"
 
 	// Entra asserts groups by object ID, so a subject naming a group that does
 	// not exist binds nobody. GitHub asserts team slugs, which share a shape
@@ -47,6 +48,12 @@ const (
 	// different resource kind, so the two never collide.
 	DefaultWorkspaceName = workloadmeta.DefaultWorkspaceName
 )
+
+// IsResearcherRole accepts the logical role and its legacy ClusterRole name.
+// Both names grant the same fixed permissions; neither selects arbitrary RBAC.
+func IsResearcherRole(role string) bool {
+	return role == DefaultResearcherRole || role == LegacyResearcherRole
+}
 
 type CreateOptions struct {
 	Name                     string

@@ -569,7 +569,8 @@ DcgmExporterUnavailable contract; there is no configurable required,
 availabilityCondition, condition name, or debounce. Both remaining sources
 (host-dcgmi and exporter) scrape the profile's effective
 dcgmHealth.exporterUrl, so every accepted config renders the dcgm-exporter
-target and keeps every DCGM_* collector rule.
+target. Baseline rules always render; rules marked extended render only when
+metricsCollector.extendedHealthChecks is enabled.
 */}}
 {{- define "gpu-monitoring.metricsCollectorConfig" -}}
 {{- $root := .root }}
@@ -588,7 +589,56 @@ target and keeps every DCGM_* collector rule.
 {{- if hasKey $sku "nodeExporterScrape" }}
 {{- $nodeExporterScrapeEnabled = $sku.nodeExporterScrape }}
 {{- end }}
-{{- $rules := $root.Values.metricsCollector.rules }}
+{{- $extended := $root.Values.metricsCollector.extendedHealthChecks }}
+{{- if not (kindIs "bool" $extended) }}
+{{- fail "metricsCollector.extendedHealthChecks must be a boolean" }}
+{{- end }}
+{{- $coverage := $root.Values.metricsCollector.requireMetricCoverage }}
+{{- if not (kindIs "bool" $coverage) }}
+{{- fail "metricsCollector.requireMetricCoverage must be a boolean" }}
+{{- end }}
+{{- if and $coverage (not $extended) }}
+{{- fail "metricsCollector.requireMetricCoverage requires metricsCollector.extendedHealthChecks=true" }}
+{{- end }}
+{{- $ibDevices := list }}
+{{- range $devicePort := splitList " " (trim (default "" $sku.ib_devices)) }}
+{{- if $devicePort }}
+{{- $ibDevices = append $ibDevices (regexReplaceAll ":.*$" $devicePort "") }}
+{{- end }}
+{{- end }}
+{{- $rules := list }}
+{{- $covered := 0 }}
+{{- range $rule := $root.Values.metricsCollector.rules }}
+{{- if and (hasKey $rule "perGpu") (not (kindIs "bool" $rule.perGpu)) }}
+{{- fail "metricsCollector.rules perGpu must be a boolean" }}
+{{- end }}
+{{- if and (hasKey $rule "extended") (not (kindIs "bool" $rule.extended)) }}
+{{- fail "metricsCollector.rules extended must be a boolean" }}
+{{- end }}
+{{- if or (not $rule.extended) $extended }}
+{{- $rendered := omit (deepCopy $rule) "extended" "perGpu" }}
+{{- if and (gt (len $ibDevices) 0) (or (eq $rule.conditionType "IBLinkDown") (eq $rule.conditionType "IBSymbolError")) }}
+{{- $_ := set $rendered "minSamples" (len $ibDevices) }}
+{{- $_ := set $rendered "sampleLabel" "device" }}
+{{- $_ := set $rendered "requiredSampleValues" $ibDevices }}
+{{- $_ := set $rendered "maxSampleAge" "2m" }}
+{{- end }}
+{{- if and $coverage $rule.perGpu }}
+{{- if le (int $sku.num_gpus) 0 }}
+{{- fail (printf "gpuSkus.%s.num_gpus must be positive for per-GPU metric coverage" $skuName) }}
+{{- end }}
+{{- $_ := set $rendered "minSamples" (int $sku.num_gpus) }}
+{{- $_ := set $rendered "sampleLabel" "UUID" }}
+{{- end }}
+{{- if and $coverage (hasKey $rendered "minSamples") (gt (int $rendered.minSamples) 0) }}
+{{- $covered = add1 $covered }}
+{{- end }}
+{{- $rules = append $rules $rendered }}
+{{- end }}
+{{- end }}
+{{- if and $coverage (eq (int $covered) 0) }}
+{{- fail "metricsCollector.requireMetricCoverage requires at least one perGpu or minSamples rule" }}
+{{- end }}
 {{- include "gpu-monitoring.validateDcgmExporterUnavailableGuard" (dict "root" $root "sku" $sku "skuName" $skuName) }}
 scrapeTargets:
   - name: "dcgm-exporter"

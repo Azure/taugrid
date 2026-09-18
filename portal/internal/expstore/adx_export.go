@@ -317,7 +317,7 @@ func (s *Store) ExportADX(ctx context.Context, opts ADXExportOptions) (ADXExport
 	} else {
 		exportedAt = exportedAt.UTC()
 	}
-	sourceStoreID, err := s.adxSourceStoreID()
+	sourceStoreID, err := s.ADXSourceStoreID()
 	if err != nil {
 		return ADXExportResult{}, err
 	}
@@ -446,7 +446,7 @@ func (s *Store) ExportADXMetrics(ctx context.Context, opts ADXMetricsExportOptio
 	} else {
 		exportedAt = exportedAt.UTC()
 	}
-	sourceStoreID, err := s.adxSourceStoreID()
+	sourceStoreID, err := s.ADXSourceStoreID()
 	if err != nil {
 		return ADXMetricsExportResult{}, err
 	}
@@ -640,7 +640,8 @@ func (s *Store) prepareADXDestination(opts ADXExportOptions) (string, error) {
 	return dest, nil
 }
 
-func (s *Store) adxSourceStoreID() (string, error) {
+// ADXSourceStoreID identifies the store independently of an export iteration.
+func (s *Store) ADXSourceStoreID() (string, error) {
 	payload := struct {
 		SchemaVersion string `json:"schema_version"`
 		Kind          string `json:"kind"`
