@@ -411,8 +411,10 @@ func validateExperimentsURL(raw string, local bool) error {
 }
 
 func isSafeLocalAbsolutePath(raw string) bool {
+	// Keep both unsafe prefixes explicit so CodeQL recognizes the redirect guard.
 	return strings.HasPrefix(raw, "/") &&
 		!strings.HasPrefix(raw, "//") &&
+		!strings.HasPrefix(raw, `/\`) &&
 		!strings.Contains(raw, `\`)
 }
 
