@@ -652,6 +652,10 @@ func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 		"capabilities":           map[string]any{"add": []any{"SYS_ADMIN"}},
 		"readOnlyRootFilesystem": true,
 		"seLinuxOptions":         map[string]any{"level": "s0:c123,c456"},
+		"seccompProfile": map[string]any{
+			"type":             "Localhost",
+			"localhostProfile": "profiles/training.json",
+		},
 	}
 	out, err := Render(p, Options{
 		Name:      "rdma-merge",
@@ -687,6 +691,29 @@ func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 	sel := sc["seLinuxOptions"].(map[string]any)
 	if sel["level"] != "s0:c123,c456" {
 		t.Errorf("seLinuxOptions should be preserved, got %v", sc["seLinuxOptions"])
+	}
+	seccomp := sc["seccompProfile"].(map[string]any)
+	if seccomp["type"] != "Localhost" || seccomp["localhostProfile"] != "profiles/training.json" {
+		t.Errorf("seccompProfile should be preserved, got %v", sc["seccompProfile"])
+	}
+}
+
+func TestRender_RDMARejectsRunAsNonRootProfile(t *testing.T) {
+	p := trainProfile()
+	p.Runtime.SecurityContext = map[string]any{"runAsNonRoot": true}
+
+	_, err := Render(p, Options{
+		Name:      "rdma-nonroot-conflict",
+		Namespace: "tau",
+		Command:   []string{"python", "train.py"},
+		RDMA: RDMAOptions{
+			Enabled:      true,
+			ResourceName: "rdma/rdma_shared_device_a",
+			Count:        1,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runAsNonRoot=true") {
+		t.Fatalf("expected runAsNonRoot conflict, got %v", err)
 	}
 }
 

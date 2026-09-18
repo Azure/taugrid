@@ -512,6 +512,15 @@ func TestValidateExecutionRejectsRDMAForRayJob(t *testing.T) {
 	if err := cfg.ValidateExecution(EngineJob); err != nil {
 		t.Fatalf("ValidateExecution(job) unexpected error: %v", err)
 	}
+
+	managed := Config{
+		SchemaVersion: 1,
+		Run:           Run{WorkloadKind: EngineRayJob},
+		Runtime:       Runtime{RDMA: RDMA{Enabled: true}},
+	}
+	if err := managed.ValidateExecution(""); err != nil {
+		t.Fatalf("ValidateExecution(managed rayjob) unexpected error: %v", err)
+	}
 }
 
 func TestParseKeepsManagedManifestPassThrough(t *testing.T) {

@@ -829,10 +829,15 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 				sc[k] = v
 			}
 		}
+		if runAsNonRoot, _ := sc["runAsNonRoot"].(bool); runAsNonRoot {
+			return nil, fmt.Errorf("RDMA requires runAsUser=0 and conflicts with profile securityContext runAsNonRoot=true")
+		}
 		sc["runAsUser"] = int64(0)
 		sc["runAsGroup"] = int64(0)
 		sc["allowPrivilegeEscalation"] = false
-		sc["seccompProfile"] = map[string]any{"type": "RuntimeDefault"}
+		if _, exists := sc["seccompProfile"]; !exists {
+			sc["seccompProfile"] = map[string]any{"type": "RuntimeDefault"}
+		}
 		sc["capabilities"] = map[string]any{
 			"drop": []any{"ALL"},
 			"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
