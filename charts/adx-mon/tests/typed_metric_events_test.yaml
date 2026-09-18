@@ -38,7 +38,7 @@ tests:
           pattern: '"column":"event_id","path":"\$\.event_id"'
       - matchRegex:
           path: spec.body
-          pattern: 'policy retention softdelete = 400d'
+          pattern: '\.alter-merge table TauExpMetricEventsV1Dedup policy retention softdelete = 400d'
       - matchRegex:
           path: spec.body
           pattern: 'policy caching hot = 30d'

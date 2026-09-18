@@ -52,7 +52,7 @@ spec:
            run_group_id, run_id, metric_name
     }
 
-    .alter materialized-view TauExpSeriesCatalogV1 policy retention softdelete = 400d recoverability = disabled
+    .alter-merge table TauExpSeriesCatalogV1 policy retention softdelete = 400d recoverability = disabled
 
     {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
     .create async ifnotexists materialized-view with (backfill=true) TauExpMetricRunCatalogV1 on table ExperimentMetrics
@@ -91,7 +91,7 @@ spec:
         by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
     }
 
-    .alter materialized-view TauExpMetricRunCatalogV1 policy retention softdelete = 400d recoverability = disabled
+    .alter-merge table TauExpMetricRunCatalogV1 policy retention softdelete = 400d recoverability = disabled
     {{- end }}
 
     {{- if ne $catalogSource "legacy" }}
@@ -115,7 +115,7 @@ spec:
            run_group_id, run_id, metric_name
     }
 
-    .alter materialized-view TauExpTypedSeriesCatalogV1 policy retention softdelete = 400d recoverability = disabled
+    .alter-merge table TauExpTypedSeriesCatalogV1 policy retention softdelete = 400d recoverability = disabled
 
     {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
     .create async ifnotexists materialized-view with (backfill=true) TauExpTypedMetricRunCatalogV1 on table TauExpMetricEventsV1
@@ -145,7 +145,7 @@ spec:
         by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
     }
 
-    .alter materialized-view TauExpTypedMetricRunCatalogV1 policy retention softdelete = 400d recoverability = disabled
+    .alter-merge table TauExpTypedMetricRunCatalogV1 policy retention softdelete = 400d recoverability = disabled
     {{- end }}
 
     {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
@@ -205,5 +205,5 @@ spec:
         by lifecycle_cluster = cluster, lifecycle_namespace = namespace, durable_identity, is_terminal
     }
 
-    .alter materialized-view TauExpLifecycleRunCatalogV1 policy retention softdelete = 400d recoverability = disabled
+    .alter-merge table TauExpLifecycleRunCatalogV1 policy retention softdelete = 400d recoverability = disabled
 {{- end }}

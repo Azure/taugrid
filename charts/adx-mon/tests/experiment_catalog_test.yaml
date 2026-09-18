@@ -42,13 +42,13 @@ tests:
           pattern: 'TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle'
       - matchRegex:
           path: spec.body
-          pattern: '\.alter materialized-view TauExpSeriesCatalogV1 policy retention softdelete = 400d'
+          pattern: '\.alter-merge table TauExpSeriesCatalogV1 policy retention softdelete = 400d'
       - matchRegex:
           path: spec.body
-          pattern: '\.alter materialized-view TauExpMetricRunCatalogV1 policy retention softdelete = 400d'
+          pattern: '\.alter-merge table TauExpMetricRunCatalogV1 policy retention softdelete = 400d'
       - matchRegex:
           path: spec.body
-          pattern: '\.alter materialized-view TauExpLifecycleRunCatalogV1 policy retention softdelete = 400d'
+          pattern: '\.alter-merge table TauExpLifecycleRunCatalogV1 policy retention softdelete = 400d'
       - notMatchRegex:
           path: spec.body
           pattern: 'backfill=true'
