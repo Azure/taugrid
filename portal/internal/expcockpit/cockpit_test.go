@@ -1758,6 +1758,32 @@ func TestKustoSourceSearchesExperiments(t *testing.T) {
 		{Project: "sample-project", ExperimentID: "other-experiment", RunGroupID: "control", RunID: "seed-3", MetricName: "train/return", Step: 1, WallTime: "2026-05-20T00:00:00Z", Value: 5},
 	}
 
+	t.Run("experiment and run searches respect inclusive range", func(t *testing.T) {
+		rows := []KustoMetricRow{
+			{Project: "sample", ExperimentID: "inside-exp", RunGroupID: "g", RunID: "inside", MetricName: "loss", Step: 1, WallTime: "2026-05-21T00:00:00Z", Value: 1},
+			{Project: "sample", ExperimentID: "outside-exp", RunGroupID: "g", RunID: "outside", MetricName: "loss", Step: 1, WallTime: "2026-05-21T00:10:00Z", Value: 2},
+		}
+		source := KustoSource{Metrics: rows}
+		runs, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{
+			Start: "2026-05-21T00:00:00Z", End: "2026-05-21T00:00:01Z",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.Runs) != 1 || runs.Runs[0].RunID != "inside" {
+			t.Fatalf("range-filtered Kusto runs = %+v", runs.Runs)
+		}
+		experiments, err := source.SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{
+			Start: "2026-05-21T00:00:00Z", End: "2026-05-21T00:00:01Z",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(experiments.Experiments) != 1 || experiments.Experiments[0].ExperimentID != "inside-exp" {
+			t.Fatalf("range-filtered Kusto experiments = %+v", experiments.Experiments)
+		}
+	})
+
 	result, err := (KustoSource{Metrics: rows, Now: func() time.Time { return now }}).SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{
 		Query:     "wandb",
 		Tags:      map[string]string{"suite": "migration"},

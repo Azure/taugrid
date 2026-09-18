@@ -43,6 +43,8 @@ const idleMinSamples = 10
 // database (both safe KQL literals).
 type Options struct {
 	Window           time.Duration
+	Start            time.Time
+	End              time.Time
 	IdleThresholdPct float64
 	CostDatabase     string
 	Namespace        string
@@ -121,11 +123,11 @@ func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, e
 		threshold = DefaultIdleThresholdPct
 	}
 
-	workspaceRows, err := q.Query(ctx, buildWorkspaceKQL(window, opts.CostDatabase, opts.Namespace, opts.Cluster))
+	workspaceRows, err := q.Query(ctx, buildWorkspaceKQLRange(window, opts.Start, opts.End, opts.CostDatabase, opts.Namespace, opts.Cluster))
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("query allocation cost by workspace: %w", err)
 	}
-	idleRows, err := q.Query(ctx, buildIdleKQL(window, opts.Namespace, opts.Cluster))
+	idleRows, err := q.Query(ctx, buildIdleKQLRange(window, opts.Start, opts.End, opts.Namespace, opts.Cluster))
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("query idle gpus: %w", err)
 	}
@@ -143,12 +145,16 @@ func windowSeconds(window time.Duration) int64 {
 // have no trustworthy cluster identity in shared ADX databases. gpu_count is
 // fractional GPU-hours; peak_gpu_count is each cluster's sampled peak.
 func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string) string {
+	return buildWorkspaceKQLRange(window, time.Time{}, time.Time{}, database, namespace, cluster)
+}
+
+func buildWorkspaceKQLRange(window time.Duration, start, end time.Time, database, namespace, cluster string) string {
 	if strings.TrimSpace(database) == "" {
 		database = "CostTracking"
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "let CostRows = materialize(database(%s).GpuCostHourly\n", kustoquery.QuoteString(database))
-	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
+	writeTimeFilter(&b, window, start, end)
 	if namespace != "" {
 		fmt.Fprintf(&b, "| where namespace == %s\n", kustoquery.QuoteString(namespace))
 	}
@@ -167,7 +173,7 @@ func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string
 	// Schema-v4 avg_util already coalesces absent readings to zero. Query raw
 	// telemetry instead: that lost availability cannot be recovered from cost rows.
 	b.WriteString("let WorkspaceUtil = GpuHealth()\n")
-	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
+	writeTimeFilter(&b, window, start, end)
 	b.WriteString("| where metric == 'gpu_utilization'\n")
 	if cluster != "" {
 		fmt.Fprintf(&b, "| where Cluster == %s\n", kustoquery.QuoteString(cluster))
@@ -189,9 +195,13 @@ func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string
 // buildIdleKQL returns every observed GPU group, including invalid-only groups,
 // so an empty idle list can be distinguished from missing or insufficient data.
 func buildIdleKQL(window time.Duration, namespace, cluster string) string {
+	return buildIdleKQLRange(window, time.Time{}, time.Time{}, namespace, cluster)
+}
+
+func buildIdleKQLRange(window time.Duration, start, end time.Time, namespace, cluster string) string {
 	var b strings.Builder
 	b.WriteString("GpuHealth()\n")
-	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
+	writeTimeFilter(&b, window, start, end)
 	b.WriteString("| where metric == 'gpu_utilization'\n")
 	if cluster != "" {
 		fmt.Fprintf(&b, "| where Cluster == %s\n", kustoquery.QuoteString(cluster))
@@ -204,6 +214,15 @@ func buildIdleKQL(window time.Duration, namespace, cluster string) string {
 	b.WriteString("| project Cluster, instance, gpu, modelName, namespace, pod, AvgUtil, Samples, ObservedSamples\n")
 	b.WriteString("| order by AvgUtil asc")
 	return b.String()
+}
+
+func writeTimeFilter(b *strings.Builder, window time.Duration, start, end time.Time) {
+	if !start.IsZero() && !end.IsZero() {
+		fmt.Fprintf(b, "| where Timestamp >= datetime(%s) and Timestamp <= datetime(%s)\n",
+			start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+		return
+	}
+	fmt.Fprintf(b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
 }
 
 // assemble folds the two result sets into a Snapshot and totals GPU-hours.

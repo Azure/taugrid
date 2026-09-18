@@ -6,6 +6,7 @@ import { APIError, useBoard, useScopedURL, useWorkspace } from './data';
 import { BoardResult, Empty, Note, PageTitle, ProfileReadiness, ScopedLink, Stat, Subtabs, Table, TrackingLink, measured, n1, text, utilizationSummary } from './components';
 import type { Cluster, Cost, CostCoverage, Jobs, Nodes, Overview as OverviewData } from './types';
 import { StellarWorkspace } from './stellar/Workspace';
+import { TimeRangeControls, useHistoricalRange } from './time-range';
 
 export function Overview({ persona }: { persona: string }) {
   return <InfrastructureOverview platform={persona === 'platform'}/>;
@@ -16,6 +17,7 @@ function InfrastructureOverview({ platform }: { platform: boolean }) {
   const cluster = useBoard<Cluster>('/api/portal/cluster');
   const costs = useBoard<Cost>('/api/portal/cost', platform);
   return <><PageTitle title="Overview">{platform ? 'Fleet health & capacity at a glance.' : 'Your training workloads at a glance.'}</PageTitle>
+    <Note>Overview combines real-time Kubernetes state with backend-default ADX summaries. Historical range controls apply on Fleet Health, Fleet Utilization, and Cost; this page does not apply range parameters.</Note>
     {platform && <BoardResult query={nodes} label="Fleet inventory">{f => <div className="stats">
       <Stat href="/portal/fleet" label="Total nodes" value={f.readyNodes} of={f.totalNodes} sub="ready / total"/>
       <Stat href="/portal/fleet" label="Total GPUs" value={f.totalGPUs} sub={`${f.gpuNodes} GPU nodes`}/>
@@ -74,6 +76,7 @@ export function Kueue() {
 function Scheduler() {
   const query = useBoard<Jobs>('/api/portal/jobs');
   return <><p className="muted">Computed GPU quota and queue pressure for the authorized workspace or configured operator scopes. Use Kueue (Live) for raw cluster-wide scheduler state.</p>
+    <Note>Real-time snapshot. Kueue current state does not support historical time filtering.</Note>
     {query.error instanceof APIError && query.error.status === 503 && query.error.state === 'setup_required' && <Empty><strong>Jobs board setup required</strong><p>Portal is running normally. Configure an authorized workspace scope or explicit operator scopes before enabling this computed board.</p><Note>Helm: portal.jobs.scopeMode=workspace or operator.</Note></Empty>}
     <BoardResult query={query} label="Jobs board">{snap => <><Note>scope: {snap.namespace || 'configured namespaces'}</Note><ProfileReadiness state={snap.workloadProfiles}/>
         {snap.hints?.map(h => <div key={h} className="warn">⚠ {h}</div>)}
@@ -95,8 +98,11 @@ function KueueLive() {
       return true;
     },
   });
-  return <><p className="muted">Live KueueViz dashboard — real-time queues, workloads, cluster-queues over WebSocket.</p><Note>Live KueueViz dashboard, reverse-proxied through the portal — <ScopedLink to="/api/portal/kueueviz/" external>open in a full page ↗</ScopedLink> for more room.</Note>
-    <BoardResult query={query} label="The Kueue (Live) board" live>{() => <iframe className="stellar" src={url} title="Kueue (Live) — KueueViz"/>}</BoardResult></>;
+  const notInstalled = query.error?.message.includes('started without --kueueviz');
+  return <><p className="muted">Live KueueViz dashboard — real-time queues, workloads, cluster-queues over WebSocket.</p><Note>Real-time live surface with no historical filtering. The global Portal range does not apply. <ScopedLink to="/api/portal/kueueviz/" external>Open in a full page ↗</ScopedLink> for more room.</Note>
+    {notInstalled
+      ? <Empty warn><strong>Optional KueueViz is not installed on this cluster.</strong><p>The Scheduler tab remains available for current queue, quota, and workload state. Deploy KueueViz and enable the Portal reverse proxy before using this live dashboard.</p><ScopedLink to="/portal/jobs?view=scheduler">Open Scheduler</ScopedLink></Empty>
+      : <BoardResult query={query} label="The Kueue (Live) board" live>{() => <iframe className="stellar" src={url} title="Kueue (Live) — KueueViz"/>}</BoardResult>}</>;
 }
 function allocationCoverage(coverage: CostCoverage | undefined, field: 'gpuHoursSamples' | 'costSamples') {
   if (!coverage || !measured(coverage.observedSamples) || !measured(coverage[field])) return 'Coverage not reported';
@@ -109,12 +115,14 @@ function idleCoverage(snapshot: Cost) {
   return `${partial ? 'Partial: ' : ''}${coverage.eligibleGPUs} / ${coverage.observedGPUs} observed GPUs have enough samples · ${coverage.measuredGPUs} measured GPUs · ${coverage.validSamples} / ${coverage.observedSamples} valid readings. Unobserved GPUs are unknown.`;
 }
 export function CostBoard() {
-  const query = useBoard<Cost>('/api/portal/cost');
+  const range = useHistoricalRange('168h');
+  const query = useBoard<Cost>('/api/portal/cost?' + range.api);
   return <><PageTitle title="Cost">Allocation-based GPU-hours and estimated cost by TauGrid workspace, via /api/portal/cost. Utilization is shown as an efficiency signal and does not determine cost.</PageTitle>
+    <TimeRangeControls defaultWindow="168h"/>
     <BoardResult query={query} label="Cost board" hint=" — start the portal with a --kusto-query-command.">{snap => <>
-      <Note>window: {text(snap.window)} · total GPU-hours: {n1(snap.gpuHoursAvailable ? snap.totalGPUHours : null)} · estimated cost: {snap.costAvailable ? '$' + snap.totalEstimatedCostUSD.toFixed(2) : '—'}</Note>
+      <Note>requested window: {text(snap.window)} · total GPU-hours: {n1(snap.gpuHoursAvailable ? snap.totalGPUHours : null)} · estimated cost: {snap.costAvailable ? '$' + snap.totalEstimatedCostUSD.toFixed(2) : '—'}</Note>
       <Note>GPU-hours: {allocationCoverage(snap.costCoverage, 'gpuHoursSamples')} · cost: {allocationCoverage(snap.costCoverage, 'costSamples')}. Availability means observed samples, not complete window coverage.</Note>
-      {!snap.workspaces?.length ? <Empty>No workspace GPU allocations in the window.</Empty> : <><h3>Cost by workspace</h3>
+      {!snap.workspaces?.length ? <Empty>No allocation records were observed in this range. The data source is available; this is not a zero-cost estimate.</Empty> : <><h3>Cost by workspace</h3>
         <Table headers={['Workspace', 'Namespace', '#GPU-hours', '#Est. cost', '#Peak GPUs', '#Avg util %', 'Coverage']} rows={snap.workspaces.map(w => [text(w.workspace), text(w.namespace), n1(w.gpuHoursAvailable ? w.gpuHours : null), w.costAvailable ? '$' + w.estimatedCostUSD.toFixed(2) : '—', w.peakGPUs.toLocaleString(undefined, { maximumFractionDigits: 2 }), n1(w.avgUtilPct),
           `GPU-hours: ${allocationCoverage(w.coverage, 'gpuHoursSamples')} · cost: ${allocationCoverage(w.coverage, 'costSamples')} · utilization: ${w.coverage?.utilizationSamples ?? 'not reported'} valid readings`])}/></>}
       <h3>Idle / underutilized GPUs</h3><Note>{idleCoverage(snap)}</Note>

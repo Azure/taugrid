@@ -287,8 +287,18 @@ func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (stri
 		if err != nil {
 			return "", nil, err
 		}
-		clauses = append(clauses, "r.created_at >= ?")
-		args = append(args, since)
+		clauses = append(clauses, `(r.created_at >= ?
+  OR (r.started_at != '' AND r.started_at >= ?)
+  OR (r.completed_at != '' AND r.completed_at >= ?)
+  OR EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time >= ?))`)
+		args = append(args, since, since, since, since)
+	}
+	if opts.Start != "" && opts.End != "" {
+		clauses = append(clauses, `((r.created_at >= ? AND r.created_at <= ?)
+  OR (r.started_at != '' AND r.started_at >= ? AND r.started_at <= ?)
+  OR (r.completed_at != '' AND r.completed_at >= ? AND r.completed_at <= ?)
+  OR EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time >= ? AND ev.time <= ?))`)
+		args = append(args, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End)
 	}
 	if opts.Query != "" {
 		like := "%" + strings.ToLower(opts.Query) + "%"

@@ -325,6 +325,8 @@ type RunSearchOptions struct {
 	MetricNames   []string
 	MetricFilters []MetricFilter
 	Since         string
+	Start         string
+	End           string
 	Limit         int
 	MinStep       *int64
 }
@@ -372,6 +374,8 @@ type ExperimentSearchOptions struct {
 	MetricNames   []string
 	MetricFilters []MetricFilter
 	Since         string
+	Start         string
+	End           string
 	Limit         int
 }
 

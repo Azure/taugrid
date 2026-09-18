@@ -136,6 +136,9 @@ func TestBoardHistoryUnavailableRetainsLiveRows(t *testing.T) {
 	if strings.Contains(snap.HistoryDiagnostic, "secret") {
 		t.Fatalf("history diagnostic leaked backend error: %q", snap.HistoryDiagnostic)
 	}
+	if snap.HistoryError == nil || !strings.Contains(snap.HistoryError.Error(), "secret") {
+		t.Fatalf("server-side history error was not retained: %v", snap.HistoryError)
+	}
 }
 
 func TestBoardWithoutHistoryIsExplicitlyLiveOnly(t *testing.T) {

@@ -6,6 +6,7 @@ package expkusto
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildMetricsQueryScopesAndDownsamples(t *testing.T) {
@@ -361,6 +362,55 @@ func TestBuildRunHistoryTimelineQueryLimitsNewestEventsThenRestoresDisplayOrder(
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("applies range before dedupe and limit", func(t *testing.T) {
+		start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+		end := start.Add(33 * time.Hour)
+		query, err := BuildRunHistoryQuery(RunHistoryQueryOptions{Start: start, End: end, Limit: 25})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rangeAt := strings.Index(query, "| where observed_at between")
+		dedupeAt := strings.Index(query, "| summarize arg_max(observed_at")
+		limitAt := strings.LastIndex(query, "| take 25")
+		if rangeAt < 0 || !(rangeAt < dedupeAt && dedupeAt < limitAt) {
+			t.Fatalf("list range must precede dedupe and limit:\n%s", query)
+		}
+
+		timeline, err := BuildRunHistoryTimelineQuery(RunHistoryQueryOptions{Window: "24h", Limit: 25}, "uid-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rangeAt = strings.Index(timeline, "| where observed_at > ago(24h)")
+		limitAt = strings.Index(timeline, "| take 25")
+		if rangeAt < 0 || rangeAt > limitAt {
+			t.Fatalf("timeline range must precede newest-event limit:\n%s", timeline)
+		}
+
+		normalized, err := BuildRunHistoryQuery(RunHistoryQueryOptions{Window: (168 * time.Hour).String(), Limit: 25})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(normalized, "| where observed_at > ago(168h)") ||
+			strings.Contains(normalized, "168h0m0s") {
+			t.Fatalf("Go duration must be normalized to a valid Kusto timespan:\n%s", normalized)
+		}
+	})
+
+	t.Run("rejects invalid ranges", func(t *testing.T) {
+		start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+		for _, opts := range []RunHistoryQueryOptions{
+			{Window: "0s"},
+			{Window: "31d"},
+			{Window: "24h", Start: start, End: start.Add(time.Hour)},
+			{Start: start},
+			{Start: start, End: start.Add(31 * 24 * time.Hour)},
+		} {
+			if _, err := BuildRunHistoryQuery(opts); err == nil {
+				t.Fatalf("expected invalid range error for %+v", opts)
+			}
+		}
+	})
 	kind := strings.Index(query, "| where tolower(owning_resource_kind) == 'rayjob'")
 	resource := strings.Index(query, "| where resource_uid == 'uid-1'")
 	desc := strings.Index(query, "| order by observed_at desc")
@@ -368,6 +418,20 @@ func TestBuildRunHistoryTimelineQueryLimitsNewestEventsThenRestoresDisplayOrder(
 	asc := strings.LastIndex(query, "| order by observed_at asc")
 	if kind < 0 || resource < 0 || desc < 0 || take < 0 || asc < 0 || !(kind < resource && resource < desc && desc < take && take < asc) {
 		t.Fatalf("timeline query must filter kind before limiting newest events, then restore ascending order:\n%s", query)
+	}
+}
+
+func TestBuildExperimentSearchQueryUsesAbsoluteWallTimeBounds(t *testing.T) {
+	start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	end := start.Add(33 * time.Hour)
+	query, err := BuildExperimentSearchQuery(MetricsQueryOptions{Start: start, End: end})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rangeAt := strings.Index(query, "| where wall_time between (datetime(2026-09-16T00:00:00Z) .. datetime(2026-09-17T09:00:00Z))")
+	dedupeAt := strings.Index(query, "| summarize arg_max(exported_at")
+	if rangeAt < 0 || rangeAt > dedupeAt {
+		t.Fatalf("absolute wall_time range must precede experiment dedupe:\n%s", query)
 	}
 }
 

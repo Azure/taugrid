@@ -100,6 +100,7 @@ type Snapshot struct {
 	History           []runs.Run `json:"history,omitempty"`
 	HistoryState      string     `json:"historyState"`
 	HistoryDiagnostic string     `json:"historyDiagnostic,omitempty"`
+	HistoryError      error      `json:"-"`
 }
 
 // Board lists Services via the Reader, keeps only the `<rc>-head-svc` ones, and
@@ -151,6 +152,7 @@ func (s Snapshot) withHistory(ctx context.Context, opts Options) Snapshot {
 	if err != nil {
 		s.HistoryState = historyStateUnavailable
 		s.HistoryDiagnostic = "durable RayJob history query failed"
+		s.HistoryError = err
 		return s
 	}
 	// The Kusto query is scoped, but keep the boundary enforced here as well so

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 )
@@ -153,6 +154,23 @@ func TestBuildWorkspaceKQL(t *testing.T) {
 	} {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("namespace KQL missing %q:\n%s", want, kql)
+		}
+	}
+}
+
+func TestBuildCostKQLCustomBounds(t *testing.T) {
+	start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
+	want := "| where Timestamp >= datetime(2026-09-16T00:00:00Z) and Timestamp <= datetime(2026-09-17T09:00:00Z)"
+	for name, kql := range map[string]string{
+		"workspace": buildWorkspaceKQLRange(end.Sub(start), start, end, "", "", ""),
+		"idle":      buildIdleKQLRange(end.Sub(start), start, end, "", ""),
+	} {
+		if !strings.Contains(kql, want) {
+			t.Fatalf("%s custom bounds missing %q:\n%s", name, want, kql)
+		}
+		if strings.Contains(kql, "ago(") {
+			t.Fatalf("%s custom bounds must not use a relative window:\n%s", name, kql)
 		}
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/blobstore"
 	"github.com/Azure/taugrid/portal/internal/expcockpit"
 	"github.com/Azure/taugrid/portal/internal/expstore"
+	"github.com/Azure/taugrid/portal/internal/historyrange"
 )
 
 const (
@@ -1641,6 +1642,10 @@ func runSearchOptionsFromRequest(r *http.Request, workspace string) (expstore.Ru
 		}
 		limit = parsed
 	}
+	start, end, since, err := parseHistoricalRangeQuery(r)
+	if err != nil {
+		return expstore.RunSearchOptions{}, err
+	}
 	minStep, err := optionalInt64Query(r, "min_step")
 	if err != nil {
 		return expstore.RunSearchOptions{}, err
@@ -1668,7 +1673,9 @@ func runSearchOptionsFromRequest(r *http.Request, workspace string) (expstore.Ru
 		Tags:          tags,
 		MetricNames:   compactStrings(metricNames),
 		MetricFilters: metricFilters,
-		Since:         strings.TrimSpace(q.Get("since")),
+		Since:         since,
+		Start:         start,
+		End:           end,
 		Limit:         limit,
 		MinStep:       minStep,
 	}, nil
@@ -1683,6 +1690,10 @@ func experimentSearchOptionsFromRequest(r *http.Request, workspace string) (exps
 			return expstore.ExperimentSearchOptions{}, fmt.Errorf("limit must be an integer")
 		}
 		limit = parsed
+	}
+	start, end, since, err := parseHistoricalRangeQuery(r)
+	if err != nil {
+		return expstore.ExperimentSearchOptions{}, err
 	}
 	metricNames := append([]string{}, q["metric_name"]...)
 	if len(metricNames) == 0 {
@@ -1704,7 +1715,9 @@ func experimentSearchOptionsFromRequest(r *http.Request, workspace string) (exps
 		Tags:          tags,
 		MetricNames:   compactStrings(metricNames),
 		MetricFilters: metricFilters,
-		Since:         strings.TrimSpace(q.Get("since")),
+		Since:         since,
+		Start:         start,
+		End:           end,
 		Limit:         limit,
 	}, nil
 }
@@ -1745,6 +1758,21 @@ func compactStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+func parseHistoricalRangeQuery(r *http.Request) (start string, end string, since string, err error) {
+	parsed, parseErr := historyrange.Parse(r.URL.Query(), true)
+	if parseErr != nil {
+		return "", "", "", parseErr
+	}
+	if parsed.Window > 0 && parsed.Start.IsZero() {
+		now := time.Now().UTC()
+		return now.Add(-parsed.Window).Format(time.RFC3339), now.Format(time.RFC3339), "", nil
+	}
+	if !parsed.Start.IsZero() {
+		return parsed.Start.Format(time.RFC3339), parsed.End.Format(time.RFC3339), "", nil
+	}
+	return "", "", parsed.Since, nil
 }
 
 func optionalInt64Query(r *http.Request, name string) (*int64, error) {

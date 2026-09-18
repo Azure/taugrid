@@ -16,8 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/expapi"
+	"github.com/Azure/taugrid/portal/internal/historyrange"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
 	"github.com/Azure/taugrid/portal/internal/portal/cost"
 	"github.com/Azure/taugrid/portal/internal/portal/jobdetail"
@@ -858,8 +861,8 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 
 // handleCluster serves the Cluster Health board: latest-per-GPU health samples
 // (utilization/temp/power/memory + remapped-row error flags) from the Metrics
-// ADX database via GpuHealth(). Optional ?window=&cluster=&instance=&model=
-// scope the query. When the board has no Kusto querier (portal started without
+// ADX database via GpuHealth(). Optional ?window= or ?start=&end= selects a
+// historical range; cluster, instance, and model scope it. When the board has no Kusto querier (portal started without
 // --kusto-query-command) it returns 503 so the frontend can render a disabled
 // state; a query failure returns 502.
 func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
@@ -886,11 +889,12 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		Model:    q.Get("model"),
 	}
 	opts.Namespace = workloadMetricsNamespace(scope)
-	if window := q.Get("window"); window != "" {
-		if d, err := time.ParseDuration(window); err == nil {
-			opts.Window = d
-		}
+	window, start, end, err := parseHistoricalRange(q)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
 	}
+	opts.Window, opts.Start, opts.End = window, start, end
 	snapshot, err := cluster.Board(r.Context(), s.cluster.Querier, opts)
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
@@ -901,7 +905,8 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 
 // handleCost serves allocation-based GPU-hours and estimated cost by TauGrid
 // workspace, plus physical underutilized GPUs. Optional
-// ?window=&namespace=&idle-threshold= scope the query.
+// ?window= or ?start=&end= selects a historical range; namespace and
+// idle-threshold scope the query.
 func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -927,11 +932,12 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 		Cluster:      clusterScope,
 		CostDatabase: s.cost.CostDatabase,
 	}
-	if window := q.Get("window"); window != "" {
-		if d, err := time.ParseDuration(window); err == nil {
-			opts.Window = d
-		}
+	window, start, end, err := parseHistoricalRange(q)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
 	}
+	opts.Window, opts.Start, opts.End = window, start, end
 	if threshold := q.Get("idle-threshold"); threshold != "" {
 		if v, err := strconv.ParseFloat(threshold, 64); err == nil {
 			opts.IdleThresholdPct = v
@@ -971,6 +977,11 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	window, start, end, err := parseHistoricalRange(r.URL.Query())
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
 	if s.ray.Reader == nil {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "ray board unavailable: portal started without Kubernetes access")
 		return
@@ -1001,11 +1012,17 @@ func (s *Server) handleRay(w http.ResponseWriter, r *http.Request) {
 			Namespace:   historyNamespace,
 			WorkspaceID: historyWorkspaceID,
 			Limit:       s.runs.HistoryLimit,
+			Window:      historicalWindowValue(window, start),
+			Start:       start,
+			End:         end,
 		},
 	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
+	}
+	if snapshot.HistoryError != nil {
+		logHistoricalFailure("RayJob list", scope, snapshot.HistoryError)
 	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0 && len(snapshot.History) == 0))
 }
@@ -1023,6 +1040,11 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	window, start, end, err := parseHistoricalRange(r.URL.Query())
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
 	resourceUID := strings.TrimPrefix(r.URL.Path, "/api/portal/ray/history/")
 	if resourceUID == "" || strings.Contains(resourceUID, "/") {
 		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/ray/history/{resourceUID}")
@@ -1036,6 +1058,7 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	historyScope := runs.HistoryScope{
 		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: scope.Namespace,
 		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Kind: "RayJob", Limit: s.runs.HistoryLimit,
+		Window: historicalWindowValue(window, start), Start: start, End: end,
 	}
 	if !scope.Managed {
 		historyScope.Cluster = s.singleWorkspaceScope.Cluster
@@ -1043,6 +1066,7 @@ func (s *Server) handleRayHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := reader.GetHistoryTimeline(r.Context(), historyScope, resourceUID)
 	if err != nil {
+		logHistoricalFailure("RayJob timeline", scope, err)
 		writeScopedError(w, http.StatusBadGateway, scope, "durable RayJob history query failed")
 		return
 	}
@@ -1096,7 +1120,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // percentage (from node_memory_total/available), from the Metrics ADX database
 // via the raw node-exporter tables. It is the CPU/memory sibling of the Cluster
 // Health board, rendered beneath the per-GPU table on the Utilization page. Optional
-// ?window=&cluster=&instance= scope the query. When the board has no Kusto
+// ?window= or ?start=&end= selects a historical range; cluster and instance
+// scope the query. When the board has no Kusto
 // querier (portal started without --kusto-query-command) it returns 503; a
 // query failure returns 502.
 func (s *Server) handleNodeUtil(w http.ResponseWriter, r *http.Request) {
@@ -1121,17 +1146,30 @@ func (s *Server) handleNodeUtil(w http.ResponseWriter, r *http.Request) {
 		Cluster:  clusterScope,
 		Instance: q.Get("instance"),
 	}
-	if window := q.Get("window"); window != "" {
-		if d, err := time.ParseDuration(window); err == nil {
-			opts.Window = d
-		}
+	window, start, end, err := parseHistoricalRange(q)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
 	}
+	opts.Window, opts.Start, opts.End = window, start, end
 	snapshot, err := nodeutil.Board(r.Context(), s.nodeUtil.Querier, opts)
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(len(snapshot.Nodes) == 0))
+}
+
+func parseHistoricalRange(q url.Values) (time.Duration, time.Time, time.Time, error) {
+	parsed, err := historyrange.Parse(q, false)
+	return parsed.Window, parsed.Start, parsed.End, err
+}
+
+func historicalWindowValue(window time.Duration, start time.Time) string {
+	if window <= 0 || !start.IsZero() {
+		return ""
+	}
+	return window.String()
 }
 
 // batch/v1 Jobs and ray.io RayJobs — with name, kind, status, and age. It reads
@@ -1147,6 +1185,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	scope, ok := s.localWorkspaceScope(w, r)
 	if !ok {
+		return
+	}
+	window, start, end, err := parseHistoricalRange(r.URL.Query())
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
 		return
 	}
 	if s.runs.Reader == nil {
@@ -1182,14 +1225,30 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			LocalQueue:  scope.LocalQueue,
 			WorkspaceID: historyWorkspaceID,
 			Limit:       s.runs.HistoryLimit,
+			Window:      historicalWindowValue(window, start),
+			Start:       start,
+			End:         end,
 		},
 	})
 	if err != nil {
+		if snapshot.HistoryError != nil {
+			logHistoricalFailure("run list", scope, snapshot.HistoryError)
+			writeScopedError(w, http.StatusBadGateway, scope, "live and durable run data are unavailable")
+			return
+		}
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
 	}
+	if snapshot.HistoryError != nil {
+		logHistoricalFailure("run list", scope, snapshot.HistoryError)
+	}
 	s.annotateMultiKueueRuns(r.Context(), &snapshot, namespace)
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(snapshot.Total == 0))
+}
+
+func logHistoricalFailure(surface string, scope WorkspaceScope, err error) {
+	log.Printf("portalapi: durable history failure surface=%q cluster=%q namespace=%q workspace=%q: %v",
+		surface, scope.Cluster, scope.Namespace, scope.WorkspaceID, err)
 }
 
 // annotateMultiKueueRuns adds observation-only execution identity from
