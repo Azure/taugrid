@@ -27,7 +27,7 @@ func TestBuildSeriesCatalogQueryUsesStableFunctionAndFilters(t *testing.T) {
 		exptelemetry.SeriesCatalogRowsFunction + "()",
 		"latest_activity_at > ago(30d)",
 		"workspace_id == 'workspace-a'",
-		"project in ('project-a', 'project-b')",
+		"['project'] in ('project-a', 'project-b')",
 		"experiment_id == 'experiment-a'",
 		"metric_name in ('train/loss')",
 		"| top 51 by latest_activity_at desc",
@@ -40,6 +40,7 @@ func TestBuildSeriesCatalogQueryUsesStableFunctionAndFilters(t *testing.T) {
 	if strings.Contains(query, exptelemetry.RemoteWriteTable) {
 		t.Fatalf("catalog query must not scan raw %s:\n%s", exptelemetry.RemoteWriteTable, query)
 	}
+	assertCatalogProjectColumnEscaped(t, query)
 }
 
 func TestBuildRunCatalogQueryIncludesLifecycleContract(t *testing.T) {
@@ -72,6 +73,7 @@ func TestBuildRunCatalogQueryIncludesLifecycleContract(t *testing.T) {
 	if strings.Contains(query, exptelemetry.RemoteWriteTable) {
 		t.Fatalf("catalog query must not scan raw %s:\n%s", exptelemetry.RemoteWriteTable, query)
 	}
+	assertCatalogProjectColumnEscaped(t, query)
 }
 
 func TestBuildCatalogQueryRejectsInvalidOptions(t *testing.T) {
@@ -80,5 +82,22 @@ func TestBuildCatalogQueryRejectsInvalidOptions(t *testing.T) {
 	}
 	if _, err := BuildRunCatalogQuery(CatalogQueryOptions{Limit: -1}); err == nil {
 		t.Fatal("expected negative limit error")
+	}
+}
+
+func assertCatalogProjectColumnEscaped(t *testing.T, query string) {
+	t.Helper()
+	for _, invalid := range []string{
+		"['project']=project",
+		" by workspace_id, project,",
+		" on workspace_id, project,",
+		" on workspace_id, cluster, project,",
+		" project in (",
+		", project asc",
+		", project,",
+	} {
+		if strings.Contains(query, invalid) {
+			t.Fatalf("catalog query contains unescaped reserved project identifier %q:\n%s", invalid, query)
+		}
 	}
 }

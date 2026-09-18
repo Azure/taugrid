@@ -10,7 +10,10 @@ import (
 	"github.com/Azure/taugrid/core/exptelemetry"
 )
 
-const maxCatalogQueryLimit = 1000
+const (
+	maxCatalogQueryLimit = 1000
+	kqlProjectColumn     = "['project']"
+)
 
 type CatalogQueryOptions struct {
 	WorkspaceID string
@@ -109,12 +112,12 @@ func BuildSeriesCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	writeCatalogFilters(&b, opts, projects, true)
 	b.WriteString(");\n")
 	b.WriteString("let top_experiments = scoped_catalog\n")
-	b.WriteString("| summarize latest_activity_at=max(latest_activity_at) by workspace_id, project, experiment_id\n")
+	b.WriteString("| summarize latest_activity_at=max(latest_activity_at) by workspace_id, " + kqlProjectColumn + ", experiment_id\n")
 	fmt.Fprintf(&b, "| top %d by latest_activity_at desc;\n", opts.Limit+1)
 	b.WriteString("scoped_catalog\n")
-	b.WriteString("| join kind=inner top_experiments on workspace_id, project, experiment_id\n")
-	b.WriteString("| project catalog_version, workspace_id, cluster, source_store_id, ['project']=project, experiment_id, run_group_id, run_id, metric_name, first_activity_at, latest_activity_at, min_step, max_step, latest_step, latest_value, unit, source, split, latest_file_id, latest_file_path, step=tolong(latest_step), wall_time=todatetime(latest_activity_at), value=todouble(latest_value), metric_file_id=latest_file_id, metric_file_path=latest_file_path, tags=''\n")
-	b.WriteString("| order by latest_activity_at desc, project asc, experiment_id asc, run_group_id asc, run_id asc, metric_name asc\n")
+	b.WriteString("| join kind=inner top_experiments on workspace_id, " + kqlProjectColumn + ", experiment_id\n")
+	b.WriteString("| project catalog_version, workspace_id, cluster, source_store_id, " + kqlProjectColumn + ", experiment_id, run_group_id, run_id, metric_name, first_activity_at, latest_activity_at, min_step, max_step, latest_step, latest_value, unit, source, split, latest_file_id, latest_file_path, step=tolong(latest_step), wall_time=todatetime(latest_activity_at), value=todouble(latest_value), metric_file_id=latest_file_id, metric_file_path=latest_file_path, tags=''\n")
+	b.WriteString("| order by latest_activity_at desc, " + kqlProjectColumn + " asc, experiment_id asc, run_group_id asc, run_id asc, metric_name asc\n")
 	return b.String(), nil
 }
 
@@ -127,15 +130,15 @@ func BuildRunCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	if len(opts.MetricNames) > 0 {
 		b.WriteString("let matching_catalog_runs = " + exptelemetry.SeriesCatalogRowsFunction + "()\n")
 		fmt.Fprintf(&b, "| where metric_name in (%s)\n", kqlStringList(opts.MetricNames))
-		b.WriteString("| distinct workspace_id, cluster, project, experiment_id, run_group_id, run_id;\n")
+		b.WriteString("| distinct workspace_id, cluster, " + kqlProjectColumn + ", experiment_id, run_group_id, run_id;\n")
 	}
 	b.WriteString(exptelemetry.RunCatalogRowsFunction + "()\n")
 	if len(opts.MetricNames) > 0 {
-		b.WriteString("| join kind=inner matching_catalog_runs on workspace_id, cluster, project, experiment_id, run_group_id, run_id\n")
+		b.WriteString("| join kind=inner matching_catalog_runs on workspace_id, cluster, " + kqlProjectColumn + ", experiment_id, run_group_id, run_id\n")
 	}
 	writeCatalogFilters(&b, opts, projects, false)
-	b.WriteString("| project catalog_version, workspace_id, cluster, source_store_id, ['project']=project, experiment_id, run_group_id, run_id, first_activity_at, latest_activity_at, first_metric_at, latest_metric_at, latest_observation_at, terminal_at, state, reason, message, durable_id, result_scope, owning_resource_kind, owning_resource_name, namespace, local_queue, cluster_queue, workload_kind, resource_uid, submit_time, created_time, kueue_admitted_time, pod_start_time, completion_time, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version, metric_series_count, has_metrics, has_lifecycle, metric_name='', step=long(null), wall_time=todatetime(latest_activity_at), value=real(null), unit='', source='', split='', metric_file_id='', metric_file_path='', tags=tostring(tags)\n")
-	b.WriteString("| order by latest_activity_at desc, project asc, experiment_id asc, run_group_id asc, run_id asc\n")
+	b.WriteString("| project catalog_version, workspace_id, cluster, source_store_id, " + kqlProjectColumn + ", experiment_id, run_group_id, run_id, first_activity_at, latest_activity_at, first_metric_at, latest_metric_at, latest_observation_at, terminal_at, state, reason, message, durable_id, result_scope, owning_resource_kind, owning_resource_name, namespace, local_queue, cluster_queue, workload_kind, resource_uid, submit_time, created_time, kueue_admitted_time, pod_start_time, completion_time, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version, metric_series_count, has_metrics, has_lifecycle, metric_name='', step=long(null), wall_time=todatetime(latest_activity_at), value=real(null), unit='', source='', split='', metric_file_id='', metric_file_path='', tags=tostring(tags)\n")
+	b.WriteString("| order by latest_activity_at desc, " + kqlProjectColumn + " asc, experiment_id asc, run_group_id asc, run_id asc\n")
 	fmt.Fprintf(&b, "| take %d\n", opts.Limit)
 	return b.String(), nil
 }
@@ -175,7 +178,7 @@ func writeCatalogFilters(b *strings.Builder, opts CatalogQueryOptions, projects 
 	if opts.WorkspaceID != "" {
 		fmt.Fprintf(b, "| where workspace_id == %s\n", kqlString(opts.WorkspaceID))
 	}
-	writeProjectFilter(b, "project", projects)
+	writeProjectFilter(b, kqlProjectColumn, projects)
 	if opts.Target != "" {
 		target := kqlString(opts.Target)
 		switch opts.TargetType {
