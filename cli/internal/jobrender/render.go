@@ -823,16 +823,21 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		container["imagePullPolicy"] = p.Runtime.ImagePullPolicy
 	}
 	if o.RDMA.Enabled {
-		container["securityContext"] = map[string]any{
-			"runAsUser":                int64(0),
-			"runAsGroup":               int64(0),
-			"allowPrivilegeEscalation": false,
-			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
-			"capabilities": map[string]any{
-				"drop": []any{"ALL"},
-				"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
-			},
+		sc := map[string]any{}
+		if p.Runtime.SecurityContext != nil {
+			for k, v := range p.Runtime.SecurityContext {
+				sc[k] = v
+			}
 		}
+		sc["runAsUser"] = int64(0)
+		sc["runAsGroup"] = int64(0)
+		sc["allowPrivilegeEscalation"] = false
+		sc["seccompProfile"] = map[string]any{"type": "RuntimeDefault"}
+		sc["capabilities"] = map[string]any{
+			"drop": []any{"ALL"},
+			"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
+		}
+		container["securityContext"] = sc
 	} else if p.Runtime.SecurityContext != nil {
 		container["securityContext"] = p.Runtime.SecurityContext
 	}
@@ -907,8 +912,8 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	// backed by memory. RDMA workloads get a larger default (32Gi).
 	if o.Launcher == "torchrun" && (o.ProcessesPerNode > 1 || o.Nodes > 1) && !hasVolume(pod, "dshm") {
 		shmSize := "16Gi"
-		if o.RDMA.Enabled && o.RDMA.ShmSize != "" {
-			shmSize = o.RDMA.ShmSize
+		if o.RDMA.Enabled {
+			shmSize = runconfig.DefaultRDMAShmSize
 		}
 		shmVol := map[string]any{
 			"name":     "dshm",

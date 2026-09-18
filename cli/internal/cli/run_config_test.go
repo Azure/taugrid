@@ -2218,7 +2218,6 @@ runtime:
   image: busybox:1.36
   rdma:
     enabled: true
-    shm_size: "64Gi"
 policy:
   profile: test-submit
   queue: training-queue
@@ -2240,7 +2239,7 @@ storage:
 			t.Fatalf("RDMA config dry-run missing %q:\n%s", want, rendered)
 		}
 	}
-	if !strings.Contains(rendered, "64Gi") {
-		t.Fatalf("RDMA config dry-run missing custom shm_size 64Gi:\n%s", rendered)
+	if !strings.Contains(rendered, "32Gi") {
+		t.Fatalf("RDMA config dry-run missing default shm 32Gi:\n%s", rendered)
 	}
 }

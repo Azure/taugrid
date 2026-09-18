@@ -133,7 +133,6 @@ type RDMA struct {
 	Enabled      bool   `yaml:"enabled"`
 	ResourceName string `yaml:"resource_name,omitempty"`
 	Count        *int   `yaml:"count,omitempty"`
-	ShmSize      string `yaml:"shm_size,omitempty"`
 }
 
 // DefaultRDMAResourceName is the RDMA shared device resource requested when no
@@ -143,9 +142,8 @@ const DefaultRDMAResourceName = "rdma/rdma_shared_device_a"
 // DefaultRDMAResourceCount is the per-pod RDMA device count when count is unset.
 const DefaultRDMAResourceCount = 1
 
-// DefaultRDMAShmSize is the /dev/shm size for RDMA workloads when shm_size is
-// unset. RayJob templates do not consume this field today, but it is part of
-// the shared normalized struct so callers never need to branch.
+// DefaultRDMAShmSize is the /dev/shm size for RDMA Job workloads when the
+// renderer does not receive an explicit override.
 const DefaultRDMAShmSize = "32Gi"
 
 const (
@@ -163,12 +161,12 @@ func QualifiedNameSegmentRE() *regexp.Regexp { return qualifiedNameSegmentRE }
 
 // NormalizedRDMA is the resolved RDMA configuration with all defaults applied.
 // Both the Job and RayJob rendering paths consume this struct; it is the single
-// return type for NormalizeRDMA.
+// return type for NormalizeRDMA. ShmSize is deliberately excluded because the
+// RayJob path manages /dev/shm independently.
 type NormalizedRDMA struct {
 	Enabled      bool
 	ResourceName string
 	Count        int
-	ShmSize      string
 }
 
 // NormalizeRDMA returns a NormalizedRDMA with defaults applied. When RDMA is
@@ -186,15 +184,10 @@ func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
 	if cfg.Count != nil {
 		count = *cfg.Count
 	}
-	shmSize := strings.TrimSpace(cfg.ShmSize)
-	if shmSize == "" {
-		shmSize = DefaultRDMAShmSize
-	}
 	return NormalizedRDMA{
 		Enabled:      true,
 		ResourceName: resourceName,
 		Count:        count,
-		ShmSize:      shmSize,
 	}
 }
 
@@ -1021,6 +1014,9 @@ func (c Config) ValidateExecution(engine string) error {
 		if engine != "job" {
 			return fmt.Errorf("storage.image_assets requires engine: job")
 		}
+	}
+	if c.Runtime.RDMA.Enabled && engine != EngineJob {
+		return fmt.Errorf("runtime.rdma requires engine: job; direct RayJob configs do not support RDMA injection")
 	}
 
 	var launcher string

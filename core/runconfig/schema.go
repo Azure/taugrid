@@ -82,7 +82,6 @@ var fieldCatalog = map[string]FieldInfo{
 	"runtime.rdma.enabled":       {Status: statusSupported, Description: "Enable RDMA device injection.", Default: "false"},
 	"runtime.rdma.resource_name": {Status: statusSupported, Description: "Kubernetes extended resource name for the RDMA device.", Default: DefaultRDMAResourceName},
 	"runtime.rdma.count":         {Status: statusSupported, Description: "Per-pod RDMA device count.", Default: "1"},
-	"runtime.rdma.shm_size":      {Status: statusSupported, Description: "Size of the /dev/shm emptyDir volume for shared memory.", Default: DefaultRDMAShmSize},
 
 	"compute":                       {Status: statusSupported, Description: "Workload sizing and dispatch hints."},
 	"compute.workers":               {Status: statusSupported, Description: "Ray execution-worker count. Generated RayJobs add a separate control-only head on the system node pool.", Default: "1"},

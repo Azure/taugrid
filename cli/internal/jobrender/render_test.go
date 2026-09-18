@@ -593,7 +593,6 @@ func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
 			Enabled:      true,
 			ResourceName: "rdma/rdma_shared_device_a",
 			Count:        1,
-			ShmSize:      "32Gi",
 		},
 	})
 	if err != nil {
@@ -647,20 +646,21 @@ func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
 	}
 }
 
-func TestRender_RDMAOverridesProfileSecurityContext(t *testing.T) {
+func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 	p := trainProfile()
 	p.Runtime.SecurityContext = map[string]any{
-		"capabilities": map[string]any{"add": []any{"SYS_ADMIN"}},
+		"capabilities":           map[string]any{"add": []any{"SYS_ADMIN"}},
+		"readOnlyRootFilesystem": true,
+		"seLinuxOptions":         map[string]any{"level": "s0:c123,c456"},
 	}
 	out, err := Render(p, Options{
-		Name:      "rdma-override",
+		Name:      "rdma-merge",
 		Namespace: "tau",
 		Command:   []string{"python", "train.py"},
 		RDMA: RDMAOptions{
 			Enabled:      true,
 			ResourceName: "rdma/rdma_shared_device_a",
 			Count:        1,
-			ShmSize:      "32Gi",
 		},
 	})
 	if err != nil {
@@ -669,11 +669,24 @@ func TestRender_RDMAOverridesProfileSecurityContext(t *testing.T) {
 	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	c := pod["containers"].([]any)[0].(map[string]any)
 	sc := c["securityContext"].(map[string]any)
+
+	// RDMA-specific fields must be set.
 	caps := sc["capabilities"].(map[string]any)
 	add := caps["add"].([]any)
-	// RDMA should override profile's SYS_ADMIN with the RDMA set.
 	if len(add) != 3 || add[0] != "IPC_LOCK" {
-		t.Errorf("RDMA securityContext should override profile, got %v", add)
+		t.Errorf("RDMA capabilities should override profile, got %v", add)
+	}
+	if fmt.Sprint(sc["runAsUser"]) != "0" {
+		t.Errorf("runAsUser should be 0, got %v", sc["runAsUser"])
+	}
+
+	// Unrelated profile fields must survive the merge.
+	if sc["readOnlyRootFilesystem"] != true {
+		t.Errorf("readOnlyRootFilesystem should be preserved, got %v", sc["readOnlyRootFilesystem"])
+	}
+	sel := sc["seLinuxOptions"].(map[string]any)
+	if sel["level"] != "s0:c123,c456" {
+		t.Errorf("seLinuxOptions should be preserved, got %v", sc["seLinuxOptions"])
 	}
 }
 
@@ -695,9 +708,6 @@ func TestNormalizeRDMA(t *testing.T) {
 		if opts.Count != 1 {
 			t.Errorf("count = %d", opts.Count)
 		}
-		if opts.ShmSize != "32Gi" {
-			t.Errorf("shm size = %q", opts.ShmSize)
-		}
 	})
 	t.Run("custom", func(t *testing.T) {
 		count := 2
@@ -705,16 +715,12 @@ func TestNormalizeRDMA(t *testing.T) {
 			Enabled:      true,
 			ResourceName: "rdma/hca_shared_devices_a",
 			Count:        &count,
-			ShmSize:      "64Gi",
 		})
 		if opts.ResourceName != "rdma/hca_shared_devices_a" {
 			t.Errorf("resource name = %q", opts.ResourceName)
 		}
 		if opts.Count != 2 {
 			t.Errorf("count = %d", opts.Count)
-		}
-		if opts.ShmSize != "64Gi" {
-			t.Errorf("shm size = %q", opts.ShmSize)
 		}
 	})
 }

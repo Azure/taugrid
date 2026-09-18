@@ -59,7 +59,6 @@ var managedPassthroughPaths = map[string]bool{
 	"runtime.rdma.enabled":        false,
 	"runtime.rdma.resource_name":  false,
 	"runtime.rdma.count":          false,
-	"runtime.rdma.shm_size":       false,
 	"storage.mounts":              true,
 	"storage.mounts.name":         false,
 	"storage.mounts.mountPath":    false,
