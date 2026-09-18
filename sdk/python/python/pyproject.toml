@@ -21,7 +21,7 @@ dev = [
     "ruff==0.16.7",
 ]
 lightning = [
-    "lightning>=2.6.5",
+    "lightning>=2.6.6",
 ]
 
 [tool.setuptools.packages.find]
