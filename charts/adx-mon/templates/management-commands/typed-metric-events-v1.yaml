@@ -102,5 +102,4 @@ spec:
         by event_id
     }
 
-    .alter-merge table TauExpMetricEventsV1Dedup policy retention softdelete = {{ .Values.managementCommands.typedMetricEventsV1.retention.softDeletePeriod }} recoverability = disabled
 {{- end }}

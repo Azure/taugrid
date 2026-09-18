@@ -40,15 +40,9 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: 'TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle'
-      - matchRegex:
+      - notMatchRegex:
           path: spec.body
-          pattern: '\.alter-merge table TauExpSeriesCatalogV1 policy retention softdelete = 400d'
-      - matchRegex:
-          path: spec.body
-          pattern: '\.alter-merge table TauExpMetricRunCatalogV1 policy retention softdelete = 400d'
-      - matchRegex:
-          path: spec.body
-          pattern: '\.alter-merge table TauExpLifecycleRunCatalogV1 policy retention softdelete = 400d'
+          pattern: '\.alter-merge table TauExp(Series|MetricRun|TypedSeries|TypedMetricRun|LifecycleRun)CatalogV1 policy retention'
       - notMatchRegex:
           path: spec.body
           pattern: 'backfill=true'
