@@ -114,7 +114,7 @@ export function StellarWorkspace() {
       <p>{scope.experimentsNative?.reason || 'Configure an authorized same-origin experiment backend for this workspace. A legacy remote page URL is not a trusted data connection.'}</p>
       <p>No local experiment data was used. Jobs remain available in the Workloads tab.</p></div></>;
   return <div className="stellar-workspace" key={scopeIdentity(scope)}>
-    <Note>Historical range applies to discovery and run search. Local run lists use creation time; local experiment discovery uses experiment updates or child-run lifecycle timestamps; ADX-backed searches use metric row time. Metric step-series remains step-based.</Note>
+    <Note>    Historical range applies to discovery and run search. Local run lists match created, started, completed, or lifecycle-event timestamps; local experiment discovery matches experiment updates or those child-run timestamps. ADX-backed searches use metric row time. Metric step-series remains step-based.</Note>
     <TimeRangeControls defaultWindow="168h"/>
     <StellarHeader target={target}/>
     {target ? <TargetWorkspace key={target + ':' + (params.get('project') || '')} target={target}/> : <ExperimentDiscovery/>}
