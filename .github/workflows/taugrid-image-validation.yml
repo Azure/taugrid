@@ -12,8 +12,12 @@ on:
       - images/tau/**
       - images/tau-core-controller/**
       - images/taugrid-portal/**
+      - images/taugrid-metrics-collector/**
+      - metrics/experiment-metrics-collector/**
       - portal/**
+      - scripts/ci/tests/image-build-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
+      - scripts/lib/image-specs.sh
       - .github/workflows/taugrid-image-validation.yml
   push:
     branches:
@@ -26,8 +30,12 @@ on:
       - images/tau/**
       - images/tau-core-controller/**
       - images/taugrid-portal/**
+      - images/taugrid-metrics-collector/**
+      - metrics/experiment-metrics-collector/**
       - portal/**
+      - scripts/ci/tests/image-build-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
+      - scripts/lib/image-specs.sh
       - .github/workflows/taugrid-image-validation.yml
   schedule:
     - cron: "0 9 * * *"
@@ -69,6 +77,11 @@ jobs:
             make_directory: images/tau-core-controller
             context: .
             dockerfile: images/tau-core-controller/Dockerfile
+          - name: TauGrid metrics collector
+            image: taugrid-metrics-collector
+            make_directory: images/taugrid-metrics-collector
+            context: .
+            dockerfile: images/taugrid-metrics-collector/Dockerfile
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

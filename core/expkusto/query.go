@@ -408,7 +408,7 @@ func buildRemoteWriteMetricsQuery(opts MetricsQueryOptions) string {
 
 func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []string) string {
 	var b strings.Builder
-	b.WriteString("let scoped = materialize(\n")
+	b.WriteString("let latest_metrics = materialize(\n")
 	b.WriteString(DefaultRemoteWriteTable + "\n")
 	if opts.Since != "" {
 		fmt.Fprintf(&b, "| where Timestamp > ago(%s)\n", kqlDuration(opts.Since))
@@ -416,17 +416,16 @@ func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []
 	b.WriteString("| extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), project_id=tostring(Labels['project']), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)\n")
 	writeProjectFilter(&b, "project_id", projects)
 	writeMetricFilters(&b, opts)
+	b.WriteString("| where isnotempty(project_id) and isnotempty(experiment_id) and isnotempty(run_id) and isnotempty(metric_name)\n")
 	b.WriteString("| where isnotnull(step) and isnotnull(value)\n")
+	b.WriteString("| summarize hint.strategy=shuffle arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id\n")
 	b.WriteString("| project exported_at=Timestamp, cluster, source_store_id, metric_file_id, metric_file_path, project_id, experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags, workspace_id\n")
 	b.WriteString(");\n")
-	b.WriteString("let deduped = materialize(scoped\n")
-	b.WriteString("| summarize arg_max(exported_at, *) by source_store_id, metric_file_id, project_id, experiment_id, run_group_id, run_id, metric_name, step, wall_time, workspace_id);\n")
-	b.WriteString("let top_experiments = deduped\n")
+	b.WriteString("let top_experiments = latest_metrics\n")
 	b.WriteString("| summarize latest_wall_time=max(wall_time) by project_id, experiment_id, workspace_id\n")
 	fmt.Fprintf(&b, "| top %d by latest_wall_time desc;\n", opts.Limit+1)
-	b.WriteString("deduped\n")
+	b.WriteString("latest_metrics\n")
 	b.WriteString("| join kind=inner (top_experiments) on project_id, experiment_id, workspace_id\n")
-	b.WriteString("| summarize arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id\n")
 	b.WriteString("| order by wall_time desc, project_id asc, run_group_id asc, run_id asc, metric_name asc\n")
 	writeExperimentSearchProjection(&b, "project_id")
 	return b.String()

@@ -236,10 +236,30 @@ type Metrics struct {
 }
 
 type MetricsOffload struct {
-	Enabled bool   `yaml:"enabled"`
-	Image   string `yaml:"image"`
-	Out     string `yaml:"out"`
+	Enabled               bool   `yaml:"enabled"`
+	Runtime               string `yaml:"runtime"`
+	Image                 string `yaml:"image"`
+	Out                   string `yaml:"out"`
+	DeliveryMode          string `yaml:"delivery_mode"`
+	ADXClusterURI         string `yaml:"adx_cluster_uri"`
+	ADXDatabase           string `yaml:"adx_database"`
+	ADXTable              string `yaml:"adx_table"`
+	ADXMapping            string `yaml:"adx_mapping"`
+	ADXClientID           string `yaml:"adx_client_id"`
+	ADXMaxAttempts        int    `yaml:"adx_max_attempts"`
+	ADXRetryBackoff       string `yaml:"adx_retry_backoff"`
+	ADXFinalStatusTimeout string `yaml:"adx_final_status_timeout"`
 }
+
+const (
+	MetricsOffloadRuntimePortalV1    = "portal-v1"
+	MetricsOffloadRuntimeCollectorV1 = "collector-v1"
+
+	MetricsOffloadDeliveryRemoteWrite  = "remote-write"
+	MetricsOffloadDeliveryDualRequired = "dual-required"
+	MetricsOffloadDeliveryDualShadow   = "dual-shadow"
+	MetricsOffloadMaxADXAttempts       = 10
+)
 
 // Experiment names where a run belongs in the identity hierarchy:
 //
@@ -612,11 +632,15 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 			return fmt.Errorf("metrics.history[%d] %q: relative paths must not escape storage.output", i, raw)
 		}
 	}
+	runtime, err := ResolveMetricsOffloadRuntime(m.Offload.Runtime)
+	if err != nil {
+		return err
+	}
 	if image := strings.TrimSpace(m.Offload.Image); image != "" {
 		if image != m.Offload.Image {
 			return fmt.Errorf("metrics offload image must not contain whitespace")
 		}
-		if err := ValidateMetricsOffloadImage(image); err != nil {
+		if err := ValidateMetricsOffloadRuntimeImage(runtime, image); err != nil {
 			return err
 		}
 	}
@@ -626,6 +650,39 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 		}
 		if !strings.HasPrefix(out, "/data/") && !strings.HasPrefix(out, "/var/run/tau/") {
 			return fmt.Errorf("metrics.offload.out %q must be under /data or /var/run/tau", m.Offload.Out)
+		}
+	}
+	deliveryMode, err := ResolveMetricsOffloadDeliveryMode(m.Offload.DeliveryMode)
+	if err != nil {
+		return err
+	}
+	if deliveryMode != MetricsOffloadDeliveryRemoteWrite {
+		if runtime != MetricsOffloadRuntimeCollectorV1 {
+			return fmt.Errorf("metrics.offload.delivery_mode %q requires metrics.offload.runtime %q", deliveryMode, MetricsOffloadRuntimeCollectorV1)
+		}
+		for field, value := range map[string]string{
+			"adx_cluster_uri": m.Offload.ADXClusterURI,
+			"adx_database":    m.Offload.ADXDatabase,
+			"adx_client_id":   m.Offload.ADXClientID,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("metrics.offload.%s is required when delivery_mode is %q", field, deliveryMode)
+			}
+		}
+	}
+	if m.Offload.ADXMaxAttempts < 0 || m.Offload.ADXMaxAttempts > MetricsOffloadMaxADXAttempts {
+		return fmt.Errorf("metrics.offload.adx_max_attempts must be between 0 and %d", MetricsOffloadMaxADXAttempts)
+	}
+	for field, raw := range map[string]string{
+		"adx_retry_backoff":        m.Offload.ADXRetryBackoff,
+		"adx_final_status_timeout": m.Offload.ADXFinalStatusTimeout,
+	} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return fmt.Errorf("metrics.offload.%s must be a positive duration (got %q)", field, raw)
 		}
 	}
 	if !m.Offload.Enabled {
@@ -654,6 +711,53 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 		}
 	}
 	return nil
+}
+
+// ResolveMetricsOffloadRuntime returns the executable contract declared by a
+// metrics offload image. Empty preserves the legacy portal contract.
+func ResolveMetricsOffloadRuntime(value string) (string, error) {
+	switch value {
+	case "":
+		return MetricsOffloadRuntimePortalV1, nil
+	case MetricsOffloadRuntimePortalV1, MetricsOffloadRuntimeCollectorV1:
+		return value, nil
+	default:
+		return "", fmt.Errorf(
+			"metrics.offload.runtime %q is unsupported (supported: %s, %s)",
+			value,
+			MetricsOffloadRuntimePortalV1,
+			MetricsOffloadRuntimeCollectorV1,
+		)
+	}
+}
+
+// ResolveMetricsOffloadDeliveryMode returns the collector sink contract.
+// Empty preserves remote-write-only delivery.
+func ResolveMetricsOffloadDeliveryMode(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "":
+		return MetricsOffloadDeliveryRemoteWrite, nil
+	case MetricsOffloadDeliveryRemoteWrite, MetricsOffloadDeliveryDualRequired, MetricsOffloadDeliveryDualShadow:
+		return strings.TrimSpace(value), nil
+	default:
+		return "", fmt.Errorf(
+			"metrics.offload.delivery_mode must be one of %q, %q, or %q (got %q)",
+			MetricsOffloadDeliveryRemoteWrite,
+			MetricsOffloadDeliveryDualRequired,
+			MetricsOffloadDeliveryDualShadow,
+			value,
+		)
+	}
+}
+
+// ValidateMetricsOffloadRuntimeImage validates the pinned image reference for
+// an explicit executable contract. Runtime is authoritative: Tau deliberately
+// does not infer compatibility from an image repository name.
+func ValidateMetricsOffloadRuntimeImage(runtime, image string) error {
+	if _, err := ResolveMetricsOffloadRuntime(runtime); err != nil {
+		return err
+	}
+	return ValidateMetricsOffloadImage(image)
 }
 
 // ValidateMetricsOffloadImage rejects mutable or implicit sidecar image

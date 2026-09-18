@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -235,6 +236,9 @@ func TestResolveDirectJobMetricsOffloadConfigAndEnvPrecedence(t *testing.T) {
 	}
 
 	runtime := resolve()
+	if got, want := runtime.Runtime, metricsoffload.RuntimePortalV1; got != want {
+		t.Fatalf("default runtime = %q, want %q", got, want)
+	}
 	if got, want := runtime.Image, "registry.example.com/taugrid-portal:config"; got != want {
 		t.Fatalf("config image = %q, want %q", got, want)
 	}
@@ -243,13 +247,58 @@ func TestResolveDirectJobMetricsOffloadConfigAndEnvPrecedence(t *testing.T) {
 	}
 
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid-portal:platform")
+	t.Setenv("TAU_METRICS_OFFLOAD_RUNTIME", metricsoffload.RuntimeCollectorV1)
 	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "/var/run/tau/platform-spool")
+	t.Setenv("TAU_METRICS_OFFLOAD_DELIVERY_MODE", metricsoffload.DeliveryDualRequired)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "Metrics")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS", "4")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF", "2s")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT", "5m")
 	runtime = resolve()
+	if got, want := runtime.Runtime, metricsoffload.RuntimeCollectorV1; got != want {
+		t.Fatalf("platform runtime override = %q, want %q", got, want)
+	}
 	if got, want := runtime.Image, "registry.example.com/taugrid-portal:platform"; got != want {
 		t.Fatalf("platform image override = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/platform-spool"; got != want {
 		t.Fatalf("platform out override = %q, want %q", got, want)
+	}
+	if runtime.DeliveryMode != metricsoffload.DeliveryDualRequired ||
+		runtime.ADXClusterURI != "https://example.kusto.windows.net" ||
+		runtime.ADXDatabase != "Metrics" ||
+		runtime.ADXClientID != "00000000-0000-0000-0000-000000000001" ||
+		runtime.ADXMaxAttempts != 4 ||
+		runtime.ADXRetryBackoff != 2*time.Second ||
+		runtime.ADXFinalStatusTimeout != 5*time.Minute {
+		t.Fatalf("platform typed ADX override = %+v", runtime)
+	}
+}
+
+func TestResolveDirectJobMetricsOffloadRejectsUnknownRuntimeOverride(t *testing.T) {
+	t.Setenv("TAU_METRICS_OFFLOAD_RUNTIME", "future-v2")
+	o := defaultRunDispatchOptions()
+	o.workspace = "research-workspace"
+	o.metricsSessionID = "session-runtime"
+	o.metricsHistory = []string{"metrics.jsonl"}
+	o.metricsOffloadImage = "registry.example.com/taugrid-portal:config"
+	o.experiment = runExperimentMetadata{
+		Project:      "pretraining",
+		ExperimentID: "modernbert-bounded",
+	}
+	_, err := resolveMetricsOffload(
+		o,
+		"modernbert-bounded",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/modernbert-bounded",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unknown runtime override error = %v", err)
 	}
 }
 

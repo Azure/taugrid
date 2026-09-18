@@ -567,10 +567,94 @@ experiment:
 	}
 
 	if !cfg.Metrics.Offload.Enabled ||
+		cfg.Metrics.Offload.Runtime != "" ||
 		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2" ||
 		cfg.Metrics.Offload.Out != "/var/run/tau/metrics-offload" ||
 		len(cfg.Metrics.History) != 2 {
 		t.Fatalf("unexpected metrics config: %+v", cfg.Metrics)
+	}
+}
+
+func TestMetricsOffloadRuntimeDefaultsAndValidates(t *testing.T) {
+	if got, err := ResolveMetricsOffloadRuntime(""); err != nil || got != MetricsOffloadRuntimePortalV1 {
+		t.Fatalf("default runtime = %q, %v; want %q", got, err, MetricsOffloadRuntimePortalV1)
+	}
+	if got, err := ResolveMetricsOffloadRuntime(MetricsOffloadRuntimeCollectorV1); err != nil || got != MetricsOffloadRuntimeCollectorV1 {
+		t.Fatalf("collector runtime = %q, %v", got, err)
+	}
+	if _, err := parse([]byte(`metrics:
+  offload:
+    runtime: future-v2
+`), "tau.yaml"); err == nil || !strings.Contains(err.Error(), "metrics.offload.runtime") {
+		t.Fatalf("unknown runtime error = %v", err)
+	}
+}
+
+func TestParseAcceptsTypedADXDualDelivery(t *testing.T) {
+	cfg, err := parse([]byte(`name: tracked-job
+engine: job
+entrypoint: train.sh
+metrics:
+  history: [metrics.jsonl]
+  offload:
+    enabled: true
+    runtime: collector-v1
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0
+    delivery_mode: dual-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_table: TauExpMetricEventsV1
+    adx_mapping: TauExpMetricEventsV1Json
+    adx_client_id: 00000000-0000-0000-0000-000000000001
+    adx_max_attempts: 4
+    adx_retry_backoff: 2s
+    adx_final_status_timeout: 5m
+experiment:
+  project: pretraining
+  name: modernbert
+`), "tau.yaml")
+	if err != nil {
+		t.Fatalf("parse typed ADX delivery: %v", err)
+	}
+	if got := cfg.Metrics.Offload; got.DeliveryMode != MetricsOffloadDeliveryDualRequired ||
+		got.ADXDatabase != "TauGrid" || got.ADXMaxAttempts != 4 {
+		t.Fatalf("unexpected typed ADX config: %+v", got)
+	}
+}
+
+func TestTypedADXDualDeliveryRequiresCollectorIdentity(t *testing.T) {
+	for name, body := range map[string]string{
+		"collector runtime": `runtime: portal-v1
+    delivery_mode: dual-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_client_id: id`,
+		"client ID": `runtime: collector-v1
+    delivery_mode: dual-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parse([]byte("metrics:\n  offload:\n    "+body+"\n"), "tau.yaml")
+			if err == nil {
+				t.Fatalf("parse unexpectedly accepted invalid typed ADX config")
+			}
+		})
+	}
+}
+
+func TestTypedADXDualDeliveryBoundsAttempts(t *testing.T) {
+	_, err := parse([]byte(`metrics:
+  offload:
+    runtime: collector-v1
+    delivery_mode: dual-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: Metrics
+    adx_client_id: id
+    adx_max_attempts: 11
+`), "tau.yaml")
+	if err == nil || !strings.Contains(err.Error(), "adx_max_attempts") {
+		t.Fatalf("unbounded attempts error = %v", err)
 	}
 }
 

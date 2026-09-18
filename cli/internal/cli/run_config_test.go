@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
@@ -1290,6 +1291,7 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`metrics.offload.runtime` | supported",
 		"`metrics.offload.image` | supported",
 		"`metrics.offload.out` | supported",
 		"`run.ttl_seconds_after_finished` | direct-only",
@@ -1693,11 +1695,14 @@ metrics:
   history: [metrics-history-attempt-*/*.jsonl]
   offload:
     enabled: true
+    runtime: collector-v1
     image: registry.example.com/taugrid-portal:20260903.1
     out: /var/run/tau/metrics-offload
 experiment:
   project: pretraining
   title: bounded run
+policy:
+  workspace: research-workspace
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1707,11 +1712,28 @@ experiment:
 		t.Fatalf("loadRunConfig: %v", err)
 	}
 	if !options.metricsOffloadEnabled ||
+		options.metricsOffloadRuntime != metricsoffload.RuntimeCollectorV1 ||
 		options.metricsOffloadImage != "registry.example.com/taugrid-portal:20260903.1" ||
 		options.metricsOffloadOut != "/var/run/tau/metrics-offload" ||
 		len(options.metricsHistory) != 1 ||
 		options.metricsHistory[0] != "metrics-history-attempt-*/*.jsonl" {
 		t.Fatalf("unexpected direct metrics dispatch options: %+v", options)
+	}
+	options.metricsSessionID = "yaml-runtime"
+	runtime, err := resolveMetricsOffload(
+		options,
+		"tracked",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/tracked",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err != nil {
+		t.Fatalf("resolve YAML metrics offload: %v", err)
+	}
+	if got, want := runtime.Runtime, metricsoffload.RuntimeCollectorV1; got != want {
+		t.Fatalf("resolved YAML runtime = %q, want %q", got, want)
 	}
 }
 

@@ -2172,6 +2172,7 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 		ArtifactURI:         "/data/research-workspace/modernbert-bounded",
 		CheckpointURI:       "/data/research-workspace/modernbert-bounded/checkpoints",
 	}
+
 	out, err := Render(trainProfile(), Options{
 		Name:           "modernbert-bounded",
 		Namespace:      "research-workspace",
@@ -2243,6 +2244,47 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("rendered telemetry contract must not contain credentials (%q):\n%s", forbidden, rendered)
 		}
+	}
+}
+
+func TestRender_DirectJobCollectorMetricsOffloadCommand(t *testing.T) {
+	script := torchrunScript(t)
+	runtime := metricsoffload.Runtime{
+		Runtime:             metricsoffload.RuntimeCollectorV1,
+		Image:               "registry.example.com/taugrid/collector:v1",
+		RunID:               "collector-job",
+		Project:             "pretraining",
+		Experiment:          "collector",
+		Group:               "default",
+		Store:               "/var/run/tau/metrics/store",
+		Out:                 "/data/collector/offload",
+		History:             []string{"/data/collector/metrics.jsonl"},
+		CompletionFile:      "/var/run/tau/metrics-completion.json",
+		RemoteWriteEndpoint: "http://${NODE_IP}:3100/receive",
+		Interval:            10 * time.Second,
+	}
+	out, err := Render(trainProfile(), Options{
+		Name:           "collector-job",
+		Namespace:      "tau",
+		ScriptPath:     script,
+		PVCMount:       "data",
+		MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := parseYAML(t, out)
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	containers := pod["containers"].([]any)
+	if len(containers) != 2 {
+		t.Fatalf("containers = %d, want main + one metrics sidecar", len(containers))
+	}
+	sidecar := containers[1].(map[string]any)
+	if got := sidecar["command"]; fmt.Sprint(got) != fmt.Sprint([]any{metricsoffload.CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %v", got)
+	}
+	if got := fmt.Sprint(sidecar["args"]); !strings.Contains(got, "collect --watch") {
+		t.Fatalf("collector args = %s", got)
 	}
 }
 

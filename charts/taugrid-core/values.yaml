@@ -387,6 +387,11 @@ portal:
     # still serve.
     queryCommand: ""
     queryArgs: []
+  experimentCatalog:
+    # Layer 1 keeps legacy raw ExperimentMetrics discovery authoritative and
+    # only compares the typed ADX catalog in bounded background queries.
+    shadowRead:
+      enabled: false
   # Enable only together with lifecycleRecorder after its MCR image, Workload
   # Identity, ADX permissions, and namespace scope are active.
   runHistory:

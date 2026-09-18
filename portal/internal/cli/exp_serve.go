@@ -43,6 +43,7 @@ type expServeOptions struct {
 	kustoQueryCommand      string
 	kustoQueryArgs         []string
 	kustoTargetPoints      int
+	kustoCatalogShadowRead bool
 	maxRuns                int
 	maxMetricRows          int
 	timeout                time.Duration
@@ -137,6 +138,7 @@ func addExpServeFlags(cmd *cobra.Command, opts *expServeOptions, includeOpen boo
 	cmd.Flags().StringVar(&opts.kustoMaxDiscoverySince, "max-discovery-since", "365d", "maximum allowed lookback for unscoped broad Kusto experiment discovery")
 	cmd.Flags().StringVar(&opts.kustoTargetSince, "target-since", "365d", "default lookback for targeted live Kusto dashboard queries")
 	cmd.Flags().IntVar(&opts.kustoTargetPoints, "kusto-target-points", 12000, "target downsampled points for live Kusto metrics queries")
+	cmd.Flags().BoolVar(&opts.kustoCatalogShadowRead, "kusto-experiment-catalog-shadow-read", false, "query the typed ADX experiment catalog for parity diagnostics while continuing to serve legacy discovery")
 	cmd.Flags().StringVar(&opts.kustoQueryCommand, "kusto-query-command", "", "executable that runs generated KQL and emits Stellar row JSONL/JSON or Kusto REST JSON; KQL is passed on stdin unless an arg contains {query}")
 	cmd.Flags().StringArrayVar(&opts.kustoQueryArgs, "kusto-query-arg", nil, "argument for --kusto-query-command; supports {endpoint}, {database}, and {query} placeholders")
 	cmd.Flags().IntVar(&opts.maxRuns, "max-runs", expapi.DefaultMaxRuns, "maximum runs returned in each Stellar snapshot")
@@ -193,6 +195,7 @@ func (opts expServeOptions) toExpapiOptions(storePath *string) expapi.Options {
 		KustoQueryArgs:         opts.kustoQueryArgs,
 		KustoNativeQuery:       opts.nativeKustoQuery(),
 		KustoTargetPoints:      opts.kustoTargetPoints,
+		KustoCatalogShadowRead: opts.kustoCatalogShadowRead,
 		MaxRuns:                opts.maxRuns,
 		MaxMetricRows:          opts.maxMetricRows,
 		RequestTimeout:         opts.timeout,

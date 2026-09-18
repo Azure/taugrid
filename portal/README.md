@@ -115,28 +115,57 @@ workspaces must not silently fall back to local data.
 
 The **Experiments** tab opens the native React workspace at `/portal/experiments`
 directly, without an intermediate Overview page or a second navigation sidebar.
-The UI uses the Portal's Experiments naming; existing `/stellar` links and API
-paths remain compatible. The workspace is native React,
-not an iframe or a wrapper around the legacy renderer. Discovery, run selection,
-metric charts, comparison, and research evidence share the portal's navigation,
-workspace context, and query cache. Experiment, metric, and step-range selections
-remain deep-linkable. Report artifacts are excluded from the native evidence
-views, counts, and links; other media and config evidence remain available.
-When a snapshot omits selected runs, the evidence panels disclose incomplete
-coverage and link to exact-run views rather than claim those runs have no evidence.
+It has one fixed data-driven flow: experiment search, cursor-paginated runs,
+exact run detail, metric catalog, and one bounded chart series. Workspace,
+project, experiment, run, metric, cursor, and step-range selections are
+deep-linkable and are included in query cache identity so authorized data cannot
+leak across workspace switches.
 
-The **Experiment summary** disclosure includes run-scoped launch details using
-the same visible-run selection as charts. Expanding it lazily shares the full
-snapshot query with Research evidence. Requested GPU totals, GPUs per worker,
-worker/pod counts, GPU class, image, entrypoint, profile, workspace and recorded
-queue are not presented as observed GPU allocations. Missing values remain
-"Not recorded", including explicit CPU requests of zero versus unknown counts.
-MIG requests are labeled as slices (total and per worker), with the resolved
-resource mode/name and MIG profile separate from GPU model/class. These optional
-fields come from renderer inputs, never resource-profile name guesses. Counts
-without a recorded unit are labeled "GPU units (unit unspecified)"; legacy GPU
-context whose basis is unknown is labeled separately. No slice count is treated
-as a physical GPU count.
+The native UI uses only the narrow canonical reads:
+
+| Read | Route |
+|---|---|
+| Experiment search | `GET /api/v2/stellar/experiments/search` |
+| Runs for one experiment | `GET /api/v2/stellar/experiments/{experiment_id}/runs` |
+| Exact run detail | `GET /api/v2/stellar/runs/{run_id}` |
+| Exact run metric catalog | `GET /api/v2/stellar/runs/{run_id}/metrics` |
+| Exact bounded series | `GET /api/v2/stellar/runs/{run_id}/series?target=...&metric=...` |
+
+List reads use bounded limits and opaque query-bound cursors. Responses carry
+freshness, provenance, availability, partial-result warnings, and typed errors.
+Discovery and catalog reads call the stable `TauExpSeriesCatalogRows()` and
+`TauExpRunCatalogRows()` contracts. The `adx-mon` Helm value
+`functions.experimentCatalogSource` selects their deployment-time implementation
+(`legacy`, `dual`, or `typed`); Portal does not model that mode in Go.
+`--kusto-experiment-catalog-shadow-read` remains a separate diagnostic for the
+legacy dashboard path and is not used by canonical reads. Raw
+`ExperimentMetrics` remains limited to exact chart-point queries.
+
+Existing `/api/stellar`, `/api/v1/stellar`, broad v2 snapshot/search routes,
+`/stellar`, CLI HTML/TUI/JSON, and report/artifact consumers remain compatible.
+Dashboard-shaped routes advertise deprecation and a canonical successor.
+The native UI no longer consumes summary/metric/full snapshot modes, section
+layout customization, manual summary/page reconciliation, backend actions, or
+backend presentation colors. Removing those compatibility contracts and the
+legacy HTML renderer is deferred until their CLI/TUI/report consumers migrate.
+
+### Experiment catalog rollout
+
+Roll out the stacked experiment architecture in this order:
+
+1. Install the typed ADX event and stable catalog functions while
+   `functions.experimentCatalogSource=legacy`.
+2. Deploy the standalone collector and validate typed delivery/parity without
+   making it required for portal reads.
+3. Deploy this Portal/API/UI layer; canonical discovery calls the stable
+   functions and chart points remain exact raw-metric reads.
+4. Change the Helm catalog source to `dual`, monitor parity, missing/extra
+   identities, duplicates, freshness, lifecycle-only visibility, and query cost.
+5. Change selected environments to `typed` after parity gates pass. Roll back
+   immediately by restoring the Helm value to `legacy`; no Portal change is
+   required.
+6. Remove deprecated snapshot aliases, CLI HTML/browser rendering, iframe-era
+   assets, and `experimentsUrl` only after their remaining consumers migrate.
 
 New `tau run` submissions attach the credential-free `tau.azure.com/launch`
 annotation (`core/experiment.Launch` v1). Run-profile capture persists it in the

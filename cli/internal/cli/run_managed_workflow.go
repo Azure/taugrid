@@ -9,12 +9,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Azure/taugrid/cli/internal/jobrender"
 	"github.com/Azure/taugrid/cli/internal/kvspec"
 	"github.com/Azure/taugrid/cli/internal/manifest"
+	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/secretpreflight"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/envspec"
@@ -118,6 +120,7 @@ func managedWorkflowMetricsOffload(ctx context.Context) (manifest.MetricsOffload
 			*dest = value
 		}
 	}
+	fromEnv("TAU_METRICS_OFFLOAD_RUNTIME", &opts.Runtime)
 	fromEnv("TAU_METRICS_OFFLOAD_IMAGE", &opts.Image)
 	fromEnv("TAU_METRICS_OFFLOAD_PROJECT", &opts.Project)
 	fromEnv("TAU_METRICS_OFFLOAD_GROUP", &opts.Group)
@@ -125,12 +128,37 @@ func managedWorkflowMetricsOffload(ctx context.Context) (manifest.MetricsOffload
 	fromEnv("TAU_METRICS_OFFLOAD_STORE", &opts.Store)
 	fromEnv("TAU_METRICS_OFFLOAD_OUT", &opts.Out)
 	fromEnv("TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT", &opts.RemoteWriteEndpoint)
+	fromEnv("TAU_METRICS_OFFLOAD_DELIVERY_MODE", &opts.DeliveryMode)
+	fromEnv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", &opts.ADXClusterURI)
+	fromEnv("TAU_METRICS_OFFLOAD_ADX_DATABASE", &opts.ADXDatabase)
+	fromEnv("TAU_METRICS_OFFLOAD_ADX_TABLE", &opts.ADXTable)
+	fromEnv("TAU_METRICS_OFFLOAD_ADX_MAPPING", &opts.ADXMapping)
+	fromEnv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", &opts.ADXClientID)
 	if raw := strings.TrimSpace(os.Getenv("TAU_METRICS_OFFLOAD_INTERVAL")); raw != "" {
 		interval, err := time.ParseDuration(raw)
 		if err != nil || interval <= 0 {
 			return manifest.MetricsOffloadOptions{}, fmt.Errorf("TAU_METRICS_OFFLOAD_INTERVAL must be a positive duration (got %q)", raw)
 		}
 		opts.Interval = interval
+	}
+	if raw := strings.TrimSpace(os.Getenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS")); raw != "" {
+		attempts, err := strconv.Atoi(raw)
+		if err != nil || attempts <= 0 || attempts > metricsoffload.MaxADXAttempts {
+			return manifest.MetricsOffloadOptions{}, fmt.Errorf("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS must be between 1 and %d (got %q)", metricsoffload.MaxADXAttempts, raw)
+		}
+		opts.ADXMaxAttempts = attempts
+	}
+	for env, target := range map[string]*time.Duration{
+		"TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF":        &opts.ADXRetryBackoff,
+		"TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT": &opts.ADXFinalStatusTimeout,
+	} {
+		if raw := strings.TrimSpace(os.Getenv(env)); raw != "" {
+			duration, err := time.ParseDuration(raw)
+			if err != nil || duration <= 0 {
+				return manifest.MetricsOffloadOptions{}, fmt.Errorf("%s must be a positive duration (got %q)", env, raw)
+			}
+			*target = duration
+		}
 	}
 	return applyRunExperimentMetricsOffload(ctx, opts), nil
 }

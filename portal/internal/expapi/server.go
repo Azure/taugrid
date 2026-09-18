@@ -77,9 +77,12 @@ type Options struct {
 	KustoNativeQuery  func(ctx context.Context, query string) (string, error)
 	KustoQueryArgs    []string
 	KustoTargetPoints int
-	MaxRuns           int
-	MaxMetricRows     int
-	RequestTimeout    time.Duration
+	// KustoCatalogShadowRead compares typed catalog discovery with the legacy
+	// raw-metrics path but never serves the catalog result.
+	KustoCatalogShadowRead bool
+	MaxRuns                int
+	MaxMetricRows          int
+	RequestTimeout         time.Duration
 }
 
 // DefaultWorkspace is the workspace Stellar serves when none is configured.
@@ -152,9 +155,12 @@ type Server struct {
 	kustoQueryArgs         []string
 	kustoNativeQuery       func(ctx context.Context, query string) (string, error)
 	kustoTargetPoints      int
+	kustoCatalogShadowRead bool
 	maxRuns                int
 	maxMetricRows          int
 	requestTimeout         time.Duration
+	cursorKey              []byte
+	v2Catalog              v2CatalogSource
 	mux                    *http.ServeMux
 }
 
@@ -212,11 +218,14 @@ func NewServer(opts Options) (*Server, error) {
 		kustoQueryArgs:         append([]string(nil), opts.KustoQueryArgs...),
 		kustoNativeQuery:       opts.KustoNativeQuery,
 		kustoTargetPoints:      opts.KustoTargetPoints,
+		kustoCatalogShadowRead: opts.KustoCatalogShadowRead,
 		maxRuns:                opts.MaxRuns,
 		maxMetricRows:          opts.MaxMetricRows,
 		requestTimeout:         opts.RequestTimeout,
+		cursorKey:              newV2CursorKey(defaultWorkspace(opts), source),
 		mux:                    http.NewServeMux(),
 	}
+	s.v2Catalog = stableFunctionCatalogSource{server: s}
 	s.routes()
 	return s, nil
 }
@@ -279,11 +288,25 @@ func (s *Server) routes() {
 	s.handleDeprecatedMutableStellarAPI("/labels")
 	s.handleDeprecatedMutableStellarAPI("/dashboards")
 	s.handleDeprecatedMutableStellarAPI("/workspaces")
+	s.mux.HandleFunc(stellarAPIV2Base+"/experiments/search", s.handleV2ExperimentSearch)
+	s.mux.HandleFunc(stellarAPIV2Base+"/experiments/", s.handleV2ExperimentRoutes)
+	s.mux.HandleFunc(stellarAPIV2Base+"/runs/", s.handleV2RunRoutes)
 }
 
 func (s *Server) handleStellarAPI(route string, handler http.HandlerFunc) {
 	for _, base := range stellarAPIBasePaths {
-		s.mux.HandleFunc(base+route, handler)
+		deprecated := base != stellarAPIV2Base || route == "/snapshot" || route == "/series" ||
+			route == "/runs" || route == "/experiments"
+		if !deprecated {
+			s.mux.HandleFunc(base+route, handler)
+			continue
+		}
+		s.mux.HandleFunc(base+route, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Deprecation", "true")
+			w.Header().Add("Link", `<`+stellarAPIV2Base+`/capabilities>; rel="successor-version"`)
+			w.Header().Set("Warning", `299 - "Deprecated Stellar dashboard API; migrate to canonical narrow v2 reads"`)
+			handler(w, r)
+		})
 	}
 }
 
@@ -463,14 +486,19 @@ func (s *Server) capabilities(debug bool) capabilitiesResponse {
 		},
 		DataSources: dataSources,
 		Capabilities: map[string]map[string]any{
-			"snapshot":            {"local": localAvailable, "kusto": kustoAvailable},
-			"series_detail":       {"local": localAvailable, "kusto": kustoSeriesDetail},
-			"run_search":          {"local": localAvailable, "kusto": kustoAvailable},
-			"experiment_search":   {"local": localAvailable, "kusto": kustoAvailable},
-			"experiment_mutation": {"local": localAvailable, "kusto": false},
-			"artifact_index":      {"local": localAvailable, "kusto": false},
-			"artifact_content":    {"local": localAvailable, "durable_ref": true},
-			"status":              {"local": localAvailable, "kusto": kustoAvailable},
+			"snapshot":             {"local": localAvailable, "kusto": kustoAvailable},
+			"series_detail":        {"local": localAvailable, "kusto": kustoSeriesDetail},
+			"run_search":           {"local": localAvailable, "kusto": kustoAvailable},
+			"experiment_search":    {"local": localAvailable, "kusto": kustoAvailable},
+			"experiment_mutation":  {"local": localAvailable, "kusto": false},
+			"artifact_index":       {"local": localAvailable, "kusto": false},
+			"artifact_content":     {"local": localAvailable, "durable_ref": true},
+			"status":               {"local": localAvailable, "kusto": kustoAvailable},
+			"v2_experiment_search": {"local": localAvailable, "kusto": kustoAvailable, "path": stellarAPIV2Base + "/experiments/search"},
+			"v2_run_listing":       {"local": localAvailable, "kusto": kustoAvailable, "path": stellarAPIV2Base + "/experiments/{experiment_id}/runs"},
+			"v2_run_detail":        {"local": localAvailable, "kusto": kustoAvailable, "path": stellarAPIV2Base + "/runs/{run_id}"},
+			"v2_metric_catalog":    {"local": localAvailable, "kusto": kustoAvailable, "path": stellarAPIV2Base + "/runs/{run_id}/metrics"},
+			"v2_exact_series":      {"local": localAvailable, "kusto": kustoSeriesDetail, "path": stellarAPIV2Base + "/runs/{run_id}/series"},
 		},
 		Degradations: degradations,
 	}
@@ -679,6 +707,7 @@ func (s *Server) baseKustoSource() expcockpit.KustoSource {
 		QueryCommand:      s.kustoQueryCommand,
 		QueryArgs:         s.kustoQueryArgs,
 		NativeQuery:       s.kustoNativeQuery,
+		CatalogShadowRead: s.kustoCatalogShadowRead,
 	}
 }
 
@@ -1620,6 +1649,7 @@ func seriesOptionsFromRequest(r *http.Request, workspace, target, metric string,
 	return expcockpit.SeriesOptions{
 		Target:        target,
 		Workspace:     workspace,
+		Project:       strings.TrimSpace(r.URL.Query().Get("project")),
 		Metric:        metric,
 		RunID:         strings.TrimSpace(r.URL.Query().Get("run_id")),
 		StartStep:     startStep,

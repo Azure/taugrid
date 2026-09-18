@@ -14,12 +14,26 @@ const (
 	RemoteWriteTable             = "ExperimentMetrics"
 	RemoteWriteDashboardFunction = "ExperimentMetricsDashboardRows"
 
+	MetricEventsTable             = "TauExpMetricEventsV1"
+	MetricEventsJSONMapping       = "TauExpMetricEventsV1Json"
+	MetricEventsDeduplicatedView  = "TauExpMetricEventsV1Dedup"
+	MetricEventRowsFunction       = "TauExpMetricEventRows"
+
 	ProjectionTable             = "TauExpMetrics"
 	ProjectionMetricsSpoolFile  = ProjectionTable + ".jsonl"
 	ProjectionDashboardFunction = "TauExpMetricsDashboardRows"
 
 	RunLifecycleTable             = "TauExpRunLifecycle"
 	RunLifecycleDashboardFunction = "TauExpRunLifecycleDashboardRows"
+
+	SeriesCatalogView         = "TauExpSeriesCatalogV1"
+	MetricRunCatalogView      = "TauExpMetricRunCatalogV1"
+	TypedSeriesCatalogView    = "TauExpTypedSeriesCatalogV1"
+	TypedMetricRunCatalogView = "TauExpTypedMetricRunCatalogV1"
+	LifecycleRunCatalogView   = "TauExpLifecycleRunCatalogV1"
+	SeriesCatalogRowsFunction = "TauExpSeriesCatalogRows"
+	RunCatalogRowsFunction    = "TauExpRunCatalogRows"
+	ExperimentCatalogVersion  = "v1"
 
 	RunStatusMetricName       = "tau/run_status"
 	RunStatusStateTag         = "tau.status.state"

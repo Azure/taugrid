@@ -184,13 +184,23 @@ type runProfile struct {
 }
 
 type runDirectMetrics struct {
-	metricsHistory        []string
-	metricsSessionID      string
-	metricsOffloadEnabled bool
-	metricsOffloadImage   string
-	metricsOffloadOut     string
-	checkpointPath        string
-	experiment            runExperimentMetadata
+	metricsHistory                      []string
+	metricsSessionID                    string
+	metricsOffloadEnabled               bool
+	metricsOffloadRuntime               string
+	metricsOffloadImage                 string
+	metricsOffloadOut                   string
+	metricsOffloadDeliveryMode          string
+	metricsOffloadADXClusterURI         string
+	metricsOffloadADXDatabase           string
+	metricsOffloadADXTable              string
+	metricsOffloadADXMapping            string
+	metricsOffloadADXClientID           string
+	metricsOffloadADXMaxAttempts        int
+	metricsOffloadADXRetryBackoff       string
+	metricsOffloadADXFinalStatusTimeout string
+	checkpointPath                      string
+	experiment                          runExperimentMetadata
 }
 
 type runObservabilityInput struct {

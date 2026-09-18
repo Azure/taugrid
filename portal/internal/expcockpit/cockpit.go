@@ -100,6 +100,7 @@ type Options struct {
 type SeriesOptions struct {
 	Target        string
 	Workspace     string
+	Project       string
 	Metric        string
 	RunID         string
 	StartStep     *int64

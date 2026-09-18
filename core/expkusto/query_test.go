@@ -263,12 +263,26 @@ func TestBuildExperimentSearchQuerySupportsRemoteWrite(t *testing.T) {
 		"Labels['project']",
 		"experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), '')",
 		"| where project_id == 'sample-project'",
+		"| where isnotempty(project_id) and isnotempty(experiment_id) and isnotempty(run_id) and isnotempty(metric_name)",
 		"| top 201 by latest_wall_time desc",
-		"arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name",
+		"summarize hint.strategy=shuffle arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name",
 		"| project ['project']=project_id, experiment_id, run_group_id, run_id, metric_name",
 	} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("remote-write experiment search query missing %q:\n%s", want, query)
+		}
+	}
+	rollup := strings.Index(query, "| summarize hint.strategy=shuffle arg_max(wall_time, *)")
+	top := strings.Index(query, "| top 201 by latest_wall_time desc")
+	if rollup < 0 || top < 0 || rollup > top {
+		t.Fatalf("remote-write experiment search must reduce the source to latest run metrics before selecting experiments:\n%s", query)
+	}
+	if strings.Count(query, "ExperimentMetrics\n") != 1 {
+		t.Fatalf("remote-write experiment search must scan ExperimentMetrics once:\n%s", query)
+	}
+	for _, unwanted := range []string{"let scoped = materialize(", "arg_max(exported_at, *) by source_store_id"} {
+		if strings.Contains(query, unwanted) {
+			t.Fatalf("remote-write experiment search must not use high-cardinality deduplication %q:\n%s", unwanted, query)
 		}
 	}
 }
@@ -577,6 +591,7 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 		"durable_id: string",
 		"workspace_id: string",
 		"result_scope: string",
+		"experiment_id: string",
 		"local_queue: string",
 		"cluster_queue: string",
 		"workload_kind: string",
@@ -589,6 +604,7 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 		"result_pvc: string",
 		"experiment_tracking: string",
 		"experiment_source: string",
+		"['project'], experiment_id, run_group_id",
 		"by cluster, namespace, durable_identity, is_terminal",
 		"arg_max(terminal_rank, *) by cluster, namespace, durable_identity",
 	} {
@@ -609,6 +625,7 @@ func TestRunLifecycleIngestionMappingKQLIsSchemaOwnedAndIdempotent(t *testing.T)
 		`"column":"observed_at","datatype":"datetime","path":"$.observed_at"`,
 		`"column":"tags","datatype":"dynamic","path":"$.tags"`,
 		`"column":"generation","datatype":"long","path":"$.generation"`,
+		`"column":"experiment_id","datatype":"string","path":"$.experiment_id"`,
 	} {
 		if !strings.Contains(mapping, want) {
 			t.Fatalf("lifecycle ingestion mapping missing %q:\n%s", want, mapping)

@@ -5,12 +5,16 @@
 #   - "Open in Experiments"  (Stellar; metrics offload writes a terminal
 #                             tau/run_status marker to Kusto on shutdown)
 #
-# Submit (offload image pinned by digest). The metrics-offload sidecar runs
-# `taugrid-portal experiment offload metrics`, a verb only the taugrid-portal
-# image installs (at /usr/local/bin/taugrid-portal); the plain `tau` image
-# does NOT contain it, so the sidecar must use a taugrid-portal image:
+# Submit (offload image pinned by digest). Omitted runtime defaults to portal-v1
+# and runs `taugrid-portal experiment offload metrics` from a taugrid-portal
+# image. To use the standalone typed-spool collector instead, set
+# TAU_METRICS_OFFLOAD_RUNTIME=collector-v1 and use the new
+# taugrid-metrics-collector image. Tau does not infer runtime from image:
 #
 #   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
+#   # or:
+#   export TAU_METRICS_OFFLOAD_RUNTIME=collector-v1
+#   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
 #   tau run --config tau.yaml
 #
 # NOTE (namespace): select a Ready TauWorkspace with `tau run --workspace`.

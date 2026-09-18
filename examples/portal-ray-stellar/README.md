@@ -23,13 +23,13 @@ links:
 
 ## Prerequisites
 
-1. **A pinned metrics-offload image.** `metrics.offload.enabled: true` requires
-   `TAU_METRICS_OFFLOAD_IMAGE` (or `--metrics-offload-image`) set to a
-   **taugrid-portal** image pinned by digest. The sidecar runs
-   `taugrid-portal experiment offload metrics`, a verb only the taugrid-portal
-   image installs (at `/usr/local/bin/taugrid-portal`); the plain `tau` image
-   does **not** contain it and the container would fail to exec. It must be
-   pinned by `@sha256:` — a `:latest` tag is rejected.
+1. **A pinned metrics-offload image.** The default runtime remains
+   `portal-v1`, which requires a **taugrid-portal** image pinned by digest and
+   runs `taugrid-portal experiment offload metrics`. To use the standalone
+   collector, set `TAU_METRICS_OFFLOAD_RUNTIME=collector-v1` and pin the new
+   **taugrid-metrics-collector** image instead. Tau does not infer the runtime
+   from the image name. The plain `tau` image contains neither command. A
+   `:latest` tag is rejected.
 2. **A namespace with a Ready TauWorkspace and a writable `/data` PVC.** The
    offload sidecar remote-writes to adx-mon and writes a small SQLite buffer;
    the trainer publishes immutable JSONL chunks under `/data`. The canonical
@@ -51,6 +51,34 @@ export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
 tau run --workspace taugrid-default --config examples/portal-ray-stellar/tau.yaml --dry-run=client
 ```
+
+For the standalone runtime, replace the image export above with:
+
+```bash
+export TAU_METRICS_OFFLOAD_RUNTIME=collector-v1
+export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
+```
+
+`collector-v1` normalizes the immutable history chunks into typed
+`tau.experiment.metric.v1` NDJSON, with manifests, checkpoints, and delivery
+receipts in the configured spool. Its remote-write adapter emits the same
+`experiment_metrics` series consumed by adx-mon, so the portal link and hosted
+dashboard contract remain compatible. Runtime selection is run-config-owned;
+there is no Helm chart sidecar selector to change.
+
+Platforms shadowing direct typed ADX delivery can additionally set:
+
+```bash
+export TAU_METRICS_OFFLOAD_DELIVERY_MODE=dual-shadow
+export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
+```
+
+Use `dual-required` only after the typed table, mapping, stable query function,
+and ingestion monitoring are ready. The client ID must match the federated
+identity on the workspace ServiceAccount; no client secret belongs in the
+workload.
 
 The rendered RayJob must carry
 `tau.azure.com/stellar-experiment-id: ray-plus-stellar` and

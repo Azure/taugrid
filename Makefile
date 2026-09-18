@@ -3,7 +3,8 @@
 
 .PHONY: help build test lint check license-headers \
 	install-tau install-tau-cli install-tau-sdk \
-	install-taugrid-portal uninstall-tau uninstall-taugrid-portal \
+	install-taugrid-portal install-taugrid-metrics-collector \
+	uninstall-tau uninstall-taugrid-portal uninstall-taugrid-metrics-collector \
 	tau-docs-build tau-docs-check tau-docs-serve \
 	kind-build-images kind-create kind-load-images kind-images \
 	kind-install kind-restart kind-up kind-down kind-status kind-test-workspace \
@@ -16,6 +17,7 @@ TAUGRID_PORTAL_DIR := $(REPO_ROOT)/portal
 TAU_CORE_CONTROLLER_DIR := $(REPO_ROOT)/controllers/tau-core
 GPU_HEALTH_CHECKER_DIR := $(REPO_ROOT)/monitoring/gpu-health-checker
 GPU_METRICS_COLLECTOR_DIR := $(REPO_ROOT)/monitoring/gpu-metrics-collector
+TAUGRID_METRICS_COLLECTOR_DIR := $(REPO_ROOT)/metrics/experiment-metrics-collector
 E2E_DIR := $(REPO_ROOT)/tests/e2e
 TAU_SDK_DIR := $(REPO_ROOT)/sdk/python/python
 TAU_SITE_DIR := $(REPO_ROOT)/site
@@ -64,8 +66,10 @@ help:
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
 	@echo "  make install-taugrid-portal  # install the TauGrid Portal CLI"
+	@echo "  make install-taugrid-metrics-collector # install the standalone metrics collector"
 	@echo "  make uninstall-tau           # remove Tau CLI binaries"
 	@echo "  make uninstall-taugrid-portal # remove the TauGrid Portal CLI"
+	@echo "  make uninstall-taugrid-metrics-collector # remove the standalone metrics collector"
 	@echo "  make tau-docs-build          # build the documentation site"
 	@echo "  make tau-docs-check          # build and validate the documentation site"
 	@echo "  make tau-docs-serve          # serve the documentation site locally"
@@ -93,12 +97,14 @@ build:
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) build \
 		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
 	@echo "==> tests/e2e"
 	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go build ./...
 
 test:
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh
+	bash scripts/ci/tests/image-build-contract_test.sh
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"
 	@cd $(CORE_DIR) && go test ./...
@@ -106,6 +112,7 @@ test:
 	$(MAKE) -C $(TAU_CORE_CONTROLLER_DIR) test
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) test GOARCH=$(HOST_GOARCH)
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) test
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) test
 	@echo "==> tests/e2e (offline)"
 	@cd $(E2E_DIR) && AI_RUNTIME_E2E=0 GOFLAGS="$(GO_COMMAND_FLAGS)" \
 		go test -count=1 ./...
@@ -124,6 +131,7 @@ lint:
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) lint \
 		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
 	@echo "==> tests/e2e"
 	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go vet ./...
 	@cd $(E2E_DIR) && gofmt -l . | tee /dev/stderr | (! read -r _)
@@ -173,6 +181,10 @@ install-taugrid-portal:
 	$(MAKE) -C $(TAUGRID_PORTAL_DIR) install
 	$(call check_installed_on_path,taugrid-portal)
 
+install-taugrid-metrics-collector:
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) install
+	$(call check_installed_on_path,taugrid-metrics-collector)
+
 uninstall-tau:
 	@bin_dir="$$(go env GOBIN)"; \
 	[ -n "$$bin_dir" ] || bin_dir="$$(go env GOPATH)/bin"; \
@@ -184,6 +196,12 @@ uninstall-taugrid-portal:
 	[ -n "$$bin_dir" ] || bin_dir="$$(go env GOPATH)/bin"; \
 	rm -f "$$bin_dir/taugrid-portal"; \
 	echo "Removed taugrid-portal from $$bin_dir."
+
+uninstall-taugrid-metrics-collector:
+	@bin_dir="$$(go env GOBIN)"; \
+	[ -n "$$bin_dir" ] || bin_dir="$$(go env GOPATH)/bin"; \
+	rm -f "$$bin_dir/taugrid-metrics-collector"; \
+	echo "Removed taugrid-metrics-collector from $$bin_dir."
 
 tau-docs-build:
 	$(MAKE) -C $(TAU_SITE_DIR) build

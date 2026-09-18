@@ -19,24 +19,45 @@ const (
 	DefaultRemoteWriteEndpoint = "http://${NODE_IP}:3100/receive"
 	DefaultInterval            = 10 * time.Second
 	DefaultDoneTimeout         = 2 * time.Minute
+	DefaultADXTable            = "TauExpMetricEventsV1"
+	DefaultADXMapping          = "TauExpMetricEventsV1Json"
+
+	RuntimePortalV1    = runconfig.MetricsOffloadRuntimePortalV1
+	RuntimeCollectorV1 = runconfig.MetricsOffloadRuntimeCollectorV1
+
+	DeliveryRemoteWrite  = runconfig.MetricsOffloadDeliveryRemoteWrite
+	DeliveryDualRequired = runconfig.MetricsOffloadDeliveryDualRequired
+	DeliveryDualShadow   = runconfig.MetricsOffloadDeliveryDualShadow
+	MaxADXAttempts       = runconfig.MetricsOffloadMaxADXAttempts
 )
 
 // Options contains platform-owned offload settings plus experiment scope.
 type Options struct {
-	Image               string
-	Project             string
-	Experiment          string
-	Group               string
-	Tags                map[string]string
-	Source              string
-	Store               string
-	Out                 string
-	RemoteWriteEndpoint string
-	Interval            time.Duration
+	Runtime               string
+	Image                 string
+	Project               string
+	Experiment            string
+	Group                 string
+	Tags                  map[string]string
+	Source                string
+	Store                 string
+	Out                   string
+	RemoteWriteEndpoint   string
+	Interval              time.Duration
+	DeliveryMode          string
+	ADXClusterURI         string
+	ADXDatabase           string
+	ADXTable              string
+	ADXMapping            string
+	ADXClientID           string
+	ADXMaxAttempts        int
+	ADXRetryBackoff       time.Duration
+	ADXFinalStatusTimeout time.Duration
 }
 
 // Runtime is a fully resolved, credential-free metrics producer contract.
 type Runtime struct {
+	Runtime                 string
 	Image                   string
 	RunID                   string
 	Project                 string
@@ -57,6 +78,15 @@ type Runtime struct {
 	ReadyTimeout            time.Duration
 	DoneFile                string
 	DoneTimeout             time.Duration // Zero uses DefaultDoneTimeout.
+	DeliveryMode            string
+	ADXClusterURI           string
+	ADXDatabase             string
+	ADXTable                string
+	ADXMapping              string
+	ADXClientID             string
+	ADXMaxAttempts          int
+	ADXRetryBackoff         time.Duration
+	ADXFinalStatusTimeout   time.Duration
 }
 
 func (r Runtime) Enabled() bool {
@@ -64,10 +94,14 @@ func (r Runtime) Enabled() bool {
 }
 
 func (r Runtime) Validate() error {
+	runtime, err := ResolveRuntime(r.Runtime)
+	if err != nil {
+		return err
+	}
 	if !r.Enabled() {
 		return nil
 	}
-	if err := ValidatePinnedImage(r.Image); err != nil {
+	if err := ValidateRuntimeImage(runtime, r.Image); err != nil {
 		return err
 	}
 	for field, value := range map[string]string{
@@ -97,6 +131,33 @@ func (r Runtime) Validate() error {
 	if strings.TrimSpace(r.RemoteWriteEndpoint) == "" {
 		return fmt.Errorf("metrics offload remote-write endpoint is required")
 	}
+	deliveryMode, err := ResolveDeliveryMode(r.DeliveryMode)
+	if err != nil {
+		return err
+	}
+	if deliveryMode != DeliveryRemoteWrite {
+		if runtime != RuntimeCollectorV1 {
+			return fmt.Errorf("metrics offload delivery mode %q requires runtime %q", deliveryMode, RuntimeCollectorV1)
+		}
+		for field, value := range map[string]string{
+			"ADX cluster URI": r.ADXClusterURI,
+			"ADX database":    r.ADXDatabase,
+			"ADX client ID":   r.ADXClientID,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("metrics offload %s is required for delivery mode %q", field, deliveryMode)
+			}
+		}
+	}
+	if r.ADXMaxAttempts < 0 || r.ADXMaxAttempts > MaxADXAttempts {
+		return fmt.Errorf("metrics offload ADX max attempts must be between 0 and %d", MaxADXAttempts)
+	}
+	if r.ADXRetryBackoff < 0 {
+		return fmt.Errorf("metrics offload ADX retry backoff must not be negative")
+	}
+	if r.ADXFinalStatusTimeout < 0 {
+		return fmt.Errorf("metrics offload ADX final status timeout must not be negative")
+	}
 	if r.BaselineExistingHistory && strings.TrimSpace(r.ReadyFile) == "" {
 		return fmt.Errorf("metrics offload ready file is required when existing history is baselined")
 	}
@@ -106,9 +167,23 @@ func (r Runtime) Validate() error {
 	return nil
 }
 
+func ResolveRuntime(value string) (string, error) {
+	return runconfig.ResolveMetricsOffloadRuntime(value)
+}
+
+func ResolveDeliveryMode(value string) (string, error) {
+	return runconfig.ResolveMetricsOffloadDeliveryMode(value)
+}
+
+// ValidateRuntimeImage validates the explicit executable contract and pinned
+// image reference without guessing compatibility from the repository name.
+func ValidateRuntimeImage(runtime, image string) error {
+	return runconfig.ValidateMetricsOffloadRuntimeImage(runtime, image)
+}
+
 // ValidatePinnedImage rejects mutable or implicit sidecar image references.
 func ValidatePinnedImage(image string) error {
-	return runconfig.ValidateMetricsOffloadImage(image)
+	return ValidateRuntimeImage(RuntimePortalV1, image)
 }
 
 // MergeTags applies experiment overrides and then protected platform scope.

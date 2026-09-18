@@ -18,11 +18,20 @@ func TestTelemetryNamesPreserveHostedAndCompatibilityContracts(t *testing.T) {
 	if RemoteWriteDatabase != "Metrics" || RemoteWriteTable != "ExperimentMetrics" || RemoteWriteDashboardFunction != "ExperimentMetricsDashboardRows" {
 		t.Fatalf("remote-write ADX contract = %s.%s -> %s(), want Metrics.ExperimentMetrics -> ExperimentMetricsDashboardRows()", RemoteWriteDatabase, RemoteWriteTable, RemoteWriteDashboardFunction)
 	}
+	if MetricEventsTable != "TauExpMetricEventsV1" || MetricEventsJSONMapping != "TauExpMetricEventsV1Json" {
+		t.Fatalf("typed ADX ingestion contract = %s/%s, want TauExpMetricEventsV1/TauExpMetricEventsV1Json", MetricEventsTable, MetricEventsJSONMapping)
+	}
+	if MetricEventsDeduplicatedView != "TauExpMetricEventsV1Dedup" || MetricEventRowsFunction != "TauExpMetricEventRows" {
+		t.Fatalf("typed ADX query contract = %s -> %s(), want TauExpMetricEventsV1Dedup -> TauExpMetricEventRows()", MetricEventsDeduplicatedView, MetricEventRowsFunction)
+	}
 	if ProjectionTable != "TauExpMetrics" || ProjectionMetricsSpoolFile != "TauExpMetrics.jsonl" || ProjectionDashboardFunction != "TauExpMetricsDashboardRows" {
 		t.Fatalf("projection compatibility contract = %s/%s/%s()", ProjectionTable, ProjectionMetricsSpoolFile, ProjectionDashboardFunction)
 	}
 	if RunStatusMetricName != "tau/run_status" {
 		t.Fatalf("run terminal marker metric = %q, want tau/run_status", RunStatusMetricName)
+	}
+	if TypedSeriesCatalogView != "TauExpTypedSeriesCatalogV1" || TypedMetricRunCatalogView != "TauExpTypedMetricRunCatalogV1" {
+		t.Fatalf("typed catalog contract = %s/%s", TypedSeriesCatalogView, TypedMetricRunCatalogView)
 	}
 }
 

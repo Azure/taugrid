@@ -225,18 +225,69 @@ metrics:
     - metrics-history-attempt-*/*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2
+    runtime: collector-v1
+    image: <platform-supplied-collector-image@sha256:digest>
     out: /var/run/tau/metrics-offload
 ```
 
+`metrics.offload.runtime` selects the executable contract provided by the
+pinned image: `collector-v1` runs the standalone collector, while omitted or
+`portal-v1` preserves the legacy `taugrid-portal` command. Tau does not infer
+the runtime from the image name.
+This selection belongs to the run configuration and rendered workload sidecar;
+the TauGrid charts do not own a collector-sidecar selector.
 `metrics.offload.image` requires an explicit non-latest tag or `@sha256`
 digest. `metrics.offload.out` must be a clean absolute path under `/data` or
 `/var/run/tau`; when omitted, Tau uses a session-scoped directory beneath
 `storage.output`. Platform operators may override these values through
-`TAU_METRICS_OFFLOAD_IMAGE` and `TAU_METRICS_OFFLOAD_OUT`; endpoint, interval,
-and source remain available through the corresponding
-`TAU_METRICS_OFFLOAD_*` environment values. Researcher YAML cannot embed
-endpoint, credentials, or workspace policy.
+`TAU_METRICS_OFFLOAD_RUNTIME`, `TAU_METRICS_OFFLOAD_IMAGE`, and
+`TAU_METRICS_OFFLOAD_OUT`; endpoint, interval, and source remain available through the corresponding
+`TAU_METRICS_OFFLOAD_*` environment values. Researcher YAML may declare the
+non-secret ADX endpoint and identity client ID for a platform-approved
+Workload Identity, but it cannot embed credentials or override workspace
+identity policy.
+
+The `collector-v1` runtime converts accepted history rows into canonical
+`tau.experiment.metric.v1` events. Its output directory is a typed,
+restart-safe spool containing immutable NDJSON chunks, transaction manifests,
+source checkpoints, and per-sink delivery receipts. The built-in
+`remote-write-v1` adapter translates those typed events to the
+`experiment_metrics` Prometheus remote-write series consumed by adx-mon.
+The spool is authoritative for replay; remote write is a delivery adapter, not
+an alternative local schema or a reason to configure ADX/catalog assets in the
+workload.
+
+Typed ADX delivery is opt-in and collector-only:
+
+```yaml
+metrics:
+  offload:
+    enabled: true
+    runtime: collector-v1
+    image: <platform-supplied-collector-image@sha256:digest>
+    delivery_mode: dual-required
+    adx_cluster_uri: https://<cluster>.<region>.kusto.windows.net
+    adx_database: Metrics
+    adx_client_id: <workload-identity-client-id>
+```
+
+`delivery_mode` defaults to `remote-write`. `dual-required` blocks terminal
+completion until both `remote-write-v1` and `adx-queued-v1` have durable
+receipts. `dual-shadow` keeps remote write required while reporting typed ADX
+failures without presenting them as successful delivery. The typed defaults
+are table `TauExpMetricEventsV1` and mapping
+`TauExpMetricEventsV1Json`; operators can override them with the corresponding
+`metrics.offload.adx_*` fields or `TAU_METRICS_OFFLOAD_ADX_*` environment
+values.
+
+The collector uses an Azure Identity token credential selected for Workload
+Identity (or managed identity outside Kubernetes). `adx_client_id` is not a
+secret: it must match the user-assigned identity
+annotated on the TauWorkspace ServiceAccount, and that principal needs only the
+ADX database/table ingestion role. Do not place client secrets, storage keys,
+or broad ADX permissions in run configuration. The workload keeps the
+workspace ServiceAccount and `azure.workload.identity/use: "true"` label that
+Tau already renders for identity-enabled workspaces.
 
 Tau gives each fresh Kubernetes submission a metrics session and stores its
 expstore and offload checkpoints beneath

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -73,6 +74,55 @@ func TestBuildContainerCarriesHardenedRuntimeContract(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("container missing %q: %s", want, rendered)
+		}
+	}
+}
+
+func TestBuildContainerRuntimeCommands(t *testing.T) {
+	runtime := testRuntime("/data/run")
+	legacy := BuildContainer(runtime, nil)
+	runtime.Runtime = RuntimePortalV1
+	explicitPortal := BuildContainer(runtime, nil)
+	if !reflect.DeepEqual(legacy, explicitPortal) {
+		t.Fatalf("omitted runtime changed legacy manifest:\nomitted=%#v\nexplicit=%#v", legacy, explicitPortal)
+	}
+
+	runtime.Runtime = RuntimeCollectorV1
+	collector := BuildContainer(runtime, nil)
+	if got := collector["command"]; !reflect.DeepEqual(got, []any{CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %#v", got)
+	}
+	args := collector["args"].([]any)
+	if len(args) < 2 || args[0] != "collect" || args[1] != "--watch" {
+		t.Fatalf("collector args = %#v", args)
+	}
+}
+
+func TestBuildContainerCarriesTypedADXContract(t *testing.T) {
+	runtime := testRuntime("/data/run")
+	runtime.Runtime = RuntimeCollectorV1
+	runtime.DeliveryMode = DeliveryDualRequired
+	runtime.ADXClusterURI = "https://example.kusto.windows.net"
+	runtime.ADXDatabase = "TauGrid"
+	runtime.ADXClientID = "00000000-0000-0000-0000-000000000001"
+	runtime.ADXMaxAttempts = 4
+	runtime.ADXRetryBackoff = 2 * time.Second
+	runtime.ADXFinalStatusTimeout = 5 * time.Minute
+
+	rendered := toText(BuildContainer(runtime, nil))
+	for _, want := range []string{
+		"--delivery-mode dual-required",
+		"--adx-cluster-uri https://example.kusto.windows.net",
+		"--adx-database TauGrid",
+		"--adx-table TauExpMetricEventsV1",
+		"--adx-mapping TauExpMetricEventsV1Json",
+		"--adx-client-id 00000000-0000-0000-0000-000000000001",
+		"--adx-max-attempts 4",
+		"--adx-retry-backoff 2s",
+		"--adx-final-status-timeout 5m0s",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("collector container missing %q: %s", want, rendered)
 		}
 	}
 }

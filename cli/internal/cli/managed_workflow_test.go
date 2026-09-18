@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Azure/taugrid/cli/internal/manifest"
+	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -742,6 +743,48 @@ runtime:
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err == nil || !strings.Contains(err.Error(), "latest") {
 		t.Fatalf("expected latest sidecar image rejection, got %v\nstdout:\n%s\nstderr:\n%s", err, out, stderr)
+	}
+}
+
+func TestManagedWorkflowSubmitCollectorMetricsOffloadDryRun(t *testing.T) {
+	manifestPath := writeFinetuneManifest(t, `
+schema_version: 1
+name: collector-demo
+research:
+  experiment: collector-experiment
+compute: { gpus: 1 }
+runtime:
+  pip:
+    - torch==2.4.0
+storage:
+  data_pvc: taugrid-datasets
+`)
+	o := defaultRunDispatchOptions()
+	o.file = manifestPath
+	o.mainScript = writeMainScript(t)
+	o.workloadKind = "rayjob"
+	o.namespace = "ray"
+	o.queue = "dev"
+	o.dryRun = "client"
+	t.Setenv("TAU_METRICS_OFFLOAD_RUNTIME", metricsoffload.RuntimeCollectorV1)
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/metrics-collector:20260918.1")
+
+	out, stderr, err := runManagedWorkflowDispatch(t, o)
+	if err != nil {
+		t.Fatalf("managed collector metrics offload dry-run: %v\nstderr:\n%s", err, stderr)
+	}
+	for _, want := range []string{
+		`command: ["/usr/local/bin/taugrid-metrics-collector"]`,
+		`args: ["collect", "--watch", "--done-file", "/data/checkpoints/finetunes/collector-demo/metrics-done.json"]`,
+		`name: POD_NAMESPACE`,
+		`fieldPath: metadata.namespace`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("collector metrics offload dry-run missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `command: ["/usr/local/bin/taugrid-portal"]`) {
+		t.Fatalf("collector selection rendered legacy portal command:\n%s", out)
 	}
 }
 

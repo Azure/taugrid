@@ -423,6 +423,60 @@ storage:
 	}
 }
 
+func TestRenderRayJobCollectorTypedADXEnvironment(t *testing.T) {
+	raw := []byte(`
+schema_version: 1
+name: typed-adx-demo
+research:
+  experiment: demo-experiment
+compute: { gpus: 1 }
+runtime:
+  pip: [torch==2.4.0]
+`)
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	out, err := Render(RenderOptions{
+		Manifest:         m,
+		ManifestRaw:      raw,
+		ManifestFilename: "typed-adx-demo.yaml",
+		WorkloadKind:     WorkloadKindRayJob,
+		MainScript:       []byte("# trainer\n"),
+		MetricsOffload: MetricsOffloadOptions{
+			Runtime:               metricsoffload.RuntimeCollectorV1,
+			Image:                 "registry.example.com/taugrid/collector:20260918.1",
+			Project:               "typed-adx",
+			DeliveryMode:          metricsoffload.DeliveryDualRequired,
+			ADXClusterURI:         "https://example.kusto.windows.net",
+			ADXDatabase:           "TauGrid",
+			ADXClientID:           "00000000-0000-0000-0000-000000000001",
+			ADXMaxAttempts:        4,
+			ADXRetryBackoff:       2 * time.Second,
+			ADXFinalStatusTimeout: 5 * time.Minute,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	workload := unmarshalLast(t, out)
+	sidecar := containerByName(t, rayJobHeadContainers(t, workload), "metrics-offload")
+	assertStringSlice(t, "metrics-offload command", dig(sidecar, "command"), []string{metricsoffload.CollectorSidecarCommand})
+	for name, value := range map[string]string{
+		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":            "dual-required",
+		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI":          "https://example.kusto.windows.net",
+		"TAU_METRICS_OFFLOAD_ADX_DATABASE":             "TauGrid",
+		"TAU_METRICS_OFFLOAD_ADX_TABLE":                "TauExpMetricEventsV1",
+		"TAU_METRICS_OFFLOAD_ADX_MAPPING":              "TauExpMetricEventsV1Json",
+		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":            "00000000-0000-0000-0000-000000000001",
+		"TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS":         "4",
+		"TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF":        "2s",
+		"TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT": "5m0s",
+	} {
+		assertEnvVar(t, "metrics-offload", sidecar, name, value)
+	}
+}
+
 func TestRenderRayJobHeadDriverLogOffloadSidecar(t *testing.T) {
 	cases := []struct {
 		name string

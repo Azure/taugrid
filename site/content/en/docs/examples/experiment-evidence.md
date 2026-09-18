@@ -30,6 +30,10 @@ Prepare:
 The sidecar runs `taugrid-portal experiment offload metrics`, so use the Portal
 image rather than the Tau CLI image.
 
+Platforms using the standalone `collector-v1` image may also enable typed ADX
+shadow delivery. It uses the TauWorkspace Workload Identity and never embeds an
+ADX secret in the workload.
+
 ## Inspect the evidence contract
 
 The checked-in run config declares:
@@ -76,6 +80,22 @@ tau run --workspace taugrid-default \
   --config examples/portal-ray-stellar/tau.yaml \
   --dry-run=client
 ```
+
+For default-off typed ADX shadow verification with `collector-v1`, replace the
+image/runtime exports and add:
+
+```bash
+export TAU_METRICS_OFFLOAD_RUNTIME=collector-v1
+export TAU_METRICS_OFFLOAD_IMAGE=<taugrid-metrics-collector-image@sha256:digest>
+export TAU_METRICS_OFFLOAD_DELIVERY_MODE=dual-shadow
+export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
+```
+
+The identity needs only ADX ingestion permission. Switch to `dual-required`
+only after typed ingestion and parity monitoring are healthy; that mode fails
+closed and withholds terminal completion if either sink is incomplete.
 
 Confirm that the rendered RayJob includes:
 

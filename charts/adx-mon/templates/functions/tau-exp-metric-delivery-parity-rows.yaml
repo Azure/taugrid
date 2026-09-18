@@ -1,0 +1,53 @@
+{{- if and .Values.functions.enabled .Values.functions.items.tauExpMetricDeliveryParityRows.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-tau-exp-metric-delivery-parity-rows
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.tauExpMetricDeliveryParityRows.database | quote }}
+  body: |
+    .create-or-alter function with (folder = 'Tau/experiments', docstring = 'Hourly shadow-delivery parity between legacy remote-write and typed metric events.', skipvalidation = 'true') TauExpMetricDeliveryParityRows()
+    {
+      let legacy =
+        ExperimentMetrics
+        | extend
+            activity_hour = bin(Timestamp, 1h),
+            workspace_id = tostring(Labels.workspace_id),
+            cluster = tostring(Cluster),
+            source_store_id = tostring(Labels.source_store_id),
+            ['project'] = tostring(Labels['project']),
+            experiment_id = coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''),
+            run_group_id = tostring(Labels.run_group_id),
+            run_id = tostring(Labels.run_id),
+            metric_name = tostring(Labels.metric_name)
+        | where isnotempty(workspace_id) and isnotempty(['project']) and isnotempty(experiment_id)
+            and isnotempty(run_group_id) and isnotempty(run_id) and isnotempty(metric_name)
+        | summarize
+            legacy_point_count = count(),
+            legacy_series_count = dcount(strcat(workspace_id, '|', cluster, '|', source_store_id, '|', ['project'], '|',
+                experiment_id, '|', run_group_id, '|', run_id, '|', metric_name))
+          by activity_hour;
+      let typed =
+        TauExpMetricEventRows()
+        | extend activity_hour = bin(wall_time, 1h)
+        | summarize
+            typed_point_count = count(),
+            typed_series_count = dcount(strcat(workspace_id, '|', cluster, '|', source_store_id, '|', ['project'], '|',
+                experiment_id, '|', run_group_id, '|', run_id, '|', metric_name))
+          by activity_hour;
+      legacy
+      | join kind=fullouter typed on activity_hour
+      | project
+          activity_hour = coalesce(activity_hour, activity_hour1),
+          legacy_point_count = coalesce(legacy_point_count, 0),
+          typed_point_count = coalesce(typed_point_count, 0),
+          point_count_delta = coalesce(typed_point_count, 0) - coalesce(legacy_point_count, 0),
+          legacy_series_count = coalesce(legacy_series_count, 0),
+          typed_series_count = coalesce(typed_series_count, 0),
+          series_count_delta = coalesce(typed_series_count, 0) - coalesce(legacy_series_count, 0)
+    }
+{{- end }}

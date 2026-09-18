@@ -205,6 +205,11 @@ ${EXTRA_VOLUME_MOUNTS_HEAD}
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
+{{if .MetricsOffload.CollectorV1}}                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+{{end}}
                 - { name: TAU_EXP_STORE, value: {{.MetricsOffload.StoreYAML}} }
                 - { name: TAU_METRICS_HISTORY, value: {{.MetricsOffload.HistoryYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_RUN, value: "${NAME}" }
@@ -217,10 +222,20 @@ ${EXTRA_VOLUME_MOUNTS_HEAD}
                 - { name: TAU_METRICS_OFFLOAD_COMPLETION_FILE, value: {{.MetricsOffload.CompletionFileYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_INTERVAL, value: {{.MetricsOffload.IntervalYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT, value: {{.MetricsOffload.RemoteWriteEndpointYAML}} }
+{{if .MetricsOffload.CollectorV1}}                - { name: TAU_METRICS_OFFLOAD_DELIVERY_MODE, value: {{.MetricsOffload.DeliveryModeYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI, value: {{.MetricsOffload.ADXClusterURIYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_DATABASE, value: {{.MetricsOffload.ADXDatabaseYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_TABLE, value: {{.MetricsOffload.ADXTableYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_MAPPING, value: {{.MetricsOffload.ADXMappingYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_CLIENT_ID, value: {{.MetricsOffload.ADXClientIDYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS, value: {{.MetricsOffload.ADXMaxAttemptsYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF, value: {{.MetricsOffload.ADXRetryBackoffYAML}} }
+                - { name: TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT, value: {{.MetricsOffload.ADXFinalStatusTimeoutYAML}} }
+{{end}}
                 - { name: TAU_GROUP, value: {{.MetricsOffload.GroupYAML}} }
                 - { name: TAU_EXPERIMENT, value: {{.MetricsOffload.ExperimentYAML}} }
-              command: ["/usr/local/bin/taugrid-portal"]
-              args: ["experiment", "offload", "metrics", "--watch", "--done-file", {{.MetricsOffload.DoneFileYAML}}]
+              command: [{{.MetricsOffload.CommandYAML}}]
+              args: [{{.MetricsOffload.ArgsPrefixYAML}}, "--done-file", {{.MetricsOffload.DoneFileYAML}}]
               resources:
                 requests: { cpu: "100m", memory: "128Mi" }
                 limits:   { cpu: "500m", memory: "512Mi" }

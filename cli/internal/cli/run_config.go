@@ -284,8 +284,18 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	if !c.LooksLikeManagedWorkflow() {
 		o.metricsHistory = append([]string{}, c.Metrics.History...)
 		o.metricsOffloadEnabled = c.Metrics.Offload.Enabled
+		o.metricsOffloadRuntime = strings.TrimSpace(c.Metrics.Offload.Runtime)
 		o.metricsOffloadImage = strings.TrimSpace(c.Metrics.Offload.Image)
 		o.metricsOffloadOut = strings.TrimSpace(c.Metrics.Offload.Out)
+		o.metricsOffloadDeliveryMode = strings.TrimSpace(c.Metrics.Offload.DeliveryMode)
+		o.metricsOffloadADXClusterURI = strings.TrimSpace(c.Metrics.Offload.ADXClusterURI)
+		o.metricsOffloadADXDatabase = strings.TrimSpace(c.Metrics.Offload.ADXDatabase)
+		o.metricsOffloadADXTable = strings.TrimSpace(c.Metrics.Offload.ADXTable)
+		o.metricsOffloadADXMapping = strings.TrimSpace(c.Metrics.Offload.ADXMapping)
+		o.metricsOffloadADXClientID = strings.TrimSpace(c.Metrics.Offload.ADXClientID)
+		o.metricsOffloadADXMaxAttempts = c.Metrics.Offload.ADXMaxAttempts
+		o.metricsOffloadADXRetryBackoff = strings.TrimSpace(c.Metrics.Offload.ADXRetryBackoff)
+		o.metricsOffloadADXFinalStatusTimeout = strings.TrimSpace(c.Metrics.Offload.ADXFinalStatusTimeout)
 	}
 
 	if c.Execution.Launcher != nil {

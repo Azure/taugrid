@@ -27,6 +27,21 @@ func TestPortalRunHistoryIsExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestPortalExperimentCatalogShadowReadIsExplicitlyEnabled(t *testing.T) {
+	cmd := newPortalCmd()
+	serve, _, err := cmd.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := serve.Flags().Lookup("kusto-experiment-catalog-shadow-read")
+	if flag == nil {
+		t.Fatal("portal serve is missing --kusto-experiment-catalog-shadow-read")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--kusto-experiment-catalog-shadow-read default = %q, want false", flag.DefValue)
+	}
+}
+
 func TestPortalRunHistoryRequiresKustoSource(t *testing.T) {
 	cmd := newPortalCmd()
 	var stderr bytes.Buffer

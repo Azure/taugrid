@@ -2388,6 +2388,43 @@ func TestParseKustoMetricRowsReadsV2FragmentedFrames(t *testing.T) {
 	}
 }
 
+func TestParseKustoMetricRowsRejectsV2ErrorCompletion(t *testing.T) {
+	raw := []byte(`[
+  {"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
+  {"FrameType":"DataTable","TableId":0,"TableKind":"QueryProperties",
+   "Columns":[{"ColumnName":"Key"},{"ColumnName":"Value"}],"Rows":[]},
+  {"FrameType":"DataSetCompletion","HasErrors":true,"Cancelled":false}
+]`)
+	if _, err := ParseKustoMetricRows(raw); err == nil || !strings.Contains(err.Error(), "reported errors") {
+		t.Fatalf("ParseKustoMetricRows error = %v, want ADX completion error", err)
+	}
+}
+
+func TestParseKustoMetricRowsRejectsV2ResponseWithoutPrimaryResult(t *testing.T) {
+	raw := []byte(`[
+  {"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
+  {"FrameType":"DataTable","TableId":0,"TableKind":"QueryProperties",
+   "Columns":[{"ColumnName":"Key"},{"ColumnName":"Value"}],"Rows":[]},
+  {"FrameType":"DataSetCompletion","HasErrors":false,"Cancelled":false}
+]`)
+	if _, err := ParseKustoMetricRows(raw); err == nil || !strings.Contains(err.Error(), "PrimaryResult") {
+		t.Fatalf("ParseKustoMetricRows error = %v, want missing PrimaryResult error", err)
+	}
+}
+
+func TestParseKustoMetricRowsRejectsV2OneAPIErrorResult(t *testing.T) {
+	raw := []byte(`[
+  {"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
+  {"FrameType":"DataTable","TableId":1,"TableKind":"PrimaryResult","TableName":"PrimaryResult",
+   "Columns":[{"ColumnName":"OneApiErrors"}],
+   "Rows":[[{"error":{"code":"LimitsExceeded","message":"summarize exceeded its memory budget"}}]]},
+  {"FrameType":"DataSetCompletion","HasErrors":false,"Cancelled":false}
+]`)
+	if _, err := ParseKustoMetricRows(raw); err == nil || !strings.Contains(err.Error(), "partial failure") {
+		t.Fatalf("ParseKustoMetricRows error = %v, want OneApiErrors partial failure", err)
+	}
+}
+
 func TestParseKustoMetricRowsReadsCopilotRowsEnvelope(t *testing.T) {
 	raw := []byte(`{
   "columns": ["project", "experiment_id", "run_group_id", "run_id", "metric_name", "step", "wall_time", "value"],
@@ -2701,6 +2738,79 @@ printf '%s\n' '{"project":"sample-project","question_id":"sample-project-wandb-m
 	}
 	if len(snapshot.Chart.Series) != 1 || snapshot.Chart.Series[0].RunID != "seed-shell" {
 		t.Fatalf("snapshot did not come from the shell adapter: %+v", snapshot.Chart.Series)
+	}
+}
+
+func TestCompareKustoCatalogShadowCountsIdentityDifferences(t *testing.T) {
+	legacy := []KustoMetricRow{
+		{WorkspaceID: "w", Cluster: "c", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r1", MetricName: "loss"},
+		{WorkspaceID: "w", Cluster: "c", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r2", MetricName: "loss"},
+	}
+	catalog := []KustoMetricRow{
+		{WorkspaceID: "w", Cluster: "c", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r1", MetricName: "loss"},
+		{WorkspaceID: "w", Cluster: "c", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r3", MetricName: "loss"},
+	}
+
+	result := compareKustoCatalogShadow("series", legacy, catalog)
+	if result.LegacyCount != 2 || result.CatalogCount != 2 || result.MissingInCatalog != 1 || result.ExtraInCatalog != 1 {
+		t.Fatalf("unexpected shadow comparison: %+v", result)
+	}
+}
+
+func TestCompareKustoRunCatalogShadowIgnoresSourceStoreMetadata(t *testing.T) {
+	legacy := []KustoMetricRow{
+		{WorkspaceID: "w", Cluster: "c", SourceStoreID: "old", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r"},
+	}
+	catalog := []KustoMetricRow{
+		{WorkspaceID: "w", Cluster: "c", SourceStoreID: "new", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r"},
+	}
+
+	result := compareKustoCatalogShadow("runs", legacy, catalog)
+	if result.MissingInCatalog != 0 || result.ExtraInCatalog != 0 {
+		t.Fatalf("source-store metadata must not change run identity: %+v", result)
+	}
+}
+
+func TestCatalogShadowSkipsUnsupportedLocalFilters(t *testing.T) {
+	if supportsExperimentCatalogShadow(expstore.ExperimentSearchOptions{Lifecycle: "failed"}) {
+		t.Fatal("experiment lifecycle filter is not represented by the series shadow query")
+	}
+	if supportsRunCatalogShadow(expstore.RunSearchOptions{Query: "owner"}) {
+		t.Fatal("run free-text filter is not represented by the run shadow query")
+	}
+}
+
+func TestKustoCatalogShadowReadReportsWithoutChangingLegacyRows(t *testing.T) {
+	reported := make(chan KustoCatalogShadowResult, 1)
+	queries := make(chan string, 1)
+	source := KustoSource{
+		CatalogShadowRead: true,
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			queries <- query
+			return `{"workspace_id":"w","cluster":"c","project":"p","experiment_id":"e","run_group_id":"g","run_id":"r","metric_name":"loss"}`, nil
+		},
+		CatalogShadowReport: func(result KustoCatalogShadowResult) {
+			reported <- result
+		},
+	}
+	legacy := []KustoMetricRow{
+		{WorkspaceID: "w", Cluster: "c", Project: "p", ExperimentID: "e", RunGroupID: "g", RunID: "r", MetricName: "loss"},
+	}
+
+	source.scheduleCatalogShadow("series", "TauExpSeriesCatalogRows()", nil, legacy)
+	select {
+	case result := <-reported:
+		if result.Err != nil || result.MissingInCatalog != 0 || result.ExtraInCatalog != 0 {
+			t.Fatalf("unexpected shadow result: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for catalog shadow result")
+	}
+	if query := <-queries; !strings.Contains(query, "TauExpSeriesCatalogRows()") {
+		t.Fatalf("unexpected shadow query:\n%s", query)
+	}
+	if len(legacy) != 1 || legacy[0].RunID != "r" {
+		t.Fatalf("legacy result was modified: %+v", legacy)
 	}
 }
 

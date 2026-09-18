@@ -75,7 +75,8 @@ export function App() {
       params.delete('namespace'); params.delete('cluster');
       if (location.pathname === '/portal/experiments') {
         for (const key of [...params.keys()]) {
-          if (['pinned', 'metric', 'sections', 'run_id', 'media_run'].includes(key) || key.startsWith('section.')) params.delete(key);
+          if (['experiment', 'target', 'project', 'run', 'run_id', 'metric', 'filter', 'run_q', 'cursor',
+            'start_step', 'end_step', 'step_interval', 'max_points'].includes(key)) params.delete(key);
         }
       }
       navigate(location.pathname + '?' + params + location.hash);

@@ -18,14 +18,19 @@ type capabilityRoute struct {
 }
 
 var capabilityRoutes = map[string]capabilityRoute{
-	"snapshot":            {"/snapshot", http.MethodGet, true},
-	"series_detail":       {"/series", http.MethodGet, true},
-	"run_search":          {"/runs", http.MethodGet, true},
-	"experiment_search":   {"/experiments", http.MethodGet, true},
-	"experiment_mutation": {"/experiments", http.MethodPost, false},
-	"artifact_index":      {"/artifacts", http.MethodGet, true},
-	"artifact_content":    {"/artifact", http.MethodGet, true},
-	"status":              {"/status", http.MethodGet, false},
+	"snapshot":             {"/snapshot", http.MethodGet, true},
+	"series_detail":        {"/series", http.MethodGet, true},
+	"run_search":           {"/runs", http.MethodGet, true},
+	"experiment_search":    {"/experiments", http.MethodGet, true},
+	"experiment_mutation":  {"/experiments", http.MethodPost, false},
+	"artifact_index":       {"/artifacts", http.MethodGet, true},
+	"artifact_content":     {"/artifact", http.MethodGet, true},
+	"status":               {"/status", http.MethodGet, false},
+	"v2_experiment_search": {"/experiments/search", http.MethodGet, true},
+	"v2_run_listing":       {"/experiments/_/runs", http.MethodGet, true},
+	"v2_run_detail":        {"/runs/_", http.MethodGet, true},
+	"v2_metric_catalog":    {"/runs/_/metrics", http.MethodGet, true},
+	"v2_exact_series":      {"/runs/_/series", http.MethodGet, true},
 }
 
 // WorkspaceRouteAllowed is the shared managed Portal allowlist. Unknown routes
@@ -40,6 +45,9 @@ func WorkspaceRouteAllowed(method, path string) bool {
 	if path == "/stellar" || path == "/stellar/" || strings.HasPrefix(path, "/stellar/assets/") {
 		return true
 	}
+	if method == http.MethodGet && workspaceScopedV2Route(path) {
+		return true
+	}
 	for _, base := range stellarAPIBasePaths {
 		if path == base+"/capabilities" {
 			return true
@@ -49,6 +57,22 @@ func WorkspaceRouteAllowed(method, path string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func workspaceScopedV2Route(path string) bool {
+	if path == stellarAPIV2Base+"/experiments/search" {
+		return true
+	}
+	if strings.HasPrefix(path, stellarAPIV2Base+"/experiments/") {
+		parts := strings.Split(strings.TrimPrefix(path, stellarAPIV2Base+"/experiments/"), "/")
+		return len(parts) == 2 && parts[0] != "" && parts[1] == "runs"
+	}
+	if strings.HasPrefix(path, stellarAPIV2Base+"/runs/") {
+		parts := strings.Split(strings.TrimPrefix(path, stellarAPIV2Base+"/runs/"), "/")
+		return len(parts) == 1 && parts[0] != "" ||
+			len(parts) == 2 && parts[0] != "" && (parts[1] == "metrics" || parts[1] == "series")
 	}
 	return false
 }

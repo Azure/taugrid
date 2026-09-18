@@ -1,0 +1,106 @@
+{{- if .Values.managementCommands.typedMetricEventsV1.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-typed-metric-events-v1
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.managementCommands.typedMetricEventsV1.database | quote }}
+  body: |
+    .create-merge table TauExpMetricEventsV1 (
+      schema_version: string,
+      event_id: string,
+      workspace_id: string,
+      cluster: string,
+      namespace: string,
+      source_store_id: string,
+      ['project']: string,
+      experiment_id: string,
+      run_group_id: string,
+      run_id: string,
+      metric_name: string,
+      step: long,
+      wall_time: datetime,
+      value: real,
+      unit: string,
+      source: string,
+      split: string,
+      metric_file_id: string,
+      metric_file_path: string,
+      tags: dynamic,
+      exported_at: datetime
+    )
+
+    .create-or-alter table TauExpMetricEventsV1 ingestion json mapping "TauExpMetricEventsV1Json" ```
+    [
+      {"column":"schema_version","path":"$.schema_version"},
+      {"column":"event_id","path":"$.event_id"},
+      {"column":"workspace_id","path":"$.workspace_id"},
+      {"column":"cluster","path":"$.cluster"},
+      {"column":"namespace","path":"$.namespace"},
+      {"column":"source_store_id","path":"$.source_store_id"},
+      {"column":"project","path":"$.project"},
+      {"column":"experiment_id","path":"$.experiment_id"},
+      {"column":"run_group_id","path":"$.run_group_id"},
+      {"column":"run_id","path":"$.run_id"},
+      {"column":"metric_name","path":"$.metric_name"},
+      {"column":"step","path":"$.step"},
+      {"column":"wall_time","path":"$.wall_time"},
+      {"column":"value","path":"$.value"},
+      {"column":"unit","path":"$.unit"},
+      {"column":"source","path":"$.source"},
+      {"column":"split","path":"$.split"},
+      {"column":"metric_file_id","path":"$.metric_file_id"},
+      {"column":"metric_file_path","path":"$.metric_file_path"},
+      {"column":"tags","path":"$.tags"},
+      {"column":"exported_at","path":"$.exported_at"}
+    ]
+    ```
+
+    .alter-merge table TauExpMetricEventsV1 policy retention softdelete = {{ .Values.managementCommands.typedMetricEventsV1.retention.softDeletePeriod }} recoverability = disabled
+    .alter table TauExpMetricEventsV1 policy caching hot = {{ .Values.managementCommands.typedMetricEventsV1.retention.hotCachePeriod }}
+    .alter-merge table TauExpMetricEventsV1 policy ingestionbatching ```
+    {
+      "MaximumBatchingTimeSpan": "{{ .Values.managementCommands.typedMetricEventsV1.ingestionBatching.maxBatchingTimeSpan }}",
+      "MaximumNumberOfItems": {{ .Values.managementCommands.typedMetricEventsV1.ingestionBatching.maxNumberOfItems }},
+      "MaximumRawDataSizeMB": {{ .Values.managementCommands.typedMetricEventsV1.ingestionBatching.maxRawDataSizeMB }}
+    }
+    ```
+
+    {{- if .Values.managementCommands.typedMetricEventsV1.backfillEnabled }}
+    .create async ifnotexists materialized-view with (backfill=true) TauExpMetricEventsV1Dedup on table TauExpMetricEventsV1
+    {{- else }}
+    .create ifnotexists materialized-view TauExpMetricEventsV1Dedup on table TauExpMetricEventsV1
+    {{- end }}
+    {
+      TauExpMetricEventsV1
+      | where isnotempty(event_id)
+      | summarize arg_max(
+          exported_at,
+          schema_version,
+          workspace_id,
+          cluster,
+          namespace,
+          source_store_id,
+          ['project'],
+          experiment_id,
+          run_group_id,
+          run_id,
+          metric_name,
+          step,
+          wall_time,
+          value,
+          unit,
+          source,
+          split,
+          metric_file_id,
+          metric_file_path,
+          tags)
+        by event_id
+    }
+
+    .alter materialized-view TauExpMetricEventsV1Dedup policy retention softdelete = {{ .Values.managementCommands.typedMetricEventsV1.retention.softDeletePeriod }} recoverability = disabled
+{{- end }}

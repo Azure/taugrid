@@ -36,3 +36,16 @@ tests:
         documentSelector:
           path: kind
           value: Deployment
+
+  - it: enables typed experiment catalog shadow reads explicitly
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+      portal.experimentCatalog.shadowRead.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-experiment-catalog-shadow-read
+        documentSelector:
+          path: kind
+          value: Deployment
