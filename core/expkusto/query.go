@@ -415,7 +415,7 @@ func appendHistoricalRange(b *strings.Builder, window string, start, end time.Ti
 		if err != nil || d <= 0 || d > 30*24*time.Hour {
 			return fmt.Errorf("window must be a positive duration no greater than 30d")
 		}
-		fmt.Fprintf(b, "| where observed_at > ago(%s)\n", window)
+		fmt.Fprintf(b, "| where observed_at > ago(%s)\n", kqlTimespan(d))
 	case !start.IsZero() || !end.IsZero():
 		if start.IsZero() || end.IsZero() {
 			return fmt.Errorf("custom history range requires both start and end")
@@ -427,6 +427,25 @@ func appendHistoricalRange(b *strings.Builder, window string, start, end time.Ti
 			start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
 	}
 	return nil
+}
+
+func kqlTimespan(d time.Duration) string {
+	for _, unit := range []struct {
+		duration time.Duration
+		suffix   string
+	}{
+		{time.Hour, "h"},
+		{time.Minute, "m"},
+		{time.Second, "s"},
+		{time.Millisecond, "ms"},
+		{time.Microsecond, "microsecond"},
+		{time.Nanosecond, "nanosecond"},
+	} {
+		if d%unit.duration == 0 {
+			return strconv.FormatInt(int64(d/unit.duration), 10) + unit.suffix
+		}
+	}
+	return strconv.FormatInt(d.Nanoseconds(), 10) + "nanosecond"
 }
 
 func buildRemoteWriteMetricsQuery(opts MetricsQueryOptions) string {

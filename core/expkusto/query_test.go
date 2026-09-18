@@ -386,6 +386,15 @@ func TestBuildRunHistoryTimelineQueryLimitsNewestEventsThenRestoresDisplayOrder(
 		if rangeAt < 0 || rangeAt > limitAt {
 			t.Fatalf("timeline range must precede newest-event limit:\n%s", timeline)
 		}
+
+		normalized, err := BuildRunHistoryQuery(RunHistoryQueryOptions{Window: (168 * time.Hour).String(), Limit: 25})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(normalized, "| where observed_at > ago(168h)") ||
+			strings.Contains(normalized, "168h0m0s") {
+			t.Fatalf("Go duration must be normalized to a valid Kusto timespan:\n%s", normalized)
+		}
 	})
 
 	t.Run("rejects invalid ranges", func(t *testing.T) {

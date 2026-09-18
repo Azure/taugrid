@@ -98,8 +98,11 @@ function KueueLive() {
       return true;
     },
   });
+  const notInstalled = query.error?.message.includes('started without --kueueviz');
   return <><p className="muted">Live KueueViz dashboard — real-time queues, workloads, cluster-queues over WebSocket.</p><Note>Real-time live surface with no historical filtering. The global Portal range does not apply. <ScopedLink to="/api/portal/kueueviz/" external>Open in a full page ↗</ScopedLink> for more room.</Note>
-    <BoardResult query={query} label="The Kueue (Live) board" live>{() => <iframe className="stellar" src={url} title="Kueue (Live) — KueueViz"/>}</BoardResult></>;
+    {notInstalled
+      ? <Empty warn><strong>Optional KueueViz is not installed on this cluster.</strong><p>The Scheduler tab remains available for current queue, quota, and workload state. Deploy KueueViz and enable the Portal reverse proxy before using this live dashboard.</p><ScopedLink to="/portal/jobs?view=scheduler">Open Scheduler</ScopedLink></Empty>
+      : <BoardResult query={query} label="The Kueue (Live) board" live>{() => <iframe className="stellar" src={url} title="Kueue (Live) — KueueViz"/>}</BoardResult>}</>;
 }
 function allocationCoverage(coverage: CostCoverage | undefined, field: 'gpuHoursSamples' | 'costSamples') {
   if (!coverage || !measured(coverage.observedSamples) || !measured(coverage[field])) return 'Coverage not reported';
