@@ -6,98 +6,28 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tau-kind-helpers.XXXXXX")"
+mkdir "${TEST_ROOT}/bin"
 trap 'rm -rf -- "${TEST_ROOT}"' EXIT
 
-mkdir -p "${TEST_ROOT}/bin"
-CALL_LOG="${TEST_ROOT}/calls"
-export CALL_LOG
+export CALL_LOG="${TEST_ROOT}/calls"
 
-cat >"${TEST_ROOT}/bin/podman" <<'EOF'
-#!/bin/sh
-set -eu
-printf 'podman %s\n' "$*" >>"$CALL_LOG"
-case "$1" in
-  info)
-    exit 0
-    ;;
-  ps)
-    printf '%s\n' tau-test-control-plane tau-test-worker
-    exit 0
-    ;;
-  image)
-    [ "$2" = inspect ]
-    printf '%s\n' test-image-id
-    exit 0
-    ;;
-  save)
-    printf archive
-    exit 0
-    ;;
-  exec)
-    if [ "$2" = tau-test-control-plane ] && [ "$3" = crictl ]; then
-      printf '%s\n' sha256:test-image-id
-      exit 0
-    fi
-    if [ "$2" = tau-test-worker ] && [ "$3" = crictl ]; then
-      exit 1
-    fi
-    if [ "$2" = -i ] && [ "$3" = tau-test-worker ] && [ "$4" = ctr ]; then
-      cat >/dev/null
-      exit 0
-    fi
+cp "${REPO_ROOT}/scripts/ci/tests/fixtures/kind-tools.sh" "${TEST_ROOT}/bin/mock"
+chmod +x "${TEST_ROOT}/bin/mock"
+for tool in podman docker kind helm kubectl; do
+  ln -s mock "${TEST_ROOT}/bin/${tool}"
+done
+export PATH="${TEST_ROOT}/bin:${PATH}"
+unset KIND_EXPERIMENTAL_PROVIDER CONTAINERS_CGROUP_MANAGER KIND_TEST_FAILURE
+
+assert_failure() {
+  local expected_status="$1" expected_message="$2" output status=0
+  shift 2
+  output="$("$@" 2>&1)" || status=$?
+  if [[ "${status}" -ne "${expected_status}" || "${output}" != *"${expected_message}"* ]]; then
+    echo "unexpected failure ($status): $*: ${output}" >&2
     exit 1
-    ;;
-esac
-EOF
-
-cat >"${TEST_ROOT}/bin/docker" <<'EOF'
-#!/bin/sh
-set -eu
-printf 'docker %s\n' "$*" >>"$CALL_LOG"
-case "$1" in
-  info)
-    exit 0
-    ;;
-  ps)
-    printf '%s\n' tau-test-control-plane
-    exit 0
-    ;;
-esac
-exit 1
-EOF
-
-cat >"${TEST_ROOT}/bin/kind" <<'EOF'
-#!/bin/sh
-set -eu
-printf 'kind %s\n' "$*" >>"$CALL_LOG"
-if [ "$1" = get ] && [ "$2" = clusters ]; then
-  printf '%s\n' tau-test
-fi
-EOF
-
-cat >"${TEST_ROOT}/bin/helm" <<'EOF'
-#!/bin/sh
-set -eu
-printf '%s\n' 'apiVersion: apps/v1'
-printf '%s\n' 'kind: Deployment'
-printf '%s\n' 'spec:'
-printf '%s\n' '  template:'
-printf '%s\n' '    spec:'
-printf '%s\n' '      containers:'
-printf '%s\n' '        - image: registry.example.com/test:1'
-EOF
-
-cat >"${TEST_ROOT}/bin/kubectl" <<'EOF'
-#!/bin/sh
-set -eu
-printf 'kubectl %s\n' "$*" >>"$CALL_LOG"
-cat >/dev/null
-printf '%s' 'registry.example.com/test:1'
-EOF
-
-chmod +x "${TEST_ROOT}/bin/"*
-PATH="${TEST_ROOT}/bin:${PATH}"
-export PATH
+  fi
+}
 
 # shellcheck source=../../lib/kind.sh
 source "${REPO_ROOT}/scripts/lib/kind.sh"
@@ -110,18 +40,18 @@ taugrid_image_spec taugrid-portal
 [[ "${TAUGRID_IMAGE_DOCKERFILE}" == images/taugrid-portal/Dockerfile ]]
 [[ "${TAUGRID_IMAGE_CONTEXT}" == . ]]
 [[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/taugrid-portal/Dockerfile portal core" ]]
-if taugrid_image_spec unknown >/dev/null 2>&1; then
-  echo "unknown image spec unexpectedly succeeded" >&2
-  exit 1
-fi
+assert_failure 2 "unknown TauGrid image: unknown" taugrid_image_spec unknown
 
 [[ "$(tau_kind_select_engine podman docker)" == podman ]]
 [[ "$(tau_kind_select_engine "" docker)" == docker ]]
-KIND_EXPERIMENTAL_PROVIDER=podman
-export KIND_EXPERIMENTAL_PROVIDER
+export KIND_EXPERIMENTAL_PROVIDER=podman
 [[ "$(tau_kind_select_engine "" docker)" == podman ]]
 unset KIND_EXPERIMENTAL_PROVIDER
 [[ "$(tau_kind_select_engine "" auto)" == podman ]]
+[[ "$(KIND_TEST_FAILURE=podman:info tau_kind_select_engine "" auto)" == docker ]]
+assert_failure 2 "container engine must be podman or docker" tau_kind_select_engine invalid
+assert_failure 2 "default container engine must be" tau_kind_select_engine "" invalid
+KIND_TEST_FAILURE=info assert_failure 1 "neither Podman nor Docker" tau_kind_select_engine "" auto
 
 [[ "$(tau_kind_qualify_image podman controller:dev)" == localhost/controller:dev ]]
 [[ "$(tau_kind_qualify_image docker controller:dev)" == controller:dev ]]
@@ -132,10 +62,15 @@ unset KIND_EXPERIMENTAL_PROVIDER
 tau_kind_configure_provider podman
 [[ "${KIND_EXPERIMENTAL_PROVIDER}" == podman ]]
 [[ "${CONTAINERS_CGROUP_MANAGER}" == cgroupfs ]]
+CONTAINERS_CGROUP_MANAGER=systemd
+tau_kind_configure_provider podman
+[[ "${CONTAINERS_CGROUP_MANAGER}" == systemd ]]
 tau_kind_configure_provider docker
 [[ -z "${KIND_EXPERIMENTAL_PROVIDER:-}" ]]
 
 tau_kind_cluster_exists podman tau-test
+tau_kind_cluster_exists docker tau-test
+assert_failure 1 "" tau_kind_cluster_exists podman missing
 tau_kind_create_cluster tau-test --wait 10s
 tau_kind_delete_cluster tau-test
 tau_kind_load_image podman tau-test localhost/controller:dev
@@ -150,46 +85,18 @@ grep -q "^podman exec tau-test-worker crictl inspecti -o go-template --template 
 grep -q '^podman save --format oci-archive localhost/controller:dev$' "${CALL_LOG}"
 grep -q '^podman exec -i tau-test-worker ctr --namespace=k8s.io images import --all-platforms --digests -$' "${CALL_LOG}"
 [[ "$(grep -c '^podman save ' "${CALL_LOG}")" -eq 1 ]]
-if grep -q '^kind load image-archive ' "${CALL_LOG}"; then
-  echo "Podman image loading unexpectedly used a temporary Kind archive" >&2
-  exit 1
-fi
-if grep -q 'ctr .* images remove' "${REPO_ROOT}/scripts/dev/kind-local.sh"; then
-  echo "Kind development preemptively removes cached Podman images" >&2
-  exit 1
-fi
+assert_failure 1 "" grep -q '^kind load image-archive ' "${CALL_LOG}"
 grep -q '^kind load docker-image controller:dev --name tau-test$' "${CALL_LOG}"
-
-for consumer in \
-  "${REPO_ROOT}/controllers/tau-core/scripts/kind-e2e.sh" \
-  "${REPO_ROOT}/scripts/dev/kind-local.sh"; do
-  if grep -Eq 'kind (get clusters|create cluster|delete cluster|load (docker-image|image-archive))' "${consumer}"; then
-    echo "Kind lifecycle or image loading bypasses scripts/lib/kind.sh: ${consumer}" >&2
-    exit 1
-  fi
-done
-
-if grep -En 'kind (create|delete) cluster' "${REPO_ROOT}/cli/scripts/kind-smoke-e2e.sh" |
-  grep -Ev 'run_with_timeout .* kind (create|delete) cluster'; then
-  echo "CLI Kind lifecycle command bypasses bounded execution" >&2
-  exit 1
-fi
-
+grep -q '^helm template release chart --namespace namespace --set feature=true --show-only templates/deployment.yaml$' "${CALL_LOG}"
 grep -q '^kubectl --context kind-tau-test create --dry-run=client ' "${CALL_LOG}"
 
-remote_default="$(make -s -n -C "${REPO_ROOT}" \
-  KIND_EXECUTION=remote KIND_REMOTE_HOST=devbox kind-build-images)"
-if grep -q 'KIND_PLATFORM=' <<<"${remote_default}"; then
-  echo "remote Kind default unexpectedly forwards the client platform" >&2
-  exit 1
-fi
-remote_arm64="$(make -s -n -C "${REPO_ROOT}" \
-  KIND_EXECUTION=remote KIND_REMOTE_HOST=devbox KIND_PLATFORM=linux/arm64 \
-  kind-build-images)"
-grep -q 'KIND_PLATFORM="linux/arm64"' <<<"${remote_arm64}"
-
-grep -q -- '--dry-run=server' "${REPO_ROOT}/scripts/dev/kind-local.sh"
-grep -q -- '--field-manager=taugrid-crds' "${REPO_ROOT}/scripts/dev/kind-local.sh"
-grep -q -- '--for=condition=Established' "${REPO_ROOT}/scripts/dev/kind-local.sh"
+assert_load_failure() {
+  KIND_TEST_FAILURE="$1" assert_failure 1 "$2" tau_kind_load_image podman tau-test localhost/controller:dev
+}
+assert_load_failure podman:image "not available on the host"
+assert_load_failure podman:ps "failed to list Podman nodes"
+assert_load_failure empty-nodes "has no Podman nodes"
+assert_load_failure podman:save "failed to load"
+assert_load_failure import "failed to load"
 
 echo "Kind helper tests passed"

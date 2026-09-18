@@ -98,6 +98,7 @@ build:
 
 test:
 	bash scripts/ci/tests/kind-helpers_test.sh
+	bash scripts/ci/tests/kind-consumers-contract_test.sh
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"
 	@cd $(CORE_DIR) && go test ./...
