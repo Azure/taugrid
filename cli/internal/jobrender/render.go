@@ -245,45 +245,11 @@ type VolumeMount struct {
 	ReadOnly  bool
 }
 
-// RDMAOptions controls RDMA device injection and security posture for Job
-// workloads that need NCCL InfiniBand verbs.
-type RDMAOptions struct {
-	Enabled      bool
-	ResourceName string
-	Count        int
-	ShmSize      string
-}
-
-const (
-	defaultRDMAResourceName  = "rdma/rdma_shared_device_a"
-	defaultRDMAResourceCount = 1
-	defaultRDMAShmSize       = "32Gi"
-)
-
-// NormalizeRDMA returns an RDMAOptions with defaults applied.
-func NormalizeRDMA(cfg runconfig.RDMA) RDMAOptions {
-	if !cfg.Enabled {
-		return RDMAOptions{}
-	}
-	resourceName := strings.TrimSpace(cfg.ResourceName)
-	if resourceName == "" {
-		resourceName = defaultRDMAResourceName
-	}
-	count := defaultRDMAResourceCount
-	if cfg.Count != nil {
-		count = *cfg.Count
-	}
-	shmSize := strings.TrimSpace(cfg.ShmSize)
-	if shmSize == "" {
-		shmSize = defaultRDMAShmSize
-	}
-	return RDMAOptions{
-		Enabled:      true,
-		ResourceName: resourceName,
-		Count:        count,
-		ShmSize:      shmSize,
-	}
-}
+// RDMAOptions is an alias for the shared RDMA configuration. All new code
+// should use runconfig.NormalizedRDMA directly; this alias exists only so
+// existing callers that reference the jobrender type continue to compile
+// without a flag-day rename.
+type RDMAOptions = runconfig.NormalizedRDMA
 
 // ProfileOptions configures the opt-in profiler wrapper for Job workloads.
 // Mode is "nsys" or "ncu"; empty disables profiling. Rank defaults to "0"

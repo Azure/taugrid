@@ -679,13 +679,13 @@ func TestRender_RDMAOverridesProfileSecurityContext(t *testing.T) {
 
 func TestNormalizeRDMA(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
-		opts := NormalizeRDMA(runconfig.RDMA{Enabled: false})
+		opts := runconfig.NormalizeRDMA(runconfig.RDMA{Enabled: false})
 		if opts.Enabled {
 			t.Fatal("expected disabled")
 		}
 	})
 	t.Run("defaults", func(t *testing.T) {
-		opts := NormalizeRDMA(runconfig.RDMA{Enabled: true})
+		opts := runconfig.NormalizeRDMA(runconfig.RDMA{Enabled: true})
 		if !opts.Enabled {
 			t.Fatal("expected enabled")
 		}
@@ -701,7 +701,7 @@ func TestNormalizeRDMA(t *testing.T) {
 	})
 	t.Run("custom", func(t *testing.T) {
 		count := 2
-		opts := NormalizeRDMA(runconfig.RDMA{
+		opts := runconfig.NormalizeRDMA(runconfig.RDMA{
 			Enabled:      true,
 			ResourceName: "rdma/hca_shared_devices_a",
 			Count:        &count,
