@@ -75,6 +75,9 @@ export function useHistoricalRange(defaultWindow: string) {
 
   if (!hasWindow && !hasCustom) apiParams.set('window', defaultWindow);
   const api = apiParams.toString();
+  const navigationParams = new URLSearchParams(api);
+  if (params.has('tz')) navigationParams.set('tz', timezone);
+  const navigation = navigationParams.toString();
   let invalid = '';
   if (windowValues.length > 1 || startValues.length > 1 || endValues.length > 1) {
     invalid = 'Historical range parameters must not be repeated.';
@@ -91,7 +94,7 @@ export function useHistoricalRange(defaultWindow: string) {
     : custom
     ? startLabel && endLabel ? `${startLabel} to ${endLabel}` : 'Incomplete or invalid custom range'
     : presets.find(([value]) => value === window)?.[1] || window;
-  return { api, custom, window, start, end, timezone, label, invalid };
+  return { api, navigation, custom, window, start, end, timezone, label, invalid };
 }
 
 export function withHistoricalRange(url: string, api: string) {

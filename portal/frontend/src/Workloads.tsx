@@ -11,7 +11,7 @@ const kubeHint = ' — start the portal with Kubernetes access (in-cluster Servi
 function RunName({ run, namespace }: { run: Run; namespace?: string }) {
   const ns = run.namespace || namespace;
   const range = useHistoricalRange('24h');
-  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name) + '?' + range.api}>{run.name}</ScopedLink> : text(run.name);
+  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name) + '?' + range.navigation}>{run.name}</ScopedLink> : text(run.name);
 }
 function Status({ value, tone = '' }: { value?: string; tone?: string }) { return <span className={'badge ' + tone}>{text(value)}</span>; }
 function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiagnostic; label: string; children: ReactNode }) {
@@ -75,7 +75,7 @@ export function JobDetailBoard() {
   const partial = Object.values(query.data?.diagnostics || {}).some(diagnostic => diagnostic.state === 'unavailable');
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
   const active = ['overview', 'pods', 'events', 'results'].includes(requested) ? requested : 'overview';
-  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to={'/portal/runs?' + range.api} className="back">← Back to Jobs</ScopedLink></div>
+  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to={'/portal/runs?' + range.navigation} className="back">← Back to Jobs</ScopedLink></div>
     <Note>Object, Kueue, pod, and event sections are current Kubernetes snapshots. Durable lifecycle/results show the retained record for this run; historical time filtering is not supported.</Note>
     {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
       <div className="detail-meta"><Status value={snap.kind} tone="kind"/><Status value={snap.status}/>
@@ -124,14 +124,14 @@ export function RayBoard() {
           c.proxyPath ? (c.available ? <ScopedLink to={c.proxyPath} external className="back">open ↗</ScopedLink> : <span className="back disabled-link" title="Ray dashboard unreachable: head pod not Ready">open ↗</span>) : <span className="warn">—</span>])}/>}
       <h2>RayJob history</h2><Note>history: {snap.historyState || 'live-only'}</Note><HistoryDiagnostic state={snap.historyState} diagnostic={snap.historyDiagnostic} ray/>
       {!snap.history?.length ? <Empty>{snap.historyState === 'available' ? 'No durable RayJob records in this scope yet.' : 'Durable RayJob history is not configured for this portal; only live dashboards are shown.'}</Empty>
-        : <Table headers={['Name', 'Namespace', 'Status', 'Age', 'Run ID']} rows={snap.history.map(r => [r.resourceUid && r.name ? <ScopedLink to={'/portal/ray/history/' + encodeURIComponent(r.resourceUid) + '?' + range.api}>{r.name}</ScopedLink> : text(r.name), r.namespace || snap.namespace || '—', <Status value={r.status}/>, text(r.age), text(r.runId)])}/>}
+        : <Table headers={['Name', 'Namespace', 'Status', 'Age', 'Run ID']} rows={snap.history.map(r => [r.resourceUid && r.name ? <ScopedLink to={'/portal/ray/history/' + encodeURIComponent(r.resourceUid) + '?' + range.navigation}>{r.name}</ScopedLink> : text(r.name), r.namespace || snap.namespace || '—', <Status value={r.status}/>, text(r.age), text(r.runId)])}/>}
     </>}</BoardResult></>;
 }
 export function RayHistoryBoard() {
   const { resourceUID = '' } = useParams();
   const range = useHistoricalRange('24h');
   const query = useBoard<RayHistory>('/api/portal/ray/history/' + encodeURIComponent(resourceUID) + '?' + range.api, !!resourceUID);
-  return <><ScopedLink to={'/portal/ray?' + range.api} className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
+  return <><ScopedLink to={'/portal/ray?' + range.navigation} className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
     <TimeRangeControls defaultWindow="24h"/>
     <Note>This page filters retained lifecycle events by <code>observedAt</code> within the selected range.</Note>
     <BoardResult query={query} label="Durable RayJob history">{snap => {

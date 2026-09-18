@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 function RangeProbe() {
   const range = useHistoricalRange('24h');
-  return <output data-testid="api">{range.api}</output>;
+  return <><output data-testid="api">{range.api}</output><output data-testid="navigation">{range.navigation}</output></>;
 }
 
 function LocationProbe() {
@@ -51,6 +51,12 @@ describe('historical range URL parsing', () => {
     render(<MemoryRouter initialEntries={['/portal/fleet?window=']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=');
     expect(screen.getByRole('alert')).toHaveTextContent('Unsupported historical window');
+  });
+
+  it('preserves the display timezone for detail navigation but not API requests', () => {
+    render(<MemoryRouter initialEntries={['/portal/runs?start=2026-09-16T00%3A00%3A00Z&end=2026-09-17T09%3A00%3A00Z&tz=utc']}><RangeProbe/></MemoryRouter>);
+    expect(screen.getByTestId('api')).not.toHaveTextContent('tz=');
+    expect(screen.getByTestId('navigation')).toHaveTextContent('tz=utc');
   });
 
   it('applies preset and custom ranges without dropping other URL filters', () => {
