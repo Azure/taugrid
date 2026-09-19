@@ -67,17 +67,9 @@ const (
 	defaultResourcePrefix    = "tau"
 	maxResourceNameLen       = 63
 	maxRayJobResourceNameLen = 47
-	defaultRDMAResourceName  = "rdma/rdma_shared_device_a"
-	defaultRDMAResourceCount = 1
-	maxRDMAResourcePrefixLen = 253
-	maxRDMAResourceNameLen   = 63
-	maxRDMAQualifiedNameLen  = maxRDMAResourcePrefixLen + 1 + maxRDMAResourceNameLen
 )
 
-var (
-	resourceNamePartRE     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	qualifiedNameSegmentRE = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
-)
+var resourceNamePartRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // Manifest is the subset of the v1 managed workflow manifest we need to make
 // scheduling decisions. The user's trainer reads the full manifest itself
@@ -122,7 +114,7 @@ type Manifest struct {
 		Image string            `yaml:"image,omitempty"`
 		Env   []envspec.Var     `yaml:"env,omitempty"`
 		EnvKV map[string]string `yaml:"env_kv,omitempty"`
-		RDMA  RuntimeRDMA       `yaml:"rdma,omitempty"`
+		RDMA  runconfig.RDMA    `yaml:"rdma,omitempty"`
 	} `yaml:"runtime,omitempty"`
 	Storage struct {
 		DataPVC string         `yaml:"data_pvc,omitempty"`
@@ -140,20 +132,9 @@ type Manifest struct {
 	} `yaml:"resource_naming,omitempty"`
 }
 
-// RuntimeRDMA opts RayJob containers into RDMA device resources and the memlock
-// capabilities NCCL NET/IB needs for verbs memory registration. Disabled by
-// default so existing CPU/GPU jobs keep their current pod security posture.
-type RuntimeRDMA struct {
-	Enabled      bool   `yaml:"enabled,omitempty"`
-	ResourceName string `yaml:"resource_name,omitempty"`
-	Count        *int   `yaml:"count,omitempty"`
-}
-
-type runtimeRDMAConfig struct {
-	Enabled      bool
-	ResourceName string
-	Count        int
-}
+// RuntimeRDMA is an alias for the shared RDMA input struct. Existing tests
+// that reference the manifest type by name continue to compile.
+type RuntimeRDMA = runconfig.RDMA
 
 type ModelMetadata struct {
 	Name            string            `yaml:"name,omitempty"`
@@ -281,7 +262,7 @@ func (m *Manifest) Validate() error {
 	if err := runconfig.ValidateLiteralEnvPayloads(envspec.DirectMap(m.Runtime.Env)); err != nil {
 		return err
 	}
-	if err := validateRuntimeRDMA(m.Runtime.RDMA); err != nil {
+	if err := runconfig.ValidateRDMA(m.Runtime.RDMA); err != nil {
 		return err
 	}
 	if err := validateStorage(m.Storage.DataPVC, m.Storage.Mounts); err != nil {
@@ -293,65 +274,6 @@ func (m *Manifest) Validate() error {
 		}
 	}
 	return validateModelMetadata(m.Model)
-}
-
-func validateRuntimeRDMA(r RuntimeRDMA) error {
-	if !r.Enabled {
-		if strings.TrimSpace(r.ResourceName) != r.ResourceName {
-			return fmt.Errorf("runtime.rdma.resource_name: must not have surrounding whitespace")
-		}
-		if r.Count != nil && *r.Count < 0 {
-			return fmt.Errorf("runtime.rdma.count: want ≥ 1 when set, got %d", *r.Count)
-		}
-		return nil
-	}
-	if strings.TrimSpace(r.ResourceName) != r.ResourceName {
-		return fmt.Errorf("runtime.rdma.resource_name: must not have surrounding whitespace")
-	}
-	resourceName := r.ResourceName
-	if resourceName == "" {
-		resourceName = defaultRDMAResourceName
-	}
-	if err := validateRDMAResourceName(resourceName); err != nil {
-		return fmt.Errorf("runtime.rdma.resource_name: %w", err)
-	}
-	if r.Count != nil && *r.Count < 1 {
-		return fmt.Errorf("runtime.rdma.count: want ≥ 1 when set, got %d", *r.Count)
-	}
-	return nil
-}
-
-func validateRDMAResourceName(resourceName string) error {
-	if len(resourceName) > maxRDMAQualifiedNameLen {
-		return fmt.Errorf("%q is too long (%d chars; max %d)", resourceName, len(resourceName), maxRDMAQualifiedNameLen)
-	}
-	parts := strings.Split(resourceName, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return fmt.Errorf("%q is invalid (want an extended resource name like %q)", resourceName, defaultRDMAResourceName)
-	}
-	prefix, name := parts[0], parts[1]
-	if isReservedResourcePrefix(prefix) {
-		return fmt.Errorf("%q uses reserved Kubernetes resource prefix %q", resourceName, prefix)
-	}
-	if len(prefix) > maxRDMAResourcePrefixLen {
-		return fmt.Errorf("%q has a prefix longer than %d chars", resourceName, maxRDMAResourcePrefixLen)
-	}
-	for _, label := range strings.Split(prefix, ".") {
-		if len(label) == 0 || len(label) > maxResourceNameLen || !resourceNamePartRE.MatchString(label) {
-			return fmt.Errorf("%q has invalid DNS-1123 prefix %q", resourceName, prefix)
-		}
-	}
-	if len(name) > maxRDMAResourceNameLen || !qualifiedNameSegmentRE.MatchString(name) {
-		return fmt.Errorf("%q has invalid resource name segment %q", resourceName, name)
-	}
-	return nil
-}
-
-func isReservedResourcePrefix(prefix string) bool {
-	return prefix == "kubernetes.io" ||
-		strings.HasSuffix(prefix, ".kubernetes.io") ||
-		prefix == "k8s.io" ||
-		strings.HasSuffix(prefix, ".k8s.io")
 }
 
 func validateComputeResourceFields(m *Manifest) error {
@@ -625,23 +547,8 @@ func (m *Manifest) RuntimeImage() string {
 }
 
 // RuntimeRDMA returns the normalized opt-in RDMA pod config.
-func (m *Manifest) RuntimeRDMA() runtimeRDMAConfig {
-	if !m.Runtime.RDMA.Enabled {
-		return runtimeRDMAConfig{}
-	}
-	resourceName := strings.TrimSpace(m.Runtime.RDMA.ResourceName)
-	if resourceName == "" {
-		resourceName = defaultRDMAResourceName
-	}
-	count := defaultRDMAResourceCount
-	if m.Runtime.RDMA.Count != nil {
-		count = *m.Runtime.RDMA.Count
-	}
-	return runtimeRDMAConfig{
-		Enabled:      true,
-		ResourceName: resourceName,
-		Count:        count,
-	}
+func (m *Manifest) RuntimeRDMA() runconfig.NormalizedRDMA {
+	return runconfig.NormalizeRDMA(m.Runtime.RDMA)
 }
 
 func (m *Manifest) DataPVC() string {

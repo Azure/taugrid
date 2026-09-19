@@ -124,6 +124,137 @@ type Runtime struct {
 	EnvSecret  map[string]string `yaml:"env_secret"`
 	EnvKV      map[string]string `yaml:"env_kv"`
 	Security   Security          `yaml:"security"`
+	RDMA       RDMA              `yaml:"rdma"`
+}
+
+// RDMA opts Job containers into RDMA device resources and the memlock
+// capabilities NCCL NET/IB needs for verbs memory registration.
+type RDMA struct {
+	Enabled      bool   `yaml:"enabled"`
+	ResourceName string `yaml:"resource_name,omitempty"`
+	Count        *int   `yaml:"count,omitempty"`
+}
+
+// DefaultRDMAResourceName is the RDMA shared device resource requested when no
+// custom resource_name is set.
+const DefaultRDMAResourceName = "rdma/rdma_shared_device_a"
+
+// DefaultRDMAResourceCount is the per-pod RDMA device count when count is unset.
+const DefaultRDMAResourceCount = 1
+
+// DefaultRDMAShmSize is the /dev/shm size for RDMA Job workloads when the
+// renderer does not receive an explicit override.
+const DefaultRDMAShmSize = "32Gi"
+
+const (
+	maxRDMAResourcePrefixLen = 253
+	maxRDMAResourceNameLen   = 63
+	maxRDMAQualifiedNameLen  = maxRDMAResourcePrefixLen + 1 + maxRDMAResourceNameLen
+)
+
+var qualifiedNameSegmentRE = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
+
+// QualifiedNameSegmentRE is the exported accessor for template renderers that
+// need the same regex (e.g. Kubernetes label value validation). The pattern is
+// anchored and matches a single segment of a qualified resource name.
+func QualifiedNameSegmentRE() *regexp.Regexp { return qualifiedNameSegmentRE }
+
+// NormalizedRDMA is the resolved RDMA configuration with all defaults applied.
+// Both the Job and RayJob rendering paths consume this struct; it is the single
+// return type for NormalizeRDMA. ShmSize is deliberately excluded because the
+// RayJob path manages /dev/shm independently.
+type NormalizedRDMA struct {
+	Enabled      bool
+	ResourceName string
+	Count        int
+}
+
+// NormalizeRDMA returns a NormalizedRDMA with defaults applied. When RDMA is
+// disabled the zero struct is returned. This merges the logic from the former
+// jobrender.NormalizeRDMA and manifest.RuntimeRDMA methods.
+func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
+	if !cfg.Enabled {
+		return NormalizedRDMA{}
+	}
+	resourceName := strings.TrimSpace(cfg.ResourceName)
+	if resourceName == "" {
+		resourceName = DefaultRDMAResourceName
+	}
+	count := DefaultRDMAResourceCount
+	if cfg.Count != nil {
+		count = *cfg.Count
+	}
+	return NormalizedRDMA{
+		Enabled:      true,
+		ResourceName: resourceName,
+		Count:        count,
+	}
+}
+
+// ValidateRDMA checks an RDMA configuration for correctness. It validates
+// resource name format (DNS-1123 prefix, qualified name segment) and rejects
+// reserved Kubernetes resource prefixes. This consolidates the validation that
+// was previously in manifest.validateRuntimeRDMA + manifest.validateRDMAResourceName.
+func ValidateRDMA(r RDMA) error {
+	if !r.Enabled {
+		if strings.TrimSpace(r.ResourceName) != r.ResourceName {
+			return fmt.Errorf("runtime.rdma.resource_name: must not have surrounding whitespace")
+		}
+		if r.Count != nil && *r.Count < 0 {
+			return fmt.Errorf("runtime.rdma.count: want ≥ 1 when set, got %d", *r.Count)
+		}
+		return nil
+	}
+	if strings.TrimSpace(r.ResourceName) != r.ResourceName {
+		return fmt.Errorf("runtime.rdma.resource_name: must not have surrounding whitespace")
+	}
+	resourceName := r.ResourceName
+	if resourceName == "" {
+		resourceName = DefaultRDMAResourceName
+	}
+	if err := validateRDMAResourceName(resourceName); err != nil {
+		return fmt.Errorf("runtime.rdma.resource_name: %w", err)
+	}
+	if r.Count != nil && *r.Count < 1 {
+		return fmt.Errorf("runtime.rdma.count: want ≥ 1 when set, got %d", *r.Count)
+	}
+	return nil
+}
+
+func validateRDMAResourceName(resourceName string) error {
+	if len(resourceName) > maxRDMAQualifiedNameLen {
+		return fmt.Errorf("%q is too long (%d chars; max %d)", resourceName, len(resourceName), maxRDMAQualifiedNameLen)
+	}
+	parts := strings.Split(resourceName, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("%q is invalid (want an extended resource name like %q)", resourceName, DefaultRDMAResourceName)
+	}
+	prefix, name := parts[0], parts[1]
+	if isReservedResourcePrefix(prefix) {
+		return fmt.Errorf("%q uses reserved Kubernetes resource prefix %q", resourceName, prefix)
+	}
+	if len(prefix) > maxRDMAResourcePrefixLen {
+		return fmt.Errorf("%q has a prefix longer than %d chars", resourceName, maxRDMAResourcePrefixLen)
+	}
+	// resourceNamePartRE is not defined here; use a local DNS-1123 label check
+	// that matches the pattern from the manifest package.
+	dnsLabelRE := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	for _, label := range strings.Split(prefix, ".") {
+		if len(label) == 0 || len(label) > 63 || !dnsLabelRE.MatchString(label) {
+			return fmt.Errorf("%q has invalid DNS-1123 prefix %q", resourceName, prefix)
+		}
+	}
+	if len(name) > maxRDMAResourceNameLen || !qualifiedNameSegmentRE.MatchString(name) {
+		return fmt.Errorf("%q has invalid resource name segment %q", resourceName, name)
+	}
+	return nil
+}
+
+func isReservedResourcePrefix(prefix string) bool {
+	return prefix == "kubernetes.io" ||
+		strings.HasSuffix(prefix, ".kubernetes.io") ||
+		prefix == "k8s.io" ||
+		strings.HasSuffix(prefix, ".k8s.io")
 }
 
 const SecurityModeRestricted = "restricted"
@@ -417,6 +548,9 @@ func (c Config) ValidateDirect() error {
 		return err
 	}
 	if err := c.Runtime.Security.Validate(); err != nil {
+		return err
+	}
+	if err := ValidateRDMA(c.Runtime.RDMA); err != nil {
 		return err
 	}
 	if err := ValidateLiteralEnvPayloads(c.Runtime.Env); err != nil {
@@ -881,7 +1015,9 @@ func (c Config) ValidateExecution(engine string) error {
 			return fmt.Errorf("storage.image_assets requires engine: job")
 		}
 	}
-
+	if c.Runtime.RDMA.Enabled && c.Workflow.File != "" {
+		return fmt.Errorf("runtime.rdma cannot be set with workflow.file; configure runtime.rdma in the referenced managed manifest")
+	}
 	var launcher string
 	if c.Execution.Launcher != nil {
 		launcher = strings.ToLower(strings.TrimSpace(*c.Execution.Launcher))

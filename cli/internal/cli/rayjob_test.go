@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
 )
@@ -71,6 +72,26 @@ func TestRayJobDispatchDryRunUsesPresetKueueLane(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestRayJobDispatchRendersRDMA(t *testing.T) {
+	script := writeRayScript(t, t.TempDir())
+	rendered := runRayJobDryRun(t, "ray-rdma", func(o *runDispatchOptions) {
+		o.script = script
+		o.profileName = "azure.research.training.l"
+		o.gpusPerWorker = 8
+		o.rdma = runconfig.RDMA{Enabled: true}
+	})
+	for _, want := range []string{
+		"rdma/rdma_shared_device_a: \"1\"",
+		"IPC_LOCK",
+		"SYS_RESOURCE",
+		"DAC_OVERRIDE",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("RDMA RayJob dry-run missing %q:\n%s", want, rendered)
 		}
 	}
 }

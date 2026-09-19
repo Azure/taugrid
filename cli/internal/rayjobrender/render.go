@@ -119,6 +119,7 @@ type Options struct {
 	EnvSecrets      []envspec.Var
 	RedactSecrets   bool
 	SecurityMode    string
+	RDMA            runconfig.NormalizedRDMA
 	DataPVC         string
 	Profile         profile.Profile
 	TopologyOptions topology.Options
@@ -526,6 +527,18 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		"resources":    resources(o, containerName),
 		"volumeMounts": volumeMounts(o, isHead),
 	}
+	if !isHead && o.RDMA.Enabled {
+		container["securityContext"] = map[string]any{
+			"runAsUser":                int64(0),
+			"runAsGroup":               int64(0),
+			"allowPrivilegeEscalation": false,
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+			"capabilities": map[string]any{
+				"drop": []any{"ALL"},
+				"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
+			},
+		}
+	}
 	// Only set explicit probes on workers. Head probes are omitted so KubeRay
 	// injects its version-aware defaults (raylet + GCS health).
 	if containerName != "ray-head" {
@@ -862,6 +875,11 @@ func resources(o Options, containerName string) map[string]any {
 		}
 		requests[gpuResource] = o.GPUsPerWorker
 		limits[gpuResource] = o.GPUsPerWorker
+	}
+	if o.RDMA.Enabled && containerName == "ray-worker" {
+		count := strconv.Itoa(o.RDMA.Count)
+		requests[o.RDMA.ResourceName] = count
+		limits[o.RDMA.ResourceName] = count
 	}
 	applyResourceOverrides(requests, limits, ResourceOverrides{
 		CPURequest:    o.Resources.CPURequest,

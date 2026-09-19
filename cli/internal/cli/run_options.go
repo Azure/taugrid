@@ -113,6 +113,7 @@ type runContainerRuntime struct {
 	env                   []string
 	envSecrets            []string
 	securityMode          string
+	rdma                  runconfig.RDMA
 	serviceAccountName    string
 	azureWorkloadIdentity bool
 }

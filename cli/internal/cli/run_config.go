@@ -259,6 +259,7 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	o.envSecrets = mapToKeyValueList(c.Runtime.EnvSecret)
 	o.envKV = mapToKeyValueList(c.Runtime.EnvKV)
 	o.securityMode = strings.TrimSpace(c.Runtime.Security.Mode)
+	o.rdma = c.Runtime.RDMA
 
 	o.upstreamCheckpoint = c.Workflow.UpstreamCheckpoint
 	o.secretPayloadPath = configRelativePath(baseDir, c.Workflow.SecretPayload)

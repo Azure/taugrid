@@ -457,6 +457,80 @@ storage:
 	}
 }
 
+func TestValidateDirectRejectsInvalidRDMA(t *testing.T) {
+	zero := 0
+	negative := -1
+	tests := []struct {
+		name string
+		rdma RDMA
+		want string
+	}{
+		{
+			name: "zero count",
+			rdma: RDMA{Enabled: true, Count: &zero},
+			want: "runtime.rdma.count: want ≥ 1",
+		},
+		{
+			name: "negative count",
+			rdma: RDMA{Enabled: true, Count: &negative},
+			want: "runtime.rdma.count: want ≥ 1",
+		},
+		{
+			name: "whitespace resource name",
+			rdma: RDMA{Enabled: true, ResourceName: " rdma/foo "},
+			want: "runtime.rdma.resource_name: must not have surrounding whitespace",
+		},
+		{
+			name: "invalid resource name",
+			rdma: RDMA{Enabled: true, ResourceName: "INVALID"},
+			want: "runtime.rdma.resource_name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Runtime: Runtime{RDMA: tt.rdma}}
+			if err := cfg.ValidateDirect(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ValidateDirect() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateDirectAcceptsValidRDMA(t *testing.T) {
+	one := 1
+	cfg := Config{Runtime: Runtime{RDMA: RDMA{Enabled: true, Count: &one, ResourceName: "rdma/rdma_shared_device_a"}}}
+	if err := cfg.ValidateDirect(); err != nil {
+		t.Fatalf("ValidateDirect() unexpected error: %v", err)
+	}
+}
+
+func TestValidateExecutionAcceptsRDMAForJobAndRayJob(t *testing.T) {
+	cfg := Config{Runtime: Runtime{RDMA: RDMA{Enabled: true}}}
+	if err := cfg.ValidateExecution(EngineRayJob); err != nil {
+		t.Fatalf("ValidateExecution(rayjob) unexpected error: %v", err)
+	}
+	if err := cfg.ValidateExecution(EngineJob); err != nil {
+		t.Fatalf("ValidateExecution(job) unexpected error: %v", err)
+	}
+
+	managed := Config{
+		SchemaVersion: 1,
+		Run:           Run{WorkloadKind: EngineRayJob},
+		Runtime:       Runtime{RDMA: RDMA{Enabled: true}},
+	}
+	if err := managed.ValidateExecution(""); err != nil {
+		t.Fatalf("ValidateExecution(managed rayjob) unexpected error: %v", err)
+	}
+
+	wrapper := Config{
+		Workflow: Workflow{File: "managed.yaml"},
+		Runtime:  Runtime{RDMA: RDMA{Enabled: true}},
+	}
+	if err := wrapper.ValidateExecution(""); err == nil || !strings.Contains(err.Error(), "configure runtime.rdma in the referenced managed manifest") {
+		t.Fatalf("ValidateExecution(workflow wrapper) error = %v, want runtime.rdma placement guidance", err)
+	}
+}
+
 func TestParseKeepsManagedManifestPassThrough(t *testing.T) {
 	cfg, err := parse([]byte(`schema_version: 1
 name: managed

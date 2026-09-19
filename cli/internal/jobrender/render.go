@@ -176,6 +176,10 @@ type Options struct {
 	// SecurityMode applies the typed runtime.security contract.
 	SecurityMode string
 
+	// RDMA opts the Job into RDMA device resources and injects the
+	// IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities NCCL NET/IB needs.
+	RDMA RDMAOptions
+
 	// OutputDir, if set, advertises the durable result path on the pod via
 	// the TAU_OUTPUT_DIR env var. Setting this does not otherwise affect
 	// the rendered manifest; the result-path/result-pvc annotations live
@@ -240,6 +244,12 @@ type VolumeMount struct {
 	MountPath string
 	ReadOnly  bool
 }
+
+// RDMAOptions is an alias for the shared RDMA configuration. All new code
+// should use runconfig.NormalizedRDMA directly; this alias exists only so
+// existing callers that reference the jobrender type continue to compile
+// without a flag-day rename.
+type RDMAOptions = runconfig.NormalizedRDMA
 
 // ProfileOptions configures the opt-in profiler wrapper for Job workloads.
 // Mode is "nsys" or "ncu"; empty disables profiling. Rank defaults to "0"
@@ -812,7 +822,28 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if p.Runtime.ImagePullPolicy != "" {
 		container["imagePullPolicy"] = p.Runtime.ImagePullPolicy
 	}
-	if p.Runtime.SecurityContext != nil {
+	if o.RDMA.Enabled {
+		sc := map[string]any{}
+		if p.Runtime.SecurityContext != nil {
+			for k, v := range p.Runtime.SecurityContext {
+				sc[k] = v
+			}
+		}
+		if runAsNonRoot, _ := sc["runAsNonRoot"].(bool); runAsNonRoot {
+			return nil, fmt.Errorf("RDMA requires runAsUser=0 and conflicts with profile securityContext runAsNonRoot=true")
+		}
+		sc["runAsUser"] = int64(0)
+		sc["runAsGroup"] = int64(0)
+		sc["allowPrivilegeEscalation"] = false
+		if _, exists := sc["seccompProfile"]; !exists {
+			sc["seccompProfile"] = map[string]any{"type": "RuntimeDefault"}
+		}
+		sc["capabilities"] = map[string]any{
+			"drop": []any{"ALL"},
+			"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
+		}
+		container["securityContext"] = sc
+	} else if p.Runtime.SecurityContext != nil {
 		container["securityContext"] = p.Runtime.SecurityContext
 	}
 	if len(cmd) > 0 {
@@ -837,6 +868,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	applyContainerResourceOverrides(resources, o)
 	profile.AddGPUResources(resources, gpu.Count)
+	if o.RDMA.Enabled {
+		addRDMAResources(resources, o.RDMA)
+	}
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
@@ -880,11 +914,15 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 
 	// /dev/shm: PyTorch DDP uses shared memory for inter-process IPC. The
 	// default 64MB is too small for multi-GPU training; mount an emptyDir
-	// backed by memory.
+	// backed by memory. RDMA workloads get a larger default (32Gi).
 	if o.Launcher == "torchrun" && (o.ProcessesPerNode > 1 || o.Nodes > 1) && !hasVolume(pod, "dshm") {
+		shmSize := "16Gi"
+		if o.RDMA.Enabled {
+			shmSize = runconfig.DefaultRDMAShmSize
+		}
 		shmVol := map[string]any{
 			"name":     "dshm",
-			"emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"},
+			"emptyDir": map[string]any{"medium": "Memory", "sizeLimit": shmSize},
 		}
 		shmMount := map[string]any{"name": "dshm", "mountPath": "/dev/shm"}
 		if existing, ok := pod["volumes"].([]any); ok {
@@ -1194,6 +1232,16 @@ func applyContainerResourceOverrides(resources map[string]any, o Options) {
 	if len(limits) > 0 {
 		resources["limits"] = limits
 	}
+}
+
+func addRDMAResources(resources map[string]any, rdma RDMAOptions) {
+	requests := copyResourceQuantities(resources["requests"])
+	limits := copyResourceQuantities(resources["limits"])
+	count := strconv.Itoa(rdma.Count)
+	requests[rdma.ResourceName] = count
+	limits[rdma.ResourceName] = count
+	resources["requests"] = requests
+	resources["limits"] = limits
 }
 
 func copyResourceQuantities(existing any) map[string]any {
