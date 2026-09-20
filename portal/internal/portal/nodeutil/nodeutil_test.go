@@ -132,19 +132,6 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 	}
 }
 
-func TestBuildKQLCustomBounds(t *testing.T) {
-	start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
-	kql := buildKQL(Options{Window: end.Sub(start), Start: start, End: end})
-	want := "Timestamp >= datetime(2026-09-16T00:00:00Z) and Timestamp <= datetime(2026-09-17T09:00:00Z)"
-	if strings.Count(kql, want) != 3 {
-		t.Fatalf("custom bounds must scope CPU and both memory legs:\n%s", kql)
-	}
-	if strings.Contains(kql, "ago(") {
-		t.Fatalf("custom bounds must not use a relative window:\n%s", kql)
-	}
-}
-
 func TestBuildKQLNoFilters(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
 	_, _ = Board(context.Background(), q, Options{})
@@ -174,5 +161,49 @@ func TestWindowOverrideChangesDenominator(t *testing.T) {
 	}
 	if !strings.Contains(q.lastKQL, "ago(300s)") || snap.Window != "5m0s" {
 		t.Fatalf("5m window not applied: %q:\n%s", snap.Window, q.lastKQL)
+	}
+}
+
+func TestBoardRejectsIncompleteCPUSamplesWithinSupportedRange(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		row     kustoquery.Row
+		message string
+	}{
+		{"overflow", kustoquery.Row{"kind": "overflow"}, "sample limit exceeded"},
+		{"truncated", kustoquery.Row{"kind": "cpu", "instance": "node-0", "cpu": "0", "sampleCount": 2.0,
+			"samples": `[{"timestamp":"2026-09-16T00:00:00Z","value":10}]`}, "missing or truncated"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			querier := &fakeQuerier{rows: []kustoquery.Row{test.row}}
+			_, err := Board(context.Background(), querier, Options{Window: time.Hour})
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("error = %v, want %q", err, test.message)
+			}
+			for _, limit := range []string{"250000", "4096"} {
+				if !strings.Contains(querier.lastKQL, limit) {
+					t.Fatalf("query lost sample limit %s", limit)
+				}
+			}
+		})
+	}
+}
+
+func TestBoardExcludesResetsFromCPUUtilizationAndCoverage(t *testing.T) {
+	querier := &fakeQuerier{rows: []kustoquery.Row{{
+		"kind": "cpu", "instance": "node-0", "cpu": "0", "sampleCount": 3.0,
+		"samples": `[{"timestamp":"2026-09-16T00:00:00Z","value":100},{"timestamp":"2026-09-16T00:01:00Z","value":5},{"timestamp":"2026-09-16T00:02:00Z","value":35}]`,
+	}}}
+	snapshot, err := Board(context.Background(), querier, Options{Window: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Nodes) != 1 {
+		t.Fatalf("nodes = %d, want 1", len(snapshot.Nodes))
+	}
+	node := snapshot.Nodes[0]
+	if node.CPUUtilPct == nil || *node.CPUUtilPct != 50 || node.CPUCoverage.CounterResets != 1 ||
+		node.CPUCoverage.ObservedSeconds != 60 || node.CPUCoverage.WindowCoveragePct != 60.0/3600*100 {
+		t.Fatalf("reset or coverage accounting changed: %+v, utilization = %v", node.CPUCoverage, node.CPUUtilPct)
 	}
 }

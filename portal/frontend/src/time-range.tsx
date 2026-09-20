@@ -53,6 +53,14 @@ function historicalWindowMilliseconds(value: string) {
   return offset === input.length && total > 0 && total <= 720 * 3_600_000 ? total : null;
 }
 
+function validTimestamp(value: string) {
+  const timestamp = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+  if (!timestamp.test(value) || !Number.isFinite(Date.parse(value))) return false;
+  const calendarDate = value.slice(0, 10);
+  const parsed = new Date(calendarDate + 'T00:00:00Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === calendarDate;
+}
+
 export function useHistoricalRange(defaultWindow: string) {
   const location = useLocation();
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -87,6 +95,15 @@ export function useHistoricalRange(defaultWindow: string) {
     invalid = `Unsupported historical window: ${requested}.`;
   } else if (hasCustom && (!start || !end)) {
     invalid = 'Custom historical ranges require both start and end timestamps.';
+  } else if (hasCustom) {
+    const elapsed = Date.parse(end) - Date.parse(start);
+    if (!validTimestamp(start) || !validTimestamp(end)) {
+      invalid = 'Enter valid RFC3339 start and end timestamps.';
+    } else if (elapsed <= 0) {
+      invalid = 'End must be after start.';
+    } else if (elapsed > 30 * 24 * 60 * 60 * 1000) {
+      invalid = 'The selected range cannot exceed 30 days.';
+    }
   }
   const startLabel = timestampLabel(start, timezone);
   const endLabel = timestampLabel(end, timezone);
@@ -106,7 +123,7 @@ export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) 
   const location = useLocation();
   const navigate = useNavigate();
   const active = useHistoricalRange(defaultWindow);
-  const selectableWindow = presets.some(([value]) => value === active.window) ? active.window : defaultWindow;
+  const selectableWindow = !active.invalid && !active.custom ? active.window : defaultWindow;
   const [mode, setMode] = useState(active.custom && !active.invalid ? 'custom' : selectableWindow);
   const [timezone, setTimezone] = useState<Timezone>(active.timezone);
   const [start, setStart] = useState(() => initialInput(active.start, new Date(Date.now() - 60 * 60 * 1000), active.timezone));
@@ -156,6 +173,7 @@ export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) 
     <div className="time-range-fields">
       <label>Range<select value={mode} onChange={event => setMode(event.target.value)}>
         {presets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        {!presets.some(([value]) => value === selectableWindow) && <option value={selectableWindow}>{selectableWindow}</option>}
         <option value="custom">Custom range</option>
       </select></label>
       {mode === 'custom' && <>

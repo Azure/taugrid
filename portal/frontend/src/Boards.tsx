@@ -17,7 +17,7 @@ function InfrastructureOverview({ platform }: { platform: boolean }) {
   const cluster = useBoard<Cluster>('/api/portal/cluster');
   const costs = useBoard<Cost>('/api/portal/cost', platform);
   return <><PageTitle title="Overview">{platform ? 'Fleet health & capacity at a glance.' : 'Your training workloads at a glance.'}</PageTitle>
-    <Note>Overview combines real-time Kubernetes state with backend-default ADX summaries. Historical range controls apply on Fleet Health, Fleet Utilization, and Cost; this page does not apply range parameters.</Note>
+    <Note>Overview combines real-time Kubernetes state with backend-default ADX summaries. Fleet shows current operational snapshots; historical range controls apply on Cost. This page does not apply range parameters.</Note>
     {platform && <BoardResult query={nodes} label="Fleet inventory">{f => <div className="stats">
       <Stat href="/portal/fleet" label="Total nodes" value={f.readyNodes} of={f.totalNodes} sub="ready / total"/>
       <Stat href="/portal/fleet" label="Total GPUs" value={f.totalGPUs} sub={`${f.gpuNodes} GPU nodes`}/>

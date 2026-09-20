@@ -861,8 +861,8 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 
 // handleCluster serves the Cluster Health board: latest-per-GPU health samples
 // (utilization/temp/power/memory + remapped-row error flags) from the Metrics
-// ADX database via GpuHealth(). Optional ?window= or ?start=&end= selects a
-// historical range; cluster, instance, and model scope it. When the board has no Kusto querier (portal started without
+// ADX database via GpuHealth(). Optional ?window=&cluster=&instance=&model=
+// query params scope the query. When the board has no Kusto querier (portal started without
 // --kusto-query-command) it returns 503 so the frontend can render a disabled
 // state; a query failure returns 502.
 func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
@@ -889,12 +889,11 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		Model:    q.Get("model"),
 	}
 	opts.Namespace = workloadMetricsNamespace(scope)
-	window, start, end, err := parseHistoricalRange(q)
-	if err != nil {
-		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
-		return
+	if window := q.Get("window"); window != "" {
+		if d, err := time.ParseDuration(window); err == nil {
+			opts.Window = d
+		}
 	}
-	opts.Window, opts.Start, opts.End = window, start, end
 	snapshot, err := cluster.Board(r.Context(), s.cluster.Querier, opts)
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
@@ -1120,8 +1119,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // percentage (from node_memory_total/available), from the Metrics ADX database
 // via the raw node-exporter tables. It is the CPU/memory sibling of the Cluster
 // Health board, rendered beneath the per-GPU table on the Utilization page. Optional
-// ?window= or ?start=&end= selects a historical range; cluster and instance
-// scope the query. When the board has no Kusto
+// ?window=&cluster=&instance= scope the query. When the board has no Kusto
 // querier (portal started without --kusto-query-command) it returns 503; a
 // query failure returns 502.
 func (s *Server) handleNodeUtil(w http.ResponseWriter, r *http.Request) {
@@ -1146,12 +1144,11 @@ func (s *Server) handleNodeUtil(w http.ResponseWriter, r *http.Request) {
 		Cluster:  clusterScope,
 		Instance: q.Get("instance"),
 	}
-	window, start, end, err := parseHistoricalRange(q)
-	if err != nil {
-		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
-		return
+	if window := q.Get("window"); window != "" {
+		if d, err := time.ParseDuration(window); err == nil {
+			opts.Window = d
+		}
 	}
-	opts.Window, opts.Start, opts.End = window, start, end
 	snapshot, err := nodeutil.Board(r.Context(), s.nodeUtil.Querier, opts)
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())

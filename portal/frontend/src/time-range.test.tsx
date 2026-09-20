@@ -18,18 +18,64 @@ function LocationProbe() {
 }
 
 describe('historical range URL parsing', () => {
+  it('rejects normalized calendar dates and non-RFC3339 clock times', () => {
+    for (const [start, end] of [
+      ['2026-02-30T00:00:00Z', '2026-02-30T00:30:00Z'],
+      ['2026-09-16T24:00:00Z', '2026-09-17T00:30:00Z'],
+    ]) {
+      const view = render(<MemoryRouter initialEntries={['/portal/cost?start=' + start + '&end=' + end]}>
+        <TimeRangeControls defaultWindow="24h"/>
+      </MemoryRouter>);
+      expect(screen.getByRole('alert')).toHaveTextContent('valid RFC3339');
+      view.unmount();
+    }
+  });
+
+  it('enforces the shared 30-day limit for URL and custom selections', () => {
+    for (const [search, valid] of [
+      ['window=60m', true], ['window=3600s', true], ['window=720h', true],
+      ['window=0s', false], ['window=-1h', false], ['window=720h1s', false],
+      ['start=2026-09-01T00:00:00Z&end=2026-10-01T00:00:00Z', true],
+      ['start=2026-09-01T00:00:00Z&end=2026-10-01T00:00:01Z', false],
+      ['start=bad&end=also-bad', false],
+      ['start=2026-09-16T01:00:00Z&end=2026-09-16T00:00:00Z', false],
+      ['start=2026-09-16T00:00:00Z&end=2026-09-16T00:00:00Z', false],
+    ] as const) {
+      const view = render(<MemoryRouter initialEntries={['/portal/cost?' + search]}>
+        <TimeRangeControls defaultWindow="24h"/>
+      </MemoryRouter>);
+      expect(screen.queryByRole('alert') !== null, search).toBe(!valid);
+      if (search === 'window=60m') expect(screen.getByLabelText('Range')).toHaveValue('60m');
+      view.unmount();
+    }
+    render(<MemoryRouter initialEntries={['/portal/cost?window=24h']}>
+      <TimeRangeControls defaultWindow="24h"/><LocationProbe/>
+    </MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Range'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'utc' } });
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-09-01T00:00' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-10-01T00:01' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('cannot exceed 30 days');
+    expect(screen.getByTestId('location')).toHaveTextContent('window=24h');
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-10-01T00:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('end=2026-10-01T00%3A00%3A00.000Z');
+  });
+
   it('uses the default only when the URL has no temporal parameters', () => {
-    render(<MemoryRouter initialEntries={['/portal/fleet?workspace=research']}><RangeProbe/></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/portal/cost?workspace=research']}><RangeProbe/></MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=24h');
   });
 
   it('preserves invalid and mixed values so the API can reject them', () => {
-    const { unmount } = render(<MemoryRouter initialEntries={['/portal/fleet?window=bad']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
+    const { unmount } = render(<MemoryRouter initialEntries={['/portal/cost?window=bad']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=bad');
     expect(screen.getByRole('alert')).toHaveTextContent('Unsupported historical window: bad.');
 
     unmount();
-    render(<MemoryRouter initialEntries={['/portal/fleet?window=1h&start=2026-09-16T00%3A00%3A00Z&end=2026-09-16T01%3A00%3A00Z']}>
+    render(<MemoryRouter initialEntries={['/portal/cost?window=1h&start=2026-09-16T00%3A00%3A00Z&end=2026-09-16T01%3A00%3A00Z']}>
       <RangeProbe/><TimeRangeControls defaultWindow="24h"/>
     </MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=1h&start=2026-09-16T00%3A00%3A00Z&end=2026-09-16T01%3A00%3A00Z');
@@ -37,18 +83,18 @@ describe('historical range URL parsing', () => {
   });
 
   it('preserves repeated parameters for strict server validation', () => {
-    render(<MemoryRouter initialEntries={['/portal/fleet?window=1h&window=24h']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/portal/cost?window=1h&window=24h']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=1h&window=24h');
     expect(screen.getByRole('alert')).toHaveTextContent('must not be repeated');
   });
 
   it('distinguishes valid non-preset durations from empty invalid values', () => {
-    const { unmount } = render(<MemoryRouter initialEntries={['/portal/fleet?window=2h30m']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
+    const { unmount } = render(<MemoryRouter initialEntries={['/portal/cost?window=2h30m']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=2h30m');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     unmount();
-    render(<MemoryRouter initialEntries={['/portal/fleet?window=']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/portal/cost?window=']}><RangeProbe/><TimeRangeControls defaultWindow="24h"/></MemoryRouter>);
     expect(screen.getByTestId('api')).toHaveTextContent('window=');
     expect(screen.getByRole('alert')).toHaveTextContent('Unsupported historical window');
   });
@@ -60,15 +106,15 @@ describe('historical range URL parsing', () => {
   });
 
   it('applies preset and custom ranges without dropping other URL filters', () => {
-    const { unmount } = render(<MemoryRouter initialEntries={['/portal/fleet?workspace=research&view=utilization&window=1h']}>
+    const { unmount } = render(<MemoryRouter initialEntries={['/portal/cost?workspace=research&view=utilization&window=1h']}>
       <TimeRangeControls defaultWindow="24h"/><LocationProbe/>
     </MemoryRouter>);
     fireEvent.change(screen.getByLabelText('Range'), { target: { value: '168h' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/portal/fleet?workspace=research&view=utilization&window=168h');
+    expect(screen.getByTestId('location')).toHaveTextContent('/portal/cost?workspace=research&view=utilization&window=168h');
 
     unmount();
-    render(<MemoryRouter initialEntries={['/portal/fleet?workspace=research&view=utilization&window=1h']}>
+    render(<MemoryRouter initialEntries={['/portal/cost?workspace=research&view=utilization&window=1h']}>
       <TimeRangeControls defaultWindow="24h"/><LocationProbe/>
     </MemoryRouter>);
     fireEvent.change(screen.getByLabelText('Range'), { target: { value: 'custom' } });

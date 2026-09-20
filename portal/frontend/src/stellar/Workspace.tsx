@@ -207,7 +207,7 @@ function TargetWorkspace({ target }: { target: string }) {
   const [saved, setSaved] = useState(() => readPreferences(key));
   const [limit, setLimit] = useState(RUN_PAGE_SIZE);
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const [previousPage, setPreviousPage] = useState<{ data: RunSearchResult; dataUpdatedAt: number }>();
+  const [previousPage, setPreviousPage] = useState<{ data: RunSearchResult; dataUpdatedAt: number; rangeIdentity: string }>();
   const [railOpen, setRailOpen] = useState(() => window.innerWidth > 1040);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [launchQueryError, setLaunchQueryError] = useState(false);
@@ -222,8 +222,8 @@ function TargetWorkspace({ target }: { target: string }) {
   const more = readableQuery(useBoard<RunSearchResult>(withHistoricalRange(stellarURL('runs', { target, limit, project: params.get('project') || undefined }), range.api)));
   useEffect(() => {
     if (requestRejected(more.error) || requestRejected(query.error)) setPreviousPage(undefined);
-    else if (more.data) setPreviousPage({ data: more.data, dataUpdatedAt: more.dataUpdatedAt });
-  }, [more.data, more.dataUpdatedAt, more.error, query.error]);
+    else if (more.data) setPreviousPage({ data: more.data, dataUpdatedAt: more.dataUpdatedAt, rangeIdentity: range.api });
+  }, [more.data, more.dataUpdatedAt, more.error, query.error, range.api]);
   const sections = sectionsFromURL(params, saved.sections);
   const visibleSections = sections.filter(section => section.visible);
   const requestedPanel = params.get('panel') || (
@@ -244,7 +244,8 @@ function TargetWorkspace({ target }: { target: string }) {
   const filters: RunFilters = { search: params.get('run_q') || '', group: params.get('group') || '',
     lifecycle: (params.get('lifecycle') || '').replace(/^stale$/, 'not_responding'),
     updated: params.get('updated') || '', sort: params.get('updated_sort') || '' };
-  const page = requestRejected(more.error) || !query.data ? undefined : more.data || previousPage?.data;
+  const retainedPage = previousPage?.rangeIdentity === range.api ? previousPage : undefined;
+  const page = requestRejected(more.error) || !query.data ? undefined : more.data || retainedPage?.data;
   const runs = query.data ? page?.runs || [] : [];
   const augmentedSnapshot = query.data ? { ...query.data, runs: runs.map(run =>
     'systems' in run ? run : { ...run, systems: [], observe_cli: '' }) } : undefined;
@@ -324,7 +325,7 @@ function TargetWorkspace({ target }: { target: string }) {
               <time title={runTimestamp(run)} dateTime={runTimestamp(run)}>{Number.isFinite(Date.parse(runTimestamp(run))) ? 'updated ' + new Date(runTimestamp(run)).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'No timestamp'}</time>
             </div></div>
         </li>)}</ul>}
-        {more.error && <div role="alert" className="warn">More runs unavailable: {more.error.message} {staleReadMessage({ data: page, dataUpdatedAt: more.data ? more.dataUpdatedAt : previousPage?.dataUpdatedAt || 0 })}
+        {more.error && <div role="alert" className="warn">More runs unavailable: {more.error.message} {staleReadMessage({ data: page, dataUpdatedAt: more.data ? more.dataUpdatedAt : retainedPage?.dataUpdatedAt || 0 })}
           <button type="button" onClick={() => void more.refetch()}>Retry loading runs</button></div>}
         {page?.warnings?.map(warning => <p className="warn" key={warning}>{warning}</p>)}
         {canLoad && <button type="button" disabled={more.isFetching} onClick={() => setLimit(value => Math.min(MAX_RUNS, value + RUN_PAGE_SIZE))}>{more.isFetching ? 'Loading runs…' : `Load ${Math.min(RUN_PAGE_SIZE, MAX_RUNS - limit)} more runs`}</button>}

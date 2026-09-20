@@ -47,8 +47,6 @@ var healthMetrics = []string{
 // workspace or node.
 type Options struct {
 	Window    time.Duration
-	Start     time.Time
-	End       time.Time
 	Cluster   string
 	Namespace string
 	Instance  string
@@ -123,12 +121,7 @@ func buildKQL(opts Options) string {
 
 	var b strings.Builder
 	b.WriteString("let samples = materialize(\nGpuHealth()\n")
-	if !opts.Start.IsZero() && !opts.End.IsZero() {
-		fmt.Fprintf(&b, "| where Timestamp >= datetime(%s) and Timestamp <= datetime(%s)\n",
-			opts.Start.UTC().Format(time.RFC3339Nano), opts.End.UTC().Format(time.RFC3339Nano))
-	} else {
-		fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", seconds)
-	}
+	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", seconds)
 	fmt.Fprintf(&b, "| where metric in (%s)\n", strings.Join(metrics, ", "))
 	if opts.Cluster != "" {
 		fmt.Fprintf(&b, "| where Cluster == %s\n", kustoquery.QuoteString(opts.Cluster))

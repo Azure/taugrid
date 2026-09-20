@@ -25,8 +25,9 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
   `kubeclient` reader) and Kusto (Cluster/Cost/Node Utilization share a `kustoquery` querier).
-- **Soft-degrade contract** — a handler with a nil data source returns **503**;
-  a `Board()` error returns **502**; an empty-but-successful result is a normal
+- **Soft-degrade contract** — after authorization, Fleet requests
+  with a nil data source return **503**; upstream or sample-integrity failures
+  return **502**; an empty-but-successful result is a normal
   **200**. Boards light up together per source family, so a portal without
   cluster access still serves the shell, Stellar, and the Kusto boards.
 - **Workspace scope** — with a workspace directory configured, a trusted
@@ -123,13 +124,37 @@ unified Fleet page; an `instance` query focuses the inline per-GPU detail table.
 ## Fleet InfiniBand evidence
 
 The Fleet page combines authorized Kubernetes node inventory and current
-Metrics Server CPU/memory usage, per-GPU ADX telemetry, historical ADX node
+Metrics Server CPU/memory usage, per-GPU ADX telemetry, recent ADX node
 utilization, and continuous GPU/NVLink and InfiniBand Node conditions in one
 operational dashboard. Inventory, telemetry, and utilization refresh and retry
 together while retaining independent freshness and failure status. Current
 Metrics Server samples are preferred on exact inventory nodes; exact ADX node
 rows are a fallback, while mismatched telemetry remains visible as independent
 source evidence.
+
+Fleet remains a current operational snapshot view, without historical range
+controls. Temporal bookmark parameters do not change its data reads or refresh;
+the legacy Fleet route aliases and focused-node links remain supported. GPU and
+ADX node utilization use the backend-default **15-minute** lookback. This is not
+a historical reconstruction of inventory, Metrics Server samples or Node health.
+
+For direct API clients, `/api/portal/cluster` and `/api/portal/nodeutil` retain
+their original relative `window` contract: positive Go durations (including
+values above one hour) select a lookback; missing, malformed or nonpositive
+values fall back to 15 minutes. Repeated `window` values use the first value;
+unknown `start`/`end` parameters are ignored. The unmerged Fleet absolute-history
+expansion and temporary one-hour policy have been withdrawn. There is no new
+Fleet migration or one-hour limit. Non-Fleet history retains its 30-day contract.
+The raw CPU sample limits (250000 total and 4096 per core), reset handling and
+truncation checks remain intact: even a default-window query can exceed a
+sample budget on a large fleet and return **502**. Relative-window compatibility
+is not a large-fleet capacity guarantee. No data migration is needed.
+
+Experiment run-search fallback is restricted to the same historical data range.
+Changing range hides previous-range results while loading or after a failure,
+without resetting hidden-run selections, page size or other workspace state.
+Same-range pagination failures retain the last successful page for retry;
+display-timezone changes do not change data identity.
 
 The inventory reader selects the exact canonical `unbounded-cloud.io/site`
 label first and the exact deprecated `net.unbounded-cloud.io/site` migration

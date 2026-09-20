@@ -6,7 +6,6 @@ import { useLocation } from 'react-router-dom';
 import { boardStaleTimeMs, useBoard } from './data';
 import { Empty, Note, ScopedLink, Table, measured, n1, utilizationSummary } from './components';
 import type { Cluster, GPU, Nodes, NodeUtil } from './types';
-import { TimeRangeControls, useHistoricalRange } from './time-range';
 
 const conditionFreshnessMs = 15 * 60 * 1000;
 const futureClockSkewMs = 60 * 1000;
@@ -352,10 +351,9 @@ function FleetFabricMap({
 function FleetInfiniBandEvidence() {
   const location = useLocation();
   const focusedInstance = new URLSearchParams(location.search).get('instance') || '';
-  const range = useHistoricalRange('24h');
   const inventoryQuery = useBoard<Nodes>('/api/portal/nodes');
-  const telemetryQuery = useBoard<Cluster>('/api/portal/cluster?' + range.api);
-  const nodeUtilQuery = useBoard<NodeUtil>('/api/portal/nodeutil?' + range.api);
+  const telemetryQuery = useBoard<Cluster>('/api/portal/cluster');
+  const nodeUtilQuery = useBoard<NodeUtil>('/api/portal/nodeutil');
   const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery];
   const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
   const snapshot = inventoryQuery.data;
@@ -423,7 +421,6 @@ function FleetInfiniBandEvidence() {
       ? hasData ? 'Partial snapshot; unavailable evidence stays Unknown.' : 'Unavailable.'
       : 'Snapshot; not live.';
   return <section className="data-panel" aria-label="GPU dashboard data">
-    <TimeRangeControls defaultWindow="24h"/>
     <div className="panel-status">
       <span role="status">GPU dashboard data: {status}{hasData && lastUpdatedAt > 0 && <>
         {' '}Last successful response <time dateTime={new Date(lastUpdatedAt).toISOString()}>{new Date(lastUpdatedAt).toLocaleString()}</time>.

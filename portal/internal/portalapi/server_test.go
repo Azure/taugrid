@@ -752,15 +752,108 @@ func TestHistoricalRangeValidation(t *testing.T) {
 	}
 }
 
+func TestFleetSnapshotRelativeWindowCompatibility(t *testing.T) {
+	for _, endpoint := range []string{"cluster", "nodeutil"} {
+		for _, test := range []struct {
+			query  string
+			window string
+			filter string
+		}{
+			{"", "15m0s", "ago(900s)"},
+			{"window=3600s", "1h0m0s", "ago(3600s)"},
+			{"window=24h", "24h0m0s", "ago(86400s)"},
+			{"window=bad", "15m0s", "ago(900s)"},
+			{"window=", "15m0s", "ago(900s)"},
+			{"window=-1h", "15m0s", "ago(900s)"},
+			{"window=0s", "15m0s", "ago(900s)"},
+			{"window=1h&window=24h", "1h0m0s", "ago(3600s)"},
+			{"start=2026-09-16T00:00:00Z&end=2026-09-16T01:00:00Z", "15m0s", "ago(900s)"},
+			{"start=bad", "15m0s", "ago(900s)"},
+			{"window=24h&start=bad&end=bad", "24h0m0s", "ago(86400s)"},
+		} {
+			t.Run(endpoint+"/"+test.query, func(t *testing.T) {
+				querier := &scopedPortalQuerier{}
+				server, err := NewServer(Options{Stellar: expapi.Options{Source: "kusto"},
+					Cluster: ClusterOptions{Querier: querier}, NodeUtil: NodeUtilOptions{Querier: querier}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/"+endpoint+"?"+test.query, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+				}
+				var snapshot struct {
+					Window string `json:"window"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &snapshot); err != nil {
+					t.Fatal(err)
+				}
+				if snapshot.Window != test.window {
+					t.Fatalf("window = %q, want %q", snapshot.Window, test.window)
+				}
+				if len(querier.kqls) != 1 || !strings.Contains(querier.kqls[0], test.filter) {
+					t.Fatalf("query missing %q", test.filter)
+				}
+				if strings.Contains(querier.kqls[0], "datetime(") {
+					t.Fatalf("snapshot query must not use absolute bounds: %s", querier.kqls[0])
+				}
+			})
+		}
+	}
+}
+
+func TestFleetSnapshotUnavailableWithoutBackend(t *testing.T) {
+	for _, endpoint := range []string{"cluster", "nodeutil"} {
+		for _, query := range []string{"window=24h", "window=bad", "window=", "window=1h&window=1h", "start=bad"} {
+			t.Run(endpoint+"/"+query, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/"+endpoint+"?"+query, nil))
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Fatalf("status = %d, want 503", rec.Code)
+				}
+				var body map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["state"] != "unavailable" || body["scope"] == nil || body["reason"] == nil {
+					t.Fatalf("unexpected error envelope: %v", body)
+				}
+			})
+		}
+		rec := httptest.NewRecorder()
+		newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/"+endpoint+"?window=1h", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("valid range status = %d, want 503", rec.Code)
+		}
+	}
+}
+
+func TestFleetUpstreamFailureRemainsBadGateway(t *testing.T) {
+	for _, endpoint := range []string{"cluster", "nodeutil"} {
+		t.Run(endpoint, func(t *testing.T) {
+			querier := &scopedPortalQuerier{err: errors.New("upstream unavailable")}
+			server, err := NewServer(Options{Stellar: expapi.Options{Source: "kusto"},
+				Cluster: ClusterOptions{Querier: querier}, NodeUtil: NodeUtilOptions{Querier: querier}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/"+endpoint+"?window=1h", nil))
+			if rec.Code != http.StatusBadGateway || len(querier.kqls) != 1 || !strings.Contains(rec.Body.String(), "upstream unavailable") {
+				t.Fatalf("status = %d, queries = %d: %s", rec.Code, len(querier.kqls), rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestHistoricalHandlersRejectInvalidRanges(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
 		opts Options
 	}{
-		{name: "cluster", path: "/api/portal/cluster?window=bad", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cluster: ClusterOptions{Querier: &stubClusterQuerier{}}}},
 		{name: "cost", path: "/api/portal/cost?start=bad&end=2026-09-17T09%3A00%3A00Z", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cost: CostOptions{Querier: &stubCostQuerier{}}}},
-		{name: "node util", path: "/api/portal/nodeutil?window=1h&start=2026-09-16T00%3A00%3A00Z&end=2026-09-17T09%3A00%3A00Z", opts: Options{Stellar: expapi.Options{Source: "kusto"}, NodeUtil: NodeUtilOptions{Querier: &stubClusterQuerier{}}}},
 		{name: "repeated cost window", path: "/api/portal/cost?window=1h&window=24h", opts: Options{Stellar: expapi.Options{Source: "kusto"}, Cost: CostOptions{Querier: &stubCostQuerier{}}}},
 	}
 	for _, tc := range tests {
@@ -1983,11 +2076,12 @@ func (r *scopedPortalReader) ListRayJobs(_ context.Context, namespace string) ([
 
 type scopedPortalQuerier struct {
 	kqls []string
+	err  error
 }
 
 func (q *scopedPortalQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row, error) {
 	q.kqls = append(q.kqls, kql)
-	return nil, nil
+	return nil, q.err
 }
 
 func managedPortalServer(t *testing.T, cfg WorkspaceDirectoryConfig) (*Server, *scopedPortalReader, *scopedPortalQuerier) {
