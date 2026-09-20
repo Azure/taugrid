@@ -572,6 +572,186 @@ func TestRenderRestrictedSecurityRejectsProfileCapabilities(t *testing.T) {
 	}
 }
 
+func rdmaProfile() profile.Profile {
+	p := trainProfile()
+	p.Resources.GPU = profile.GPUContract{Count: 8, Size: "l"}
+	return p
+}
+
+func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "train.py")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\nprint('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Render(rdmaProfile(), Options{
+		Name:             "rdma-nccl-job",
+		Namespace:        "tau",
+		ScriptPath:       script,
+		Launcher:         "torchrun",
+		ProcessesPerNode: 8,
+		RDMA: RDMAOptions{
+			Enabled:      true,
+			ResourceName: "rdma/rdma_shared_device_a",
+			Count:        1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	c := pod["containers"].([]any)[0].(map[string]any)
+
+	// Verify securityContext capabilities.
+	sc := c["securityContext"].(map[string]any)
+	caps := sc["capabilities"].(map[string]any)
+	add := caps["add"].([]any)
+	wantCaps := []string{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"}
+	if len(add) != len(wantCaps) {
+		t.Fatalf("expected %d capabilities, got %v", len(wantCaps), add)
+	}
+	for i, want := range wantCaps {
+		if add[i] != want {
+			t.Errorf("capability[%d] = %v, want %v", i, add[i], want)
+		}
+	}
+	if fmt.Sprint(sc["runAsUser"]) != "0" || fmt.Sprint(sc["runAsGroup"]) != "0" {
+		t.Errorf("expected runAsUser/runAsGroup 0, got %v/%v", sc["runAsUser"], sc["runAsGroup"])
+	}
+	if sc["allowPrivilegeEscalation"] != false {
+		t.Errorf("expected allowPrivilegeEscalation=false")
+	}
+
+	// Verify RDMA device resources.
+	resources := c["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if requests["rdma/rdma_shared_device_a"] != "1" {
+		t.Errorf("requests missing RDMA resource: %v", requests)
+	}
+	if limits["rdma/rdma_shared_device_a"] != "1" {
+		t.Errorf("limits missing RDMA resource: %v", limits)
+	}
+
+	// Verify /dev/shm size is 32Gi.
+	volumes := pod["volumes"].([]any)
+	var shmSize string
+	for _, v := range volumes {
+		vol := v.(map[string]any)
+		if vol["name"] == "dshm" {
+			shmSize = vol["emptyDir"].(map[string]any)["sizeLimit"].(string)
+		}
+	}
+	if shmSize != "32Gi" {
+		t.Errorf("dshm sizeLimit = %q, want 32Gi", shmSize)
+	}
+}
+
+func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
+	p := trainProfile()
+	p.Runtime.SecurityContext = map[string]any{
+		"capabilities":           map[string]any{"add": []any{"SYS_ADMIN"}},
+		"readOnlyRootFilesystem": true,
+		"seLinuxOptions":         map[string]any{"level": "s0:c123,c456"},
+		"seccompProfile": map[string]any{
+			"type":             "Localhost",
+			"localhostProfile": "profiles/training.json",
+		},
+	}
+	out, err := Render(p, Options{
+		Name:      "rdma-merge",
+		Namespace: "tau",
+		Command:   []string{"python", "train.py"},
+		RDMA: RDMAOptions{
+			Enabled:      true,
+			ResourceName: "rdma/rdma_shared_device_a",
+			Count:        1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	c := pod["containers"].([]any)[0].(map[string]any)
+	sc := c["securityContext"].(map[string]any)
+
+	// RDMA-specific fields must be set.
+	caps := sc["capabilities"].(map[string]any)
+	add := caps["add"].([]any)
+	if len(add) != 3 || add[0] != "IPC_LOCK" {
+		t.Errorf("RDMA capabilities should override profile, got %v", add)
+	}
+	if fmt.Sprint(sc["runAsUser"]) != "0" {
+		t.Errorf("runAsUser should be 0, got %v", sc["runAsUser"])
+	}
+
+	// Unrelated profile fields must survive the merge.
+	if sc["readOnlyRootFilesystem"] != true {
+		t.Errorf("readOnlyRootFilesystem should be preserved, got %v", sc["readOnlyRootFilesystem"])
+	}
+	sel := sc["seLinuxOptions"].(map[string]any)
+	if sel["level"] != "s0:c123,c456" {
+		t.Errorf("seLinuxOptions should be preserved, got %v", sc["seLinuxOptions"])
+	}
+	seccomp := sc["seccompProfile"].(map[string]any)
+	if seccomp["type"] != "Localhost" || seccomp["localhostProfile"] != "profiles/training.json" {
+		t.Errorf("seccompProfile should be preserved, got %v", sc["seccompProfile"])
+	}
+}
+
+func TestRender_RDMARejectsRunAsNonRootProfile(t *testing.T) {
+	p := trainProfile()
+	p.Runtime.SecurityContext = map[string]any{"runAsNonRoot": true}
+
+	_, err := Render(p, Options{
+		Name:      "rdma-nonroot-conflict",
+		Namespace: "tau",
+		Command:   []string{"python", "train.py"},
+		RDMA: RDMAOptions{
+			Enabled:      true,
+			ResourceName: "rdma/rdma_shared_device_a",
+			Count:        1,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runAsNonRoot=true") {
+		t.Fatalf("expected runAsNonRoot conflict, got %v", err)
+	}
+}
+
+func TestNormalizeRDMA(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		opts := runconfig.NormalizeRDMA(runconfig.RDMA{Enabled: false})
+		if opts.Enabled {
+			t.Fatal("expected disabled")
+		}
+	})
+	t.Run("defaults", func(t *testing.T) {
+		opts := runconfig.NormalizeRDMA(runconfig.RDMA{Enabled: true})
+		if !opts.Enabled {
+			t.Fatal("expected enabled")
+		}
+		if opts.ResourceName != "rdma/rdma_shared_device_a" {
+			t.Errorf("resource name = %q", opts.ResourceName)
+		}
+		if opts.Count != 1 {
+			t.Errorf("count = %d", opts.Count)
+		}
+	})
+	t.Run("custom", func(t *testing.T) {
+		count := 2
+		opts := runconfig.NormalizeRDMA(runconfig.RDMA{
+			Enabled:      true,
+			ResourceName: "rdma/hca_shared_devices_a",
+			Count:        &count,
+		})
+		if opts.ResourceName != "rdma/hca_shared_devices_a" {
+			t.Errorf("resource name = %q", opts.ResourceName)
+		}
+		if opts.Count != 2 {
+			t.Errorf("count = %d", opts.Count)
+		}
+	})
+}
+
 // podTolerations returns the rendered pod tolerations as key|operator|value|effect
 // strings, which keeps the assertions below readable and order-independent.
 func podTolerations(t *testing.T, out []byte) []string {

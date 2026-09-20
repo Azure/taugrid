@@ -838,7 +838,7 @@ func mergeStringMaps(first, second map[string]string) map[string]string {
 }
 
 func validKubernetesLabelValue(v string) bool {
-	return len(v) <= maxResourceNameLen && qualifiedNameSegmentRE.MatchString(v)
+	return len(v) <= maxResourceNameLen && runconfig.QualifiedNameSegmentRE().MatchString(v)
 }
 
 func (opts RenderOptions) profileOptions() ProfileOptions {
@@ -1394,7 +1394,7 @@ func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePai
 //
 // `workers` is the execution-worker count. A separate control-only head is
 // always rendered on the system node pool.
-func buildRayJob(name, resourceName, namespace, manifestName string, gpus, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runtimeRDMAConfig, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
+func buildRayJob(name, resourceName, namespace, manifestName string, gpus, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runconfig.NormalizedRDMA, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffload)
 	if err != nil {
 		return nil, err
@@ -1426,7 +1426,7 @@ func buildRayJob(name, resourceName, namespace, manifestName string, gpus, worke
 
 // buildRayJobCPU renders a CPU-only RayJob with a system head and `workers`
 // dedicated CPU execution workers.
-func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, resources workloadResourceSizing, rdma runtimeRDMAConfig, spcName string, embeds payloadEmbeds) ([]byte, error) {
+func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, resources workloadResourceSizing, rdma runconfig.NormalizedRDMA, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffloadRuntime{})
 	if err != nil {
 		return nil, err
@@ -1463,7 +1463,7 @@ func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers 
 // into the eval pod's TAU_UPSTREAM_CHECKPOINT env var (empty string if
 // the eval doesn't depend on a train job, in which case the cluster
 // wrapper exposes ctx.upstream_checkpoint as None).
-func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, cpuWorkers int, image string, smokePairs int, upstreamCheckpoint string, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runtimeRDMAConfig, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
+func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, cpuWorkers int, image string, smokePairs int, upstreamCheckpoint string, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runconfig.NormalizedRDMA, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffload)
 	if err != nil {
 		return nil, err
@@ -1710,7 +1710,7 @@ type workloadTemplateInput struct {
 	DataPVC            string
 	StorageMounts      []StorageMount
 	Scheduling         schedulingMetadata
-	RDMA               runtimeRDMAConfig
+	RDMA               runconfig.NormalizedRDMA
 	Blocks             workloadBlocks
 	MetricsOffload     metricsOffloadRuntime
 	CheckpointArtifact string

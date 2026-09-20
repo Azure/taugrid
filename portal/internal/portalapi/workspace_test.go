@@ -267,6 +267,69 @@ func TestWorkspaceDirectoryValidation(t *testing.T) {
 	}
 }
 
+func TestIsSafeLocalAbsolutePath(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "root", raw: "/", want: true},
+		{name: "local route", raw: "/stellar", want: true},
+		{name: "base path", raw: "/base/stellar", want: true},
+		{name: "query and fragment", raw: "/stellar?project=vision#runs", want: true},
+		{name: "URL in query", raw: "/stellar?next=https://example.com", want: true},
+		{name: "encoded slashes", raw: "/%2F%2Fexample.com/stellar", want: true},
+		{name: "encoded backslash", raw: "/%5Cexample.com/stellar", want: true},
+		{name: "Unicode path", raw: "/実験", want: true},
+		{name: "empty"},
+		{name: "relative path", raw: "stellar"},
+		{name: "absolute URL", raw: "https://stellar.example/stellar"},
+		{name: "double slash", raw: "//attacker.example/stellar"},
+		{name: "triple slash", raw: "///attacker.example/stellar"},
+		{name: "slash backslash", raw: `/\attacker.example/stellar`},
+		{name: "backslash slash", raw: `\/attacker.example/stellar`},
+		{name: "double backslash", raw: `\\attacker.example/stellar`},
+		{name: "backslash in path", raw: `/stellar\other`},
+		{name: "backslash in query", raw: `/stellar?project=\other`},
+		{name: "backslash in fragment", raw: `/stellar#\other`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSafeLocalAbsolutePath(tt.raw); got != tt.want {
+				t.Fatalf("isSafeLocalAbsolutePath(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateExperimentsURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		local   bool
+		wantErr bool
+	}{
+		{name: "local root", raw: "/", local: true},
+		{name: "local route", raw: "/stellar?project=vision#runs", local: true},
+		{name: "local encoded path", raw: "/%2F%5Cstellar", local: true},
+		{name: "local Unicode path", raw: "/実験", local: true},
+		{name: "local workspace HTTPS navigation", raw: "https://stellar.example/base/stellar?project=vision#runs", local: true},
+		{name: "remote workspace HTTPS navigation", raw: "https://stellar.example/base/stellar?project=vision#runs"},
+		{name: "remote workspace local path", raw: "/stellar", wantErr: true},
+		{name: "HTTP navigation", raw: "http://stellar.example/stellar", local: true, wantErr: true},
+		{name: "credentials", raw: "https://user:pass@stellar.example/stellar", local: true, wantErr: true},
+		{name: "malformed escape", raw: "/stellar%zz", local: true, wantErr: true},
+		{name: "control character", raw: "/\t/attacker.example", local: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateExperimentsURL(tt.raw, tt.local); (err != nil) != tt.wantErr {
+				t.Fatalf("validateExperimentsURL(%q, %v) = %v, wantErr %v", tt.raw, tt.local, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestWorkspaceDirectoryRejectsUnsafeLocalExperimentPaths(t *testing.T) {
 	for _, experimentsURL := range []string{"//attacker.example/stellar", `/\attacker.example/stellar`} {
 		t.Run(experimentsURL, func(t *testing.T) {

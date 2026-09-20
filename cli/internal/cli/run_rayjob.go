@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/kube"
+	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -236,6 +237,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 			EnvSecrets:         envSecrets,
 			RedactSecrets:      o.dryRun == "client",
 			SecurityMode:       o.securityMode,
+			RDMA:               runconfig.NormalizeRDMA(o.rdma),
 			DataPVC:            dataPVC,
 			Profile:            p,
 			TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),
