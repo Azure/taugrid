@@ -353,6 +353,32 @@ func TestStatusDeliveryFailureDoesNotPublishDone(t *testing.T) {
 	}
 }
 
+func TestRequiredADXFinalStatusFailureDoesNotPublishDone(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	completionPath := filepath.Join(root, "completion.json")
+	done := filepath.Join(root, "done")
+	writeFile(t, history, "")
+	writeFile(t, completionPath, `{"state":"succeeded","completed_at":"2023-11-14T22:15:00Z"}`)
+	client := &fakeADXClient{results: []adxQueuedResult{
+		&fakeADXResult{status: adxStatusQueued},
+	}}
+	sink := adxTestSink(client)
+	options := baseOptions(root, history, sink)
+	options.CompletionFile, options.DoneFile = completionPath, done
+
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runner.Run(context.Background()); err == nil || result.Completed {
+		t.Fatalf("required non-final ADX status completed: result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(done); !os.IsNotExist(err) {
+		t.Fatalf("done file exists after non-final ADX status: %v", err)
+	}
+}
+
 func TestCorruptCheckpointAndChunkFailClosed(t *testing.T) {
 	t.Run("checkpoint", func(t *testing.T) {
 		root := t.TempDir()
