@@ -122,14 +122,13 @@ Stellar uses scalar metric tables supplied by its selected ingestion path
 follow its published chart guide and enable Metrics/Logs table precreation
 before broad collection to avoid ADX control-plane throttling.
 
-The standalone `collector-v1` runtime can additionally send canonical
+The standalone `collector-v1` runtime sends canonical
 `tau.experiment.metric.v1` chunks through queued ADX ingestion. Prepare the
-additive `Metrics.TauExpMetricEventsV1` table, its
+`Metrics.TauExpMetricEventsV1` table, its
 `TauExpMetricEventsV1Json` mapping, and the stable
-`TauExpMetricEventRows()` function through adx-mon before enabling this path.
-Keep typed assets and catalog cutover disabled until their asynchronous
-backfills and parity checks are healthy. Raw `ExperimentMetrics` remains
-available for legacy chart queries.
+`TauExpMetricEventRows()` function through adx-mon before enabling workloads.
+Canonical Portal v2 discovery and series reads require the typed catalog
+Functions and do not fall back to raw `ExperimentMetrics`.
 
 Grant the workload identity used by the TauWorkspace ServiceAccount only the
 ADX database/table ingestion role required for `TauExpMetricEventsV1`. The
@@ -142,7 +141,7 @@ Queued submission is not final ingestion acknowledgement. TauGrid's
 `adx-queued-v1` sink requests final result reporting and waits for ADX to report
 success before persisting its delivery receipt. Monitor final ingestion
 failures, status latency/timeouts, throttling, and materialized-view health
-before changing workloads from `dual-shadow` to `dual-required`.
+for every workload using `adx-required`.
 
 Only hand consumers a tested endpoint, database, ServiceAccount subject, and
 non-secret identity client ID. Then configure [Portal](../enable-portal/) or

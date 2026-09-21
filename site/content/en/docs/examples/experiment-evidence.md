@@ -81,21 +81,21 @@ tau run --workspace taugrid-default \
   --dry-run=client
 ```
 
-For default-off typed ADX shadow verification with `collector-v1`, replace the
-image/runtime exports and add:
+For required typed ADX delivery with `collector-v1`, replace the image/runtime
+exports and add:
 
 ```bash
 export TAU_METRICS_OFFLOAD_RUNTIME=collector-v1
 export TAU_METRICS_OFFLOAD_IMAGE=<taugrid-metrics-collector-image@sha256:digest>
-export TAU_METRICS_OFFLOAD_DELIVERY_MODE=dual-shadow
+export TAU_METRICS_OFFLOAD_DELIVERY_MODE=adx-required
 export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
 export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
 export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
 ```
 
-The identity needs only ADX ingestion permission. Switch to `dual-required`
-only after typed ingestion and parity monitoring are healthy; that mode fails
-closed and withholds terminal completion if either sink is incomplete.
+The identity needs only ADX ingestion permission. `adx-required` fails closed
+and withholds terminal completion until ADX reports a durable successful
+ingestion receipt.
 
 Confirm that the rendered RayJob includes:
 

@@ -2,7 +2,6 @@ suite: Typed experiment metric events v1
 templates:
   - templates/management-commands/typed-metric-events-v1.yaml
   - templates/functions/tau-exp-metric-event-rows.yaml
-  - templates/functions/tau-exp-metric-delivery-parity-rows.yaml
   - templates/functions/tau-exp-metric-delivery-observability-rows.yaml
 tests:
   - it: suppresses typed delivery assets by default
@@ -98,26 +97,11 @@ tests:
           path: spec.body
           pattern: '(^|\n)[[:space:]]+project ='
 
-  - it: keeps parity and observability query assets default off
-    template: templates/functions/tau-exp-metric-delivery-parity-rows.yaml
+  - it: keeps typed delivery observability default off
+    template: templates/functions/tau-exp-metric-delivery-observability-rows.yaml
     asserts:
       - hasDocuments:
           count: 0
-
-  - it: renders shadow parity and typed delivery observability
-    template: templates/functions/tau-exp-metric-delivery-parity-rows.yaml
-    set:
-      functions.items.tauExpMetricDeliveryParityRows.enabled: true
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpMetricDeliveryParityRows\(\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'join kind=fullouter typed'
-      - matchRegex:
-          path: spec.body
-          pattern: 'point_count_delta'
 
   - it: renders duplicate schema and export-delay observability
     template: templates/functions/tau-exp-metric-delivery-observability-rows.yaml

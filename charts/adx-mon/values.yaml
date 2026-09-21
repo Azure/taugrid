@@ -600,10 +600,6 @@ functions:
     tauExpRunCatalogRows:
       enabled: false
       database: Metrics
-    # -- Hourly legacy/typed delivery parity query.
-    tauExpMetricDeliveryParityRows:
-      enabled: false
-      database: Metrics
     # -- Typed delivery duplication and digest observability query.
     tauExpMetricDeliveryObservabilityRows:
       enabled: false

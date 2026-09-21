@@ -250,7 +250,7 @@ cluster DNS.
 | `functions.items.<name>.enabled` | Enable individual function | `true` |
 | `functions.items.<name>.database` | Target ADX database | varies |
 
-Available functions: `gpuHealth`, `nodeHealth`, `containerMetrics`, `kueueMetrics`, `ncclErrors`, `xidErrors`, `trainingJobSummary`, `experimentMetricsDashboardRows`, `tauExpMetricEventRows`, `tauExpSeriesCatalogRows`, `tauExpRunCatalogRows`, `tauExpMetricDeliveryParityRows`, `tauExpMetricDeliveryObservabilityRows`.
+Available functions: `gpuHealth`, `nodeHealth`, `containerMetrics`, `kueueMetrics`, `ncclErrors`, `xidErrors`, `trainingJobSummary`, `experimentMetricsDashboardRows`, `tauExpMetricEventRows`, `tauExpSeriesCatalogRows`, `tauExpRunCatalogRows`, `tauExpMetricDeliveryObservabilityRows`.
 
 The additive typed delivery path is disabled by default. Enable
 `managementCommands.typedMetricEventsV1.enabled` to create
