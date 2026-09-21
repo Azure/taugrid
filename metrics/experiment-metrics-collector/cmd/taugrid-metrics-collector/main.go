@@ -259,6 +259,6 @@ func printUsage(w io.Writer) {
   %s --version
 
 Collect immutable experiment metric history into a typed, restart-safe spool
-and optionally deliver it through Prometheus remote-write and ADX queued ingestion.
+and deliver it through required ADX queued ingestion.
 `, binaryName, binaryName, binaryName)
 }

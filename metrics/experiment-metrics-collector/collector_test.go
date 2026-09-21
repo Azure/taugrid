@@ -341,60 +341,6 @@ func TestStatusDeliveryFailureDoesNotPublishDone(t *testing.T) {
 	}
 }
 
-func TestOptionalShadowSinkFailureIsVisibleAndDoesNotBlockCompletion(t *testing.T) {
-	root := t.TempDir()
-	history := filepath.Join(root, "history.jsonl")
-	completionPath := filepath.Join(root, "completion.json")
-	done := filepath.Join(root, "done")
-	writeFile(t, history, historyRow)
-	writeFile(t, completionPath, `{"state":"succeeded","completed_at":"2023-11-14T22:15:00Z"}`)
-	required := &recordingSink{name: "required", config: "v1"}
-	shadow := &recordingSink{name: "shadow", config: "v1", fail: errors.New(strings.Repeat("failure ", 300))}
-	options := baseOptions(root, history, required)
-	options.OptionalSinks = []Sink{shadow}
-	options.CompletionFile, options.DoneFile = completionPath, done
-
-	result := runCollector(t, options)
-	if !result.Completed {
-		t.Fatal("optional shadow failure blocked terminal completion")
-	}
-	if _, err := os.Stat(done); err != nil {
-		t.Fatal(err)
-	}
-	if len(result.OptionalSinkFailures) != 2 {
-		t.Fatalf("optional failures=%+v, want history and terminal visibility", result.OptionalSinkFailures)
-	}
-	if result.OptionalSinkFailureCount != 2 {
-		t.Fatalf("optional failure count=%d, want 2", result.OptionalSinkFailureCount)
-	}
-	for _, failure := range result.OptionalSinkFailures {
-		if failure.Sink != "shadow" || failure.ChunkDigest == "" || len(failure.Error) > 1027 {
-			t.Fatalf("invalid optional failure=%+v", failure)
-		}
-	}
-	if required.deliveries != 2 {
-		t.Fatalf("required deliveries=%d, want history and terminal", required.deliveries)
-	}
-}
-
-func TestOptionalSinkFailureDetailsAreBoundedAndDeduplicated(t *testing.T) {
-	result := &Result{}
-	for i := 0; i < 300; i++ {
-		recordOptionalSinkFailure(result, SinkFailure{
-			Sink: "shadow", ChunkDigest: fmt.Sprintf("%064x", i), Error: "failed",
-		})
-	}
-	recordOptionalSinkFailure(result, SinkFailure{
-		Sink: "shadow", ChunkDigest: fmt.Sprintf("%064x", 0), Error: "latest failure",
-	})
-	if len(result.OptionalSinkFailures) != 256 {
-		t.Fatalf("failure details=%d, want bounded 256", len(result.OptionalSinkFailures))
-	}
-	if result.OptionalSinkFailures[0].Error != "latest failure" {
-		t.Fatalf("duplicate detail was not updated: %+v", result.OptionalSinkFailures[0])
-	}
-}
-
 func TestRequiredADXFinalStatusFailureDoesNotPublishDone(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")

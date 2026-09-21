@@ -173,41 +173,6 @@ func (s *stubV2CatalogSource) searchExperiments(_ context.Context, source string
 	}, nil
 }
 
-func TestV2AutoExperimentProvenanceReportsOnlySuccessfulSources(t *testing.T) {
-	localFailure := errors.New("local unavailable")
-	kustoFailure := errors.New("kusto unavailable")
-	kustoResult := expstore.ExperimentSearchResult{Experiments: []expstore.ExperimentSummary{{
-		ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "kusto-only"},
-	}}}
-	localResult := expstore.ExperimentSearchResult{Experiments: []expstore.ExperimentSummary{{
-		ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "local-only"},
-	}}}
-
-	fallback, err := searchAutoExperimentCatalogs(context.Background(), true, 10,
-		func() (expstore.ExperimentSearchResult, error) {
-			return expstore.ExperimentSearchResult{}, localFailure
-		},
-		func() (expstore.ExperimentSearchResult, error) { return kustoResult, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(fallback.ServedSources, []string{"kusto"}) {
-		t.Fatalf("fallback sources = %v, want kusto", fallback.ServedSources)
-	}
-
-	skipped, err := searchAutoExperimentCatalogs(context.Background(), true, 10,
-		func() (expstore.ExperimentSearchResult, error) { return localResult, nil },
-		func() (expstore.ExperimentSearchResult, error) {
-			return expstore.ExperimentSearchResult{}, kustoFailure
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(skipped.ServedSources, []string{"local"}) {
-		t.Fatalf("skipped sources = %v, want local", skipped.ServedSources)
-	}
-}
-
 func (s *stubV2CatalogSource) searchRuns(_ context.Context, _ string, opts expstore.RunSearchOptions) (runSearchResponse, error) {
 	s.lastRunOpts = opts
 	if s.runErr != nil {

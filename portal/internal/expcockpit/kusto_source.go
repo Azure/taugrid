@@ -697,9 +697,9 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 		runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{
 			Target: opts.Target, Workspace: opts.Workspace, Query: opts.Query, Project: opts.Project,
 			Lifecycle: opts.Lifecycle, Tags: opts.Tags, MetricNames: opts.MetricNames,
-			MetricFilters: opts.MetricFilters, Since: opts.Since, Limit: catalogScanLimit(opts.Limit),
+			MetricFilters: opts.MetricFilters, Since: opts.Since, Limit: opts.Limit,
 		})
-		for _, summary := range catalogExperimentSummaries(runs, s.sourcePath()) {
+		for _, summary := range catalogExperimentSummaries(runRows, runs, s.sourcePath()) {
 			summariesByKey[summary.Project+"\x00"+summary.ExperimentID] = summary
 		}
 		pageCursor, pageCount := catalogExperimentPageCursor(runRows)
@@ -735,11 +735,18 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 	}, nil
 }
 
-func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []expstore.ExperimentSummary {
+func catalogExperimentSummaries(rows []KustoMetricRow, runs []expstore.RunSearchRun, source string) []expstore.ExperimentSummary {
 	type accumulator struct {
 		summary expstore.ExperimentSummary
 		groups  map[string]bool
 		metrics map[string]bool
+	}
+	latestActivity := map[string]string{}
+	for _, row := range rows {
+		key := catalogRunKey(row.Project, row.ExperimentID)
+		if row.LatestActivityAt > latestActivity[key] {
+			latestActivity[key] = row.LatestActivityAt
+		}
 	}
 	byExperiment := map[string]*accumulator{}
 	for _, run := range runs {
@@ -765,7 +772,7 @@ func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []e
 		}
 		item.summary.StateCounts[firstNonEmptyString(run.State, "unknown")]++
 		item.summary.LifecycleCounts[firstNonEmptyString(run.LifecycleState, "unknown")]++
-		latest := firstNonEmptyString(run.CompletedAt, run.StartedAt, run.CreatedAt)
+		latest := firstNonEmptyString(latestActivity[catalogRunKey(run.Project, experimentID)], run.CompletedAt, run.StartedAt, run.CreatedAt)
 		if latest > item.summary.LatestRunAt {
 			item.summary.LatestRunAt = latest
 			item.summary.UpdatedAt = latest
@@ -878,13 +885,6 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 		Truncated:     truncated,
 		Runs:          runs,
 	}, nil
-}
-
-func catalogScanLimit(limit int) int {
-	if limit < 1000 {
-		return 1000
-	}
-	return limit
 }
 
 func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []string, opts expstore.RunSearchOptions, runs []KustoMetricRow) ([]KustoMetricRow, error) {

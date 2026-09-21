@@ -109,18 +109,12 @@ type v2RunDetailResponse struct {
 }
 
 type v2Metric struct {
-	Name           string   `json:"name"`
-	Count          int64    `json:"count"`
-	FiniteCount    int64    `json:"finite_count"`
-	NonFiniteCount int64    `json:"non_finite_count"`
-	MinStep        *int64   `json:"min_step,omitempty"`
-	MaxStep        *int64   `json:"max_step,omitempty"`
-	LatestStep     *int64   `json:"latest_step,omitempty"`
-	LatestWallTime *int64   `json:"latest_wall_time,omitempty"`
-	LatestValue    *float64 `json:"latest_value,omitempty"`
-	MinValue       *float64 `json:"min_value,omitempty"`
-	MaxValue       *float64 `json:"max_value,omitempty"`
-	UpdatedAt      string   `json:"updated_at,omitempty"`
+	Name        string   `json:"name"`
+	MinStep     *int64   `json:"min_step,omitempty"`
+	MaxStep     *int64   `json:"max_step,omitempty"`
+	LatestStep  *int64   `json:"latest_step,omitempty"`
+	LatestValue *float64 `json:"latest_value,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
 }
 
 type v2MetricCatalogResponse struct {
@@ -196,69 +190,9 @@ func (a stableFunctionCatalogSource) searchExperiments(ctx context.Context, sour
 	case "kusto":
 		result, err := kustoSearch()
 		return v2ExperimentCatalogResult{Result: result, ServedSources: []string{"kusto"}}, err
-	case "auto":
-		return searchAutoExperimentCatalogs(ctx, a.server.hasKustoSource(), opts.Limit, localSearch, kustoSearch)
 	default:
 		return v2ExperimentCatalogResult{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
-}
-
-func searchAutoExperimentCatalogs(
-	ctx context.Context,
-	hasKusto bool,
-	limit int,
-	localSearch, kustoSearch func() (expstore.ExperimentSearchResult, error),
-) (v2ExperimentCatalogResult, error) {
-	local, localErr := localSearch()
-	if err := ctx.Err(); err != nil {
-		return v2ExperimentCatalogResult{Result: local}, err
-	}
-	if !hasKusto {
-		return v2ExperimentCatalogResult{Result: local, ServedSources: []string{"local"}}, localErr
-	}
-	kusto, kustoErr := kustoSearch()
-	if err := ctx.Err(); err != nil {
-		return v2ExperimentCatalogResult{Result: local}, err
-	}
-	if localErr != nil {
-		if kustoErr != nil {
-			return v2ExperimentCatalogResult{}, errors.Join(
-				fmt.Errorf("local experiment search: %w", localErr),
-				fmt.Errorf("Kusto experiment search: %w", kustoErr))
-		}
-		kusto.Warnings = append(kusto.Warnings,
-			fmt.Sprintf("source=auto fell back to Kusto because local experiment search failed: %v", localErr))
-		return v2ExperimentCatalogResult{Result: kusto, ServedSources: []string{"kusto"}}, nil
-	}
-	if kustoErr != nil {
-		local.Warnings = append(local.Warnings,
-			fmt.Sprintf("source=auto skipped Kusto experiment search because it failed: %v", kustoErr))
-		return v2ExperimentCatalogResult{Result: local, ServedSources: []string{"local"}}, nil
-	}
-	merged := mergeExperimentSearchResults(local, kusto, limit)
-	sources := experimentContributingSources(local, kusto)
-	return v2ExperimentCatalogResult{Result: merged, ServedSources: sources}, nil
-}
-
-func experimentContributingSources(local, kusto expstore.ExperimentSearchResult) []string {
-	sources := []string{}
-	if len(local.Experiments) > 0 {
-		sources = append(sources, "local")
-	}
-	localIDs := make(map[string]bool, len(local.Experiments))
-	for _, experiment := range local.Experiments {
-		localIDs[v2ExperimentCursorID(experiment)] = true
-	}
-	for _, experiment := range kusto.Experiments {
-		if !localIDs[v2ExperimentCursorID(experiment)] {
-			sources = append(sources, "kusto")
-			break
-		}
-	}
-	if len(sources) == 0 {
-		return []string{"local", "kusto"}
-	}
-	return sources
 }
 
 func (a stableFunctionCatalogSource) searchRuns(ctx context.Context, source string, opts expstore.RunSearchOptions) (runSearchResponse, error) {
@@ -274,13 +208,6 @@ func (a stableFunctionCatalogSource) searchRuns(ctx context.Context, source stri
 		return localSearch()
 	case "kusto":
 		return kustoSearch()
-	case "auto":
-		result, warnings, err := searchAutoSources(ctx, a.server.hasKustoSource(), "run", localSearch, kustoSearch,
-			func(local, kusto runSearchResponse) runSearchResponse {
-				return mergeRunSearchResults(local, kusto, opts.Limit)
-			})
-		result.Warnings = append(result.Warnings, warnings...)
-		return result, err
 	default:
 		return runSearchResponse{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
@@ -543,14 +470,11 @@ func (s *Server) handleV2MetricCatalog(w http.ResponseWriter, r *http.Request, r
 	metrics := make([]v2Metric, 0, len(run.Metrics))
 	for _, metric := range run.Metrics {
 		item := v2Metric{
-			Name: metric.MetricName, Count: metric.Count, FiniteCount: metric.FiniteCount,
-			NonFiniteCount: metric.NonFiniteCount, MinStep: metric.MinStep, MaxStep: metric.MaxStep,
-			LatestStep: metric.LatestStep, LatestWallTime: metric.LatestWallTime, UpdatedAt: metric.UpdatedAt,
+			Name: metric.MetricName, MinStep: metric.MinStep, MaxStep: metric.MaxStep,
+			LatestStep: metric.LatestStep, UpdatedAt: metric.UpdatedAt,
 		}
-		if metric.FiniteCount > 0 {
+		if run.Source == "kusto" || metric.FiniteCount > 0 {
 			item.LatestValue = float64Pointer(metric.LatestValue)
-			item.MinValue = float64Pointer(metric.MinValue)
-			item.MaxValue = float64Pointer(metric.MaxValue)
 		}
 		metrics = append(metrics, item)
 	}
@@ -658,6 +582,10 @@ func (s *Server) v2SourceAndWorkspace(w http.ResponseWriter, r *http.Request) (s
 	}
 	if source == "" {
 		source = s.source
+	}
+	if source == "auto" {
+		s.writeV2Error(w, http.StatusBadRequest, "INVALID_SOURCE", "canonical v2 reads require source=local or source=kusto")
+		return "", "", false
 	}
 	workspace, err := s.resolveWorkspace(r)
 	if err != nil {

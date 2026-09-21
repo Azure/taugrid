@@ -168,7 +168,7 @@ func TestCatalogExperimentSummariesKeepProjectsDistinct(t *testing.T) {
 		{RunRecord: expstore.RunRecord{Project: "project-a", ExperimentID: "shared", RunID: "run-a"}},
 		{RunRecord: expstore.RunRecord{Project: "project-b", ExperimentID: "shared", RunID: "run-b"}},
 	}
-	summaries := catalogExperimentSummaries(runs, "kusto")
+	summaries := catalogExperimentSummaries(nil, runs, "kusto")
 	if len(summaries) != 2 {
 		t.Fatalf("same experiment ID across projects was merged: %+v", summaries)
 	}

@@ -38,24 +38,15 @@ type Options struct {
 	Watch                   bool
 	MaxIterations           int
 	Sinks                   []Sink
-	OptionalSinks           []Sink
 	Now                     func() time.Time
 	fault                   func(faultPoint) error
 }
 
-type SinkFailure struct {
-	Sink        string `json:"sink"`
-	ChunkDigest string `json:"chunk_digest"`
-	Error       string `json:"error"`
-}
-
 type Result struct {
-	Chunks                   int           `json:"chunks"`
-	Events                   int           `json:"events"`
-	ReceiptsUsed             int           `json:"receipts_used"`
-	Completed                bool          `json:"completed"`
-	OptionalSinkFailureCount int           `json:"optional_sink_failure_count,omitempty"`
-	OptionalSinkFailures     []SinkFailure `json:"optional_sink_failures,omitempty"`
+	Chunks       int  `json:"chunks"`
+	Events       int  `json:"events"`
+	ReceiptsUsed int  `json:"receipts_used"`
+	Completed    bool `json:"completed"`
 }
 
 type Runner struct {
@@ -88,7 +79,7 @@ func New(options Options) (*Runner, error) {
 	}
 	sinkNames := map[string]bool{}
 	receiptNamespaces := map[string]bool{}
-	for _, sink := range append(append([]Sink(nil), options.Sinks...), options.OptionalSinks...) {
+	for _, sink := range options.Sinks {
 		if sink == nil || strings.TrimSpace(sink.Name()) == "" {
 			return nil, fmt.Errorf("sink name is required")
 		}
@@ -516,39 +507,7 @@ func (r *Runner) deliverChunk(ctx context.Context, chunk MetricEventChunk, resul
 			result.ReceiptsUsed++
 		}
 	}
-	for _, sink := range r.options.OptionalSinks {
-		_, reused, err := deliverWithReceipt(ctx, r.options.Out, sink, chunk, r.inject)
-		if err != nil {
-			result.OptionalSinkFailureCount++
-			failure := SinkFailure{
-				Sink: sink.Name(), ChunkDigest: chunk.Digest, Error: boundedError(err),
-			}
-			recordOptionalSinkFailure(result, failure)
-			continue
-		}
-		if reused {
-			result.ReceiptsUsed++
-		}
-	}
 	return nil
-}
-
-func recordOptionalSinkFailure(result *Result, failure SinkFailure) {
-	const maxFailureDetails = 256
-	for index := range result.OptionalSinkFailures {
-		current := &result.OptionalSinkFailures[index]
-		if current.Sink == failure.Sink && current.ChunkDigest == failure.ChunkDigest {
-			current.Error = failure.Error
-			return
-		}
-	}
-	if len(result.OptionalSinkFailures) < maxFailureDetails {
-		result.OptionalSinkFailures = append(result.OptionalSinkFailures, failure)
-	}
-}
-
-func boundedError(err error) string {
-	return boundedText(err.Error())
 }
 
 func boundedText(text string) string {
