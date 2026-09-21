@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -152,7 +151,7 @@ func TestKustoCatalogAndSeriesKeepDuplicateRunIDsProjectScoped(t *testing.T) {
 }
 
 func TestKustoCatalogRequiresLiveQueryTransport(t *testing.T) {
-	source := KustoSource{MetricsFile: filepath.Join(t.TempDir(), "legacy-metrics.jsonl")}
+	source := KustoSource{}
 	if _, err := source.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{Limit: 10}); err == nil ||
 		!strings.Contains(err.Error(), "live Kusto query transport") {
 		t.Fatalf("SearchCatalogExperiments error = %v", err)
@@ -168,7 +167,7 @@ func TestCatalogExperimentSummariesKeepProjectsDistinct(t *testing.T) {
 		{RunRecord: expstore.RunRecord{Project: "project-a", ExperimentID: "shared", RunID: "run-a"}},
 		{RunRecord: expstore.RunRecord{Project: "project-b", ExperimentID: "shared", RunID: "run-b"}},
 	}
-	summaries := catalogExperimentSummaries(runs, "kusto")
+	summaries := catalogExperimentSummaries(nil, runs, "kusto")
 	if len(summaries) != 2 {
 		t.Fatalf("same experiment ID across projects was merged: %+v", summaries)
 	}

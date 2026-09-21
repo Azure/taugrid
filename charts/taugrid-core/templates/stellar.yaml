@@ -20,7 +20,7 @@ that plan. See README.md "Upgrading existing releases".
 {{- $hasVolumeMounts := or $usesExpstore (gt (len $extraVolumeMounts) 0) -}}
 {{- $hasVolumes := or $usesExpstore (gt (len $extraVolumes) 0) -}}
 {{- if and $stellar.importer.enabled (eq $source "kusto") -}}
-{{- fail "stellar.importer.enabled requires stellar.source=local or auto; source=kusto must not mount workload JSONL/PVC inputs" -}}
+{{- fail "stellar.importer.enabled requires stellar.source=local; source=kusto must not mount workload JSONL/PVC inputs" -}}
 {{- end -}}
 {{- if and $stellar.importer.enabled (not $stellar.importer.run) -}}
 {{- fail "stellar.importer.run is required when stellar.importer.enabled=true" -}}
@@ -35,7 +35,7 @@ that plan. See README.md "Upgrading existing releases".
 {{- fail "stellar.workspace is required when stellar.enabled=true; Stellar scopes every read to one TauWorkspace, and an unset workspace would fall back to the placeholder \"default\" and match no real runs" -}}
 {{- end -}}
 {{- if and $usesExpstore (not $stellar.expstore.pvcName) -}}
-{{- fail "stellar.expstore.pvcName must name a pre-provisioned platform-managed PVC when stellar.source=local or auto" -}}
+{{- fail "stellar.expstore.pvcName must name a pre-provisioned platform-managed PVC when stellar.source=local" -}}
 {{- end -}}
 {{- if not $stellar.image.repository -}}
 {{- fail "stellar.image.repository is required when stellar.enabled=true" -}}
@@ -43,14 +43,14 @@ that plan. See README.md "Upgrading existing releases".
 {{- if not $stellar.image.tag -}}
 {{- fail "stellar.image.tag is required when stellar.enabled=true; publish or select a real TauGrid Portal image tag" -}}
 {{- end -}}
-{{- if not (has $source (list "local" "auto" "kusto")) -}}
-{{- fail "stellar.source must be local, auto, or kusto" -}}
+{{- if not (has $source (list "local" "kusto")) -}}
+{{- fail "stellar.source must be local or kusto" -}}
 {{- end -}}
 {{- if ne $stellar.service.type "ClusterIP" -}}
 {{- fail "stellar.service.type must remain ClusterIP; use the Portal authenticated-proxy contract for researcher browser access" -}}
 {{- end -}}
-{{- if and (eq $source "kusto") (not $kusto.metricsFile) (not $kusto.queryCommand) -}}
-{{- fail "stellar.kusto.metricsFile or stellar.kusto.queryCommand is required when stellar.source=kusto" -}}
+{{- if and (eq $source "kusto") (not $kusto.endpoint) (not $kusto.queryCommand) -}}
+{{- fail "stellar.kusto.endpoint or stellar.kusto.queryCommand is required when stellar.source=kusto" -}}
 {{- end -}}
 {{- if $serviceAccount.create }}
 apiVersion: v1
@@ -175,24 +175,12 @@ spec:
             - {{ $stellar.workspace | quote }}
             - --source
             - {{ $source | quote }}
-            {{- with $kusto.metricsFile }}
-            - --kusto-metrics-file
-            - {{ . | quote }}
-            {{- end }}
-            {{- with $kusto.project }}
-            - --kusto-project
-            - {{ . | quote }}
-            {{- end }}
             {{- with $kusto.endpoint }}
             - --kusto-endpoint
             - {{ . | quote }}
             {{- end }}
             {{- with $kusto.database }}
             - --kusto-database
-            - {{ . | quote }}
-            {{- end }}
-            {{- with $kusto.ingestion }}
-            - --kusto-ingestion
             - {{ . | quote }}
             {{- end }}
             {{- with $discovery.since }}
@@ -206,18 +194,6 @@ spec:
             {{- range $project := $discovery.allowedProjects }}
             - --allowed-project
             - {{ $project | quote }}
-            {{- end }}
-            {{- if and (default false $discovery.legacyProjectScope) $kusto.project }}
-            - --allowed-project
-            - {{ $kusto.project | quote }}
-            {{- end }}
-            {{- range $project := $discovery.featuredProjects }}
-            - --featured-project
-            - {{ $project | quote }}
-            {{- end }}
-            {{- with $kusto.since }}
-            - --kusto-since
-            - {{ . | quote }}
             {{- end }}
             {{- with $kusto.targetSince }}
             - --target-since

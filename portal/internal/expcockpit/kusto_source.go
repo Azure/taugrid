@@ -10,43 +10,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/expkusto"
-	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/portal/internal/expstore"
-	"github.com/Azure/taugrid/portal/internal/portalbin"
 )
 
-const defaultKustoRunStaleAfter = 15 * time.Minute
 const defaultKustoDiscoverySince = "90d"
 const defaultKustoMaxDiscoverySince = "365d"
 const defaultKustoTargetSince = "365d"
 const noAllowedKustoProjectMatch = "__tau_no_allowed_project_match__"
-
-func KustoStorePathForIngestion(ingestion string) string {
-	switch KustoIngestionOrDefault(ingestion) {
-	case "remote-write":
-		return "kusto://" + expkusto.DefaultRemoteWriteTable
-	default:
-		return "kusto://" + expkusto.DefaultProjectionTable
-	}
-}
-
-func KustoIngestionOrDefault(ingestion string) string {
-	switch strings.ToLower(strings.TrimSpace(ingestion)) {
-	case "remote-write":
-		return "remote-write"
-	default:
-		return "projection"
-	}
-}
 
 type KustoMetricRow struct {
 	CatalogVersion      string   `json:"catalog_version,omitempty"`
@@ -92,34 +69,11 @@ type KustoMetricRow struct {
 	HasLifecycle        bool     `json:"has_lifecycle,omitempty"`
 }
 
-// UnmarshalJSON normalizes rows written before the experiment-axis rename.
-func (r *KustoMetricRow) UnmarshalJSON(data []byte) error {
-	type alias KustoMetricRow
-	aux := struct {
-		*alias
-		LegacyExperimentID string `json:"question_id"`
-	}{alias: (*alias)(r)}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if r.ExperimentID == "" {
-		r.ExperimentID = aux.LegacyExperimentID
-	}
-	return nil
-}
-
 type KustoSource struct {
-	MetricsFile       string
-	Metrics           []KustoMetricRow
-	StorePath         string
-	Project           string
 	WorkspaceID       string
 	AllowedProjects   []string
-	FeaturedProjects  []string
 	Endpoint          string
 	Database          string
-	Ingestion         string
-	Since             string
 	DiscoverySince    string
 	MaxDiscoverySince string
 	TargetSince       string
@@ -142,18 +96,7 @@ func (s KustoSource) hasRemoteQuery() bool {
 	return strings.TrimSpace(s.QueryCommand) != "" || s.NativeQuery != nil
 }
 
-func (s KustoSource) BuildSeries(ctx context.Context, opts SeriesOptions) (SeriesDetail, error) {
-	return s.buildSeries(ctx, opts, false)
-}
-
-// BuildTypedSeries serves canonical Portal series from the stable typed metric
-// event Function. Legacy BuildSeries remains available to explicit CLI/report
-// consumers.
 func (s KustoSource) BuildTypedSeries(ctx context.Context, opts SeriesOptions) (SeriesDetail, error) {
-	return s.buildSeries(ctx, opts, true)
-}
-
-func (s KustoSource) buildSeries(ctx context.Context, opts SeriesOptions, typed bool) (SeriesDetail, error) {
 	opts.Target = strings.TrimSpace(opts.Target)
 	opts.Metric = strings.TrimSpace(opts.Metric)
 	opts.RunID = strings.TrimSpace(opts.RunID)
@@ -171,17 +114,13 @@ func (s KustoSource) buildSeries(ctx context.Context, opts SeriesOptions, typed 
 	if err != nil {
 		return SeriesDetail{}, err
 	}
-	rows, err := s.loadSeriesRows(ctx, opts, typed)
+	if opts.RunID == "" {
+		return SeriesDetail{}, fmt.Errorf("run_id query parameter is required")
+	}
+	rows, err := s.runKustoSeriesCommand(ctx, opts)
 	if err != nil {
 		return SeriesDetail{}, err
 	}
-	rows = filterKustoRowsByWorkspace(rows, s.WorkspaceID)
-	projects, err := s.rawProjectScope(ctx, s.Project)
-	if err != nil {
-		return SeriesDetail{}, err
-	}
-	rows = filterKustoRowsByProjects(rows, projects)
-	rows, _ = filterKustoRows(rows, opts.Target)
 	rows = filterKustoSeriesRows(rows, opts)
 	if len(rows) == 0 {
 		return SeriesDetail{}, expstore.ErrNotFound
@@ -190,26 +129,11 @@ func (s KustoSource) buildSeries(ctx context.Context, opts SeriesOptions, typed 
 		rows = rows[:opts.MaxMetricRows]
 	}
 
-	runRows := rows
-	if opts.RunID != "" {
-		runRows = filterKustoRowsByRunID(rows, opts.RunID)
-		if len(runRows) == 0 {
-			return SeriesDetail{}, expstore.ErrNotFound
-		}
-	}
-	groups := kustoRunGroups(runRows)
-	runs, truncated := kustoRuns(runRows, opts.MaxRuns, s.effectiveNow(), s.effectiveStaleAfter())
-	allowedRuns := map[string]bool{}
-	for _, run := range runs {
-		allowedRuns[run.RunID] = true
-	}
-	points := kustoMetricPoints(runRows, allowedRuns)
-	chart := buildChartWithRunColorsBudgetAndInterval(points, opts.Metric, groupClassMap(groups), runColorMapForRuns(runs), opts.MaxPoints, opts.StepInterval)
+	allowedRuns := map[string]bool{opts.RunID: true}
+	points := kustoMetricPoints(rows, allowedRuns)
+	chart := buildChartWithRunColorsBudgetAndInterval(points, opts.Metric, nil, runColorMapForRunIDs([]string{opts.RunID}), opts.MaxPoints, opts.StepInterval)
 	chart.StepInterval = opts.StepInterval
 	warnings := []string{"source=kusto series are extrema-preserving display projections; Kusto source rows remain authoritative"}
-	if truncated {
-		warnings = append(warnings, fmt.Sprintf("runs truncated to %d matching runs", len(runs)))
-	}
 	detail := SeriesDetail{
 		SchemaVersion: SchemaVersion,
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -223,31 +147,13 @@ func (s KustoSource) buildSeries(ctx context.Context, opts SeriesOptions, typed 
 		Chart:         chart,
 		Warnings:      warnings,
 	}
-	if s.hasRemoteQuery() {
-		rawQuery, err := s.buildKustoSeriesQueryForSource(ctx, opts, true, typed)
-		if err != nil {
-			return SeriesDetail{}, err
-		}
-		detail.RawQuery = rawQuery
-		detail.RawQuerySource = "kusto"
+	rawQuery, err := s.buildKustoSeriesQuery(ctx, opts, true)
+	if err != nil {
+		return SeriesDetail{}, err
 	}
+	detail.RawQuery = rawQuery
+	detail.RawQuerySource = "kusto"
 	return detail, nil
-}
-
-func (s KustoSource) loadSeriesRows(ctx context.Context, opts SeriesOptions, typed bool) ([]KustoMetricRow, error) {
-	if len(s.Metrics) > 0 {
-		if typed {
-			return nil, fmt.Errorf("typed series require a live Kusto query")
-		}
-		return s.Metrics, nil
-	}
-	if s.hasRemoteQuery() {
-		return s.runKustoSeriesCommandForSource(ctx, opts, typed)
-	}
-	if strings.TrimSpace(s.MetricsFile) != "" {
-		return LoadKustoMetricRows(s.MetricsFile)
-	}
-	return nil, fmt.Errorf("source=kusto has no --kusto-metrics-file, --kusto-endpoint, or --kusto-query-command configured")
 }
 
 func filterKustoSeriesRows(rows []KustoMetricRow, opts SeriesOptions) []KustoMetricRow {
@@ -268,214 +174,6 @@ func filterKustoSeriesRows(rows []KustoMetricRow, opts SeriesOptions) []KustoMet
 		out = append(out, row)
 	}
 	return out
-}
-
-func filterKustoRowsByRunID(rows []KustoMetricRow, runID string) []KustoMetricRow {
-	out := make([]KustoMetricRow, 0, len(rows))
-	for _, row := range rows {
-		if row.RunID == runID {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
-func (s KustoSource) BuildSnapshot(ctx context.Context, opts Options) (Snapshot, error) {
-	opts.Target = strings.TrimSpace(opts.Target)
-	var err error
-	s, err = s.scopedToWorkspace(opts.Workspace)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if opts.Target == "" {
-		return Snapshot{}, fmt.Errorf("dashboard target is required")
-	}
-
-	rows, err := s.loadSnapshotRows(ctx, opts)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	rows = filterKustoRowsByWorkspace(rows, s.WorkspaceID)
-	rawProjects, err := s.rawProjectScope(ctx, opts.Project)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	rows = filterKustoRowsByProjects(rows, rawProjects)
-	rows = filterKustoRowsByProjects(rows, s.effectiveProjectScope(opts.Project))
-	if len(rows) == 0 {
-		return Snapshot{}, expstore.ErrNotFound
-	}
-	select {
-	case <-ctx.Done():
-		return Snapshot{}, ctx.Err()
-	default:
-	}
-
-	filtered, targetType := filterKustoRows(rows, opts.Target)
-	if len(filtered) == 0 {
-		return Snapshot{}, expstore.ErrNotFound
-	}
-	if strings.TrimSpace(opts.Project) == "" {
-		projects := kustoRowsProjects(filtered)
-		if len(projects) > 1 {
-			return Snapshot{}, fmt.Errorf("ambiguous Kusto target %q matched multiple projects (%s); add project= to the request", opts.Target, strings.Join(projects, ", "))
-		}
-	}
-	metricOptionRows := filtered
-	warnings := []string{fmt.Sprintf("source=kusto uses %s scalar rows; local-only artifacts, observations, and run context are unavailable unless exported separately", strings.TrimPrefix(KustoStorePathForIngestion(s.Ingestion), "kusto://"))}
-	if !opts.SkipMetricCatalog && opts.Mode != SnapshotModeSummary {
-		discoveryRows, err := s.loadRowsForMetricOptions(ctx, opts)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		if len(discoveryRows) > 0 {
-			discoveryRows = filterKustoRowsByWorkspace(discoveryRows, s.WorkspaceID)
-			discoveryRows = filterKustoRowsByProjects(discoveryRows, rawProjects)
-			discoveryRows = filterKustoRowsByProjects(discoveryRows, s.effectiveProjectScope(opts.Project))
-			if scopedRows, _ := filterKustoRows(discoveryRows, opts.Target); len(scopedRows) > 0 {
-				metricOptionRows = scopedRows
-			}
-		}
-	}
-	if opts.MaxMetricRows > 0 && len(filtered) > opts.MaxMetricRows {
-		warnings = append(warnings, fmt.Sprintf("metric points truncated to %d of %d Kusto rows", opts.MaxMetricRows, len(filtered)))
-		filtered = filtered[:opts.MaxMetricRows]
-	}
-
-	catalogRows := filtered
-	if len(metricOptionRows) > 0 {
-		catalogRows = metricOptionRows
-	}
-	now := s.effectiveNow()
-	staleAfter := s.effectiveStaleAfter()
-	groups := kustoRunGroups(catalogRows)
-	runs, runsTruncated := kustoRuns(catalogRows, opts.MaxRuns, now, staleAfter)
-	if runsTruncated {
-		warnings = append(warnings, fmt.Sprintf("runs truncated to %d matching runs", len(runs)))
-	}
-	runColors := runColorMapForRuns(runs)
-	applyRunColors(runs, runColors)
-	allowedRuns := map[string]bool{}
-	for _, run := range runs {
-		allowedRuns[run.RunID] = true
-	}
-	points := kustoMetricPoints(filtered, allowedRuns)
-	catalogPoints := kustoMetricPoints(catalogRows, allowedRuns)
-	groupClasses := groupClassMap(groups)
-	metricOptions := buildMetricOptionsFromPoints(catalogPoints, opts.Metric)
-	experiment := kustoExperiment(filtered, opts.Target, targetType)
-	if catalogExperiment := kustoExperiment(catalogRows, opts.Target, targetType); catalogExperiment != nil {
-		experiment = catalogExperiment
-	}
-	status := kustoStatus(s.sourcePath(), opts.Target, targetType, experiment, groups, runs, catalogRows)
-	if opts.Mode == SnapshotModeSummary {
-		actions := kustoActions(s.sourcePath(), opts.Target, targetType, experiment, "")
-		summary := buildExperimentSummary(opts.Target, targetType, experiment, groups, runs, nil, ChartView{}, nil, "", actions.NextCommand)
-		snapshot := Snapshot{
-			SchemaVersion: SchemaVersion,
-			PayloadMode:   string(SnapshotModeSummary),
-			GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-			StorePath:     s.sourcePath(),
-			Target:        opts.Target,
-			TargetType:    targetType,
-			Manifest:      kustoManifest(experiment, filtered),
-			Status:        status,
-			Summary:       summary,
-			Experiment:    experiment,
-			RunGroups:     groups,
-			Runs:          runs,
-			MetricOptions: metricOptions,
-			Actions:       actions,
-			SeedCoverage:  summary.SeedCoverage,
-			Warnings:      warnings,
-		}
-		if len(points) == 0 {
-			snapshot.Warnings = append(snapshot.Warnings, "no scalar metrics were found for this target")
-		}
-		return snapshot, nil
-	}
-
-	if opts.Mode == SnapshotModeMetric {
-		metric := requestedMetric(points, opts.Metric)
-		metricPoints := filterMetricPoints(points, metric)
-		cards := summarizeCards(metricPoints, groupClasses)
-		chart := buildChartWithRunColors(metricPoints, metric, groupClasses, runColors)
-		metricOptions = markMetricOptionSelected(metricOptions, chart.MetricName)
-		sweep := buildSweepWithRunColors(metricPoints, chart.MetricName, runs, nil, groupClasses, runColors)
-		decision := buildDecisionMetricContext(points, chart.MetricName, groupClasses)
-		bestGroup := decision.BestGroupID
-		actions := kustoActions(s.sourcePath(), opts.Target, targetType, experiment, chart.MetricName)
-		summary := buildExperimentSummary(opts.Target, targetType, experiment, groups, runs, decision.Cards, decisionChart(chart, decision.MetricName), nil, bestGroup, kustoActions(s.sourcePath(), opts.Target, targetType, experiment, decision.MetricName).NextCommand)
-		if summary.NextCommand != "" {
-			actions.NextCommand = summary.NextCommand
-		}
-		compare := buildCompareInsights(decision.Points, decision.MetricName, runs, nil, nil, nil, bestGroup)
-		snapshot := Snapshot{
-			SchemaVersion: SchemaVersion,
-			PayloadMode:   string(SnapshotModeMetric),
-			GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-			StorePath:     s.sourcePath(),
-			Target:        opts.Target,
-			TargetType:    targetType,
-			Manifest:      kustoManifest(experiment, filtered),
-			Status:        status,
-			Summary:       summary,
-			Experiment:    experiment,
-			RunGroups:     groups,
-			Runs:          runs,
-			Cards:         cards,
-			Chart:         chart,
-			MetricOptions: metricOptions,
-			Sweep:         sweep,
-			Compare:       compare,
-			Actions:       actions,
-			BestGroupID:   bestGroup,
-			SeedCoverage:  summary.SeedCoverage,
-			Warnings:      warnings,
-		}
-		if len(points) == 0 {
-			snapshot.Warnings = append(snapshot.Warnings, "no scalar metrics were found for this target")
-		}
-		return snapshot, nil
-	}
-	cards := summarizeCards(points, groupClasses)
-	chart := buildChartWithRunColors(points, opts.Metric, groupClasses, runColors)
-	metricOptions = markMetricOptionSelected(metricOptions, chart.MetricName)
-	sweep := buildSweepWithRunColors(points, chart.MetricName, runs, nil, groupClasses, runColors)
-	decision := buildDecisionMetricContext(points, chart.MetricName, groupClasses)
-	bestGroup := decision.BestGroupID
-	actions := kustoActions(s.sourcePath(), opts.Target, targetType, experiment, chart.MetricName)
-	summary := buildExperimentSummary(opts.Target, targetType, experiment, groups, runs, decision.Cards, decisionChart(chart, decision.MetricName), nil, bestGroup, kustoActions(s.sourcePath(), opts.Target, targetType, experiment, decision.MetricName).NextCommand)
-	if summary.NextCommand != "" {
-		actions.NextCommand = summary.NextCommand
-	}
-	compare := buildCompareInsights(decision.Points, decision.MetricName, runs, nil, nil, nil, bestGroup)
-	snapshot := Snapshot{
-		SchemaVersion: SchemaVersion,
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-		StorePath:     s.sourcePath(),
-		Target:        opts.Target,
-		TargetType:    targetType,
-		Manifest:      kustoManifest(experiment, filtered),
-		Status:        status,
-		Summary:       summary,
-		Experiment:    experiment,
-		RunGroups:     groups,
-		Runs:          runs,
-		Cards:         cards,
-		Chart:         chart,
-		MetricOptions: metricOptions,
-		Sweep:         sweep,
-		Compare:       compare,
-		Actions:       actions,
-		BestGroupID:   bestGroup,
-		SeedCoverage:  summary.SeedCoverage,
-		Warnings:      warnings,
-	}
-	if len(points) == 0 {
-		snapshot.Warnings = append(snapshot.Warnings, "no scalar metrics were found for this target")
-	}
-	return snapshot, nil
 }
 
 func normalizeKustoExperimentSearchOptions(opts expstore.ExperimentSearchOptions) expstore.ExperimentSearchOptions {
@@ -509,132 +207,6 @@ func normalizeKustoSearchLimit(limit int) (int, error) {
 	default:
 		return min(limit, 1000), nil
 	}
-}
-
-func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
-	opts = normalizeKustoExperimentSearchOptions(opts)
-	var err error
-	s, err = s.scopedToWorkspace(opts.Workspace)
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
-	}
-	opts.Limit, err = normalizeKustoSearchLimit(opts.Limit)
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
-	}
-	if strings.TrimSpace(opts.Since) == "" && s.hasRemoteQuery() {
-		opts.Since = s.effectiveDiscoverySince()
-	}
-	if s.hasRemoteQuery() {
-		if err := s.validateDiscoverySince(opts.Since, opts.Project); err != nil {
-			return expstore.ExperimentSearchResult{}, err
-		}
-	}
-	rows, warnings, err := s.loadRowsForExperimentSearch(ctx, opts)
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
-	}
-	rows = filterKustoRowsByWorkspace(rows, s.WorkspaceID)
-	rawProjects, err := s.rawProjectScope(ctx, opts.Project)
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
-	}
-	rows = filterKustoRowsByProjects(rows, rawProjects)
-	if opts.Since != "" {
-		var sinceWarnings []string
-		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since)
-		if err != nil {
-			return expstore.ExperimentSearchResult{}, err
-		}
-		warnings = append(warnings, sinceWarnings...)
-	}
-	rows = filterKustoRowsByProjects(rows, s.effectiveProjectScope(opts.Project))
-	summaries := kustoExperimentSummaries(rows, opts, s.sourcePath(), s.effectiveNow(), s.effectiveStaleAfter())
-	if opts.Lifecycle != "" {
-		warnings = append(warnings, "source=kusto derives lifecycle from tau/run_status markers plus metric freshness; queued runs without metrics are not visible")
-		summaries = filterKustoExperimentSummariesByLifecycle(summaries, opts.Lifecycle)
-	}
-	sort.SliceStable(summaries, func(i, j int) bool {
-		if summaries[i].LatestRunAt != summaries[j].LatestRunAt {
-			return summaries[i].LatestRunAt > summaries[j].LatestRunAt
-		}
-		if summaries[i].Project != summaries[j].Project {
-			return summaries[i].Project < summaries[j].Project
-		}
-		return summaries[i].ExperimentID < summaries[j].ExperimentID
-	})
-	truncated := len(summaries) > opts.Limit
-	if truncated {
-		summaries = summaries[:opts.Limit]
-	}
-	return expstore.ExperimentSearchResult{
-		SchemaVersion: expstore.ExperimentSearchSchemaVersion,
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-		StorePath:     s.sourcePath(),
-		Total:         len(summaries),
-		Truncated:     truncated,
-		Experiments:   summaries,
-		Warnings:      warnings,
-	}, nil
-}
-
-func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
-	opts = normalizeKustoRunSearchOptions(opts)
-	var err error
-	s, err = s.scopedToWorkspace(opts.Workspace)
-	if err != nil {
-		return expstore.RunSearchResult{}, err
-	}
-	opts.Limit, err = normalizeKustoSearchLimit(opts.Limit)
-	if err != nil {
-		return expstore.RunSearchResult{}, err
-	}
-	if strings.TrimSpace(opts.Since) == "" && s.hasRemoteQuery() {
-		opts.Since = s.effectiveTargetSince()
-	}
-	rows, warnings, err := s.loadRowsForRunSearch(ctx, opts)
-	if err != nil {
-		return expstore.RunSearchResult{}, err
-	}
-	rows = filterKustoRowsByWorkspace(rows, s.WorkspaceID)
-	rawProjects, err := s.rawProjectScope(ctx, opts.Project)
-	if err != nil {
-		return expstore.RunSearchResult{}, err
-	}
-	rows = filterKustoRowsByProjects(rows, rawProjects)
-	if opts.Since != "" {
-		var sinceWarnings []string
-		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since)
-		if err != nil {
-			return expstore.RunSearchResult{}, err
-		}
-		warnings = append(warnings, sinceWarnings...)
-	}
-	rows = filterKustoRowsByProjects(rows, s.effectiveProjectScope(opts.Project))
-	runs := kustoRunSearchRuns(rows, opts, s.sourcePath(), s.effectiveNow(), s.effectiveStaleAfter())
-	sort.SliceStable(runs, func(i, j int) bool {
-		left := firstNonEmptyString(runs[i].CompletedAt, runs[i].StartedAt, runs[i].CreatedAt)
-		right := firstNonEmptyString(runs[j].CompletedAt, runs[j].StartedAt, runs[j].CreatedAt)
-		if left != right {
-			return left > right
-		}
-		return runs[i].RunID < runs[j].RunID
-	})
-	truncated := len(runs) > opts.Limit
-	total := len(runs)
-	if truncated {
-		runs = runs[:opts.Limit]
-	}
-	return expstore.RunSearchResult{
-		SchemaVersion: expstore.RunSearchSchemaVersion,
-		GeneratedAt:   s.effectiveNow().UTC().Format(time.RFC3339),
-		StorePath:     s.sourcePath(),
-		Target:        strings.TrimSpace(opts.Target),
-		Total:         total,
-		Truncated:     truncated,
-		Runs:          runs,
-		Warnings:      warnings,
-	}, nil
 }
 
 // SearchCatalogExperiments reads run identities from TauExpRunCatalogRows() so
@@ -697,9 +269,9 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 		runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{
 			Target: opts.Target, Workspace: opts.Workspace, Query: opts.Query, Project: opts.Project,
 			Lifecycle: opts.Lifecycle, Tags: opts.Tags, MetricNames: opts.MetricNames,
-			MetricFilters: opts.MetricFilters, Since: opts.Since, Limit: catalogScanLimit(opts.Limit),
+			MetricFilters: opts.MetricFilters, Since: opts.Since,
 		})
-		for _, summary := range catalogExperimentSummaries(runs, s.sourcePath()) {
+		for _, summary := range catalogExperimentSummaries(runRows, runs, s.sourcePath()) {
 			summariesByKey[summary.Project+"\x00"+summary.ExperimentID] = summary
 		}
 		pageCursor, pageCount := catalogExperimentPageCursor(runRows)
@@ -735,11 +307,18 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 	}, nil
 }
 
-func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []expstore.ExperimentSummary {
+func catalogExperimentSummaries(rows []KustoMetricRow, runs []expstore.RunSearchRun, source string) []expstore.ExperimentSummary {
 	type accumulator struct {
 		summary expstore.ExperimentSummary
 		groups  map[string]bool
 		metrics map[string]bool
+	}
+	latestActivity := map[string]string{}
+	for _, row := range rows {
+		key := catalogRunKey(row.Project, row.ExperimentID)
+		if row.LatestActivityAt > latestActivity[key] {
+			latestActivity[key] = row.LatestActivityAt
+		}
 	}
 	byExperiment := map[string]*accumulator{}
 	for _, run := range runs {
@@ -765,7 +344,7 @@ func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []e
 		}
 		item.summary.StateCounts[firstNonEmptyString(run.State, "unknown")]++
 		item.summary.LifecycleCounts[firstNonEmptyString(run.LifecycleState, "unknown")]++
-		latest := firstNonEmptyString(run.CompletedAt, run.StartedAt, run.CreatedAt)
+		latest := firstNonEmptyString(latestActivity[catalogRunKey(run.Project, experimentID)], run.CompletedAt, run.StartedAt, run.CreatedAt)
 		if latest > item.summary.LatestRunAt {
 			item.summary.LatestRunAt = latest
 			item.summary.UpdatedAt = latest
@@ -878,13 +457,6 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 		Truncated:     truncated,
 		Runs:          runs,
 	}, nil
-}
-
-func catalogScanLimit(limit int) int {
-	if limit < 1000 {
-		return 1000
-	}
-	return limit
 }
 
 func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []string, opts expstore.RunSearchOptions, runs []KustoMetricRow) ([]KustoMetricRow, error) {
@@ -1084,14 +656,6 @@ func catalogUniqueSortedStrings(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func LoadKustoMetricRows(path string) ([]KustoMetricRow, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return ParseKustoMetricRows(raw)
 }
 
 func ParseKustoMetricRows(raw []byte) ([]KustoMetricRow, error) {
@@ -1388,106 +952,8 @@ func decodeKustoMetricRowMap(rowMap map[string]any) (KustoMetricRow, error) {
 	return row, nil
 }
 
-func (s KustoSource) loadRows(ctx context.Context, opts Options) ([]KustoMetricRow, error) {
-	if len(s.Metrics) > 0 {
-		return s.Metrics, nil
-	}
-	if s.hasRemoteQuery() {
-		return s.runKustoQueryCommand(ctx, opts)
-	}
-	if strings.TrimSpace(s.MetricsFile) != "" {
-		return LoadKustoMetricRows(s.MetricsFile)
-	}
-	return nil, nil
-}
-
-func (s KustoSource) loadSnapshotRows(ctx context.Context, opts Options) ([]KustoMetricRow, error) {
-	if opts.Mode == SnapshotModeSummary && s.shouldQueryMetricCatalog(opts) {
-		return s.runKustoMetricOptionsCommand(ctx, opts)
-	}
-	return s.loadRows(ctx, opts)
-}
-
-func (s KustoSource) loadRowsForMetricOptions(ctx context.Context, opts Options) ([]KustoMetricRow, error) {
-	if len(s.Metrics) > 0 || !s.hasRemoteQuery() {
-		return nil, nil
-	}
-	if strings.TrimSpace(opts.Metric) == "" {
-		return nil, nil
-	}
-	return s.runKustoMetricOptionsCommand(ctx, opts)
-}
-
-func (s KustoSource) loadRowsForExperimentSearch(ctx context.Context, opts expstore.ExperimentSearchOptions) ([]KustoMetricRow, []string, error) {
-	if len(s.Metrics) > 0 {
-		return s.Metrics, nil, nil
-	}
-	if s.hasRemoteQuery() {
-		rows, err := s.runKustoExperimentSearchCommand(ctx, opts)
-		return rows, nil, err
-	}
-	if strings.TrimSpace(s.MetricsFile) != "" {
-		rows, err := LoadKustoMetricRows(s.MetricsFile)
-		return rows, nil, err
-	}
-	return nil, []string{"source=kusto has no --kusto-metrics-file, --kusto-endpoint, or --kusto-query-command configured"}, nil
-}
-
-func (s KustoSource) shouldQueryMetricCatalog(opts Options) bool {
-	return strings.TrimSpace(opts.Metric) != "" &&
-		len(s.Metrics) == 0 &&
-		s.hasRemoteQuery()
-}
-
-func (s KustoSource) loadRowsForRunSearch(ctx context.Context, opts expstore.RunSearchOptions) ([]KustoMetricRow, []string, error) {
-	if len(s.Metrics) > 0 {
-		return s.Metrics, nil, nil
-	}
-	if s.hasRemoteQuery() {
-		searchOpts := expstore.ExperimentSearchOptions{
-			Target:      opts.Target,
-			Project:     opts.Project,
-			MetricNames: opts.MetricNames,
-			Since:       opts.Since,
-			Limit:       opts.Limit,
-		}
-		rows, err := s.runKustoExperimentSearchCommand(ctx, searchOpts)
-		return rows, nil, err
-	}
-	if strings.TrimSpace(s.MetricsFile) != "" {
-		rows, err := LoadKustoMetricRows(s.MetricsFile)
-		return rows, nil, err
-	}
-	return nil, []string{"source=kusto has no --kusto-metrics-file, --kusto-endpoint, or --kusto-query-command configured"}, nil
-}
-
-func (s KustoSource) runKustoQueryCommand(ctx context.Context, opts Options) ([]KustoMetricRow, error) {
-	projects, err := s.rawProjectScope(ctx, opts.Project)
-	if err != nil {
-		return nil, err
-	}
-	targetPoints := s.TargetPoints
-	if targetPoints == 0 {
-		targetPoints = expkusto.DefaultTargetPoints
-	}
-	query, err := expkusto.BuildMetricsQuery(expkusto.MetricsQueryOptions{
-		WorkspaceID:  s.WorkspaceID,
-		Projects:     projects,
-		Target:       opts.Target,
-		TargetType:   "auto",
-		MetricNames:  metricNamesWithKustoRunStatus(metricNameFilter(opts.Metric)),
-		Since:        s.effectiveTargetSince(),
-		Ingestion:    s.Ingestion,
-		TargetPoints: targetPoints,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.executeKustoQueryCommand(ctx, query)
-}
-
-func (s KustoSource) runKustoSeriesCommandForSource(ctx context.Context, opts SeriesOptions, typed bool) ([]KustoMetricRow, error) {
-	query, err := s.buildKustoSeriesQueryForSource(ctx, opts, false, typed)
+func (s KustoSource) runKustoSeriesCommand(ctx context.Context, opts SeriesOptions) ([]KustoMetricRow, error) {
+	query, err := s.buildKustoSeriesQuery(ctx, opts, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1495,97 +961,25 @@ func (s KustoSource) runKustoSeriesCommandForSource(ctx context.Context, opts Se
 }
 
 func (s KustoSource) buildKustoSeriesQuery(ctx context.Context, opts SeriesOptions, raw bool) (string, error) {
-	return s.buildKustoSeriesQueryForSource(ctx, opts, raw, false)
-}
-
-func (s KustoSource) buildKustoSeriesQueryForSource(ctx context.Context, opts SeriesOptions, raw, typed bool) (string, error) {
 	projects, err := s.rawProjectScope(ctx, opts.Project)
 	if err != nil {
 		return "", err
 	}
-	runIDs := []string{}
-	if opts.RunID != "" {
-		runIDs = append(runIDs, opts.RunID)
-	}
 	targetPoints := max(opts.MaxPoints, expkusto.MinTargetPoints)
-	queryOptions := expkusto.MetricsQueryOptions{
+	return expkusto.BuildTypedMetricsQuery(expkusto.MetricsQueryOptions{
 		WorkspaceID:                 s.WorkspaceID,
 		Projects:                    projects,
 		Target:                      opts.Target,
 		TargetType:                  "auto",
-		RunIDs:                      runIDs,
+		RunIDs:                      []string{opts.RunID},
 		MetricNames:                 []string{opts.Metric},
 		StartStep:                   opts.StartStep,
 		EndStep:                     opts.EndStep,
 		Since:                       s.effectiveTargetSince(),
-		Ingestion:                   s.Ingestion,
 		TargetPoints:                targetPoints,
 		Raw:                         raw,
 		IncludeValidationMilestones: !raw,
-	}
-	var query string
-	if typed {
-		query, err = expkusto.BuildTypedMetricsQuery(queryOptions)
-	} else {
-		query, err = expkusto.BuildMetricsQuery(queryOptions)
-	}
-	if err != nil {
-		return "", err
-	}
-	return query, nil
-}
-
-func (s KustoSource) runKustoMetricOptionsCommand(ctx context.Context, opts Options) ([]KustoMetricRow, error) {
-	projects, err := s.rawProjectScope(ctx, opts.Project)
-	if err != nil {
-		return nil, err
-	}
-	targetPoints := s.TargetPoints
-	if targetPoints == 0 {
-		targetPoints = expkusto.DefaultTargetPoints
-	}
-	query, err := expkusto.BuildExperimentSearchQuery(expkusto.MetricsQueryOptions{
-		WorkspaceID:  s.WorkspaceID,
-		Projects:     projects,
-		Target:       opts.Target,
-		TargetType:   "auto",
-		Since:        s.effectiveTargetSince(),
-		Ingestion:    s.Ingestion,
-		TargetPoints: targetPoints,
 	})
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.executeKustoQueryCommand(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
-func (s KustoSource) runKustoExperimentSearchCommand(ctx context.Context, opts expstore.ExperimentSearchOptions) ([]KustoMetricRow, error) {
-	projects, err := s.rawProjectScope(ctx, opts.Project)
-	if err != nil {
-		return nil, err
-	}
-	targetPoints := s.TargetPoints
-	if targetPoints == 0 {
-		targetPoints = expkusto.DefaultTargetPoints
-	}
-	query, err := expkusto.BuildExperimentSearchQuery(expkusto.MetricsQueryOptions{
-		WorkspaceID:  s.WorkspaceID,
-		Projects:     projects,
-		Target:       opts.Target,
-		MetricNames:  metricNamesWithKustoRunStatus(opts.MetricNames),
-		Since:        firstNonEmptyString(strings.TrimSpace(opts.Since), s.effectiveDiscoverySince()),
-		Ingestion:    s.Ingestion,
-		TargetPoints: targetPoints,
-		Limit:        opts.Limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.executeKustoQueryCommand(ctx, query)
 }
 
 func (s KustoSource) executeKustoQueryCommand(ctx context.Context, query string) ([]KustoMetricRow, error) {
@@ -1637,54 +1031,6 @@ func expandKustoCommandArgs(args []string, endpoint, database, query string) ([]
 	return out, queryInArgs
 }
 
-func metricNameFilter(metric string) []string {
-	metric = strings.TrimSpace(metric)
-	if metric == "" {
-		return nil
-	}
-	return []string{metric}
-}
-
-func metricNamesWithKustoRunStatus(metricNames []string) []string {
-	if len(metricNames) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(metricNames)+1)
-	seen := map[string]bool{}
-	for _, metricName := range metricNames {
-		metricName = strings.TrimSpace(metricName)
-		if metricName == "" || seen[metricName] {
-			continue
-		}
-		seen[metricName] = true
-		out = append(out, metricName)
-	}
-	if !seen[expkusto.RunStatusMetricName] {
-		out = append(out, expkusto.RunStatusMetricName)
-	}
-	return out
-}
-
-func (s KustoSource) effectiveProjectScope(requestProject string) []string {
-	requestProject = strings.TrimSpace(requestProject)
-	allowed := normalizeProjectList(s.AllowedProjects)
-	if len(allowed) == 0 {
-		if requestProject == "" {
-			return nil
-		}
-		return []string{requestProject}
-	}
-	if requestProject == "" {
-		return allowed
-	}
-	for _, project := range allowed {
-		if project == requestProject {
-			return []string{requestProject}
-		}
-	}
-	return []string{noAllowedKustoProjectMatch}
-}
-
 func (s KustoSource) rawProjectScope(_ context.Context, requestProject string) ([]string, error) {
 	requestProject = strings.TrimSpace(requestProject)
 	allowed := normalizeProjectList(s.AllowedProjects)
@@ -1730,48 +1076,6 @@ func normalizeProjectList(values []string) []string {
 	return out
 }
 
-func filterKustoRowsByProjects(rows []KustoMetricRow, projects []string) []KustoMetricRow {
-	projects = normalizeProjectList(projects)
-	if len(projects) == 0 {
-		return rows
-	}
-	allowed := map[string]bool{}
-	for _, project := range projects {
-		allowed[project] = true
-	}
-	out := make([]KustoMetricRow, 0, len(rows))
-	for _, row := range rows {
-		if allowed[strings.TrimSpace(row.Project)] {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
-func filterKustoRowsByWorkspace(rows []KustoMetricRow, workspaceID string) []KustoMetricRow {
-	workspaceID = strings.TrimSpace(workspaceID)
-	if workspaceID == "" {
-		return rows
-	}
-	out := make([]KustoMetricRow, 0, len(rows))
-	for _, row := range rows {
-		rowWorkspace := strings.TrimSpace(row.WorkspaceID)
-		if rowWorkspace == "" {
-			var tags map[string]string
-			if json.Unmarshal([]byte(row.Tags), &tags) == nil {
-				rowWorkspace = strings.TrimSpace(tags[exptelemetry.TauWorkspaceTag])
-			}
-		}
-		// Untagged rows are NOT admitted here, unlike the local store. ADX
-		// TauExpMetrics is a fleet-wide table shared by every workspace, so an
-		// untagged row is of unknown ownership rather than implicitly ours.
-		if rowWorkspace == workspaceID {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
 func (s KustoSource) scopedToWorkspace(workspace string) (KustoSource, error) {
 	workspace = strings.TrimSpace(workspace)
 	configured := strings.TrimSpace(s.WorkspaceID)
@@ -1785,7 +1089,7 @@ func (s KustoSource) scopedToWorkspace(workspace string) (KustoSource, error) {
 }
 
 func (s KustoSource) effectiveDiscoverySince() string {
-	return firstNonEmptyString(strings.TrimSpace(s.DiscoverySince), strings.TrimSpace(s.Since), defaultKustoDiscoverySince)
+	return firstNonEmptyString(strings.TrimSpace(s.DiscoverySince), defaultKustoDiscoverySince)
 }
 
 func (s KustoSource) effectiveMaxDiscoverySince() string {
@@ -1793,7 +1097,7 @@ func (s KustoSource) effectiveMaxDiscoverySince() string {
 }
 
 func (s KustoSource) effectiveTargetSince() string {
-	return firstNonEmptyString(strings.TrimSpace(s.TargetSince), strings.TrimSpace(s.Since), defaultKustoTargetSince)
+	return firstNonEmptyString(strings.TrimSpace(s.TargetSince), defaultKustoTargetSince)
 }
 
 func (s KustoSource) validateDiscoverySince(since, requestProject string) error {
@@ -1855,13 +1159,6 @@ func (s KustoSource) effectiveNow() time.Time {
 	return time.Now().UTC()
 }
 
-func (s KustoSource) effectiveStaleAfter() time.Duration {
-	if s.StaleAfter > 0 {
-		return s.StaleAfter
-	}
-	return defaultKustoRunStaleAfter
-}
-
 func normalizeKustoLifecycle(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch value {
@@ -1872,283 +1169,6 @@ func normalizeKustoLifecycle(value string) string {
 	default:
 		return value
 	}
-}
-
-func kustoExperimentSummaries(rows []KustoMetricRow, opts expstore.ExperimentSearchOptions, sourcePath string, now time.Time, staleAfter time.Duration) []expstore.ExperimentSummary {
-	byExperiment := map[string][]KustoMetricRow{}
-	for _, row := range rows {
-		experimentID := firstNonEmptyString(strings.TrimSpace(row.ExperimentID), strings.TrimSpace(row.RunGroupID))
-		if experimentID == "" {
-			continue
-		}
-		key := strings.TrimSpace(row.Project) + "\x00" + experimentID
-		byExperiment[key] = append(byExperiment[key], row)
-	}
-	ids := make([]string, 0, len(byExperiment))
-	for id := range byExperiment {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]expstore.ExperimentSummary, 0, len(ids))
-	for _, id := range ids {
-		experimentRows := byExperiment[id]
-		if !kustoExperimentMatches(experimentRows, opts, sourcePath) {
-			continue
-		}
-		out = append(out, kustoExperimentSummary(firstKustoExperimentID(experimentRows), experimentRows, now, staleAfter))
-	}
-	return out
-}
-
-func firstKustoExperimentID(rows []KustoMetricRow) string {
-	for _, row := range rows {
-		if value := strings.TrimSpace(row.ExperimentID); value != "" {
-			return value
-		}
-	}
-	for _, row := range rows {
-		if value := strings.TrimSpace(row.RunGroupID); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func kustoExperimentMatches(rows []KustoMetricRow, opts expstore.ExperimentSearchOptions, sourcePath string) bool {
-	if len(rows) == 0 {
-		return false
-	}
-	if opts.Project != "" && !kustoRowsContain(rows, func(row KustoMetricRow) bool { return row.Project == opts.Project }) {
-		return false
-	}
-	query := strings.ToLower(strings.TrimSpace(opts.Query))
-	if query != "" && !kustoRowsContain(rows, func(row KustoMetricRow) bool { return kustoRowMatchesQuery(row, query) }) {
-		return false
-	}
-	for _, metricName := range opts.MetricNames {
-		metricName = strings.TrimSpace(metricName)
-		if metricName == "" {
-			continue
-		}
-		if !kustoRowsContain(rows, func(row KustoMetricRow) bool { return row.MetricName == metricName }) {
-			return false
-		}
-	}
-	for _, key := range sortedKustoTagKeys(opts.Tags) {
-		expected := opts.Tags[key]
-		if !kustoRowsContain(rows, func(row KustoMetricRow) bool { return kustoRowTags(row)[key] == expected }) {
-			return false
-		}
-	}
-	if len(opts.MetricFilters) > 0 && !kustoExperimentMatchesMetricFilters(rows, opts.MetricFilters, sourcePath) {
-		return false
-	}
-	return true
-}
-
-func kustoRowsContain(rows []KustoMetricRow, fn func(KustoMetricRow) bool) bool {
-	for _, row := range rows {
-		if fn(row) {
-			return true
-		}
-	}
-	return false
-}
-
-func kustoRowMatchesQuery(row KustoMetricRow, query string) bool {
-	for _, value := range []string{row.Project, row.ExperimentID, row.RunGroupID, row.RunID, row.MetricName} {
-		if strings.Contains(strings.ToLower(value), query) {
-			return true
-		}
-	}
-	for key, value := range kustoRowTags(row) {
-		if strings.Contains(strings.ToLower(key), query) || strings.Contains(strings.ToLower(value), query) {
-			return true
-		}
-	}
-	return false
-}
-
-func kustoExperimentSummary(experimentID string, rows []KustoMetricRow, now time.Time, staleAfter time.Duration) expstore.ExperimentSummary {
-	runIDs := map[string]bool{}
-	groupIDs := map[string]bool{}
-	metricNames := map[string]bool{}
-	stateCounts := map[string]int{}
-	lifecycleCounts := map[string]int{}
-	latest := ""
-	project := ""
-	runViews, _ := kustoRuns(rows, 0, now, staleAfter)
-	for _, run := range runViews {
-		if run.RunID != "" && !runIDs[run.RunID] {
-			runIDs[run.RunID] = true
-			stateCounts[run.State]++
-			lifecycleState := run.LifecycleState
-			if lifecycleState == "" {
-				lifecycleState = run.State
-			}
-			lifecycleCounts[lifecycleState]++
-		}
-	}
-	for _, row := range rows {
-		if project == "" {
-			project = row.Project
-		}
-		if row.RunGroupID != "" {
-			groupIDs[row.RunGroupID] = true
-		}
-		if row.MetricName != "" && !isKustoRunStatusMetric(row) {
-			metricNames[row.MetricName] = true
-		}
-		if row.WallTime > latest {
-			latest = row.WallTime
-		}
-	}
-	if latest == "" {
-		latest = time.Now().UTC().Format(time.RFC3339)
-	}
-	return expstore.ExperimentSummary{
-		ExperimentRecord: expstore.ExperimentRecord{
-			ExperimentID: experimentID,
-			Project:      project,
-			Name:         experimentID,
-			Source:       "kusto",
-			CreatedAt:    firstKustoTime(rows),
-			UpdatedAt:    latest,
-		},
-		RunCount:        len(runIDs),
-		RunGroupCount:   len(groupIDs),
-		StateCounts:     stateCounts,
-		LifecycleCounts: lifecycleCounts,
-		LatestRunAt:     latest,
-		MetricNames:     sortedKustoBoolKeys(metricNames),
-	}
-}
-
-func kustoExperimentMatchesMetricFilters(rows []KustoMetricRow, filters []expstore.MetricFilter, sourcePath string) bool {
-	summariesByRun := kustoMetricSummariesByRun(rows, sourcePath)
-	for _, filter := range filters {
-		matchedFilter := false
-		for _, summaries := range summariesByRun {
-			if kustoMetricFilterMatches(summaries, filter) {
-				matchedFilter = true
-				break
-			}
-		}
-		if !matchedFilter {
-			return false
-		}
-	}
-	return true
-}
-
-func kustoMetricSummariesByRun(rows []KustoMetricRow, sourcePath string) map[string][]expstore.MetricSummaryRecord {
-	sourcePath = firstNonEmptyString(sourcePath, KustoStorePathForIngestion(""))
-	rowsByRun := map[string][]expstore.MetricRow{}
-	for _, row := range rows {
-		if strings.TrimSpace(row.RunID) == "" || strings.TrimSpace(row.MetricName) == "" {
-			continue
-		}
-		if isKustoRunStatusMetric(row) {
-			continue
-		}
-		rowsByRun[row.RunID] = append(rowsByRun[row.RunID], kustoMetricRow(row))
-	}
-	out := map[string][]expstore.MetricSummaryRecord{}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for runID, metricRows := range rowsByRun {
-		file := expstore.MetricFileRecord{
-			FileID:        "kusto:" + runID,
-			Path:          sourcePath,
-			Format:        "kusto",
-			SchemaVersion: expstore.MetricSchemaVersion,
-			RunID:         runID,
-			CreatedAt:     now,
-		}
-		out[runID] = expstore.SummarizeMetricRows(file, metricRows)
-	}
-	return out
-}
-
-func kustoMetricRow(row KustoMetricRow) expstore.MetricRow {
-	step := row.Step
-	unit := row.Unit
-	split := row.Split
-	metricRow := expstore.MetricRow{
-		Project:    row.Project,
-		RunGroupID: row.RunGroupID,
-		RunID:      row.RunID,
-		MetricName: row.MetricName,
-		Step:       &step,
-		Value:      row.Value,
-		Unit:       &unit,
-		Source:     "kusto",
-		Split:      &split,
-		Tags:       row.Tags,
-	}
-	if wallTime := kustoWallTimeMicros(row.WallTime); wallTime != nil {
-		metricRow.WallTime = wallTime
-	}
-	return metricRow
-}
-
-func kustoRunSearchRuns(rows []KustoMetricRow, opts expstore.RunSearchOptions, sourcePath string, now time.Time, staleAfter time.Duration) []expstore.RunSearchRun {
-	byID := map[string][]KustoMetricRow{}
-	for _, row := range rows {
-		if strings.TrimSpace(row.RunID) == "" {
-			continue
-		}
-		byID[row.RunID] = append(byID[row.RunID], row)
-	}
-	summariesByRun := kustoMetricSummariesByRun(rows, sourcePath)
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]expstore.RunSearchRun, 0, len(ids))
-	for _, id := range ids {
-		view := kustoRunView(id, byID[id], now, staleAfter)
-		tags := view.Tags
-		summaries := summariesByRun[id]
-		run := expstore.RunRecord{
-			RunID:        view.RunID,
-			Project:      view.Project,
-			ExperimentID: firstKustoExperimentID(byID[id]),
-			RunGroupID:   view.RunGroupID,
-			State:        view.State,
-			CreatedAt:    view.CreatedAt,
-			StartedAt:    view.StartedAt,
-			CompletedAt:  view.CompletedAt,
-			ResultURI:    view.ResultURI,
-		}
-		lifecycleState := view.LifecycleState
-		successful := view.Successful
-		reasons := view.SuccessReasons
-		if lifecycleState == "succeeded" {
-			classification := expstore.ClassifyRun(run, tags, summaries, expstore.SuccessOptions{
-				Tags:          tags,
-				MetricFilters: opts.MetricFilters,
-				MinStep:       opts.MinStep,
-			})
-			lifecycleState = classification.LifecycleState
-			successful = classification.Successful
-			reasons = classification.Reasons
-		}
-		item := expstore.RunSearchRun{
-			RunRecord:      run,
-			LifecycleState: lifecycleState,
-			Successful:     successful,
-			SuccessReasons: reasons,
-			Tags:           tags,
-			MetricNames:    view.MetricNames,
-			Metrics:        summaries,
-		}
-		if !kustoRunSearchMatches(item, opts) {
-			continue
-		}
-		out = append(out, item)
-	}
-	return out
 }
 
 func kustoRunSearchMatches(run expstore.RunSearchRun, opts expstore.RunSearchOptions) bool {
@@ -2171,13 +1191,13 @@ func kustoRunSearchMatches(run expstore.RunSearchRun, opts expstore.RunSearchOpt
 	if query != "" && !kustoRunSearchMatchesQuery(run, query) {
 		return false
 	}
-	for _, key := range sortedKustoTagKeys(opts.Tags) {
-		if run.Tags[key] != opts.Tags[key] {
+	for key, value := range opts.Tags {
+		if run.Tags[key] != value {
 			return false
 		}
 	}
 	for _, metricName := range opts.MetricNames {
-		if !kustoStringSliceContains(run.MetricNames, strings.TrimSpace(metricName)) {
+		if !stringSliceContains(run.MetricNames, strings.TrimSpace(metricName)) {
 			return false
 		}
 	}
@@ -2199,135 +1219,6 @@ func kustoRunSearchMatchesQuery(run expstore.RunSearchRun, query string) bool {
 	}
 	for key, value := range run.Tags {
 		if strings.Contains(strings.ToLower(key), query) || strings.Contains(strings.ToLower(value), query) {
-			return true
-		}
-	}
-	return false
-}
-
-func filterKustoExperimentSummariesByLifecycle(summaries []expstore.ExperimentSummary, lifecycle string) []expstore.ExperimentSummary {
-	lifecycle = normalizeKustoLifecycle(lifecycle)
-	if lifecycle == "" {
-		return summaries
-	}
-	out := make([]expstore.ExperimentSummary, 0, len(summaries))
-	for _, summary := range summaries {
-		if summary.LifecycleCounts[lifecycle] > 0 {
-			out = append(out, summary)
-		}
-	}
-	return out
-}
-
-func isKustoRunStatusMetric(row KustoMetricRow) bool {
-	return strings.TrimSpace(row.MetricName) == expkusto.RunStatusMetricName
-}
-
-func firstKustoDataRow(rows []KustoMetricRow) KustoMetricRow {
-	for _, row := range rows {
-		if !isKustoRunStatusMetric(row) {
-			return row
-		}
-	}
-	return KustoMetricRow{}
-}
-
-func latestKustoStatusRow(rows []KustoMetricRow) (KustoMetricRow, bool) {
-	var latest KustoMetricRow
-	ok := false
-	for _, row := range rows {
-		if !isKustoRunStatusMetric(row) {
-			continue
-		}
-		if !ok || row.WallTime > latest.WallTime {
-			latest = row
-			ok = true
-		}
-	}
-	return latest, ok
-}
-
-func kustoRunStatusState(row KustoMetricRow) string {
-	tags := kustoRowTags(row)
-	if state := normalizeKustoLifecycle(tags[expkusto.RunStatusStateTag]); state != "" {
-		switch state {
-		case "succeeded", "failed", "cancelled":
-			return state
-		}
-	}
-	switch {
-	case row.Value > 0:
-		return "succeeded"
-	case row.Value < -1:
-		return "cancelled"
-	case row.Value < 0:
-		return "failed"
-	default:
-		return "running"
-	}
-}
-
-func kustoRunStatusReasons(row KustoMetricRow) []string {
-	tags := kustoRowTags(row)
-	reasons := []string{"run emitted terminal status marker"}
-	if reason := strings.TrimSpace(tags[expkusto.RunStatusReasonTag]); reason != "" {
-		reasons = append(reasons, reason)
-	}
-	if message := strings.TrimSpace(tags[expkusto.RunStatusMessageTag]); message != "" {
-		reasons = append(reasons, message)
-	}
-	return reasons
-}
-
-func kustoMergedTags(rows []KustoMetricRow) map[string]string {
-	tags := map[string]string{}
-	for _, row := range rows {
-		for key, value := range kustoRowTags(row) {
-			tags[key] = value
-		}
-	}
-	if len(tags) == 0 {
-		return nil
-	}
-	return tags
-}
-
-func kustoMetricNames(rows []KustoMetricRow) []string {
-	names := map[string]bool{}
-	for _, row := range rows {
-		metricName := strings.TrimSpace(row.MetricName)
-		if metricName == "" || isKustoRunStatusMetric(row) {
-			continue
-		}
-		names[metricName] = true
-	}
-	return sortedKustoBoolKeys(names)
-}
-
-func firstKustoMetricTime(rows []KustoMetricRow) string {
-	return boundKustoMetricTime(rows, true)
-}
-
-func lastKustoMetricTime(rows []KustoMetricRow) string {
-	return boundKustoMetricTime(rows, false)
-}
-
-func boundKustoMetricTime(rows []KustoMetricRow, min bool) string {
-	out := ""
-	for _, row := range rows {
-		if isKustoRunStatusMetric(row) || row.WallTime == "" {
-			continue
-		}
-		if out == "" || (min && row.WallTime < out) || (!min && row.WallTime > out) {
-			out = row.WallTime
-		}
-	}
-	return out
-}
-
-func kustoStringSliceContains(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
 			return true
 		}
 	}
@@ -2416,64 +1307,6 @@ func compareKustoMetricFilterValue(left float64, op string, right float64) bool 
 	}
 }
 
-func filterKustoRowsSince(rows []KustoMetricRow, since string) ([]KustoMetricRow, []string, error) {
-	cutoff, err := parseKustoSince(since, time.Now())
-	if err != nil {
-		return nil, nil, err
-	}
-	if cutoff.IsZero() {
-		return rows, nil, nil
-	}
-	out := make([]KustoMetricRow, 0, len(rows))
-	skippedInvalidTime := 0
-	for _, row := range rows {
-		t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(row.WallTime))
-		if err != nil {
-			skippedInvalidTime++
-			continue
-		}
-		if !t.Before(cutoff) {
-			out = append(out, row)
-		}
-	}
-	warnings := []string{}
-	if skippedInvalidTime > 0 {
-		warnings = append(warnings, fmt.Sprintf("source=kusto skipped %d rows with unparsable wall_time while applying since", skippedInvalidTime))
-	}
-	return out, warnings, nil
-}
-
-func parseKustoSince(value string, now time.Time) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
-	}
-	if strings.HasSuffix(value, "d") {
-		days, err := strconv.ParseFloat(strings.TrimSuffix(value, "d"), 64)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("since must be RFC3339, Go duration, or Nd")
-		}
-		return now.UTC().Add(-time.Duration(days * float64(24*time.Hour))), nil
-	}
-	if duration, err := time.ParseDuration(value); err == nil {
-		return now.UTC().Add(-duration), nil
-	}
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("since must be RFC3339, Go duration, or Nd")
-	}
-	return parsed.UTC(), nil
-}
-
-func kustoWallTimeMicros(value string) *int64 {
-	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
-	if err != nil {
-		return nil
-	}
-	micros := t.UnixMicro()
-	return &micros
-}
-
 func kustoRowTags(row KustoMetricRow) map[string]string {
 	raw := strings.TrimSpace(row.Tags)
 	if raw == "" || raw == "{}" {
@@ -2490,24 +1323,6 @@ func kustoRowTags(row KustoMetricRow) map[string]string {
 	return out
 }
 
-func sortedKustoTagKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedKustoBoolKeys(values map[string]bool) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -2517,237 +1332,23 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
+func stringSliceContains(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func (s KustoSource) sourcePath() string {
-	if strings.TrimSpace(s.StorePath) != "" {
-		return s.StorePath
-	}
-	if strings.TrimSpace(s.MetricsFile) != "" {
-		return s.MetricsFile
-	}
-	return KustoStorePathForIngestion(s.Ingestion)
-}
-
-func filterKustoRows(rows []KustoMetricRow, target string) ([]KustoMetricRow, string) {
-	for _, match := range []struct {
-		typ string
-		fn  func(KustoMetricRow) bool
-	}{
-		{typ: "run", fn: func(row KustoMetricRow) bool { return row.RunID == target }},
-		{typ: "run_group", fn: func(row KustoMetricRow) bool { return row.RunGroupID == target }},
-		{typ: "experiment", fn: func(row KustoMetricRow) bool { return row.ExperimentID == target }},
-	} {
-		out := []KustoMetricRow{}
-		for _, row := range rows {
-			if match.fn(row) {
-				out = append(out, row)
-			}
-		}
-		if len(out) > 0 {
-			return out, match.typ
-		}
-	}
-	return nil, ""
-}
-
-func kustoRowsProjects(rows []KustoMetricRow) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, row := range rows {
-		project := strings.TrimSpace(row.Project)
-		if project == "" || seen[project] {
-			continue
-		}
-		seen[project] = true
-		out = append(out, project)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func kustoExperiment(rows []KustoMetricRow, target, targetType string) *expstore.ExperimentRecord {
-	if len(rows) == 0 {
-		return nil
-	}
-	experimentID := firstNonEmptyString(rows[0].ExperimentID, rows[0].RunGroupID)
-	if experimentID == "" && targetType == "experiment" {
-		experimentID = target
-	}
-	if experimentID == "" {
-		return nil
-	}
-	return &expstore.ExperimentRecord{
-		ExperimentID: experimentID,
-		Project:      rows[0].Project,
-		Name:         experimentID,
-		CreatedAt:    firstKustoTime(rows),
-		UpdatedAt:    lastKustoTime(rows),
-	}
-}
-
-func kustoRunGroups(rows []KustoMetricRow) []RunGroupView {
-	byID := map[string]KustoMetricRow{}
-	for _, row := range rows {
-		if row.RunGroupID == "" {
-			continue
-		}
-		if _, ok := byID[row.RunGroupID]; !ok {
-			byID[row.RunGroupID] = row
-		}
-	}
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]RunGroupView, 0, len(ids))
-	for _, id := range ids {
-		row := byID[id]
-		out = append(out, RunGroupView{
-			RunGroupID: id,
-			Project:    row.Project,
-			Name:       id,
-			GroupClass: cssClass("group", id),
-			CreatedAt:  firstKustoTime(rows),
-			UpdatedAt:  lastKustoTime(rows),
-		})
-	}
-	return out
-}
-
-func kustoRuns(rows []KustoMetricRow, maxRuns int, now time.Time, staleAfter time.Duration) ([]RunView, bool) {
-	byID := map[string][]KustoMetricRow{}
-	for _, row := range rows {
-		if row.RunID == "" {
-			continue
-		}
-		byID[row.RunID] = append(byID[row.RunID], row)
-	}
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	truncated := false
-	if maxRuns > 0 && len(ids) > maxRuns {
-		ids = ids[:maxRuns]
-		truncated = true
-	}
-	out := make([]RunView, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, kustoRunView(id, byID[id], now, staleAfter))
-	}
-	return out, truncated
-}
-
-func kustoRunView(runID string, rows []KustoMetricRow, now time.Time, staleAfter time.Duration) RunView {
-	row := firstKustoDataRow(rows)
-	if row.RunID == "" {
-		row = rows[0]
-	}
-	for _, candidate := range rows {
-		row.SourceStoreID = firstNonEmptyString(row.SourceStoreID, candidate.SourceStoreID)
-		row.WorkspaceID = firstNonEmptyString(row.WorkspaceID, candidate.WorkspaceID)
-		row.Cluster = firstNonEmptyString(row.Cluster, candidate.Cluster)
-		row.Project = firstNonEmptyString(row.Project, candidate.Project)
-		row.RunGroupID = firstNonEmptyString(row.RunGroupID, candidate.RunGroupID)
-	}
-	classification := classifyKustoRun(rows, now, staleAfter)
-	tags := kustoMergedTags(rows)
-	launch := experiment.ParseLaunch(tags[experiment.LaunchTag])
-	if launch != nil {
-		tags[experiment.LaunchTag] = launch.Tag()
-	} else {
-		delete(tags, experiment.LaunchTag)
-	}
-	view := RunView{
-		RunID:          runID,
-		Source:         "kusto",
-		SourceStoreID:  row.SourceStoreID,
-		WorkspaceID:    row.WorkspaceID,
-		Cluster:        row.Cluster,
-		Project:        row.Project,
-		RunGroupID:     row.RunGroupID,
-		State:          classification.Truth.legacyState(),
-		Successful:     classification.Successful,
-		SuccessReasons: classification.Reasons,
-		CreatedAt:      firstKustoTime(rows),
-		UpdatedAt:      firstNonEmptyString(lastKustoMetricTime(rows), classification.CompletedAt, lastKustoTime(rows)),
-		StartedAt:      classification.StartedAt,
-		CompletedAt:    classification.CompletedAt,
-		ResultURI:      firstNonEmptyString(tags[expkusto.RunStatusArtifactURITag], tags[expkusto.RunStatusCheckpointURITag]),
-		Tags:           tags,
-		Launch:         launch,
-		MetricNames:    kustoMetricNames(rows),
-		ObserveCLI:     "",
-	}
-	applyLifecycleTruth(&view, classification.Truth)
-	return view
-}
-
-type kustoRunClassification struct {
-	Truth       LifecycleTruth
-	Successful  bool
-	Reasons     []string
-	StartedAt   string
-	CompletedAt string
-}
-
-func classifyKustoRun(rows []KustoMetricRow, now time.Time, staleAfter time.Duration) kustoRunClassification {
-	statusRow, hasStatus := latestKustoStatusRow(rows)
-	firstMetricAt := firstKustoMetricTime(rows)
-	latestMetricAt := lastKustoMetricTime(rows)
-	outcome := ""
-	explicitReason := ""
-	explicitSource := ""
-	terminalAt := time.Time{}
-	controlPlaneAt := time.Time{}
-	reasons := []string{}
-	if hasStatus {
-		statusState := kustoRunStatusState(statusRow)
-		if terminalOutcome(statusState) != "" {
-			outcome = statusState
-			reasons = kustoRunStatusReasons(statusRow)
-			explicitReason = strings.Join(reasons, ": ")
-			explicitSource = "tau_terminal_marker"
-			terminalAt = parseLifecycleTime(statusRow.WallTime)
-		} else {
-			controlPlaneAt = parseLifecycleTime(statusRow.WallTime)
-		}
-	}
-	truth := ResolveLifecycle(LifecycleEvidence{
-		ExplicitOutcome:      outcome,
-		ExplicitReason:       explicitReason,
-		ExplicitSource:       explicitSource,
-		TerminalAt:           terminalAt,
-		LatestMetricAt:       parseLifecycleTime(latestMetricAt),
-		LatestControlPlaneAt: controlPlaneAt,
-		Now:                  now,
-		NotRespondingAfter:   staleAfter,
-	})
-	if len(reasons) == 0 {
-		reasons = []string{truth.Reason}
-	}
-	return kustoRunClassification{
-		Truth:      truth,
-		Successful: truth.OutcomeState == "succeeded",
-		Reasons:    reasons,
-		StartedAt:  firstNonEmptyString(firstMetricAt, firstKustoTime(rows)),
-		CompletedAt: func() string {
-			if truth.OutcomeState == "" {
-				return ""
-			}
-			return firstNonEmptyString(statusRow.WallTime, lastKustoTime(rows))
-		}(),
-	}
+	return "kusto://typed"
 }
 
 func kustoMetricPoints(rows []KustoMetricRow, allowedRuns map[string]bool) []metricPoint {
 	out := make([]metricPoint, 0, len(rows))
 	for _, row := range rows {
 		if row.RunID == "" || row.MetricName == "" || !allowedRuns[row.RunID] {
-			continue
-		}
-		if isKustoRunStatusMetric(row) {
 			continue
 		}
 		out = append(out, metricPoint{
@@ -2764,125 +1365,4 @@ func kustoMetricPoints(rows []KustoMetricRow, allowedRuns map[string]bool) []met
 		})
 	}
 	return out
-}
-
-func kustoStatus(sourcePath, target, targetType string, experiment *expstore.ExperimentRecord, groups []RunGroupView, runs []RunView, rows []KustoMetricRow) expstore.Status {
-	stateCounts := map[string]int{}
-	lifecycleCounts := map[string]int{}
-	for _, run := range runs {
-		stateCounts[run.State]++
-		lifecycle := run.LifecycleState
-		if lifecycle == "" {
-			lifecycle = run.State
-		}
-		lifecycleCounts[lifecycle]++
-	}
-	status := expstore.Status{
-		StorePath:       sourcePath,
-		Target:          target,
-		TargetType:      targetType,
-		Runs:            len(runs),
-		RunGroups:       len(groups),
-		StateCounts:     stateCounts,
-		LifecycleCounts: lifecycleCounts,
-		MetricFiles:     1,
-		LatestEventAt:   lastKustoTime(rows),
-	}
-	if experiment != nil {
-		status.Experiment = experiment
-	}
-	if targetType == "run_group" {
-		for _, group := range groups {
-			if group.RunGroupID == target {
-				status.RunGroup = &expstore.RunGroup{
-					RunGroupID: group.RunGroupID,
-					Project:    group.Project,
-					Name:       group.Name,
-					CreatedAt:  group.CreatedAt,
-					UpdatedAt:  group.UpdatedAt,
-				}
-				break
-			}
-		}
-	}
-	if targetType == "run" {
-		for _, run := range runs {
-			if run.RunID == target {
-				status.Run = map[string]any{
-					"run_id":       run.RunID,
-					"project":      run.Project,
-					"run_group_id": run.RunGroupID,
-					"state":        run.State,
-					"created_at":   run.CreatedAt,
-				}
-				break
-			}
-		}
-	}
-	return status
-}
-
-func kustoManifest(experiment *expstore.ExperimentRecord, rows []KustoMetricRow) expstore.Manifest {
-	project := ""
-	if experiment != nil {
-		project = experiment.Project
-	} else if len(rows) > 0 {
-		project = rows[0].Project
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	return expstore.Manifest{
-		SchemaVersion: expstore.SchemaVersion,
-		Kind:          "tau.exp.kusto",
-		Project:       project,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-}
-
-func kustoActions(sourcePath, target, targetType string, experiment *expstore.ExperimentRecord, metric string) ActionView {
-	queryTarget := target
-	queryFlag := "--experiment"
-	if targetType == "run_group" {
-		queryFlag = "--group"
-	} else if targetType == "run" {
-		queryFlag = "--run"
-	} else if experiment != nil {
-		queryTarget = experiment.ExperimentID
-	}
-	next := portalbin.ExperimentCmd + " kusto metrics-query " + queryFlag + " " + shellQuote(queryTarget)
-	if metric != "" {
-		next += " --metric " + shellQuote(metric)
-	}
-	return ActionView{
-		CopyCLI:     next,
-		CopySQL:     next,
-		ObserveCLI:  "",
-		NextCommand: next,
-		StorePath:   sourcePath,
-	}
-}
-
-func firstKustoTime(rows []KustoMetricRow) string {
-	return boundKustoTime(rows, true)
-}
-
-func lastKustoTime(rows []KustoMetricRow) string {
-	return boundKustoTime(rows, false)
-}
-
-func boundKustoTime(rows []KustoMetricRow, first bool) string {
-	var best time.Time
-	for _, row := range rows {
-		t, err := time.Parse(time.RFC3339Nano, row.WallTime)
-		if err != nil {
-			continue
-		}
-		if best.IsZero() || (first && t.Before(best)) || (!first && t.After(best)) {
-			best = t
-		}
-	}
-	if best.IsZero() {
-		return time.Now().UTC().Format(time.RFC3339)
-	}
-	return best.UTC().Format(time.RFC3339)
 }

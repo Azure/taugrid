@@ -27,16 +27,10 @@ type expServeOptions struct {
 	defaultTarget          string
 	metric                 string
 	source                 string
-	kustoMetricsFile       string
-	kustoProject           string
 	workspace              string
-	kustoWorkspace         string
 	kustoAllowedProjects   []string
-	kustoFeaturedProjects  []string
 	kustoEndpoint          string
 	kustoDatabase          string
-	kustoIngestion         string
-	kustoSince             string
 	kustoDiscoverySince    string
 	kustoMaxDiscoverySince string
 	kustoTargetSince       string
@@ -103,7 +97,6 @@ func defaultExpServeOptions() expServeOptions {
 	return expServeOptions{
 		addr:                   expapi.DefaultAddr,
 		source:                 "local",
-		kustoIngestion:         "projection",
 		kustoDiscoverySince:    "90d",
 		kustoMaxDiscoverySince: "365d",
 		kustoTargetSince:       "365d",
@@ -121,18 +114,11 @@ func addExpServeFlags(cmd *cobra.Command, opts *expServeOptions, includeOpen boo
 		cmd.Flags().BoolVar(&opts.open, "open", false, "open the Stellar dashboard URL in the default browser after binding the server")
 	}
 	cmd.Flags().StringVar(&opts.metric, "metric", "", "default metric name for the primary dashboard chart")
-	cmd.Flags().StringVar(&opts.source, "source", "local", "Stellar datasource: local, kusto, or auto")
-	cmd.Flags().StringVar(&opts.kustoMetricsFile, "kusto-metrics-file", "", "Kusto Stellar row JSONL/JSON exported from Kusto for --source=kusto or --source=auto fallback")
-	cmd.Flags().StringVar(&opts.kustoProject, "kusto-project", "", "deprecated project-label compatibility metadata; use --allowed-project for hard discovery scoping or request project= filters")
+	cmd.Flags().StringVar(&opts.source, "source", "local", "Stellar datasource: local or kusto")
 	cmd.Flags().StringVar(&opts.workspace, "workspace", "", "TauWorkspace this Stellar server serves; required, since Stellar refuses unscoped reads")
-	cmd.Flags().StringVar(&opts.kustoWorkspace, "kusto-workspace", "", "deprecated alias for --workspace")
-	_ = cmd.Flags().MarkDeprecated("kusto-workspace", "use --workspace; scoping now applies to every source, not just Kusto")
 	cmd.Flags().StringArrayVar(&opts.kustoAllowedProjects, "allowed-project", nil, "project label allowed in Kusto discovery; repeat for team-scoped deployments, omit to discover all projects")
-	cmd.Flags().StringArrayVar(&opts.kustoFeaturedProjects, "featured-project", nil, "project label to feature in Stellar without filtering discovery; repeatable")
 	cmd.Flags().StringVar(&opts.kustoEndpoint, "kusto-endpoint", "", "Kusto endpoint; queried natively via azure-kusto-go unless --kusto-query-command is set, in which case it only fills {endpoint} placeholders")
 	cmd.Flags().StringVar(&opts.kustoDatabase, "kusto-database", "", "Kusto database metadata passed to --kusto-query-command placeholders")
-	cmd.Flags().StringVar(&opts.kustoIngestion, "kusto-ingestion", "projection", "Kusto ingestion shape: projection or remote-write")
-	cmd.Flags().StringVar(&opts.kustoSince, "kusto-since", "", "deprecated fallback lookback for live Kusto query generation; prefer --discovery-since and --target-since")
 	cmd.Flags().StringVar(&opts.kustoDiscoverySince, "discovery-since", "90d", "default lookback for broad Kusto experiment discovery")
 	cmd.Flags().StringVar(&opts.kustoMaxDiscoverySince, "max-discovery-since", "365d", "maximum allowed lookback for unscoped broad Kusto experiment discovery")
 	cmd.Flags().StringVar(&opts.kustoTargetSince, "target-since", "365d", "default lookback for targeted live Kusto dashboard queries")
@@ -176,16 +162,10 @@ func (opts expServeOptions) toExpapiOptions(storePath *string) expapi.Options {
 		DefaultTarget:          opts.defaultTarget,
 		DefaultMetric:          opts.metric,
 		Source:                 opts.source,
-		KustoMetricsFile:       opts.kustoMetricsFile,
-		KustoProject:           opts.kustoProject,
 		Workspace:              opts.workspace,
-		KustoWorkspace:         opts.kustoWorkspace,
 		KustoAllowedProjects:   opts.kustoAllowedProjects,
-		KustoFeaturedProjects:  opts.kustoFeaturedProjects,
 		KustoEndpoint:          opts.kustoEndpoint,
 		KustoDatabase:          opts.kustoDatabase,
-		KustoIngestion:         opts.kustoIngestion,
-		KustoSince:             opts.kustoSince,
 		KustoDiscoverySince:    opts.kustoDiscoverySince,
 		KustoMaxDiscoverySince: opts.kustoMaxDiscoverySince,
 		KustoTargetSince:       opts.kustoTargetSince,

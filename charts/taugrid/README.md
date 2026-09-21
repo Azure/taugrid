@@ -66,7 +66,7 @@ the chart does not modify it.
 
 Set all three connection fields together or leave all empty. A partial connection
 fails rendering when Kusto Portal is enabled, rather than selecting an unintended
-identity. An absent connection retains degraded Kusto APIs; `source=local/auto`
+identity. An absent connection retains degraded Kusto APIs; `source=local`
 ignores the shared connection and retains its existing store requirements.
 The fixed workspace remains `taugrid-default`, the Service remains ClusterIP,
 and workspace-directory routing stays disabled. This connection is backend

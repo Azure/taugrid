@@ -221,7 +221,7 @@ func trustedStellarProbe(request *http.Request, scope WorkspaceScope, route stri
 	base := strings.TrimRight(target.Path, "/")
 	prefix := strings.TrimPrefix(path.Dir(request.URL.Path), base)
 	switch prefix {
-	case "/api/v2/stellar", "/api/v1/stellar", "/api/stellar":
+	case "/api/v2/stellar":
 	default:
 		return nil, errors.New("trusted experiment probe requires a canonical API path")
 	}

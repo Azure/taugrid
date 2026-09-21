@@ -16,8 +16,8 @@ import (
 
 const (
 	defaultFrontendAssetBase = "/stellar/assets"
-	defaultSnapshotPath      = "/api/stellar/snapshot"
-	defaultSeriesPath        = "/api/stellar/series"
+	defaultSnapshotPath      = "/api/v2/stellar/snapshot"
+	defaultSeriesPath        = "/api/v2/stellar/series"
 	defaultRefreshInterval   = "30000"
 )
 
@@ -168,8 +168,6 @@ func frontendSourceLabel(source string) string {
 		return "Kusto/ADX"
 	case "local":
 		return "local expstore"
-	case "auto":
-		return "auto"
 	default:
 		return ""
 	}
@@ -181,8 +179,6 @@ func frontendSourceTitle(source string) string {
 		return "Hosted scalar source: authoritative ADX/Kusto rows."
 	case "local":
 		return "Local/offline source: expstore packets, artifacts, and recovery state."
-	case "auto":
-		return "Auto source mode can merge local expstore data and Kusto scalar rows."
 	default:
 		return ""
 	}

@@ -79,30 +79,19 @@ stellar:
   # override it when the operator chose another workspace name.
   workspace: taugrid-default
   defaultTarget: test-cluster-stellar
-  # kusto = ADX/Kusto-only scalar dashboards and requires kusto.metricsFile or
-  # kusto.queryCommand when enabled. local/auto are manual compatibility modes
-  # for local expstore debugging; only those modes mount an existing expstore PVC.
+  # kusto = ADX/Kusto-only scalar dashboards and requires kusto.endpoint or
+  # kusto.queryCommand when enabled. local is for expstore debugging and mounts
+  # an existing expstore PVC.
   source: kusto
   discovery:
     # Empty means discover all Tau/W&B project labels visible to the Kusto query
     # identity. Set allowedProjects only for explicitly team-scoped deployments.
     allowedProjects: []
-    # Featured projects are UI hints and do not filter discovery.
-    featuredProjects: []
     since: 90d
     maxSince: 365d
-    # Temporary bridge for legacy installs that intentionally used
-    # stellar.kusto.project as a hard scope. Leave false for shared dashboards.
-    legacyProjectScope: false
   kusto:
-    metricsFile: ""
-    # Deprecated: project is a Tau/W&B label, not Kusto connection config. Use
-    # stellar.discovery.allowedProjects for hard scoping or request project=.
-    project: ""
     endpoint: ""
     database: ""
-    ingestion: projection
-    since: ""
     targetSince: 365d
     queryCommand: ""
     queryArgs: []
@@ -161,13 +150,13 @@ stellar:
     requests: { cpu: "250m", memory: 512Mi }
     limits: { cpu: "1", memory: 2Gi }
   expstore:
-    # Used only when stellar.source is local or auto. The platform must
+    # Used only when stellar.source is local. The platform must
     # pre-provision this claim; Kusto-only Stellar does not mount it.
     pvcName: ""
   importer:
     # Manual-only compatibility bridge for offline/debug recovery from jobs that
     # append metrics-history.jsonl to a shared volume. Requires stellar.source to
-    # be local or auto; source=kusto intentionally rejects workload PVC scanning.
+    # be local; source=kusto intentionally rejects workload PVC scanning.
     enabled: false
     history: []
     run: ""
@@ -290,11 +279,11 @@ portal:
   replicaCount: 1
   serviceName: tau-portal
   # kusto backs the Experiments (Stellar), Cluster Health, and Cost boards via
-  # the shared --kusto-query-command shell-out. local/auto are debug modes for a
+  # the shared --kusto-query-command shell-out. local is a debug mode for a
   # local expstore-backed Experiments board and do not light up the Kusto boards.
   source: kusto
   # Experiment store root for the mounted Stellar experience. Required only for
-  # source=local/auto; leave empty for source=kusto. Mounting a real expstore
+  # source=local; leave empty for source=kusto. Mounting a real expstore
   # (via extraVolumes/extraVolumeMounts) is a future enhancement.
   store: ""
   # Default cluster name for the Kusto-backed Cluster Health and Cost boards. In
@@ -380,7 +369,6 @@ portal:
     endpoint: ""
     database: ""
     costDatabase: CostTracking
-    ingestion: remote-write
     # Executable that runs generated KQL and emits Kusto REST JSON. Reused by the
     # Experiments, Cluster Health, and Cost boards. Empty leaves the Cluster
     # Health and Cost boards degraded to 503; the shell, Jobs, and Ray boards

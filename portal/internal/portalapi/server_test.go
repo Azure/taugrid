@@ -391,12 +391,12 @@ func TestStellarMountedUnderPortal(t *testing.T) {
 
 	// A Stellar API route must also resolve through the mount.
 	rec = httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stellar/capabilities", nil))
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/capabilities", nil))
 	if rec.Code == http.StatusNotFound {
-		t.Fatalf("/api/stellar/capabilities not mounted: status = %d", rec.Code)
+		t.Fatalf("/api/v2/stellar/capabilities not mounted: status = %d", rec.Code)
 	}
 	if got := rec.Header().Get("X-Frame-Options"); got != "SAMEORIGIN" {
-		t.Fatalf("/api/stellar/capabilities X-Frame-Options = %q, want SAMEORIGIN", got)
+		t.Fatalf("/api/v2/stellar/capabilities X-Frame-Options = %q, want SAMEORIGIN", got)
 	}
 }
 
@@ -1494,7 +1494,7 @@ func TestRunsBoardDistinguishesUnconfiguredAndUnavailableStellar(t *testing.T) {
 			t.Fatal(err)
 		}
 		server, err := NewServer(Options{
-			Stellar:            expapi.Options{Source: "auto", StorePath: t.TempDir()},
+			Stellar:            expapi.Options{Source: "local", StorePath: t.TempDir()},
 			Runs:               RunsOptions{Reader: &stubRunsReader{}},
 			WorkspaceDirectory: directory,
 		})
@@ -2268,8 +2268,7 @@ func TestManagedWorkspaceAdversarialIsolationMatrix(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		"/api/stellar/experiments?workspace=alpha&project=beta-marker-project&target=beta-marker-run&limit=999999",
-		"/api/v1/stellar/runs?workspace=alpha&project=beta-marker-project&target=beta-marker-run",
+		"/api/v2/stellar/experiments?workspace=alpha&project=beta-marker-project&target=beta-marker-run&limit=999999",
 		"/api/v2/stellar/runs?workspace=alpha&project=beta-marker-project&target=beta-marker-run",
 	} {
 		rec := alphaRequest(t, server, path)
@@ -2469,12 +2468,12 @@ func TestManagedWorkspaceStellarCannotCrossWorkspaceScopes(t *testing.T) {
 		t.Fatalf("managed directory omitted scoped local Stellar = %d %s", rec.Code, rec.Body.String())
 	}
 
-	rec = managedRequest(t, server, "/api/stellar/experiments?workspace=alpha&project=beta&target=beta-run")
+	rec = managedRequest(t, server, "/api/v2/stellar/experiments/search?workspace=alpha&project=beta&target=beta-run")
 	if rec.Code == http.StatusTemporaryRedirect || strings.Contains(rec.Body.String(), `"workspace":"beta"`) {
 		t.Fatalf("alpha cross-workspace Stellar response = %d %s", rec.Code, rec.Body.String())
 	}
 
-	rec = managedRequest(t, server, "/api/stellar/experiments?workspace=beta")
+	rec = managedRequest(t, server, "/api/v2/stellar/experiments/search?workspace=beta")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unauthorized beta Stellar response = %d %s", rec.Code, rec.Body.String())
 	}
@@ -2538,7 +2537,6 @@ func TestKustoStellarAvailableForEndpointOnlyPortal(t *testing.T) {
 	}{
 		{"native only", expapi.Options{Source: "kusto", KustoEndpoint: "https://adx.example.com", KustoNativeQuery: native}, true},
 		{"query command only", expapi.Options{Source: "kusto", KustoQueryCommand: "/bin/true"}, true},
-		{"metrics file only", expapi.Options{Source: "kusto", KustoMetricsFile: "rows.jsonl"}, true},
 		{"no transport", expapi.Options{Source: "kusto"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -8,10 +8,10 @@ const config = {
   workspace: root?.dataset.workspace || "",
   project: root?.dataset.project || "",
   metric: root?.dataset.metric || "",
-  snapshotPath: root?.dataset.snapshotPath || "/api/stellar/snapshot",
-  seriesPath: root?.dataset.seriesPath || "/api/stellar/series",
-  runsPath: root?.dataset.runsPath || "/api/stellar/runs",
-  experimentsPath: root?.dataset.experimentsPath || "/api/stellar/experiments",
+  snapshotPath: root?.dataset.snapshotPath || "/api/v2/stellar/snapshot",
+  seriesPath: root?.dataset.seriesPath || "/api/v2/stellar/series",
+  runsPath: root?.dataset.runsPath || "/api/v2/stellar/runs",
+  experimentsPath: root?.dataset.experimentsPath || "/api/v2/stellar/experiments",
   source: root?.dataset.source || "",
   refreshInterval: root?.dataset.refreshInterval || root?.dataset.autoRefreshInterval || "",
 };
@@ -1203,7 +1203,7 @@ function applySourceParam(url) {
 
 function usesRemoteExperimentSource() {
   const source = text(config.source, "").trim().toLowerCase();
-  return source === "kusto" || source === "auto";
+  return source === "kusto";
 }
 
 async function fetchExperiments(options = {}) {
@@ -2671,9 +2671,6 @@ function sourceStatusLabel(source) {
   if (source === "local") {
     return "local expstore";
   }
-  if (source === "auto") {
-    return "auto";
-  }
   return "";
 }
 
@@ -2683,9 +2680,6 @@ function sourceStatusTitle(source) {
   }
   if (source === "local") {
     return "Local/offline source: expstore packets, artifacts, and recovery state.";
-  }
-  if (source === "auto") {
-    return "Auto source mode can merge local expstore data and Kusto scalar rows.";
   }
   return "";
 }
@@ -5484,7 +5478,7 @@ function artifactPreviewSource(artifact) {
     }
   }
   if (artifact.artifact_id && hasLocalArtifactReference(artifact)) {
-    const url = new URL("/api/stellar/artifact", window.location.origin);
+    const url = new URL("/api/v2/stellar/artifact", window.location.origin);
     url.searchParams.set("target", state.target);
     url.searchParams.set("artifact", artifact.artifact_id);
     applySourceParam(url);
@@ -5532,7 +5526,7 @@ function artifactScopedSource(artifact, options = {}) {
   }
   const targetKey = base64URLSegment(state.target);
   const artifactKey = base64URLSegment(artifact.artifact_id);
-  const url = new URL(`/api/stellar/artifact/bundle/${targetKey}/${artifactKey}/`, window.location.origin);
+  const url = new URL(`/api/v2/stellar/artifact/bundle/${targetKey}/${artifactKey}/`, window.location.origin);
   if (options.frame) {
     url.searchParams.set("frame", "1");
   }

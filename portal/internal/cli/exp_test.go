@@ -31,22 +31,16 @@ import (
 
 func TestExpServeKustoDiscoveryFlags(t *testing.T) {
 	opts := defaultExpServeOptions()
-	if opts.kustoSince != "" {
-		t.Fatalf("legacy kustoSince default = %q, want empty", opts.kustoSince)
-	}
 	if opts.kustoDiscoverySince != "90d" || opts.kustoMaxDiscoverySince != "365d" || opts.kustoTargetSince != "365d" {
 		t.Fatalf("unexpected Kusto discovery defaults: %+v", opts)
 	}
 
 	store := ""
 	cmd := newExpServeCmd(&store)
-	for _, name := range []string{"allowed-project", "featured-project", "discovery-since", "max-discovery-since", "target-since"} {
+	for _, name := range []string{"allowed-project", "discovery-since", "max-discovery-since", "target-since"} {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Fatalf("serve command missing --%s", name)
 		}
-	}
-	if got := cmd.Flags().Lookup("kusto-since").DefValue; got != "" {
-		t.Fatalf("--kusto-since default = %q, want empty", got)
 	}
 }
 
