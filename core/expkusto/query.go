@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/kustoquery"
 )
 
 const (
-	DefaultEndpoint     = "https://example.kusto.windows.net"
-	DefaultDatabase     = exptelemetry.RemoteWriteDatabase
+	DefaultEndpoint     = kustoquery.DefaultEndpoint
+	DefaultDatabase     = kustoquery.DefaultDatabase
 	DefaultTargetPoints = 12000
 	MinTargetPoints     = 100
 )
@@ -80,7 +80,7 @@ func BuildRunSearchLifecycleEvidenceQuery(identities []RunEvidenceIdentity, inge
 		if strings.TrimSpace(identity.RunID) == "" {
 			return "", fmt.Errorf("lifecycle evidence requires a run ID")
 		}
-		filters = append(filters, fmt.Sprintf("(workspace_id == %s and project_id == %s and run_group_id == %s and run_id == %s)", kqlString(identity.WorkspaceID), kqlString(identity.Project), kqlString(identity.RunGroupID), kqlString(identity.RunID)))
+		filters = append(filters, fmt.Sprintf("(workspace_id == %s and project_id == %s and run_group_id == %s and run_id == %s)", kustoquery.QuoteString(identity.WorkspaceID), kustoquery.QuoteString(identity.Project), kustoquery.QuoteString(identity.RunGroupID), kustoquery.QuoteString(identity.RunID)))
 	}
 	query.WriteString("| where " + strings.Join(filters, " or ") + "\n")
 	query.WriteString("| where isnotnull(wall_time) and isnotnull(value) and isnotempty(metric_name)\n")

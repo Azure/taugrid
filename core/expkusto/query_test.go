@@ -54,7 +54,7 @@ func TestBuildRunSearchLifecycleEvidenceQuery(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, want := range []string{
-				"workspace_id == 'workspace' and project_id == 'project' and run_group_id == 'group' and run_id == " + kqlString("run'quoted"),
+				"workspace_id == @'workspace' and project_id == @'project' and run_group_id == @'group' and run_id == @'run''quoted'",
 				"arg_max(exported_at, *)", "status_evidence=metric_name == 'tau/run_status'",
 				"arg_max(wall_time, *) by workspace_id, project_id, run_group_id, run_id, status_evidence",
 			} {
@@ -75,6 +75,45 @@ func TestBuildRunSearchLifecycleEvidenceQuery(t *testing.T) {
 				t.Fatalf("missing ingestion table %s", table)
 			}
 		})
+	}
+}
+
+func TestBuildRunSearchLifecycleEvidenceQueryQuotesIdentities(t *testing.T) {
+	for _, ingestion := range []string{"projection", "remote-write"} {
+		for _, field := range []string{"workspace_id", "project_id", "run_group_id", "run_id"} {
+			for _, test := range []struct {
+				name    string
+				value   string
+				literal string
+			}{
+				{"plain", "value", "@'value'"},
+				{"trailing backslash", `value\`, `@'value\'`},
+				{"quote", "a'b", "@'a''b'"},
+				{"backslash and quote", `a\' | x`, `@'a\'' | x'`},
+				{"literal escape", `value\n`, `@'value\n'`},
+			} {
+				t.Run(ingestion+"/"+field+"/"+test.name, func(t *testing.T) {
+					identity := RunEvidenceIdentity{WorkspaceID: "workspace", Project: "project", RunGroupID: "group", RunID: "run"}
+					switch field {
+					case "workspace_id":
+						identity.WorkspaceID = test.value
+					case "project_id":
+						identity.Project = test.value
+					case "run_group_id":
+						identity.RunGroupID = test.value
+					case "run_id":
+						identity.RunID = test.value
+					}
+					query, err := BuildRunSearchLifecycleEvidenceQuery([]RunEvidenceIdentity{identity}, ingestion)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if want := field + " == " + test.literal; !strings.Contains(query, want) {
+						t.Fatalf("evidence query missing literal identity %q:\n%s", want, query)
+					}
+				})
+			}
+		}
 	}
 }
 

@@ -17,8 +17,6 @@ import (
 	"github.com/Azure/azure-kusto-go/azkustodata"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-
-	"github.com/Azure/taugrid/core/expkusto"
 )
 
 // SDKClient executes KQL against ADX using the native azure-kusto-go SDK. The
@@ -38,7 +36,7 @@ func (c SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
 	if endpoint == "" {
 		return nil, ErrNoQueryCommand
 	}
-	database := firstNonEmpty(c.Database, expkusto.DefaultDatabase)
+	database := firstNonEmpty(c.Database, DefaultDatabase)
 	run := c.queryJSON
 	if run == nil {
 		run = func(ctx context.Context, database, query string) (string, error) {
@@ -65,7 +63,7 @@ func RunADXQuery(ctx context.Context, endpoint, database, query string) (string,
 	if endpoint == "" {
 		return "", ErrNoQueryCommand
 	}
-	return runADXQuery(ctx, endpoint, firstNonEmpty(database, expkusto.DefaultDatabase), query)
+	return runADXQuery(ctx, endpoint, firstNonEmpty(database, DefaultDatabase), query)
 }
 
 // runADXQuery is the production transport: DefaultAzureCredential →

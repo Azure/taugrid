@@ -71,6 +71,44 @@ func TestKustoActionsSuppressUnwritableObservationCommand(t *testing.T) {
 	}
 }
 
+func TestKustoSearchLatestLifecyclePreservesBackslashRunID(t *testing.T) {
+	for _, ingestion := range []string{"projection", "remote-write"} {
+		t.Run(ingestion, func(t *testing.T) {
+			now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+			const runID = `run\`
+			row := KustoMetricRow{WorkspaceID: "workspace", Project: "project", ExperimentID: "experiment", RunGroupID: "group", RunID: runID, MetricName: "loss", WallTime: now.Add(-5 * time.Minute).Format(time.RFC3339), Value: 1}
+			evidenceQueries := 0
+			source := KustoSource{WorkspaceID: "workspace", Ingestion: ingestion, Now: func() time.Time { return now }, NativeQuery: func(_ context.Context, query string) (string, error) {
+				selected := row
+				if strings.Contains(query, "let run_search_evidence") {
+					evidenceQueries++
+					if !strings.Contains(query, `run_id == @'run\'`) {
+						return "", errors.New("lifecycle lookup did not preserve the trailing-backslash run ID as a literal")
+					}
+					selected.MetricName = expkusto.RunStatusMetricName
+					selected.Tags = `{"tau.status.state":"failed"}`
+					selected.WallTime = now.Add(-time.Minute).Format(time.RFC3339)
+				}
+				raw, err := json.Marshal([]KustoMetricRow{selected})
+				return string(raw), err
+			}}
+			page, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Target: "experiment", Project: "project", Start: now.Add(-10 * time.Minute).Format(time.RFC3339), End: now.Add(-2 * time.Minute).Format(time.RFC3339), Limit: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Runs) != 1 || page.Total != 1 || page.Truncated || page.Runs[0].RunID != runID {
+				t.Fatalf("changed page membership or identity: %+v", page)
+			}
+			if run := page.Runs[0]; run.OutcomeState != "failed" || run.LifecycleState != "running" {
+				t.Fatalf("latest=%q historical=%q, want failed/running", run.OutcomeState, run.LifecycleState)
+			}
+			if evidenceQueries != 1 {
+				t.Fatalf("evidence queries=%d, want 1", evidenceQueries)
+			}
+		})
+	}
+}
+
 func TestKustoSearchLatestLifecycleBatches(t *testing.T) {
 	for _, count := range []int{1, 200, 201, 1000} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
@@ -86,7 +124,7 @@ func TestKustoSearchLatestLifecycleBatches(t *testing.T) {
 					evidenceQueries++
 					selected = nil
 					for _, row := range rows {
-						if strings.Contains(query, "run_id == '"+row.RunID+"'") {
+						if strings.Contains(query, "run_id == @'"+row.RunID+"'") {
 							row.MetricName = expkusto.RunStatusMetricName
 							row.Tags = `{"tau.status.state":"failed"}`
 							row.WallTime = now.Add(-time.Minute).Format(time.RFC3339)
@@ -162,7 +200,7 @@ func TestKustoSearchRejectsUntrustworthyLatestEvidence(t *testing.T) {
 					}
 					result = nil
 					for _, row := range rows {
-						if strings.Contains(query, "run_id == '"+row.RunID+"'") {
+						if strings.Contains(query, "run_id == @'"+row.RunID+"'") {
 							result = append(result, row)
 						}
 					}
