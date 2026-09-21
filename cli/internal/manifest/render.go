@@ -484,6 +484,10 @@ func Render(opts RenderOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if metricsOffload.Enabled {
+		scheduling.PodLabels[workloadmeta.LabelAzureWorkloadIdentityUse] = "true"
+		scheduling.PodMetadataBlock = renderPodMetadata(scheduling.PodLabels, scheduling.PodAnnotations, 4)
+	}
 
 	// Inject execution contract env vars for RayJob workloads (backfill #1025
 	// gap: the manifest renderer was missing these authoritative vars).

@@ -90,7 +90,11 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 }
 
 func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "")
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "")
 	config := filepath.Clean("../../../examples/market-policy/tau.yaml")
 	options, _, err := loadRunConfig(config)
@@ -111,7 +115,7 @@ func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T
 	if err != nil {
 		t.Fatalf("resolve market-policy metrics offload: %v", err)
 	}
-	if got, want := runtime.Image, "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2"; got != want {
+	if got, want := runtime.Image, offloadImage; got != want {
 		t.Fatalf("metrics offload image = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/metrics-offload"; got != want {

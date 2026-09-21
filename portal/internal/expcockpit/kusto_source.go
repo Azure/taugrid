@@ -558,6 +558,9 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 		if summaries[i].LatestRunAt != summaries[j].LatestRunAt {
 			return summaries[i].LatestRunAt > summaries[j].LatestRunAt
 		}
+		if summaries[i].Project != summaries[j].Project {
+			return summaries[i].Project < summaries[j].Project
+		}
 		return summaries[i].ExperimentID < summaries[j].ExperimentID
 	})
 	truncated := len(summaries) > opts.Limit
@@ -662,46 +665,64 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 	if err != nil {
 		return expstore.ExperimentSearchResult{}, err
 	}
-	query, err := expkusto.BuildRunCatalogQuery(expkusto.CatalogQueryOptions{
-		WorkspaceID: s.WorkspaceID,
-		Projects:    projects,
-		Target:      opts.Target,
-		MetricNames: opts.MetricNames,
-		Since:       opts.Since,
-		Limit:       catalogScanLimit(opts.Limit),
-	})
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
+	const sourceBatchSize = 1000
+	afterAt := opts.CursorAt
+	afterProject, afterExperiment := catalogCursorParts(opts.CursorID)
+	summariesByKey := map[string]expstore.ExperimentSummary{}
+	sourceExhausted := false
+	for len(summariesByKey) <= opts.Limit && !sourceExhausted {
+		query, err := expkusto.BuildExperimentCatalogQuery(expkusto.CatalogQueryOptions{
+			WorkspaceID: s.WorkspaceID, Projects: projects, Target: opts.Target,
+			MetricNames: opts.MetricNames, Since: opts.Since, Limit: sourceBatchSize,
+			AfterAt: afterAt, AfterProject: afterProject, AfterExperimentID: afterExperiment,
+		})
+		if err != nil {
+			return expstore.ExperimentSearchResult{}, err
+		}
+		runRows, err := s.executeKustoQueryCommand(ctx, query)
+		if err != nil {
+			return expstore.ExperimentSearchResult{}, err
+		}
+		if len(runRows) == 0 {
+			sourceExhausted = true
+			break
+		}
+		metricRows, err := s.catalogMetricRowsForRuns(ctx, projects, expstore.RunSearchOptions{
+			Target: opts.Target, Project: opts.Project, Workspace: opts.Workspace,
+			MetricNames: opts.MetricNames, Since: opts.Since, Limit: opts.Limit,
+		}, runRows)
+		if err != nil {
+			return expstore.ExperimentSearchResult{}, err
+		}
+		runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{
+			Target: opts.Target, Workspace: opts.Workspace, Query: opts.Query, Project: opts.Project,
+			Lifecycle: opts.Lifecycle, Tags: opts.Tags, MetricNames: opts.MetricNames,
+			MetricFilters: opts.MetricFilters, Since: opts.Since, Limit: catalogScanLimit(opts.Limit),
+		})
+		for _, summary := range catalogExperimentSummaries(runs, s.sourcePath()) {
+			summariesByKey[summary.Project+"\x00"+summary.ExperimentID] = summary
+		}
+		pageCursor, pageCount := catalogExperimentPageCursor(runRows)
+		if pageCount < sourceBatchSize {
+			sourceExhausted = true
+		} else if pageCursor.At == afterAt && pageCursor.Project == afterProject && pageCursor.ID == afterExperiment {
+			return expstore.ExperimentSearchResult{}, fmt.Errorf("typed experiment catalog pagination did not advance")
+		} else {
+			afterAt, afterProject, afterExperiment = pageCursor.At, pageCursor.Project, pageCursor.ID
+		}
 	}
-	runRows, err := s.executeKustoQueryCommand(ctx, query)
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
+	summaries := make([]expstore.ExperimentSummary, 0, len(summariesByKey))
+	for _, summary := range summariesByKey {
+		summaries = append(summaries, summary)
 	}
-	metricRows, err := s.catalogMetricRowsForRuns(ctx, projects, expstore.RunSearchOptions{
-		Target:      opts.Target,
-		Project:     opts.Project,
-		Workspace:   opts.Workspace,
-		MetricNames: opts.MetricNames,
-		Since:       opts.Since,
-		Limit:       opts.Limit,
-	}, runRows)
-	if err != nil {
-		return expstore.ExperimentSearchResult{}, err
-	}
-	runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{
-		Target: opts.Target, Workspace: opts.Workspace, Query: opts.Query, Project: opts.Project,
-		Lifecycle: opts.Lifecycle, Tags: opts.Tags, MetricNames: opts.MetricNames,
-		MetricFilters: opts.MetricFilters, Since: opts.Since, Limit: catalogScanLimit(opts.Limit),
-	})
-	summaries := catalogExperimentSummaries(runs, s.sourcePath())
 	sort.SliceStable(summaries, func(i, j int) bool {
 		if summaries[i].LatestRunAt != summaries[j].LatestRunAt {
 			return summaries[i].LatestRunAt > summaries[j].LatestRunAt
 		}
 		return summaries[i].ExperimentID < summaries[j].ExperimentID
 	})
-	truncated := len(summaries) > opts.Limit
-	if truncated {
+	truncated := len(summaries) > opts.Limit || !sourceExhausted
+	if len(summaries) > opts.Limit {
 		summaries = summaries[:opts.Limit]
 	}
 	return expstore.ExperimentSearchResult{
@@ -723,7 +744,8 @@ func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []e
 	byExperiment := map[string]*accumulator{}
 	for _, run := range runs {
 		experimentID := firstNonEmptyString(run.ExperimentID, run.RunGroupID, run.RunID)
-		item := byExperiment[experimentID]
+		key := strings.TrimSpace(run.Project) + "\x00" + experimentID
+		item := byExperiment[key]
 		if item == nil {
 			item = &accumulator{
 				summary: expstore.ExperimentSummary{
@@ -735,7 +757,7 @@ func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []e
 				},
 				groups: map[string]bool{}, metrics: map[string]bool{},
 			}
-			byExperiment[experimentID] = item
+			byExperiment[key] = item
 		}
 		item.summary.RunCount++
 		if run.RunGroupID != "" {
@@ -794,27 +816,48 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 	if err != nil {
 		return expstore.RunSearchResult{}, err
 	}
-	query, err := expkusto.BuildRunCatalogQuery(expkusto.CatalogQueryOptions{
-		WorkspaceID: s.WorkspaceID,
-		Projects:    projects,
-		Target:      opts.Target,
-		RunGroupID:  opts.RunGroupID,
-		MetricNames: opts.MetricNames,
-		Since:       opts.Since,
-		Limit:       catalogScanLimit(opts.Limit),
-	})
-	if err != nil {
-		return expstore.RunSearchResult{}, err
+	const sourceBatchSize = 1000
+	afterAt := opts.CursorAt
+	afterProject, afterRun := catalogCursorParts(opts.CursorID)
+	runsByKey := map[string]expstore.RunSearchRun{}
+	sourceExhausted := false
+	for len(runsByKey) <= opts.Limit && !sourceExhausted {
+		query, err := expkusto.BuildRunCatalogQuery(expkusto.CatalogQueryOptions{
+			WorkspaceID: s.WorkspaceID, Projects: projects, Target: opts.Target,
+			RunGroupID: opts.RunGroupID, MetricNames: opts.MetricNames, Since: opts.Since,
+			Limit: sourceBatchSize, AfterAt: afterAt, AfterProject: afterProject, AfterRunID: afterRun,
+		})
+		if err != nil {
+			return expstore.RunSearchResult{}, err
+		}
+		rows, err := s.executeKustoQueryCommand(ctx, query)
+		if err != nil {
+			return expstore.RunSearchResult{}, err
+		}
+		if len(rows) == 0 {
+			sourceExhausted = true
+			break
+		}
+		metricRows, err := s.catalogMetricRowsForRuns(ctx, projects, opts, rows)
+		if err != nil {
+			return expstore.RunSearchResult{}, err
+		}
+		for _, run := range catalogRunSearchRuns(rows, metricRows, opts) {
+			runsByKey[catalogRunKey(run.Project, run.RunID)] = run
+		}
+		pageCursor := catalogRunPageCursor(rows)
+		if len(rows) < sourceBatchSize {
+			sourceExhausted = true
+		} else if pageCursor.At == afterAt && pageCursor.Project == afterProject && pageCursor.ID == afterRun {
+			return expstore.RunSearchResult{}, fmt.Errorf("typed run catalog pagination did not advance")
+		} else {
+			afterAt, afterProject, afterRun = pageCursor.At, pageCursor.Project, pageCursor.ID
+		}
 	}
-	rows, err := s.executeKustoQueryCommand(ctx, query)
-	if err != nil {
-		return expstore.RunSearchResult{}, err
+	runs := make([]expstore.RunSearchRun, 0, len(runsByKey))
+	for _, run := range runsByKey {
+		runs = append(runs, run)
 	}
-	metricRows, err := s.catalogMetricRowsForRuns(ctx, projects, opts, rows)
-	if err != nil {
-		return expstore.RunSearchResult{}, err
-	}
-	runs := catalogRunSearchRuns(rows, metricRows, opts)
 	sort.SliceStable(runs, func(i, j int) bool {
 		if runs[i].CreatedAt != runs[j].CreatedAt {
 			return runs[i].CreatedAt > runs[j].CreatedAt
@@ -822,8 +865,8 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 		return runs[i].RunID < runs[j].RunID
 	})
 	total := len(runs)
-	truncated := total > opts.Limit
-	if truncated {
+	truncated := total > opts.Limit || !sourceExhausted
+	if total > opts.Limit {
 		runs = runs[:opts.Limit]
 	}
 	return expstore.RunSearchResult{
@@ -957,6 +1000,65 @@ func catalogMetricSummariesByRun(rows []KustoMetricRow) map[string][]expstore.Me
 
 func catalogRunKey(project, runID string) string {
 	return strings.TrimSpace(project) + "\x00" + strings.TrimSpace(runID)
+}
+
+func catalogCursorParts(cursorID string) (string, string) {
+	project, id, _ := strings.Cut(cursorID, "\x00")
+	return strings.TrimSpace(project), strings.TrimSpace(id)
+}
+
+type catalogPageCursor struct {
+	At      string
+	Project string
+	ID      string
+}
+
+func catalogRunPageCursor(rows []KustoMetricRow) catalogPageCursor {
+	cursors := make([]catalogPageCursor, 0, len(rows))
+	for _, row := range rows {
+		cursors = append(cursors, catalogPageCursor{
+			At:      firstNonEmptyString(row.CreatedTime, row.SubmitTime, row.FirstActivityAt, row.LatestActivityAt),
+			Project: strings.TrimSpace(row.Project), ID: strings.TrimSpace(row.RunID),
+		})
+	}
+	sort.Slice(cursors, func(i, j int) bool {
+		if cursors[i].At != cursors[j].At {
+			return cursors[i].At > cursors[j].At
+		}
+		if cursors[i].Project != cursors[j].Project {
+			return cursors[i].Project < cursors[j].Project
+		}
+		return cursors[i].ID < cursors[j].ID
+	})
+	return cursors[len(cursors)-1]
+}
+
+func catalogExperimentPageCursor(rows []KustoMetricRow) (catalogPageCursor, int) {
+	byExperiment := map[string]catalogPageCursor{}
+	for _, row := range rows {
+		key := strings.TrimSpace(row.Project) + "\x00" + strings.TrimSpace(row.ExperimentID)
+		cursor, exists := byExperiment[key]
+		if !exists || row.LatestActivityAt > cursor.At {
+			cursor = catalogPageCursor{
+				At: row.LatestActivityAt, Project: strings.TrimSpace(row.Project), ID: strings.TrimSpace(row.ExperimentID),
+			}
+			byExperiment[key] = cursor
+		}
+	}
+	cursors := make([]catalogPageCursor, 0, len(byExperiment))
+	for _, cursor := range byExperiment {
+		cursors = append(cursors, cursor)
+	}
+	sort.Slice(cursors, func(i, j int) bool {
+		if cursors[i].At != cursors[j].At {
+			return cursors[i].At > cursors[j].At
+		}
+		if cursors[i].Project != cursors[j].Project {
+			return cursors[i].Project < cursors[j].Project
+		}
+		return cursors[i].ID < cursors[j].ID
+	})
+	return cursors[len(cursors)-1], len(cursors)
 }
 
 func catalogCompactStrings(values []string) []string {
@@ -2088,7 +2190,7 @@ func kustoRunSearchMatches(run expstore.RunSearchRun, opts expstore.RunSearchOpt
 }
 
 func kustoRunSearchMatchesQuery(run expstore.RunSearchRun, query string) bool {
-	values := []string{run.RunID, run.Project, run.RunGroupID, run.State, run.LifecycleState, run.Owner, run.ResultURI}
+	values := []string{run.RunID, run.Project, run.ExperimentID, run.RunGroupID, run.State, run.LifecycleState, run.Owner, run.ResultURI}
 	values = append(values, run.MetricNames...)
 	for _, value := range values {
 		if strings.Contains(strings.ToLower(value), query) {
@@ -2249,7 +2351,8 @@ func kustoMetricFilterMatches(summaries []expstore.MetricSummaryRecord, filter e
 func kustoMetricFilterSummaryValue(summary expstore.MetricSummaryRecord, field string) (float64, bool) {
 	switch normalizedKustoMetricFilterField(field) {
 	case "latest":
-		return summary.LatestValue, summary.FiniteCount > 0
+		return summary.LatestValue, summary.FiniteCount > 0 || summary.Count > 0 ||
+			summary.LatestStep != nil || summary.UpdatedAt != ""
 	case "min":
 		return summary.MinValue, summary.FiniteCount > 0
 	case "max":

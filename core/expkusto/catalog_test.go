@@ -76,6 +76,57 @@ func TestBuildRunCatalogQueryIncludesLifecycleContract(t *testing.T) {
 	assertCatalogProjectColumnEscaped(t, query)
 }
 
+func TestBuildRunCatalogQueryAppliesCursorBeforeBoundedTake(t *testing.T) {
+	query, err := BuildRunCatalogQuery(CatalogQueryOptions{
+		AfterAt:      "2026-09-18T18:10:00Z",
+		AfterProject: "project-a",
+		AfterRunID:   "run-1000",
+		Limit:        1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cursor := strings.Index(query, "| where cursor_sort_at <")
+	take := strings.Index(query, "| take 1000")
+	if cursor < 0 || take < 0 || cursor > take {
+		t.Fatalf("cursor filter must precede bounded take:\n%s", query)
+	}
+	for _, want := range []string{
+		"cursor_sort_at=coalesce(created_time, submit_time, first_activity_at, latest_activity_at)",
+		"['project'] > 'project-a'",
+		"run_id > 'run-1000'",
+		"order by cursor_sort_at desc, ['project'] asc, run_id asc",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("query missing %q:\n%s", want, query)
+		}
+	}
+}
+
+func TestBuildExperimentCatalogQueryPagesGroupedExperiments(t *testing.T) {
+	query, err := BuildExperimentCatalogQuery(CatalogQueryOptions{
+		AfterAt:           "2026-09-18T18:10:00Z",
+		AfterProject:      "project-a",
+		AfterExperimentID: "experiment-1000",
+		Limit:             1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"summarize experiment_cursor_at=max(latest_activity_at) by workspace_id, ['project'], experiment_id",
+		"['project'] > 'project-a'",
+		"experiment_id > 'experiment-1000'",
+		"| take 1000;",
+		"join kind=inner page_experiments",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("query missing %q:\n%s", want, query)
+		}
+	}
+}
+
 func TestBuildCatalogQueryRejectsInvalidOptions(t *testing.T) {
 	if _, err := BuildSeriesCatalogQuery(CatalogQueryOptions{TargetType: "invalid"}); err == nil {
 		t.Fatal("expected invalid target type error")

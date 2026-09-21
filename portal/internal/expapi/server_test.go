@@ -145,6 +145,7 @@ type stubV2CatalogSource struct {
 	experimentErr   error
 	runs            runSearchResponse
 	runErr          error
+	lastRunOpts     expstore.RunSearchOptions
 }
 
 func (s *stubV2CatalogSource) searchExperiments(_ context.Context, source string, opts expstore.ExperimentSearchOptions) (v2ExperimentCatalogResult, error) {
@@ -208,6 +209,7 @@ func TestV2AutoExperimentProvenanceReportsOnlySuccessfulSources(t *testing.T) {
 }
 
 func (s *stubV2CatalogSource) searchRuns(_ context.Context, _ string, opts expstore.RunSearchOptions) (runSearchResponse, error) {
+	s.lastRunOpts = opts
 	if s.runErr != nil {
 		return runSearchResponse{}, s.runErr
 	}
@@ -230,11 +232,13 @@ func TestV2ExperimentSearchPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.v2Catalog = &stubV2CatalogSource{experiments: []expstore.ExperimentSummary{
+
+	catalog := &stubV2CatalogSource{experiments: []expstore.ExperimentSummary{
 		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-a", UpdatedAt: "2026-09-18T12:00:00Z"}},
 		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-b", UpdatedAt: "2026-09-18T11:00:00Z"}},
 		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-c", UpdatedAt: "2026-09-18T10:00:00Z"}},
 	}}
+	server.v2Catalog = catalog
 
 	first := httptest.NewRecorder()
 	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search?limit=1", nil))
@@ -268,6 +272,41 @@ func TestV2ExperimentSearchPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	server.Handler().ServeHTTP(tampered, httptest.NewRequest(http.MethodGet, path+"x", nil))
 	if tampered.Code != http.StatusBadRequest {
 		t.Fatalf("tampered cursor status = %d, body=%s", tampered.Code, tampered.Body.String())
+	}
+}
+
+func TestV2ExperimentCursorKeepsSameIDAcrossProjectsReachable(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.v2Catalog = &stubV2CatalogSource{experiments: []expstore.ExperimentSummary{
+		{ExperimentRecord: expstore.ExperimentRecord{Project: "project-a", ExperimentID: "shared", UpdatedAt: "2026-09-18T12:00:00Z"}},
+		{ExperimentRecord: expstore.ExperimentRecord{Project: "project-b", ExperimentID: "shared", UpdatedAt: "2026-09-18T12:00:00Z"}},
+	}}
+
+	first := httptest.NewRecorder()
+	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search?limit=1", nil))
+	var firstPage v2ExperimentSearchResponse
+	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &firstPage) != nil || firstPage.NextCursor == "" {
+		t.Fatalf("unexpected first page: status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := httptest.NewRecorder()
+	server.Handler().ServeHTTP(second, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?limit=1&cursor="+url.QueryEscape(firstPage.NextCursor),
+		nil,
+	))
+	var secondPage v2ExperimentSearchResponse
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Experiments) != 1 ||
+		secondPage.Experiments[0].Project == firstPage.Experiments[0].Project {
+		t.Fatalf("project-scoped duplicate experiment was unreachable: first=%+v second=%+v", firstPage, secondPage)
 	}
 }
 
@@ -373,6 +412,15 @@ func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog := &stubV2CatalogSource{runs: runSearchResponse{
+		RunSearchResult: expstore.RunSearchResult{Total: 3},
+		Runs: []sourcedRun{
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{RunID: "run-a", ExperimentID: "experiment-alpha", CreatedAt: "2026-09-18T12:00:00Z"}}, Source: "local"},
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{RunID: "run-b", ExperimentID: "experiment-alpha", CreatedAt: "2026-09-18T11:00:00Z"}}, Source: "local"},
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{RunID: "run-c", ExperimentID: "experiment-alpha", CreatedAt: "2026-09-18T10:00:00Z"}}, Source: "local"},
+		},
+	}}
+	server.v2Catalog = catalog
 	first := httptest.NewRecorder()
 	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/experiment-alpha/runs?limit=1", nil))
 	if first.Code != http.StatusOK {
@@ -398,6 +446,9 @@ func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	}
 	if len(secondPage.Runs) != 1 || secondPage.Runs[0].RunID == firstPage.Runs[0].RunID {
 		t.Fatalf("cursor did not advance: first=%+v second=%+v", firstPage.Runs, secondPage.Runs)
+	}
+	if catalog.lastRunOpts.CursorAt == "" || catalog.lastRunOpts.CursorID == "" {
+		t.Fatalf("validated cursor was not passed to the catalog source: %+v", catalog.lastRunOpts)
 	}
 
 	tampered := httptest.NewRecorder()

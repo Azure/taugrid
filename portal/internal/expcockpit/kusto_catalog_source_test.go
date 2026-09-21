@@ -5,6 +5,8 @@ package expcockpit
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -158,5 +160,151 @@ func TestKustoCatalogRequiresLiveQueryTransport(t *testing.T) {
 	if _, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{Limit: 10}); err == nil ||
 		!strings.Contains(err.Error(), "live Kusto query transport") {
 		t.Fatalf("SearchCatalogRuns error = %v", err)
+	}
+}
+
+func TestCatalogExperimentSummariesKeepProjectsDistinct(t *testing.T) {
+	runs := []expstore.RunSearchRun{
+		{RunRecord: expstore.RunRecord{Project: "project-a", ExperimentID: "shared", RunID: "run-a"}},
+		{RunRecord: expstore.RunRecord{Project: "project-b", ExperimentID: "shared", RunID: "run-b"}},
+	}
+	summaries := catalogExperimentSummaries(runs, "kusto")
+	if len(summaries) != 2 {
+		t.Fatalf("same experiment ID across projects was merged: %+v", summaries)
+	}
+	projects := map[string]bool{}
+	for _, summary := range summaries {
+		projects[summary.Project] = true
+	}
+	if !projects["project-a"] || !projects["project-b"] {
+		t.Fatalf("project-scoped summaries=%+v", summaries)
+	}
+}
+
+func TestCatalogRunQueryMatchesExperimentID(t *testing.T) {
+	run := expstore.RunSearchRun{RunRecord: expstore.RunRecord{
+		RunID: "run-a", Project: "project-a", ExperimentID: "experiment-search-target",
+	}}
+	if !kustoRunSearchMatches(run, expstore.RunSearchOptions{Query: "search-target"}) {
+		t.Fatalf("experiment ID query did not match run: %+v", run)
+	}
+}
+
+func TestCatalogLatestMetricFilterUsesKnownLatestValue(t *testing.T) {
+	summary := expstore.MetricSummaryRecord{
+		MetricName: "train/loss", LatestValue: 0.25, UpdatedAt: "2026-09-18T18:10:00Z",
+	}
+	if !kustoMetricFilterMatches([]expstore.MetricSummaryRecord{summary}, expstore.MetricFilter{
+		MetricName: "train/loss", Field: "latest", Op: "<", Value: 0.5,
+	}) {
+		t.Fatalf("known catalog latest value was treated as unavailable: %+v", summary)
+	}
+}
+
+func TestKustoCatalogRunCursorFiltersAtSource(t *testing.T) {
+	var query string
+	source := KustoSource{
+		WorkspaceID:     "workspace-a",
+		AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, generated string) (string, error) {
+			query = generated
+			return `[]`, nil
+		},
+	}
+
+	_, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Target: "experiment-a", Limit: 1000,
+		CursorAt: "2026-09-18T18:10:00Z", CursorID: "project-a\x00run-1000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := strings.Index(query, "| where cursor_sort_at <")
+	take := strings.Index(query, "| take 1000")
+	if cursor < 0 || take < 0 || cursor > take {
+		t.Fatalf("cursor was not applied before the source limit:\n%s", query)
+	}
+}
+
+func TestKustoCatalogRunSearchScansPastFilteredSourcePage(t *testing.T) {
+	firstPage := make([]map[string]any, 0, 1000)
+	for i := range 1000 {
+		firstPage = append(firstPage, map[string]any{
+			"workspace_id": "workspace-a", "project": "project-a", "experiment_id": "experiment-a",
+			"run_id": fmt.Sprintf("run-%04d", i), "created_time": fmt.Sprintf("2026-09-18T%02d:%02d:00Z", 23-(i/60)%24, i%60),
+			"latest_activity_at": "2026-09-18T23:00:00Z", "state": "queued", "has_lifecycle": true,
+		})
+	}
+	firstRaw, err := json.Marshal(firstPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCalls := 0
+	source := KustoSource{
+		WorkspaceID: "workspace-a", AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.SeriesCatalogRowsFunction+"()") {
+				return `[]`, nil
+			}
+			runCalls++
+			if runCalls == 1 {
+				return string(firstRaw), nil
+			}
+			if !strings.Contains(query, "| where cursor_sort_at <") {
+				t.Fatalf("second source page omitted cursor:\n%s", query)
+			}
+			return `[{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-a","run_id":"older-match","created_time":"2026-09-17T00:00:00Z","latest_activity_at":"2026-09-17T00:00:00Z","state":"succeeded","has_lifecycle":true}]`, nil
+		},
+	}
+	result, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Target: "experiment-a", Lifecycle: "succeeded", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runCalls != 2 || len(result.Runs) != 1 || result.Runs[0].RunID != "older-match" {
+		t.Fatalf("runCalls=%d result=%+v", runCalls, result)
+	}
+}
+
+func TestKustoCatalogExperimentSearchScansPastFilteredSourcePage(t *testing.T) {
+	firstPage := make([]map[string]any, 0, 1000)
+	for i := range 1000 {
+		firstPage = append(firstPage, map[string]any{
+			"workspace_id": "workspace-a", "project": "project-a",
+			"experiment_id": fmt.Sprintf("experiment-%04d", i), "run_id": fmt.Sprintf("run-%04d", i),
+			"latest_activity_at": "2026-09-18T23:00:00Z", "state": "succeeded", "has_lifecycle": true,
+		})
+	}
+	firstRaw, err := json.Marshal(firstPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCalls := 0
+	source := KustoSource{
+		WorkspaceID: "workspace-a", AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.SeriesCatalogRowsFunction+"()") {
+				return `[]`, nil
+			}
+			runCalls++
+			if runCalls == 1 {
+				return string(firstRaw), nil
+			}
+			if !strings.Contains(query, "| where experiment_cursor_at <") {
+				t.Fatalf("second experiment page omitted cursor:\n%s", query)
+			}
+			return `[{"workspace_id":"workspace-a","project":"project-a","experiment_id":"needle-experiment","run_id":"older-match","latest_activity_at":"2026-09-17T00:00:00Z","state":"succeeded","has_lifecycle":true}]`, nil
+		},
+	}
+	result, err := source.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{
+		Workspace: "workspace-a", Query: "needle", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runCalls != 2 || len(result.Experiments) != 1 ||
+		result.Experiments[0].ExperimentID != "needle-experiment" {
+		t.Fatalf("runCalls=%d result=%+v", runCalls, result)
 	}
 }

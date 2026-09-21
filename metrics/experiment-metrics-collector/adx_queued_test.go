@@ -245,6 +245,9 @@ func TestADXRetryClassification(t *testing.T) {
 	if !adxRetryable(transientStatus) {
 		t.Fatal("SDK transient status was not retryable")
 	}
+	if !adxRetryable(fmt.Errorf("ADX final ingestion status: %w", transientStatus)) {
+		t.Fatal("wrapped SDK transient status was not retryable")
+	}
 	permanentStatus := azkustoingest.StatusFromMapForTests(map[string]interface{}{
 		"Status": "Failed", "FailureStatus": "Permanent", "ErrorCode": "BadRequest_MappingReferenceWasNotFound",
 	})

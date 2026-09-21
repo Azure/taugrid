@@ -426,6 +426,9 @@ storage:
 	if strings.Contains(s, "tau experiment --store") {
 		t.Fatalf("metrics offload sidecar should invoke tau directly via argv, not a shell script:\n%s", s)
 	}
+	if got := dig(workload, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "labels", workloadmeta.LabelAzureWorkloadIdentityUse); got != "true" {
+		t.Fatalf("metrics offload head pod workload identity label = %v, want true", got)
+	}
 }
 
 func TestRenderRayJobCollectorTypedADXEnvironment(t *testing.T) {

@@ -799,14 +799,15 @@ func mergeExperimentSearchResults(local, kusto expstore.ExperimentSearchResult, 
 	merged := append([]expstore.ExperimentSummary{}, local.Experiments...)
 	seen := map[string]bool{}
 	for _, experiment := range local.Experiments {
-		seen[experiment.ExperimentID] = true
+		seen[experiment.Project+"\x00"+experiment.ExperimentID] = true
 	}
 	addedKusto := 0
 	for _, experiment := range kusto.Experiments {
-		if seen[experiment.ExperimentID] {
+		key := experiment.Project + "\x00" + experiment.ExperimentID
+		if seen[key] {
 			continue
 		}
-		seen[experiment.ExperimentID] = true
+		seen[key] = true
 		merged = append(merged, experiment)
 		addedKusto++
 	}
@@ -814,7 +815,7 @@ func mergeExperimentSearchResults(local, kusto expstore.ExperimentSearchResult, 
 		if merged[i].LatestRunAt != merged[j].LatestRunAt {
 			return merged[i].LatestRunAt > merged[j].LatestRunAt
 		}
-		return merged[i].ExperimentID < merged[j].ExperimentID
+		return v2ExperimentCursorID(merged[i]) < v2ExperimentCursorID(merged[j])
 	})
 	total := len(merged)
 	truncated := local.Truncated || kusto.Truncated || total > limit

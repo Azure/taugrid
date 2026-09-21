@@ -330,8 +330,10 @@ func adxRetryable(err error) bool {
 			responseErr.StatusCode == http.StatusConflict ||
 			responseErr.StatusCode == http.StatusTooManyRequests || responseErr.StatusCode >= 500
 	}
-	if azkustoingest.IsStatusRecord(err) {
-		return azkustoingest.IsRetryable(err)
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if azkustoingest.IsStatusRecord(current) {
+			return azkustoingest.IsRetryable(current)
+		}
 	}
 	var networkErr net.Error
 	if errors.As(err, &networkErr) {

@@ -327,6 +327,8 @@ type RunSearchOptions struct {
 	Since         string
 	Limit         int
 	MinStep       *int64
+	CursorAt      string
+	CursorID      string
 }
 
 type RunClassification struct {
@@ -373,6 +375,8 @@ type ExperimentSearchOptions struct {
 	MetricFilters []MetricFilter
 	Since         string
 	Limit         int
+	CursorAt      string
+	CursorID      string
 }
 
 type ExperimentSummary struct {

@@ -247,10 +247,10 @@ func experimentContributingSources(local, kusto expstore.ExperimentSearchResult)
 	}
 	localIDs := make(map[string]bool, len(local.Experiments))
 	for _, experiment := range local.Experiments {
-		localIDs[experiment.ExperimentID] = true
+		localIDs[v2ExperimentCursorID(experiment)] = true
 	}
 	for _, experiment := range kusto.Experiments {
-		if !localIDs[experiment.ExperimentID] {
+		if !localIDs[v2ExperimentCursorID(experiment)] {
 			sources = append(sources, "kusto")
 			break
 		}
@@ -330,6 +330,10 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
+	if cursor != nil {
+		opts.CursorAt = cursor.SortAt
+		opts.CursorID = cursor.ItemID
+	}
 	catalogResult, err := s.v2CatalogSource().searchExperiments(ctx, source, opts)
 	if err != nil {
 		s.writeV2ClassifiedError(w, err)
@@ -342,7 +346,7 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 		if left != right {
 			return left > right
 		}
-		return experiments[i].ExperimentID < experiments[j].ExperimentID
+		return v2ExperimentCursorID(experiments[i]) < v2ExperimentCursorID(experiments[j])
 	})
 	filtered := experiments[:0]
 	for _, item := range experiments {
@@ -359,7 +363,7 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 	if hasMore && len(filtered) > 0 {
 		last := filtered[len(filtered)-1]
 		nextCursor, err = s.encodeV2Cursor(v2CursorPayload{
-			Version: 1, FilterHash: filterHash, SortAt: v2ExperimentSortAt(last), ItemID: last.ExperimentID,
+			Version: 1, FilterHash: filterHash, SortAt: v2ExperimentSortAt(last), ItemID: v2ExperimentCursorID(last),
 		})
 		if err != nil {
 			s.writeV2ClassifiedError(w, err)
@@ -461,6 +465,10 @@ func (s *Server) handleV2RunList(w http.ResponseWriter, r *http.Request, target 
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
+	if cursor != nil {
+		opts.CursorAt = cursor.SortAt
+		opts.CursorID = cursor.ItemID
+	}
 	result, err := s.v2CatalogSource().searchRuns(ctx, source, opts)
 	if err != nil {
 		s.writeV2ClassifiedError(w, err)
@@ -794,7 +802,11 @@ func v2RunCursorID(run sourcedRun) string {
 
 func v2ExperimentAfterCursor(experiment expstore.ExperimentSummary, cursor v2CursorPayload) bool {
 	sortAt := v2ExperimentSortAt(experiment)
-	return sortAt < cursor.SortAt || (sortAt == cursor.SortAt && experiment.ExperimentID > cursor.ItemID)
+	return sortAt < cursor.SortAt || (sortAt == cursor.SortAt && v2ExperimentCursorID(experiment) > cursor.ItemID)
+}
+
+func v2ExperimentCursorID(experiment expstore.ExperimentSummary) string {
+	return strings.TrimSpace(experiment.Project) + "\x00" + strings.TrimSpace(experiment.ExperimentID)
 }
 
 func v2ExperimentSortAt(experiment expstore.ExperimentSummary) string {

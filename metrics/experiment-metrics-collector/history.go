@@ -80,7 +80,7 @@ func expandHistory(patterns []string) ([]string, error) {
 	return out, nil
 }
 
-func readSource(path string, checkpoint SourceCheckpoint) (sourceRead, error) {
+func readSource(path string, checkpoint SourceCheckpoint, includeTrailingRecord bool) (sourceRead, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return sourceRead{}, err
@@ -116,11 +116,13 @@ func readSource(path string, checkpoint SourceCheckpoint) (sourceRead, error) {
 	if err != nil {
 		return sourceRead{}, err
 	}
-	lastNewline := bytes.LastIndexByte(raw, '\n')
-	if lastNewline < 0 {
-		raw = nil
-	} else {
-		raw = raw[:lastNewline+1]
+	if !includeTrailingRecord {
+		lastNewline := bytes.LastIndexByte(raw, '\n')
+		if lastNewline < 0 {
+			raw = nil
+		} else {
+			raw = raw[:lastNewline+1]
+		}
 	}
 	end := checkpoint.Offset + int64(len(raw))
 	prefix, err := prefixDigest(f, end)
@@ -131,6 +133,14 @@ func readSource(path string, checkpoint SourceCheckpoint) (sourceRead, error) {
 		path: path, fileID: fileID, data: raw, start: checkpoint.Offset, end: end,
 		prefix: prefix, startLine: checkpoint.Lines + 1, modTime: info.ModTime().UTC(),
 	}, nil
+}
+
+func sourceLineCount(raw []byte) int {
+	count := bytes.Count(raw, []byte{'\n'})
+	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+		count++
+	}
+	return count
 }
 
 func baselineSource(path string, sequence uint64) (SourceCheckpoint, error) {

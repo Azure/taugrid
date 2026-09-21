@@ -137,6 +137,26 @@ func TestIncompleteTrailingLineWaitsForNewline(t *testing.T) {
 	}
 }
 
+func TestCompletionDrainsValidUnterminatedTrailingLine(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	completion := filepath.Join(root, "completion.json")
+	writeFile(t, history, strings.TrimSuffix(historyRow, "\n"))
+	writeFile(t, completion, `{"state":"succeeded","completed_at":"2023-11-14T22:15:00Z"}`)
+	sink := &recordingSink{name: "test", config: "v1"}
+	options := baseOptions(root, history, sink)
+	options.CompletionFile = completion
+
+	result := runCollector(t, options)
+	if !result.Completed || result.Events != 2 {
+		t.Fatalf("result=%+v, want one metric plus terminal status", result)
+	}
+	if len(sink.chunks) != 2 || len(sink.chunks[0].Events) != 1 ||
+		sink.chunks[0].Events[0].MetricName != "train/loss" {
+		t.Fatalf("delivered chunks=%+v", sink.chunks)
+	}
+}
+
 func TestBaselineSkipsExistingCompleteHistoryAndPublishesReady(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
@@ -529,6 +549,34 @@ func TestCheckpointContainsIdentityPrefixOffsetAndSequence(t *testing.T) {
 	}
 	if source.ChunkDigest == "" {
 		t.Fatal("source checkpoint does not reference its durable chunk")
+	}
+}
+
+func TestMetadataOnlyProgressCheckpointRestarts(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	metadataOnly := `{"_step":2,"_timestamp":1700000001,"note":"checkpoint"}` + "\n"
+	writeFile(t, history, historyRow+metadataOnly)
+	sink := &recordingSink{name: "test", config: "v1"}
+	options := baseOptions(root, history, sink)
+
+	first := runCollector(t, options)
+	second := runCollector(t, options)
+	if first.Events != 1 || second.Events != 0 || sink.deliveries != 1 {
+		t.Fatalf("first=%+v second=%+v deliveries=%d", first, second, sink.deliveries)
+	}
+	raw, err := os.ReadFile(filepath.Join(options.Out, "checkpoint.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints checkpointSet
+	if err := json.Unmarshal(raw, &checkpoints); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := checkpoints.Sources[history]
+	if checkpoint.Offset != int64(len(historyRow)+len(metadataOnly)) ||
+		checkpoint.Sequence != 1 || checkpoint.ChunkDigest == "" {
+		t.Fatalf("metadata checkpoint=%+v", checkpoint)
 	}
 }
 

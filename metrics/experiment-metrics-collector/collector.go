@@ -204,8 +204,7 @@ func (r *Runner) replaySpool(
 		manifest, ok := bySequence[checkpoint.Sequence]
 		if !ok || manifest.Kind != "history" || manifest.SourcePath != source ||
 			manifest.ChunkDigest != checkpoint.ChunkDigest ||
-			manifest.EndOffset != checkpoint.Offset ||
-			manifest.PrefixSHA256 != checkpoint.PrefixSHA256 {
+			manifest.EndOffset > checkpoint.Offset {
 			return fmt.Errorf("source checkpoint %s does not match a durable manifest", source)
 		}
 	}
@@ -298,7 +297,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 
 	for iteration := 1; ; iteration++ {
-		if err := r.drain(ctx, &checkpoints, checkpointPath, &result); err != nil {
+		if err := r.drain(ctx, &checkpoints, checkpointPath, &result, false); err != nil {
 			return result, err
 		}
 		completed, err := fileExists(r.options.CompletionFile)
@@ -306,7 +305,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			return result, err
 		}
 		if completed {
-			if err := r.drain(ctx, &checkpoints, checkpointPath, &result); err != nil {
+			if err := r.drain(ctx, &checkpoints, checkpointPath, &result, true); err != nil {
 				return result, err
 			}
 			if err := r.publishStatus(ctx, &checkpoints, &result); err != nil {
@@ -333,7 +332,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 }
 
-func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpointPath string, result *Result) error {
+func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpointPath string, result *Result, includeTrailingRecords bool) error {
 	files, err := expandHistory(r.options.History)
 	if err != nil {
 		return err
@@ -349,7 +348,7 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 	}
 	for _, path := range files {
 		checkpoint := checkpoints.Sources[path]
-		read, err := readSource(path, checkpoint)
+		read, err := readSource(path, checkpoint, includeTrailingRecords)
 		if err != nil {
 			return err
 		}
@@ -361,10 +360,10 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 			return err
 		}
 		if len(events) == 0 {
-			lines := bytes.Count(read.data, []byte{'\n'})
+			lines := sourceLineCount(read.data)
 			checkpoints.Sources[path] = SourceCheckpoint{
 				Path: path, FileID: read.fileID, Offset: read.end, PrefixSHA256: read.prefix,
-				Sequence: checkpoint.Sequence, Lines: checkpoint.Lines + lines,
+				Sequence: checkpoint.Sequence, ChunkDigest: checkpoint.ChunkDigest, Lines: checkpoint.Lines + lines,
 			}
 			if err := writeCheckpoints(checkpointPath, *checkpoints); err != nil {
 				return err
@@ -381,7 +380,7 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 		if err := r.inject(faultAfterChunkWrite); err != nil {
 			return err
 		}
-		lines := bytes.Count(read.data, []byte{'\n'})
+		lines := sourceLineCount(read.data)
 		checkpoints.Sources[path] = SourceCheckpoint{
 			Path: path, FileID: read.fileID, Offset: read.end, PrefixSHA256: read.prefix,
 			Sequence: checkpoints.NextSequence, ChunkDigest: chunk.Digest, Lines: checkpoint.Lines + lines,
