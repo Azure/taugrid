@@ -1,0 +1,111 @@
+suite: Experiment catalog v1
+templates:
+  - templates/management-commands/experiment-catalog-v1.yaml
+  - templates/functions/tau-exp-series-catalog-rows.yaml
+  - templates/functions/tau-exp-run-catalog-rows.yaml
+tests:
+  - it: suppresses the physical catalog by default
+    template: templates/management-commands/experiment-catalog-v1.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates only typed metric catalogs and the lifecycle catalog
+    template: templates/management-commands/experiment-catalog-v1.yaml
+    set:
+      managementCommands.experimentCatalogV1.enabled: true
+    asserts:
+      - isKind:
+          of: ManagementCommand
+      - equal:
+          path: spec.database
+          value: Metrics
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1'
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpTypedMetricRunCatalogV1 on table TauExpMetricEventsV1'
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle'
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'TauExpSeriesCatalogV1 on table ExperimentMetrics'
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'TauExpMetricRunCatalogV1 on table ExperimentMetrics'
+      - notMatchRegex:
+          path: spec.body
+          pattern: '\.alter-merge table TauExp.*CatalogV1 policy retention'
+
+  - it: uses verified async syntax only when backfill is enabled
+    template: templates/management-commands/experiment-catalog-v1.yaml
+    set:
+      managementCommands.experimentCatalogV1.enabled: true
+      managementCommands.experimentCatalogV1.backfillEnabled: true
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpTypedSeriesCatalogV1'
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpTypedMetricRunCatalogV1'
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpLifecycleRunCatalogV1'
+
+  - it: renders the typed stable series function
+    template: templates/functions/tau-exp-series-catalog-rows.yaml
+    set:
+      functions.items.tauExpSeriesCatalogRows.enabled: true
+    asserts:
+      - isKind:
+          of: Function
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpTypedSeriesCatalogV1'
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\] = \\['project'\\]"
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'ExperimentMetrics'
+      - notMatchRegex:
+          path: spec.body
+          pattern: '(^|\n)[[:space:]]+project ='
+
+  - it: renders typed metric and lifecycle run evidence
+    template: templates/functions/tau-exp-run-catalog-rows.yaml
+    set:
+      functions.items.tauExpRunCatalogRows.enabled: true
+    asserts:
+      - isKind:
+          of: Function
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpTypedMetricRunCatalogV1'
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpLifecycleRunCatalogV1'
+      - matchRegex:
+          path: spec.body
+          pattern: 'join kind=fullouter lifecycle_runs'
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\] = tostring\\(catalog_project\\)"
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'TauExpMetricRunCatalogV1'
+      - notMatchRegex:
+          path: spec.body
+          pattern: '(^|\n)[[:space:]]+project ='
+
+  - it: suppresses run catalog when functions are globally disabled
+    template: templates/functions/tau-exp-run-catalog-rows.yaml
+    set:
+      functions.enabled: false
+      functions.items.tauExpRunCatalogRows.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

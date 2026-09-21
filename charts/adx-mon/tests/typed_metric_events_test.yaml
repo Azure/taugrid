@@ -1,0 +1,97 @@
+suite: Typed experiment metric events v1
+templates:
+  - templates/management-commands/typed-metric-events-v1.yaml
+  - templates/functions/tau-exp-metric-event-rows.yaml
+tests:
+  - it: suppresses typed delivery assets by default
+    template: templates/management-commands/typed-metric-events-v1.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates the exact additive table mapping and policies
+    template: templates/management-commands/typed-metric-events-v1.yaml
+    set:
+      managementCommands.typedMetricEventsV1.enabled: true
+    asserts:
+      - isKind:
+          of: ManagementCommand
+      - equal:
+          path: spec.database
+          value: Metrics
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create-merge table TauExpMetricEventsV1'
+      - matchRegex:
+          path: spec.body
+          pattern: 'schema_version: string,[\s\S]*event_id: string,[\s\S]*workspace_id: string'
+      - matchRegex:
+          path: spec.body
+          pattern: "step: long,[\\s\\S]*wall_time: datetime,[\\s\\S]*value: real,[\\s\\S]*tags: dynamic,[\\s\\S]*exported_at: datetime"
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create-or-alter table TauExpMetricEventsV1 ingestion json mapping "TauExpMetricEventsV1Json"'
+      - matchRegex:
+          path: spec.body
+          pattern: '"column":"event_id","path":"\$\.event_id"'
+      - matchRegex:
+          path: spec.body
+          pattern: '\.alter-merge table TauExpMetricEventsV1 policy retention softdelete = 400d'
+      - notMatchRegex:
+          path: spec.body
+          pattern: '\.alter-merge table TauExpMetricEventsV1Dedup policy retention'
+      - matchRegex:
+          path: spec.body
+          pattern: 'policy caching hot = 30d'
+      - matchRegex:
+          path: spec.body
+          pattern: 'policy ingestionbatching'
+      - matchRegex:
+          path: spec.body
+          pattern: '"MaximumBatchingTimeSpan": "00:00:15"'
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create ifnotexists materialized-view TauExpMetricEventsV1Dedup on table TauExpMetricEventsV1'
+      - matchRegex:
+          path: spec.body
+          pattern: 'summarize arg_max\([\s\S]*by event_id'
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'backfill=true'
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'update policy'
+
+  - it: uses verified async syntax for explicit typed backfill
+    template: templates/management-commands/typed-metric-events-v1.yaml
+    set:
+      managementCommands.typedMetricEventsV1.enabled: true
+      managementCommands.typedMetricEventsV1.backfillEnabled: true
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpMetricEventsV1Dedup on table TauExpMetricEventsV1'
+
+  - it: renders the stable typed event contract
+    template: templates/functions/tau-exp-metric-event-rows.yaml
+    set:
+      functions.items.tauExpMetricEventRows.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpMetricEventRows\(\)'
+      - matchRegex:
+          path: spec.body
+          pattern: 'TauExpMetricEventsV1Dedup'
+      - matchRegex:
+          path: spec.body
+          pattern: 'schema_version = tostring\(schema_version\),[\s\S]*event_id = tostring\(event_id\),[\s\S]*exported_at = todatetime\(exported_at\)'
+      - matchRegex:
+          path: spec.body
+          pattern: 'tags = todynamic\(tags\)'
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\] = tostring\\(\\['project'\\]\\)"
+      - notMatchRegex:
+          path: spec.body
+          pattern: '(^|\n)[[:space:]]+project ='
