@@ -150,7 +150,6 @@ For Tau metrics, keep the converged shape:
 
 - Prometheus remote-write metric: `experiment_metrics`
 - ADX database/table: `Metrics.ExperimentMetrics`
-- Remote-write dashboard function: `ExperimentMetricsDashboardRows()`
 - Local metrics spool: `TauExpMetrics.jsonl`
 - Projection dashboard function: `TauExpMetricsDashboardRows()`
 - Stellar run terminal marker: `metric_name="tau/run_status"` on

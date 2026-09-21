@@ -250,7 +250,7 @@ cluster DNS.
 | `functions.items.<name>.enabled` | Enable individual function | `true` |
 | `functions.items.<name>.database` | Target ADX database | varies |
 
-Available functions: `gpuHealth`, `nodeHealth`, `containerMetrics`, `kueueMetrics`, `ncclErrors`, `xidErrors`, `trainingJobSummary`, `experimentMetricsDashboardRows`, `tauExpMetricEventRows`, `tauExpSeriesCatalogRows`, `tauExpRunCatalogRows`, `tauExpMetricDeliveryObservabilityRows`.
+Available functions: `gpuHealth`, `nodeHealth`, `containerMetrics`, `kueueMetrics`, `ncclErrors`, `xidErrors`, `trainingJobSummary`, `tauExpMetricEventRows`, `tauExpSeriesCatalogRows`, `tauExpRunCatalogRows`.
 
 The additive typed delivery path is disabled by default. Enable
 `managementCommands.typedMetricEventsV1.enabled` to create
@@ -290,9 +290,8 @@ rows are deliberately omitted instead of assigned a guessed experiment.
 
 Enable the physical views first and wait for asynchronous backfills to
 complete, then enable the stable Functions. They always read typed event/catalog
-assets and fail closed. The raw `ExperimentMetrics` table and
-`ExperimentMetricsDashboardRows()` may remain for explicit compatibility
-consumers, but Portal canonical v2 reads never use them.
+assets and fail closed. Portal canonical v2 reads never use raw
+`ExperimentMetrics`.
 
 ### AlertRules
 

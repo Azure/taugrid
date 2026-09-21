@@ -585,9 +585,6 @@ functions:
     trainingJobSummary:
       enabled: true
       database: Metrics
-    experimentMetricsDashboardRows:
-      enabled: true
-      database: Metrics
     # -- Stable deduplicated TauExpMetricEventsV1 rows.
     tauExpMetricEventRows:
       enabled: false
@@ -598,10 +595,6 @@ functions:
       database: Metrics
     # -- Stable v1 experiment run catalog joining metric and lifecycle evidence.
     tauExpRunCatalogRows:
-      enabled: false
-      database: Metrics
-    # -- Typed delivery duplication and digest observability query.
-    tauExpMetricDeliveryObservabilityRows:
       enabled: false
       database: Metrics
     # -- AuditEvents() — parses KubeAuditLogs from the audit pipeline (WI-26).

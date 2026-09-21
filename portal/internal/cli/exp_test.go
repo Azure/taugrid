@@ -2300,7 +2300,6 @@ func TestExpKustoMetricsQueryCommand(t *testing.T) {
 		".create-merge table TauExpMetrics",
 		"TauExpMetricsDashboardRows",
 		".create-merge table ExperimentMetrics",
-		"ExperimentMetricsDashboardRows",
 		"Prometheus metric experiment_metrics",
 		"Cluster: string",
 	} {

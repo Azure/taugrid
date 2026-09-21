@@ -9,15 +9,14 @@ import (
 )
 
 const (
-	RemoteWriteMetricName        = "experiment_metrics"
-	RemoteWriteDatabase          = "Metrics"
-	RemoteWriteTable             = "ExperimentMetrics"
-	RemoteWriteDashboardFunction = "ExperimentMetricsDashboardRows"
+	RemoteWriteMetricName = "experiment_metrics"
+	RemoteWriteDatabase   = "Metrics"
+	RemoteWriteTable      = "ExperimentMetrics"
 
-	MetricEventsTable             = "TauExpMetricEventsV1"
-	MetricEventsJSONMapping       = "TauExpMetricEventsV1Json"
-	MetricEventsDeduplicatedView  = "TauExpMetricEventsV1Dedup"
-	MetricEventRowsFunction       = "TauExpMetricEventRows"
+	MetricEventsTable            = "TauExpMetricEventsV1"
+	MetricEventsJSONMapping      = "TauExpMetricEventsV1Json"
+	MetricEventsDeduplicatedView = "TauExpMetricEventsV1Dedup"
+	MetricEventRowsFunction      = "TauExpMetricEventRows"
 
 	ProjectionTable             = "TauExpMetrics"
 	ProjectionMetricsSpoolFile  = ProjectionTable + ".jsonl"

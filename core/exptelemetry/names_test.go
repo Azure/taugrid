@@ -11,12 +11,12 @@ import (
 	"testing"
 )
 
-func TestTelemetryNamesPreserveHostedAndCompatibilityContracts(t *testing.T) {
+func TestTelemetryNamesPreserveHostedAndTypedContracts(t *testing.T) {
 	if RemoteWriteMetricName != "experiment_metrics" {
 		t.Fatalf("remote-write Prometheus metric = %q, want experiment_metrics", RemoteWriteMetricName)
 	}
-	if RemoteWriteDatabase != "Metrics" || RemoteWriteTable != "ExperimentMetrics" || RemoteWriteDashboardFunction != "ExperimentMetricsDashboardRows" {
-		t.Fatalf("remote-write ADX contract = %s.%s -> %s(), want Metrics.ExperimentMetrics -> ExperimentMetricsDashboardRows()", RemoteWriteDatabase, RemoteWriteTable, RemoteWriteDashboardFunction)
+	if RemoteWriteDatabase != "Metrics" || RemoteWriteTable != "ExperimentMetrics" {
+		t.Fatalf("remote-write ADX contract = %s.%s, want Metrics.ExperimentMetrics", RemoteWriteDatabase, RemoteWriteTable)
 	}
 	if MetricEventsTable != "TauExpMetricEventsV1" || MetricEventsJSONMapping != "TauExpMetricEventsV1Json" {
 		t.Fatalf("typed ADX ingestion contract = %s/%s, want TauExpMetricEventsV1/TauExpMetricEventsV1Json", MetricEventsTable, MetricEventsJSONMapping)
@@ -66,7 +66,6 @@ func TestTelemetrySchemaVersioningDocNamesContracts(t *testing.T) {
 	for _, want := range []string{
 		fmt.Sprintf("Prometheus remote-write metric: `%s`", RemoteWriteMetricName),
 		fmt.Sprintf("ADX database/table: `%s.%s`", RemoteWriteDatabase, RemoteWriteTable),
-		fmt.Sprintf("Remote-write dashboard function: `%s()`", RemoteWriteDashboardFunction),
 		fmt.Sprintf("Local metrics spool: `%s`", ProjectionMetricsSpoolFile),
 		fmt.Sprintf("Projection dashboard function: `%s()`", ProjectionDashboardFunction),
 	} {

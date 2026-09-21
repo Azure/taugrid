@@ -2,7 +2,6 @@ suite: Typed experiment metric events v1
 templates:
   - templates/management-commands/typed-metric-events-v1.yaml
   - templates/functions/tau-exp-metric-event-rows.yaml
-  - templates/functions/tau-exp-metric-delivery-observability-rows.yaml
 tests:
   - it: suppresses typed delivery assets by default
     template: templates/management-commands/typed-metric-events-v1.yaml
@@ -96,24 +95,3 @@ tests:
       - notMatchRegex:
           path: spec.body
           pattern: '(^|\n)[[:space:]]+project ='
-
-  - it: keeps typed delivery observability default off
-    template: templates/functions/tau-exp-metric-delivery-observability-rows.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: renders duplicate schema and export-delay observability
-    template: templates/functions/tau-exp-metric-delivery-observability-rows.yaml
-    set:
-      functions.items.tauExpMetricDeliveryObservabilityRows.enabled: true
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpMetricDeliveryObservabilityRows\(\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'duplicate_event_count'
-      - matchRegex:
-          path: spec.body
-          pattern: 'max_export_delay_seconds'

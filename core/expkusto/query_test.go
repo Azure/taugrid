@@ -593,19 +593,17 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		defaultRemoteWriteDashboardFunction,
 		defaultRemoteWriteMetricName,
 		DefaultRemoteWriteTable,
 		"Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real",
 		"Cluster: string",
-		"source_store_id=tostring(Labels.source_store_id)",
-		"metric_file_id=tostring(Labels.metric_file_id)",
-		"experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), '')",
-		"['project'], experiment_id, run_group_id, run_id, metric_name",
 	} {
 		if !strings.Contains(remoteWrite, want) {
 			t.Fatalf("remote-write schema KQL missing %q:\n%s", want, remoteWrite)
 		}
+	}
+	if strings.Contains(remoteWrite, ".create-or-alter function") {
+		t.Fatalf("remote-write table schema must not recreate a legacy dashboard function:\n%s", remoteWrite)
 	}
 
 	lifecycle, err := BuildRunLifecycleSchemaKQL(SchemaOptions{})
@@ -684,8 +682,8 @@ func TestKQLStringLiteralEscapesSingleQuotes(t *testing.T) {
 }
 
 func TestTelemetryNameConstantsPreserveKustoContracts(t *testing.T) {
-	if DefaultDatabase != "Metrics" || DefaultRemoteWriteTable != "ExperimentMetrics" || defaultRemoteWriteDashboardFunction != "ExperimentMetricsDashboardRows" {
-		t.Fatalf("hosted fleet contract = %s.%s -> %s(), want Metrics.ExperimentMetrics -> ExperimentMetricsDashboardRows()", DefaultDatabase, DefaultRemoteWriteTable, defaultRemoteWriteDashboardFunction)
+	if DefaultDatabase != "Metrics" || DefaultRemoteWriteTable != "ExperimentMetrics" {
+		t.Fatalf("hosted fleet contract = %s.%s, want Metrics.ExperimentMetrics", DefaultDatabase, DefaultRemoteWriteTable)
 	}
 	if defaultRemoteWriteMetricName != "experiment_metrics" {
 		t.Fatalf("remote-write metric name = %q, want experiment_metrics", defaultRemoteWriteMetricName)
@@ -698,10 +696,13 @@ func TestTelemetryNameConstantsPreserveKustoContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{defaultRemoteWriteMetricName, DefaultRemoteWriteTable, defaultRemoteWriteDashboardFunction + "()"} {
+	for _, want := range []string{defaultRemoteWriteMetricName, DefaultRemoteWriteTable} {
 		if !strings.Contains(remoteWrite, want) {
 			t.Fatalf("remote-write schema missing %q:\n%s", want, remoteWrite)
 		}
+	}
+	if strings.Contains(remoteWrite, ".create-or-alter function") {
+		t.Fatalf("remote-write schema must not recreate a legacy dashboard function:\n%s", remoteWrite)
 	}
 	if strings.Contains(remoteWrite, DefaultProjectionTable) || strings.Contains(remoteWrite, defaultProjectionDashboardFunction) {
 		t.Fatalf("remote-write schema must not depend on projection compatibility names:\n%s", remoteWrite)
