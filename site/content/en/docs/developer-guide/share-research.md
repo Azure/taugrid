@@ -190,7 +190,9 @@ Before starting, ask the cluster owner to confirm that:
 - the workspace is Ready and has a writable `blob-training` PVC;
 - the workspace has GPU quota and allocatable GPU capacity;
 - the Portal has a Kusto query source for the workspace; and
-- you have the platform-supplied `taugrid-portal` image pinned by digest.
+- you have the platform-supplied `taugrid-metrics-collector` image pinned by
+  digest, the approved ADX endpoint/database, and the workspace Workload
+  Identity client ID.
 
 Each run uses one GPU. One available GPU can run them one at a time; three
 available GPUs can run all three at the same time.
@@ -199,9 +201,16 @@ Set the image and offloader working directory in the terminal that starts the
 runs:
 
 ```bash
-export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
+export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
 ```
+
+The collector uses the fixed `collector-v1` runtime and required queued ADX
+delivery. The identity must be federated to the workspace ServiceAccount and
+need only the ADX ingestion role; do not put a client secret in the workload.
 
 Copy the example so `train.py` stays beside the Tau config files:
 

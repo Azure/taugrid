@@ -36,3 +36,21 @@ tests:
         documentSelector:
           path: kind
           value: Deployment
+
+  - it: uses the typed catalog contract without migration switches
+    set:
+      portal.enabled: true
+      portal.image.tag: pinned
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-experiment-catalog-read-source
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --kusto-experiment-catalog-shadow-read
+        documentSelector:
+          path: kind
+          value: Deployment

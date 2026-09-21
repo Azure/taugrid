@@ -49,8 +49,10 @@ CLI.
 
 ## Online metrics history
 
-`taugrid-portal experiment offload metrics --history <path-or-glob> --watch`
-tails complete JSONL rows. Empty iterations and valid rows containing only
+The legacy `taugrid-portal experiment offload metrics` command remains only as
+an offline/recovery compatibility tool. New workload sidecars use the
+standalone `taugrid-metrics-collector`. The recovery command tails complete
+JSONL rows. Empty iterations and valid rows containing only
 metadata or non-scalar values do not stop the watcher. Their consumed bytes
 are checkpointed so later scalar rows can be imported and exported without
 replaying earlier history after a restart.
@@ -115,28 +117,45 @@ workspaces must not silently fall back to local data.
 
 The **Experiments** tab opens the native React workspace at `/portal/experiments`
 directly, without an intermediate Overview page or a second navigation sidebar.
-The UI uses the Portal's Experiments naming; existing `/stellar` links and API
-paths remain compatible. The workspace is native React,
-not an iframe or a wrapper around the legacy renderer. Discovery, run selection,
-metric charts, comparison, and research evidence share the portal's navigation,
-workspace context, and query cache. Experiment, metric, and step-range selections
-remain deep-linkable. Report artifacts are excluded from the native evidence
-views, counts, and links; other media and config evidence remain available.
-When a snapshot omits selected runs, the evidence panels disclose incomplete
-coverage and link to exact-run views rather than claim those runs have no evidence.
+It has one fixed data-driven flow: experiment search, cursor-paginated runs,
+exact run detail, metric catalog, and one bounded chart series. Workspace,
+project, experiment, run, metric, cursor, and step-range selections are
+deep-linkable and are included in query cache identity so authorized data cannot
+leak across workspace switches.
 
-The **Experiment summary** disclosure includes run-scoped launch details using
-the same visible-run selection as charts. Expanding it lazily shares the full
-snapshot query with Research evidence. Requested GPU totals, GPUs per worker,
-worker/pod counts, GPU class, image, entrypoint, profile, workspace and recorded
-queue are not presented as observed GPU allocations. Missing values remain
-"Not recorded", including explicit CPU requests of zero versus unknown counts.
-MIG requests are labeled as slices (total and per worker), with the resolved
-resource mode/name and MIG profile separate from GPU model/class. These optional
-fields come from renderer inputs, never resource-profile name guesses. Counts
-without a recorded unit are labeled "GPU units (unit unspecified)"; legacy GPU
-context whose basis is unknown is labeled separately. No slice count is treated
-as a physical GPU count.
+The native UI uses only the narrow canonical reads:
+
+| Read | Route |
+|---|---|
+| Experiment search | `GET /api/v2/stellar/experiments/search` |
+| Runs for one experiment | `GET /api/v2/stellar/experiments/{experiment_id}/runs` |
+| Exact run detail | `GET /api/v2/stellar/runs/{run_id}` |
+| Exact run metric catalog | `GET /api/v2/stellar/runs/{run_id}/metrics` |
+| Exact bounded series | `GET /api/v2/stellar/runs/{run_id}/series?target=...&metric=...` |
+
+List reads use bounded limits and opaque query-bound cursors. Responses carry
+freshness, provenance, availability, partial-result warnings, and typed errors.
+Canonical v2 reads are typed-only and fail closed. Experiment and run discovery
+call `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()`; bounded series
+reads call `TauExpMetricEventRows()`. ADX and Function failures remain visible
+to clients. Raw `ExperimentMetrics` queries are retained only for explicit
+legacy CLI/report compatibility consumers and are not a Portal v2 fallback.
+
+Existing `/api/stellar`, `/api/v1/stellar`, broad v2 snapshot/search routes,
+`/stellar`, CLI HTML/TUI/JSON, and report/artifact consumers remain compatible.
+Dashboard-shaped routes advertise deprecation and a canonical successor.
+The native UI no longer consumes summary/metric/full snapshot modes, section
+layout customization, manual summary/page reconciliation, backend actions, or
+backend presentation colors. Removing those compatibility contracts and the
+legacy HTML renderer is deferred until their CLI/TUI/report consumers migrate.
+
+### Typed catalog deployment
+
+Deploy the typed event table/mapping, typed catalog materialized views, and the
+three stable Functions before enabling Portal traffic. Workload sidecars require
+the standalone collector image, an approved Workload Identity client ID, and
+ADX queued-ingestion permissions. Rollback restores the previous Portal and
+collector images/charts; there is no legacy read-source switch.
 
 New `tau run` submissions attach the credential-free `tau.azure.com/launch`
 annotation (`core/experiment.Launch` v1). Run-profile capture persists it in the

@@ -54,6 +54,14 @@ Existing experiment ingestion and tables are also prerequisites. The Cost board
 still uses `taugrid-core.portal.kusto.costDatabase` (`CostTracking` by default)
 and needs Viewer permission there if used.
 
+Typed experiment telemetry additionally requires a release-matched `tau` client
+and immutable `taugrid-metrics-collector` image. The collector is rendered as a
+workload sidecar by `tau run`; the umbrella chart does not deploy it as a
+cluster service or store its ingestion identity. Configure the workload with
+the collector digest, ADX endpoint/database, and the TauWorkspace ServiceAccount
+Workload Identity client ID. Canonical Portal reads require the typed adx-mon
+table, catalogs, and stable Functions before traffic is enabled.
+
 Nonempty `taugrid-core.portal.kusto.endpoint` and `.database` override the shared
 values independently. An explicit
 `taugrid-core.portal.serviceAccount.annotations.azure.workload.identity/client-id`

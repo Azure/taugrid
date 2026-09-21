@@ -40,3 +40,7 @@ portal/frontend/*.tsbuildinfo
 
 # Impeccable local detector cache
 .impeccable/hook.cache.json
+
+# Standalone experiment metrics collector builds
+metrics/experiment-metrics-collector/bin/
+metrics/experiment-metrics-collector/taugrid-metrics-collector

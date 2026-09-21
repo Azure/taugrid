@@ -3,7 +3,7 @@
 # Licensed under the MIT License.
 
 taugrid_image_names() {
-  printf '%s\n' tau taugrid-portal tau-core-controller
+  printf '%s\n' tau taugrid-portal tau-core-controller taugrid-metrics-collector
 }
 
 taugrid_image_spec() {
@@ -25,6 +25,11 @@ taugrid_image_spec() {
       TAUGRID_IMAGE_REPOSITORY=tau-core-controller
       TAUGRID_IMAGE_DOCKERFILE=images/tau-core-controller/Dockerfile
       TAUGRID_IMAGE_SOURCE_PATHS=(images/tau-core-controller/Dockerfile controllers/tau-core core)
+      ;;
+    taugrid-metrics-collector)
+      TAUGRID_IMAGE_REPOSITORY=taugrid-metrics-collector
+      TAUGRID_IMAGE_DOCKERFILE=images/taugrid-metrics-collector/Dockerfile
+      TAUGRID_IMAGE_SOURCE_PATHS=(images/taugrid-metrics-collector/Dockerfile metrics/experiment-metrics-collector core)
       ;;
     *)
       echo "unknown TauGrid image: ${name}" >&2
