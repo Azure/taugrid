@@ -81,13 +81,70 @@ it('preserves snapshot liveness for in-range runs without adding snapshot-only r
   expect(requests.filter(url => url.pathname.endsWith('/runs'))).toHaveLength(1);
 });
 
+it('uses page liveness when the run is outside the capped snapshot', async () => {
+  vi.stubGlobal('innerWidth', 1280);
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return Promise.resolve(json({ ...page, runs: [
+      { ...page.runs[0], lifecycle_state: 'running', liveness_state: 'not_responding' },
+    ] }));
+    if (url.pathname.endsWith('/snapshot')) return Promise.resolve(json({
+      runs: [snapshotRun({ run_id: 'outside-range' })], status: { metric_files: 0 },
+      cards: [], metric_options: [], chart: {}, summary: {},
+    }));
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace();
+  await screen.findByRole('checkbox', { name: 'range-a-run' });
+  const operational = screen.getByRole('region', { name: 'Loaded run operational status' });
+  expect(within(operational).getByText('active').textContent).toBe('0 active');
+  expect(within(operational).getByText('stale').textContent).toBe('1 stale');
+  expect(screen.queryByRole('checkbox', { name: 'outside-range' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Running 0' }));
+  expect(screen.queryByRole('checkbox', { name: 'range-a-run' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Not responding 1' }));
+  expect(screen.getByRole('checkbox', { name: 'range-a-run' })).toBeInTheDocument();
+});
+
 function searchRun(overrides: Partial<RunSearchRun> = {}): RunSearchRun {
   return { ...page.runs[0], index_version: 'v0', lifecycle_state: 'running', successful: false, ...overrides };
 }
+
+it('renders failed Kusto page authority outside a capped snapshot', async () => {
+  vi.stubGlobal('innerWidth', 1280);
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return Promise.resolve(json({ ...page, runs: [
+      { ...page.runs[0], source: 'kusto', lifecycle_state: 'running', outcome_state: 'failed', lifecycle_source: 'tau_terminal_marker' },
+    ] }));
+    if (url.pathname.endsWith('/snapshot')) return Promise.resolve(json({
+      runs: Array.from({ length: 200 }, (_, index) => snapshotRun({ run_id: `outside-${index}` })),
+      status: { metric_files: 0 }, cards: [], metric_options: [], chart: {}, summary: {},
+    }));
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace();
+  await screen.findByRole('checkbox', { name: 'range-a-run' });
+  const operational = screen.getByRole('region', { name: 'Loaded run operational status' });
+  expect(within(operational).getByText('active')).toHaveTextContent('0 active');
+  fireEvent.click(screen.getByRole('button', { name: 'Running 0' }));
+  expect(screen.queryByRole('checkbox', { name: 'range-a-run' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Failed 1' }));
+  expect(screen.getByRole('checkbox', { name: 'range-a-run' })).toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: 'outside-0' })).not.toBeInTheDocument();
+});
 function snapshotRun(overrides: Partial<RunView> = {}): RunView {
   return { ...page.runs[0], systems: [], observe_cli: '', lifecycle_state: 'stale',
     liveness_state: 'not_responding', ...overrides };
 }
+
+it('replaces page authority coherently when a matching snapshot has current liveness', () => {
+  const member = { ...searchRun(), outcome_state: 'failed', lifecycle_source: 'tau_terminal_marker' };
+  const [run] = reconcilePageRuns([member], [snapshotRun({ liveness_state: 'running', lifecycle_source: 'metrics' })]);
+  expect(runLifecycle(run)).toBe('running');
+  expect(run.outcome_state).toBeUndefined();
+  expect(member.outcome_state).toBe('failed');
+});
 
 it('keeps the header aligned with loaded pages rather than totals or visible runs', async () => {
   vi.stubGlobal('innerWidth', 1280);
@@ -337,4 +394,52 @@ it('preserves the requested interval and retained page on timezone-only navigati
   expect(request.searchParams.get('start')).toBe('2026-09-16T00:00:00Z');
   expect(request.searchParams.get('end')).toBe('2026-09-16T01:00:00Z');
   expect(request.searchParams.has('tz')).toBe(false);
+});
+
+it('preserves retained failed-page state when the real timezone control is applied', async () => {
+  const client = createPortalQueryClient();
+  const fetch = vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (!url.pathname.endsWith('/runs')) return Promise.resolve(otherResponse(url));
+    return Promise.resolve(url.searchParams.get('limit') === '200' ? json(page) : json({ error: 'page unavailable' }, 502));
+  });
+  vi.stubGlobal('fetch', fetch);
+  renderWorkspace(client, '/portal/experiments?target=experiment&sections=&start=2026-09-16T00:00:00.000000001Z&end=2026-09-16T01:00:00.000000009Z&tz=utc&refresh=off');
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'range-a-run' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Load 200 more runs' }));
+  await screen.findByText(/More runs unavailable/);
+  await waitFor(() => expect(client.isFetching()).toBe(0));
+  const requests = fetch.mock.calls.map(([input]) => String(input));
+  fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'local' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(screen.getByLabelText('Timezone')).toHaveValue('local'));
+  expect(fetch.mock.calls.map(([input]) => String(input))).toEqual(requests);
+  expect(screen.getByRole('checkbox', { name: 'range-a-run' })).not.toBeChecked();
+  expect(screen.getByText('1 loaded of 201 · 0 visible')).toBeInTheDocument();
+  expect(screen.getByText(/More runs unavailable/)).toBeInTheDocument();
+});
+
+it('preserves a pending page request when the real timezone control is applied', async () => {
+  const client = createPortalQueryClient();
+  let finishPage: ((response: Response) => void) | undefined;
+  const fetch = vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (!url.pathname.endsWith('/runs')) return Promise.resolve(otherResponse(url));
+    return url.searchParams.get('limit') === '200' ? Promise.resolve(json(page))
+      : new Promise<Response>(resolve => { finishPage = resolve; });
+  });
+  vi.stubGlobal('fetch', fetch);
+  renderWorkspace(client, '/portal/experiments?target=experiment&sections=&start=2026-09-16T00:00:00.000000001Z&end=2026-09-16T01:00:00.000000009Z&tz=utc&refresh=off');
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'range-a-run' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Load 200 more runs' }));
+  await waitFor(() => expect(finishPage).toBeTypeOf('function'));
+  const requests = fetch.mock.calls.map(([input]) => String(input));
+  fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'local' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(fetch.mock.calls.map(([input]) => String(input))).toEqual(requests);
+  expect(screen.getByRole('checkbox', { name: 'range-a-run' })).not.toBeChecked();
+  expect(screen.getByRole('button', { name: 'Loading runs…' })).toBeDisabled();
+  await act(async () => { finishPage?.(json({ error: 'page unavailable' }, 502)); });
+  await screen.findByText(/More runs unavailable/);
+  expect(screen.getByText('1 loaded of 201 · 0 visible')).toBeInTheDocument();
 });

@@ -46,6 +46,57 @@ func TestBuildMetricsQueryScopesAndDownsamples(t *testing.T) {
 	}
 }
 
+func TestBuildRunSearchLifecycleEvidenceQuery(t *testing.T) {
+	for _, ingestion := range []string{"projection", "remote-write"} {
+		t.Run(ingestion, func(t *testing.T) {
+			query, err := BuildRunSearchLifecycleEvidenceQuery([]RunEvidenceIdentity{{WorkspaceID: "workspace", Project: "project", RunGroupID: "group", RunID: "run'quoted"}}, ingestion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				"workspace_id == 'workspace' and project_id == 'project' and run_group_id == 'group' and run_id == " + kqlString("run'quoted"),
+				"arg_max(exported_at, *)", "status_evidence=metric_name == 'tau/run_status'",
+				"arg_max(wall_time, *) by workspace_id, project_id, run_group_id, run_id, status_evidence",
+			} {
+				if !strings.Contains(query, want) {
+					t.Fatalf("evidence query missing %q:\n%s", want, query)
+				}
+			}
+			for _, forbidden := range []string{"ago(", "between (", "TauExpRunLifecycleDashboardRows", "top "} {
+				if strings.Contains(query, forbidden) {
+					t.Fatalf("latest evidence query contains historical/alternate authority %q", forbidden)
+				}
+			}
+			table := DefaultProjectionTable
+			if ingestion == "remote-write" {
+				table = DefaultRemoteWriteTable
+			}
+			if !strings.Contains(query, table+"\n") {
+				t.Fatalf("missing ingestion table %s", table)
+			}
+		})
+	}
+}
+
+func TestBuildRunSearchLifecycleEvidenceQueryRejectsInvalidRequests(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		identities []RunEvidenceIdentity
+		ingestion  string
+	}{
+		{"empty", nil, "projection"},
+		{"oversized", make([]RunEvidenceIdentity, 201), "projection"},
+		{"blank run", []RunEvidenceIdentity{{RunID: " "}}, "projection"},
+		{"ingestion", []RunEvidenceIdentity{{RunID: "run"}}, "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := BuildRunSearchLifecycleEvidenceQuery(test.identities, test.ingestion); err == nil {
+				t.Fatal("invalid evidence query accepted")
+			}
+		})
+	}
+}
+
 func TestBuildMetricsQuerySupportsAdxMonRemoteWrite(t *testing.T) {
 	query, err := BuildMetricsQuery(MetricsQueryOptions{
 		WorkspaceID:  "sample",
@@ -418,6 +469,35 @@ func TestBuildRunHistoryTimelineQueryLimitsNewestEventsThenRestoresDisplayOrder(
 	asc := strings.LastIndex(query, "| order by observed_at asc")
 	if kind < 0 || resource < 0 || desc < 0 || take < 0 || asc < 0 || !(kind < resource && resource < desc && desc < take && take < asc) {
 		t.Fatalf("timeline query must filter kind before limiting newest events, then restore ascending order:\n%s", query)
+	}
+}
+
+func TestHistoricalQueriesPreserveSubsecondBounds(t *testing.T) {
+	start := time.Date(2026, 9, 16, 10, 0, 0, 100000000, time.UTC)
+	end := start.Add(800 * time.Millisecond)
+	for name, build := range map[string]func() (string, error){
+		"imported experiments": func() (string, error) {
+			return BuildExperimentSearchQuery(MetricsQueryOptions{Start: start, End: end})
+		},
+		"remote-write experiments": func() (string, error) {
+			return BuildExperimentSearchQuery(MetricsQueryOptions{Start: start, End: end, Ingestion: "remote-write"})
+		},
+		"run history": func() (string, error) {
+			return BuildRunHistoryQuery(RunHistoryQueryOptions{Start: start, End: end})
+		},
+		"run timeline": func() (string, error) {
+			return BuildRunHistoryTimelineQuery(RunHistoryQueryOptions{Start: start, End: end}, "uid-1")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			query, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(query, "datetime(2026-09-16T10:00:00.1Z) .. datetime(2026-09-16T10:00:00.9Z)") {
+				t.Fatalf("subsecond interval lost in KQL:\n%s", query)
+			}
+		})
 	}
 }
 

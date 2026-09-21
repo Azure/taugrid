@@ -1767,10 +1767,10 @@ func parseHistoricalRangeQuery(r *http.Request) (start string, end string, since
 	}
 	if parsed.Window > 0 && parsed.Start.IsZero() {
 		now := time.Now().UTC()
-		return now.Add(-parsed.Window).Format(time.RFC3339), now.Format(time.RFC3339), "", nil
+		return now.Add(-parsed.Window).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), "", nil
 	}
 	if !parsed.Start.IsZero() {
-		return parsed.Start.Format(time.RFC3339), parsed.End.Format(time.RFC3339), "", nil
+		return parsed.Start.Format(time.RFC3339Nano), parsed.End.Format(time.RFC3339Nano), "", nil
 	}
 	return "", "", parsed.Since, nil
 }

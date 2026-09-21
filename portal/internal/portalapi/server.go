@@ -944,7 +944,11 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, err := cost.Board(r.Context(), s.cost.Querier, opts)
 	if err != nil {
-		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
+		status := http.StatusBadGateway
+		if errors.Is(err, cost.ErrInvalidAllocationRange) {
+			status = http.StatusBadRequest
+		}
+		writeScopedError(w, status, scope, err.Error())
 		return
 	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, dataState(len(snapshot.Workspaces) == 0 && len(snapshot.IdleGPUs) == 0))

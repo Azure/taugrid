@@ -16,6 +16,7 @@ package cost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -27,6 +28,8 @@ import (
 
 // DefaultWindow is the chargeback look-back.
 const DefaultWindow = 7 * 24 * time.Hour
+
+var ErrInvalidAllocationRange = errors.New("allocation cost range must have start before end and align to whole UTC hours; partial-hour costs are unavailable")
 
 // DefaultIdleThresholdPct flags a GPU as underutilized when its average
 // utilization over the window is below this.
@@ -114,6 +117,12 @@ type Snapshot struct {
 // Board runs the allocation-cost and GpuHealth utilization queries via the
 // Querier and assembles the Snapshot.
 func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, error) {
+	if !opts.Start.IsZero() || !opts.End.IsZero() {
+		if opts.Start.IsZero() || opts.End.IsZero() || !opts.Start.Before(opts.End) ||
+			!opts.Start.Equal(opts.Start.Truncate(time.Hour)) || !opts.End.Equal(opts.End.Truncate(time.Hour)) {
+			return Snapshot{}, ErrInvalidAllocationRange
+		}
+	}
 	window := opts.Window
 	if window <= 0 {
 		window = DefaultWindow
@@ -154,7 +163,12 @@ func buildWorkspaceKQLRange(window time.Duration, start, end time.Time, database
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "let CostRows = materialize(database(%s).GpuCostHourly\n", kustoquery.QuoteString(database))
-	writeTimeFilter(&b, window, start, end)
+	if !start.IsZero() && !end.IsZero() {
+		fmt.Fprintf(&b, "| where Timestamp >= datetime(%s) and Timestamp < datetime(%s)\n",
+			start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	} else {
+		writeTimeFilter(&b, window, start, end)
+	}
 	if namespace != "" {
 		fmt.Fprintf(&b, "| where namespace == %s\n", kustoquery.QuoteString(namespace))
 	}

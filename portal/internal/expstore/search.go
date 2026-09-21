@@ -287,18 +287,20 @@ func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (stri
 		if err != nil {
 			return "", nil, err
 		}
-		clauses = append(clauses, `(r.created_at >= ?
-  OR (r.started_at != '' AND r.started_at >= ?)
-  OR (r.completed_at != '' AND r.completed_at >= ?)
-  OR EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time >= ?))`)
-		args = append(args, since, since, since, since)
+		clauses = append(clauses, `(r.created_at COLLATE tau_timestamp >= ?
+  OR (r.started_at != '' AND r.started_at COLLATE tau_timestamp >= ?)
+  OR (r.completed_at != '' AND r.completed_at COLLATE tau_timestamp >= ?)
+	OR EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time COLLATE tau_timestamp >= ?)
+	OR EXISTS (SELECT 1 FROM metric_files mf WHERE mf.run_id = r.run_id AND mf.created_at COLLATE tau_timestamp >= ?))`)
+		args = append(args, since, since, since, since, since)
 	}
 	if opts.Start != "" && opts.End != "" {
-		clauses = append(clauses, `((r.created_at >= ? AND r.created_at <= ?)
-  OR (r.started_at != '' AND r.started_at >= ? AND r.started_at <= ?)
-  OR (r.completed_at != '' AND r.completed_at >= ? AND r.completed_at <= ?)
-  OR EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time >= ? AND ev.time <= ?))`)
-		args = append(args, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End)
+		clauses = append(clauses, `((r.created_at COLLATE tau_timestamp >= ? AND r.created_at COLLATE tau_timestamp <= ?)
+  OR (r.started_at != '' AND r.started_at COLLATE tau_timestamp >= ? AND r.started_at COLLATE tau_timestamp <= ?)
+  OR (r.completed_at != '' AND r.completed_at COLLATE tau_timestamp >= ? AND r.completed_at COLLATE tau_timestamp <= ?)
+	OR EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time COLLATE tau_timestamp >= ? AND ev.time COLLATE tau_timestamp <= ?)
+	OR EXISTS (SELECT 1 FROM metric_files mf WHERE mf.run_id = r.run_id AND mf.created_at COLLATE tau_timestamp >= ? AND mf.created_at COLLATE tau_timestamp <= ?))`)
+		args = append(args, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End)
 	}
 	if opts.Query != "" {
 		like := "%" + strings.ToLower(opts.Query) + "%"
@@ -361,7 +363,7 @@ SELECT r.run_id, r.project, r.experiment_id, r.run_group_id,
 FROM runs r
 LEFT JOIN run_groups g ON g.run_group_id = r.run_group_id
 ` + where + `
-ORDER BY r.created_at DESC, r.run_id`
+ORDER BY r.created_at COLLATE tau_timestamp DESC, r.run_id`
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 		if offset > 0 {

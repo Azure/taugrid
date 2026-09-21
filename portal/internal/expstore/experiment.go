@@ -289,33 +289,35 @@ func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchO
 		if err != nil {
 			return nil, err
 		}
-		clauses = append(clauses, `(e.updated_at >= ? OR EXISTS (
+		clauses = append(clauses, `(e.updated_at COLLATE tau_timestamp >= ? OR EXISTS (
   SELECT 1 FROM workspace_run_experiments re
   JOIN runs r ON r.run_id = re.run_id
   WHERE re.experiment_id = e.experiment_id AND (
-    r.created_at >= ? OR
-    (r.started_at != '' AND r.started_at >= ?) OR
-    (r.completed_at != '' AND r.completed_at >= ?) OR
-    EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time >= ?)
+	r.created_at COLLATE tau_timestamp >= ? OR
+	(r.started_at != '' AND r.started_at COLLATE tau_timestamp >= ?) OR
+	(r.completed_at != '' AND r.completed_at COLLATE tau_timestamp >= ?) OR
+		EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time COLLATE tau_timestamp >= ?) OR
+		EXISTS (SELECT 1 FROM metric_files mf WHERE mf.run_id = r.run_id AND mf.created_at COLLATE tau_timestamp >= ?)
   )
 ))`)
-		args = append(args, since, since, since, since, since)
+		args = append(args, since, since, since, since, since, since)
 	}
 	if opts.Start != "" && opts.End != "" {
 		clauses = append(clauses, `(
-  (e.updated_at >= ? AND e.updated_at <= ?)
+	(e.updated_at COLLATE tau_timestamp >= ? AND e.updated_at COLLATE tau_timestamp <= ?)
   OR EXISTS (
     SELECT 1 FROM workspace_run_experiments re
     JOIN runs r ON r.run_id = re.run_id
     WHERE re.experiment_id = e.experiment_id AND (
-      (r.created_at >= ? AND r.created_at <= ?) OR
-      (r.started_at != '' AND r.started_at >= ? AND r.started_at <= ?) OR
-      (r.completed_at != '' AND r.completed_at >= ? AND r.completed_at <= ?) OR
-      EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time >= ? AND ev.time <= ?)
+	(r.created_at COLLATE tau_timestamp >= ? AND r.created_at COLLATE tau_timestamp <= ?) OR
+	(r.started_at != '' AND r.started_at COLLATE tau_timestamp >= ? AND r.started_at COLLATE tau_timestamp <= ?) OR
+	(r.completed_at != '' AND r.completed_at COLLATE tau_timestamp >= ? AND r.completed_at COLLATE tau_timestamp <= ?) OR
+	EXISTS (SELECT 1 FROM events ev WHERE ev.run_id = r.run_id AND ev.time COLLATE tau_timestamp >= ? AND ev.time COLLATE tau_timestamp <= ?) OR
+	EXISTS (SELECT 1 FROM metric_files mf WHERE mf.run_id = r.run_id AND mf.created_at COLLATE tau_timestamp >= ? AND mf.created_at COLLATE tau_timestamp <= ?)
     )
   )
 )`)
-		args = append(args, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End)
+		args = append(args, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End, opts.Start, opts.End)
 	}
 	where := ""
 	if len(clauses) > 0 {
@@ -332,7 +334,7 @@ LEFT JOIN workspace_run_experiments re ON re.experiment_id = e.experiment_id
 LEFT JOIN runs r ON r.run_id = re.run_id
 `+where+`
 GROUP BY e.experiment_id, e.project, e.name, e.description, e.source, e.created_at, e.updated_at
-ORDER BY coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at)), e.updated_at) DESC, e.experiment_id
+ORDER BY coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at) COLLATE tau_timestamp), e.updated_at) COLLATE tau_timestamp DESC, e.experiment_id
 LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err

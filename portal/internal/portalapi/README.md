@@ -156,11 +156,47 @@ without resetting hidden-run selections, page size or other workspace state.
 Same-range pagination failures retain the last successful page for retry;
 display-timezone changes do not change data identity.
 
+Custom Apply preserves each untouched RFC3339 bound verbatim, including offsets
+and nanoseconds. Editing one bound changes only that bound to UTC millisecond
+precision. UTC/local selection changes presentation, not the requested instant.
+Validation compares exact instants through the 30-day limit; a positive 1ns
+interval is valid, but 30 days plus 1ns is not. This URL/API contract does not
+imply nanosecond storage in ADX. Nonexistent local DST times are rejected;
+ambiguous edited local times use the platform's earlier occurrence. Use an
+explicit offset or UTC for an unambiguous repeated local time.
+
 Run search determines historical membership, ordering, totals and pagination.
+Local run membership includes metric-file registration timestamps as well as
+run and event timestamps, before applying the result limit. A long-running run
+can therefore remain in range after a JSONL import without a new lifecycle
+event; its original run timestamps are not rewritten. Local experiment discovery
+also includes child metric-file registration, even when later imports move the
+experiment update time beyond an earlier selected interval. Registration time,
+not the metric sample's wall time, defines this import activity. Both local
+discovery and run search compare timestamp instants, including fractional seconds
+and equivalent timezone offsets, before applying result limits. Custom and
+relative Stellar bounds retain nanosecond precision through API serialization.
+Unscoped Kusto experiment discovery enforces the configured maximum discovery
+lookback on `since`, `window` and absolute interval lengths before querying;
+the existing project-scoped exemption is unchanged.
 Within the same workspace/source scope, matching snapshot runs (project and run
 ID) retain their authoritative lifecycle, evidence timestamps and detail fields;
-search-only fields and metric summaries remain available. Missing snapshot
-classification fields fall back to search classification. Snapshot-only runs
+search-only fields and metric summaries remain available. Local search rows also
+carry authoritative `outcome_state` / `liveness_state` resolved from their own
+record and indexed metrics using the snapshot resolver. Thus runs absent from a
+truncated snapshot retain correct liveness without additional queries. Existing
+legacy classification and success-gate filtering remain unchanged. After selecting
+and limiting historical Kusto members, search looks up their latest retained
+terminal marker and ordinary metric, independent of the selected interval and
+snapshot cap. It matches exact workspace/project/group/run identities in batches
+of at most 200, returning at most two evidence rows per identity. File/in-memory
+sources reuse their already loaded rows; projection and remote-write use the
+existing query transport. These bounds limit transfer, not ADX scan cost.
+Evidence-query failure fails the Kusto source; auto retains local results with
+its existing warning and local-first duplicate policy. A successful empty lookup
+is explicitly unknown, never authoritative historical running. Matching snapshot
+authority replaces the page outcome/liveness/reason/source as one coherent group.
+Missing snapshot classification fields fall back to search classification. Snapshot-only runs
 never enter the range-filtered list. Lifecycle describes the latest available
 evidence, not a reconstruction of run state at the historical range end.
 Reconciliation uses a linear-time identity lookup over the existing responses;
@@ -247,6 +283,16 @@ silently truncated series. `queriedAt` records query completion, not the age of
 every underlying sample.
 
 Cost remains allocation-based, using schema-v4 `GpuCostHourly` rows.
+Custom cost ranges must start and end on whole UTC hours; unsupported partial
+hours return **400** before querying Kusto. Allocation buckets use `[start, end)`:
+a 10:00-11:00 range includes the 10:00 bucket, not the bucket starting at 11:00.
+Raw utilization samples retain inclusive bounds, and relative lookback requests
+retain their existing behavior. Partial-hour costs are not prorated or inferred.
+Opening a new Cost Custom range defaults to the previous complete UTC hour.
+Both display timezones remain available. Apply validates actual UTC instants
+before navigation or a new request; nonaligned user input is never rounded.
+Direct invalid URLs still reach backend validation and can be corrected using
+the controls. Other boards retain their generic custom defaults.
 `costAvailable` and `gpuHoursAvailable` distinguish unknown totals from measured
 zero; their coverage counters expose partial sums. Raw GPU utilization is a
 separate efficiency signal. `idleAvailable` requires enough valid readings to

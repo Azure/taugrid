@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Azure/taugrid/portal/internal/expcockpit"
 	"github.com/Azure/taugrid/portal/internal/expstore"
 )
 
@@ -52,7 +53,18 @@ type runSearchResponse struct {
 func withRunSource(result expstore.RunSearchResult, source string) runSearchResponse {
 	out := runSearchResponse{RunSearchResult: result, Runs: make([]sourcedRun, 0, len(result.Runs))}
 	for _, run := range result.Runs {
-		out.Runs = append(out.Runs, sourcedRun{RunSearchRun: run, Source: source})
+		item := sourcedRun{RunSearchRun: run, Source: source}
+		if source == "local" {
+			truth := expcockpit.LocalRunLifecycle(run.RunRecord, run.Metrics)
+			item.OutcomeState = truth.OutcomeState
+			item.LivenessState = truth.LivenessState
+			item.LifecycleReason = truth.Reason
+			item.LifecycleSource = truth.Source
+			if item.OutcomeState == "" && item.LivenessState == "" {
+				item.LivenessState = "pending"
+			}
+		}
+		out.Runs = append(out.Runs, item)
 	}
 	return out
 }

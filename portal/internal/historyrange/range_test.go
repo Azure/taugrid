@@ -35,3 +35,23 @@ func TestParseAllowsLegacySinceOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("Parse disallow since error = %v", err)
 	}
 }
+
+func TestParseNanosecondBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		end   string
+		valid bool
+	}{
+		{"positive nanosecond", "2026-09-01T00:00:00.000000001Z", true},
+		{"exact thirty days", "2026-10-01T00:00:00Z", true},
+		{"over thirty days", "2026-10-01T00:00:00.000000001Z", false},
+		{"equal offset instant", "2026-09-01T02:00:00+02:00", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Parse(url.Values{"start": {"2026-09-01T00:00:00Z"}, "end": {test.end}}, false)
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+		})
+	}
+}

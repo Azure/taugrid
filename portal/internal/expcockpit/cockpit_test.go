@@ -5,6 +5,7 @@ package expcockpit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,10 +22,254 @@ func dashboardSectionSourceIndex(source, id string) int {
 	return strings.Index(source, fmt.Sprintf(`id: "%s"`, id))
 }
 
+func TestKustoSearchLatestLifecycleOutsideRangeAndSnapshot(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	rows := []KustoMetricRow{}
+	for number := range 200 {
+		rows = append(rows, KustoMetricRow{Project: "review", ExperimentID: "experiment", RunGroupID: "group", RunID: fmt.Sprintf("a-%03d", number), MetricName: "loss", WallTime: now.Add(-24 * time.Hour).Format(time.RFC3339), Value: 1})
+	}
+	rows = append(rows,
+		KustoMetricRow{Project: "review", ExperimentID: "experiment", RunGroupID: "group", RunID: "z-failed", MetricName: "loss", WallTime: now.Add(-5 * time.Minute).Format(time.RFC3339), Value: 1},
+		KustoMetricRow{Project: "review", ExperimentID: "experiment", RunGroupID: "group", RunID: "z-failed", MetricName: expkusto.RunStatusMetricName, WallTime: now.Add(-time.Minute).Format(time.RFC3339), Value: -1, Tags: `{"tau.status.state":"failed"}`},
+	)
+	source := KustoSource{Metrics: rows, Now: func() time.Time { return now }}
+	page, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Target: "experiment", Project: "review", Start: now.Add(-10 * time.Minute).Format(time.RFC3339), End: now.Add(-2 * time.Minute).Format(time.RFC3339), Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Runs) != 1 || page.Runs[0].RunID != "z-failed" || page.Runs[0].LifecycleState != "running" {
+		t.Fatalf("historical selection changed: %+v", page)
+	}
+	bounded, err := source.BuildSnapshot(context.Background(), Options{Target: "experiment", Project: "review", Mode: SnapshotModeSummary, MaxRuns: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range bounded.Runs {
+		if run.RunID == "z-failed" {
+			t.Fatal("fixture unexpectedly in bounded snapshot")
+		}
+	}
+	raw, err := json.Marshal(page.Runs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authority struct {
+		OutcomeState string `json:"outcome_state"`
+	}
+	if err := json.Unmarshal(raw, &authority); err != nil {
+		t.Fatal(err)
+	}
+	if authority.OutcomeState != "failed" {
+		t.Fatalf("latest outcome_state = %q, want failed", authority.OutcomeState)
+	}
+}
+
 func TestKustoActionsSuppressUnwritableObservationCommand(t *testing.T) {
 	actions := kustoActions("kusto://ExperimentMetrics", "seed-1", "run", nil, "")
 	if actions.ObserveCLI != "" {
 		t.Fatalf("Kusto observation command requires a locally materialized scope, got %q", actions.ObserveCLI)
+	}
+}
+
+func TestKustoSearchLatestLifecycleBatches(t *testing.T) {
+	for _, count := range []int{1, 200, 201, 1000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+			rows := make([]KustoMetricRow, count)
+			for index := range rows {
+				rows[index] = KustoMetricRow{WorkspaceID: "workspace", Project: "project", ExperimentID: "experiment", RunGroupID: "group", RunID: fmt.Sprintf("run-%04d", index), MetricName: "loss", WallTime: now.Add(-5 * time.Minute).Format(time.RFC3339), Value: 1}
+			}
+			evidenceQueries := 0
+			source := KustoSource{WorkspaceID: "workspace", Now: func() time.Time { return now }, NativeQuery: func(ctx context.Context, query string) (string, error) {
+				selected := rows
+				if strings.Contains(query, "let run_search_evidence") {
+					evidenceQueries++
+					selected = nil
+					for _, row := range rows {
+						if strings.Contains(query, "run_id == '"+row.RunID+"'") {
+							row.MetricName = expkusto.RunStatusMetricName
+							row.Tags = `{"tau.status.state":"failed"}`
+							row.WallTime = now.Add(-time.Minute).Format(time.RFC3339)
+							selected = append(selected, row)
+						}
+					}
+					if len(selected) > 200 {
+						t.Fatalf("evidence batch contains %d identities", len(selected))
+					}
+				}
+				raw, err := json.Marshal(selected)
+				return string(raw), err
+			}}
+			page, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Project: "project", Start: now.Add(-10 * time.Minute).Format(time.RFC3339), End: now.Add(-2 * time.Minute).Format(time.RFC3339), Limit: count})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Runs) != count || page.Total != count || page.Truncated {
+				t.Fatalf("changed membership: %+v", page)
+			}
+			for _, run := range page.Runs {
+				if run.OutcomeState != "failed" || run.LifecycleState != "running" {
+					t.Fatalf("run %s latest=%q historical=%q, want failed/running", run.RunID, run.OutcomeState, run.LifecycleState)
+				}
+			}
+			if evidenceQueries != (count+199)/200 {
+				t.Fatalf("evidence queries=%d, want %d", evidenceQueries, (count+199)/200)
+			}
+		})
+	}
+}
+
+func TestKustoSearchMissingLatestEvidenceIsUnknown(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	source := KustoSource{Now: func() time.Time { return now }, NativeQuery: func(_ context.Context, query string) (string, error) {
+		if strings.Contains(query, "let run_search_evidence") {
+			return "[]", nil
+		}
+		return `[{"project":"project","run_group_id":"group","run_id":"run","metric_name":"loss","wall_time":"2026-09-21T11:55:00Z","value":1}]`, nil
+	}}
+	page, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Project: "project", Start: "2026-09-21T11:50:00Z", End: "2026-09-21T11:58:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Runs) != 1 || page.Runs[0].LivenessState != "unknown" || page.Runs[0].LifecycleSource != "unavailable" {
+		t.Fatalf("missing evidence must be unknown/unavailable: %+v", page.Runs)
+	}
+}
+
+func TestKustoSearchRejectsUntrustworthyLatestEvidence(t *testing.T) {
+	for _, problem := range []string{"workspace", "project", "group", "timestamp", "oversized", "second-batch", "cancelled", "partial-response"} {
+		t.Run(problem, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			count := 1
+			if problem == "second-batch" {
+				count = 201
+			}
+			rows := make([]KustoMetricRow, count)
+			for index := range rows {
+				rows[index] = KustoMetricRow{WorkspaceID: "workspace", Project: "project", RunGroupID: "group", RunID: fmt.Sprintf("run-%04d", index), MetricName: "loss", WallTime: "2026-09-21T11:55:00Z", Value: 1}
+			}
+			batches := 0
+			source := KustoSource{WorkspaceID: "workspace", NativeQuery: func(_ context.Context, query string) (string, error) {
+				result := rows
+				if strings.Contains(query, "let run_search_evidence") {
+					batches++
+					if problem == "partial-response" {
+						return `[{"FrameType":"DataTable","TableKind":"PrimaryResult","Columns":[],"Rows":[]},{"FrameType":"DataSetCompletion","HasErrors":true,"Cancelled":false,"OneApiErrors":[{"code":"E_QUERY_RESULT_SET_TOO_LARGE"}]}]`, nil
+					}
+					if problem == "second-batch" && batches == 2 {
+						return "", errors.New("second batch unavailable")
+					}
+					result = nil
+					for _, row := range rows {
+						if strings.Contains(query, "run_id == '"+row.RunID+"'") {
+							result = append(result, row)
+						}
+					}
+					switch problem {
+					case "workspace":
+						result[0].WorkspaceID = "other"
+					case "project":
+						result[0].Project = "other"
+					case "group":
+						result[0].RunGroupID = "other"
+					case "timestamp":
+						result[0].WallTime = "bad"
+					case "oversized":
+						result = append(result, result[0], result[0])
+					case "cancelled":
+						cancel()
+					}
+				}
+				raw, err := json.Marshal(result)
+				return string(raw), err
+			}}
+			page, err := source.SearchRuns(ctx, expstore.RunSearchOptions{Project: "project", Start: "2026-09-21T11:50:00Z", End: "2026-09-21T11:58:00Z", Limit: count})
+			if err == nil || len(page.Runs) != 0 {
+				t.Fatalf("%s evidence must fail without partial runs: page=%+v err=%v", problem, page, err)
+			}
+			if problem == "second-batch" && batches != 2 {
+				t.Fatalf("expected failure in second batch, got %d", batches)
+			}
+		})
+	}
+}
+
+func TestKustoSearchUsesOneLifecycleClock(t *testing.T) {
+	calls := 0
+	source := KustoSource{Metrics: []KustoMetricRow{{Project: "project", RunID: "run", MetricName: "loss", WallTime: "2026-09-21T11:55:00Z", Value: 1}}, Now: func() time.Time {
+		calls++
+		return time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	}}
+	if _, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Project: "project"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("lifecycle clock called %d times, want one request instant", calls)
+	}
+}
+
+func TestKustoSearchLatestEvidenceTransports(t *testing.T) {
+	for _, transport := range []string{"memory", "file", "command"} {
+		for _, state := range []string{"failed", "succeeded", "cancelled", "running", "boundary", "stale"} {
+			t.Run(transport+"/"+state, func(t *testing.T) {
+				member := KustoMetricRow{Project: "project", RunGroupID: "group", RunID: "run", MetricName: "loss", WallTime: "2026-09-21T10:00:00Z", Value: 1}
+				latest := member
+				latest.WallTime = "2026-09-21T13:59:00+02:00"
+				latest.MetricName = "accuracy"
+				wantOutcome, wantLiveness := "", "running"
+				switch state {
+				case "failed", "succeeded", "cancelled":
+					latest.MetricName = "tau/run_status"
+					latest.Tags = fmt.Sprintf(`{"tau.status.state":%q}`, state)
+					wantOutcome, wantLiveness = state, ""
+				case "boundary":
+					latest.WallTime = "2026-09-21T11:45:00Z"
+				case "stale":
+					latest.WallTime = "2026-09-21T11:44:59.999999999Z"
+					wantLiveness = "not_responding"
+				}
+				rows := []KustoMetricRow{member, latest}
+				source := KustoSource{Now: func() time.Time { return time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC) }}
+				raw, err := json.Marshal(rows)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch transport {
+				case "memory":
+					source.Metrics = rows
+				case "file":
+					source.MetricsFile = filepath.Join(t.TempDir(), "metrics.json")
+					if err := os.WriteFile(source.MetricsFile, raw, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "command":
+					membership, _ := json.Marshal([]KustoMetricRow{member})
+					evidence, _ := json.Marshal([]KustoMetricRow{latest})
+					script := "#!/bin/sh\nquery=$(cat)\ncase \"$query\" in\n*'let run_search_evidence'*) printf '%s' '" + string(evidence) + "';;\n*) printf '%s' '" + string(membership) + "';;\nesac\n"
+					source.QueryCommand = filepath.Join(t.TempDir(), "query")
+					if err := os.WriteFile(source.QueryCommand, []byte(script), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				page, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Project: "project", Start: "2026-09-21T09:59:00Z", End: "2026-09-21T10:01:00Z", Limit: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(page.Runs) != 1 || page.Runs[0].OutcomeState != wantOutcome || page.Runs[0].LivenessState != wantLiveness || len(page.Runs[0].MetricNames) != 1 || page.Runs[0].MetricNames[0] != "loss" {
+					t.Fatalf("latest state or historical metrics changed: %+v", page)
+				}
+			})
+		}
+	}
+}
+
+func TestKustoSearchEmptyPageSkipsLatestQuery(t *testing.T) {
+	calls := 0
+	source := KustoSource{NativeQuery: func(context.Context, string) (string, error) { calls++; return "[]", nil }}
+	page, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Project: "project"})
+	if err != nil || len(page.Runs) != 0 || calls != 1 {
+		t.Fatalf("empty page: calls=%d page=%+v err=%v", calls, page, err)
 	}
 }
 

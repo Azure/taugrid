@@ -18,6 +18,78 @@ function LocationProbe() {
 }
 
 describe('historical range URL parsing', () => {
+  it('preserves the untouched bound and edited instant through timezone toggles', () => {
+    const end = '2026-09-16T10:01:30.900000009Z';
+    render(<MemoryRouter initialEntries={['/portal/runs?' + new URLSearchParams({ start: '2026-09-16T10:00:30.100000001Z', end, tz: 'utc' })]}>
+      <TimeRangeControls defaultWindow="24h"/><LocationProbe/>
+    </MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-09-16T10:00:45.123' } });
+    fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'local' } });
+    fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'utc' } });
+    expect(screen.getByLabelText('Start')).toHaveValue('2026-09-16T10:00:45.123');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    const location = new URL(screen.getByTestId('location').textContent || '', 'http://localhost');
+    expect(location.searchParams.get('start')).toBe('2026-09-16T10:00:45.123Z');
+    expect(location.searchParams.get('end')).toBe(end);
+  });
+
+  it.runIf(Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/New_York')('rejects a local DST gap and retains the earlier fold occurrence', () => {
+    render(<MemoryRouter initialEntries={['/portal/runs?window=1h']}>
+      <TimeRangeControls defaultWindow="24h"/><LocationProbe/>
+    </MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Range'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-03-08T02:30' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-03-08T04:00' } });
+    fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'utc' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter valid start and end');
+    expect(screen.getByTestId('location')).toHaveTextContent('window=1h');
+    fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'local' } });
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-11-01T01:30' } });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-11-01T02:30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    const location = new URL(screen.getByTestId('location').textContent || '', 'http://localhost');
+    expect(location.searchParams.get('start')).toBe('2026-11-01T05:30:00.000Z');
+    expect(location.searchParams.get('end')).toBe('2026-11-01T07:30:00.000Z');
+  });
+
+  it.each([
+    ['2026-09-01T00:00:00.000000001Z', '2026-09-01T00:00:00.000000002Z', true],
+    ['2026-09-01T00:00:00.000000001Z', '2026-10-01T00:00:00.000000001Z', true],
+    ['2026-09-01T00:00:00.000000001Z', '2026-10-01T00:00:00.000000002Z', false],
+    ['2026-09-01T08:00:00.000000001+08:00', '2026-09-01T00:00:00.000000001Z', false],
+  ])('compares precise custom instants %s to %s', (start, end, valid) => {
+    render(<MemoryRouter initialEntries={['/portal/runs?' + new URLSearchParams({ start, end, tz: 'utc' })]}>
+      <TimeRangeControls defaultWindow="24h"/><RangeProbe/>
+    </MemoryRouter>);
+    expect(screen.queryByRole('alert') === null).toBe(valid);
+    if (valid) {
+      const before = screen.getByTestId('api').textContent;
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByTestId('api').textContent).toBe(before);
+    }
+  });
+
+  it.each([false, true])('preserves exact untouched bounds when applying (switch timezone=%s)', switchTimezone => {
+    const start = '2026-09-16T10:00:30.100000001+00:00';
+    const end = '2026-09-16T10:00:30.900000009Z';
+    const params = new URLSearchParams({ start, end, tz: 'utc', workspace: 'research' });
+    render(<MemoryRouter initialEntries={['/portal/runs?' + params]}>
+      <TimeRangeControls defaultWindow="24h"/><RangeProbe/><LocationProbe/>
+    </MemoryRouter>);
+    const before = screen.getByTestId('api').textContent;
+    if (switchTimezone) fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'local' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api').textContent).toBe(before);
+    const location = new URL(screen.getByTestId('location').textContent || '', 'http://localhost');
+    expect(location.searchParams.get('start')).toBe(start);
+    expect(location.searchParams.get('end')).toBe(end);
+    expect(location.searchParams.get('workspace')).toBe('research');
+    expect(location.searchParams.get('tz')).toBe(switchTimezone ? 'local' : 'utc');
+  });
+
   it('rejects normalized calendar dates and non-RFC3339 clock times', () => {
     for (const [start, end] of [
       ['2026-02-30T00:00:00Z', '2026-02-30T00:30:00Z'],

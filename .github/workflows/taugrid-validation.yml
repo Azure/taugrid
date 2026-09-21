@@ -165,6 +165,10 @@ jobs:
             exit 1
           fi
 
+      - name: Test portal frontend
+        if: matrix.module == 'portal'
+        run: npm test --prefix frontend
+
       - name: Verify module dependencies
         run: go mod verify
 

@@ -82,9 +82,14 @@ export function reconcilePageRuns(pageRuns: RunSearchRun[], snapshotRuns: RunVie
   return pageRuns.map(run => {
     const snapshot = byIdentity.get(JSON.stringify([run.project, run.run_id]));
     if (!snapshot) return run;
+    const authority = snapshot.outcome_state || snapshot.liveness_state ? snapshot : run;
     return {
       ...run,
       ...snapshot,
+      outcome_state: authority.outcome_state,
+      liveness_state: authority.liveness_state,
+      lifecycle_reason: authority.lifecycle_reason,
+      lifecycle_source: authority.lifecycle_source,
       lifecycle_state: snapshot.lifecycle_state ?? run.lifecycle_state,
       successful: snapshot.successful ?? run.successful,
       metrics: run.metrics,

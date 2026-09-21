@@ -118,7 +118,7 @@ export function CostBoard() {
   const range = useHistoricalRange('168h');
   const query = useBoard<Cost>('/api/portal/cost?' + range.api);
   return <><PageTitle title="Cost">Allocation-based GPU-hours and estimated cost by TauGrid workspace, via /api/portal/cost. Utilization is shown as an efficiency signal and does not determine cost.</PageTitle>
-    <TimeRangeControls defaultWindow="168h"/>
+    <TimeRangeControls defaultWindow="168h" customRangePolicy="utc-hour"/>
     <BoardResult query={query} label="Cost board" hint=" — start the portal with a --kusto-query-command.">{snap => <>
       <Note>requested window: {text(snap.window)} · total GPU-hours: {n1(snap.gpuHoursAvailable ? snap.totalGPUHours : null)} · estimated cost: {snap.costAvailable ? '$' + snap.totalEstimatedCostUSD.toFixed(2) : '—'}</Note>
       <Note>GPU-hours: {allocationCoverage(snap.costCoverage, 'gpuHoursSamples')} · cost: {allocationCoverage(snap.costCoverage, 'costSamples')}. Availability means observed samples, not complete window coverage.</Note>

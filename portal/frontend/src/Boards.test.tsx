@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Kueue, Overview } from './Boards';
+import { CostBoard, Kueue, Overview } from './Boards';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import type { WorkspaceScope } from './types';
 
@@ -16,6 +16,66 @@ const researchScope: WorkspaceScope = {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+it('initializes Cost custom requests to the previous complete UTC hour', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-21T12:34:56.789Z'));
+  const fetch = vi.fn(() => Promise.resolve(json({ workspaces: [], idleGPUs: [] })));
+  vi.stubGlobal('fetch', fetch);
+  render(<QueryClientProvider client={createPortalQueryClient()}><MemoryRouter initialEntries={['/portal/cost?window=168h']}>
+    <WorkspaceProvider scope={researchScope} managed={false}><CostBoard/></WorkspaceProvider>
+  </MemoryRouter></QueryClientProvider>);
+  await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+  fireEvent.change(screen.getByLabelText('Range'), { target: { value: 'custom' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  const calls = vi.mocked(globalThis.fetch).mock.calls;
+  const request = new URL(String(calls[1][0]), 'http://localhost');
+  expect(request.searchParams.get('start')).toBe('2026-09-21T11:00:00.000Z');
+  expect(request.searchParams.get('end')).toBe('2026-09-21T12:00:00.000Z');
+});
+
+it('blocks non-hour Cost drafts before fetching and recovers after correction', async () => {
+  const fetch = vi.fn(() => Promise.resolve(json({ workspaces: [], idleGPUs: [] })));
+  vi.stubGlobal('fetch', fetch);
+  render(<QueryClientProvider client={createPortalQueryClient()}><MemoryRouter initialEntries={['/portal/cost?window=168h']}>
+    <WorkspaceProvider scope={researchScope} managed={false}><CostBoard/></WorkspaceProvider>
+  </MemoryRouter></QueryClientProvider>);
+  await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+  fireEvent.change(screen.getByLabelText('Range'), { target: { value: 'custom' } });
+  fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'utc' } });
+  fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-09-21T11:30' } });
+  fireEvent.change(screen.getByLabelText('End'), { target: { value: '2026-09-21T12:00' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('whole UTC hours');
+  expect(fetch).toHaveBeenCalledOnce();
+  fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-09-21T11:00' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('recovers a directly loaded Cost 400 without rounding a nanosecond bound', async () => {
+  const fetch = vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    return Promise.resolve(url.searchParams.get('start')?.includes('000000001')
+      ? new Response(JSON.stringify({ error: 'Cost ranges must start and end on whole UTC hours.' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+      : json({ workspaces: [], idleGPUs: [] }));
+  });
+  vi.stubGlobal('fetch', fetch);
+  render(<QueryClientProvider client={createPortalQueryClient()}><MemoryRouter initialEntries={['/portal/cost?start=2026-09-21T11:00:00.000000001Z&end=2026-09-21T12:00:00Z&tz=utc']}>
+    <WorkspaceProvider scope={researchScope} managed={false}><CostBoard/></WorkspaceProvider>
+  </MemoryRouter></QueryClientProvider>);
+  await screen.findByText(/Cost board unavailable/);
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(within(screen.getByRole('region', { name: 'Historical time range' })).getByRole('alert')).toHaveTextContent('whole UTC hours');
+  expect(fetch).toHaveBeenCalledOnce();
+  fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-09-21T10:00:00.000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await screen.findByText(/No allocation records/);
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 describe('Kueue board', () => {

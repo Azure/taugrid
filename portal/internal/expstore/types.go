@@ -345,12 +345,16 @@ type SuccessOptions struct {
 
 type RunSearchRun struct {
 	RunRecord
-	LifecycleState string                `json:"lifecycle_state"`
-	Successful     bool                  `json:"successful"`
-	SuccessReasons []string              `json:"success_reasons,omitempty"`
-	Tags           map[string]string     `json:"tags,omitempty"`
-	MetricNames    []string              `json:"metric_names,omitempty"`
-	Metrics        []MetricSummaryRecord `json:"metrics,omitempty"`
+	OutcomeState    string                `json:"outcome_state,omitempty"`
+	LivenessState   string                `json:"liveness_state,omitempty"`
+	LifecycleReason string                `json:"lifecycle_reason,omitempty"`
+	LifecycleSource string                `json:"lifecycle_source,omitempty"`
+	LifecycleState  string                `json:"lifecycle_state"`
+	Successful      bool                  `json:"successful"`
+	SuccessReasons  []string              `json:"success_reasons,omitempty"`
+	Tags            map[string]string     `json:"tags,omitempty"`
+	MetricNames     []string              `json:"metric_names,omitempty"`
+	Metrics         []MetricSummaryRecord `json:"metrics,omitempty"`
 }
 
 type RunSearchResult struct {

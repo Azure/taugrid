@@ -50,3 +50,4 @@ __pycache__/
 # Portal build output
 /portal/bin/
 .github/instructions/typescript.instructions.md
+controllers/tau-core/bin/

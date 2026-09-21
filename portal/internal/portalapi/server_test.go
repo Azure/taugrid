@@ -985,6 +985,39 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 	}
 }
 
+func TestCostBoardHourlyRangeValidation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		query  string
+		status int
+		calls  int
+	}{
+		{"relative", "window=168h", http.StatusOK, 2},
+		{"aligned", "start=2026-09-16T10:00:00Z&end=2026-09-16T11:00:00Z", http.StatusOK, 2},
+		{"offset", "start=2026-09-16T12:00:00%2B02:00&end=2026-09-16T13:00:00%2B02:00", http.StatusOK, 2},
+		{"partial start", "start=2026-09-16T10:30:00Z&end=2026-09-16T11:00:00Z", http.StatusBadRequest, 0},
+		{"partial end", "start=2026-09-16T10:00:00Z&end=2026-09-16T11:30:00Z", http.StatusBadRequest, 0},
+		{"nanosecond start", "start=2026-09-16T10:00:00.000000001Z&end=2026-09-16T11:00:00Z", http.StatusBadRequest, 0},
+		{"half hour offset aligned", "start=2026-09-16T15:30:00%2B05:30&end=2026-09-16T16:30:00%2B05:30", http.StatusOK, 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			querier := &stubCostQuerier{}
+			server, err := NewServer(Options{Stellar: expapi.Options{Source: "kusto"}, Cost: CostOptions{Querier: querier}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/portal/cost?"+test.query, nil))
+			if recorder.Code != test.status || querier.calls != test.calls {
+				t.Fatalf("status=%d calls=%d body=%s", recorder.Code, querier.calls, recorder.Body.String())
+			}
+			if test.status == http.StatusBadRequest && !strings.Contains(recorder.Body.String(), "whole UTC hours") {
+				t.Fatalf("missing range constraint: %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestCostBoardUnavailableWithoutQuerier(t *testing.T) {
 	// newTestServer builds a server with no Cost.Querier → board disabled.
 	rec := httptest.NewRecorder()

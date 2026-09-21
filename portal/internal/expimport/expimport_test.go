@@ -113,6 +113,51 @@ func TestImportJSONLWritesResearchMetricHistory(t *testing.T) {
 	}
 }
 
+func TestImportJSONLKeepsOldActiveRunInCurrentRange(t *testing.T) {
+	ctx := context.Background()
+	store, _, err := expstore.Init(ctx, filepath.Join(t.TempDir(), "store"), expstore.InitOptions{
+		Name: "metric-range", Project: "tau", Group: "baseline",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	oldTime := time.Now().UTC().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	for _, runID := range []string{"active", "outside"} {
+		if _, err := store.RecordRunData(ctx, expstore.RecordRunDataOptions{Run: expstore.RunRecord{
+			RunID: runID, Project: "tau", RunGroupID: "baseline", State: "running", CreatedAt: oldTime, StartedAt: oldTime,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history := filepath.Join(t.TempDir(), "history.jsonl")
+	writeJSONLLines(t, history, `{"_step":1,"train/loss":0.42}`)
+	if _, err := ImportJSONL(ctx, store, JSONLImportOptions{RunID: "active", History: []string{history}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, options := range []expstore.RunSearchOptions{
+		{Since: "7d", Limit: 1},
+		{Start: now.Add(-7 * 24 * time.Hour).Format(time.RFC3339), End: now.Add(time.Minute).Format(time.RFC3339), Limit: 1},
+	} {
+		result, err := store.SearchRuns(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Runs) != 1 || result.Runs[0].RunID != "active" || result.Truncated ||
+			result.Runs[0].CreatedAt != oldTime || result.Runs[0].StartedAt != oldTime {
+			t.Fatalf("expected imported active run with unchanged timestamps: %+v", result)
+		}
+	}
+	events, err := store.Query(ctx, "SELECT count(*) AS count FROM events WHERE run_id = 'active'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events.Rows[0]["count"] != int64(0) {
+		t.Fatalf("fixture must have metric evidence without lifecycle events: %+v", events.Rows)
+	}
+}
+
 func TestImportJSONLNoScalarsOnlyForValidHistory(t *testing.T) {
 	ctx := context.Background()
 	store, _, err := expstore.Init(ctx, filepath.Join(t.TempDir(), "store"), expstore.InitOptions{

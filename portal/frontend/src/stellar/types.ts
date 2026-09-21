@@ -26,7 +26,7 @@ export interface MetricSummary {
   latest_step?: number; latest_wall_time?: number; latest_value?: number; min_value?: number;
   max_value?: number; updated_at: string; latest_file_id?: string;
 }
-export interface RunSearchRun extends RunRecord {
+export interface RunSearchRun extends RunRecord, Pick<RunView, 'outcome_state' | 'liveness_state' | 'lifecycle_reason' | 'lifecycle_source'> {
   lifecycle_state: string; successful: boolean; success_reasons?: string[];
   tags?: Record<string, string>; metric_names?: string[]; metrics?: MetricSummary[];
 }

@@ -12,7 +12,109 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestExperimentDiscoveryMetricRegistration(t *testing.T) {
+	now := time.Now().UTC()
+	for _, mode := range []string{"absolute", "relative"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			store, _, err := Init(ctx, t.TempDir(), InitOptions{Name: "history", Project: "history", Group: "baseline"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			old := now.Add(-60 * 24 * time.Hour).Format(time.RFC3339Nano)
+			for _, id := range []string{"active", "inactive"} {
+				var metrics []MetricFileRecord
+				if id == "active" {
+					metrics = []MetricFileRecord{{FileID: "recent", RunID: id, Project: "history", RunGroupID: "baseline",
+						Path: "metrics/recent.parquet", Format: "parquet", SchemaVersion: MetricSchemaVersion,
+						CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)}}
+				}
+				_, err := store.RecordRunData(ctx, RecordRunDataOptions{Run: RunRecord{
+					RunID: id, Project: "history", ExperimentID: id, RunGroupID: "baseline", State: "running", CreatedAt: old,
+				}, MetricFiles: metrics})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			updated := now.Format(time.RFC3339Nano)
+			opts := ExperimentSearchOptions{Start: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), End: now.Add(-30 * time.Minute).Format(time.RFC3339Nano), Limit: 1}
+			if mode == "relative" {
+				updated = old
+				opts = ExperimentSearchOptions{Since: "24h", Limit: 1}
+			}
+			if _, err := store.db.ExecContext(ctx, "UPDATE experiments SET updated_at = ?", updated); err != nil {
+				t.Fatal(err)
+			}
+			result, err := store.SearchExperiments(ctx, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Experiments) != 1 || result.Experiments[0].ExperimentID != "active" {
+				t.Fatalf("experiments=%+v, want only active", result.Experiments)
+			}
+		})
+	}
+}
+
+func TestExperimentDiscoveryTimestampInstants(t *testing.T) {
+	for _, evidence := range []string{"created_at", "started_at", "completed_at", "updated_at", "time"} {
+		for _, sample := range []struct {
+			name  string
+			stamp string
+			want  int
+		}{
+			{"before", "2026-09-17T10:00:00.099Z", 0},
+			{"start", "2026-09-17T10:00:00.100Z", 1},
+			{"offset", "2026-09-17T12:00:00.500+02:00", 1},
+			{"end", "2026-09-17T10:00:00.900Z", 1},
+			{"after", "2026-09-17T10:00:00.901Z", 0},
+		} {
+			t.Run(evidence+"/"+sample.name, func(t *testing.T) {
+				ctx := context.Background()
+				store, _, err := Init(ctx, t.TempDir(), InitOptions{Name: "history", Project: "history", Group: "baseline"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				_, err = store.EnrichRunData(ctx, EnrichRunDataOptions{Run: RunRecord{
+					RunID: "run", Project: "history", ExperimentID: "history", RunGroupID: "baseline",
+					State: "succeeded", CreatedAt: "2026-09-01T00:00:00Z",
+				}, Events: []EventRecord{{
+					EventID: "event", RunID: "run", Time: "2026-09-01T00:00:00Z",
+					Type: "lifecycle", Source: "test", Severity: "info", Message: "observed",
+				}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.db.ExecContext(ctx, "UPDATE experiments SET updated_at = '2026-09-01T00:00:00Z'"); err != nil {
+					t.Fatal(err)
+				}
+				table := "runs"
+				if evidence == "updated_at" {
+					table = "experiments"
+				} else if evidence == "time" {
+					table = "events"
+				}
+				if _, err := store.db.ExecContext(ctx, "UPDATE "+table+" SET "+evidence+" = ?", sample.stamp); err != nil {
+					t.Fatal(err)
+				}
+				result, err := store.SearchExperiments(ctx, ExperimentSearchOptions{
+					Start: "2026-09-17T10:00:00.1Z", End: "2026-09-17T10:00:00.9Z", Limit: 1,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(result.Experiments) != sample.want {
+					t.Fatalf("experiments=%d, want %d for %s", len(result.Experiments), sample.want, sample.stamp)
+				}
+			})
+		}
+	}
+}
 
 func TestInitCreatesStoreAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
@@ -453,6 +555,50 @@ func TestSearchRunsClassifiesLifecycleAndMetricFilters(t *testing.T) {
 	}
 	if len(result.Runs) != 2 {
 		t.Fatalf("metric-name search should find both runs with collapse metric: %+v", result.Runs)
+	}
+}
+
+func TestSearchRunsIncludesMetricEvidenceBeforeLimit(t *testing.T) {
+	ctx := context.Background()
+	store, _, err := Init(ctx, filepath.Join(t.TempDir(), "store"), InitOptions{
+		Name: "metric-range", Project: "tau", Group: "baseline",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, fixture := range []struct {
+		runID     string
+		createdAt string
+		metricAt  string
+	}{
+		{"active", "2026-06-01T00:00:00Z", "2026-06-10T10:30:00Z"},
+		{"before", "2026-06-02T00:00:00Z", "2026-06-10T09:59:59Z"},
+		{"after", "2026-06-20T00:00:00Z", "2026-06-20T10:30:00Z"},
+	} {
+		run := RunRecord{RunID: fixture.runID, Project: "tau", RunGroupID: "baseline",
+			State: "running", CreatedAt: fixture.createdAt, StartedAt: fixture.createdAt}
+		metricFile := MetricFileRecord{FileID: "metrics-" + run.RunID, RunID: run.RunID,
+			Project: run.Project, RunGroupID: run.RunGroupID, Path: "metrics/" + run.RunID + ".parquet",
+			Format: "parquet", SchemaVersion: MetricSchemaVersion, RowCount: 1, CreatedAt: fixture.metricAt}
+		if _, err := store.RecordRunData(ctx, RecordRunDataOptions{
+			Run: run, MetricFiles: []MetricFileRecord{metricFile},
+			MetricSummaries: SummarizeMetricRows(metricFile, []MetricRow{{RunID: run.RunID, MetricName: "loss", Value: 1}}),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, lifecycle := range []string{"", "running"} {
+		result, err := store.SearchRuns(ctx, RunSearchOptions{
+			Project: "tau", Start: "2026-06-10T10:00:00Z", End: "2026-06-10T11:00:00Z",
+			Limit: 1, Lifecycle: lifecycle,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Runs) != 1 || result.Runs[0].RunID != "active" || result.Truncated {
+			t.Fatalf("lifecycle %q: expected only metric-active run before limit, got %+v", lifecycle, result)
+		}
 	}
 }
 

@@ -490,7 +490,19 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 		opts.Since = s.effectiveDiscoverySince()
 	}
 	if s.hasRemoteQuery() {
-		if err := s.validateDiscoverySince(opts.Since, opts.Project); err != nil {
+		discoverySince := opts.Since
+		if opts.Start != "" && opts.End != "" {
+			start, err := time.Parse(time.RFC3339Nano, opts.Start)
+			if err != nil {
+				return expstore.ExperimentSearchResult{}, fmt.Errorf("start must be RFC3339: %w", err)
+			}
+			end, err := time.Parse(time.RFC3339Nano, opts.End)
+			if err != nil {
+				return expstore.ExperimentSearchResult{}, fmt.Errorf("end must be RFC3339: %w", err)
+			}
+			discoverySince = end.Sub(start).String()
+		}
+		if err := s.validateDiscoverySince(discoverySince, opts.Project); err != nil {
 			return expstore.ExperimentSearchResult{}, err
 		}
 	}
@@ -541,6 +553,8 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 
 func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
 	opts = normalizeKustoRunSearchOptions(opts)
+	now := s.effectiveNow()
+	s.Now = func() time.Time { return now }
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
 	if err != nil {
@@ -563,6 +577,7 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 		return expstore.RunSearchResult{}, err
 	}
 	rows = filterKustoRowsByProjects(rows, rawProjects)
+	latestRows := rows
 	if opts.Since != "" || opts.Start != "" || opts.End != "" {
 		var sinceWarnings []string
 		rows, sinceWarnings, err = filterKustoRowsSince(rows, opts.Since, opts.Start, opts.End)
@@ -586,6 +601,9 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 	if truncated {
 		runs = runs[:opts.Limit]
 	}
+	if err := s.enrichRunSearchLifecycle(ctx, runs, rows, latestRows); err != nil {
+		return expstore.RunSearchResult{}, err
+	}
 	return expstore.RunSearchResult{
 		SchemaVersion: expstore.RunSearchSchemaVersion,
 		GeneratedAt:   s.effectiveNow().UTC().Format(time.RFC3339),
@@ -596,6 +614,107 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 		Runs:          runs,
 		Warnings:      warnings,
 	}, nil
+}
+
+func kustoEvidenceIdentity(row KustoMetricRow) expkusto.RunEvidenceIdentity {
+	workspace := strings.TrimSpace(row.WorkspaceID)
+	if workspace == "" {
+		workspace = strings.TrimSpace(kustoRowTags(row)[exptelemetry.TauWorkspaceTag])
+	}
+	return expkusto.RunEvidenceIdentity{WorkspaceID: workspace, Project: row.Project, RunGroupID: row.RunGroupID, RunID: row.RunID}
+}
+
+func (s KustoSource) enrichRunSearchLifecycle(ctx context.Context, runs []expstore.RunSearchRun, membership, available []KustoMetricRow) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	identitiesByRun := make(map[string]map[expkusto.RunEvidenceIdentity]bool)
+	for _, row := range membership {
+		if identitiesByRun[row.RunID] == nil {
+			identitiesByRun[row.RunID] = make(map[expkusto.RunEvidenceIdentity]bool)
+		}
+		identitiesByRun[row.RunID][kustoEvidenceIdentity(row)] = true
+	}
+	identities := make([]expkusto.RunEvidenceIdentity, 0, len(runs))
+	selected := make(map[expkusto.RunEvidenceIdentity]bool, len(runs))
+	for _, run := range runs {
+		candidates := identitiesByRun[run.RunID]
+		if len(candidates) != 1 {
+			return fmt.Errorf("ambiguous lifecycle identity for run %q", run.RunID)
+		}
+		for identity := range candidates {
+			identities = append(identities, identity)
+			selected[identity] = true
+		}
+	}
+	if s.hasRemoteQuery() && len(s.Metrics) == 0 {
+		available = nil
+		for offset := 0; offset < len(identities); offset += 200 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			batch := identities[offset:min(offset+200, len(identities))]
+			query, err := expkusto.BuildRunSearchLifecycleEvidenceQuery(batch, s.Ingestion)
+			if err != nil {
+				return err
+			}
+			rows, err := s.executeKustoQueryCommand(ctx, query)
+			if err != nil {
+				return fmt.Errorf("latest run lifecycle evidence: %w", err)
+			}
+			if len(rows) > 2*len(batch) {
+				return fmt.Errorf("latest run lifecycle evidence exceeds batch bound")
+			}
+			allowed := make(map[expkusto.RunEvidenceIdentity]bool, len(batch))
+			for _, identity := range batch {
+				allowed[identity] = true
+			}
+			for _, row := range rows {
+				if !allowed[kustoEvidenceIdentity(row)] {
+					return fmt.Errorf("latest run lifecycle evidence contains an unexpected identity")
+				}
+			}
+			available = append(available, rows...)
+		}
+	}
+	evidence := make(map[expkusto.RunEvidenceIdentity][2]KustoMetricRow, len(runs))
+	for _, row := range available {
+		identity := kustoEvidenceIdentity(row)
+		if !selected[identity] {
+			continue
+		}
+		at := parseLifecycleTime(row.WallTime)
+		if at.IsZero() || row.MetricName == "" {
+			return fmt.Errorf("invalid latest run lifecycle evidence")
+		}
+		kind := 0
+		if isKustoRunStatusMetric(row) {
+			kind = 1
+		}
+		latest := evidence[identity]
+		if latest[kind].RunID == "" || at.After(parseLifecycleTime(latest[kind].WallTime)) {
+			latest[kind] = row
+		}
+		evidence[identity] = latest
+	}
+	now := s.effectiveNow()
+	for index, identity := range identities {
+		var rows []KustoMetricRow
+		for _, row := range evidence[identity] {
+			if row.RunID != "" {
+				rows = append(rows, row)
+			}
+		}
+		truth := classifyKustoRun(rows, now, s.effectiveStaleAfter()).Truth
+		if truth.OutcomeState == "" && truth.LivenessState == "" {
+			truth.LivenessState = "unknown"
+		}
+		runs[index].OutcomeState = truth.OutcomeState
+		runs[index].LivenessState = truth.LivenessState
+		runs[index].LifecycleReason = truth.Reason
+		runs[index].LifecycleSource = truth.Source
+	}
+	return ctx.Err()
 }
 
 func LoadKustoMetricRows(path string) ([]KustoMetricRow, error) {
@@ -731,6 +850,8 @@ func parseKustoTables(raw json.RawMessage) ([]KustoMetricRow, error) {
 
 func parseKustoFrameArray(raw []byte) ([]KustoMetricRow, bool, error) {
 	var frames []struct {
+		HasErrors bool              `json:"HasErrors"`
+		Cancelled bool              `json:"Cancelled"`
 		FrameType string            `json:"FrameType"`
 		TableKind string            `json:"TableKind"`
 		TableName string            `json:"TableName"`
@@ -743,6 +864,11 @@ func parseKustoFrameArray(raw []byte) ([]KustoMetricRow, bool, error) {
 	}
 	if len(frames) == 0 || frames[0].FrameType == "" {
 		return nil, false, nil
+	}
+	for _, frame := range frames {
+		if frame.HasErrors || frame.Cancelled {
+			return nil, true, fmt.Errorf("Kusto response contains incomplete or failed query results")
+		}
 	}
 	for _, frame := range frames {
 		if frame.FrameType != "DataTable" {

@@ -173,6 +173,33 @@ func TestBuildCostKQLCustomBounds(t *testing.T) {
 			t.Fatalf("%s custom bounds must not use a relative window:\n%s", name, kql)
 		}
 	}
+	allocation, _, _ := strings.Cut(buildWorkspaceKQLRange(end.Sub(start), start, end, "", "", ""), "let WorkspaceUtil")
+	if !strings.Contains(allocation, "Timestamp < datetime(2026-09-17T09:00:00Z)") || strings.Contains(allocation, "Timestamp <=") {
+		t.Fatalf("allocation must exclude the bucket starting at the end: %s", allocation)
+	}
+}
+
+func TestBoardRejectsPartialHourAllocationRanges(t *testing.T) {
+	start := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	for _, bounds := range []struct {
+		name       string
+		start, end time.Time
+	}{
+		{"partial start", start.Add(time.Minute), start.Add(time.Hour)},
+		{"partial end", start, start.Add(90 * time.Minute)},
+		{"subsecond end", start, start.Add(time.Hour + time.Nanosecond)},
+	} {
+		t.Run(bounds.name, func(t *testing.T) {
+			querier := &scriptedQuerier{}
+			_, err := Board(context.Background(), querier, Options{Start: bounds.start, End: bounds.end})
+			if err == nil || !strings.Contains(err.Error(), "whole UTC hours") {
+				t.Fatalf("expected explicit hourly range error, got %v", err)
+			}
+			if querier.calls != 0 {
+				t.Fatalf("invalid range queried allocation data %d times", querier.calls)
+			}
+		})
+	}
 }
 
 func TestBuildWorkspaceKQLNoFilter(t *testing.T) {

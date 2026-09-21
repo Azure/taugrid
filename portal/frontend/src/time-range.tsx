@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 type Timezone = 'local' | 'utc';
+type BoundDraft = { kind: 'instant'; value: string } | { kind: 'invalid'; text: string };
+const hourNanoseconds = 3_600_000_000_000n;
 
 const presets = [
   ['15m', 'Last 15 minutes'],
@@ -14,18 +16,28 @@ const presets = [
 ] as const;
 
 function inputValue(date: Date, timezone: Timezone) {
-  if (timezone === 'utc') return date.toISOString().slice(0, 16);
+  if (timezone === 'utc') return date.toISOString().slice(0, 23);
   const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+  return new Date(date.getTime() - offset).toISOString().slice(0, 23);
 }
 
-function parseInput(value: string, timezone: Timezone) {
-  return new Date(value + (timezone === 'utc' ? 'Z' : ''));
+function editDraft(value: string, timezone: Timezone): BoundDraft {
+  const parsed = new Date(value + (timezone === 'utc' ? 'Z' : ''));
+  const wallClock = new Date(value + 'Z');
+  if (!Number.isFinite(parsed.getTime()) || !Number.isFinite(wallClock.getTime())
+    || inputValue(parsed, timezone) !== wallClock.toISOString().slice(0, 23)) {
+    return { kind: 'invalid', text: value };
+  }
+  return { kind: 'instant', value: parsed.toISOString() };
 }
 
-function initialInput(value: string, fallback: Date, timezone: Timezone) {
-  const date = new Date(value);
-  return inputValue(Number.isFinite(date.getTime()) ? date : fallback, timezone);
+function initialDraft(value: string, fallback: Date): BoundDraft {
+  if (!value) return { kind: 'instant', value: fallback.toISOString() };
+  return validTimestamp(value) ? { kind: 'instant', value } : { kind: 'invalid', text: value };
+}
+
+function draftInput(draft: BoundDraft, timezone: Timezone) {
+  return draft.kind === 'instant' ? inputValue(new Date(draft.value), timezone) : draft.text;
 }
 
 function timestampLabel(value: string, timezone: Timezone) {
@@ -59,6 +71,28 @@ function validTimestamp(value: string) {
   const calendarDate = value.slice(0, 10);
   const parsed = new Date(calendarDate + 'T00:00:00Z');
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === calendarDate;
+}
+
+function timestampNanoseconds(value: string): bigint | null {
+  if (!validTimestamp(value)) return null;
+  const fraction = /\.(\d+)/.exec(value)?.[1] || '';
+  const wholeSeconds = Date.parse(value.replace(/\.\d+/, ''));
+  return BigInt(wholeSeconds) * 1_000_000n + BigInt(fraction.slice(0, 9).padEnd(9, '0'));
+}
+
+function customRangeError(start: string, end: string) {
+  const startInstant = timestampNanoseconds(start);
+  const endInstant = timestampNanoseconds(end);
+  if (startInstant === null || endInstant === null) return 'Enter valid RFC3339 start and end timestamps.';
+  const elapsed = endInstant - startInstant;
+  if (elapsed <= 0n) return 'End must be after start.';
+  if (elapsed > 30n * 24n * hourNanoseconds) return 'The selected range cannot exceed 30 days.';
+  return '';
+}
+
+function isUTCHour(value: string) {
+  const instant = timestampNanoseconds(value);
+  return instant !== null && instant % hourNanoseconds === 0n;
 }
 
 export function useHistoricalRange(defaultWindow: string) {
@@ -96,14 +130,7 @@ export function useHistoricalRange(defaultWindow: string) {
   } else if (hasCustom && (!start || !end)) {
     invalid = 'Custom historical ranges require both start and end timestamps.';
   } else if (hasCustom) {
-    const elapsed = Date.parse(end) - Date.parse(start);
-    if (!validTimestamp(start) || !validTimestamp(end)) {
-      invalid = 'Enter valid RFC3339 start and end timestamps.';
-    } else if (elapsed <= 0) {
-      invalid = 'End must be after start.';
-    } else if (elapsed > 30 * 24 * 60 * 60 * 1000) {
-      invalid = 'The selected range cannot exceed 30 days.';
-    }
+    invalid = customRangeError(start, end);
   }
   const startLabel = timestampLabel(start, timezone);
   const endLabel = timestampLabel(end, timezone);
@@ -119,24 +146,27 @@ export function withHistoricalRange(url: string, api: string) {
   return url + (url.includes('?') ? '&' : '?') + api;
 }
 
-export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) {
+export function TimeRangeControls({ defaultWindow, customRangePolicy = 'any' }: { defaultWindow: string; customRangePolicy?: 'any' | 'utc-hour' }) {
   const location = useLocation();
   const navigate = useNavigate();
   const active = useHistoricalRange(defaultWindow);
   const selectableWindow = !active.invalid && !active.custom ? active.window : defaultWindow;
   const [mode, setMode] = useState(active.custom && !active.invalid ? 'custom' : selectableWindow);
   const [timezone, setTimezone] = useState<Timezone>(active.timezone);
-  const [start, setStart] = useState(() => initialInput(active.start, new Date(Date.now() - 60 * 60 * 1000), active.timezone));
-  const [end, setEnd] = useState(() => initialInput(active.end, new Date(), active.timezone));
+  const [start, setStart] = useState(() => initialDraft(active.start, new Date(Date.now() - 60 * 60 * 1000)));
+  const [end, setEnd] = useState(() => initialDraft(active.end, new Date()));
   const [error, setError] = useState('');
 
   useEffect(() => {
     setMode(active.custom && !active.invalid ? 'custom' : selectableWindow);
-    setTimezone(active.timezone);
-    if (active.start && Number.isFinite(new Date(active.start).getTime())) setStart(inputValue(new Date(active.start), active.timezone));
-    if (active.end && Number.isFinite(new Date(active.end).getTime())) setEnd(inputValue(new Date(active.end), active.timezone));
     setError('');
-  }, [active.custom, active.end, active.invalid, active.start, active.timezone, active.window, selectableWindow]);
+  }, [active.custom, active.invalid, selectableWindow]);
+  useEffect(() => { setTimezone(active.timezone); }, [active.timezone]);
+  useEffect(() => {
+    if (active.start) setStart(initialDraft(active.start, new Date()));
+    if (active.end) setEnd(initialDraft(active.end, new Date()));
+    setError('');
+  }, [active.start, active.end]);
 
   const apply = () => {
     const next = new URLSearchParams(location.search);
@@ -145,22 +175,21 @@ export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) 
     next.delete('end');
     next.delete('tz');
     if (mode === 'custom') {
-      const parsedStart = parseInput(start, timezone);
-      const parsedEnd = parseInput(end, timezone);
-      if (!Number.isFinite(parsedStart.getTime()) || !Number.isFinite(parsedEnd.getTime())) {
+      if (start.kind !== 'instant' || end.kind !== 'instant') {
         setError('Enter valid start and end timestamps.');
         return;
       }
-      if (parsedEnd <= parsedStart) {
-        setError('End must be after start.');
+      const invalid = customRangeError(start.value, end.value);
+      if (invalid) {
+        setError(invalid);
         return;
       }
-      if (parsedEnd.getTime() - parsedStart.getTime() > 30 * 24 * 60 * 60 * 1000) {
-        setError('The selected range cannot exceed 30 days.');
+      if (customRangePolicy === 'utc-hour' && (!isUTCHour(start.value) || !isUTCHour(end.value))) {
+        setError('Cost ranges must start and end on whole UTC hours.');
         return;
       }
-      next.set('start', parsedStart.toISOString());
-      next.set('end', parsedEnd.toISOString());
+      next.set('start', start.value);
+      next.set('end', end.value);
       next.set('tz', timezone);
     } else {
       next.set('window', mode);
@@ -171,15 +200,24 @@ export function TimeRangeControls({ defaultWindow }: { defaultWindow: string }) 
 
   return <section className="time-range" aria-label="Historical time range">
     <div className="time-range-fields">
-      <label>Range<select value={mode} onChange={event => setMode(event.target.value)}>
+      <label>Range<select value={mode} onChange={event => {
+        const nextMode = event.target.value;
+        if (nextMode === 'custom' && !active.custom && customRangePolicy === 'utc-hour') {
+          const hourMilliseconds = 60 * 60 * 1000;
+          const end = Math.floor(Date.now() / hourMilliseconds) * hourMilliseconds;
+          setStart(initialDraft('', new Date(end - hourMilliseconds)));
+          setEnd(initialDraft('', new Date(end)));
+        }
+        setMode(nextMode);
+      }}>
         {presets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         {!presets.some(([value]) => value === selectableWindow) && <option value={selectableWindow}>{selectableWindow}</option>}
         <option value="custom">Custom range</option>
       </select></label>
       {mode === 'custom' && <>
-        <label>Start<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)}/></label>
-        <label>End<input type="datetime-local" value={end} onChange={event => setEnd(event.target.value)}/></label>
-        <label>Timezone<select value={timezone} onChange={event => setTimezone(event.target.value as Timezone)}>
+        <label>Start<input type="datetime-local" step="0.001" title={start.kind === 'instant' ? start.value : undefined} value={draftInput(start, timezone)} onChange={event => setStart(editDraft(event.target.value, timezone))}/></label>
+        <label>End<input type="datetime-local" step="0.001" title={end.kind === 'instant' ? end.value : undefined} value={draftInput(end, timezone)} onChange={event => setEnd(editDraft(event.target.value, timezone))}/></label>
+        <label>Timezone<select value={timezone} onChange={event => setTimezone(event.target.value === 'utc' ? 'utc' : 'local')}>
           <option value="local">Browser local</option>
           <option value="utc">UTC</option>
         </select></label>
