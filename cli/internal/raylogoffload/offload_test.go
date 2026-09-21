@@ -427,22 +427,56 @@ func TestWrapShellScriptWritesCompletionAndPreservesExitCode(t *testing.T) {
 
 func TestWrapShellScriptForwardsTermToWorkload(t *testing.T) {
 	t.Parallel()
+	for _, duringStartup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("duringStartup=%t", duringStartup), func(t *testing.T) {
+			testWrapShellScriptForwardsTermToWorkload(t, duringStartup)
+		})
+	}
+}
+
+func testWrapShellScriptForwardsTermToWorkload(t *testing.T, duringStartup bool) {
+	t.Helper()
 	root := t.TempDir()
 	completionPath := filepath.Join(root, "tau-driver-complete")
 	readyPath := filepath.Join(root, "workload-ready")
+	childPIDPath := filepath.Join(root, "workload.pid")
+	startupPath := filepath.Join(root, "wrapper-startup")
+	releasePath := filepath.Join(root, "wrapper-release")
 	command := fmt.Sprintf(
-		"trap 'exit 42' TERM INT\nprintf 'ready\\n' > %s\nwhile true; do sleep 1; done",
+		"trap 'exit 42' TERM INT\nprintf '%%s' \"$BASHPID\" > %s\nprintf 'ready\\n' > %s\nwhile true; do sleep 1; done",
+		shellTestQuote(childPIDPath),
 		shellTestQuote(readyPath),
 	)
-	cmd := exec.Command("bash", "-c", WrapShellScript(command))
+	script := WrapShellScript(command)
+	if duringStartup {
+		const captureChild = `tau_driver_child="$!"`
+		if strings.Count(script, captureChild) != 1 {
+			t.Fatal("expected one child PID capture point")
+		}
+		barrier := fmt.Sprintf("printf 'startup\\n' > %s\nwhile [[ ! -f %s ]]; do :; done\n", shellTestQuote(startupPath), shellTestQuote(releasePath))
+		script = strings.Replace(script, captureChild, barrier+captureChild, 1)
+		const signalTrap = "trap tau_driver_forward_signal TERM INT"
+		if strings.Count(script, signalTrap) != 1 {
+			t.Fatal("expected one signal trap registration point")
+		}
+		handler := "tau_driver_forward_signal; : > " + shellTestQuote(releasePath)
+		script = strings.Replace(script, signalTrap, "trap "+shellTestQuote(handler)+" TERM INT", 1)
+	}
+	cmd := exec.Command("bash", "-c", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), "TAU_RAY_LOG_COMPLETION_FILE="+completionPath)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start wrapped command: %v", err)
 	}
 	t.Cleanup(func() {
-		if cmd.Process != nil {
+		if raw, err := os.ReadFile(childPIDPath); err == nil {
+			if childPID, err := strconv.Atoi(string(raw)); err == nil && childPID > 0 {
+				_ = syscall.Kill(-childPID, syscall.SIGKILL)
+			}
+		}
+		if cmd.ProcessState == nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Wait()
 		}
 	})
 
@@ -453,7 +487,12 @@ func TestWrapShellScriptForwardsTermToWorkload(t *testing.T) {
 			if string(ready) != "ready\n" {
 				t.Fatalf("workload readiness marker = %q, want %q", ready, "ready\n")
 			}
-			break
+			if !duringStartup {
+				break
+			}
+			if _, err = os.Stat(startupPath); err == nil {
+				break
+			}
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("read workload readiness marker: %v", err)
