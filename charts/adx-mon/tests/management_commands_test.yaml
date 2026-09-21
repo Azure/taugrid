@@ -21,6 +21,10 @@ tests:
           path: spec.body
           pattern: "Cluster: string"
         documentIndex: 0
+      - matchRegex:
+          path: spec.body
+          pattern: "max_mem_used: real,\\s+Cluster: string"
+        documentIndex: 0
       - equal:
           path: spec.database
           value: "CostTracking"
@@ -40,6 +44,10 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "schema_version: long"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.body
+          pattern: "Cluster: string,\\s+workspace: string,\\s+peak_gpu_count: real,\\s+schema_version: long"
         documentIndex: 1
 
   - it: "does not create summary table schemas when disabled"

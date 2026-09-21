@@ -49,6 +49,9 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "where Cluster == local_cluster"
+      - matchRegex:
+          path: spec.body
+          pattern: "avg_mem_used, max_mem_used, Cluster"
 
   - it: does not render gpu-utilization-hourly when disabled
     template: summary-rules/gpu-utilization-hourly.yaml
@@ -135,6 +138,9 @@ tests:
       - matchRegex:
           path: spec.body
           pattern: "hourly_cost, Cluster, workspace, peak_gpu_count"
+      - matchRegex:
+          path: spec.body
+          pattern: "peak_gpu_count,\\s+schema_version"
       - matchRegex:
           path: spec.body
           pattern: "KubeNamespaceLabels"
