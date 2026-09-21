@@ -6,6 +6,8 @@ package expkusto
 import (
 	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/core/exptelemetry"
 )
 
 func TestBuildMetricsQueryScopesAndDownsamples(t *testing.T) {
@@ -42,6 +44,41 @@ func TestBuildMetricsQueryScopesAndDownsamples(t *testing.T) {
 		if !strings.Contains(query, want) {
 			t.Fatalf("query missing %q:\n%s", want, query)
 		}
+	}
+}
+
+func TestBuildTypedMetricsQueryUsesStableFunctionAndBoundedScope(t *testing.T) {
+	start, end := int64(10), int64(100)
+	query, err := BuildTypedMetricsQuery(MetricsQueryOptions{
+		WorkspaceID:  "workspace-a",
+		Projects:     []string{"project-a"},
+		Target:       "run-a",
+		TargetType:   "run",
+		MetricNames:  []string{"train/loss"},
+		StartStep:    &start,
+		EndStep:      &end,
+		TargetPoints: 256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		exptelemetry.MetricEventRowsFunction + "()",
+		"workspace_id == 'workspace-a'",
+		"['project'] == 'project-a'",
+		"run_id == 'run-a'",
+		"metric_name in ('train/loss')",
+		"step >= 10",
+		"step <= 100",
+		"let target_points = 256",
+		"summarize arg_max(exported_at, *)",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("typed query missing %q:\n%s", want, query)
+		}
+	}
+	if strings.Contains(query, exptelemetry.RemoteWriteTable) || strings.Contains(query, "ExperimentMetrics") {
+		t.Fatalf("typed query referenced a legacy metrics source:\n%s", query)
 	}
 }
 
@@ -263,12 +300,26 @@ func TestBuildExperimentSearchQuerySupportsRemoteWrite(t *testing.T) {
 		"Labels['project']",
 		"experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), '')",
 		"| where project_id == 'sample-project'",
+		"| where isnotempty(project_id) and isnotempty(experiment_id) and isnotempty(run_id) and isnotempty(metric_name)",
 		"| top 201 by latest_wall_time desc",
-		"arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name",
+		"summarize hint.strategy=shuffle arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name",
 		"| project ['project']=project_id, experiment_id, run_group_id, run_id, metric_name",
 	} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("remote-write experiment search query missing %q:\n%s", want, query)
+		}
+	}
+	rollup := strings.Index(query, "| summarize hint.strategy=shuffle arg_max(wall_time, *)")
+	top := strings.Index(query, "| top 201 by latest_wall_time desc")
+	if rollup < 0 || top < 0 || rollup > top {
+		t.Fatalf("remote-write experiment search must reduce the source to latest run metrics before selecting experiments:\n%s", query)
+	}
+	if strings.Count(query, "ExperimentMetrics\n") != 1 {
+		t.Fatalf("remote-write experiment search must scan ExperimentMetrics once:\n%s", query)
+	}
+	for _, unwanted := range []string{"let scoped = materialize(", "arg_max(exported_at, *) by source_store_id"} {
+		if strings.Contains(query, unwanted) {
+			t.Fatalf("remote-write experiment search must not use high-cardinality deduplication %q:\n%s", unwanted, query)
 		}
 	}
 }
@@ -553,21 +604,15 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		defaultRemoteWriteDashboardFunction,
 		defaultRemoteWriteMetricName,
 		DefaultRemoteWriteTable,
 		"Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real",
 		"Cluster: string",
-		"source_store_id=tostring(Labels.source_store_id)",
-		"metric_file_id=tostring(Labels.metric_file_id)",
-		"experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), '')",
-		"['project'], experiment_id, run_group_id, run_id, metric_name",
 	} {
 		if !strings.Contains(remoteWrite, want) {
 			t.Fatalf("remote-write schema KQL missing %q:\n%s", want, remoteWrite)
 		}
 	}
-
 	lifecycle, err := BuildRunLifecycleSchemaKQL(SchemaOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -601,6 +646,7 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 		"result_pvc: string",
 		"experiment_tracking: string",
 		"experiment_source: string",
+		"['project'], experiment_id, run_group_id",
 		"by cluster, namespace, durable_identity, is_terminal",
 		"arg_max(terminal_rank, *) by cluster, namespace, durable_identity",
 	} {
@@ -622,6 +668,7 @@ func TestRunLifecycleIngestionMappingKQLIsSchemaOwnedAndIdempotent(t *testing.T)
 		`"column":"experiment_id","datatype":"string","path":"$.experiment_id"`,
 		`"column":"tags","datatype":"dynamic","path":"$.tags"`,
 		`"column":"generation","datatype":"long","path":"$.generation"`,
+		`"column":"experiment_id","datatype":"string","path":"$.experiment_id"`,
 	} {
 		if !strings.Contains(mapping, want) {
 			t.Fatalf("lifecycle ingestion mapping missing %q:\n%s", want, mapping)
@@ -643,8 +690,8 @@ func TestKQLStringLiteralEscapesSingleQuotes(t *testing.T) {
 }
 
 func TestTelemetryNameConstantsPreserveKustoContracts(t *testing.T) {
-	if DefaultDatabase != "Metrics" || DefaultRemoteWriteTable != "ExperimentMetrics" || defaultRemoteWriteDashboardFunction != "ExperimentMetricsDashboardRows" {
-		t.Fatalf("hosted fleet contract = %s.%s -> %s(), want Metrics.ExperimentMetrics -> ExperimentMetricsDashboardRows()", DefaultDatabase, DefaultRemoteWriteTable, defaultRemoteWriteDashboardFunction)
+	if DefaultDatabase != "Metrics" || DefaultRemoteWriteTable != "ExperimentMetrics" {
+		t.Fatalf("hosted fleet contract = %s.%s, want Metrics.ExperimentMetrics", DefaultDatabase, DefaultRemoteWriteTable)
 	}
 	if defaultRemoteWriteMetricName != "experiment_metrics" {
 		t.Fatalf("remote-write metric name = %q, want experiment_metrics", defaultRemoteWriteMetricName)
@@ -657,7 +704,7 @@ func TestTelemetryNameConstantsPreserveKustoContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{defaultRemoteWriteMetricName, DefaultRemoteWriteTable, defaultRemoteWriteDashboardFunction + "()"} {
+	for _, want := range []string{defaultRemoteWriteMetricName, DefaultRemoteWriteTable} {
 		if !strings.Contains(remoteWrite, want) {
 			t.Fatalf("remote-write schema missing %q:\n%s", want, remoteWrite)
 		}

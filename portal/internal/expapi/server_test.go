@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,6 +24,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/Azure/taugrid/core/expkusto"
+	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/portal/internal/blobstore"
 	"github.com/Azure/taugrid/portal/internal/expcockpit"
@@ -80,6 +83,558 @@ func TestRunSearchEndpointUsesIndexedMetricSummaries(t *testing.T) {
 	}
 	if len(result.Runs[0].MetricNames) == 0 {
 		t.Fatalf("run search should include metric names after summary backfill: %+v", result.Runs[0])
+	}
+}
+
+func TestV2ExperimentSearchReturnsNarrowContract(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedMetricRichExpAPIStore(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search?q=experiment-alpha&limit=10", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2ExperimentSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Experiments) != 1 || response.Experiments[0].ExperimentID != "experiment-alpha" {
+		t.Fatalf("unexpected experiments: %+v", response.Experiments)
+	}
+	if response.Metadata.Provenance.RequestedSource != "local" ||
+		response.Metadata.Freshness.State != "immediate" ||
+		response.Metadata.Availability.State != "available" {
+		t.Fatalf("unexpected metadata: %+v", response.Metadata)
+	}
+	for _, presentationField := range []string{`"store_path"`, `"cards"`, `"chart"`, `"sweep"`, `"actions"`} {
+		if strings.Contains(rec.Body.String(), presentationField) {
+			t.Fatalf("v2 narrow response exposed %s: %s", presentationField, rec.Body.String())
+		}
+	}
+}
+
+func TestV2ExperimentSearchRejectsAutoSource(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedMetricRichExpAPIStore(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?source=auto",
+		nil,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "INVALID_SOURCE" ||
+		!strings.Contains(response.Error.Message, "source=local or source=kusto") {
+		t.Fatalf("unexpected error: %+v", response.Error)
+	}
+}
+
+func TestDashboardShapedAndAliasRoutesAdvertiseDeprecation(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/api/stellar/runs?target=experiment-alpha",
+		"/api/v1/stellar/experiments",
+		"/api/v2/stellar/snapshot?target=experiment-alpha&mode=summary",
+	} {
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Header().Get("Deprecation") != "true" ||
+			!strings.Contains(rec.Header().Get("Link"), "/api/v2/stellar/capabilities") {
+			t.Fatalf("%s did not advertise deprecation: headers=%v", path, rec.Header())
+		}
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search", nil))
+	if rec.Header().Get("Deprecation") != "" {
+		t.Fatalf("canonical narrow read was marked deprecated: headers=%v", rec.Header())
+	}
+}
+
+type stubV2CatalogSource struct {
+	experimentCalls int
+	experiments     []expstore.ExperimentSummary
+	experimentErr   error
+	runs            runSearchResponse
+	runErr          error
+	lastRunOpts     expstore.RunSearchOptions
+}
+
+func (s *stubV2CatalogSource) searchExperiments(_ context.Context, source string, opts expstore.ExperimentSearchOptions) (v2ExperimentCatalogResult, error) {
+	s.experimentCalls++
+	if s.experimentErr != nil {
+		return v2ExperimentCatalogResult{}, s.experimentErr
+	}
+	if s.experiments != nil {
+		return v2ExperimentCatalogResult{
+			Result: expstore.ExperimentSearchResult{Experiments: s.experiments}, ServedSources: []string{source},
+		}, nil
+	}
+	return v2ExperimentCatalogResult{
+		Result: expstore.ExperimentSearchResult{
+			Experiments: []expstore.ExperimentSummary{{
+				ExperimentRecord: expstore.ExperimentRecord{
+					ExperimentID: "adapter-experiment",
+					Project:      opts.Project,
+					Name:         "Adapter experiment",
+					Source:       source,
+				},
+			}},
+		},
+		ServedSources: []string{source},
+	}, nil
+}
+
+func (s *stubV2CatalogSource) searchRuns(_ context.Context, _ string, opts expstore.RunSearchOptions) (runSearchResponse, error) {
+	s.lastRunOpts = opts
+	if s.runErr != nil {
+		return runSearchResponse{}, s.runErr
+	}
+	if s.runs.Runs == nil {
+		return runSearchResponse{}, nil
+	}
+	filtered := s.runs
+	filtered.Runs = nil
+	for _, run := range s.runs.Runs {
+		if opts.Project != "" && run.Project != opts.Project {
+			continue
+		}
+		filtered.Runs = append(filtered.Runs, run)
+	}
+	return filtered, nil
+}
+
+func TestV2ExperimentSearchPaginatesWithValidatedOpaqueCursor(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := &stubV2CatalogSource{experiments: []expstore.ExperimentSummary{
+		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-a", UpdatedAt: "2026-09-18T12:00:00Z"}},
+		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-b", UpdatedAt: "2026-09-18T11:00:00Z"}},
+		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-c", UpdatedAt: "2026-09-18T10:00:00Z"}},
+	}}
+	server.v2Catalog = catalog
+
+	first := httptest.NewRecorder()
+	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search?limit=1", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, body=%s", first.Code, first.Body.String())
+	}
+	var firstPage v2ExperimentSearchResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Experiments) != 1 || firstPage.Experiments[0].ExperimentID != "experiment-a" ||
+		firstPage.NextCursor == "" || firstPage.Metadata.Partial {
+		t.Fatalf("unexpected first page: %+v", firstPage)
+	}
+
+	second := httptest.NewRecorder()
+	path := "/api/v2/stellar/experiments/search?limit=1&cursor=" + url.QueryEscape(firstPage.NextCursor)
+	server.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodGet, path, nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, body=%s", second.Code, second.Body.String())
+	}
+	var secondPage v2ExperimentSearchResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Experiments) != 1 || secondPage.Experiments[0].ExperimentID != "experiment-b" {
+		t.Fatalf("cursor did not advance: %+v", secondPage)
+	}
+
+	tampered := httptest.NewRecorder()
+	server.Handler().ServeHTTP(tampered, httptest.NewRequest(http.MethodGet, path+"x", nil))
+	if tampered.Code != http.StatusBadRequest {
+		t.Fatalf("tampered cursor status = %d, body=%s", tampered.Code, tampered.Body.String())
+	}
+}
+
+func TestV2ExperimentCursorKeepsSameIDAcrossProjectsReachable(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.v2Catalog = &stubV2CatalogSource{experiments: []expstore.ExperimentSummary{
+		{ExperimentRecord: expstore.ExperimentRecord{Project: "project-a", ExperimentID: "shared", UpdatedAt: "2026-09-18T12:00:00Z"}},
+		{ExperimentRecord: expstore.ExperimentRecord{Project: "project-b", ExperimentID: "shared", UpdatedAt: "2026-09-18T12:00:00Z"}},
+	}}
+
+	first := httptest.NewRecorder()
+	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search?limit=1", nil))
+	var firstPage v2ExperimentSearchResponse
+	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &firstPage) != nil || firstPage.NextCursor == "" {
+		t.Fatalf("unexpected first page: status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := httptest.NewRecorder()
+	server.Handler().ServeHTTP(second, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?limit=1&cursor="+url.QueryEscape(firstPage.NextCursor),
+		nil,
+	))
+	var secondPage v2ExperimentSearchResponse
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Experiments) != 1 ||
+		secondPage.Experiments[0].Project == firstPage.Experiments[0].Project {
+		t.Fatalf("project-scoped duplicate experiment was unreachable: first=%+v second=%+v", firstPage, secondPage)
+	}
+}
+
+func TestV2ErrorsDistinguishClientDependencyConflictAndInternalFailures(t *testing.T) {
+	tests := []struct {
+		name           string
+		path           string
+		err            error
+		wantStatus     int
+		wantCode       string
+		classification string
+	}{
+		{name: "client", path: "/api/v2/stellar/experiments/search?limit=0", wantStatus: http.StatusBadRequest, wantCode: "INVALID_ARGUMENT", classification: "client"},
+		{name: "conflict", err: expstore.ErrConflict, wantStatus: http.StatusConflict, wantCode: "CONFLICT", classification: "client"},
+		{name: "unavailable", err: errors.New("Kusto endpoint is not configured"), wantStatus: http.StatusServiceUnavailable, wantCode: "SOURCE_UNAVAILABLE", classification: "dependency"},
+		{name: "upstream", err: errors.New("Kusto query response reported errors"), wantStatus: http.StatusBadGateway, wantCode: "UPSTREAM_FAILURE", classification: "dependency"},
+		{name: "internal", err: errors.New("sqlite scan failed"), wantStatus: http.StatusInternalServerError, wantCode: "INTERNAL", classification: "internal"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.err != nil {
+				server.v2Catalog = &stubV2CatalogSource{experimentErr: test.err}
+			}
+			path := test.path
+			if path == "" {
+				path = "/api/v2/stellar/experiments/search"
+			}
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, test.wantStatus, rec.Body.String())
+			}
+			var envelope v2ErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Error.Code != test.wantCode || envelope.Error.Classification != test.classification {
+				t.Fatalf("unexpected error: %+v", envelope.Error)
+			}
+		})
+	}
+}
+
+func TestV2CatalogSourceSeamIsModeIndependent(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &stubV2CatalogSource{}
+	server.v2Catalog = catalog
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search?project=adapter-project", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2ExperimentSearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if catalog.experimentCalls != 1 || len(response.Experiments) != 1 ||
+		response.Experiments[0].ExperimentID != "adapter-experiment" ||
+		response.Experiments[0].Project != "adapter-project" {
+		t.Fatalf("canonical search did not use catalog seam: calls=%d response=%+v", catalog.experimentCalls, response)
+	}
+}
+
+func TestV2CatalogFunctionsSurfaceFailure(t *testing.T) {
+	var query string
+	server, err := NewServer(Options{
+		Source:               "kusto",
+		Workspace:            "workspace-a",
+		KustoAllowedProjects: []string{"project-a"},
+		KustoNativeQuery: func(_ context.Context, generated string) (string, error) {
+			query = generated
+			return "", errors.New("Kusto query response reported errors: catalog function unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?project=project-a&limit=10",
+		nil,
+	))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(query, exptelemetry.RunCatalogRowsFunction+"()") {
+		t.Fatalf("function-backed discovery did not query the stable run catalog:\n%s", query)
+	}
+}
+
+func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &stubV2CatalogSource{runs: runSearchResponse{
+		RunSearchResult: expstore.RunSearchResult{Total: 3},
+		Runs: []sourcedRun{
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{RunID: "run-a", ExperimentID: "experiment-alpha", CreatedAt: "2026-09-18T12:00:00Z"}}, Source: "local"},
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{RunID: "run-b", ExperimentID: "experiment-alpha", CreatedAt: "2026-09-18T11:00:00Z"}}, Source: "local"},
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{RunID: "run-c", ExperimentID: "experiment-alpha", CreatedAt: "2026-09-18T10:00:00Z"}}, Source: "local"},
+		},
+	}}
+	server.v2Catalog = catalog
+	first := httptest.NewRecorder()
+	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/experiment-alpha/runs?limit=1", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, body=%s", first.Code, first.Body.String())
+	}
+	var firstPage v2RunListResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Runs) != 1 || firstPage.NextCursor == "" || firstPage.Metadata.Partial {
+		t.Fatalf("unexpected first page: %+v", firstPage)
+	}
+
+	second := httptest.NewRecorder()
+	secondPath := "/api/v2/stellar/experiments/experiment-alpha/runs?limit=1&cursor=" + url.QueryEscape(firstPage.NextCursor)
+	server.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodGet, secondPath, nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, body=%s", second.Code, second.Body.String())
+	}
+	var secondPage v2RunListResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Runs) != 1 || secondPage.Runs[0].RunID == firstPage.Runs[0].RunID {
+		t.Fatalf("cursor did not advance: first=%+v second=%+v", firstPage.Runs, secondPage.Runs)
+	}
+	if catalog.lastRunOpts.CursorAt == "" || catalog.lastRunOpts.CursorID == "" {
+		t.Fatalf("validated cursor was not passed to the catalog source: %+v", catalog.lastRunOpts)
+	}
+
+	tampered := httptest.NewRecorder()
+	tamperedPath := "/api/v2/stellar/experiments/experiment-alpha/runs?limit=1&cursor=" + url.QueryEscape(firstPage.NextCursor+"x")
+	server.Handler().ServeHTTP(tampered, httptest.NewRequest(http.MethodGet, tamperedPath, nil))
+	if tampered.Code != http.StatusBadRequest {
+		t.Fatalf("tampered cursor status = %d, body=%s", tampered.Code, tampered.Body.String())
+	}
+	var envelope v2ErrorEnvelope
+	if err := json.Unmarshal(tampered.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "INVALID_CURSOR" || envelope.Error.Classification != "client" || envelope.Error.Retryable {
+		t.Fatalf("unexpected cursor error: %+v", envelope.Error)
+	}
+}
+
+func TestV2ExactRunDetailAndMetricCatalogSupportLifecycleOnlyRuns(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs/seed-1", nil))
+	if detail.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, body=%s", detail.Code, detail.Body.String())
+	}
+	var runResponse v2RunDetailResponse
+	if err := json.Unmarshal(detail.Body.Bytes(), &runResponse); err != nil {
+		t.Fatal(err)
+	}
+	if runResponse.Run.RunID != "seed-1" || runResponse.Run.LifecycleState != "succeeded" ||
+		runResponse.Run.Tags == nil || runResponse.Run.MetricNames == nil {
+		t.Fatalf("unexpected exact run detail: %+v", runResponse)
+	}
+
+	catalog := httptest.NewRecorder()
+	server.Handler().ServeHTTP(catalog, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs/seed-1/metrics", nil))
+	if catalog.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d, body=%s", catalog.Code, catalog.Body.String())
+	}
+	var metricResponse v2MetricCatalogResponse
+	if err := json.Unmarshal(catalog.Body.Bytes(), &metricResponse); err != nil {
+		t.Fatal(err)
+	}
+	if metricResponse.RunID != "seed-1" || len(metricResponse.Metrics) != 0 ||
+		metricResponse.Metadata.Availability.State != "unavailable" {
+		t.Fatalf("unexpected lifecycle-only metric catalog: %+v", metricResponse)
+	}
+
+	mismatched := httptest.NewRecorder()
+	server.Handler().ServeHTTP(mismatched, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/runs/seed-1?target=another-experiment", nil))
+	if mismatched.Code != http.StatusNotFound {
+		t.Fatalf("mismatched exact target status = %d, body=%s", mismatched.Code, mismatched.Body.String())
+	}
+}
+
+func TestV2LocalNonFiniteOnlyMetricOmitsLatestValue(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.v2Catalog = &stubV2CatalogSource{runs: runSearchResponse{Runs: []sourcedRun{{
+		RunSearchRun: expstore.RunSearchRun{
+			RunRecord: expstore.RunRecord{
+				RunID:        "non-finite-run",
+				Project:      "project-a",
+				ExperimentID: "experiment-a",
+			},
+			Metrics: []expstore.MetricSummaryRecord{{
+				MetricName:     "train/loss",
+				Count:          2,
+				NonFiniteCount: 2,
+				LatestValue:    0,
+			}},
+		},
+		Source: "local",
+	}}}}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/runs/non-finite-run/metrics?project=project-a&target=experiment-a",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2MetricCatalogResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Metrics) != 1 || response.Metrics[0].LatestValue != nil {
+		t.Fatalf("non-finite-only metric fabricated a latest value: %+v", response.Metrics)
+	}
+}
+
+func TestV2ExactRunRequiresProjectWhenRunIDsCollide(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.v2Catalog = &stubV2CatalogSource{runs: runSearchResponse{Runs: []sourcedRun{
+		{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{
+			RunID: "shared-run", Project: "project-a", ExperimentID: "experiment-a",
+		}}, Source: "kusto"},
+		{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{
+			RunID: "shared-run", Project: "project-b", ExperimentID: "experiment-b",
+		}}, Source: "kusto"},
+	}}}
+
+	ambiguous := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ambiguous, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs/shared-run", nil))
+	if ambiguous.Code != http.StatusConflict {
+		t.Fatalf("ambiguous status = %d, body=%s", ambiguous.Code, ambiguous.Body.String())
+	}
+
+	exact := httptest.NewRecorder()
+	server.Handler().ServeHTTP(exact, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/runs/shared-run?project=project-b&target=experiment-b", nil))
+	if exact.Code != http.StatusOK {
+		t.Fatalf("exact status = %d, body=%s", exact.Code, exact.Body.String())
+	}
+	var response v2RunDetailResponse
+	if err := json.Unmarshal(exact.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Run.Project != "project-b" || response.Run.ExperimentID != "experiment-b" {
+		t.Fatalf("wrong exact run: %+v", response.Run)
+	}
+}
+
+func TestV2ExactSeriesRequiresScopeAndHonorsPointBounds(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedMetricRichExpAPIStore(t), Workspace: "sample"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		path string
+		code int
+	}{
+		{"missing target", "/api/v2/stellar/runs/ablation-seed-2/series?metric=train%2Freturn", http.StatusBadRequest},
+		{"wrong target", "/api/v2/stellar/runs/ablation-seed-2/series?target=other&metric=train%2Freturn", http.StatusNotFound},
+		{"wrong workspace", "/api/v2/stellar/runs/ablation-seed-2/series?workspace=other&target=experiment-alpha&metric=train%2Freturn", http.StatusForbidden},
+		{"excessive points", "/api/v2/stellar/runs/ablation-seed-2/series?workspace=sample&target=experiment-alpha&metric=train%2Freturn&max_points=12001", http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if rec.Code != test.code {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, test.code, rec.Body.String())
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	path := "/api/v2/stellar/runs/ablation-seed-2/series?workspace=sample&target=experiment-alpha&metric=train%2Freturn&max_points=1"
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2SeriesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.RunID != "ablation-seed-2" || response.Metric != "train/return" ||
+		response.ReturnedPoints > 1 || response.MaxPoints != 1 {
+		t.Fatalf("series bounds not enforced: %+v", response)
+	}
+	if strings.Contains(rec.Body.String(), `"color"`) || strings.Contains(rec.Body.String(), `"smoothing"`) {
+		t.Fatalf("series exposed presentation metadata: %s", rec.Body.String())
+	}
+}
+
+func TestWorkspaceRoutePolicyAllowsOnlyConcreteV2NarrowReads(t *testing.T) {
+	allowed := []string{
+		"/api/v2/stellar/experiments/search",
+		"/api/v2/stellar/experiments/experiment-alpha/runs",
+		"/api/v2/stellar/runs/run-1",
+		"/api/v2/stellar/runs/run-1/metrics",
+		"/api/v2/stellar/runs/run-1/series",
+	}
+	for _, path := range allowed {
+		if !WorkspaceRouteAllowed(http.MethodGet, path) {
+			t.Fatalf("expected route to be workspace scoped: %s", path)
+		}
+	}
+	for _, path := range []string{
+		"/api/v2/stellar/experiments/experiment-alpha",
+		"/api/v2/stellar/runs/run-1/delete",
+		"/api/v2/stellar/runs/run-1/metrics/extra",
+	} {
+		if WorkspaceRouteAllowed(http.MethodGet, path) {
+			t.Fatalf("unexpected workspace route allowed: %s", path)
+		}
 	}
 }
 

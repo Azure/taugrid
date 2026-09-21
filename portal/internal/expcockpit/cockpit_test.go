@@ -2388,6 +2388,43 @@ func TestParseKustoMetricRowsReadsV2FragmentedFrames(t *testing.T) {
 	}
 }
 
+func TestParseKustoMetricRowsRejectsV2ErrorCompletion(t *testing.T) {
+	raw := []byte(`[
+  {"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
+  {"FrameType":"DataTable","TableId":0,"TableKind":"QueryProperties",
+   "Columns":[{"ColumnName":"Key"},{"ColumnName":"Value"}],"Rows":[]},
+  {"FrameType":"DataSetCompletion","HasErrors":true,"Cancelled":false}
+]`)
+	if _, err := ParseKustoMetricRows(raw); err == nil || !strings.Contains(err.Error(), "reported errors") {
+		t.Fatalf("ParseKustoMetricRows error = %v, want ADX completion error", err)
+	}
+}
+
+func TestParseKustoMetricRowsRejectsV2ResponseWithoutPrimaryResult(t *testing.T) {
+	raw := []byte(`[
+  {"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
+  {"FrameType":"DataTable","TableId":0,"TableKind":"QueryProperties",
+   "Columns":[{"ColumnName":"Key"},{"ColumnName":"Value"}],"Rows":[]},
+  {"FrameType":"DataSetCompletion","HasErrors":false,"Cancelled":false}
+]`)
+	if _, err := ParseKustoMetricRows(raw); err == nil || !strings.Contains(err.Error(), "PrimaryResult") {
+		t.Fatalf("ParseKustoMetricRows error = %v, want missing PrimaryResult error", err)
+	}
+}
+
+func TestParseKustoMetricRowsRejectsV2OneAPIErrorResult(t *testing.T) {
+	raw := []byte(`[
+  {"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
+  {"FrameType":"DataTable","TableId":1,"TableKind":"PrimaryResult","TableName":"PrimaryResult",
+   "Columns":[{"ColumnName":"OneApiErrors"}],
+   "Rows":[[{"error":{"code":"LimitsExceeded","message":"summarize exceeded its memory budget"}}]]},
+  {"FrameType":"DataSetCompletion","HasErrors":false,"Cancelled":false}
+]`)
+	if _, err := ParseKustoMetricRows(raw); err == nil || !strings.Contains(err.Error(), "partial failure") {
+		t.Fatalf("ParseKustoMetricRows error = %v, want OneApiErrors partial failure", err)
+	}
+}
+
 func TestParseKustoMetricRowsReadsCopilotRowsEnvelope(t *testing.T) {
 	raw := []byte(`{
   "columns": ["project", "experiment_id", "run_group_id", "run_id", "metric_name", "step", "wall_time", "value"],

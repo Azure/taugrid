@@ -2312,6 +2312,31 @@ func TestManagedWorkspaceAdversarialIsolationMatrix(t *testing.T) {
 	}
 }
 
+func TestManagedWorkspaceCanonicalV2AuthErrorsAreTyped(t *testing.T) {
+	server, _, _ := adversarialPortalServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/experiment-alpha/runs?workspace=alpha", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Error struct {
+			Code           string `json:"code"`
+			Classification string `json:"classification"`
+			Retryable      bool   `json:"retryable"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "AUTHENTICATION_REQUIRED" ||
+		response.Error.Classification != "authorization" ||
+		response.Error.Retryable {
+		t.Fatalf("unexpected typed error: %+v", response.Error)
+	}
+}
+
 func TestClusterWideWorkspaceUsesClusterWideInfrastructureMetrics(t *testing.T) {
 	if got := workloadMetricsNamespace(WorkspaceScope{Managed: true, Namespace: "team-alpha"}); got != "team-alpha" {
 		t.Fatalf("managed scope without an authorization mode used namespace %q, want fail-closed team-alpha", got)
