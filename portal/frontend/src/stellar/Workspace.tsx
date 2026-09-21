@@ -13,7 +13,7 @@ import { labelGroups } from './evidence-helpers';
 import { stellarURL } from './api';
 import {
   defaultMetrics, defaultSections, filterRuns, MAX_PINS, MAX_RUNS, metricList, preferenceKey, readPreferences,
-  refreshEnabled, RUN_PAGE_SIZE, runLifecycle, runTimestamp, savePreferences, scopeIdentity, sectionsFromURL,
+  reconcilePageRuns, refreshEnabled, RUN_PAGE_SIZE, runLifecycle, runTimestamp, savePreferences, scopeIdentity, sectionsFromURL,
   type RunFilters, type Section,
 } from './state';
 import type { ExperimentSearchResult, Run, RunSearchResult, Snapshot } from './types';
@@ -85,7 +85,7 @@ function RefreshControls({ target }: { target: string }) {
         {enabled ? paused ? 'auto paused' : 'auto 30s' : 'auto off'}
       </span></label><button type="button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Refreshing…' : 'Refresh'}</button></div>;
 }
-function StellarHeader({ target }: { target: string }) {
+function StellarHeader({ target, loadedRuns = 0 }: { target: string; loadedRuns?: number }) {
   const { scope } = useWorkspace(), { params, update } = useURLState();
   const summary = readableQuery(useBoard<Snapshot>(stellarURL('snapshot', { target, mode: 'summary', project: params.get('project') || undefined }), !!target));
   const [search, setSearch] = useState(params.get('experiment_q') || '');
@@ -100,7 +100,7 @@ function StellarHeader({ target }: { target: string }) {
     </form>}
     <div className="stellar-topbar-actions"><span className="stellar-meta-pill"><b>{scope.source === 'local' ? 'local expstore' : scope.source === 'kusto' ? 'Kusto/ADX' : scope.source}</b> source</span>
       {target && <QueryResult query={summary} name="Experiment header">{snapshot => <>
-        <span className="stellar-meta-pill"><b>{snapshot.runs.length}</b> loaded runs</span><span className="stellar-meta-pill"><b>{snapshot.status.metric_files}</b> metric files</span>
+        <span className="stellar-meta-pill"><b>{loadedRuns}</b> loaded runs</span><span className="stellar-meta-pill"><b>{snapshot.status.metric_files}</b> metric files</span>
       </>}</QueryResult>}
       <RefreshControls target={target}/>
     </div>
@@ -116,8 +116,7 @@ export function StellarWorkspace() {
   return <div className="stellar-workspace" key={scopeIdentity(scope)}>
     <Note>    Historical range applies to discovery and run search. Local run lists match created, started, completed, or lifecycle-event timestamps; local experiment discovery matches experiment updates or those child-run timestamps. ADX-backed searches use metric row time. Metric step-series remains step-based.</Note>
     <TimeRangeControls defaultWindow="168h"/>
-    <StellarHeader target={target}/>
-    {target ? <TargetWorkspace key={target + ':' + (params.get('project') || '')} target={target}/> : <ExperimentDiscovery/>}
+    {target ? <TargetWorkspace key={target + ':' + (params.get('project') || '')} target={target}/> : <><StellarHeader target=""/><ExperimentDiscovery/></>}
   </div>;
 }
 function experimentKey(project: string, target: string) {
@@ -246,7 +245,7 @@ function TargetWorkspace({ target }: { target: string }) {
     updated: params.get('updated') || '', sort: params.get('updated_sort') || '' };
   const retainedPage = previousPage?.rangeIdentity === range.api ? previousPage : undefined;
   const page = requestRejected(more.error) || !query.data ? undefined : more.data || retainedPage?.data;
-  const runs = query.data ? page?.runs || [] : [];
+  const runs = page ? reconcilePageRuns(page.runs || [], query.data?.runs || []) : [];
   const augmentedSnapshot = query.data ? { ...query.data, runs: runs.map(run =>
     'systems' in run ? run : { ...run, systems: [], observe_cli: '' }) } : undefined;
   const listed = filterRuns(runs, filters);
@@ -289,7 +288,7 @@ function TargetWorkspace({ target }: { target: string }) {
         </li>)}</ol><button type="button" onClick={() => setSections(defaultSections())}>Reset sections</button>
       </details>
     </div>;
-  return <div className="stellar-target-workspace">
+  return <><StellarHeader target={target} loadedRuns={runs.length}/><div className="stellar-target-workspace">
     <QueryResult query={query} name="Experiment summary">{snapshot => <>
       <div className="stellar-workbench-layout">
       <aside className="stellar-selection-rail" aria-label="Experiment and run selection">
@@ -374,5 +373,5 @@ function TargetWorkspace({ target }: { target: string }) {
       {!sections.some(section => section.visible) && <Empty>All sections are hidden. Use Customize sections to restore your layout.</Empty>}
       </div></div>
     </>}</QueryResult>
-  </div>;
+  </div></>;
 }

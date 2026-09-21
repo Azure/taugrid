@@ -156,6 +156,16 @@ without resetting hidden-run selections, page size or other workspace state.
 Same-range pagination failures retain the last successful page for retry;
 display-timezone changes do not change data identity.
 
+Run search determines historical membership, ordering, totals and pagination.
+Within the same workspace/source scope, matching snapshot runs (project and run
+ID) retain their authoritative lifecycle, evidence timestamps and detail fields;
+search-only fields and metric summaries remain available. Missing snapshot
+classification fields fall back to search classification. Snapshot-only runs
+never enter the range-filtered list. Lifecycle describes the latest available
+evidence, not a reconstruction of run state at the historical range end.
+Reconciliation uses a linear-time identity lookup over the existing responses;
+it does not issue additional requests or recompute lifecycle rules in the browser.
+
 The inventory reader selects the exact canonical `unbounded-cloud.io/site`
 label first and the exact deprecated `net.unbounded-cloud.io/site` migration
 label only when the canonical value is empty. It never performs fuzzy label

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import type { WorkspaceScope } from '../types';
-import type { Run, Snapshot } from './types';
+import type { Run, RunSearchRun, RunView, Snapshot } from './types';
 
 export const MAX_PINS = 14;
 export const RUN_PAGE_SIZE = 200;
@@ -76,6 +76,20 @@ export function runLifecycle(run: Run): string {
   if (authoritative) return authoritative.toLowerCase();
   const state = (run.lifecycle_state || (run.successful ? 'succeeded' : run.state) || 'pending').toLowerCase();
   return state === 'stale' ? 'not_responding' : state;
+}
+export function reconcilePageRuns(pageRuns: RunSearchRun[], snapshotRuns: RunView[]): (RunSearchRun & Partial<RunView>)[] {
+  const byIdentity = new Map(snapshotRuns.map(run => [JSON.stringify([run.project, run.run_id]), run]));
+  return pageRuns.map(run => {
+    const snapshot = byIdentity.get(JSON.stringify([run.project, run.run_id]));
+    if (!snapshot) return run;
+    return {
+      ...run,
+      ...snapshot,
+      lifecycle_state: snapshot.lifecycle_state ?? run.lifecycle_state,
+      successful: snapshot.successful ?? run.successful,
+      metrics: run.metrics,
+    };
+  });
 }
 export function runTimestamp(run: Run): string {
   return ('updated_at' in run && run.updated_at) || run.completed_at || run.started_at || run.created_at || '';
