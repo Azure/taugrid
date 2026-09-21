@@ -32,6 +32,79 @@ type CatalogQueryOptions struct {
 	AfterExperimentID string
 }
 
+type SeriesCatalogRow struct {
+	CatalogVersion   string  `json:"catalog_version"`
+	WorkspaceID      string  `json:"workspace_id"`
+	Cluster          string  `json:"cluster"`
+	SourceStoreID    string  `json:"source_store_id"`
+	Project          string  `json:"project"`
+	ExperimentID     string  `json:"experiment_id"`
+	RunGroupID       string  `json:"run_group_id"`
+	RunID            string  `json:"run_id"`
+	MetricName       string  `json:"metric_name"`
+	FirstActivityAt  string  `json:"first_activity_at"`
+	LatestActivityAt string  `json:"latest_activity_at"`
+	MinStep          int64   `json:"min_step"`
+	MaxStep          int64   `json:"max_step"`
+	LatestStep       int64   `json:"latest_step"`
+	LatestValue      float64 `json:"latest_value"`
+	Unit             string  `json:"unit"`
+	Source           string  `json:"source"`
+	Split            string  `json:"split"`
+	LatestFileID     string  `json:"latest_file_id"`
+	LatestFilePath   string  `json:"latest_file_path"`
+}
+
+type RunCatalogRow struct {
+	CatalogVersion      string `json:"catalog_version"`
+	WorkspaceID         string `json:"workspace_id"`
+	Cluster             string `json:"cluster"`
+	SourceStoreID       string `json:"source_store_id"`
+	Project             string `json:"project"`
+	ExperimentID        string `json:"experiment_id"`
+	RunGroupID          string `json:"run_group_id"`
+	RunID               string `json:"run_id"`
+	FirstActivityAt     string `json:"first_activity_at"`
+	LatestActivityAt    string `json:"latest_activity_at"`
+	FirstMetricAt       string `json:"first_metric_at"`
+	LatestMetricAt      string `json:"latest_metric_at"`
+	LatestObservationAt string `json:"latest_observation_at"`
+	TerminalAt          string `json:"terminal_at"`
+	State               string `json:"state"`
+	Reason              string `json:"reason"`
+	Message             string `json:"message"`
+	DurableID           string `json:"durable_id"`
+	ResultScope         string `json:"result_scope"`
+	Tags                string `json:"tags"`
+	OwningResourceKind  string `json:"owning_resource_kind"`
+	OwningResourceName  string `json:"owning_resource_name"`
+	Namespace           string `json:"namespace"`
+	LocalQueue          string `json:"local_queue"`
+	ClusterQueue        string `json:"cluster_queue"`
+	WorkloadKind        string `json:"workload_kind"`
+	ResourceUID         string `json:"resource_uid"`
+	SubmitTime          string `json:"submit_time"`
+	CreatedTime         string `json:"created_time"`
+	KueueAdmittedTime   string `json:"kueue_admitted_time"`
+	PodStartTime        string `json:"pod_start_time"`
+	CompletionTime      string `json:"completion_time"`
+	ArtifactURI         string `json:"artifact_uri"`
+	CheckpointURI       string `json:"checkpoint_uri"`
+	Image               string `json:"image"`
+	ImageDigest         string `json:"image_digest"`
+	ConfigHash          string `json:"config_hash"`
+	CodeSHA             string `json:"code_sha"`
+	TauCommand          string `json:"tau_command"`
+	ResultPath          string `json:"result_path"`
+	ResultPVC           string `json:"result_pvc"`
+	ExperimentTracking  string `json:"experiment_tracking"`
+	ExperimentSource    string `json:"experiment_source"`
+	ControllerVersion   string `json:"controller_version"`
+	MetricSeriesCount   int64  `json:"metric_series_count"`
+	HasMetrics          bool   `json:"has_metrics"`
+	HasLifecycle        bool   `json:"has_lifecycle"`
+}
+
 func BuildSeriesCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	opts, projects, err := normalizeCatalogQueryOptions(opts)
 	if err != nil {

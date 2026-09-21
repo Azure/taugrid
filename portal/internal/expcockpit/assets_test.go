@@ -51,8 +51,8 @@ func TestGeneratedAssetsUseExperimentGroupWording(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"/api/v2/stellar/labels",
-		"/api/v2/stellar/dashboards",
+		"/api/stellar/labels",
+		"/api/stellar/dashboards",
 		"Set experiment target label",
 		"Set run group label",
 		"Save dashboard",

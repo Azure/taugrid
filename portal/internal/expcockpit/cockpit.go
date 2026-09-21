@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"html/template"
@@ -127,6 +128,25 @@ func (s LocalSource) BuildSnapshot(ctx context.Context, opts Options) (Snapshot,
 		return Snapshot{}, fmt.Errorf("local expstore source is required")
 	}
 	return buildLocalSnapshot(ctx, s.Store, opts)
+}
+
+type MergedSource struct {
+	Store *expstore.Store
+	Kusto KustoSource
+}
+
+func (s MergedSource) BuildSnapshot(ctx context.Context, opts Options) (Snapshot, error) {
+	if s.Store == nil {
+		return s.Kusto.BuildSnapshot(ctx, opts)
+	}
+	snapshot, err := buildMergedSnapshot(ctx, s.Store, s.Kusto, opts)
+	if err == nil {
+		return snapshot, nil
+	}
+	if errors.Is(err, expstore.ErrNotFound) {
+		return s.Kusto.BuildSnapshot(ctx, opts)
+	}
+	return Snapshot{}, err
 }
 
 func BuildSeries(ctx context.Context, store *expstore.Store, opts SeriesOptions) (SeriesDetail, error) {
@@ -607,6 +627,218 @@ func ParseSnapshotMode(value string) (SnapshotMode, error) {
 	default:
 		return SnapshotModeFull, fmt.Errorf("unsupported Stellar snapshot mode %q", value)
 	}
+}
+
+func buildMergedSnapshot(ctx context.Context, store *expstore.Store, kusto KustoSource, opts Options) (Snapshot, error) {
+	opts.Target = strings.TrimSpace(opts.Target)
+	var err error
+	kusto, err = kusto.scopedToWorkspace(opts.Workspace)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if opts.Target == "" {
+		return Snapshot{}, fmt.Errorf("dashboard target is required")
+	}
+	status, err := store.Status(ctx, opts.Target)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	experiment, err := loadExperiment(ctx, store, status)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	groups, err := loadRunGroups(ctx, store, status, experiment)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	runs, runsTruncated, err := loadRuns(ctx, store, status, experiment, opts.MaxRuns, opts.Workspace, "")
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if strings.TrimSpace(opts.Workspace) != "" && len(runs) == 0 {
+		return kusto.BuildSnapshot(ctx, opts)
+	}
+	localRunIDs := runIDSet(runs)
+	// scopeSnapshotStatus rewrites status.Runs to the scoped count, so the
+	// denominator has to be read before it runs or the warning degenerates to
+	// "N of N".
+	totalRuns := status.Runs
+	groups = scopeSnapshotStatus(&status, groups, runs, opts.Workspace)
+	warnings := []string{}
+	if runsTruncated {
+		warnings = append(warnings, workspaceTruncationWarning(opts.Workspace, len(runs), totalRuns))
+	}
+	runIDs := runIDs(runs)
+	artifacts, err := loadArtifacts(ctx, store, runIDs)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	configs, err := loadConfigs(ctx, store, runIDs)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	events, err := loadEvents(ctx, store, runIDs)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	contexts, err := loadRunContexts(ctx, store, runIDs)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	var metricFiles []map[string]any
+	if strings.TrimSpace(opts.Workspace) == "" || len(runIDs) > 0 {
+		metricFiles, err = loadMetricFiles(ctx, store, status, experiment, runIDs)
+		if err != nil {
+			return Snapshot{}, err
+		}
+	}
+	points, metricWarnings := readMetricPoints(store, metricFiles, opts.MaxMetricRows)
+	warnings = append(warnings, metricWarnings...)
+	kustoRows, err := kusto.loadRows(ctx, opts)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	kustoRows = filterKustoRowsByWorkspace(kustoRows, kusto.WorkspaceID)
+	if len(kustoRows) > 0 {
+		var remoteWarnings []string
+		groups, runs, points, remoteWarnings = mergeKustoRows(opts, status, kustoRows, groups, runs, points)
+		warnings = append(warnings, remoteWarnings...)
+		status.Runs = len(runs)
+		status.RunGroups = len(groups)
+		if len(remoteWarnings) > 0 {
+			status.MetricFiles++
+		}
+		status.StateCounts = stateCountsWithKusto(status.StateCounts, runs)
+	}
+	if strings.TrimSpace(opts.Workspace) != "" && len(runs) == 0 {
+		return Snapshot{}, expstore.ErrNotFound
+	}
+	runs, metadataWarnings, err := attachRunSearchMetadata(ctx, store, runs, localRunIDs)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	groups = scopeSnapshotStatus(&status, groups, runs, opts.Workspace)
+	warnings = append(warnings, metadataWarnings...)
+	runColors := runColorMapForRuns(runs)
+	applyRunColors(runs, runColors)
+	groupClasses := groupClassMap(groups)
+	metricOptions := buildMetricOptionsFromPoints(points, "")
+	if opts.Mode == SnapshotModeSummary {
+		actions := buildActions(store.Root, opts.Target, status.TargetType, experiment, "")
+		summary := buildExperimentSummary(opts.Target, status.TargetType, experiment, groups, runs, nil, ChartView{}, nil, "", actions.NextCommand)
+		snapshot := Snapshot{
+			SchemaVersion: SchemaVersion,
+			PayloadMode:   string(SnapshotModeSummary),
+			GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+			StorePath:     store.Root,
+			Target:        opts.Target,
+			TargetType:    status.TargetType,
+			Manifest:      store.Manifest(),
+			Status:        status,
+			Summary:       summary,
+			Experiment:    experiment,
+			RunGroups:     groups,
+			Runs:          runs,
+			MetricOptions: metricOptions,
+			Actions:       actions,
+			SeedCoverage:  summary.SeedCoverage,
+			Warnings:      warnings,
+		}
+		if len(points) == 0 {
+			snapshot.Warnings = append(snapshot.Warnings, "no scalar metrics were found for this target")
+		}
+		return snapshot, nil
+	}
+	if opts.Mode == SnapshotModeMetric {
+		metric := requestedMetric(points, opts.Metric)
+		metricPoints := filterMetricPoints(points, metric)
+		cards := summarizeCards(metricPoints, groupClasses)
+		chart := buildChartWithRunColors(metricPoints, metric, groupClasses, runColors)
+		metricOptions = markMetricOptionSelected(metricOptions, chart.MetricName)
+		sweep := buildSweepWithRunColors(metricPoints, chart.MetricName, runs, configs, groupClasses, runColors)
+		decision := buildDecisionMetricContext(points, chart.MetricName, groupClasses)
+		bestGroup := decision.BestGroupID
+		actions := buildActions(store.Root, opts.Target, status.TargetType, experiment, actionMetric(opts.Metric, chart.MetricName, decision.MetricName))
+		summary := buildExperimentSummary(opts.Target, status.TargetType, experiment, groups, runs, decision.Cards, decisionChart(chart, decision.MetricName), nil, bestGroup, defaultNextCommand(store.Root, opts.Target, decision.MetricName))
+		if summary.NextCommand != "" {
+			actions.NextCommand = summary.NextCommand
+		}
+		compare := buildCompareInsights(decision.Points, decision.MetricName, runs, contexts, configs, events, bestGroup)
+		snapshot := Snapshot{
+			SchemaVersion: SchemaVersion,
+			PayloadMode:   string(SnapshotModeMetric),
+			GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+			StorePath:     store.Root,
+			Target:        opts.Target,
+			TargetType:    status.TargetType,
+			Manifest:      store.Manifest(),
+			Status:        status,
+			Summary:       summary,
+			Experiment:    experiment,
+			RunGroups:     groups,
+			Runs:          runs,
+			Cards:         cards,
+			Chart:         chart,
+			MetricOptions: metricOptions,
+			Sweep:         sweep,
+			Compare:       compare,
+			Actions:       actions,
+			BestGroupID:   bestGroup,
+			SeedCoverage:  summary.SeedCoverage,
+			Warnings:      warnings,
+		}
+		if len(points) == 0 {
+			snapshot.Warnings = append(snapshot.Warnings, "no scalar metrics were found for this target")
+		}
+		return snapshot, nil
+	}
+	observationExperiment, observationGroups := workspaceObservationScope(opts.Workspace, experiment, groups)
+	observations, err := loadObservations(ctx, store, observationExperiment, observationGroups, runs, artifacts, events, metricNames(points))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	cards := summarizeCards(points, groupClasses)
+	chart := buildChartWithRunColors(points, opts.Metric, groupClasses, runColors)
+	metricOptions = buildMetricOptions(cards, chart.MetricName)
+	sweep := buildSweepWithRunColors(points, chart.MetricName, runs, configs, groupClasses, runColors)
+	decision := buildDecisionMetricContext(points, chart.MetricName, groupClasses)
+	bestGroup := decision.BestGroupID
+	actions := buildActions(store.Root, opts.Target, status.TargetType, experiment, actionMetric(opts.Metric, chart.MetricName, decision.MetricName))
+	summary := buildExperimentSummary(opts.Target, status.TargetType, experiment, groups, runs, decision.Cards, decisionChart(chart, decision.MetricName), observations, bestGroup, defaultNextCommand(store.Root, opts.Target, decision.MetricName))
+	if summary.NextCommand != "" {
+		actions.NextCommand = summary.NextCommand
+	}
+	compare := buildCompareInsights(decision.Points, decision.MetricName, runs, contexts, configs, events, bestGroup)
+	runs = attachRunDetails(store.Root, runs, contexts, configs, artifacts, events, observations)
+	snapshot := Snapshot{
+		SchemaVersion: SchemaVersion,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		StorePath:     store.Root,
+		Target:        opts.Target,
+		TargetType:    status.TargetType,
+		Manifest:      store.Manifest(),
+		Status:        status,
+		Summary:       summary,
+		Experiment:    experiment,
+		RunGroups:     groups,
+		Runs:          runs,
+		Cards:         cards,
+		Chart:         chart,
+		MetricOptions: metricOptions,
+		Sweep:         sweep,
+		Compare:       compare,
+		Artifacts:     artifacts,
+		Events:        events,
+		Observations:  observations,
+		Actions:       actions,
+		BestGroupID:   bestGroup,
+		SeedCoverage:  summary.SeedCoverage,
+		Warnings:      warnings,
+	}
+	if len(points) == 0 {
+		snapshot.Warnings = append(snapshot.Warnings, "no scalar metrics were found for this target")
+	}
+	return snapshot, nil
 }
 
 func buildLocalSnapshot(ctx context.Context, store *expstore.Store, opts Options) (Snapshot, error) {
@@ -3277,6 +3509,14 @@ func runIDs(runs []RunView) []string {
 	return ids
 }
 
+func runIDSet(runs []RunView) map[string]bool {
+	out := make(map[string]bool, len(runs))
+	for _, run := range runs {
+		out[run.RunID] = true
+	}
+	return out
+}
+
 func attachRunSearchMetadata(ctx context.Context, store *expstore.Store, runs []RunView, allowedRunIDs map[string]bool) ([]RunView, []string, error) {
 	ids := make([]string, 0, len(runs))
 	for _, run := range runs {
@@ -3431,6 +3671,78 @@ func stringArgs(values []string) []any {
 		out = append(out, value)
 	}
 	return out
+}
+
+func mergeKustoRows(opts Options, status expstore.Status, rows []KustoMetricRow, groups []RunGroupView, runs []RunView, points []metricPoint) ([]RunGroupView, []RunView, []metricPoint, []string) {
+	filtered, targetType := filterKustoRows(rows, opts.Target)
+	if len(filtered) == 0 {
+		return groups, runs, points, nil
+	}
+	if targetType != "" && status.TargetType != "" && targetType != status.TargetType {
+		return groups, runs, points, []string{fmt.Sprintf("source=auto skipped Kusto rows for target type %s because local target type is %s", targetType, status.TargetType)}
+	}
+	existingGroups := map[string]bool{}
+	for _, group := range groups {
+		existingGroups[group.RunGroupID] = true
+	}
+	for _, group := range kustoRunGroups(filtered) {
+		if existingGroups[group.RunGroupID] {
+			continue
+		}
+		existingGroups[group.RunGroupID] = true
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].RunGroupID < groups[j].RunGroupID
+	})
+
+	existingRuns := map[string]bool{}
+	for _, run := range runs {
+		existingRuns[run.RunID] = true
+	}
+	remainingRuns := 0
+	if opts.MaxRuns > 0 {
+		remainingRuns = opts.MaxRuns - len(runs)
+		if remainingRuns < 0 {
+			remainingRuns = 0
+		}
+	}
+	remoteRuns, truncated := kustoRuns(filtered, 0, time.Now().UTC(), defaultKustoRunStaleAfter)
+	addedRuns := map[string]bool{}
+	duplicates := 0
+	for _, run := range remoteRuns {
+		if existingRuns[run.RunID] {
+			duplicates++
+			continue
+		}
+		if opts.MaxRuns > 0 && remainingRuns == 0 {
+			truncated = true
+			continue
+		}
+		existingRuns[run.RunID] = true
+		addedRuns[run.RunID] = true
+		runs = append(runs, run)
+		if opts.MaxRuns > 0 {
+			remainingRuns--
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].RunID < runs[j].RunID
+	})
+	if len(addedRuns) > 0 {
+		points = append(points, kustoMetricPoints(filtered, addedRuns)...)
+	}
+	warnings := []string{}
+	if len(addedRuns) > 0 {
+		warnings = append(warnings, fmt.Sprintf("source=auto merged %d Kusto-backed runs with local/PVC runs", len(addedRuns)))
+	}
+	if duplicates > 0 {
+		warnings = append(warnings, fmt.Sprintf("source=auto kept local metrics for %d duplicate Kusto run IDs", duplicates))
+	}
+	if truncated {
+		warnings = append(warnings, fmt.Sprintf("source=auto Kusto runs truncated by max_runs=%d", opts.MaxRuns))
+	}
+	return groups, runs, points, warnings
 }
 
 func stateCountsWithKusto(_ map[string]int, runs []RunView) map[string]int {

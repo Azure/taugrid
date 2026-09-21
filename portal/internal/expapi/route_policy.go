@@ -48,12 +48,14 @@ func WorkspaceRouteAllowed(method, path string) bool {
 	if method == http.MethodGet && workspaceScopedV2Route(path) {
 		return true
 	}
-	if path == stellarAPIV2Base+"/capabilities" {
-		return true
-	}
-	for _, route := range capabilityRoutes {
-		if route.workspaceScoped && method == route.method && path == stellarAPIV2Base+route.path {
+	for _, base := range stellarAPIBasePaths {
+		if path == base+"/capabilities" {
 			return true
+		}
+		for _, route := range capabilityRoutes {
+			if route.workspaceScoped && method == route.method && path == base+route.path {
+				return true
+			}
 		}
 	}
 	return false

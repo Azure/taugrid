@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,22 +39,35 @@ const (
 )
 
 const (
-	stellarAPIVersion = "v2"
-	stellarAPIV2Base  = "/api/v2/stellar"
+	stellarAPIVersion    = "v2"
+	stellarAPILegacyBase = "/api/stellar"
+	stellarAPIV1Base     = "/api/v1/stellar"
+	stellarAPIV2Base     = "/api/v2/stellar"
 )
 
+var stellarAPIBasePaths = []string{stellarAPILegacyBase, stellarAPIV1Base, stellarAPIV2Base}
+var stellarDeprecatedAPIBasePaths = []string{stellarAPILegacyBase, stellarAPIV1Base}
+
 type Options struct {
-	StorePath     string
-	DefaultTarget string
-	DefaultMetric string
-	Source        string
+	StorePath        string
+	DefaultTarget    string
+	DefaultMetric    string
+	Source           string
+	KustoMetricsFile string
+	KustoProject     string
 	// Workspace is the TauWorkspace this Stellar server serves. Stellar is
 	// single-workspace: every read is scoped to it, and an unset workspace no
 	// longer means "every workspace" -- it falls back to DefaultWorkspace.
-	Workspace              string
+	Workspace string
+	// Deprecated: use Workspace. Retained because this used to be the
+	// Kusto-only spelling of the same idea.
+	KustoWorkspace         string
 	KustoAllowedProjects   []string
+	KustoFeaturedProjects  []string
 	KustoEndpoint          string
 	KustoDatabase          string
+	KustoIngestion         string
+	KustoSince             string
 	KustoDiscoverySince    string
 	KustoMaxDiscoverySince string
 	KustoTargetSince       string
@@ -76,8 +90,13 @@ type Options struct {
 // a real install never silently lands here.
 const DefaultWorkspace = "default"
 
+// defaultWorkspace resolves the server's workspace, preferring the current
+// option over the Kusto-only spelling it replaced.
 func defaultWorkspace(opts Options) string {
 	if workspace := strings.TrimSpace(opts.Workspace); workspace != "" {
+		return workspace
+	}
+	if workspace := strings.TrimSpace(opts.KustoWorkspace); workspace != "" {
 		return workspace
 	}
 	return DefaultWorkspace
@@ -117,10 +136,15 @@ type Server struct {
 	defaultTarget          string
 	defaultMetric          string
 	source                 string
+	kustoMetricsFile       string
+	kustoProject           string
 	workspace              string
 	kustoAllowedProjects   []string
+	kustoFeaturedProjects  []string
 	kustoEndpoint          string
 	kustoDatabase          string
+	kustoIngestion         string
+	kustoSince             string
 	kustoDiscoverySince    string
 	kustoMaxDiscoverySince string
 	kustoTargetSince       string
@@ -146,12 +170,13 @@ func NewServer(opts Options) (*Server, error) {
 	}
 	root := strings.TrimSpace(opts.StorePath)
 	if source == "kusto" && root == "" {
-		root = "kusto://typed"
+		root = expcockpit.KustoStorePathForIngestion(opts.KustoIngestion)
 	} else {
-		root, err = expstore.ResolveRoot(expstore.ResolveOptions{Explicit: opts.StorePath})
+		resolved, err := expstore.ResolveRoot(expstore.ResolveOptions{Explicit: opts.StorePath})
 		if err != nil {
 			return nil, err
 		}
+		root = resolved
 	}
 	if opts.MaxRuns < 0 {
 		return nil, fmt.Errorf("--max-runs must be non-negative")
@@ -173,10 +198,15 @@ func NewServer(opts Options) (*Server, error) {
 		defaultTarget:          strings.TrimSpace(opts.DefaultTarget),
 		defaultMetric:          strings.TrimSpace(opts.DefaultMetric),
 		source:                 source,
+		kustoMetricsFile:       strings.TrimSpace(opts.KustoMetricsFile),
+		kustoProject:           strings.TrimSpace(opts.KustoProject),
 		workspace:              defaultWorkspace(opts),
 		kustoAllowedProjects:   compactStrings(opts.KustoAllowedProjects),
+		kustoFeaturedProjects:  compactStrings(opts.KustoFeaturedProjects),
 		kustoEndpoint:          strings.TrimSpace(opts.KustoEndpoint),
 		kustoDatabase:          strings.TrimSpace(opts.KustoDatabase),
+		kustoIngestion:         strings.TrimSpace(opts.KustoIngestion),
+		kustoSince:             strings.TrimSpace(opts.KustoSince),
 		kustoDiscoverySince:    strings.TrimSpace(opts.KustoDiscoverySince),
 		kustoMaxDiscoverySince: strings.TrimSpace(opts.KustoMaxDiscoverySince),
 		kustoTargetSince:       strings.TrimSpace(opts.KustoTargetSince),
@@ -242,21 +272,48 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/stellar/assets/", s.handleStellarAsset)
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.handleStellarAPI("/capabilities", s.handleCapabilities)
-	s.handleStellarAPI("/status", s.handleStatus)
-	s.handleStellarAPI("/snapshot", s.handleSnapshot)
+	s.handleStellarAPI("/experiments", s.handleExperiments)
 	s.handleStellarAPI("/series", s.handleSeries)
 	s.handleStellarAPI("/runs", s.handleRunSearch)
-	s.handleStellarAPI("/experiments", s.handleExperiments)
+	s.handleStellarAPI("/snapshot", s.handleSnapshot)
+	s.handleStellarAPI("/status", s.handleStatus)
 	s.handleStellarAPI("/artifacts", s.handleArtifacts)
 	s.handleStellarAPI("/artifact", s.handleArtifact)
 	s.handleStellarAPI("/artifact/", s.handleArtifact)
+	s.handleDeprecatedMutableStellarAPI("/labels")
+	s.handleDeprecatedMutableStellarAPI("/dashboards")
+	s.handleDeprecatedMutableStellarAPI("/workspaces")
 	s.mux.HandleFunc(stellarAPIV2Base+"/experiments/search", s.handleV2ExperimentSearch)
 	s.mux.HandleFunc(stellarAPIV2Base+"/experiments/", s.handleV2ExperimentRoutes)
 	s.mux.HandleFunc(stellarAPIV2Base+"/runs/", s.handleV2RunRoutes)
 }
 
 func (s *Server) handleStellarAPI(route string, handler http.HandlerFunc) {
-	s.mux.HandleFunc(stellarAPIV2Base+route, handler)
+	for _, base := range stellarAPIBasePaths {
+		deprecated := base != stellarAPIV2Base || route == "/snapshot" || route == "/series" ||
+			route == "/runs" || route == "/experiments"
+		if !deprecated {
+			s.mux.HandleFunc(base+route, handler)
+			continue
+		}
+		s.mux.HandleFunc(base+route, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Deprecation", "true")
+			w.Header().Add("Link", `<`+stellarAPIV2Base+`/capabilities>; rel="successor-version"`)
+			w.Header().Set("Warning", `299 - "Deprecated Stellar dashboard API; migrate to canonical narrow v2 reads"`)
+			handler(w, r)
+		})
+	}
+}
+
+func (s *Server) handleDeprecatedMutableStellarAPI(route string) {
+	for _, base := range stellarDeprecatedAPIBasePaths {
+		s.mux.HandleFunc(base+route, s.handleUnsupportedMutableState)
+		s.mux.HandleFunc(base+route+"/", s.handleUnsupportedMutableState)
+	}
+}
+
+func (s *Server) handleUnsupportedMutableState(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotImplemented, "mutable Stellar UI state is unsupported; Kusto identity and run groups are read-only")
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -283,6 +340,16 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			"/api/v2/stellar/experiments?q=<query>",
 			"/api/v2/stellar/runs?q=<query>",
 			"/api/v2/stellar/status?target=<experiment|run-group|run>",
+			"/api/v1/stellar/capabilities",
+			"/api/v1/stellar/snapshot?target=<experiment|run-group|run>",
+			"/api/v1/stellar/experiments?q=<query>",
+			"/api/v1/stellar/runs?q=<query>",
+			"/api/v1/stellar/status?target=<experiment|run-group|run>",
+			"/api/stellar/capabilities",
+			"/api/stellar/snapshot?target=<experiment|run-group|run>",
+			"/api/stellar/experiments?q=<query>",
+			"/api/stellar/runs?q=<query>",
+			"/api/stellar/status?target=<experiment|run-group|run>",
 		},
 	})
 }
@@ -357,7 +424,7 @@ func (s *Server) capabilities(debug bool) capabilitiesResponse {
 		},
 		"kusto": {
 			Available: kustoAvailable,
-			Ingestion: "typed",
+			Ingestion: expcockpit.KustoIngestionOrDefault(s.kustoIngestion),
 		},
 	}
 	if debug {
@@ -370,7 +437,7 @@ func (s *Server) capabilities(debug bool) capabilitiesResponse {
 			Available:      kustoAvailable,
 			Endpoint:       s.kustoEndpoint,
 			Database:       s.kustoDatabase,
-			Ingestion:      "typed",
+			Ingestion:      expcockpit.KustoIngestionOrDefault(s.kustoIngestion),
 			DiscoverySince: s.kustoDiscoverySince,
 			TargetSince:    s.kustoTargetSince,
 			QueryCommand:   s.kustoQueryCommand,
@@ -383,7 +450,7 @@ func (s *Server) capabilities(debug bool) capabilitiesResponse {
 	if s.source == "kusto" && !kustoAvailable {
 		degradations = append(degradations, capabilityDegradation{
 			Code:   "SOURCE_UNAVAILABLE",
-			Detail: "--kusto-endpoint or --kusto-query-command is required when --source=kusto.",
+			Detail: "--kusto-metrics-file or --kusto-query-command is required when --source=kusto.",
 		})
 	}
 	if s.source == "kusto" || kustoAvailable {
@@ -409,10 +476,15 @@ func (s *Server) capabilities(debug bool) capabilitiesResponse {
 		},
 		Paths: capabilitiesPaths{
 			CanonicalBasePath: stellarAPIV2Base,
-			SupportedBases:    []string{stellarAPIV2Base},
+			LegacyBasePath:    stellarAPILegacyBase,
+			SupportedBases:    []string{stellarAPIV2Base, stellarAPIV1Base, stellarAPILegacyBase},
 		},
 		DataSources: dataSources,
 		Capabilities: map[string]map[string]any{
+			"snapshot":             {"local": localAvailable, "kusto": kustoAvailable},
+			"series_detail":        {"local": localAvailable, "kusto": kustoSeriesDetail},
+			"run_search":           {"local": localAvailable, "kusto": kustoAvailable},
+			"experiment_search":    {"local": localAvailable, "kusto": kustoAvailable},
 			"experiment_mutation":  {"local": localAvailable, "kusto": false},
 			"artifact_index":       {"local": localAvailable, "kusto": false},
 			"artifact_content":     {"local": localAvailable, "durable_ref": true},
@@ -435,9 +507,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
 	if s.source == "kusto" {
-		if !s.hasKustoRemoteQuery() {
-			writeError(w, http.StatusServiceUnavailable, "--kusto-endpoint or --kusto-query-command is required when --source=kusto")
+		if s.kustoMetricsFile == "" && !s.hasKustoRemoteQuery() {
+			writeError(w, http.StatusServiceUnavailable, "--kusto-metrics-file, --kusto-endpoint, or --kusto-query-command is required when --source=kusto")
 			return
+		}
+		if s.kustoMetricsFile != "" {
+			if _, err := expcockpit.LoadKustoMetricRows(s.kustoMetricsFile); err != nil {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+				return
+			}
 		}
 		if s.kustoQueryCommand != "" {
 			if _, err := execLookPath(s.kustoQueryCommand); err != nil {
@@ -446,11 +524,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":                     true,
-			"store_path":             s.storeRoot,
-			"source":                 s.source,
-			"kusto_query_command":    s.kustoQueryCommand,
-			"kusto_allowed_projects": s.kustoAllowedProjects,
+			"ok":                      true,
+			"store_path":              s.storeRoot,
+			"source":                  s.source,
+			"kusto_metrics_file":      s.kustoMetricsFile,
+			"kusto_query_command":     s.kustoQueryCommand,
+			"kusto_allowed_projects":  s.kustoAllowedProjects,
+			"kusto_featured_projects": s.kustoFeaturedProjects,
 		})
 		return
 	}
@@ -512,8 +592,59 @@ func (s *Server) buildSnapshotWithMode(ctx context.Context, source, target, work
 	switch source {
 	case "local":
 		return s.buildLocalSnapshot(ctx, opts)
+	case "kusto":
+		return s.buildKustoSnapshot(ctx, opts)
+	case "auto":
+		snapshot, err := s.buildMergedSnapshot(ctx, opts)
+		if err == nil {
+			return snapshot, nil
+		}
+		if !errors.Is(err, expstore.ErrNotFound) || (s.kustoMetricsFile == "" && !s.hasKustoRemoteQuery()) {
+			return expcockpit.Snapshot{}, err
+		}
+		return s.buildKustoSnapshot(ctx, opts)
 	default:
-		return expcockpit.Snapshot{}, fmt.Errorf("legacy snapshots support only local experiment data")
+		return expcockpit.Snapshot{}, fmt.Errorf("unsupported Stellar source %q", source)
+	}
+}
+
+func (s *Server) buildSeries(ctx context.Context, r *http.Request, opts expcockpit.SeriesOptions) (expcockpit.SeriesDetail, error) {
+	source, err := normalizeStellarSource(r.URL.Query().Get("source"))
+	if err != nil {
+		return expcockpit.SeriesDetail{}, err
+	}
+	if source == "" {
+		source = s.source
+	}
+	if _, err := s.resolveWorkspace(r); err != nil {
+		return expcockpit.SeriesDetail{}, err
+	}
+	switch source {
+	case "local":
+		store, err := expstore.Open(ctx, s.storeRoot)
+		if err != nil {
+			return expcockpit.SeriesDetail{}, err
+		}
+		defer store.Close()
+		return expcockpit.BuildSeries(ctx, store, opts)
+	case "kusto":
+		return s.buildKustoSeries(ctx, opts)
+	case "auto":
+		store, err := expstore.Open(ctx, s.storeRoot)
+		if err == nil {
+			defer store.Close()
+			series, localErr := expcockpit.BuildSeries(ctx, store, opts)
+			if localErr == nil {
+				return series, nil
+			}
+			err = localErr
+		}
+		if !errors.Is(err, expstore.ErrNotFound) || !s.hasKustoSource() {
+			return expcockpit.SeriesDetail{}, err
+		}
+		return s.buildKustoSeries(ctx, opts)
+	default:
+		return expcockpit.SeriesDetail{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
 }
 
@@ -541,9 +672,30 @@ func (s *Server) buildV2Series(ctx context.Context, r *http.Request, opts expcoc
 			return expcockpit.SeriesDetail{}, fmt.Errorf("typed v2 series require a live Kusto query")
 		}
 		return s.baseKustoSource().BuildTypedSeries(ctx, opts)
+	case "auto":
+		store, err := expstore.Open(ctx, s.storeRoot)
+		if err == nil {
+			defer store.Close()
+			series, localErr := expcockpit.BuildSeries(ctx, store, opts)
+			if localErr == nil {
+				return series, nil
+			}
+			err = localErr
+		}
+		if !errors.Is(err, expstore.ErrNotFound) || !s.hasKustoRemoteQuery() {
+			return expcockpit.SeriesDetail{}, err
+		}
+		return s.baseKustoSource().BuildTypedSeries(ctx, opts)
 	default:
 		return expcockpit.SeriesDetail{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
+}
+
+func (s *Server) buildKustoSeries(ctx context.Context, opts expcockpit.SeriesOptions) (expcockpit.SeriesDetail, error) {
+	if !s.hasKustoSource() {
+		return expcockpit.SeriesDetail{}, fmt.Errorf("source=kusto has no metrics file or query command configured")
+	}
+	return s.baseKustoSource().BuildSeries(ctx, opts)
 }
 
 func (s *Server) buildLocalSnapshot(ctx context.Context, opts expcockpit.Options) (expcockpit.Snapshot, error) {
@@ -555,12 +707,37 @@ func (s *Server) buildLocalSnapshot(ctx context.Context, opts expcockpit.Options
 	return expcockpit.BuildSnapshot(ctx, store, opts)
 }
 
+func (s *Server) buildMergedSnapshot(ctx context.Context, opts expcockpit.Options) (expcockpit.Snapshot, error) {
+	store, err := expstore.Open(ctx, s.storeRoot)
+	if err != nil {
+		return expcockpit.Snapshot{}, err
+	}
+	defer store.Close()
+	return (expcockpit.MergedSource{
+		Store: store,
+		Kusto: s.baseKustoSource(),
+	}).BuildSnapshot(ctx, opts)
+}
+
+func (s *Server) buildKustoSnapshot(ctx context.Context, opts expcockpit.Options) (expcockpit.Snapshot, error) {
+	if s.kustoMetricsFile == "" && !s.hasKustoRemoteQuery() {
+		return expcockpit.Snapshot{}, fmt.Errorf("--kusto-metrics-file, --kusto-endpoint, or --kusto-query-command is required when --source=kusto or Kusto fallback is selected")
+	}
+	return s.baseKustoSource().BuildSnapshot(ctx, opts)
+}
+
 func (s *Server) baseKustoSource() expcockpit.KustoSource {
 	return expcockpit.KustoSource{
+		MetricsFile:       s.kustoMetricsFile,
+		StorePath:         expcockpit.KustoStorePathForIngestion(s.kustoIngestion),
+		Project:           s.kustoProject,
 		WorkspaceID:       s.workspace,
 		AllowedProjects:   append([]string(nil), s.kustoAllowedProjects...),
+		FeaturedProjects:  append([]string(nil), s.kustoFeaturedProjects...),
 		Endpoint:          s.kustoEndpoint,
 		Database:          s.kustoDatabase,
+		Ingestion:         s.kustoIngestion,
+		Since:             s.kustoSince,
 		DiscoverySince:    s.kustoDiscoverySince,
 		MaxDiscoverySince: s.kustoMaxDiscoverySince,
 		TargetSince:       s.kustoTargetSince,
@@ -568,6 +745,28 @@ func (s *Server) baseKustoSource() expcockpit.KustoSource {
 		QueryCommand:      s.kustoQueryCommand,
 		QueryArgs:         s.kustoQueryArgs,
 		NativeQuery:       s.kustoNativeQuery,
+	}
+}
+
+func (s *Server) searchExperiments(ctx context.Context, source string, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
+	switch source {
+	case "local":
+		return s.searchLocalExperiments(ctx, opts)
+	case "kusto":
+		return s.baseKustoSource().SearchExperiments(ctx, opts)
+	case "auto":
+		result, warnings, err := searchAutoSources(ctx, s.hasKustoSource(), "experiment",
+			func() (expstore.ExperimentSearchResult, error) { return s.searchLocalExperiments(ctx, opts) },
+			func() (expstore.ExperimentSearchResult, error) {
+				return s.baseKustoSource().SearchExperiments(ctx, opts)
+			},
+			func(local, kusto expstore.ExperimentSearchResult) expstore.ExperimentSearchResult {
+				return mergeExperimentSearchResults(local, kusto, opts.Limit)
+			})
+		result.Warnings = append(result.Warnings, warnings...)
+		return result, err
+	default:
+		return expstore.ExperimentSearchResult{}, fmt.Errorf("unsupported Stellar source %q", source)
 	}
 }
 
@@ -581,13 +780,62 @@ func (s *Server) searchLocalExperiments(ctx context.Context, opts expstore.Exper
 }
 
 func (s *Server) hasKustoSource() bool {
-	return s.hasKustoRemoteQuery()
+	return strings.TrimSpace(s.kustoMetricsFile) != "" || s.hasKustoRemoteQuery()
 }
 
 // hasKustoRemoteQuery reports whether the server can issue live KQL — through
 // the external query command or the native azure-kusto-go transport.
 func (s *Server) hasKustoRemoteQuery() bool {
 	return strings.TrimSpace(s.kustoQueryCommand) != "" || s.kustoNativeQuery != nil
+}
+
+func mergeExperimentSearchResults(local, kusto expstore.ExperimentSearchResult, limit int) expstore.ExperimentSearchResult {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	merged := append([]expstore.ExperimentSummary{}, local.Experiments...)
+	seen := map[string]bool{}
+	for _, experiment := range local.Experiments {
+		seen[experiment.Project+"\x00"+experiment.ExperimentID] = true
+	}
+	addedKusto := 0
+	for _, experiment := range kusto.Experiments {
+		key := experiment.Project + "\x00" + experiment.ExperimentID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, experiment)
+		addedKusto++
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].LatestRunAt != merged[j].LatestRunAt {
+			return merged[i].LatestRunAt > merged[j].LatestRunAt
+		}
+		return v2ExperimentCursorID(merged[i]) < v2ExperimentCursorID(merged[j])
+	})
+	total := len(merged)
+	truncated := local.Truncated || kusto.Truncated || total > limit
+	if total > limit {
+		merged = merged[:limit]
+	}
+	warnings := append([]string{}, local.Warnings...)
+	warnings = append(warnings, kusto.Warnings...)
+	if addedKusto > 0 {
+		warnings = append(warnings, fmt.Sprintf("source=auto merged %d Kusto-backed experiments with local expstore experiments", addedKusto))
+	}
+	return expstore.ExperimentSearchResult{
+		SchemaVersion: expstore.ExperimentSearchSchemaVersion,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		StorePath:     local.StorePath,
+		Total:         len(merged),
+		Truncated:     truncated,
+		Experiments:   merged,
+		Warnings:      warnings,
+	}
 }
 
 func (s *Server) handleStellarCockpit(w http.ResponseWriter, r *http.Request) {
@@ -621,6 +869,10 @@ func (s *Server) writeStellarCockpit(w http.ResponseWriter, r *http.Request) {
 	if source == "" {
 		source = s.source
 	}
+	// This used to force source=kusto whenever a workspace was present, which
+	// silently switched local deployments to a source they had not configured.
+	// Workspace scoping is implemented for both sources, so the source stays as
+	// requested.
 	workspace, err := s.resolveWorkspace(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -632,8 +884,8 @@ func (s *Server) writeStellarCockpit(w http.ResponseWriter, r *http.Request) {
 		Project:      strings.TrimSpace(r.URL.Query().Get("project")),
 		Metric:       metric,
 		AssetBase:    "/stellar/assets",
-		SnapshotPath: "/api/v2/stellar/snapshot",
-		SeriesPath:   "/api/v2/stellar/series",
+		SnapshotPath: "/api/stellar/snapshot",
+		SeriesPath:   "/api/stellar/series",
 		Source:       source,
 		Embedded:     isIframeEmbed(r),
 	})
@@ -715,7 +967,7 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	series, err := s.buildV2Series(ctx, r, opts)
+	series, err := s.buildSeries(ctx, r, opts)
 	if err != nil {
 		writeError(w, statusCode(err), err.Error())
 		return
@@ -728,8 +980,17 @@ func (s *Server) handleRunSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	source, workspace, ok := s.v2SourceAndWorkspace(w, r)
-	if !ok {
+	source, err := normalizeStellarSource(r.URL.Query().Get("source"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if source == "" {
+		source = s.source
+	}
+	workspace, err := s.resolveWorkspace(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	opts, err := runSearchOptionsFromRequest(r, workspace)
@@ -739,7 +1000,7 @@ func (s *Server) handleRunSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	result, err := s.v2CatalogSource().searchRuns(ctx, source, opts)
+	result, err := s.searchRuns(ctx, source, opts)
 	if err != nil {
 		writeError(w, statusCode(err), err.Error())
 		return
@@ -748,27 +1009,77 @@ func (s *Server) handleRunSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleExperiments(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	source, err := normalizeStellarSource(r.URL.Query().Get("source"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	source, workspace, ok := s.v2SourceAndWorkspace(w, r)
-	if !ok {
-		return
+	if source == "" {
+		source = s.source
 	}
-	opts, err := experimentSearchOptionsFromRequest(r, workspace)
+	workspace, err := s.resolveWorkspace(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	result, err := s.v2CatalogSource().searchExperiments(ctx, source, opts)
-	if err != nil {
-		writeError(w, statusCode(err), err.Error())
-		return
+	switch r.Method {
+	case http.MethodGet:
+		opts, err := experimentSearchOptionsFromRequest(r, workspace)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err := s.searchExperiments(ctx, source, opts)
+		if err != nil {
+			writeError(w, statusCode(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case http.MethodPost:
+		if source == "kusto" {
+			writeError(w, http.StatusBadRequest, "Stellar experiment assignment is local-only; use source=local or source=auto")
+			return
+		}
+		store, err := expstore.Open(ctx, s.storeRoot)
+		if err != nil {
+			writeError(w, statusCode(err), err.Error())
+			return
+		}
+		defer store.Close()
+		var req struct {
+			RunID        string `json:"run_id"`
+			ExperimentID string `json:"experiment_id"`
+			Name         string `json:"name"`
+			Description  string `json:"description"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid experiment assignment JSON")
+			return
+		}
+		req.RunID = strings.TrimSpace(req.RunID)
+		req.ExperimentID = strings.TrimSpace(req.ExperimentID)
+		if req.RunID == "" || req.ExperimentID == "" {
+			writeError(w, http.StatusBadRequest, "run_id and experiment_id are required")
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			req.Name = req.ExperimentID
+		}
+		if err := store.AssignRunToExperiment(ctx, expstore.ExperimentRecord{
+			ExperimentID: req.ExperimentID,
+			Name:         req.Name,
+			Description:  req.Description,
+			Source:       "explicit",
+		}, req.RunID); err != nil {
+			writeError(w, statusCode(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"run_id": req.RunID, "experiment_id": req.ExperimentID, "name": req.Name})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-	writeJSON(w, http.StatusOK, result.Result)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -988,7 +1299,7 @@ func apiArtifacts(artifacts []expcockpit.ArtifactView, target string) []apiArtif
 			CreatedAt:   artifact.CreatedAt,
 			Preview:     artifact.Preview,
 			ExternalRef: artifact.ExternalRef,
-			FetchURL:    stellarAPIV2Base + "/artifact?target=" + url.QueryEscape(fetchTarget) + "&artifact=" + url.QueryEscape(artifact.ArtifactID),
+			FetchURL:    "/api/stellar/artifact?target=" + url.QueryEscape(fetchTarget) + "&artifact=" + url.QueryEscape(artifact.ArtifactID),
 		})
 	}
 	return out
@@ -1025,8 +1336,11 @@ func filterArtifacts(artifacts []expcockpit.ArtifactView, query url.Values) []ex
 }
 
 func artifactRequestParams(r *http.Request) (string, string, string, error) {
-	scopedPrefix := stellarAPIV2Base + "/artifact/bundle/"
-	if strings.HasPrefix(r.URL.Path, scopedPrefix) {
+	for _, base := range stellarAPIBasePaths {
+		scopedPrefix := base + "/artifact/bundle/"
+		if !strings.HasPrefix(r.URL.Path, scopedPrefix) {
+			continue
+		}
 		rest := strings.TrimPrefix(r.URL.Path, scopedPrefix)
 		parts := strings.SplitN(rest, "/", 3)
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
@@ -1529,10 +1843,10 @@ func normalizeStellarSource(source string) (string, error) {
 		return "", nil
 	}
 	switch source {
-	case "local", "kusto":
+	case "local", "kusto", "auto":
 		return source, nil
 	default:
-		return "", fmt.Errorf("source must be local or kusto")
+		return "", fmt.Errorf("source must be local, kusto, or auto")
 	}
 }
 

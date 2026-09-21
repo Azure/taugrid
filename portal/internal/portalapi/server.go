@@ -270,7 +270,8 @@ func NewServer(opts Options) (*Server, error) {
 }
 
 func kustoStellarAvailable(opts expapi.Options) bool {
-	return strings.TrimSpace(opts.KustoQueryCommand) != "" ||
+	return strings.TrimSpace(opts.KustoMetricsFile) != "" ||
+		strings.TrimSpace(opts.KustoQueryCommand) != "" ||
 		opts.KustoNativeQuery != nil
 }
 
@@ -379,7 +380,7 @@ func (s *Server) routes() {
 	}
 
 	// Mounted Stellar surface — reused unchanged for the Experiments board.
-	// Stellar registers its own /stellar* and canonical API routes.
+	// Stellar registers its own /stellar* and versioned/legacy API routes.
 	// Managed workspace mode gates those prefixes before delegation.
 	//
 	// Stellar's handler hard-codes X-Frame-Options: DENY (internal/expapi), which
@@ -391,6 +392,8 @@ func (s *Server) routes() {
 	workspaceStellarHandler := s.workspaceAwareStellar(stellarHandler)
 	s.mux.Handle("/stellar", workspaceStellarHandler)
 	s.mux.Handle("/stellar/", workspaceStellarHandler)
+	s.mux.Handle("/api/stellar/", workspaceStellarHandler)
+	s.mux.Handle("/api/v1/stellar/", workspaceStellarHandler)
 	s.mux.Handle("/api/v2/stellar/", workspaceStellarHandler)
 }
 

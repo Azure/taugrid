@@ -14,7 +14,7 @@
 #
 # The service is intentionally CPU-only and pinned to AKS system nodes. It
 # defaults to stateless, read-only ADX/Kusto dashboards and does not mount a
-# writable PVC unless stellar.source is explicitly changed to local for
+# writable PVC unless stellar.source is explicitly changed to local/auto for
 # manual debugging.
 stellar:
   enabled: false
@@ -24,9 +24,14 @@ stellar:
   source: kusto
   discovery:
     allowedProjects: []
+    featuredProjects: []
     since: 90d
     maxSince: 365d
+    legacyProjectScope: false
   kusto:
+    ingestion: remote-write
+    project: ""
+    since: ""
     targetSince: 365d
     queryCommand: ""
     queryArgs:

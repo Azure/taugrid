@@ -11,12 +11,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Azure/taugrid/core/expkusto"
 	"github.com/Azure/taugrid/portal/internal/expstore"
 )
 
 func dashboardSectionSourceIndex(source, id string) int {
 	return strings.Index(source, fmt.Sprintf(`id: "%s"`, id))
+}
+
+func TestKustoActionsSuppressUnwritableObservationCommand(t *testing.T) {
+	actions := kustoActions("kusto://ExperimentMetrics", "seed-1", "run", nil, "")
+	if actions.ObserveCLI != "" {
+		t.Fatalf("Kusto observation command requires a locally materialized scope, got %q", actions.ObserveCLI)
+	}
 }
 
 func TestBuildChartDensitySamplesMillionPointOverlay(t *testing.T) {
@@ -964,8 +973,8 @@ func TestStellarTopbarReturnToLandingFrontendSource(t *testing.T) {
 		t.Fatal("returnToLanding must reset autoRefresh.started so the loop can restart")
 	}
 	for _, forbidden := range []string{
-		"/api/v2/stellar/labels",
-		"/api/v2/stellar/dashboards",
+		"/api/stellar/labels",
+		"/api/stellar/dashboards",
 		"renderOverlayStoreStatus",
 		"overlayStoreStatus",
 		"missing overlays",
@@ -999,7 +1008,7 @@ func TestStellarFrontendIncludesRefreshIntervalDataAttribute(t *testing.T) {
 			t.Fatalf("Stellar frontend HTML missing %q:\n%s", want, source)
 		}
 	}
-	for _, forbidden := range []string{"overlay", "/api/v2/stellar/labels", "/api/v2/stellar/dashboards", "saved dashboard"} {
+	for _, forbidden := range []string{"overlay", "/api/stellar/labels", "/api/stellar/dashboards", "saved dashboard"} {
 		if strings.Contains(strings.ToLower(source), strings.ToLower(forbidden)) {
 			t.Fatalf("Stellar frontend HTML must not advertise mutable state %q:\n%s", forbidden, html)
 		}
@@ -1461,6 +1470,140 @@ func TestBuildChartColorsRunsWithinSameGroup(t *testing.T) {
 	}
 }
 
+func TestKustoSourceBuildsDashboardSnapshot(t *testing.T) {
+	now := time.Date(2026, 5, 21, 0, 20, 0, 0, time.UTC)
+	rows := []KustoMetricRow{
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-1", MetricName: "train/return", Step: 1, WallTime: "2026-05-21T00:00:00Z", Value: 10, Source: "wandb"},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-1", MetricName: "train/return", Step: 2, WallTime: "2026-05-21T00:01:00Z", Value: 20, Source: "wandb"},
+		{WorkspaceID: "sample", Cluster: "sample-cluster", Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-1", MetricName: expkusto.RunStatusMetricName, Step: 0, WallTime: "2026-05-21T00:02:00Z", Value: 1, Source: "stellar-online-status", Tags: `{"tau.status.state":"succeeded","tau.status.artifact_uri":"az://results/seed-1"}`},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-2", MetricName: "train/return", Step: 1, WallTime: "2026-05-21T00:19:30Z", Value: 15, Source: "wandb"},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-2", MetricName: "eval/score", Step: 1, WallTime: "2026-05-21T00:19:30Z", Value: 7, Source: "wandb"},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-3", MetricName: "train/return", Step: 1, WallTime: "2026-05-21T00:00:30Z", Value: 12, Source: "wandb"},
+	}
+
+	snapshot, err := (KustoSource{Metrics: rows, Now: func() time.Time { return now }}).BuildSnapshot(context.Background(), Options{
+		Target:        "sample-project-wandb-migration",
+		Metric:        "train/return",
+		MaxRuns:       10,
+		MaxMetricRows: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.TargetType != "experiment" || snapshot.Status.Runs != 3 || len(snapshot.Cards) == 0 {
+		t.Fatalf("unexpected Kusto snapshot: %+v", snapshot)
+	}
+	if !snapshot.Chart.HasData || len(snapshot.Chart.Series) != 3 || snapshot.Chart.Series[0].Overlay.Source != "kusto" {
+		t.Fatalf("unexpected Kusto chart: %+v", snapshot.Chart)
+	}
+	if snapshot.Chart.Series[0].Color == "" || snapshot.Chart.Series[0].Color == snapshot.Chart.Series[1].Color {
+		t.Fatalf("expected distinct Kusto chart colors per run: %+v", snapshot.Chart.Series)
+	}
+	if snapshot.Status.LifecycleCounts["succeeded"] != 1 || snapshot.Status.LifecycleCounts["running"] != 1 || snapshot.Status.LifecycleCounts["stale"] != 1 {
+		t.Fatalf("unexpected Kusto lifecycle counts: %+v", snapshot.Status.LifecycleCounts)
+	}
+	if snapshot.MetricOptions[0].Name == expkusto.RunStatusMetricName {
+		t.Fatalf("status marker should not be exposed as a scalar metric option: %+v", snapshot.MetricOptions)
+	}
+	if strings.Contains(strings.ToLower(strings.Join(snapshot.Warnings, "\n")), "overlay") {
+		t.Fatalf("Kusto snapshot must not advertise overlays: %+v", snapshot.Warnings)
+	}
+	if snapshot.Summary.SeedCoverage != "3 runs across 1 run groups (reference-group=3)" {
+		t.Fatalf("unexpected seed coverage: %s", snapshot.Summary.SeedCoverage)
+	}
+	if snapshot.Runs[0].WorkspaceID != "sample" || snapshot.Runs[0].Cluster != "sample-cluster" || snapshot.Runs[0].ResultURI != "az://results/seed-1" {
+		t.Fatalf("missing durable Kusto context/result evidence: %+v", snapshot.Runs[0])
+	}
+}
+
+func TestKustoSourceLatestTerminalStatusWinsAfterRetry(t *testing.T) {
+	rows := []KustoMetricRow{
+		{Project: "pretraining", ExperimentID: "modernbert", RunGroupID: "fwe100", RunID: "bounded-retry", MetricName: "train/loss", Step: 1, WallTime: "2026-07-17T20:40:00Z", Value: 2.1},
+		{Project: "pretraining", ExperimentID: "modernbert", RunGroupID: "fwe100", RunID: "bounded-retry", MetricName: expkusto.RunStatusMetricName, WallTime: "2026-07-17T20:45:00Z", Value: -1, Tags: `{"tau.status.state":"failed","tau.status.reason":"OOMKilled","tau_retry_attempt":"1"}`},
+		{Project: "pretraining", ExperimentID: "modernbert", RunGroupID: "fwe100", RunID: "bounded-retry", MetricName: "train/loss", Step: 2, WallTime: "2026-07-17T20:50:00Z", Value: 1.7},
+		{Project: "pretraining", ExperimentID: "modernbert", RunGroupID: "fwe100", RunID: "bounded-retry", MetricName: expkusto.RunStatusMetricName, WallTime: "2026-07-17T20:55:00Z", Value: 1, Tags: `{"tau.status.state":"succeeded","tau.status.reason":"job-entrypoint-exit","tau_retry_attempt":"2"}`},
+	}
+	snapshot, err := (KustoSource{Metrics: rows}).BuildSnapshot(context.Background(), Options{
+		Target:        "modernbert",
+		Metric:        "train/loss",
+		MaxRuns:       10,
+		MaxMetricRows: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Runs) != 1 || snapshot.Runs[0].LifecycleState != "succeeded" || !snapshot.Runs[0].Successful {
+		t.Fatalf("latest retry status was not selected: %+v", snapshot.Runs)
+	}
+	if snapshot.Status.LifecycleCounts["succeeded"] != 1 || snapshot.Status.LifecycleCounts["failed"] != 0 {
+		t.Fatalf("unexpected retry lifecycle counts: %+v", snapshot.Status.LifecycleCounts)
+	}
+}
+
+func TestKustoSourceRestrictsHostedDataToWorkspace(t *testing.T) {
+	rows := []KustoMetricRow{
+		{WorkspaceID: "sample", Project: "sample-project", ExperimentID: "shared-experiment", RunGroupID: "default", RunID: "sample-run", MetricName: "train/loss", Step: 1, WallTime: "2026-05-21T00:00:00Z", Value: 1},
+		{Project: "sample-project", ExperimentID: "shared-experiment", RunGroupID: "default", RunID: "legacy-sample-run", MetricName: "train/loss", Step: 1, WallTime: "2026-05-21T00:01:00Z", Value: 2, Tags: `{"tau_workspace":"sample"}`},
+		{WorkspaceID: "research", Project: "sample-project", ExperimentID: "shared-experiment", RunGroupID: "default", RunID: "research-run", MetricName: "train/loss", Step: 1, WallTime: "2026-05-21T00:02:00Z", Value: 3},
+		{Project: "sample-project", ExperimentID: "shared-experiment", RunGroupID: "default", RunID: "unscoped-run", MetricName: "train/loss", Step: 1, WallTime: "2026-05-21T00:03:00Z", Value: 4},
+	}
+	source := KustoSource{Metrics: rows}
+
+	snapshot, err := source.BuildSnapshot(context.Background(), Options{
+		Target:        "shared-experiment",
+		Workspace:     "sample",
+		Metric:        "train/loss",
+		MaxRuns:       10,
+		MaxMetricRows: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status.Runs != 2 {
+		t.Fatalf("workspace snapshot mixed scoped or legacy-unscoped runs: %+v", snapshot.Status)
+	}
+
+	result, err := source.SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{Workspace: "sample", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Experiments) != 1 || result.Experiments[0].RunCount != 2 {
+		t.Fatalf("workspace discovery mixed scoped or legacy-unscoped runs: %+v", result)
+	}
+	runs, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{
+		Target:    "shared-experiment",
+		Workspace: "sample",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.Runs) != 2 {
+		t.Fatalf("workspace run search mixed scoped or legacy-unscoped runs: %+v", runs)
+	}
+}
+
+func TestKustoSourceRejectsConflictingWorkspaceScope(t *testing.T) {
+	source := KustoSource{
+		WorkspaceID: "sample",
+		Metrics: []KustoMetricRow{{
+			WorkspaceID: "sample",
+			Project:     "vision",
+			RunGroupID:  "baseline",
+			RunID:       "seed-1",
+			MetricName:  "train/loss",
+			Step:        1,
+			WallTime:    "2026-07-16T00:00:00Z",
+			Value:       1,
+		}},
+	}
+	if _, err := source.SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{Workspace: "research"}); err == nil {
+		t.Fatal("request workspace replaced configured Kusto workspace boundary")
+	}
+	if _, err := source.BuildSnapshot(context.Background(), Options{Target: "experiment", Workspace: "research"}); err == nil {
+		t.Fatal("snapshot workspace replaced configured Kusto workspace boundary")
+	}
+}
+
 func TestLocalSnapshotAndSeriesRestrictRunsToWorkspace(t *testing.T) {
 	ctx := context.Background()
 	store, _, err := expstore.Init(ctx, filepath.Join(t.TempDir(), "store"), expstore.InitOptions{
@@ -1533,6 +1676,52 @@ func TestLocalSnapshotAndSeriesRestrictRunsToWorkspace(t *testing.T) {
 	if len(snapshot.Runs) != 2 || snapshot.Status.Runs != 2 {
 		t.Fatalf("workspace snapshot changed after injection-like input: %+v status=%+v", snapshot.Runs, snapshot.Status)
 	}
+	merged, err := (MergedSource{
+		Store: store,
+		Kusto: KustoSource{Metrics: []KustoMetricRow{{
+			WorkspaceID: "research",
+			Project:     "tau",
+			RunGroupID:  "baseline",
+			RunID:       "foreign-kusto-run",
+			MetricName:  "train/loss",
+			Step:        1,
+			WallTime:    "2026-07-16T00:00:00Z",
+			Value:       1,
+		}}},
+	}).BuildSnapshot(ctx, Options{
+		Target:        "workspace-dashboard",
+		Workspace:     "sample",
+		MaxRuns:       10,
+		MaxMetricRows: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range merged.Runs {
+		if run.RunID == "foreign-kusto-run" {
+			t.Fatalf("merged snapshot admitted another workspace's Kusto run: %+v", merged.Runs)
+		}
+	}
+	if _, err := (MergedSource{
+		Store: store,
+		Kusto: KustoSource{Metrics: []KustoMetricRow{{
+			WorkspaceID: "research",
+			Project:     "tau",
+			RunGroupID:  "baseline",
+			RunID:       "foreign-kusto-run",
+			MetricName:  "train/loss",
+			Step:        1,
+			WallTime:    "2026-07-16T00:00:00Z",
+			Value:       1,
+		}}},
+	}).BuildSnapshot(ctx, Options{
+		Target:        "workspace-dashboard",
+		Workspace:     "missing-workspace",
+		MaxRuns:       10,
+		MaxMetricRows: 100,
+	}); !errors.Is(err, expstore.ErrNotFound) {
+		t.Fatalf("empty merged workspace snapshot error = %v, want ErrNotFound", err)
+	}
 
 	_, err = BuildSeries(ctx, store, SeriesOptions{
 		Target:        "workspace-dashboard",
@@ -1556,6 +1745,221 @@ func TestLocalSnapshotAndSeriesRestrictRunsToWorkspace(t *testing.T) {
 		MaxPoints:     100,
 	}); err != nil {
 		t.Fatalf("authorized run beyond dashboard max_runs was rejected: %v", err)
+	}
+}
+
+func TestKustoSourceSearchesExperiments(t *testing.T) {
+	now := time.Date(2026, 5, 21, 0, 20, 0, 0, time.UTC)
+	rows := []KustoMetricRow{
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-1", MetricName: "train/return", Step: 1, WallTime: "2026-05-21T00:00:00Z", Value: 10, Tags: `{"suite":"migration"}`},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-1", MetricName: "train/return", Step: 2, WallTime: "2026-05-21T00:01:00Z", Value: 20, Tags: `{"suite":"migration"}`},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-1", MetricName: expkusto.RunStatusMetricName, Step: 0, WallTime: "2026-05-21T00:02:00Z", Value: 1, Tags: `{"tau.status.state":"succeeded"}`},
+		{Project: "sample-project", ExperimentID: "sample-project-wandb-migration", RunGroupID: "reference-group", RunID: "seed-2", MetricName: "eval/score", Step: 1, WallTime: "2026-05-21T00:00:30Z", Value: 7, Tags: `{"suite":"migration"}`},
+		{Project: "sample-project", ExperimentID: "other-experiment", RunGroupID: "control", RunID: "seed-3", MetricName: "train/return", Step: 1, WallTime: "2026-05-20T00:00:00Z", Value: 5},
+	}
+
+	result, err := (KustoSource{Metrics: rows, Now: func() time.Time { return now }}).SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{
+		Query:     "wandb",
+		Tags:      map[string]string{"suite": "migration"},
+		Lifecycle: "succeeded",
+		MetricFilters: []expstore.MetricFilter{
+			{MetricName: "train/return", Op: ">", Value: 15},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Experiments) != 1 {
+		t.Fatalf("unexpected Kusto experiments: %+v", result)
+	}
+	experiment := result.Experiments[0]
+	if experiment.ExperimentID != "sample-project-wandb-migration" || experiment.Source != "kusto" || experiment.RunCount != 2 || experiment.RunGroupCount != 1 {
+		t.Fatalf("unexpected Kusto experiment summary: %+v", experiment)
+	}
+	if experiment.LifecycleCounts["succeeded"] != 1 || experiment.LifecycleCounts["stale"] != 1 || len(experiment.MetricNames) != 2 {
+		t.Fatalf("unexpected Kusto lifecycle/metrics: %+v", experiment)
+	}
+	if !strings.Contains(strings.Join(result.Warnings, "\n"), "source=kusto derives lifecycle") {
+		t.Fatalf("missing lifecycle approximation warning: %+v", result.Warnings)
+	}
+}
+
+func TestKustoSourceSearchExperimentsSpansProjectsByDefault(t *testing.T) {
+	now := time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC)
+	rows := []KustoMetricRow{
+		{Project: "tau-submit", ExperimentID: "tau-submit", RunGroupID: "default", RunID: "seed-1", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T21:04:00Z", Value: 1.2},
+		{Project: "vit-enc-vision", ExperimentID: "vision-vitenc-public-recipe", RunGroupID: "paper-param-pilot", RunID: "seed-2", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T17:46:59Z", Value: 0.8},
+		{Project: "other-project", ExperimentID: "older-control", RunGroupID: "control", RunID: "seed-3", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-10T00:00:00Z", Value: 2.0},
+	}
+	source := KustoSource{
+		Metrics: rows,
+		Project: "tau-submit",
+		Now:     func() time.Time { return now },
+	}
+
+	result, err := source.SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Experiments) != 3 {
+		t.Fatalf("default Kusto discovery should span projects, got %+v", result.Experiments)
+	}
+	if !kustoExperimentProjects(result.Experiments)["vit-enc-vision"] {
+		t.Fatalf("default Kusto discovery omitted ViT-Enc project: %+v", result.Experiments)
+	}
+
+	filtered, err := source.SearchExperiments(context.Background(), expstore.ExperimentSearchOptions{Project: "vit-enc-vision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Experiments) != 1 || filtered.Experiments[0].Project != "vit-enc-vision" {
+		t.Fatalf("request project filter did not isolate ViT-Enc: %+v", filtered.Experiments)
+	}
+}
+
+func TestKustoSourceSearchRunsHonorsAllowedProjectsForStaticRows(t *testing.T) {
+	rows := []KustoMetricRow{
+		{Project: "tau-submit", ExperimentID: "tau-submit", RunGroupID: "default", RunID: "seed-1", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T21:04:00Z", Value: 1.2},
+		{Project: "vit-enc-vision", ExperimentID: "vision-vitenc-public-recipe", RunGroupID: "paper-param-pilot", RunID: "seed-2", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T17:46:59Z", Value: 0.8},
+	}
+	source := KustoSource{
+		Metrics:         rows,
+		AllowedProjects: []string{"vit-enc-vision"},
+	}
+
+	result, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].Project != "vit-enc-vision" || result.Runs[0].RunID != "seed-2" {
+		t.Fatalf("allowed project scope did not filter static Kusto run search: %+v", result.Runs)
+	}
+
+	blocked, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{Project: "tau-submit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked.Runs) != 0 {
+		t.Fatalf("disallowed request project should not return static Kusto runs: %+v", blocked.Runs)
+	}
+}
+
+func TestKustoSourceSnapshotRequiresProjectForAmbiguousTarget(t *testing.T) {
+	rows := []KustoMetricRow{
+		{Project: "tau-submit", ExperimentID: "shared-target", RunGroupID: "default", RunID: "seed-1", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T21:04:00Z", Value: 1.2},
+		{Project: "vit-enc-vision", ExperimentID: "shared-target", RunGroupID: "paper-param-pilot", RunID: "seed-2", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T17:46:59Z", Value: 0.8},
+	}
+	source := KustoSource{Metrics: rows}
+
+	_, err := source.BuildSnapshot(context.Background(), Options{Target: "shared-target", Metric: "pretrain/loss", MaxRuns: 10})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous Kusto target") || !strings.Contains(err.Error(), "project=") {
+		t.Fatalf("expected project disambiguation error, got %v", err)
+	}
+
+	snapshot, err := source.BuildSnapshot(context.Background(), Options{Target: "shared-target", Project: "vit-enc-vision", Metric: "pretrain/loss", MaxRuns: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Experiment == nil || snapshot.Experiment.Project != "vit-enc-vision" || len(snapshot.Runs) != 1 || snapshot.Runs[0].RunID != "seed-2" {
+		t.Fatalf("project disambiguation returned wrong snapshot: %+v", snapshot)
+	}
+}
+
+func TestKustoLookbackDurationAcceptsWeeks(t *testing.T) {
+	got, err := parseKustoLookbackDuration("2w", time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 14*24*time.Hour {
+		t.Fatalf("2w parsed as %s, want 336h", got)
+	}
+}
+
+func kustoExperimentProjects(experiments []expstore.ExperimentSummary) map[string]bool {
+	out := map[string]bool{}
+	for _, experiment := range experiments {
+		out[experiment.Project] = true
+	}
+	return out
+}
+
+func TestKustoSourcePreservesCanonicalIdentity(t *testing.T) {
+	ctx := context.Background()
+	rows := []KustoMetricRow{
+		{WorkspaceID: "sample", SourceStoreID: "source-1", Project: "tau-submit", ExperimentID: "pretrain", RunGroupID: "canonical-group", RunID: "sample-run-001", MetricName: "pretrain/loss", Step: 1, WallTime: "2026-06-16T21:04:00Z", Value: 1.2, Tags: `{"suite":"sample-suite"}`},
+		{WorkspaceID: "sample", SourceStoreID: "source-1", Project: "tau-submit", ExperimentID: "pretrain", RunGroupID: "canonical-group", RunID: "sample-run-001", MetricName: "pretrain/lr", Step: 1, WallTime: "2026-06-16T21:04:00Z", Value: 0.001, Tags: `{"suite":"sample-suite"}`},
+	}
+	source := KustoSource{Metrics: rows}
+
+	snapshot, err := source.BuildSnapshot(ctx, Options{Target: "sample-run-001", Metric: "pretrain/loss", MaxRuns: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Runs) != 1 {
+		t.Fatalf("unexpected runs: %+v", snapshot.Runs)
+	}
+	run := snapshot.Runs[0]
+	if run.Project != "tau-submit" || run.RunGroupID != "canonical-group" || run.Tags["suite"] != "sample-suite" {
+		t.Fatalf("canonical Kusto identity not preserved: %+v", run)
+	}
+	if snapshot.RunGroups[0].RunGroupID != "canonical-group" || snapshot.Chart.Series[0].RunGroupID != "canonical-group" {
+		t.Fatalf("canonical run_group did not drive grouping/chart: groups=%+v chart=%+v", snapshot.RunGroups, snapshot.Chart.Series)
+	}
+	if strings.Contains(strings.ToLower(strings.Join(snapshot.Warnings, "\n")), "overlay") {
+		t.Fatalf("canonical Kusto snapshot must not mention overlays: %+v", snapshot.Warnings)
+	}
+	scopedSnapshot, err := source.BuildSnapshot(ctx, Options{
+		Target:    "sample-run-001",
+		Workspace: "sample",
+		Metric:    "pretrain/loss",
+		MaxRuns:   10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scopedSnapshot.Runs[0].Project != "tau-submit" || scopedSnapshot.Runs[0].RunGroupID != "canonical-group" {
+		t.Fatalf("workspace-scoped Kusto read changed canonical identity: %+v", scopedSnapshot.Runs[0])
+	}
+
+	result, err := source.SearchExperiments(ctx, expstore.ExperimentSearchOptions{
+		Query: "pretrain",
+		Tags:  map[string]string{"suite": "sample-suite"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Experiments) != 1 || result.Experiments[0].ExperimentID != "pretrain" || result.Experiments[0].RunGroupCount != 1 {
+		t.Fatalf("canonical experiment search not reflected: %+v", result)
+	}
+	projectResult, err := source.SearchExperiments(ctx, expstore.ExperimentSearchOptions{
+		Project: "tau-submit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projectResult.Experiments) != 1 || projectResult.Experiments[0].Project != "tau-submit" {
+		t.Fatalf("canonical project search failed: %+v", projectResult.Experiments)
+	}
+	runSearch, err := source.SearchRuns(ctx, expstore.RunSearchOptions{
+		Project: "tau-submit",
+		Tags:    map[string]string{"suite": "sample-suite"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runSearch.Runs) != 1 || runSearch.Runs[0].RunID != "sample-run-001" || runSearch.Runs[0].Project != "tau-submit" {
+		t.Fatalf("canonical project run search failed: %+v", runSearch.Runs)
+	}
+	disallowed := KustoSource{
+		Metrics:         rows,
+		AllowedProjects: []string{"other-project"},
+	}
+	blocked, err := disallowed.SearchExperiments(ctx, expstore.ExperimentSearchOptions{Project: "tau-submit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked.Experiments) != 0 {
+		t.Fatalf("disallowed canonical project should not be returned: %+v", blocked.Experiments)
 	}
 }
 
@@ -1852,6 +2256,23 @@ func colorsByRun(series []ChartSeries) map[string]string {
 	return out
 }
 
+func TestLoadKustoMetricRowsNormalizesLegacyExperimentID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "TauExpMetrics.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join([]string{
+		`{"project":"sample-project","question_id":"q1","run_group_id":"g1","run_id":"r1","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":1}`,
+		`{"project":"sample-project","question_id":"q1","run_group_id":"g1","run_id":"r2","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":2}`,
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := LoadKustoMetricRows(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[1].RunID != "r2" || rows[1].ExperimentID != "q1" {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+}
+
 func TestParseKustoMetricRowsReadsRESTTables(t *testing.T) {
 	raw := []byte(`{
   "Tables": [
@@ -2017,5 +2438,317 @@ func TestParseKustoMetricRowsReadsCopilotRowsEnvelope(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].RunID != "r1" {
 		t.Fatalf("unexpected rows envelope: %+v", rows)
+	}
+}
+
+func TestKustoSourceExecutesQueryCommand(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "kusto-query")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+query="$(cat)"
+case "$query" in
+  *"column_ifexists('experiment_id', '') == 'sample-project-wandb-migration'"*) ;;
+  *) echo "missing scoped target" >&2; exit 7 ;;
+esac
+printf '%s\n' '{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-live","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":33}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := (KustoSource{
+		Project:      "sample-project",
+		QueryCommand: script,
+	}).BuildSnapshot(context.Background(), Options{
+		Target: "sample-project-wandb-migration",
+		Metric: "train/return",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status.Runs != 1 || len(snapshot.Chart.Series) != 1 || snapshot.Chart.Series[0].RunID != "seed-live" {
+		t.Fatalf("unexpected live Kusto snapshot: %+v", snapshot)
+	}
+	if snapshot.StorePath != "kusto://TauExpMetrics" || snapshot.Status.StorePath != "kusto://TauExpMetrics" {
+		t.Fatalf("projection Kusto snapshot should display TauExpMetrics store path: snapshot=%q status=%q", snapshot.StorePath, snapshot.Status.StorePath)
+	}
+}
+
+func TestKustoSourceBuildSeriesPropagatesRangeBudgetAndRawQuery(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "kusto-series-query")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+query="$(cat)"
+case "$query" in
+  *"let target_points = 900;"*"run_id in ('seed-live')"*"step >= 100"*"step <= 200"*"union endpoints, minima, maxima, milestones"*) ;;
+  *) echo "missing focused series scope" >&2; exit 7 ;;
+esac
+printf '%s\n' '{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-live","metric_name":"train/return","step":100,"wall_time":"2026-05-21T00:00:00Z","value":33,"source_point_count":10000}'
+printf '%s\n' '{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-live","metric_name":"train/return","step":200,"wall_time":"2026-05-21T00:01:00Z","value":35,"source_point_count":10000}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	start, end := int64(100), int64(200)
+	detail, err := (KustoSource{
+		Project:      "sample-project",
+		QueryCommand: script,
+	}).BuildSeries(context.Background(), SeriesOptions{
+		Target:    "sample-project-wandb-migration",
+		Metric:    "train/return",
+		RunID:     "seed-live",
+		StartStep: &start,
+		EndStep:   &end,
+		MaxPoints: 900,
+		MaxRuns:   5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.RawQuerySource != "kusto" || !strings.Contains(detail.RawQuery, "point_count=1") || strings.Contains(detail.RawQuery, "let bucketed") {
+		t.Fatalf("raw query must expose scoped source rows without display aggregation:\n%s", detail.RawQuery)
+	}
+	if len(detail.Chart.Series) != 1 || detail.Chart.Series[0].PointCount != 10000 || detail.Chart.Series[0].Sampling.SourcePoints != 10000 {
+		t.Fatalf("Kusto source count transparency missing: %+v", detail.Chart)
+	}
+}
+
+func TestKustoSourceBuildSeriesClampsPreselectionForSmallDisplayBudget(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "kusto-series-small-budget")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+query="$(cat)"
+case "$query" in
+  *"let target_points = 100;"*"run_id in ('seed-live')"*) ;;
+  *) echo "small display budget was not clamped for Kusto preselection" >&2; exit 7 ;;
+esac
+printf '%s\n' '{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-live","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":33,"source_point_count":10000}'
+printf '%s\n' '{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-live","metric_name":"train/return","step":2,"wall_time":"2026-05-21T00:01:00Z","value":35,"source_point_count":10000}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := (KustoSource{
+		Project:      "sample-project",
+		QueryCommand: script,
+	}).BuildSeries(context.Background(), SeriesOptions{
+		Target:    "sample-project-wandb-migration",
+		Metric:    "train/return",
+		RunID:     "seed-live",
+		MaxPoints: 32,
+		MaxRuns:   5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Chart.Series) != 1 || detail.Chart.Series[0].Sampling.RequestedBudget != 32 {
+		t.Fatalf("display budget must remain caller-requested after Kusto preselection clamp: %+v", detail.Chart)
+	}
+}
+
+func TestKustoSourceQueryCommandOverridesMetricsFile(t *testing.T) {
+	tempDir := t.TempDir()
+	metricsFile := filepath.Join(tempDir, "stale-metrics.jsonl")
+	if err := os.WriteFile(metricsFile, []byte(`{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-stale","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":1}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(tempDir, "kusto-query")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+	cat >/dev/null
+	printf '%s\n' '{"project":"sample-project","experiment_id":"sample-project-wandb-migration","run_group_id":"reference-group","run_id":"seed-live","metric_name":"train/return","step":2,"wall_time":"2026-05-21T00:01:00Z","value":33}'
+	`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := KustoSource{
+		Project:      "sample-project",
+		MetricsFile:  metricsFile,
+		QueryCommand: script,
+	}
+
+	snapshot, err := source.BuildSnapshot(context.Background(), Options{
+		Target: "sample-project-wandb-migration",
+		Metric: "train/return",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Chart.Series) != 1 || snapshot.Chart.Series[0].RunID != "seed-live" {
+		t.Fatalf("snapshot used stale metrics file instead of live query: %+v", snapshot.Chart.Series)
+	}
+	runs, err := source.SearchRuns(context.Background(), expstore.RunSearchOptions{
+		Query: "seed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs.Total != 1 || len(runs.Runs) != 1 || runs.Runs[0].RunID != "seed-live" {
+		t.Fatalf("run search used stale metrics file instead of live query: %+v", runs)
+	}
+}
+
+func TestKustoSourceFocusedMetricSnapshotDiscoversCatalog(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "kusto-query")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+query="$(cat)"
+case "$query" in
+  *"run_id == 'sample-run-001'"*) ;;
+  *) echo "missing scoped Vision run target" >&2; exit 7 ;;
+esac
+case "$query" in
+  *"metric_name in ("*)
+    printf '%s\n' '{"project":"tau-submit","experiment_id":"tau-submit","run_group_id":"default","run_id":"sample-run-001","metric_name":"pretrain/loss","step":1800,"wall_time":"2026-06-16T21:04:00Z","value":1.7}'
+    printf '%s\n' '{"project":"tau-submit","experiment_id":"tau-submit","run_group_id":"default","run_id":"sample-run-001","metric_name":"tau/run_status","step":0,"wall_time":"2026-06-16T21:05:00Z","value":1}'
+    ;;
+  *)
+    printf '%s\n' '{"project":"tau-submit","experiment_id":"tau-submit","run_group_id":"default","run_id":"sample-run-001","metric_name":"pretrain/loss","step":1800,"wall_time":"2026-06-16T21:04:00Z","value":1.7}'
+    printf '%s\n' '{"project":"tau-submit","experiment_id":"tau-submit","run_group_id":"default","run_id":"sample-run-001","metric_name":"pretrain/lr","step":1800,"wall_time":"2026-06-16T21:04:00Z","value":0.0004}'
+    printf '%s\n' '{"project":"tau-submit","experiment_id":"tau-submit","run_group_id":"default","run_id":"sample-run-001","metric_name":"pretrain/teacher_entropy_gap","step":1800,"wall_time":"2026-06-16T21:04:00Z","value":0.12}'
+    printf '%s\n' '{"project":"tau-submit","experiment_id":"tau-submit","run_group_id":"default","run_id":"sample-run-001","metric_name":"tau/run_status","step":0,"wall_time":"2026-06-16T21:05:00Z","value":1}'
+    ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	source := KustoSource{
+		Project:      "tau-submit",
+		Ingestion:    "remote-write",
+		QueryCommand: script,
+	}
+	opts := Options{
+		Target: "sample-run-001",
+		Metric: "pretrain/loss",
+	}
+	summary, err := source.BuildSnapshot(context.Background(), Options{
+		Target: opts.Target,
+		Metric: opts.Metric,
+		Mode:   SnapshotModeSummary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Chart.HasData || len(summary.MetricOptions) != 3 {
+		t.Fatalf("summary should expose a lightweight metric catalog without chart payload: chart=%+v options=%+v", summary.Chart, summary.MetricOptions)
+	}
+	if summary.StorePath != "kusto://ExperimentMetrics" || summary.Status.StorePath != "kusto://ExperimentMetrics" {
+		t.Fatalf("remote-write Kusto summary should display ExperimentMetrics store path: snapshot=%q status=%q", summary.StorePath, summary.Status.StorePath)
+	}
+	for _, metric := range []string{"pretrain/loss", "pretrain/lr", "pretrain/teacher_entropy_gap"} {
+		if _, ok := metricOptionByName(summary.MetricOptions, metric); !ok {
+			t.Fatalf("summary catalog missing %q: %+v", metric, summary.MetricOptions)
+		}
+	}
+
+	snapshot, err := source.BuildSnapshot(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Chart.HasData || snapshot.Chart.MetricName != "pretrain/loss" || len(snapshot.Chart.Series) != 1 {
+		t.Fatalf("focused Kusto snapshot should keep the requested chart: %+v", snapshot.Chart)
+	}
+	for _, metric := range []string{"pretrain/loss", "pretrain/lr", "pretrain/teacher_entropy_gap"} {
+		option, ok := metricOptionByName(snapshot.MetricOptions, metric)
+		if !ok {
+			t.Fatalf("focused Kusto snapshot catalog missing %q: %+v", metric, snapshot.MetricOptions)
+		}
+		if metric == "pretrain/loss" && !option.Selected {
+			t.Fatalf("requested metric should be selected in catalog: %+v", snapshot.MetricOptions)
+		}
+	}
+	if _, ok := metricOptionByName(snapshot.MetricOptions, expkusto.RunStatusMetricName); ok {
+		t.Fatalf("status marker should not be exposed as a scalar metric option: %+v", snapshot.MetricOptions)
+	}
+
+	compact, err := source.BuildSnapshot(context.Background(), Options{
+		Target:            opts.Target,
+		Metric:            opts.Metric,
+		Mode:              SnapshotModeMetric,
+		SkipMetricCatalog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compact.Chart.HasData || len(compact.MetricOptions) != 1 {
+		t.Fatalf("compact Kusto metric snapshot should skip the extra catalog query: chart=%+v options=%+v", compact.Chart, compact.MetricOptions)
+	}
+}
+
+func metricOptionByName(options []MetricOptionView, name string) (MetricOptionView, bool) {
+	for _, option := range options {
+		if option.Name == name {
+			return option, true
+		}
+	}
+	return MetricOptionView{}, false
+}
+
+func TestKustoSourceUsesNativeQueryTransport(t *testing.T) {
+	var seen string
+	source := KustoSource{
+		Project: "sample-project",
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			seen = query
+			return `{"project":"sample-project","question_id":"sample-project-wandb-migration","run_group_id":"h200-rollout","run_id":"seed-native","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":33}`, nil
+		},
+	}
+
+	snapshot, err := source.BuildSnapshot(context.Background(), Options{
+		Target: "sample-project-wandb-migration",
+		Metric: "train/return",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, warning := range snapshot.Warnings {
+		if strings.Contains(warning, "--kusto-endpoint") {
+			t.Fatalf("native transport should not warn about missing sources: %+v", snapshot.Warnings)
+		}
+	}
+	if snapshot.Status.Runs != 1 || len(snapshot.Chart.Series) != 1 || snapshot.Chart.Series[0].RunID != "seed-native" {
+		t.Fatalf("unexpected native Kusto snapshot: %+v", snapshot)
+	}
+	if !strings.Contains(seen, "sample-project-wandb-migration") {
+		t.Fatalf("native transport received an unscoped query:\n%s", seen)
+	}
+}
+
+func TestKustoSourceQueryCommandWinsOverNativeQuery(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "kusto-query")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"project":"sample-project","question_id":"sample-project-wandb-migration","run_group_id":"h200-rollout","run_id":"seed-shell","metric_name":"train/return","step":1,"wall_time":"2026-05-21T00:00:00Z","value":33}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeCalls := 0
+	source := KustoSource{
+		Project:      "sample-project",
+		QueryCommand: script,
+		NativeQuery: func(context.Context, string) (string, error) {
+			nativeCalls++
+			return "", nil
+		},
+	}
+
+	snapshot, err := source.BuildSnapshot(context.Background(), Options{
+		Target: "sample-project-wandb-migration",
+		Metric: "train/return",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeCalls != 0 {
+		t.Fatalf("explicit --kusto-query-command must win over the native transport, native calls=%d", nativeCalls)
+	}
+	if len(snapshot.Chart.Series) != 1 || snapshot.Chart.Series[0].RunID != "seed-shell" {
+		t.Fatalf("snapshot did not come from the shell adapter: %+v", snapshot.Chart.Series)
+	}
+}
+
+func TestKustoSourceWarnsWhenNoTransportConfigured(t *testing.T) {
+	_, warnings, err := (KustoSource{Project: "sample-project"}).loadRowsForRunSearch(context.Background(), expstore.RunSearchOptions{
+		Query: "seed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "--kusto-endpoint") {
+		t.Fatalf("unconfigured Kusto source must name every accepted transport: %+v", warnings)
 	}
 }

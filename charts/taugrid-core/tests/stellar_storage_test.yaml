@@ -11,14 +11,14 @@ tests:
       stellar.expstore.pvcName: ""
     asserts:
       - failedTemplate:
-          errorMessage: stellar.expstore.pvcName must name a pre-provisioned platform-managed PVC when stellar.source=local
+          errorMessage: stellar.expstore.pvcName must name a pre-provisioned platform-managed PVC when stellar.source=local or auto
 
   - it: renders Kusto mode without writable storage or overlay arguments
     set:
       stellar.enabled: true
       stellar.source: kusto
       stellar.workspace: sample
-      stellar.kusto.queryCommand: /usr/local/bin/query-kusto
+      stellar.kusto.metricsFile: /tmp/metrics.json
     asserts:
       - hasDocuments:
           count: 2
@@ -64,7 +64,7 @@ tests:
       stellar.source: kusto
       stellar.workspace: sample
       stellar.image.tag: pinned
-      stellar.kusto.queryCommand: /usr/local/bin/query-kusto
+      stellar.kusto.metricsFile: /tmp/metrics.json
       stellar.service.type: LoadBalancer
     asserts:
       - failedTemplate:

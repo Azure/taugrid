@@ -191,17 +191,19 @@ login and is an operator-debug compatibility path, not the researcher-facing
 acceptance surface. The chart rejects a LoadBalancer; use the unified Portal
 access contract below for supported browser access.
 
-By default enabled Stellar uses `stellar.source=kusto` and queries the stable
-typed experiment Functions in ADX. The standalone metrics collector is the
-ingest path only; it is not the dashboard query source.
+By default enabled Stellar uses `stellar.source=kusto`: training emits
+`experiment_metrics` remote-write samples, adx-mon ingests them into
+`Metrics.ExperimentMetrics`, and Stellar queries ADX/Kusto for scalar dashboards.
+adx-mon is the ingest path only; it is not the dashboard query source.
 The canonical telemetry naming/versioning contract is documented in
 [`../../../../docs/tau/tau-telemetry-schema-versioning.md`](../../../../docs/tau/tau-telemetry-schema-versioning.md).
 
-`stellar.source=kusto` requires either `stellar.kusto.endpoint` for native ADX
-queries or `stellar.kusto.queryCommand` for an explicit query adapter. The
-identity must have permission to query ADX, and an adapter must emit row
-JSON/JSONL or Kusto REST JSON. Set `stellar.serviceAccount` plus
-`stellar.podLabels` for a dedicated query
+`stellar.source=kusto` requires either `stellar.kusto.metricsFile` for a manual
+export or `stellar.kusto.queryCommand` for live ADX queries. The query command
+must be present in the Tau image or supplied by the cluster, have identity/RBAC
+to query ADX, and emit Stellar row JSON/JSONL or Kusto REST JSON. Set
+`stellar.kusto.ingestion=remote-write` for the adx-mon `ExperimentMetrics` table.
+Set `stellar.serviceAccount` plus `stellar.podLabels` for a dedicated query
 identity, such as Azure Workload Identity, and grant that identity the ADX
 database viewer role on the database that contains `Metrics.ExperimentMetrics`.
 Use `stellar.extraInitContainers`, `stellar.extraVolumes`, and
@@ -215,13 +217,13 @@ to the query identity by default. Landing/search discovery uses
 (default `365d`) as the unscoped safety cap; targeted dashboard URLs use
 `stellar.kusto.targetSince` (default `365d`). To hard-scope a team deployment,
 set `stellar.discovery.allowedProjects`; do not use the deprecated
-Kusto project field as a deployment-level filter. For example, RAD-DINO rows under
+`stellar.kusto.project` as a Kusto-level filter. For example, RAD-DINO rows under
 `project=rad-dino-chexpert` are visible from the shared dashboard without
 redeploying a `tau-submit`-scoped Stellar. Add `?project=rad-dino-chexpert` to a
 URL when you want a request-level filter.
 
-Use `stellar.source=local` only for explicit debug/offline recovery. That mode
-requires the existing platform-managed claim
+Use `stellar.source=local` or `stellar.source=auto` only for explicit
+debug/offline recovery. Those modes require the existing platform-managed claim
 named by `stellar.expstore.pvcName` and can enable the manual importer sidecar;
 `source=kusto` intentionally rejects the importer so the current telemetry path
 has one scalar source of truth. This chart never creates or deletes either
@@ -335,7 +337,7 @@ set its name and client-ID annotation to match the externally managed object.
 The chart derives `azure.workload.identity/use: "true"` on the pod.
 `portal.kusto.queryCommand` remains an optional adapter override, and
 `portal.kusto.costDatabase` remains independent (Viewer access there is needed
-for Cost). Empty shared values preserve existing degraded behavior; local
+for Cost). Empty shared values preserve existing degraded behavior; local/auto
 sources do not inherit them. Workspace scope, ClusterIP exposure, and disabled
 workspace-directory defaults are unchanged.
 

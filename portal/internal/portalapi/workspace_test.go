@@ -120,7 +120,7 @@ func TestWorkspaceAwareStellarDelegatesLocalRouteWithScope(t *testing.T) {
 		gotSource = r.URL.Query().Get("source")
 		w.WriteHeader(http.StatusNoContent)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments?workspace=alpha&project=vision&source=local", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?workspace=alpha&project=vision&source=local", nil)
 	req.Header.Set(defaultViewerUserHeader, "user@example.com")
 	req.Header.Set(defaultViewerGroupsHeader, "group-alpha")
 	rec := httptest.NewRecorder()
@@ -130,7 +130,7 @@ func TestWorkspaceAwareStellarDelegatesLocalRouteWithScope(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if gotPath != "/api/v2/stellar/experiments" || gotWorkspace != "alpha" || gotProject != "vision" || gotSource != "kusto" {
+	if gotPath != "/api/stellar/experiments" || gotWorkspace != "alpha" || gotProject != "vision" || gotSource != "kusto" {
 		t.Fatalf("delegated route = path %q workspace %q project %q source %q", gotPath, gotWorkspace, gotProject, gotSource)
 	}
 }
@@ -149,8 +149,8 @@ func TestWorkspaceAwareStellarBlocksUnscopedManagedRoutes(t *testing.T) {
 		method string
 		path   string
 	}{
-		{method: http.MethodPost, path: "/api/v2/stellar/experiments?workspace=alpha"},
-		{method: http.MethodGet, path: "/api/v2/stellar/artifact?workspace=alpha&artifact=other-workspace"},
+		{method: http.MethodPost, path: "/api/stellar/experiments?workspace=alpha"},
+		{method: http.MethodGet, path: "/api/stellar/artifact?workspace=alpha&artifact=other-workspace"},
 		{method: http.MethodGet, path: "/stellar/unknown-route?workspace=alpha"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
@@ -172,12 +172,12 @@ func TestWorkspaceExperimentRedirectPreservesAPIRouteAndQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments?project=vision", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?project=vision", nil)
 	redirect, err := url.Parse(workspaceExperimentRedirectURL(target, req, "sample", "kusto"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redirect.Path != "/api/v2/stellar/experiments" ||
+	if redirect.Path != "/api/stellar/experiments" ||
 		redirect.Query().Get("workspace") != "sample" ||
 		redirect.Query().Get("project") != "vision" ||
 		redirect.Query().Get("source") != "kusto" {

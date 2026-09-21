@@ -5,6 +5,7 @@ package expapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func (s *Server) localArtifactRunSnapshot(ctx context.Context, r *http.Request, 
 	}
 	store, err := expstore.Open(ctx, s.storeRoot)
 	if err != nil {
-		return expcockpit.Snapshot{}, true, err
+		return expcockpit.Snapshot{}, source != "auto" || !errors.Is(err, expstore.ErrNotFound), err
 	}
 	defer store.Close()
 	candidate := strings.TrimSpace(r.URL.Query().Get("run"))
@@ -98,7 +99,7 @@ func (s *Server) localArtifactRunSnapshot(ctx context.Context, r *http.Request, 
 		Target: candidate, Workspace: workspace, Project: strings.TrimSpace(r.URL.Query().Get("project")), Limit: 1,
 	})
 	if err != nil {
-		return expcockpit.Snapshot{}, true, err
+		return expcockpit.Snapshot{}, source != "auto" || !errors.Is(err, expstore.ErrNotFound), err
 	}
 	if len(result.Runs) == 0 {
 		return expcockpit.Snapshot{}, true, expstore.ErrNotFound

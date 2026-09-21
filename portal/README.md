@@ -141,10 +141,13 @@ reads call `TauExpMetricEventRows()`. ADX and Function failures remain visible
 to clients. Raw `ExperimentMetrics` queries are retained only for explicit
 legacy CLI/report compatibility consumers and are not a Portal v2 fallback.
 
-The unversioned and v1 API aliases are removed. The standalone `/stellar`
-dashboard and its broad v2 snapshot/search routes remain for local
-CLI/TUI/report consumers; Kusto-backed Portal reads use the narrow typed routes
-above and never fall back to raw metrics or another source.
+Existing `/api/stellar`, `/api/v1/stellar`, broad v2 snapshot/search routes,
+`/stellar`, CLI HTML/TUI/JSON, and report/artifact consumers remain compatible.
+Dashboard-shaped routes advertise deprecation and a canonical successor.
+The native UI no longer consumes summary/metric/full snapshot modes, section
+layout customization, manual summary/page reconciliation, backend actions, or
+backend presentation colors. Removing those compatibility contracts and the
+legacy HTML renderer is deferred until their CLI/TUI/report consumers migrate.
 
 ### Typed catalog deployment
 
@@ -217,7 +220,7 @@ Nonempty `taugrid-core.portal.kusto.endpoint`/`.database` and an explicit
 `taugrid-core.portal.serviceAccount.annotations.azure.workload.identity/client-id`
 override inherited fields. Set the whole shared triple or leave it empty;
 partial connections or empty explicit client-ID annotations fail rendering.
-An absent connection preserves degraded Kusto behavior; local mode does
+An absent connection preserves degraded Kusto behavior; local/auto mode does
 not inherit it. The Service remains ClusterIP-only, and workspace-directory
 routing is not enabled. See the [chart contract](../charts/taugrid/README.md#cluster-level-adx-query-connection)
 for existing-ServiceAccount handling and override details.
