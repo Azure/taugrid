@@ -48,6 +48,11 @@ export async function fetchJSON<T>(url: string, signal: AbortSignal): Promise<T>
       const body: unknown = JSON.parse(raw);
       if (body && typeof body === 'object') {
         if ('error' in body && typeof body.error === 'string') detail = body.error;
+        if ('error' in body && body.error && typeof body.error === 'object') {
+          const nested = body.error as Record<string, unknown>;
+          if (typeof nested.message === 'string') detail = nested.message;
+          if (typeof nested.code === 'string') state = nested.code;
+        }
         if ('reason' in body && typeof body.reason === 'string') detail = body.reason;
         if ('detail' in body && typeof body.detail === 'string') detail = body.detail;
         if ('code' in body && typeof body.code === 'string') state = body.code;
