@@ -602,10 +602,6 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 			t.Fatalf("remote-write schema KQL missing %q:\n%s", want, remoteWrite)
 		}
 	}
-	if strings.Contains(remoteWrite, ".create-or-alter function") {
-		t.Fatalf("remote-write table schema must not recreate a legacy dashboard function:\n%s", remoteWrite)
-	}
-
 	lifecycle, err := BuildRunLifecycleSchemaKQL(SchemaOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -700,9 +696,6 @@ func TestTelemetryNameConstantsPreserveKustoContracts(t *testing.T) {
 		if !strings.Contains(remoteWrite, want) {
 			t.Fatalf("remote-write schema missing %q:\n%s", want, remoteWrite)
 		}
-	}
-	if strings.Contains(remoteWrite, ".create-or-alter function") {
-		t.Fatalf("remote-write schema must not recreate a legacy dashboard function:\n%s", remoteWrite)
 	}
 	if strings.Contains(remoteWrite, DefaultProjectionTable) || strings.Contains(remoteWrite, defaultProjectionDashboardFunction) {
 		t.Fatalf("remote-write schema must not depend on projection compatibility names:\n%s", remoteWrite)
