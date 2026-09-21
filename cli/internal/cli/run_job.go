@@ -588,7 +588,6 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	if interval == 0 {
 		interval = metricsoffload.DefaultInterval
 	}
-	endpoint := firstNonEmpty(policy.RemoteWriteEndpoint, metricsoffload.DefaultRemoteWriteEndpoint)
 	source := firstNonEmpty(policy.Source, metricsoffload.DefaultSource)
 	group := firstNonEmpty(o.experiment.RunGroupID, policy.Group, "default")
 	checkpointURI := strings.TrimSpace(o.checkpointPath)
@@ -621,7 +620,6 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 		Out:                     firstNonEmpty(policy.Out, path.Join(durableRoot, "offload")),
 		History:                 history,
 		CompletionFile:          "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint:     endpoint,
 		Interval:                interval,
 		ArtifactURI:             outputDir,
 		CheckpointURI:           checkpointURI,
@@ -660,17 +658,16 @@ func validateMetricsSessionID(sessionID string) error {
 
 func applyDirectMetricsOffloadEnvPolicy(opts *metricsoffload.Options) error {
 	for env, target := range map[string]*string{
-		"TAU_METRICS_OFFLOAD_RUNTIME":               &opts.Runtime,
-		"TAU_METRICS_OFFLOAD_IMAGE":                 &opts.Image,
-		"TAU_METRICS_OFFLOAD_SOURCE":                &opts.Source,
-		"TAU_METRICS_OFFLOAD_OUT":                   &opts.Out,
-		"TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT": &opts.RemoteWriteEndpoint,
-		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":         &opts.DeliveryMode,
-		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI":       &opts.ADXClusterURI,
-		"TAU_METRICS_OFFLOAD_ADX_DATABASE":          &opts.ADXDatabase,
-		"TAU_METRICS_OFFLOAD_ADX_TABLE":             &opts.ADXTable,
-		"TAU_METRICS_OFFLOAD_ADX_MAPPING":           &opts.ADXMapping,
-		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":         &opts.ADXClientID,
+		"TAU_METRICS_OFFLOAD_RUNTIME":         &opts.Runtime,
+		"TAU_METRICS_OFFLOAD_IMAGE":           &opts.Image,
+		"TAU_METRICS_OFFLOAD_SOURCE":          &opts.Source,
+		"TAU_METRICS_OFFLOAD_OUT":             &opts.Out,
+		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":   &opts.DeliveryMode,
+		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI": &opts.ADXClusterURI,
+		"TAU_METRICS_OFFLOAD_ADX_DATABASE":    &opts.ADXDatabase,
+		"TAU_METRICS_OFFLOAD_ADX_TABLE":       &opts.ADXTable,
+		"TAU_METRICS_OFFLOAD_ADX_MAPPING":     &opts.ADXMapping,
+		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":   &opts.ADXClientID,
 	} {
 		if value := strings.TrimSpace(os.Getenv(env)); value != "" {
 			*target = value

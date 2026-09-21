@@ -5,6 +5,7 @@ package expcockpit
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,16 +13,11 @@ import (
 	"github.com/Azure/taugrid/portal/internal/expstore"
 )
 
-func TestKustoCatalogSearchUsesStableFunctionsAndNotShadowReads(t *testing.T) {
+func TestKustoCatalogSearchUsesStableFunctions(t *testing.T) {
 	var queries []string
-	shadowReports := 0
 	source := KustoSource{
-		WorkspaceID:       "workspace-a",
-		AllowedProjects:   []string{"project-a"},
-		CatalogShadowRead: true,
-		CatalogShadowReport: func(KustoCatalogShadowResult) {
-			shadowReports++
-		},
+		WorkspaceID:     "workspace-a",
+		AllowedProjects: []string{"project-a"},
 		NativeQuery: func(_ context.Context, query string) (string, error) {
 			queries = append(queries, query)
 			if strings.Contains(query, exptelemetry.RunCatalogRowsFunction+"()") {
@@ -102,9 +98,6 @@ func TestKustoCatalogSearchUsesStableFunctionsAndNotShadowReads(t *testing.T) {
 		runs.Runs[0].Metrics[0].MetricName != "train/loss" {
 		t.Fatalf("unexpected catalog runs: %+v", runs)
 	}
-	if shadowReports != 0 {
-		t.Fatalf("canonical catalog reads triggered %d layer-1 shadow reports", shadowReports)
-	}
 
 	joined := strings.Join(queries, "\n")
 	if !strings.Contains(joined, exptelemetry.SeriesCatalogRowsFunction+"()") ||
@@ -124,6 +117,7 @@ func TestKustoCatalogAndSeriesKeepDuplicateRunIDsProjectScoped(t *testing.T) {
 					{"workspace_id":"workspace-a","project":"project-b","experiment_id":"experiment-b","run_id":"shared-run","first_activity_at":"2026-09-18T18:01:00Z","state":"queued","has_lifecycle":true}
 				]`, nil
 			}
+
 			return `[
 				{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-a","run_id":"shared-run","metric_name":"loss","latest_step":1,"latest_value":2},
 				{"workspace_id":"workspace-a","project":"project-b","experiment_id":"experiment-b","run_id":"shared-run","metric_name":"accuracy","latest_step":1,"latest_value":3}
@@ -152,5 +146,17 @@ func TestKustoCatalogAndSeriesKeepDuplicateRunIDsProjectScoped(t *testing.T) {
 	}
 	if !strings.Contains(query, `'project-b'`) || strings.Contains(query, `'project-a'`) {
 		t.Fatalf("series query was not project scoped:\n%s", query)
+	}
+}
+
+func TestKustoCatalogRequiresLiveQueryTransport(t *testing.T) {
+	source := KustoSource{MetricsFile: filepath.Join(t.TempDir(), "legacy-metrics.jsonl")}
+	if _, err := source.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{Limit: 10}); err == nil ||
+		!strings.Contains(err.Error(), "live Kusto query transport") {
+		t.Fatalf("SearchCatalogExperiments error = %v", err)
+	}
+	if _, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{Limit: 10}); err == nil ||
+		!strings.Contains(err.Error(), "live Kusto query transport") {
+		t.Fatalf("SearchCatalogRuns error = %v", err)
 	}
 }

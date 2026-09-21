@@ -5,16 +5,12 @@
 #   - "Open in Experiments"  (Stellar; metrics offload writes a terminal
 #                             tau/run_status marker to Kusto on shutdown)
 #
-# Submit (offload image pinned by digest). Omitted runtime defaults to portal-v1
-# and runs `taugrid-portal experiment offload metrics` from a taugrid-portal
-# image. To use the standalone typed-spool collector instead, set
-# TAU_METRICS_OFFLOAD_RUNTIME=collector-v1 and use the new
-# taugrid-metrics-collector image. Tau does not infer runtime from image:
+# Submit with the standalone collector image and approved ADX Workload Identity:
 #
-#   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
-#   # or:
-#   export TAU_METRICS_OFFLOAD_RUNTIME=collector-v1
 #   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
+#   export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+#   export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+#   export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
 #   tau run --config tau.yaml
 #
 # NOTE (namespace): select a Ready TauWorkspace with `tau run --workspace`.
@@ -50,8 +46,8 @@ storage:
   data_pvc: blob-training       # mounted at /data
   output: /data/projects/taugrid-default/runs/portal-ray-stellar
 
-# Stellar wiring: the offload sidecar watches immutable chunks and remote-writes rows
-# (plus a terminal tau/run_status marker) to Kusto. Path is relative to
+# Stellar wiring: the collector watches immutable chunks and queues typed events
+# (plus a terminal tau/run_status marker) to ADX. Path is relative to
 # storage.output.
 metrics:
   history:

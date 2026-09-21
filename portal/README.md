@@ -49,8 +49,10 @@ CLI.
 
 ## Online metrics history
 
-`taugrid-portal experiment offload metrics --history <path-or-glob> --watch`
-tails complete JSONL rows. Empty iterations and valid rows containing only
+The legacy `taugrid-portal experiment offload metrics` command remains only as
+an offline/recovery compatibility tool. New workload sidecars use the
+standalone `taugrid-metrics-collector`. The recovery command tails complete
+JSONL rows. Empty iterations and valid rows containing only
 metadata or non-scalar values do not stop the watcher. Their consumed bytes
 are checkpointed so later scalar rows can be imported and exported without
 replaying earlier history after a restart.
@@ -133,17 +135,11 @@ The native UI uses only the narrow canonical reads:
 
 List reads use bounded limits and opaque query-bound cursors. Responses carry
 freshness, provenance, availability, partial-result warnings, and typed errors.
-The Portal value `portal.experimentCatalog.readSource` selects authoritative
-canonical discovery. `legacy` (the default) uses bounded raw
-`ExperimentMetrics` queries and does not require catalog Function CRs.
-`functions` calls the stable `TauExpSeriesCatalogRows()` and
-`TauExpRunCatalogRows()` contracts and surfaces any ADX/function failure. When
-function reads are enabled, the `adx-mon` value
-`functions.experimentCatalogSource` selects their implementation (`legacy`,
-`dual`, or `typed`).
-`--kusto-experiment-catalog-shadow-read` remains a separate diagnostic for the
-legacy dashboard path and is not used by canonical reads. Raw
-`ExperimentMetrics` remains limited to exact chart-point queries.
+Canonical v2 reads are typed-only and fail closed. Experiment and run discovery
+call `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()`; bounded series
+reads call `TauExpMetricEventRows()`. ADX and Function failures remain visible
+to clients. Raw `ExperimentMetrics` queries are retained only for explicit
+legacy CLI/report compatibility consumers and are not a Portal v2 fallback.
 
 Existing `/api/stellar`, `/api/v1/stellar`, broad v2 snapshot/search routes,
 `/stellar`, CLI HTML/TUI/JSON, and report/artifact consumers remain compatible.
@@ -153,26 +149,13 @@ layout customization, manual summary/page reconciliation, backend actions, or
 backend presentation colors. Removing those compatibility contracts and the
 legacy HTML renderer is deferred until their CLI/TUI/report consumers migrate.
 
-### Experiment catalog rollout
+### Typed catalog deployment
 
-Roll out the stacked experiment architecture in this order:
-
-1. Keep `portal.experimentCatalog.readSource=legacy` while installing the typed
-   ADX event and stable catalog functions with
-   `functions.experimentCatalogSource=legacy`.
-2. Deploy the standalone collector and validate typed delivery/parity without
-   making it required for portal reads.
-3. Deploy this Portal/API/UI layer; canonical discovery remains on bounded
-   legacy queries and chart points remain exact raw-metric reads.
-4. After the Function CRs are healthy, set
-   `portal.experimentCatalog.readSource=functions`, then change the ADX catalog
-   source to `dual` and monitor parity, missing/extra
-   identities, duplicates, freshness, lifecycle-only visibility, and query cost.
-5. Change selected environments to `typed` after parity gates pass. Roll back
-   immediately by restoring the Helm value to `legacy`; no Portal change is
-   required.
-6. Remove deprecated snapshot aliases, CLI HTML/browser rendering, iframe-era
-   assets, and `experimentsUrl` only after their remaining consumers migrate.
+Deploy the typed event table/mapping, typed catalog materialized views, and the
+three stable Functions before enabling Portal traffic. Workload sidecars require
+the standalone collector image, an approved Workload Identity client ID, and
+ADX queued-ingestion permissions. Rollback restores the previous Portal and
+collector images/charts; there is no legacy read-source switch.
 
 New `tau run` submissions attach the credential-free `tau.azure.com/launch`
 annotation (`core/experiment.Launch` v1). Run-profile capture persists it in the

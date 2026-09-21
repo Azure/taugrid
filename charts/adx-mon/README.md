@@ -271,8 +271,8 @@ retains management-command ownership. The collector uses digest-derived
 deduplication.
 
 The opt-in v1 experiment catalog creates three physical materialized views in
-the Metrics database: `TauExpSeriesCatalogV1`, `TauExpMetricRunCatalogV1`, and
-`TauExpLifecycleRunCatalogV1`. Enable
+the Metrics database: `TauExpTypedSeriesCatalogV1`,
+`TauExpTypedMetricRunCatalogV1`, and `TauExpLifecycleRunCatalogV1`. Enable
 `managementCommands.experimentCatalogV1.enabled` and the two catalog Function
 items to expose `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()`. The
 versioned views are created once with asynchronous full backfill; source-table
@@ -288,27 +288,11 @@ lifecycle rows with a blank experiment ID are included only when a unique
 metric-run identity can enrich them, and unresolved historical lifecycle-only
 rows are deliberately omitted instead of assigned a guessed experiment.
 
-Enable the physical views first and wait for their asynchronous backfills to
-complete, then enable the two stable functions. Layer-1 Portal deployments may
-subsequently enable `portal.experimentCatalog.shadowRead.enabled`; that gate
-compares catalog identities in bounded background queries but continues serving
-legacy raw `ExperimentMetrics` discovery. Raw metrics remain the source for
-bounded chart point queries and keep their existing retention policy.
-
-`functions.experimentCatalogSource` controls only the stable catalog functions
-and defaults to `legacy`:
-
-- `legacy` reads the existing `ExperimentMetrics` catalogs.
-- `dual` unions typed and legacy evidence and deduplicates the canonical
-  series/run identities. Use this for default-off shadow verification.
-- `typed` reads typed evidence for catalog discovery after parity gates pass.
-
-The raw `ExperimentMetrics` table and `ExperimentMetricsDashboardRows()` remain
-available in all modes for legacy chart points. Enable the parity and delivery
-observability functions to compare hourly point/series counts and monitor
-duplicates, missing identities, schema mismatches, and event-to-export delay before
-cutover. Rollback is a value-only change back to `legacy`; it does not delete
-typed data.
+Enable the physical views first and wait for asynchronous backfills to
+complete, then enable the stable Functions. They always read typed event/catalog
+assets and fail closed. The raw `ExperimentMetrics` table and
+`ExperimentMetricsDashboardRows()` may remain for explicit compatibility
+consumers, but Portal canonical v2 reads never use them.
 
 ### AlertRules
 

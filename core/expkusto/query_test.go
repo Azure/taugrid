@@ -6,6 +6,8 @@ package expkusto
 import (
 	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/core/exptelemetry"
 )
 
 func TestBuildMetricsQueryScopesAndDownsamples(t *testing.T) {
@@ -42,6 +44,41 @@ func TestBuildMetricsQueryScopesAndDownsamples(t *testing.T) {
 		if !strings.Contains(query, want) {
 			t.Fatalf("query missing %q:\n%s", want, query)
 		}
+	}
+}
+
+func TestBuildTypedMetricsQueryUsesStableFunctionAndBoundedScope(t *testing.T) {
+	start, end := int64(10), int64(100)
+	query, err := BuildTypedMetricsQuery(MetricsQueryOptions{
+		WorkspaceID:  "workspace-a",
+		Projects:     []string{"project-a"},
+		Target:       "run-a",
+		TargetType:   "run",
+		MetricNames:  []string{"train/loss"},
+		StartStep:    &start,
+		EndStep:      &end,
+		TargetPoints: 256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		exptelemetry.MetricEventRowsFunction + "()",
+		"workspace_id == 'workspace-a'",
+		"['project'] == 'project-a'",
+		"run_id == 'run-a'",
+		"metric_name in ('train/loss')",
+		"step >= 10",
+		"step <= 100",
+		"let target_points = 256",
+		"summarize arg_max(exported_at, *)",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("typed query missing %q:\n%s", want, query)
+		}
+	}
+	if strings.Contains(query, exptelemetry.RemoteWriteTable) || strings.Contains(query, "ExperimentMetrics") {
+		t.Fatalf("typed query referenced a legacy metrics source:\n%s", query)
 	}
 }
 

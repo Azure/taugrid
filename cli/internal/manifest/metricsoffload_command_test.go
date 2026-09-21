@@ -25,10 +25,8 @@ func TestMetricsOffloadTemplatesUseResolvedRuntimeCommand(t *testing.T) {
 			t.Fatalf("%s does not render the resolved runtime command; got command lines: %v",
 				name, commandLines(body))
 		}
-		for _, hardcoded := range []string{metricsoffload.SidecarCommand, metricsoffload.CollectorSidecarCommand} {
-			if strings.Contains(body, hardcoded) {
-				t.Fatalf("%s hard-codes runtime command %s", name, hardcoded)
-			}
+		if strings.Contains(body, metricsoffload.CollectorSidecarCommand) {
+			t.Fatalf("%s hard-codes runtime command %s", name, metricsoffload.CollectorSidecarCommand)
 		}
 	}
 }

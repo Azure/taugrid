@@ -252,13 +252,10 @@ type MetricsOffload struct {
 }
 
 const (
-	MetricsOffloadRuntimePortalV1    = "portal-v1"
 	MetricsOffloadRuntimeCollectorV1 = "collector-v1"
 
-	MetricsOffloadDeliveryRemoteWrite  = "remote-write"
-	MetricsOffloadDeliveryDualRequired = "dual-required"
-	MetricsOffloadDeliveryDualShadow   = "dual-shadow"
-	MetricsOffloadMaxADXAttempts       = 10
+	MetricsOffloadDeliveryADXRequired = "adx-required"
+	MetricsOffloadMaxADXAttempts      = 10
 )
 
 // Experiment names where a run belongs in the identity hierarchy:
@@ -652,38 +649,12 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 			return fmt.Errorf("metrics.offload.out %q must be under /data or /var/run/tau", m.Offload.Out)
 		}
 	}
-	deliveryMode, err := ResolveMetricsOffloadDeliveryMode(m.Offload.DeliveryMode)
+	_, err = ResolveMetricsOffloadDeliveryMode(m.Offload.DeliveryMode)
 	if err != nil {
 		return err
 	}
-	if deliveryMode != MetricsOffloadDeliveryRemoteWrite {
-		if runtime != MetricsOffloadRuntimeCollectorV1 {
-			return fmt.Errorf("metrics.offload.delivery_mode %q requires metrics.offload.runtime %q", deliveryMode, MetricsOffloadRuntimeCollectorV1)
-		}
-		for field, value := range map[string]string{
-			"adx_cluster_uri": m.Offload.ADXClusterURI,
-			"adx_database":    m.Offload.ADXDatabase,
-			"adx_client_id":   m.Offload.ADXClientID,
-		} {
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("metrics.offload.%s is required when delivery_mode is %q", field, deliveryMode)
-			}
-		}
-	}
-	if m.Offload.ADXMaxAttempts < 0 || m.Offload.ADXMaxAttempts > MetricsOffloadMaxADXAttempts {
-		return fmt.Errorf("metrics.offload.adx_max_attempts must be between 0 and %d", MetricsOffloadMaxADXAttempts)
-	}
-	for field, raw := range map[string]string{
-		"adx_retry_backoff":        m.Offload.ADXRetryBackoff,
-		"adx_final_status_timeout": m.Offload.ADXFinalStatusTimeout,
-	} {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		value, err := time.ParseDuration(raw)
-		if err != nil || value <= 0 {
-			return fmt.Errorf("metrics.offload.%s must be a positive duration (got %q)", field, raw)
-		}
+	if runtime != MetricsOffloadRuntimeCollectorV1 {
+		return fmt.Errorf("metrics.offload.runtime must be %q", MetricsOffloadRuntimeCollectorV1)
 	}
 	if !m.Offload.Enabled {
 		return nil
@@ -710,41 +681,53 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 			return fmt.Errorf("experiment.group: %w", err)
 		}
 	}
+	if m.Offload.ADXMaxAttempts < 0 || m.Offload.ADXMaxAttempts > MetricsOffloadMaxADXAttempts {
+		return fmt.Errorf("metrics.offload.adx_max_attempts must be between 0 and %d", MetricsOffloadMaxADXAttempts)
+	}
+	for field, raw := range map[string]string{
+		"adx_retry_backoff":        m.Offload.ADXRetryBackoff,
+		"adx_final_status_timeout": m.Offload.ADXFinalStatusTimeout,
+	} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return fmt.Errorf("metrics.offload.%s must be a positive duration (got %q)", field, raw)
+		}
+	}
 	return nil
 }
 
-// ResolveMetricsOffloadRuntime returns the executable contract declared by a
-// metrics offload image. Empty preserves the legacy portal contract.
+// ResolveMetricsOffloadRuntime returns the sole supported metrics offload
+// executable contract.
 func ResolveMetricsOffloadRuntime(value string) (string, error) {
 	switch value {
 	case "":
-		return MetricsOffloadRuntimePortalV1, nil
-	case MetricsOffloadRuntimePortalV1, MetricsOffloadRuntimeCollectorV1:
-		return value, nil
+		return MetricsOffloadRuntimeCollectorV1, nil
+	case MetricsOffloadRuntimeCollectorV1:
+		return MetricsOffloadRuntimeCollectorV1, nil
 	default:
 		return "", fmt.Errorf(
-			"metrics.offload.runtime %q is unsupported (supported: %s, %s)",
+			"metrics.offload.runtime %q is unsupported (supported: %s)",
 			value,
-			MetricsOffloadRuntimePortalV1,
 			MetricsOffloadRuntimeCollectorV1,
 		)
 	}
 }
 
 // ResolveMetricsOffloadDeliveryMode returns the collector sink contract.
-// Empty preserves remote-write-only delivery.
+// Empty selects the typed ADX-only required-delivery contract.
 func ResolveMetricsOffloadDeliveryMode(value string) (string, error) {
 	switch strings.TrimSpace(value) {
 	case "":
-		return MetricsOffloadDeliveryRemoteWrite, nil
-	case MetricsOffloadDeliveryRemoteWrite, MetricsOffloadDeliveryDualRequired, MetricsOffloadDeliveryDualShadow:
-		return strings.TrimSpace(value), nil
+		return MetricsOffloadDeliveryADXRequired, nil
+	case MetricsOffloadDeliveryADXRequired:
+		return MetricsOffloadDeliveryADXRequired, nil
 	default:
 		return "", fmt.Errorf(
-			"metrics.offload.delivery_mode must be one of %q, %q, or %q (got %q)",
-			MetricsOffloadDeliveryRemoteWrite,
-			MetricsOffloadDeliveryDualRequired,
-			MetricsOffloadDeliveryDualShadow,
+			"metrics.offload.delivery_mode must be %q (got %q)",
+			MetricsOffloadDeliveryADXRequired,
 			value,
 		)
 	}

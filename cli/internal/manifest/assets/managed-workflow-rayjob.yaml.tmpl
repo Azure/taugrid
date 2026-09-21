@@ -221,7 +221,6 @@ ${EXTRA_VOLUME_MOUNTS_HEAD}
                 - { name: TAU_METRICS_OFFLOAD_OUT, value: {{.MetricsOffload.OutYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_COMPLETION_FILE, value: {{.MetricsOffload.CompletionFileYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_INTERVAL, value: {{.MetricsOffload.IntervalYAML}} }
-                - { name: TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT, value: {{.MetricsOffload.RemoteWriteEndpointYAML}} }
 {{if .MetricsOffload.CollectorV1}}                - { name: TAU_METRICS_OFFLOAD_DELIVERY_MODE, value: {{.MetricsOffload.DeliveryModeYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI, value: {{.MetricsOffload.ADXClusterURIYAML}} }
                 - { name: TAU_METRICS_OFFLOAD_ADX_DATABASE, value: {{.MetricsOffload.ADXDatabaseYAML}} }

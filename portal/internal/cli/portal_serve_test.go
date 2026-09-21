@@ -27,33 +27,15 @@ func TestPortalRunHistoryIsExplicitlyEnabled(t *testing.T) {
 	}
 }
 
-func TestPortalExperimentCatalogShadowReadIsExplicitlyEnabled(t *testing.T) {
-	cmd := newPortalCmd()
-	serve, _, err := cmd.Find([]string{"serve"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	flag := serve.Flags().Lookup("kusto-experiment-catalog-shadow-read")
-	if flag == nil {
-		t.Fatal("portal serve is missing --kusto-experiment-catalog-shadow-read")
-	}
-	if flag.DefValue != "false" {
-		t.Fatalf("--kusto-experiment-catalog-shadow-read default = %q, want false", flag.DefValue)
-	}
-}
-
-func TestPortalExperimentCatalogReadSourceDefaultsToLegacy(t *testing.T) {
+func TestPortalHasNoCatalogReadSourceMigrationSwitch(t *testing.T) {
 	cmd := newPortalCmd()
 	serve, _, err := cmd.Find([]string{"serve"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	flag := serve.Flags().Lookup("kusto-experiment-catalog-read-source")
-	if flag == nil {
-		t.Fatal("portal serve is missing --kusto-experiment-catalog-read-source")
-	}
-	if flag.DefValue != "legacy" {
-		t.Fatalf("--kusto-experiment-catalog-read-source default = %q, want legacy", flag.DefValue)
+	if flag != nil {
+		t.Fatal("portal serve unexpectedly exposes the retired catalog read-source switch")
 	}
 }
 

@@ -8,8 +8,6 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/taugrid/core v0.0.0
-	github.com/golang/snappy v1.0.0
-	google.golang.org/protobuf v1.36.12
 )
 
 require (

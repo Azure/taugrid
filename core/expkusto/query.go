@@ -138,6 +138,60 @@ func BuildMetricsQuery(opts MetricsQueryOptions) (string, error) {
 	return b.String(), nil
 }
 
+// BuildTypedMetricsQuery builds a bounded point query over the stable typed
+// metric-event Function. It intentionally bypasses legacy projection and
+// remote-write tables.
+func BuildTypedMetricsQuery(opts MetricsQueryOptions) (string, error) {
+	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
+	opts.Project = strings.TrimSpace(opts.Project)
+	projects := normalizedProjects(opts.Project, opts.Projects)
+	opts.Target = strings.TrimSpace(opts.Target)
+	opts.TargetType = strings.ToLower(strings.TrimSpace(opts.TargetType))
+	opts.RunGroupID = strings.TrimSpace(opts.RunGroupID)
+	opts.Since = strings.TrimSpace(opts.Since)
+	if opts.TargetType == "" {
+		opts.TargetType = "auto"
+	}
+	switch opts.TargetType {
+	case "auto", "experiment", "run_group", "run":
+	default:
+		return "", fmt.Errorf("--target-type must be auto, experiment, run_group, or run")
+	}
+	if opts.Since == "" {
+		opts.Since = "7d"
+	}
+	if opts.TargetPoints == 0 {
+		opts.TargetPoints = DefaultTargetPoints
+	}
+	if opts.TargetPoints < MinTargetPoints {
+		return "", fmt.Errorf("--target-points must be at least %d", MinTargetPoints)
+	}
+	if opts.StartStep != nil && opts.EndStep != nil && *opts.StartStep > *opts.EndStep {
+		return "", fmt.Errorf("--start-step must be less than or equal to --end-step")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "let target_points = %d;\n", opts.TargetPoints)
+	b.WriteString("let scoped = materialize(\n")
+	b.WriteString(exptelemetry.MetricEventRowsFunction + "()\n")
+	if opts.Since != "" {
+		fmt.Fprintf(&b, "| where wall_time > ago(%s)\n", kqlDuration(opts.Since))
+	}
+	writeProjectFilter(&b, "['project']", projects)
+	writeMetricScopeFilters(&b, opts)
+	writeStepRangeFilters(&b, opts)
+	b.WriteString("| where isnotnull(step) and isnotnull(value)\n")
+	b.WriteString("| project exported_at, cluster, source_store_id, metric_file_id, metric_file_path, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags=tostring(tags), workspace_id\n")
+	b.WriteString(");\n")
+	writeRequestedAndMilestones(&b, opts)
+	b.WriteString("let deduped = requested\n")
+	b.WriteString("| summarize arg_max(exported_at, *) by source_store_id, metric_file_id, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, workspace_id;\n")
+	writeMetricsResult(&b, opts)
+	writeDashboardProjection(&b)
+	b.WriteString("| order by run_group_id asc, run_id asc, metric_name asc, step asc\n")
+	return b.String(), nil
+}
+
 func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
 	opts.Project = strings.TrimSpace(opts.Project)

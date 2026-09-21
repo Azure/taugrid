@@ -8,21 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
-	"github.com/golang/snappy"
-	"google.golang.org/protobuf/encoding/protowire"
 )
 
 const historyRow = `{"_step":1,"_timestamp":1700000000.25,"train/loss":0.5}` + "\n"
@@ -247,69 +240,6 @@ func TestReceiptReuseAndConfigInvalidation(t *testing.T) {
 	}
 	if first.deliveries != 2 {
 		t.Fatalf("new digest deliveries=%d, want 2", first.deliveries)
-	}
-}
-
-func TestRemoteWriteRetriesRetryableAndRejectsPermanent(t *testing.T) {
-	var attempts atomic.Int32
-	retryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if attempts.Add(1) < 3 {
-			http.Error(w, "retry", http.StatusTooManyRequests)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer retryServer.Close()
-	event := testEvent(t, "train/loss")
-	sink := &RemoteWriteSink{Endpoint: retryServer.URL, BatchSize: 1, MaxAttempts: 3, Backoff: time.Millisecond}
-	ack, err := sink.Deliver(context.Background(), MetricEventChunk{Events: []exptelemetry.MetricEvent{event}})
-	if err != nil || ack.Retries != 2 || attempts.Load() != 3 {
-		t.Fatalf("ack=%+v attempts=%d err=%v", ack, attempts.Load(), err)
-	}
-
-	attempts.Store(0)
-	permanentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts.Add(1)
-		http.Error(w, "bad", http.StatusBadRequest)
-	}))
-	defer permanentServer.Close()
-	sink.Endpoint = permanentServer.URL
-	if _, err := sink.Deliver(context.Background(), MetricEventChunk{Events: []exptelemetry.MetricEvent{event}}); err == nil {
-		t.Fatal("permanent 4xx unexpectedly succeeded")
-	}
-	if attempts.Load() != 1 {
-		t.Fatalf("permanent attempts=%d, want 1", attempts.Load())
-	}
-}
-
-func TestRemoteWriteSeriesMatchesExistingContract(t *testing.T) {
-	event := testEvent(t, "train/loss")
-	event.SourceStoreID = "store"
-	event.MetricFileID = "file-id"
-	event.MetricFilePath = "/data/history.jsonl"
-	event.Source = "stellar-online"
-	event.Split = "train"
-	event.Unit = "loss"
-	event.Tags = map[string]string{exptelemetry.TauWorkspaceTag: "workspace", "model": "small"}
-	event.EventID = ""
-	event, err := exptelemetry.NewMetricEvent(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	labels, value, timestamp := decodeSeriesForTest(t, encodeTimeSeries(event))
-	want := map[string]string{
-		"__name__": exptelemetry.RemoteWriteMetricName, "project": "project",
-		"experiment_id": "experiment", "run_group_id": "group", "run_id": "run-1",
-		"metric_name": "train/loss", "source": "stellar-online", "split": "train",
-		"unit": "loss", "step": "1", "metric_file_id": "file-id",
-		"metric_file_path": "/data/history.jsonl", "source_store_id": "store",
-		"tags": `{"model":"small","tau_workspace":"workspace"}`, "workspace_id": "workspace",
-	}
-	if fmt.Sprint(labels) != fmt.Sprint(want) {
-		t.Fatalf("labels=%v want=%v", labels, want)
-	}
-	if value != 1 || timestamp != event.WallTime.UnixMilli() {
-		t.Fatalf("sample value=%v timestamp=%d", value, timestamp)
 	}
 }
 
@@ -544,70 +474,6 @@ func testEvent(t *testing.T, name string) exptelemetry.MetricEvent {
 		t.Fatal(err)
 	}
 	return event
-}
-
-func decodeSeriesForTest(t *testing.T, raw []byte) (map[string]string, float64, int64) {
-	t.Helper()
-	labels := map[string]string{}
-	var value float64
-	var timestamp int64
-	for len(raw) > 0 {
-		number, wireType, n := protowire.ConsumeTag(raw)
-		if n < 0 || wireType != protowire.BytesType {
-			t.Fatalf("invalid time series tag: %d %v %d", number, wireType, n)
-		}
-		raw = raw[n:]
-		field, n := protowire.ConsumeBytes(raw)
-		if n < 0 {
-			t.Fatalf("invalid time series field: %d", n)
-		}
-		raw = raw[n:]
-		switch number {
-		case 1:
-			var name, labelValue string
-			for len(field) > 0 {
-				labelNumber, labelType, consumed := protowire.ConsumeTag(field)
-				if consumed < 0 || labelType != protowire.BytesType {
-					t.Fatal("invalid label")
-				}
-				field = field[consumed:]
-				text, consumed := protowire.ConsumeString(field)
-				if consumed < 0 {
-					t.Fatal("invalid label value")
-				}
-				field = field[consumed:]
-				if labelNumber == 1 {
-					name = text
-				} else if labelNumber == 2 {
-					labelValue = text
-				}
-			}
-			labels[name] = labelValue
-		case 2:
-			sampleNumber, sampleType, consumed := protowire.ConsumeTag(field)
-			if sampleNumber != 1 || sampleType != protowire.Fixed64Type || consumed < 0 {
-				t.Fatal("invalid sample value tag")
-			}
-			field = field[consumed:]
-			bits, consumed := protowire.ConsumeFixed64(field)
-			if consumed < 0 {
-				t.Fatal("invalid sample value")
-			}
-			value = math.Float64frombits(bits)
-			field = field[consumed:]
-			sampleNumber, sampleType, consumed = protowire.ConsumeTag(field)
-			if sampleNumber != 2 || sampleType != protowire.VarintType || consumed < 0 {
-				t.Fatal("invalid sample timestamp tag")
-			}
-			field = field[consumed:]
-			rawTimestamp, consumed := protowire.ConsumeVarint(field)
-			if consumed < 0 {
-				t.Fatal("invalid sample timestamp")
-			}
-			timestamp = int64(rawTimestamp)
-		}
-	}
-	return labels, value, timestamp
 }
 
 func TestCompletionFallsBackToFileModTime(t *testing.T) {
@@ -985,46 +851,6 @@ func TestSpoolMetadataAndJSONFramingFailClosed(t *testing.T) {
 		options.CompletionFile = completion
 		expectRunError(t, options, "completion")
 	})
-}
-
-func TestRemoteWriteRequestCompatibilityHeadersAndFraming(t *testing.T) {
-	event := testEvent(t, "train/loss")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Content-Encoding"); got != "snappy" {
-			t.Errorf("Content-Encoding=%q", got)
-		}
-		if got := r.Header.Get("Content-Type"); got != "application/x-protobuf" {
-			t.Errorf("Content-Type=%q", got)
-		}
-		if got := r.Header.Get("X-Prometheus-Remote-Write-Version"); got != "0.1.0" {
-			t.Errorf("remote-write version=%q", got)
-		}
-		compressed, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		raw, err := snappy.Decode(nil, compressed)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		number, wireType, n := protowire.ConsumeTag(raw)
-		if number != 1 || wireType != protowire.BytesType || n < 0 {
-			t.Errorf("invalid WriteRequest tag: %d %v %d", number, wireType, n)
-			return
-		}
-		_, fieldBytes := protowire.ConsumeBytes(raw[n:])
-		if fieldBytes < 0 || n+fieldBytes != len(raw) {
-			t.Errorf("invalid WriteRequest timeseries: %d", n)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-	sink := &RemoteWriteSink{Endpoint: server.URL, MaxAttempts: 1}
-	if _, err := sink.Deliver(context.Background(), MetricEventChunk{Events: []exptelemetry.MetricEvent{event}}); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func failOnce(want faultPoint) func(faultPoint) error {

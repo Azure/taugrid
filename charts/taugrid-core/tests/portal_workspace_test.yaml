@@ -37,55 +37,20 @@ tests:
           path: kind
           value: Deployment
 
-  - it: enables typed experiment catalog shadow reads explicitly
-    set:
-      portal.enabled: true
-      portal.image.tag: pinned
-      portal.experimentCatalog.shadowRead.enabled: true
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --kusto-experiment-catalog-shadow-read
-        documentSelector:
-          path: kind
-          value: Deployment
-
-  - it: serves legacy experiment discovery by default
+  - it: uses the typed catalog contract without migration switches
     set:
       portal.enabled: true
       portal.image.tag: pinned
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].args
           content: --kusto-experiment-catalog-read-source
         documentSelector:
           path: kind
           value: Deployment
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].args
-          content: legacy
+          content: --kusto-experiment-catalog-shadow-read
         documentSelector:
           path: kind
           value: Deployment
-
-  - it: enables function-backed canonical discovery explicitly
-    set:
-      portal.enabled: true
-      portal.image.tag: pinned
-      portal.experimentCatalog.readSource: functions
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: functions
-        documentSelector:
-          path: kind
-          value: Deployment
-
-  - it: rejects an unknown experiment catalog read source
-    set:
-      portal.enabled: true
-      portal.image.tag: pinned
-      portal.experimentCatalog.readSource: fallback
-    asserts:
-      - failedTemplate:
-          errorMessage: "portal.experimentCatalog.readSource must be one of: legacy, functions"

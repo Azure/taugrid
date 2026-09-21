@@ -10,13 +10,11 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: creates legacy physical catalogs without implicit backfill
+  - it: creates only typed metric catalogs and the lifecycle catalog
     template: templates/management-commands/experiment-catalog-v1.yaml
     set:
       managementCommands.experimentCatalogV1.enabled: true
     asserts:
-      - hasDocuments:
-          count: 1
       - isKind:
           of: ManagementCommand
       - equal:
@@ -24,36 +22,24 @@ tests:
           value: Metrics
       - matchRegex:
           path: spec.body
-          pattern: '\.create ifnotexists materialized-view TauExpSeriesCatalogV1'
+          pattern: 'TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1'
       - matchRegex:
           path: spec.body
-          pattern: '\.create ifnotexists materialized-view TauExpMetricRunCatalogV1'
-      - matchRegex:
-          path: spec.body
-          pattern: '\.create ifnotexists materialized-view TauExpLifecycleRunCatalogV1'
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpSeriesCatalogV1 on table ExperimentMetrics'
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpMetricRunCatalogV1 on table ExperimentMetrics'
+          pattern: 'TauExpTypedMetricRunCatalogV1 on table TauExpMetricEventsV1'
       - matchRegex:
           path: spec.body
           pattern: 'TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle'
       - notMatchRegex:
           path: spec.body
-          pattern: '\.alter-merge table TauExp(Series|MetricRun|TypedSeries|TypedMetricRun|LifecycleRun)CatalogV1 policy retention'
+          pattern: 'TauExpSeriesCatalogV1 on table ExperimentMetrics'
       - notMatchRegex:
           path: spec.body
-          pattern: 'backfill=true'
+          pattern: 'TauExpMetricRunCatalogV1 on table ExperimentMetrics'
       - notMatchRegex:
           path: spec.body
-          pattern: 'TauExpTypedSeriesCatalogV1'
-      - notMatchRegex:
-          path: spec.body
-          pattern: 'update policy'
+          pattern: '\.alter-merge table TauExp.*CatalogV1 policy retention'
 
-  - it: uses verified async materialized view syntax only when backfill is enabled
+  - it: uses verified async syntax only when backfill is enabled
     template: templates/management-commands/experiment-catalog-v1.yaml
     set:
       managementCommands.experimentCatalogV1.enabled: true
@@ -61,81 +47,13 @@ tests:
     asserts:
       - matchRegex:
           path: spec.body
-          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpSeriesCatalogV1'
+          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpTypedSeriesCatalogV1'
       - matchRegex:
           path: spec.body
-          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpMetricRunCatalogV1'
+          pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpTypedMetricRunCatalogV1'
       - matchRegex:
           path: spec.body
           pattern: '\.create async ifnotexists materialized-view with \(backfill=true\) TauExpLifecycleRunCatalogV1'
-      - notMatchRegex:
-          path: spec.body
-          pattern: '\.create async ifnotexists materialized-view TauExp'
-
-  - it: creates both physical metric catalogs for dual shadow delivery
-    template: templates/management-commands/experiment-catalog-v1.yaml
-    set:
-      managementCommands.experimentCatalogV1.enabled: true
-      functions.experimentCatalogSource: dual
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpSeriesCatalogV1 on table ExperimentMetrics'
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1'
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpMetricRunCatalogV1 on table ExperimentMetrics'
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpTypedMetricRunCatalogV1 on table TauExpMetricEventsV1'
-
-  - it: creates only typed metric catalogs after cutover
-    template: templates/management-commands/experiment-catalog-v1.yaml
-    set:
-      managementCommands.experimentCatalogV1.enabled: true
-      functions.experimentCatalogSource: typed
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1'
-      - notMatchRegex:
-          path: spec.body
-          pattern: 'TauExpSeriesCatalogV1 on table ExperimentMetrics'
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle'
-
-  - it: uses dynamic metric labels and monotonic lifecycle buckets
-    template: templates/management-commands/experiment-catalog-v1.yaml
-    set:
-      managementCommands.experimentCatalogV1.enabled: true
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'coalesce\(tostring\(Labels.experiment_id\), tostring\(Labels.question_id\),'
-      - matchRegex:
-          path: spec.body
-          pattern: "is_terminal_marker = metric_name == 'tau/run_status' and status_state in"
-      - matchRegex:
-          path: spec.body
-          pattern: "is_terminal = tolower\\(state\\) in \\('succeeded', 'failed', 'cancelled'\\)"
-      - matchRegex:
-          path: spec.body
-          pattern: 'by lifecycle_cluster = cluster, lifecycle_namespace = namespace, durable_identity, is_terminal'
-      - matchRegex:
-          path: spec.body
-          pattern: "run_group_id, run_id, metric_name\\n"
-      - notMatchRegex:
-          path: spec.body
-          pattern: 'run_id, metric_name, unit, source, split'
-
-  - it: suppresses stable catalog functions by default
-    template: templates/functions/tau-exp-series-catalog-rows.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
 
   - it: renders the typed stable series function
     template: templates/functions/tau-exp-series-catalog-rows.yaml
@@ -144,67 +62,20 @@ tests:
     asserts:
       - isKind:
           of: Function
-      - equal:
-          path: spec.database
-          value: Metrics
       - matchRegex:
           path: spec.body
-          pattern: 'TauExpSeriesCatalogRows\(\)'
-      - matchRegex:
-          path: spec.body
-          pattern: "catalog_version = 'v1'"
-      - matchRegex:
-          path: spec.body
-          pattern: 'latest_step = tolong\(step_value\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'latest_value = todouble\(metric_value\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'summarize[\s\S]*by workspace_id, cluster, source_store_id, \['
+          pattern: 'TauExpTypedSeriesCatalogV1'
       - matchRegex:
           path: spec.body
           pattern: "\\['project'\\] = \\['project'\\]"
       - notMatchRegex:
           path: spec.body
+          pattern: 'ExperimentMetrics'
+      - notMatchRegex:
+          path: spec.body
           pattern: '(^|\n)[[:space:]]+project ='
 
-  - it: unions and deduplicates legacy and typed series during shadow delivery
-    template: templates/functions/tau-exp-series-catalog-rows.yaml
-    set:
-      functions.items.tauExpSeriesCatalogRows.enabled: true
-      functions.experimentCatalogSource: dual
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'let legacy_rows'
-      - matchRegex:
-          path: spec.body
-          pattern: 'let typed_rows'
-      - matchRegex:
-          path: spec.body
-          pattern: 'union legacy_rows, typed_rows'
-      - matchRegex:
-          path: spec.body
-          pattern: "by workspace_id, cluster, source_store_id, \\['project'\\], experiment_id"
-
-  - it: renders typed-only stable series after cutover
-    template: templates/functions/tau-exp-series-catalog-rows.yaml
-    set:
-      functions.items.tauExpSeriesCatalogRows.enabled: true
-      functions.experimentCatalogSource: typed
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'let typed_rows'
-      - notMatchRegex:
-          path: spec.body
-          pattern: 'TauExpSeriesCatalogV1'
-      - notMatchRegex:
-          path: spec.body
-          pattern: 'union legacy_rows'
-
-  - it: renders the full outer stable run function
+  - it: renders typed metric and lifecycle run evidence
     template: templates/functions/tau-exp-run-catalog-rows.yaml
     set:
       functions.items.tauExpRunCatalogRows.enabled: true
@@ -213,75 +84,22 @@ tests:
           of: Function
       - matchRegex:
           path: spec.body
-          pattern: 'TauExpRunCatalogRows\(\)'
+          pattern: 'TauExpTypedMetricRunCatalogV1'
       - matchRegex:
           path: spec.body
-          pattern: 'experiment_id_count = dcount\(experiment_id\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'iff\(experiment_id_count == 1, candidate_experiment_id,'
+          pattern: 'TauExpLifecycleRunCatalogV1'
       - matchRegex:
           path: spec.body
           pattern: 'join kind=fullouter lifecycle_runs'
       - matchRegex:
           path: spec.body
-          pattern: 'lifecycle_is_terminal, lifecycle_state'
-      - matchRegex:
-          path: spec.body
-          pattern: "catalog_version = 'v1'"
-      - matchRegex:
-          path: spec.body
-          pattern: 'metric_series_count'
-      - matchRegex:
-          path: spec.body
-          pattern: "TauExpSeriesCatalogRows\\(\\)[\\s\\S]*metric_name != 'tau/run_status'"
-      - matchRegex:
-          path: spec.body
-          pattern: 'has_metrics = isnotnull\(metric_latest_time\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'join kind=fullouter lifecycle_runs on workspace_id, cluster'
-      - matchRegex:
-          path: spec.body
-          pattern: 'experiment_tracking'
-      - matchRegex:
-          path: spec.body
           pattern: "\\['project'\\] = tostring\\(catalog_project\\)"
-      - notMatchRegex:
-          path: spec.body
-          pattern: '(^|\n)[[:space:]]+project ='
-
-  - it: unions and deduplicates metric run evidence during shadow delivery
-    template: templates/functions/tau-exp-run-catalog-rows.yaml
-    set:
-      functions.items.tauExpRunCatalogRows.enabled: true
-      functions.experimentCatalogSource: dual
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'union legacy_metric_runs, typed_metric_runs'
-      - matchRegex:
-          path: spec.body
-          pattern: 'metric_first_time = min\(metric_first_time\)'
-      - matchRegex:
-          path: spec.body
-          pattern: 'lifecycle_is_terminal, lifecycle_state'
-
-  - it: renders typed-only metric run evidence after cutover
-    template: templates/functions/tau-exp-run-catalog-rows.yaml
-    set:
-      functions.items.tauExpRunCatalogRows.enabled: true
-      functions.experimentCatalogSource: typed
-    asserts:
-      - matchRegex:
-          path: spec.body
-          pattern: 'TauExpTypedMetricRunCatalogV1'
       - notMatchRegex:
           path: spec.body
           pattern: 'TauExpMetricRunCatalogV1'
       - notMatchRegex:
           path: spec.body
-          pattern: 'union legacy_metric_runs'
+          pattern: '(^|\n)[[:space:]]+project ='
 
   - it: suppresses run catalog when functions are globally disabled
     template: templates/functions/tau-exp-run-catalog-rows.yaml

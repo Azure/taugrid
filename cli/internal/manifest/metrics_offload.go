@@ -13,10 +13,9 @@ import (
 )
 
 const (
-	defaultMetricsOffloadProject             = "tau-finetune"
-	defaultMetricsOffloadSource              = metricsoffload.DefaultSource
-	defaultMetricsOffloadInterval            = metricsoffload.DefaultInterval
-	defaultMetricsOffloadRemoteWriteEndpoint = metricsoffload.DefaultRemoteWriteEndpoint
+	defaultMetricsOffloadProject  = "tau-finetune"
+	defaultMetricsOffloadSource   = metricsoffload.DefaultSource
+	defaultMetricsOffloadInterval = metricsoffload.DefaultInterval
 )
 
 // MetricsOffloadOptions configures the sidecar-only RayJob metrics offload
@@ -38,7 +37,6 @@ type metricsOffloadRuntime struct {
 	CompletionFile        string
 	DoneFile              string
 	DoneTimeout           time.Duration
-	RemoteWriteEndpoint   string
 	Interval              time.Duration
 	DeliveryMode          string
 	ADXClusterURI         string
@@ -70,7 +68,6 @@ type metricsOffloadTemplateData struct {
 	DoneFileShell             string
 	DoneFileYAML              string
 	DoneTimeoutSeconds        int64
-	RemoteWriteEndpointYAML   string
 	IntervalYAML              string
 	DeliveryModeYAML          string
 	ADXClusterURIYAML         string
@@ -109,23 +106,20 @@ func (opts RenderOptions) metricsOffloadRuntime(kind string) (metricsOffloadRunt
 	store := firstNonEmpty(mo.Store, runDir+"/metrics-expstore")
 	out := firstNonEmpty(mo.Out, runDir+"/metrics-offload")
 	source := firstNonEmpty(mo.Source, defaultMetricsOffloadSource)
-	endpoint := firstNonEmpty(mo.RemoteWriteEndpoint, defaultMetricsOffloadRemoteWriteEndpoint)
 	deliveryMode, err := metricsoffload.ResolveDeliveryMode(mo.DeliveryMode)
 	if err != nil {
 		return metricsOffloadRuntime{}, err
 	}
-	if deliveryMode != metricsoffload.DeliveryRemoteWrite {
-		if runtime != metricsoffload.RuntimeCollectorV1 {
-			return metricsOffloadRuntime{}, fmt.Errorf("--metrics-offload delivery mode %q requires runtime %q", deliveryMode, metricsoffload.RuntimeCollectorV1)
-		}
-		for field, value := range map[string]string{
-			"ADX cluster URI": mo.ADXClusterURI,
-			"ADX database":    mo.ADXDatabase,
-			"ADX client ID":   mo.ADXClientID,
-		} {
-			if strings.TrimSpace(value) == "" {
-				return metricsOffloadRuntime{}, fmt.Errorf("--metrics-offload %s is required for delivery mode %q", field, deliveryMode)
-			}
+	if runtime != metricsoffload.RuntimeCollectorV1 {
+		return metricsOffloadRuntime{}, fmt.Errorf("--metrics-offload runtime must be %q", metricsoffload.RuntimeCollectorV1)
+	}
+	for field, value := range map[string]string{
+		"ADX cluster URI": mo.ADXClusterURI,
+		"ADX database":    mo.ADXDatabase,
+		"ADX client ID":   mo.ADXClientID,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return metricsOffloadRuntime{}, fmt.Errorf("--metrics-offload %s is required for delivery mode %q", field, deliveryMode)
 		}
 	}
 	if mo.ADXMaxAttempts < 0 || mo.ADXMaxAttempts > metricsoffload.MaxADXAttempts {
@@ -159,7 +153,6 @@ func (opts RenderOptions) metricsOffloadRuntime(kind string) (metricsOffloadRunt
 		CompletionFile:        runDir + "/metrics-completion.json",
 		DoneFile:              runDir + "/metrics-done.json",
 		DoneTimeout:           metricsoffload.DefaultDoneTimeout,
-		RemoteWriteEndpoint:   endpoint,
 		Interval:              interval,
 		DeliveryMode:          deliveryMode,
 		ADXClusterURI:         strings.TrimSpace(mo.ADXClusterURI),
@@ -187,7 +180,7 @@ func (m metricsOffloadRuntime) templateData() metricsOffloadTemplateData {
 	}
 	return metricsOffloadTemplateData{
 		Enabled:                   true,
-		CollectorV1:               m.Runtime == metricsoffload.RuntimeCollectorV1,
+		CollectorV1:               true,
 		CommandYAML:               quoteYAMLString(command),
 		ArgsPrefixYAML:            strings.Join(quotedArgs, ", "),
 		ImageYAML:                 quoteYAMLString(m.Image),
@@ -204,7 +197,6 @@ func (m metricsOffloadRuntime) templateData() metricsOffloadTemplateData {
 		DoneFileShell:             shellQuote(m.DoneFile),
 		DoneFileYAML:              quoteYAMLString(m.DoneFile),
 		DoneTimeoutSeconds:        int64(m.DoneTimeout / time.Second),
-		RemoteWriteEndpointYAML:   quoteYAMLString(m.RemoteWriteEndpoint),
 		IntervalYAML:              quoteYAMLString(m.Interval.String()),
 		DeliveryModeYAML:          quoteYAMLString(m.DeliveryMode),
 		ADXClusterURIYAML:         quoteYAMLString(m.ADXClusterURI),

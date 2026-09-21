@@ -52,8 +52,8 @@ func TestRunCollectHelp(t *testing.T) {
 	if err := run([]string{"collect", "--help"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "-remote-write-endpoint") {
-		t.Fatalf("collect help output = %q", stderr.String())
+	if strings.Contains(stderr.String(), "remote-write") {
+		t.Fatalf("collect help unexpectedly exposes remote-write: %q", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "-delivery-mode") ||
 		!strings.Contains(stderr.String(), "-adx-cluster-uri") ||
@@ -81,6 +81,9 @@ func TestRunCollectUsesManagedWorkflowEnvironment(t *testing.T) {
 		"TAU_METRICS_OFFLOAD_COMPLETION_FILE": filepath.Join(root, "completion.json"),
 		"TAU_METRICS_OFFLOAD_INTERVAL":        "1ms",
 		"TAU_METRICS_OFFLOAD_TAGS":            "tau_workspace=workspace,tau_namespace=namespace",
+		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI": "https://cluster.kusto.windows.net",
+		"TAU_METRICS_OFFLOAD_ADX_DATABASE":    "metrics",
+		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":   "00000000-0000-0000-0000-000000000001",
 	} {
 		t.Setenv(name, value)
 	}
@@ -97,7 +100,7 @@ func TestRunCollectUsesManagedWorkflowEnvironment(t *testing.T) {
 	}
 }
 
-func TestRunCollectAcceptsOptionalADXEnvironment(t *testing.T) {
+func TestRunCollectAcceptsRequiredADXEnvironment(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
 	if err := os.WriteFile(history, nil, 0o644); err != nil {
@@ -111,8 +114,7 @@ func TestRunCollectAcceptsOptionalADXEnvironment(t *testing.T) {
 		"TAU_METRICS_OFFLOAD_GROUP":                    "group",
 		"TAU_METRICS_OFFLOAD_SOURCE":                   "source",
 		"TAU_METRICS_OFFLOAD_OUT":                      filepath.Join(root, "out"),
-		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":            "dual-shadow",
-		"TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT":    "https://prometheus.example/api/v1/write",
+		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":            "adx-required",
 		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI":          "https://cluster.kusto.windows.net",
 		"TAU_METRICS_OFFLOAD_ADX_DATABASE":             "metrics",
 		"TAU_METRICS_OFFLOAD_ADX_TABLE":                "MetricEvents",
@@ -144,8 +146,7 @@ func TestRunCollectRejectsPartialADXConfiguration(t *testing.T) {
 	err := run([]string{
 		"collect", "--run", "run", "--project", "project", "--experiment", "experiment",
 		"--group", "group", "--out", filepath.Join(root, "out"), "--history", history,
-		"--delivery-mode", "dual-required",
-		"--remote-write-endpoint", "https://prometheus.example/api/v1/write",
+		"--delivery-mode", "adx-required",
 		"--adx-cluster-uri", "https://cluster.kusto.windows.net",
 	}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "--adx-database") {

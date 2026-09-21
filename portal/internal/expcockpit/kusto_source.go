@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"sort"
 	"strconv"
@@ -26,13 +25,10 @@ import (
 )
 
 const defaultKustoRunStaleAfter = 15 * time.Minute
-const defaultKustoCatalogShadowTimeout = 10 * time.Second
 const defaultKustoDiscoverySince = "90d"
 const defaultKustoMaxDiscoverySince = "365d"
 const defaultKustoTargetSince = "365d"
 const noAllowedKustoProjectMatch = "__tau_no_allowed_project_match__"
-
-var defaultKustoCatalogShadowLimiter = make(chan struct{}, 1)
 
 func KustoStorePathForIngestion(ingestion string) string {
 	switch KustoIngestionOrDefault(ingestion) {
@@ -136,24 +132,8 @@ type KustoSource struct {
 	// a shell plus a hand-rolled IMDS-token script into the distroless image.
 	// QueryCommand still wins when both are configured.
 	NativeQuery func(ctx context.Context, query string) (string, error)
-	// CatalogShadowRead executes typed catalog queries for parity diagnostics.
-	// Legacy discovery remains authoritative in this layer.
-	CatalogShadowRead bool
-	// CatalogShadowReport is primarily for tests and embedding. When nil,
-	// diagnostics are written through the standard logger.
-	CatalogShadowReport func(KustoCatalogShadowResult)
-	StaleAfter          time.Duration
-	Now                 func() time.Time
-}
-
-type KustoCatalogShadowResult struct {
-	Kind             string
-	LegacyCount      int
-	CatalogCount     int
-	MissingInCatalog int
-	ExtraInCatalog   int
-	Duration         time.Duration
-	Err              error
+	StaleAfter  time.Duration
+	Now         func() time.Time
 }
 
 // hasRemoteQuery reports whether this source can reach ADX at all — through the
@@ -163,6 +143,17 @@ func (s KustoSource) hasRemoteQuery() bool {
 }
 
 func (s KustoSource) BuildSeries(ctx context.Context, opts SeriesOptions) (SeriesDetail, error) {
+	return s.buildSeries(ctx, opts, false)
+}
+
+// BuildTypedSeries serves canonical Portal series from the stable typed metric
+// event Function. Legacy BuildSeries remains available to explicit CLI/report
+// consumers.
+func (s KustoSource) BuildTypedSeries(ctx context.Context, opts SeriesOptions) (SeriesDetail, error) {
+	return s.buildSeries(ctx, opts, true)
+}
+
+func (s KustoSource) buildSeries(ctx context.Context, opts SeriesOptions, typed bool) (SeriesDetail, error) {
 	opts.Target = strings.TrimSpace(opts.Target)
 	opts.Metric = strings.TrimSpace(opts.Metric)
 	opts.RunID = strings.TrimSpace(opts.RunID)
@@ -180,7 +171,7 @@ func (s KustoSource) BuildSeries(ctx context.Context, opts SeriesOptions) (Serie
 	if err != nil {
 		return SeriesDetail{}, err
 	}
-	rows, err := s.loadSeriesRows(ctx, opts)
+	rows, err := s.loadSeriesRows(ctx, opts, typed)
 	if err != nil {
 		return SeriesDetail{}, err
 	}
@@ -233,7 +224,7 @@ func (s KustoSource) BuildSeries(ctx context.Context, opts SeriesOptions) (Serie
 		Warnings:      warnings,
 	}
 	if s.hasRemoteQuery() {
-		rawQuery, err := s.buildKustoSeriesQuery(ctx, opts, true)
+		rawQuery, err := s.buildKustoSeriesQueryForSource(ctx, opts, true, typed)
 		if err != nil {
 			return SeriesDetail{}, err
 		}
@@ -243,12 +234,15 @@ func (s KustoSource) BuildSeries(ctx context.Context, opts SeriesOptions) (Serie
 	return detail, nil
 }
 
-func (s KustoSource) loadSeriesRows(ctx context.Context, opts SeriesOptions) ([]KustoMetricRow, error) {
+func (s KustoSource) loadSeriesRows(ctx context.Context, opts SeriesOptions, typed bool) ([]KustoMetricRow, error) {
 	if len(s.Metrics) > 0 {
+		if typed {
+			return nil, fmt.Errorf("typed series require a live Kusto query")
+		}
 		return s.Metrics, nil
 	}
 	if s.hasRemoteQuery() {
-		return s.runKustoSeriesCommand(ctx, opts)
+		return s.runKustoSeriesCommandForSource(ctx, opts, typed)
 	}
 	if strings.TrimSpace(s.MetricsFile) != "" {
 		return LoadKustoMetricRows(s.MetricsFile)
@@ -555,17 +549,6 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 		warnings = append(warnings, sinceWarnings...)
 	}
 	rows = filterKustoRowsByProjects(rows, s.effectiveProjectScope(opts.Project))
-	if s.CatalogShadowRead && s.hasRemoteQuery() && supportsExperimentCatalogShadow(opts) {
-		query, queryErr := expkusto.BuildSeriesCatalogQuery(expkusto.CatalogQueryOptions{
-			WorkspaceID: s.WorkspaceID,
-			Projects:    rawProjects,
-			Target:      opts.Target,
-			MetricNames: opts.MetricNames,
-			Since:       opts.Since,
-			Limit:       opts.Limit,
-		})
-		s.scheduleCatalogShadow("series", query, queryErr, rows)
-	}
 	summaries := kustoExperimentSummaries(rows, opts, s.sourcePath(), s.effectiveNow(), s.effectiveStaleAfter())
 	if opts.Lifecycle != "" {
 		warnings = append(warnings, "source=kusto derives lifecycle from tau/run_status markers plus metric freshness; queued runs without metrics are not visible")
@@ -639,19 +622,6 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 	if truncated {
 		runs = runs[:opts.Limit]
 	}
-	if s.CatalogShadowRead && s.hasRemoteQuery() && supportsRunCatalogShadow(opts) {
-		query, queryErr := expkusto.BuildRunCatalogQuery(expkusto.CatalogQueryOptions{
-			WorkspaceID: s.WorkspaceID,
-			Projects:    rawProjects,
-			Target:      opts.Target,
-			RunGroupID:  opts.RunGroupID,
-			RunIDs:      runSearchIDs(runs),
-			MetricNames: opts.MetricNames,
-			Since:       opts.Since,
-			Limit:       opts.Limit,
-		})
-		s.scheduleCatalogShadow("runs", query, queryErr, kustoRunShadowRows(runs, rows))
-	}
 	return expstore.RunSearchResult{
 		SchemaVersion: expstore.RunSearchSchemaVersion,
 		GeneratedAt:   s.effectiveNow().UTC().Format(time.RFC3339),
@@ -667,11 +637,10 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 // SearchCatalogExperiments reads run identities from TauExpRunCatalogRows() so
 // lifecycle-only experiments remain discoverable, then enriches them from
 // TauExpSeriesCatalogRows(). Helm selects the function implementations; Portal
-// neither knows nor models legacy/dual/typed selection. CatalogShadowRead is
-// intentionally not involved.
+// neither knows nor models alternate catalog implementations.
 func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
 	if !s.hasRemoteQuery() {
-		return s.SearchExperiments(ctx, opts)
+		return expstore.ExperimentSearchResult{}, fmt.Errorf("typed experiment catalog requires a live Kusto query transport")
 	}
 	opts = normalizeKustoExperimentSearchOptions(opts)
 	var err error
@@ -806,7 +775,7 @@ func catalogExperimentSummaries(runs []expstore.RunSearchRun, source string) []e
 // functions encapsulate Helm-time implementation selection.
 func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
 	if !s.hasRemoteQuery() {
-		return s.SearchRuns(ctx, opts)
+		return expstore.RunSearchResult{}, fmt.Errorf("typed run catalog requires a live Kusto query transport")
 	}
 	opts = normalizeKustoRunSearchOptions(opts)
 	var err error
@@ -1415,8 +1384,8 @@ func (s KustoSource) runKustoQueryCommand(ctx context.Context, opts Options) ([]
 	return s.executeKustoQueryCommand(ctx, query)
 }
 
-func (s KustoSource) runKustoSeriesCommand(ctx context.Context, opts SeriesOptions) ([]KustoMetricRow, error) {
-	query, err := s.buildKustoSeriesQuery(ctx, opts, false)
+func (s KustoSource) runKustoSeriesCommandForSource(ctx context.Context, opts SeriesOptions, typed bool) ([]KustoMetricRow, error) {
+	query, err := s.buildKustoSeriesQueryForSource(ctx, opts, false, typed)
 	if err != nil {
 		return nil, err
 	}
@@ -1424,6 +1393,10 @@ func (s KustoSource) runKustoSeriesCommand(ctx context.Context, opts SeriesOptio
 }
 
 func (s KustoSource) buildKustoSeriesQuery(ctx context.Context, opts SeriesOptions, raw bool) (string, error) {
+	return s.buildKustoSeriesQueryForSource(ctx, opts, raw, false)
+}
+
+func (s KustoSource) buildKustoSeriesQueryForSource(ctx context.Context, opts SeriesOptions, raw, typed bool) (string, error) {
 	projects, err := s.rawProjectScope(ctx, opts.Project)
 	if err != nil {
 		return "", err
@@ -1433,7 +1406,7 @@ func (s KustoSource) buildKustoSeriesQuery(ctx context.Context, opts SeriesOptio
 		runIDs = append(runIDs, opts.RunID)
 	}
 	targetPoints := max(opts.MaxPoints, expkusto.MinTargetPoints)
-	query, err := expkusto.BuildMetricsQuery(expkusto.MetricsQueryOptions{
+	queryOptions := expkusto.MetricsQueryOptions{
 		WorkspaceID:                 s.WorkspaceID,
 		Projects:                    projects,
 		Target:                      opts.Target,
@@ -1447,7 +1420,13 @@ func (s KustoSource) buildKustoSeriesQuery(ctx context.Context, opts SeriesOptio
 		TargetPoints:                targetPoints,
 		Raw:                         raw,
 		IncludeValidationMilestones: !raw,
-	})
+	}
+	var query string
+	if typed {
+		query, err = expkusto.BuildTypedMetricsQuery(queryOptions)
+	} else {
+		query, err = expkusto.BuildMetricsQuery(queryOptions)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -1478,15 +1457,6 @@ func (s KustoSource) runKustoMetricOptionsCommand(ctx context.Context, opts Opti
 	rows, err := s.executeKustoQueryCommand(ctx, query)
 	if err != nil {
 		return nil, err
-	}
-	if s.CatalogShadowRead {
-		catalogQuery, queryErr := expkusto.BuildSeriesCatalogQuery(expkusto.CatalogQueryOptions{
-			WorkspaceID: s.WorkspaceID,
-			Projects:    projects,
-			Target:      opts.Target,
-			Since:       s.effectiveTargetSince(),
-		})
-		s.scheduleCatalogShadow("metric-options", catalogQuery, queryErr, rows)
 	}
 	return rows, nil
 }
@@ -1548,146 +1518,6 @@ func (s KustoSource) executeKustoQueryCommand(ctx context.Context, query string)
 		return nil, fmt.Errorf("parse Kusto query command output: %w", err)
 	}
 	return rows, nil
-}
-
-func (s KustoSource) scheduleCatalogShadow(kind, query string, queryErr error, legacyRows []KustoMetricRow) {
-	if !s.CatalogShadowRead {
-		return
-	}
-	if queryErr != nil {
-		s.reportCatalogShadow(KustoCatalogShadowResult{Kind: kind, LegacyCount: len(legacyRows), Err: queryErr})
-		return
-	}
-	select {
-	case defaultKustoCatalogShadowLimiter <- struct{}{}:
-	default:
-		return
-	}
-	legacy := append([]KustoMetricRow(nil), legacyRows...)
-	go func() {
-		defer func() { <-defaultKustoCatalogShadowLimiter }()
-		started := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), defaultKustoCatalogShadowTimeout)
-		defer cancel()
-		catalogRows, err := s.executeKustoQueryCommand(ctx, query)
-		result := compareKustoCatalogShadow(kind, legacy, catalogRows)
-		result.Duration = time.Since(started)
-		result.Err = err
-		s.reportCatalogShadow(result)
-	}()
-}
-
-func compareKustoCatalogShadow(kind string, legacyRows, catalogRows []KustoMetricRow) KustoCatalogShadowResult {
-	legacyKeys := kustoCatalogShadowKeys(kind, legacyRows)
-	catalogKeys := kustoCatalogShadowKeys(kind, catalogRows)
-	result := KustoCatalogShadowResult{
-		Kind:         kind,
-		LegacyCount:  len(legacyKeys),
-		CatalogCount: len(catalogKeys),
-	}
-	for key := range legacyKeys {
-		if !catalogKeys[key] {
-			result.MissingInCatalog++
-		}
-	}
-	for key := range catalogKeys {
-		if !legacyKeys[key] {
-			result.ExtraInCatalog++
-		}
-	}
-	return result
-}
-
-func kustoCatalogShadowKeys(kind string, rows []KustoMetricRow) map[string]bool {
-	keys := make(map[string]bool, len(rows))
-	for _, row := range rows {
-		parts := []string{
-			row.WorkspaceID,
-			row.Cluster,
-			row.Project,
-			row.ExperimentID,
-			row.RunGroupID,
-			row.RunID,
-		}
-		if kind != "runs" {
-			parts = append(parts, row.SourceStoreID, row.MetricName)
-		}
-		keys[strings.Join(parts, "\x00")] = true
-	}
-	return keys
-}
-
-func supportsExperimentCatalogShadow(opts expstore.ExperimentSearchOptions) bool {
-	return strings.TrimSpace(opts.Query) == "" &&
-		strings.TrimSpace(opts.Lifecycle) == "" &&
-		len(opts.Tags) == 0 &&
-		len(opts.MetricFilters) == 0
-}
-
-func supportsRunCatalogShadow(opts expstore.RunSearchOptions) bool {
-	return strings.TrimSpace(opts.Query) == "" &&
-		strings.TrimSpace(opts.State) == "" &&
-		strings.TrimSpace(opts.Lifecycle) == "" &&
-		len(opts.Tags) == 0 &&
-		len(opts.MetricFilters) == 0 &&
-		opts.MinStep == nil
-}
-
-func kustoRunShadowRows(runs []expstore.RunSearchRun, rows []KustoMetricRow) []KustoMetricRow {
-	selected := make(map[string]expstore.RunSearchRun, len(runs))
-	for _, run := range runs {
-		selected[run.RunID] = run
-	}
-	out := make([]KustoMetricRow, 0, len(runs))
-	seen := map[string]bool{}
-	for _, row := range rows {
-		run, ok := selected[row.RunID]
-		if !ok || seen[row.RunID] {
-			continue
-		}
-		if row.Project != run.Project || row.ExperimentID != run.ExperimentID || row.RunGroupID != run.RunGroupID {
-			continue
-		}
-		seen[row.RunID] = true
-		out = append(out, row)
-	}
-	return out
-}
-
-func runSearchIDs(runs []expstore.RunSearchRun) []string {
-	ids := make([]string, 0, len(runs))
-	for _, run := range runs {
-		if run.RunID != "" {
-			ids = append(ids, run.RunID)
-		}
-	}
-	return ids
-}
-
-func (s KustoSource) reportCatalogShadow(result KustoCatalogShadowResult) {
-	if s.CatalogShadowReport != nil {
-		s.CatalogShadowReport(result)
-		return
-	}
-	if result.Err != nil {
-		slog.Error(
-			"experiment catalog shadow read failed",
-			"kind", result.Kind,
-			"legacy_count", result.LegacyCount,
-			"duration", result.Duration,
-			"error", result.Err,
-		)
-		return
-	}
-	slog.Info(
-		"experiment catalog shadow read completed",
-		"kind", result.Kind,
-		"legacy_count", result.LegacyCount,
-		"catalog_count", result.CatalogCount,
-		"missing_in_catalog", result.MissingInCatalog,
-		"extra_in_catalog", result.ExtraInCatalog,
-		"duration", result.Duration,
-	)
 }
 
 func expandKustoCommandArgs(args []string, endpoint, database, query string) ([]string, bool) {

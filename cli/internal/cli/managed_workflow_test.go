@@ -654,9 +654,11 @@ storage:
 	o.namespace = "ray"
 	o.queue = "dev"
 	o.dryRun = "client"
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/tau:20260618.1")
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/collector:20260618.1")
 	t.Setenv("TAU_METRICS_OFFLOAD_PROJECT", "vit-enc-vision")
-	t.Setenv("TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT", "http://${NODE_IP}:3100/receive")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {
 		t.Fatalf("managed workflow submit metrics offload dry-run: %v\nstderr:\n%s", err, stderr)
@@ -664,11 +666,11 @@ storage:
 	rendered := out
 	for _, want := range []string{
 		"name: metrics-offload",
-		"image: \"registry.example.com/taugrid/tau:20260618.1\"",
+		"image: \"registry.example.com/taugrid/collector:20260618.1\"",
 		"name: TAU_METRICS_HISTORY",
 		"value: \"/data/checkpoints/finetunes/vision-demo/metrics-history.jsonl\"",
-		`command: ["/usr/local/bin/taugrid-portal"]`,
-		`args: ["experiment", "offload", "metrics", "--watch", "--done-file", "/data/checkpoints/finetunes/vision-demo/metrics-done.json"]`,
+		`command: ["/usr/local/bin/taugrid-metrics-collector"]`,
+		`args: ["collect", "--watch", "--done-file", "/data/checkpoints/finetunes/vision-demo/metrics-done.json"]`,
 		"name: TAU_EXP_STORE",
 		"value: \"/data/checkpoints/finetunes/vision-demo/metrics-expstore\"",
 		"name: TAU_METRICS_OFFLOAD_PROJECT",
@@ -676,8 +678,8 @@ storage:
 		"name: TAU_METRICS_OFFLOAD_GROUP",
 		"name: TAU_METRICS_OFFLOAD_COMPLETION_FILE",
 		"value: \"/data/checkpoints/finetunes/vision-demo/metrics-completion.json\"",
-		"name: TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT",
-		"value: \"http://${NODE_IP}:3100/receive\"",
+		"name: TAU_METRICS_OFFLOAD_DELIVERY_MODE",
+		"value: \"adx-required\"",
 		"name: \"TAU_GROUP\"",
 		"value: \"demo-experiment\"",
 		"name: \"TAU_EXPERIMENT\"",
@@ -768,6 +770,9 @@ storage:
 	o.dryRun = "client"
 	t.Setenv("TAU_METRICS_OFFLOAD_RUNTIME", metricsoffload.RuntimeCollectorV1)
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/metrics-collector:20260918.1")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 
 	out, stderr, err := runManagedWorkflowDispatch(t, o)
 	if err != nil {

@@ -15,20 +15,16 @@ import (
 )
 
 const (
-	DefaultSource              = "stellar-online"
-	DefaultRemoteWriteEndpoint = "http://${NODE_IP}:3100/receive"
-	DefaultInterval            = 10 * time.Second
-	DefaultDoneTimeout         = 2 * time.Minute
-	DefaultADXTable            = "TauExpMetricEventsV1"
-	DefaultADXMapping          = "TauExpMetricEventsV1Json"
+	DefaultSource      = "stellar-online"
+	DefaultInterval    = 10 * time.Second
+	DefaultDoneTimeout = 2 * time.Minute
+	DefaultADXTable    = "TauExpMetricEventsV1"
+	DefaultADXMapping  = "TauExpMetricEventsV1Json"
 
-	RuntimePortalV1    = runconfig.MetricsOffloadRuntimePortalV1
 	RuntimeCollectorV1 = runconfig.MetricsOffloadRuntimeCollectorV1
 
-	DeliveryRemoteWrite  = runconfig.MetricsOffloadDeliveryRemoteWrite
-	DeliveryDualRequired = runconfig.MetricsOffloadDeliveryDualRequired
-	DeliveryDualShadow   = runconfig.MetricsOffloadDeliveryDualShadow
-	MaxADXAttempts       = runconfig.MetricsOffloadMaxADXAttempts
+	DeliveryADXRequired = runconfig.MetricsOffloadDeliveryADXRequired
+	MaxADXAttempts      = runconfig.MetricsOffloadMaxADXAttempts
 )
 
 // Options contains platform-owned offload settings plus experiment scope.
@@ -42,7 +38,6 @@ type Options struct {
 	Source                string
 	Store                 string
 	Out                   string
-	RemoteWriteEndpoint   string
 	Interval              time.Duration
 	DeliveryMode          string
 	ADXClusterURI         string
@@ -69,7 +64,6 @@ type Runtime struct {
 	Out                     string
 	History                 []string
 	CompletionFile          string
-	RemoteWriteEndpoint     string
 	Interval                time.Duration
 	ArtifactURI             string
 	CheckpointURI           string
@@ -128,25 +122,20 @@ func (r Runtime) Validate() error {
 	if r.Interval <= 0 {
 		return fmt.Errorf("metrics offload interval must be positive")
 	}
-	if strings.TrimSpace(r.RemoteWriteEndpoint) == "" {
-		return fmt.Errorf("metrics offload remote-write endpoint is required")
-	}
 	deliveryMode, err := ResolveDeliveryMode(r.DeliveryMode)
 	if err != nil {
 		return err
 	}
-	if deliveryMode != DeliveryRemoteWrite {
-		if runtime != RuntimeCollectorV1 {
-			return fmt.Errorf("metrics offload delivery mode %q requires runtime %q", deliveryMode, RuntimeCollectorV1)
-		}
-		for field, value := range map[string]string{
-			"ADX cluster URI": r.ADXClusterURI,
-			"ADX database":    r.ADXDatabase,
-			"ADX client ID":   r.ADXClientID,
-		} {
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("metrics offload %s is required for delivery mode %q", field, deliveryMode)
-			}
+	if runtime != RuntimeCollectorV1 {
+		return fmt.Errorf("metrics offload runtime must be %q", RuntimeCollectorV1)
+	}
+	for field, value := range map[string]string{
+		"ADX cluster URI": r.ADXClusterURI,
+		"ADX database":    r.ADXDatabase,
+		"ADX client ID":   r.ADXClientID,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("metrics offload %s is required for delivery mode %q", field, deliveryMode)
 		}
 	}
 	if r.ADXMaxAttempts < 0 || r.ADXMaxAttempts > MaxADXAttempts {
@@ -183,7 +172,7 @@ func ValidateRuntimeImage(runtime, image string) error {
 
 // ValidatePinnedImage rejects mutable or implicit sidecar image references.
 func ValidatePinnedImage(image string) error {
-	return ValidateRuntimeImage(RuntimePortalV1, image)
+	return ValidateRuntimeImage(RuntimeCollectorV1, image)
 }
 
 // MergeTags applies experiment overrides and then protected platform scope.

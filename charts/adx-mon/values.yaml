@@ -563,8 +563,6 @@ crds:
 # -- Pre-built Function CRDs (KQL views)
 functions:
   enabled: true
-  # -- Catalog evidence source: legacy (current source), dual (shadow), or typed (cutover).
-  experimentCatalogSource: legacy
   items:
     gpuHealth:
       enabled: true

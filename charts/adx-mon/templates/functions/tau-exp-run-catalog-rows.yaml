@@ -1,8 +1,4 @@
 {{- if and .Values.functions.enabled .Values.functions.items.tauExpRunCatalogRows.enabled }}
-{{- $catalogSource := lower .Values.functions.experimentCatalogSource }}
-{{- if not (has $catalogSource (list "legacy" "dual" "typed")) }}
-{{- fail "functions.experimentCatalogSource must be one of: legacy, dual, typed" }}
-{{- end }}
 apiVersion: adx-mon.azure.com/v1
 kind: Function
 metadata:
@@ -21,27 +17,6 @@ spec:
         | where metric_name != 'tau/run_status'
         | summarize metric_series_count = count()
           by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id;
-      {{- if ne $catalogSource "typed" }}
-      let legacy_metric_runs =
-        TauExpMetricRunCatalogV1
-        | project
-            workspace_id = tostring(workspace_id),
-            cluster = tostring(cluster),
-            metric_source_store_id = tostring(source_store_id),
-            ['project'] = tostring(['project']),
-            experiment_id = tostring(experiment_id),
-            run_group_id = tostring(run_group_id),
-            run_id = tostring(run_id),
-            metric_first_time = todatetime(first_metric_time),
-            metric_latest_time = todatetime(latest_metric_time),
-            metric_terminal_observed_at = todatetime(terminal_observed_at),
-            metric_terminal_state = tolower(tostring(terminal_state)),
-            metric_terminal_reason = tostring(terminal_reason),
-            metric_terminal_message = tostring(terminal_message),
-            metric_terminal_artifact_uri = tostring(terminal_artifact_uri),
-            metric_terminal_checkpoint_uri = tostring(terminal_checkpoint_uri);
-      {{- end }}
-      {{- if ne $catalogSource "legacy" }}
       let typed_metric_runs =
         TauExpTypedMetricRunCatalogV1
         | project
@@ -60,15 +35,8 @@ spec:
             metric_terminal_message = tostring(terminal_message),
             metric_terminal_artifact_uri = tostring(terminal_artifact_uri),
             metric_terminal_checkpoint_uri = tostring(terminal_checkpoint_uri);
-      {{- end }}
       let metric_run_evidence =
-        {{- if eq $catalogSource "legacy" }}
-        legacy_metric_runs
-        {{- else if eq $catalogSource "typed" }}
         typed_metric_runs
-        {{- else }}
-        union legacy_metric_runs, typed_metric_runs
-        {{- end }}
         | extend metric_latest_rank = metric_latest_time, terminal_rank = metric_terminal_observed_at
         | summarize
             metric_first_time = min(metric_first_time),

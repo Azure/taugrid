@@ -127,7 +127,6 @@ func managedWorkflowMetricsOffload(ctx context.Context) (manifest.MetricsOffload
 	fromEnv("TAU_METRICS_OFFLOAD_SOURCE", &opts.Source)
 	fromEnv("TAU_METRICS_OFFLOAD_STORE", &opts.Store)
 	fromEnv("TAU_METRICS_OFFLOAD_OUT", &opts.Out)
-	fromEnv("TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT", &opts.RemoteWriteEndpoint)
 	fromEnv("TAU_METRICS_OFFLOAD_DELIVERY_MODE", &opts.DeliveryMode)
 	fromEnv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", &opts.ADXClusterURI)
 	fromEnv("TAU_METRICS_OFFLOAD_ADX_DATABASE", &opts.ADXDatabase)

@@ -24,9 +24,7 @@ import (
 const binaryName = "taugrid-metrics-collector"
 
 const (
-	deliveryModeRemoteWrite  = "remote-write"
-	deliveryModeDualRequired = "dual-required"
-	deliveryModeDualShadow   = "dual-shadow"
+	deliveryModeADXRequired = "adx-required"
 )
 
 type repeated []string
@@ -62,9 +60,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	var histories, rawTags repeated
 	var options collector.Options
-	var deliveryMode, endpoint, adxClusterURI, adxDatabase, adxTable, adxMapping, adxClientID string
-	var batchSize, maxAttempts, adxMaxAttempts int
-	var backoff, adxBackoff, adxFinalTimeout time.Duration
+	var deliveryMode, adxClusterURI, adxDatabase, adxTable, adxMapping, adxClientID string
+	var adxMaxAttempts int
+	var adxBackoff, adxFinalTimeout time.Duration
 	flags.StringVar(&options.Run, "run", "", "run id")
 	flags.StringVar(&options.Project, "project", "", "project id")
 	flags.StringVar(&options.Experiment, "experiment", "", "experiment id")
@@ -75,8 +73,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.Var(&rawTags, "tag", "tag key=value (repeatable)")
 	flags.StringVar(&options.CompletionFile, "completion-file", "", "workload completion sentinel")
 	flags.DurationVar(&options.Interval, "interval", time.Minute, "watch polling interval")
-	flags.StringVar(&deliveryMode, "delivery-mode", deliveryModeRemoteWrite, "delivery mode: remote-write, dual-required, or dual-shadow")
-	flags.StringVar(&endpoint, "remote-write-endpoint", "", "Prometheus remote-write endpoint")
+	flags.StringVar(&deliveryMode, "delivery-mode", deliveryModeADXRequired, "delivery mode: adx-required")
 	flags.StringVar(&adxClusterURI, "adx-cluster-uri", "", "Azure Data Explorer cluster URI")
 	flags.StringVar(&adxDatabase, "adx-database", "", "Azure Data Explorer database")
 	flags.StringVar(&adxTable, "adx-table", "TauExpMetricEventsV1", "Azure Data Explorer metric event table")
@@ -87,9 +84,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&options.DoneFile, "done-file", "", "terminal delivery sentinel")
 	flags.StringVar(&options.StatusArtifactURI, "status-artifact-uri", "", "terminal artifact URI tag")
 	flags.StringVar(&options.StatusCheckpointURI, "status-checkpoint-uri", "", "terminal checkpoint URI tag")
-	flags.IntVar(&batchSize, "remote-write-batch-size", 5000, "samples per remote-write request")
-	flags.IntVar(&maxAttempts, "remote-write-max-attempts", 3, "maximum attempts per remote-write request")
-	flags.DurationVar(&backoff, "remote-write-retry-backoff", time.Second, "initial retry backoff")
 	flags.IntVar(&adxMaxAttempts, "adx-max-attempts", 3, "maximum ADX queued ingestion attempts")
 	flags.DurationVar(&adxBackoff, "adx-retry-backoff", time.Second, "initial ADX retry backoff")
 	flags.DurationVar(&adxFinalTimeout, "adx-final-status-timeout", 10*time.Minute, "maximum wait for terminal ADX ingestion status")
@@ -123,7 +117,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	applyStringEnvDefault(changed, "status-artifact-uri", &options.StatusArtifactURI, "TAU_METRICS_OFFLOAD_ARTIFACT_URI")
 	applyStringEnvDefault(changed, "status-checkpoint-uri", &options.StatusCheckpointURI, "TAU_METRICS_OFFLOAD_CHECKPOINT_URI")
 	applyStringEnvDefault(changed, "delivery-mode", &deliveryMode, "TAU_METRICS_OFFLOAD_DELIVERY_MODE")
-	applyStringEnvDefault(changed, "remote-write-endpoint", &endpoint, "TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT")
 	applyStringEnvDefault(changed, "adx-cluster-uri", &adxClusterURI, "TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI")
 	applyStringEnvDefault(changed, "adx-database", &adxDatabase, "TAU_METRICS_OFFLOAD_ADX_DATABASE")
 	applyStringEnvDefault(changed, "adx-table", &adxTable, "TAU_METRICS_OFFLOAD_ADX_TABLE")
@@ -134,7 +127,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		target   *time.Duration
 		envName  string
 	}{
-		{"remote-write-retry-backoff", &backoff, "TAU_METRICS_OFFLOAD_REMOTE_WRITE_RETRY_BACKOFF"},
 		{"adx-retry-backoff", &adxBackoff, "TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF"},
 		{"adx-final-status-timeout", &adxFinalTimeout, "TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT"},
 	} {
@@ -147,8 +139,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		target   *int
 		envName  string
 	}{
-		{"remote-write-batch-size", &batchSize, "TAU_METRICS_OFFLOAD_REMOTE_WRITE_BATCH_SIZE"},
-		{"remote-write-max-attempts", &maxAttempts, "TAU_METRICS_OFFLOAD_REMOTE_WRITE_MAX_ATTEMPTS"},
 		{"adx-max-attempts", &adxMaxAttempts, "TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS"},
 	} {
 		if err := applyIntEnvDefault(changed, intDefault.flagName, intDefault.target, intDefault.envName); err != nil {
@@ -171,15 +161,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 		}
 	}
-	if batchSize <= 0 {
-		return fmt.Errorf("--remote-write-batch-size must be positive")
-	}
-	if maxAttempts < 0 {
-		return fmt.Errorf("--remote-write-max-attempts must be nonnegative")
-	}
-	if backoff < 0 {
-		return fmt.Errorf("--remote-write-retry-backoff must be nonnegative")
-	}
 	if adxMaxAttempts < 0 || adxMaxAttempts > collector.MaxADXQueuedAttempts {
 		return fmt.Errorf("--adx-max-attempts must be between 0 and %d", collector.MaxADXQueuedAttempts)
 	}
@@ -198,40 +179,25 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	deliveryMode = strings.ToLower(strings.TrimSpace(deliveryMode))
 	switch deliveryMode {
-	case deliveryModeRemoteWrite, deliveryModeDualRequired, deliveryModeDualShadow:
+	case deliveryModeADXRequired:
 	default:
-		return fmt.Errorf("--delivery-mode must be remote-write, dual-required, or dual-shadow")
+		return fmt.Errorf("--delivery-mode must be adx-required")
 	}
-	if strings.TrimSpace(endpoint) != "" {
-		sink := &collector.RemoteWriteSink{
-			Endpoint: endpoint, BatchSize: batchSize, MaxAttempts: maxAttempts, Backoff: backoff,
-		}
-		options.Sinks = append(options.Sinks, sink)
-	}
-	if deliveryMode != deliveryModeRemoteWrite {
-		if strings.TrimSpace(endpoint) == "" {
-			return fmt.Errorf("--remote-write-endpoint is required with --delivery-mode=%s", deliveryMode)
-		}
-		adxValues := []string{adxClusterURI, adxDatabase, adxTable, adxMapping, adxClientID}
-		for index, name := range []string{"--adx-cluster-uri", "--adx-database", "--adx-table", "--adx-mapping", "--adx-client-id"} {
-			if strings.TrimSpace(adxValues[index]) == "" {
-				return fmt.Errorf("%s is required with --delivery-mode=%s", name, deliveryMode)
-			}
-		}
-		sink, err := collector.NewADXQueuedSink(collector.ADXQueuedConfig{
-			ClusterURI: adxClusterURI, Database: adxDatabase, Table: adxTable, IngestionMapping: adxMapping,
-			ClientID: adxClientID, MaxAttempts: adxMaxAttempts, RetryBackoff: adxBackoff,
-			FinalStatusTimeout: adxFinalTimeout,
-		}, nil)
-		if err != nil {
-			return err
-		}
-		if deliveryMode == deliveryModeDualRequired {
-			options.Sinks = append(options.Sinks, sink)
-		} else {
-			options.OptionalSinks = append(options.OptionalSinks, sink)
+	adxValues := []string{adxClusterURI, adxDatabase, adxTable, adxMapping, adxClientID}
+	for index, name := range []string{"--adx-cluster-uri", "--adx-database", "--adx-table", "--adx-mapping", "--adx-client-id"} {
+		if strings.TrimSpace(adxValues[index]) == "" {
+			return fmt.Errorf("%s is required with --delivery-mode=%s", name, deliveryMode)
 		}
 	}
+	sink, err := collector.NewADXQueuedSink(collector.ADXQueuedConfig{
+		ClusterURI: adxClusterURI, Database: adxDatabase, Table: adxTable, IngestionMapping: adxMapping,
+		ClientID: adxClientID, MaxAttempts: adxMaxAttempts, RetryBackoff: adxBackoff,
+		FinalStatusTimeout: adxFinalTimeout,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	options.Sinks = append(options.Sinks, sink)
 	runner, err := collector.New(options)
 	if err != nil {
 		return err

@@ -1,8 +1,4 @@
 {{- if .Values.managementCommands.experimentCatalogV1.enabled }}
-{{- $catalogSource := lower .Values.functions.experimentCatalogSource }}
-{{- if not (has $catalogSource (list "legacy" "dual" "typed")) }}
-{{- fail "functions.experimentCatalogSource must be one of: legacy, dual, typed" }}
-{{- end }}
 apiVersion: adx-mon.azure.com/v1
 kind: ManagementCommand
 metadata:
@@ -14,84 +10,8 @@ metadata:
 spec:
   database: {{ .Values.managementCommands.experimentCatalogV1.database | quote }}
   body: |
-    // Catalog definitions are immutable. Legacy is the default source, dual is
-    // the shadow phase, and typed is the cutover phase.
-    {{- if ne $catalogSource "typed" }}
-    {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
-    .create async ifnotexists materialized-view with (backfill=true) TauExpSeriesCatalogV1 on table ExperimentMetrics
-    {{- else }}
-    .create ifnotexists materialized-view TauExpSeriesCatalogV1 on table ExperimentMetrics
-    {{- end }}
-    {
-      ExperimentMetrics
-      | extend
-          workspace_id = tostring(Labels.workspace_id),
-          cluster = tostring(Cluster),
-          source_store_id = tostring(Labels.source_store_id),
-          ['project'] = tostring(Labels['project']),
-          experiment_id = coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''),
-          run_group_id = tostring(Labels.run_group_id),
-          run_id = tostring(Labels.run_id),
-          metric_name = tostring(Labels.metric_name),
-          source = tostring(Labels.source),
-          unit = tostring(Labels.unit),
-          split = tostring(Labels.split),
-          metric_file_id = tostring(Labels.metric_file_id),
-          metric_file_path = tostring(Labels.metric_file_path),
-          step_value = tolong(Labels.step),
-          metric_value = todouble(Value)
-      | where isnotempty(workspace_id) and isnotempty(['project']) and isnotempty(experiment_id)
-          and isnotempty(run_group_id) and isnotempty(run_id) and isnotempty(metric_name)
-      | summarize
-          first_activity_at = min(Timestamp),
-          latest_activity_at = max(Timestamp),
-          min_step = min(step_value),
-          max_step = max(step_value),
-          arg_max(Timestamp, step_value, metric_value, metric_file_id, metric_file_path, unit, source, split)
-        by workspace_id, cluster, source_store_id, ['project'], experiment_id,
-           run_group_id, run_id, metric_name
-    }
-
-    {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
-    .create async ifnotexists materialized-view with (backfill=true) TauExpMetricRunCatalogV1 on table ExperimentMetrics
-    {{- else }}
-    .create ifnotexists materialized-view TauExpMetricRunCatalogV1 on table ExperimentMetrics
-    {{- end }}
-    {
-      ExperimentMetrics
-      | extend
-          workspace_id = tostring(Labels.workspace_id),
-          cluster = tostring(Cluster),
-          source_store_id = tostring(Labels.source_store_id),
-          ['project'] = tostring(Labels['project']),
-          experiment_id = coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''),
-          run_group_id = tostring(Labels.run_group_id),
-          run_id = tostring(Labels.run_id),
-          metric_name = tostring(Labels.metric_name),
-          status_tags = parse_json(tostring(Labels.tags)),
-          status_state = tolower(tostring(parse_json(tostring(Labels.tags))['tau.status.state']))
-      | where isnotempty(workspace_id) and isnotempty(['project']) and isnotempty(experiment_id)
-          and isnotempty(run_group_id) and isnotempty(run_id)
-      | extend
-          is_terminal_marker = metric_name == 'tau/run_status' and status_state in ('succeeded', 'failed', 'cancelled')
-      | extend
-          terminal_observed_at = iff(is_terminal_marker, Timestamp, datetime(null)),
-          terminal_state = iff(is_terminal_marker, status_state, ''),
-          terminal_reason = iff(is_terminal_marker, tostring(status_tags['tau.status.reason']), ''),
-          terminal_message = iff(is_terminal_marker, tostring(status_tags['tau.status.message']), ''),
-          terminal_artifact_uri = iff(is_terminal_marker, tostring(status_tags['tau.status.artifact_uri']), ''),
-          terminal_checkpoint_uri = iff(is_terminal_marker, tostring(status_tags['tau.status.checkpoint_uri']), '')
-      | summarize
-          first_metric_time = min(Timestamp),
-          latest_metric_time = max(Timestamp),
-          arg_max(Timestamp, source_store_id),
-          arg_max(terminal_observed_at, terminal_state, terminal_reason, terminal_message, terminal_artifact_uri, terminal_checkpoint_uri)
-        by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
-    }
-
-    {{- end }}
-
-    {{- if ne $catalogSource "legacy" }}
+    // Portal catalogs are typed-only. Legacy ExperimentMetrics remains outside
+    // this contract for explicit compatibility consumers.
     {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
     .create async ifnotexists materialized-view with (backfill=true) TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1
     {{- else }}
@@ -139,8 +59,6 @@ spec:
           arg_max(terminal_observed_at, terminal_state, terminal_reason, terminal_message, terminal_artifact_uri, terminal_checkpoint_uri)
         by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
     }
-
-    {{- end }}
 
     {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
     .create async ifnotexists materialized-view with (backfill=true) TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle

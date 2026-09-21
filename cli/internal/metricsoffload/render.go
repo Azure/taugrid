@@ -3,8 +3,7 @@
 
 // Package metricsoffload renders the opt-in Stellar metrics sidecar.
 //
-// Runtime selects the executable contract that the pinned sidecar image
-// declares it provides. Empty preserves the legacy taugrid-portal command.
+// Runtime selects the standalone collector executable contract.
 package metricsoffload
 
 import (
@@ -19,7 +18,6 @@ const (
 	RuntimeVolumeName = "tau-metrics-runtime"
 	RuntimeMountPath  = "/var/run/tau"
 
-	SidecarCommand          = "/usr/local/bin/taugrid-portal"
 	CollectorSidecarCommand = "/usr/local/bin/taugrid-metrics-collector"
 )
 
@@ -54,7 +52,7 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 	if err != nil {
 		panic(err)
 	}
-	args := make([]any, 0, len(prefixArgs)+18)
+	args := make([]any, 0, len(prefixArgs)+24)
 	for _, arg := range prefixArgs {
 		args = append(args, arg)
 	}
@@ -67,32 +65,30 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 		"--out", runtime.Out,
 		"--completion-file", runtime.CompletionFile,
 		"--interval", runtime.Interval.String(),
-		"--remote-write-endpoint", runtime.RemoteWriteEndpoint,
 	)
-	if resolvedRuntime == RuntimeCollectorV1 {
-		deliveryMode, err := ResolveDeliveryMode(runtime.DeliveryMode)
-		if err != nil {
-			panic(err)
-		}
-		args = append(args, "--delivery-mode", deliveryMode)
-		if deliveryMode != DeliveryRemoteWrite {
-			args = append(args,
-				"--adx-cluster-uri", runtime.ADXClusterURI,
-				"--adx-database", runtime.ADXDatabase,
-				"--adx-table", firstNonEmpty(runtime.ADXTable, DefaultADXTable),
-				"--adx-mapping", firstNonEmpty(runtime.ADXMapping, DefaultADXMapping),
-				"--adx-client-id", runtime.ADXClientID,
-			)
-			if runtime.ADXMaxAttempts > 0 {
-				args = append(args, "--adx-max-attempts", strconv.Itoa(runtime.ADXMaxAttempts))
-			}
-			if runtime.ADXRetryBackoff > 0 {
-				args = append(args, "--adx-retry-backoff", runtime.ADXRetryBackoff.String())
-			}
-			if runtime.ADXFinalStatusTimeout > 0 {
-				args = append(args, "--adx-final-status-timeout", runtime.ADXFinalStatusTimeout.String())
-			}
-		}
+	if resolvedRuntime != RuntimeCollectorV1 {
+		panic("unsupported metrics offload runtime")
+	}
+	deliveryMode, err := ResolveDeliveryMode(runtime.DeliveryMode)
+	if err != nil {
+		panic(err)
+	}
+	args = append(args,
+		"--delivery-mode", deliveryMode,
+		"--adx-cluster-uri", runtime.ADXClusterURI,
+		"--adx-database", runtime.ADXDatabase,
+		"--adx-table", firstNonEmpty(runtime.ADXTable, DefaultADXTable),
+		"--adx-mapping", firstNonEmpty(runtime.ADXMapping, DefaultADXMapping),
+		"--adx-client-id", runtime.ADXClientID,
+	)
+	if runtime.ADXMaxAttempts > 0 {
+		args = append(args, "--adx-max-attempts", strconv.Itoa(runtime.ADXMaxAttempts))
+	}
+	if runtime.ADXRetryBackoff > 0 {
+		args = append(args, "--adx-retry-backoff", runtime.ADXRetryBackoff.String())
+	}
+	if runtime.ADXFinalStatusTimeout > 0 {
+		args = append(args, "--adx-final-status-timeout", runtime.ADXFinalStatusTimeout.String())
 	}
 	if runtime.BaselineExistingHistory {
 		args = append(args, "--baseline-existing-history")
@@ -158,19 +154,12 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 	}
 }
 
-// RuntimeCommand returns the executable and fixed argv prefix for a runtime
-// contract. Empty runtime preserves the legacy portal-v1 command.
+// RuntimeCommand returns the standalone collector executable and fixed argv.
 func RuntimeCommand(value string) (string, []string, error) {
-	runtime, err := ResolveRuntime(value)
-	if err != nil {
+	if _, err := ResolveRuntime(value); err != nil {
 		return "", nil, err
 	}
-	switch runtime {
-	case RuntimeCollectorV1:
-		return CollectorSidecarCommand, []string{"collect", "--watch"}, nil
-	default:
-		return SidecarCommand, []string{"experiment", "offload", "metrics", "--watch"}, nil
-	}
+	return CollectorSidecarCommand, []string{"collect", "--watch"}, nil
 }
 
 func WrapCommand(command []string, runtime Runtime) ([]string, error) {

@@ -17,23 +17,25 @@ import (
 
 func testRuntime(dir string) Runtime {
 	return Runtime{
-		Image:               "example.test/tau:v1",
-		RunID:               "ray-run",
-		Project:             "pretraining",
-		Experiment:          "modernbert-fineweb",
-		Group:               "fwe100",
-		Tags:                map[string]string{"tau_workspace": "research-workspace"},
-		Source:              "stellar-online",
-		Store:               filepath.Join(dir, "store"),
-		Out:                 filepath.Join(dir, "out"),
-		History:             []string{filepath.Join(dir, "metrics-*.jsonl")},
-		CompletionFile:      filepath.Join(dir, "completion.json"),
-		RemoteWriteEndpoint: "http://127.0.0.1:3100/receive",
-		Interval:            time.Second,
-		ReadyFile:           filepath.Join(dir, "ready"),
-		ReadyTimeout:        time.Second,
-		DoneFile:            filepath.Join(dir, "done"),
-		DoneTimeout:         50 * time.Millisecond,
+		Image:          "example.test/tau:v1",
+		RunID:          "ray-run",
+		Project:        "pretraining",
+		Experiment:     "modernbert-fineweb",
+		Group:          "fwe100",
+		Tags:           map[string]string{"tau_workspace": "research-workspace"},
+		Source:         "stellar-online",
+		Store:          filepath.Join(dir, "store"),
+		Out:            filepath.Join(dir, "out"),
+		History:        []string{filepath.Join(dir, "metrics-*.jsonl")},
+		CompletionFile: filepath.Join(dir, "completion.json"),
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       time.Second,
+		ReadyFile:      filepath.Join(dir, "ready"),
+		ReadyTimeout:   time.Second,
+		DoneFile:       filepath.Join(dir, "done"),
+		DoneTimeout:    50 * time.Millisecond,
 	}
 }
 
@@ -80,14 +82,6 @@ func TestBuildContainerCarriesHardenedRuntimeContract(t *testing.T) {
 
 func TestBuildContainerRuntimeCommands(t *testing.T) {
 	runtime := testRuntime("/data/run")
-	legacy := BuildContainer(runtime, nil)
-	runtime.Runtime = RuntimePortalV1
-	explicitPortal := BuildContainer(runtime, nil)
-	if !reflect.DeepEqual(legacy, explicitPortal) {
-		t.Fatalf("omitted runtime changed legacy manifest:\nomitted=%#v\nexplicit=%#v", legacy, explicitPortal)
-	}
-
-	runtime.Runtime = RuntimeCollectorV1
 	collector := BuildContainer(runtime, nil)
 	if got := collector["command"]; !reflect.DeepEqual(got, []any{CollectorSidecarCommand}) {
 		t.Fatalf("collector command = %#v", got)
@@ -101,7 +95,7 @@ func TestBuildContainerRuntimeCommands(t *testing.T) {
 func TestBuildContainerCarriesTypedADXContract(t *testing.T) {
 	runtime := testRuntime("/data/run")
 	runtime.Runtime = RuntimeCollectorV1
-	runtime.DeliveryMode = DeliveryDualRequired
+	runtime.DeliveryMode = DeliveryADXRequired
 	runtime.ADXClusterURI = "https://example.kusto.windows.net"
 	runtime.ADXDatabase = "TauGrid"
 	runtime.ADXClientID = "00000000-0000-0000-0000-000000000001"
@@ -111,7 +105,7 @@ func TestBuildContainerCarriesTypedADXContract(t *testing.T) {
 
 	rendered := toText(BuildContainer(runtime, nil))
 	for _, want := range []string{
-		"--delivery-mode dual-required",
+		"--delivery-mode adx-required",
 		"--adx-cluster-uri https://example.kusto.windows.net",
 		"--adx-database TauGrid",
 		"--adx-table TauExpMetricEventsV1",

@@ -1,8 +1,4 @@
 {{- if and .Values.functions.enabled .Values.functions.items.tauExpSeriesCatalogRows.enabled }}
-{{- $catalogSource := lower .Values.functions.experimentCatalogSource }}
-{{- if not (has $catalogSource (list "legacy" "dual" "typed")) }}
-{{- fail "functions.experimentCatalogSource must be one of: legacy, dual, typed" }}
-{{- end }}
 apiVersion: adx-mon.azure.com/v1
 kind: Function
 metadata:
@@ -14,33 +10,8 @@ metadata:
 spec:
   database: {{ .Values.functions.items.tauExpSeriesCatalogRows.database | quote }}
   body: |
-    .create-or-alter function with (folder = 'Tau/catalog', docstring = 'Stable v1 experiment metric-series catalog across legacy and typed delivery.', skipvalidation = 'true') TauExpSeriesCatalogRows()
+    .create-or-alter function with (folder = 'Tau/catalog', docstring = 'Stable v1 typed experiment metric-series catalog.', skipvalidation = 'true') TauExpSeriesCatalogRows()
     {
-      {{- if ne $catalogSource "typed" }}
-      let legacy_rows =
-        TauExpSeriesCatalogV1
-        | project
-            workspace_id = tostring(workspace_id),
-            cluster = tostring(cluster),
-            source_store_id = tostring(source_store_id),
-            ['project'] = tostring(['project']),
-            experiment_id = tostring(experiment_id),
-            run_group_id = tostring(run_group_id),
-            run_id = tostring(run_id),
-            metric_name = tostring(metric_name),
-            first_activity_at = todatetime(first_activity_at),
-            latest_activity_at = todatetime(latest_activity_at),
-            min_step = tolong(min_step),
-            max_step = tolong(max_step),
-            latest_step = tolong(step_value),
-            latest_value = todouble(metric_value),
-            unit = tostring(unit),
-            source = tostring(source),
-            split = tostring(split),
-            latest_file_id = tostring(metric_file_id),
-            latest_file_path = tostring(metric_file_path);
-      {{- end }}
-      {{- if ne $catalogSource "legacy" }}
       let typed_rows =
         TauExpTypedSeriesCatalogV1
         | project
@@ -63,14 +34,7 @@ spec:
             split = tostring(split),
             latest_file_id = tostring(metric_file_id),
             latest_file_path = tostring(metric_file_path);
-      {{- end }}
-      {{- if eq $catalogSource "legacy" }}
-      legacy_rows
-      {{- else if eq $catalogSource "typed" }}
       typed_rows
-      {{- else }}
-      union legacy_rows, typed_rows
-      {{- end }}
       | extend latest_rank = latest_activity_at
       | summarize
           first_activity_at = min(first_activity_at),

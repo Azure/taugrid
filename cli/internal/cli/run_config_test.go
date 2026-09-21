@@ -66,8 +66,11 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 	// The example deliberately names policy.workspace. With no usable
 	// kubeconfig in this test, success guards that client dry-run retains the
 	// name for metrics metadata without fetching the live TauWorkspace.
-	const offloadImage = "registry.example.com/taugrid-portal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	config := filepath.Clean("../../../examples/portal-ray-stellar/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
 	for _, want := range []string{

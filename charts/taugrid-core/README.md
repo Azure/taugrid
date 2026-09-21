@@ -341,30 +341,11 @@ for Cost). Empty shared values preserve existing degraded behavior; local/auto
 sources do not inherit them. Workspace scope, ClusterIP exposure, and disabled
 workspace-directory defaults are unchanged.
 
-`portal.experimentCatalog.shadowRead.enabled` is a layer-1 migration gate for
-the typed ADX experiment catalog. It defaults to `false`. When enabled, Portal
-continues to serve the existing `ExperimentMetrics` discovery result and runs a
-single bounded background catalog query for structured parity diagnostics.
-Enable it only after adx-mon has created and backfilled
-`TauExpSeriesCatalogV1`, `TauExpMetricRunCatalogV1`, and
-`TauExpLifecycleRunCatalogV1` plus the stable
-`TauExpSeriesCatalogRows()`/`TauExpRunCatalogRows()` functions. A catalog query
-failure never becomes a successful fallback response and never replaces the
-legacy result in this layer.
-
-`portal.experimentCatalog.readSource` controls authoritative canonical
-discovery and defaults to `legacy`, which uses bounded raw
-`ExperimentMetrics` queries without requiring the catalog Function CRs. Set it
-to `functions` only after `TauExpSeriesCatalogRows()` and
-`TauExpRunCatalogRows()` reconcile successfully. Function-backed read failures
-remain visible to clients; Portal never silently downgrades them to legacy.
-
-Layer 2B keeps this Portal contract unchanged. adx-mon may ingest
-`TauExpMetricEventsV1` and set `functions.experimentCatalogSource=dual` for
-typed/legacy parity while Portal continues serving the legacy discovery path.
-Only a later Portal layer should change the API read source. Raw
-`ExperimentMetrics` remains available for legacy chart queries throughout the
-typed catalog rollout.
+Portal canonical v2 experiment, run, and series reads require the stable typed
+ADX Functions. Deploy `TauExpMetricEventRows()`,
+`TauExpSeriesCatalogRows()`, and `TauExpRunCatalogRows()` before routing Portal
+traffic. Function or ADX failures surface to clients; the chart has no legacy,
+dual, shadow-read, or read-source switch.
 
 ### Explicit Portal-only configuration
 
