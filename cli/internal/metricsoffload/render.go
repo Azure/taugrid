@@ -3,18 +3,13 @@
 
 // Package metricsoffload renders the opt-in Stellar metrics sidecar.
 //
-// The sidecar argv below starts with "experiment offload metrics", which is a
-// taugrid-portal verb — the tau binary does not provide it. This package stays
-// in tau core because tau is what renders RayJobs, but the image supplied via
-// --metrics-offload-image must be a taugrid-portal image. There is no default
-// image and nothing in-repo sets one, so this is opt-in and cannot break an
-// existing deployment silently; it is still a contract change worth knowing
-// about when enabling the sidecar for the first time after the split.
+// Runtime selects the standalone collector executable contract.
 package metricsoffload
 
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,11 +18,7 @@ const (
 	RuntimeVolumeName = "tau-metrics-runtime"
 	RuntimeMountPath  = "/var/run/tau"
 
-	// SidecarCommand is the binary the sidecar execs. The verbs below belong
-	// to taugrid-portal, whose image installs only this path — rendering
-	// /usr/local/bin/tau here produces a container that fails at startup with
-	// an exec error, long after the manifest looked correct.
-	SidecarCommand = "/usr/local/bin/taugrid-portal"
+	CollectorSidecarCommand = "/usr/local/bin/taugrid-metrics-collector"
 )
 
 type Mount struct {
@@ -53,8 +44,19 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 	if source == "" {
 		source = DefaultSource
 	}
-	args := []any{
-		"experiment", "offload", "metrics", "--watch",
+	command, prefixArgs, err := RuntimeCommand(runtime.Runtime)
+	if err != nil {
+		panic(err)
+	}
+	resolvedRuntime, err := ResolveRuntime(runtime.Runtime)
+	if err != nil {
+		panic(err)
+	}
+	args := make([]any, 0, len(prefixArgs)+24)
+	for _, arg := range prefixArgs {
+		args = append(args, arg)
+	}
+	args = append(args,
 		"--run", runtime.RunID,
 		"--project", runtime.Project,
 		"--experiment", runtime.Experiment,
@@ -63,7 +65,30 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 		"--out", runtime.Out,
 		"--completion-file", runtime.CompletionFile,
 		"--interval", runtime.Interval.String(),
-		"--remote-write-endpoint", runtime.RemoteWriteEndpoint,
+	)
+	if resolvedRuntime != RuntimeCollectorV1 {
+		panic("unsupported metrics offload runtime")
+	}
+	deliveryMode, err := ResolveDeliveryMode(runtime.DeliveryMode)
+	if err != nil {
+		panic(err)
+	}
+	args = append(args,
+		"--delivery-mode", deliveryMode,
+		"--adx-cluster-uri", runtime.ADXClusterURI,
+		"--adx-database", runtime.ADXDatabase,
+		"--adx-table", firstNonEmpty(runtime.ADXTable, DefaultADXTable),
+		"--adx-mapping", firstNonEmpty(runtime.ADXMapping, DefaultADXMapping),
+		"--adx-client-id", runtime.ADXClientID,
+	)
+	if runtime.ADXMaxAttempts > 0 {
+		args = append(args, "--adx-max-attempts", strconv.Itoa(runtime.ADXMaxAttempts))
+	}
+	if runtime.ADXRetryBackoff > 0 {
+		args = append(args, "--adx-retry-backoff", runtime.ADXRetryBackoff.String())
+	}
+	if runtime.ADXFinalStatusTimeout > 0 {
+		args = append(args, "--adx-final-status-timeout", runtime.ADXFinalStatusTimeout.String())
 	}
 	if runtime.BaselineExistingHistory {
 		args = append(args, "--baseline-existing-history")
@@ -104,7 +129,7 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 		"name":            "metrics-offload",
 		"image":           runtime.Image,
 		"imagePullPolicy": "IfNotPresent",
-		"command":         []any{SidecarCommand},
+		"command":         []any{command},
 		"args":            args,
 		"env": []any{
 			map[string]any{
@@ -127,6 +152,14 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 		},
 		"volumeMounts": volumeMounts,
 	}
+}
+
+// RuntimeCommand returns the standalone collector executable and fixed argv.
+func RuntimeCommand(value string) (string, []string, error) {
+	if _, err := ResolveRuntime(value); err != nil {
+		return "", nil, err
+	}
+	return CollectorSidecarCommand, []string{"collect", "--watch"}, nil
 }
 
 func WrapCommand(command []string, runtime Runtime) ([]string, error) {
@@ -246,4 +279,13 @@ func timeoutSeconds(value, fallback time.Duration) int64 {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }

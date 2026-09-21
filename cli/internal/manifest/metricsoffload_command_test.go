@@ -10,12 +10,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 )
 
-// The metrics offload sidecar runs taugrid-portal verbs, so it has to exec the
-// taugrid-portal binary. Two of the three render paths are text templates,
-// which no compiler checks against metricsoffload.SidecarCommand.
-func TestMetricsOffloadTemplatesExecThePortalBinary(t *testing.T) {
-	want := `command: ["` + metricsoffload.SidecarCommand + `"]`
-
+func TestMetricsOffloadTemplatesUseResolvedRuntimeCommand(t *testing.T) {
 	for _, name := range []string{"managed-workflow-rayjob.yaml.tmpl", "managed-workflow-rayjob-eval.yaml.tmpl"} {
 		raw, err := assets.ReadFile("assets/" + name)
 		if err != nil {
@@ -25,9 +20,13 @@ func TestMetricsOffloadTemplatesExecThePortalBinary(t *testing.T) {
 		if !strings.Contains(body, "metrics-offload") {
 			t.Fatalf("%s no longer renders the metrics-offload sidecar; this guard is now vacuous", name)
 		}
-		if !strings.Contains(body, want) {
-			t.Fatalf("%s does not exec %s; got the sidecar command lines: %v",
-				name, metricsoffload.SidecarCommand, commandLines(body))
+		if !strings.Contains(body, `command: [{{.MetricsOffload.CommandYAML}}]`) ||
+			!strings.Contains(body, `args: [{{.MetricsOffload.ArgsPrefixYAML}}, "--done-file"`) {
+			t.Fatalf("%s does not render the resolved runtime command; got command lines: %v",
+				name, commandLines(body))
+		}
+		if strings.Contains(body, metricsoffload.CollectorSidecarCommand) {
+			t.Fatalf("%s hard-codes runtime command %s", name, metricsoffload.CollectorSidecarCommand)
 		}
 	}
 }

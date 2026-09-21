@@ -2336,22 +2336,25 @@ func TestRender_Torchrun_ProfilerRejected(t *testing.T) {
 func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 	script := torchrunScript(t)
 	runtime := metricsoffload.Runtime{
-		Image:               "registry.example.com/taugrid/tau:v0.6.0",
-		RunID:               "modernbert-bounded",
-		Project:             "pretraining",
-		Experiment:          "modernbert-fineweb",
-		Group:               "fwe100",
-		Tags:                map[string]string{"tau_workspace": "research-workspace", "tau_namespace": "research-workspace", "tau_cluster": "sample-gpu-cluster"},
-		Source:              "stellar-online",
-		Store:               "/data/research-workspace/modernbert-bounded/.tau/metrics-expstore",
-		Out:                 "/data/research-workspace/modernbert-bounded/.tau/metrics-offload",
-		History:             []string{"/data/research-workspace/modernbert-bounded/metrics-history-attempt-*/*.jsonl"},
-		CompletionFile:      "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint: "http://${NODE_IP}:3100/receive",
-		Interval:            10 * time.Second,
-		ArtifactURI:         "/data/research-workspace/modernbert-bounded",
-		CheckpointURI:       "/data/research-workspace/modernbert-bounded/checkpoints",
+		Image:          "registry.example.com/taugrid/collector:v0.6.0",
+		RunID:          "modernbert-bounded",
+		Project:        "pretraining",
+		Experiment:     "modernbert-fineweb",
+		Group:          "fwe100",
+		Tags:           map[string]string{"tau_workspace": "research-workspace", "tau_namespace": "research-workspace", "tau_cluster": "sample-gpu-cluster"},
+		Source:         "stellar-online",
+		Store:          "/data/research-workspace/modernbert-bounded/.tau/metrics-expstore",
+		Out:            "/data/research-workspace/modernbert-bounded/.tau/metrics-offload",
+		History:        []string{"/data/research-workspace/modernbert-bounded/metrics-history-attempt-*/*.jsonl"},
+		CompletionFile: "/var/run/tau/metrics-completion.json",
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       10 * time.Second,
+		ArtifactURI:    "/data/research-workspace/modernbert-bounded",
+		CheckpointURI:  "/data/research-workspace/modernbert-bounded/checkpoints",
 	}
+
 	out, err := Render(trainProfile(), Options{
 		Name:           "modernbert-bounded",
 		Namespace:      "research-workspace",
@@ -2383,15 +2386,16 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 	if sidecar["name"] != "metrics-offload" || sidecar["image"] != runtime.Image {
 		t.Fatalf("unexpected sidecar: %+v", sidecar)
 	}
-	if got := sidecar["command"].([]any); len(got) != 1 || got[0] != metricsoffload.SidecarCommand {
+	if got := sidecar["command"].([]any); len(got) != 1 || got[0] != metricsoffload.CollectorSidecarCommand {
 		t.Fatalf("sidecar command = %v", got)
 	}
 	args := fmt.Sprint(sidecar["args"])
 	for _, want := range []string{
-		"experiment offload metrics --watch",
+		"collect --watch",
 		"--history " + runtime.History[0],
 		"--completion-file " + runtime.CompletionFile,
-		"--remote-write-endpoint " + runtime.RemoteWriteEndpoint,
+		"--delivery-mode adx-required",
+		"--adx-cluster-uri " + runtime.ADXClusterURI,
 		"--tag tau_workspace=research-workspace",
 		"--tag tau_namespace=research-workspace",
 		"--tag tau_cluster=sample-gpu-cluster",
@@ -2426,20 +2430,65 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 	}
 }
 
+func TestRender_DirectJobCollectorMetricsOffloadCommand(t *testing.T) {
+	script := torchrunScript(t)
+	runtime := metricsoffload.Runtime{
+		Runtime:        metricsoffload.RuntimeCollectorV1,
+		Image:          "registry.example.com/taugrid/collector:v1",
+		RunID:          "collector-job",
+		Project:        "pretraining",
+		Experiment:     "collector",
+		Group:          "default",
+		Store:          "/var/run/tau/metrics/store",
+		Out:            "/data/collector/offload",
+		History:        []string{"/data/collector/metrics.jsonl"},
+		CompletionFile: "/var/run/tau/metrics-completion.json",
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       10 * time.Second,
+	}
+	out, err := Render(trainProfile(), Options{
+		Name:           "collector-job",
+		Namespace:      "tau",
+		ScriptPath:     script,
+		PVCMount:       "data",
+		MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := parseYAML(t, out)
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	containers := pod["containers"].([]any)
+	if len(containers) != 2 {
+		t.Fatalf("containers = %d, want main + one metrics sidecar", len(containers))
+	}
+	sidecar := containers[1].(map[string]any)
+	if got := sidecar["command"]; fmt.Sprint(got) != fmt.Sprint([]any{metricsoffload.CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %v", got)
+	}
+	if got := fmt.Sprint(sidecar["args"]); !strings.Contains(got, "collect --watch") {
+		t.Fatalf("collector args = %s", got)
+	}
+}
+
 func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 	script := torchrunScript(t)
 	valid := metricsoffload.Runtime{
-		Image:               "registry.example.com/taugrid/tau:v0.6.0",
-		RunID:               "bounded",
-		Project:             "pretraining",
-		Experiment:          "bounded-experiment",
-		Group:               "fwe100",
-		Store:               "/data/bounded/.tau/store",
-		Out:                 "/data/bounded/.tau/offload",
-		History:             []string{"/data/bounded/metrics-history.jsonl"},
-		CompletionFile:      "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint: "http://${NODE_IP}:3100/receive",
-		Interval:            10 * time.Second,
+		Image:          "registry.example.com/taugrid/collector:v0.6.0",
+		RunID:          "bounded",
+		Project:        "pretraining",
+		Experiment:     "bounded-experiment",
+		Group:          "fwe100",
+		Store:          "/data/bounded/.tau/store",
+		Out:            "/data/bounded/.tau/offload",
+		History:        []string{"/data/bounded/metrics-history.jsonl"},
+		CompletionFile: "/var/run/tau/metrics-completion.json",
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       10 * time.Second,
 	}
 	tests := []struct {
 		name    string
@@ -2479,19 +2528,21 @@ func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 
 func testMetricsRuntime(completion, ready string, readyTimeout time.Duration) metricsoffload.Runtime {
 	return metricsoffload.Runtime{
-		Image:               "example.test/tau:v1",
-		RunID:               "run-1",
-		Project:             "project-1",
-		Experiment:          "experiment-1",
-		Group:               "group-1",
-		Store:               "/data/store",
-		Out:                 "/data/out",
-		History:             []string{"/data/history.jsonl"},
-		CompletionFile:      completion,
-		RemoteWriteEndpoint: "http://127.0.0.1:3100/receive",
-		Interval:            time.Second,
-		ReadyFile:           ready,
-		ReadyTimeout:        readyTimeout,
+		Image:          "example.test/collector:v1",
+		RunID:          "run-1",
+		Project:        "project-1",
+		Experiment:     "experiment-1",
+		Group:          "group-1",
+		Store:          "/data/store",
+		Out:            "/data/out",
+		History:        []string{"/data/history.jsonl"},
+		CompletionFile: completion,
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       time.Second,
+		ReadyFile:      ready,
+		ReadyTimeout:   readyTimeout,
 	}
 }
 

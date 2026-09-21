@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -121,8 +122,10 @@ func TestNewRunJobRequestIsolatesArtifactPublicationGenerations(t *testing.T) {
 }
 
 func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/tau:v0.6.0")
-	t.Setenv("TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT", "http://${NODE_IP}:3100/receive")
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/collector:v0.6.0")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	o := defaultRunDispatchOptions()
 	o.workspace = "research-workspace"
 	o.metricsSessionID = "session-a"
@@ -211,8 +214,11 @@ func TestResolveDirectJobMetricsOffloadConfigAndEnvPrecedence(t *testing.T) {
 	o.workspace = "research-workspace"
 	o.metricsSessionID = "session-config"
 	o.metricsHistory = []string{"metrics-history-attempt-*/*.jsonl"}
-	o.metricsOffloadImage = "registry.example.com/taugrid-portal:config"
+	o.metricsOffloadImage = "registry.example.com/taugrid-collector:config"
 	o.metricsOffloadOut = "/var/run/tau/config-spool"
+	o.metricsOffloadADXClusterURI = "https://config.kusto.windows.net"
+	o.metricsOffloadADXDatabase = "ConfigMetrics"
+	o.metricsOffloadADXClientID = "00000000-0000-0000-0000-000000000001"
 	o.experiment = runExperimentMetadata{
 		Project:      "pretraining",
 		ExperimentID: "modernbert-bounded",
@@ -235,26 +241,77 @@ func TestResolveDirectJobMetricsOffloadConfigAndEnvPrecedence(t *testing.T) {
 	}
 
 	runtime := resolve()
-	if got, want := runtime.Image, "registry.example.com/taugrid-portal:config"; got != want {
+	if got, want := runtime.Runtime, metricsoffload.RuntimeCollectorV1; got != want {
+		t.Fatalf("default runtime = %q, want %q", got, want)
+	}
+	if got, want := runtime.Image, "registry.example.com/taugrid-collector:config"; got != want {
 		t.Fatalf("config image = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/config-spool"; got != want {
 		t.Fatalf("config out = %q, want %q", got, want)
 	}
 
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid-portal:platform")
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid-collector:platform")
+	t.Setenv("TAU_METRICS_OFFLOAD_RUNTIME", metricsoffload.RuntimeCollectorV1)
 	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "/var/run/tau/platform-spool")
+	t.Setenv("TAU_METRICS_OFFLOAD_DELIVERY_MODE", metricsoffload.DeliveryADXRequired)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "Metrics")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS", "4")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF", "2s")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT", "5m")
 	runtime = resolve()
-	if got, want := runtime.Image, "registry.example.com/taugrid-portal:platform"; got != want {
+	if got, want := runtime.Runtime, metricsoffload.RuntimeCollectorV1; got != want {
+		t.Fatalf("platform runtime override = %q, want %q", got, want)
+	}
+	if got, want := runtime.Image, "registry.example.com/taugrid-collector:platform"; got != want {
 		t.Fatalf("platform image override = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/platform-spool"; got != want {
 		t.Fatalf("platform out override = %q, want %q", got, want)
 	}
+	if runtime.DeliveryMode != metricsoffload.DeliveryADXRequired ||
+		runtime.ADXClusterURI != "https://example.kusto.windows.net" ||
+		runtime.ADXDatabase != "Metrics" ||
+		runtime.ADXClientID != "00000000-0000-0000-0000-000000000001" ||
+		runtime.ADXMaxAttempts != 4 ||
+		runtime.ADXRetryBackoff != 2*time.Second ||
+		runtime.ADXFinalStatusTimeout != 5*time.Minute {
+		t.Fatalf("platform typed ADX override = %+v", runtime)
+	}
+}
+
+func TestResolveDirectJobMetricsOffloadRejectsUnknownRuntimeOverride(t *testing.T) {
+	t.Setenv("TAU_METRICS_OFFLOAD_RUNTIME", "future-v2")
+	o := defaultRunDispatchOptions()
+	o.workspace = "research-workspace"
+	o.metricsSessionID = "session-runtime"
+	o.metricsHistory = []string{"metrics.jsonl"}
+	o.metricsOffloadImage = "registry.example.com/taugrid-portal:config"
+	o.experiment = runExperimentMetadata{
+		Project:      "pretraining",
+		ExperimentID: "modernbert-bounded",
+	}
+	_, err := resolveMetricsOffload(
+		o,
+		"modernbert-bounded",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/modernbert-bounded",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unknown runtime override error = %v", err)
+	}
 }
 
 func TestResolveDirectJobMetricsOffloadRejectsReadOnlyOutput(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/tau:v0.6.0")
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/collector:v0.6.0")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	o := defaultRunDispatchOptions()
 	o.workspace = "research-workspace"
 	o.metricsSessionID = "session-read-only"
@@ -279,7 +336,10 @@ func TestResolveDirectJobMetricsOffloadRejectsReadOnlyOutput(t *testing.T) {
 }
 
 func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/tau:v0.6.0")
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/collector:v0.6.0")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	script := filepath.Join(t.TempDir(), "train.sh")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nset -eu\nchunk_dir=\"$TAU_OUTPUT_DIR/metrics-history-attempt-0\"\nmkdir -p \"$chunk_dir\"\nprintf '{\"step\":1,\"loss\":1.0}\\n' > \"$chunk_dir/chunk-000001.jsonl.tmp\"\nmv \"$chunk_dir/chunk-000001.jsonl.tmp\" \"$chunk_dir/chunk-000001.jsonl\"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -319,7 +379,7 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	rendered := stdout.String()
 	for _, want := range []string{
 		"name: metrics-offload",
-		"registry.example.com/taugrid/tau:v0.6.0",
+		"registry.example.com/taugrid/collector:v0.6.0",
 		workloadmeta.AnnotationExperimentSource + ": stellar",
 		workloadmeta.AnnotationStellarExperimentID + ": modernbert-bounded",
 		"--experiment",

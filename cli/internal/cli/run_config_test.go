@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
@@ -65,8 +66,11 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 	// The example deliberately names policy.workspace. With no usable
 	// kubeconfig in this test, success guards that client dry-run retains the
 	// name for metrics metadata without fetching the live TauWorkspace.
-	const offloadImage = "registry.example.com/taugrid-portal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	config := filepath.Clean("../../../examples/portal-ray-stellar/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
 	for _, want := range []string{
@@ -86,7 +90,11 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 }
 
 func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "")
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "")
 	config := filepath.Clean("../../../examples/market-policy/tau.yaml")
 	options, _, err := loadRunConfig(config)
@@ -107,7 +115,7 @@ func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T
 	if err != nil {
 		t.Fatalf("resolve market-policy metrics offload: %v", err)
 	}
-	if got, want := runtime.Image, "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2"; got != want {
+	if got, want := runtime.Image, offloadImage; got != want {
 		t.Fatalf("metrics offload image = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/metrics-offload"; got != want {
@@ -1290,6 +1298,7 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`metrics.offload.runtime` | supported",
 		"`metrics.offload.image` | supported",
 		"`metrics.offload.out` | supported",
 		"`run.ttl_seconds_after_finished` | direct-only",
@@ -1693,11 +1702,14 @@ metrics:
   history: [metrics-history-attempt-*/*.jsonl]
   offload:
     enabled: true
+    runtime: collector-v1
     image: registry.example.com/taugrid-portal:20260903.1
     out: /var/run/tau/metrics-offload
 experiment:
   project: pretraining
   title: bounded run
+policy:
+  workspace: research-workspace
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1707,11 +1719,28 @@ experiment:
 		t.Fatalf("loadRunConfig: %v", err)
 	}
 	if !options.metricsOffloadEnabled ||
+		options.metricsOffloadRuntime != metricsoffload.RuntimeCollectorV1 ||
 		options.metricsOffloadImage != "registry.example.com/taugrid-portal:20260903.1" ||
 		options.metricsOffloadOut != "/var/run/tau/metrics-offload" ||
 		len(options.metricsHistory) != 1 ||
 		options.metricsHistory[0] != "metrics-history-attempt-*/*.jsonl" {
 		t.Fatalf("unexpected direct metrics dispatch options: %+v", options)
+	}
+	options.metricsSessionID = "yaml-runtime"
+	runtime, err := resolveMetricsOffload(
+		options,
+		"tracked",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/tracked",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err != nil {
+		t.Fatalf("resolve YAML metrics offload: %v", err)
+	}
+	if got, want := runtime.Runtime, metricsoffload.RuntimeCollectorV1; got != want {
+		t.Fatalf("resolved YAML runtime = %q, want %q", got, want)
 	}
 }
 

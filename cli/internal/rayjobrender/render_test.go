@@ -602,6 +602,7 @@ func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 
 func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	runtime := metricsoffload.Runtime{
+		Runtime:                 metricsoffload.RuntimeCollectorV1,
 		Image:                   "registry.example.com/taugrid/tau@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		RunID:                   "modernbert-ray",
 		Project:                 "pretraining",
@@ -613,7 +614,9 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 		Out:                     "/data/research-workspace/runs/modernbert-ray/.tau/metrics/session/offload",
 		History:                 []string{"/data/research-workspace/runs/modernbert-ray/metrics-history-attempt-*/*.jsonl"},
 		CompletionFile:          "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint:     "http://${NODE_IP}:3100/receive",
+		ADXClusterURI:           "https://example.kusto.windows.net",
+		ADXDatabase:             "TauGrid",
+		ADXClientID:             "00000000-0000-0000-0000-000000000001",
 		Interval:                10 * time.Second,
 		ArtifactURI:             "/data/research-workspace/runs/modernbert-ray",
 		BaselineExistingHistory: true,
@@ -679,6 +682,19 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	pod := head["template"].(map[string]any)["spec"].(map[string]any)
 	if got := containerNames(t, pod["containers"].([]any)); !strings.Contains(got, "metrics-offload") {
 		t.Fatalf("head containers = %s", got)
+	}
+	headContainers := pod["containers"].([]any)
+	metricsContainer := headContainers[len(headContainers)-1].(map[string]any)
+	if got := fmt.Sprint(metricsContainer["command"]); got != fmt.Sprint([]any{metricsoffload.CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %s", got)
+	}
+	if got := fmt.Sprint(metricsContainer["args"]); !strings.Contains(got, "collect --watch") {
+		t.Fatalf("collector args = %s", got)
+	}
+	workers := cluster["workerGroupSpecs"].([]any)
+	workerPod := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := containerNames(t, workerPod["containers"].([]any)); strings.Contains(got, "metrics-offload") {
+		t.Fatalf("worker containers unexpectedly include metrics offload: %s", got)
 	}
 }
 

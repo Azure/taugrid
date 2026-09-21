@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -16,23 +17,25 @@ import (
 
 func testRuntime(dir string) Runtime {
 	return Runtime{
-		Image:               "example.test/tau:v1",
-		RunID:               "ray-run",
-		Project:             "pretraining",
-		Experiment:          "modernbert-fineweb",
-		Group:               "fwe100",
-		Tags:                map[string]string{"tau_workspace": "research-workspace"},
-		Source:              "stellar-online",
-		Store:               filepath.Join(dir, "store"),
-		Out:                 filepath.Join(dir, "out"),
-		History:             []string{filepath.Join(dir, "metrics-*.jsonl")},
-		CompletionFile:      filepath.Join(dir, "completion.json"),
-		RemoteWriteEndpoint: "http://127.0.0.1:3100/receive",
-		Interval:            time.Second,
-		ReadyFile:           filepath.Join(dir, "ready"),
-		ReadyTimeout:        time.Second,
-		DoneFile:            filepath.Join(dir, "done"),
-		DoneTimeout:         50 * time.Millisecond,
+		Image:          "example.test/tau:v1",
+		RunID:          "ray-run",
+		Project:        "pretraining",
+		Experiment:     "modernbert-fineweb",
+		Group:          "fwe100",
+		Tags:           map[string]string{"tau_workspace": "research-workspace"},
+		Source:         "stellar-online",
+		Store:          filepath.Join(dir, "store"),
+		Out:            filepath.Join(dir, "out"),
+		History:        []string{filepath.Join(dir, "metrics-*.jsonl")},
+		CompletionFile: filepath.Join(dir, "completion.json"),
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       time.Second,
+		ReadyFile:      filepath.Join(dir, "ready"),
+		ReadyTimeout:   time.Second,
+		DoneFile:       filepath.Join(dir, "done"),
+		DoneTimeout:    50 * time.Millisecond,
 	}
 }
 
@@ -73,6 +76,47 @@ func TestBuildContainerCarriesHardenedRuntimeContract(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("container missing %q: %s", want, rendered)
+		}
+	}
+}
+
+func TestBuildContainerRuntimeCommands(t *testing.T) {
+	runtime := testRuntime("/data/run")
+	collector := BuildContainer(runtime, nil)
+	if got := collector["command"]; !reflect.DeepEqual(got, []any{CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %#v", got)
+	}
+	args := collector["args"].([]any)
+	if len(args) < 2 || args[0] != "collect" || args[1] != "--watch" {
+		t.Fatalf("collector args = %#v", args)
+	}
+}
+
+func TestBuildContainerCarriesTypedADXContract(t *testing.T) {
+	runtime := testRuntime("/data/run")
+	runtime.Runtime = RuntimeCollectorV1
+	runtime.DeliveryMode = DeliveryADXRequired
+	runtime.ADXClusterURI = "https://example.kusto.windows.net"
+	runtime.ADXDatabase = "TauGrid"
+	runtime.ADXClientID = "00000000-0000-0000-0000-000000000001"
+	runtime.ADXMaxAttempts = 4
+	runtime.ADXRetryBackoff = 2 * time.Second
+	runtime.ADXFinalStatusTimeout = 5 * time.Minute
+
+	rendered := toText(BuildContainer(runtime, nil))
+	for _, want := range []string{
+		"--delivery-mode adx-required",
+		"--adx-cluster-uri https://example.kusto.windows.net",
+		"--adx-database TauGrid",
+		"--adx-table TauExpMetricEventsV1",
+		"--adx-mapping TauExpMetricEventsV1Json",
+		"--adx-client-id 00000000-0000-0000-0000-000000000001",
+		"--adx-max-attempts 4",
+		"--adx-retry-backoff 2s",
+		"--adx-final-status-timeout 5m0s",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("collector container missing %q: %s", want, rendered)
 		}
 	}
 }
