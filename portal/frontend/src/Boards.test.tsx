@@ -29,7 +29,14 @@ describe('Platform overview', () => {
   it('shows GPU topology with allocated and available capacity', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
-      if (url.includes('/api/portal/overview')) return Promise.resolve(json({ cards: { queue: { admitted: 1, pending: 0, gpuUsed: 8, gpuHeadroom: 8 } }, running: [] }));
+      if (url.includes('/api/portal/overview')) return Promise.resolve(json({ cards: { queue: {
+        admitted: 3, pending: 1, gpuUsed: 8, gpuHeadroom: 8,
+        queues: [
+          { namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq', admitted: 2, pending: 0 },
+          { namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 1, pending: 0 },
+          { namespace: 'aks-ai-runtime-e2e', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 0, pending: 1 },
+        ],
+      } }, running: [] }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
         nodes: [
@@ -55,6 +62,9 @@ describe('Platform overview', () => {
     expect(screen.getByText('Admitted, unfinished workloads')).toBeInTheDocument();
     expect(screen.getByText('Admission reserves quota; it does not prove that the workload is running.')).toBeInTheDocument();
     expect(screen.queryByText('Active work')).not.toBeInTheDocument();
+    expect(screen.getByText('CPU queue')).toBeInTheDocument();
+    expect(screen.getAllByText('GPU queue')).toHaveLength(2);
+    expect(screen.getByText('tau-default/cpu')).toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: 'Operational evidence' })).not.toBeInTheDocument();
     expect(screen.getAllByLabelText(/allocated GPUs and .* available GPUs/).length).toBeGreaterThan(0);
     expect(screen.getByText('gpu-a')).toBeVisible();

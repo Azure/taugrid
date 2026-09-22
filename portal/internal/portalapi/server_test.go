@@ -2491,6 +2491,7 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkspaceDirectory: %v", err)
 	}
+
 	server, err := NewServer(Options{
 		Stellar:            expapi.Options{Source: "kusto"},
 		Jobs:               JobsOptions{Reader: runningJobsReader{}},
@@ -2511,6 +2512,27 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	}
 	if len(body.Running) != 0 {
 		t.Fatalf("running = %+v, want no workloads from another LocalQueue", body.Running)
+	}
+}
+
+func TestQueueLanesKeepLocalQueuesSeparate(t *testing.T) {
+	got := queueLanes([]queue.Group{
+		{Namespace: "tau-default", Queue: "cpu", ClusterQueue: "tau-cpu-cq", Admitted: 2},
+		{Namespace: "tau-default", Queue: "jobqueue", ClusterQueue: "tau-cq", Admitted: 8},
+		{Namespace: "tau-default", Queue: "jobqueue", ClusterQueue: "tau-cq", Admitted: 8, ResourceFlavor: "ndm-a100-v4"},
+		{Namespace: "aks-ai-runtime-e2e", Queue: "jobqueue", ClusterQueue: "tau-cq", Pending: 1},
+	})
+	if len(got) != 3 {
+		t.Fatalf("queue lanes = %#v, want three namespace/queue lanes", got)
+	}
+	if got[0].Queue != "cpu" || got[0].Admitted != 2 {
+		t.Fatalf("CPU lane = %#v, want 2 admitted", got[0])
+	}
+	if got[1].Queue != "jobqueue" || got[1].Admitted != 8 {
+		t.Fatalf("GPU lane = %#v, want deduplicated 8 admitted", got[1])
+	}
+	if got[2].Namespace != "aks-ai-runtime-e2e" || got[2].Pending != 1 {
+		t.Fatalf("E2E lane = %#v, want 1 pending", got[2])
 	}
 }
 

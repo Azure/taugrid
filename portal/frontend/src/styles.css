@@ -310,6 +310,15 @@
   .overview-queue-counts span { display: flex; justify-content: space-between; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
   .overview-queue-counts b { color: var(--text); font-size: 12px; }
   .overview-queue-counts .warning, .overview-queue-counts .warning b { color: var(--amber); }
+  .overview-queue-lanes { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
+  .overview-queue-lane { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+  .overview-queue-lane div { min-width: 0; }
+  .overview-queue-lane strong, .overview-queue-lane small { display: block; }
+  .overview-queue-lane strong { font-size: 11px; }
+  .overview-queue-lane small { margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+  .overview-queue-lane > span { color: var(--muted); font-size: 9px; white-space: nowrap; }
+  .overview-queue-lane > span b { color: var(--text); font-size: 11px; }
+  .overview-queue-lane > span.warning, .overview-queue-lane > span.warning b { color: var(--amber); }
   .overview-workload-list { display: flex; flex-direction: column; gap: 8px; }
   .overview-workload {
     display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 9px; padding: 10px;

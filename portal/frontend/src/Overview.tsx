@@ -125,6 +125,7 @@ function PoolDetails({ site }: { site?: SiteGroup }) {
 
 function QueueBridge({ data }: { data: OverviewData }) {
   const queue = data.cards.queue;
+  const lanes = queue?.queues?.filter(lane => lane.admitted > 0 || lane.pending > 0) ?? [];
   const unavailable = data.cards.queueUnavailable || (!queue ? 'Queue data unavailable' : '');
   const capacity = queue ? queue.gpuUsed + queue.gpuHeadroom : 0;
   const pressure = queue && capacity > 0 ? queue.gpuUsed / capacity : 0;
@@ -142,6 +143,16 @@ function QueueBridge({ data }: { data: OverviewData }) {
         <span className={queue!.pending > 0 ? 'warning' : ''}><b>{queue!.pending}</b> pending</span>
         <span><b>{queue!.gpuHeadroom}</b> GPUs free</span>
       </div>
+      {!!lanes.length && <div className="overview-queue-lanes" aria-label="Queue admission lanes">
+        {lanes.map(lane => <div className="overview-queue-lane" key={`${lane.namespace}/${lane.queue}`}>
+          <div>
+            <strong>{lane.queue === 'cpu' ? 'CPU queue' : lane.queue === 'jobqueue' ? 'GPU queue' : lane.queue}</strong>
+            <small>{lane.namespace}/{lane.queue}</small>
+          </div>
+          <span><b>{lane.admitted}</b> admitted</span>
+          <span className={lane.pending > 0 ? 'warning' : ''}><b>{lane.pending}</b> pending</span>
+        </div>)}
+      </div>}
     </>}
     <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queues and quota →</ScopedLink>
   </div>;

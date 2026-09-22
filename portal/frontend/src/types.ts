@@ -26,7 +26,10 @@ export interface Overview extends Scoped {
       totalCPUCores: number; totalMemoryGiB: number; topSKU?: string;
     };
     health?: { totalGPUs: number; errorGPUs: number };
-    queue?: { admitted: number; pending: number; gpuUsed: number; gpuHeadroom: number };
+    queue?: {
+      admitted: number; pending: number; gpuUsed: number; gpuHeadroom: number;
+      queues?: { namespace: string; queue: string; clusterQueue?: string; admitted: number; pending: number }[];
+    };
     cost?: { totalGPUHours: number; window: string; idleGPUs: number };
     ray?: { clusters: number };
     fleetUnavailable?: string; healthUnavailable?: string; queueUnavailable?: string; costUnavailable?: string; rayUnavailable?: string;
