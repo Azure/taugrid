@@ -441,6 +441,77 @@ func TestReadSourceRejectsChangedPrefixAfterIdentityChange(t *testing.T) {
 	}
 }
 
+func TestIdentityRebindPendingChunkReplaysAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	ready := filepath.Join(root, "ready")
+	writeFile(t, history, historyRow)
+	sink := &recordingSink{name: "test", config: "v1"}
+	options := baseOptions(root, history, sink)
+	options.BaselineExistingHistory = true
+	options.ReadyFile = ready
+	if result := runCollector(t, options); result.Events != 0 {
+		t.Fatalf("baseline result=%+v, want no events", result)
+	}
+	checkpointPath := filepath.Join(options.Out, "checkpoint.json")
+	raw, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before checkpointSet
+	if err := decodeOneJSON(raw, &before); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := before.Sources[history]
+	checkpoint.FileID = "previous-device:previous-inode"
+	before.Sources[history] = checkpoint
+	if err := writeCheckpoints(checkpointPath, before, defaultStorage()); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(history, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trailing := `{"_step":2,"_timestamp":1700000001,"eval/score":2}` + "\n"
+	if _, err := file.WriteString(trailing); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.fault = failOnce(faultAfterChunkWrite)
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background()); err == nil {
+		t.Fatal("chunk-write fault unexpectedly succeeded")
+	}
+	raw, err = os.ReadFile(checkpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rebound checkpointSet
+	if err := decodeOneJSON(raw, &rebound); err != nil {
+		t.Fatal(err)
+	}
+	got := rebound.Sources[history]
+	if got.FileID != fileIdentity(info) || got.Offset != checkpoint.Offset || got.Sequence != checkpoint.Sequence ||
+		got.ChunkDigest != checkpoint.ChunkDigest || got.Baseline {
+		t.Fatalf("rebound checkpoint=%+v, want identity-only durable transition from %+v", got, checkpoint)
+	}
+	options.fault = nil
+	result := runCollector(t, options)
+	if result.Events != 1 || sink.deliveries != 1 {
+		t.Fatalf("restart result=%+v deliveries=%d, want pending trailing row once", result, sink.deliveries)
+	}
+}
+
 func TestWatchDrainsLineAppendedImmediatelyBeforeCompletion(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")

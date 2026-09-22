@@ -378,6 +378,16 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 		if len(read.data) == 0 {
 			continue
 		}
+		if checkpoint.Path != "" && checkpoint.FileID != read.fileID {
+			rebound := cloneCheckpoints(*checkpoints)
+			checkpoint.FileID = read.fileID
+			checkpoint.Baseline = false
+			rebound.Sources[path] = checkpoint
+			if err := writeCheckpoints(checkpointPath, rebound, r.storage()); err != nil {
+				return fmt.Errorf("persist history identity rebind for %s: %w", path, err)
+			}
+			*checkpoints = rebound
+		}
 		events, ndjson, err := r.project(read)
 		if err != nil {
 			return err
