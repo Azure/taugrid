@@ -784,10 +784,6 @@ func v2RunAfterCursor(run sourcedRun, cursor v2CursorPayload) bool {
 			(project == cursor.Project && runID > cursor.ItemID)))
 }
 
-func v2RunCursorID(run sourcedRun) string {
-	return strings.TrimSpace(run.Project) + "\x00" + strings.TrimSpace(run.RunID)
-}
-
 func v2ExperimentAfterCursor(experiment expstore.ExperimentSummary, cursor v2CursorPayload) bool {
 	sortAt := v2ExperimentSortAt(experiment)
 	project := strings.TrimSpace(experiment.Project)
