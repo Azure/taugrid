@@ -21,11 +21,15 @@ export interface Overview extends Scoped {
   workloadProfiles?: Profiles; runningUnavailable?: string;
   running: (Tracking & { name: string; job?: string; namespace: string; queue?: string; clusterQueue?: string })[];
   cards: {
-    fleet?: { readyNodes: number; totalNodes: number; gpuNodes: number; totalGPUs: number };
+    fleet?: {
+      readyNodes: number; totalNodes: number; gpuNodes: number; totalGPUs: number;
+      totalCPUCores: number; totalMemoryGiB: number; topSKU?: string;
+    };
     health?: { totalGPUs: number; errorGPUs: number };
     queue?: { admitted: number; pending: number; gpuUsed: number; gpuHeadroom: number };
     cost?: { totalGPUHours: number; window: string; idleGPUs: number };
-    fleetUnavailable?: string; healthUnavailable?: string; queueUnavailable?: string; costUnavailable?: string;
+    ray?: { clusters: number };
+    fleetUnavailable?: string; healthUnavailable?: string; queueUnavailable?: string; costUnavailable?: string; rayUnavailable?: string;
   };
 }
 export interface GPU {

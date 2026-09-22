@@ -30,7 +30,13 @@ describe('Platform overview', () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({ cards: { queue: { admitted: 1, pending: 0, gpuUsed: 8, gpuHeadroom: 8 } }, running: [] }));
-      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({ readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2 }));
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
+        readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
+        nodes: [
+          { name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
+          { name: 'gpu-b', site: 'east', region: 'eastus2', agentPool: 'h100', gpuCapacity: 8, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
+        ],
+      }));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ window: '15m0s', gpus: [] }));
       if (url.includes('/api/portal/cost')) return Promise.resolve(json({
         window: '168h0m0s',
@@ -56,6 +62,8 @@ describe('Platform overview', () => {
     expect(await within(costBoard).findByText('Estimated cost')).toBeVisible();
     expect(within(costBoard).getByText('$321.09')).toBeVisible();
     expect(within(costBoard).queryByText('987.6')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /west/i })).toBeVisible();
   });
 
   it('emits resolvable canonical run links for workload tracking', () => {
