@@ -35,9 +35,9 @@ function experiment(experimentID: string, project: string, name: string) {
   };
 }
 
-function run(runID: string, project: string, lifecycleState = 'succeeded', metricNames = ['train/loss']) {
+function run(runID: string, project: string, lifecycleState = 'succeeded', metricNames = ['train/loss'], experimentID = 'exp-one') {
   return {
-    run_id: runID, experiment_id: 'exp-one', project, run_group_id: 'group-1',
+    run_id: runID, experiment_id: experimentID, project, run_group_id: 'group-1',
     state: lifecycleState, lifecycle_state: lifecycleState, successful: lifecycleState === 'succeeded',
     success_reasons: [], owner: 'ada', created_at: '2026-09-21T18:00:00Z',
     started_at: '2026-09-21T18:01:00Z', completed_at: '2026-09-21T19:00:00Z',
@@ -147,6 +147,67 @@ describe('typed experiment dashboard', () => {
     expect(location).not.toContain('filter=');
     expect(location).not.toContain('cursor=');
     expect(location).not.toContain('start_step=');
+  });
+
+  it('resolves a workload target bookmark into canonical experiment and run state', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/runs/workload-1/metrics')) return Promise.resolve(json({
+        metadata: metadata(), run_id: 'workload-1', metrics: [],
+      }));
+      if (url.includes('/runs/workload-1')) return Promise.resolve(json({
+        metadata: metadata(), run: run('workload-1', 'vision', 'running', [], 'experiment-7'),
+      }));
+      if (url.includes('/experiments/experiment-7/runs')) return Promise.resolve(json({
+        metadata: metadata(), target: 'experiment-7',
+        runs: [run('workload-1', 'vision', 'running', [], 'experiment-7')],
+      }));
+      return Promise.resolve(json({
+        metadata: metadata(), experiments: [experiment('experiment-7', 'vision', 'Resolved experiment')],
+      }));
+    }));
+
+    renderWorkspace('/portal/experiments?target=workload-1&project=vision');
+
+    expect(await screen.findByText('No metrics are available for this run.')).toBeVisible();
+    await waitFor(() => {
+      const location = screen.getByLabelText('location').textContent!;
+      expect(location).toContain('project=vision');
+      expect(location).toContain('experiment=experiment-7');
+      expect(location).toContain('run=workload-1');
+      expect(location).not.toContain('target=');
+    });
+    expect(requests.some(url => url.includes('/runs/workload-1?') && !url.includes('target='))).toBe(true);
+  });
+
+  it('clears dependent state when the project changes for the same experiment ID', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/experiments/shared/runs')) return Promise.resolve(json({
+        metadata: metadata(), target: 'shared', runs: [],
+      }));
+      return Promise.resolve(json({
+        metadata: metadata(), experiments: [
+          experiment('shared', 'project-a', 'Shared A'),
+          experiment('shared', 'project-b', 'Shared B'),
+        ],
+      }));
+    }));
+    const user = userEvent.setup();
+    renderWorkspace('/portal/experiments?project=project-a&experiment=shared&run=old-run&metric=loss&filter=active&cursor=c2&start_step=10&end_step=20&step_interval=2&max_points=40');
+
+    await user.click(await screen.findByRole('button', { name: /Shared B/ }));
+    await waitFor(() => expect(screen.getByLabelText('location')).toHaveTextContent('project=project-b'));
+    const location = screen.getByLabelText('location').textContent!;
+    expect(location).toContain('experiment=shared');
+    expect(location).not.toContain('run=');
+    expect(location).not.toContain('metric=');
+    expect(location).not.toContain('filter=');
+    expect(location).not.toContain('cursor=');
+    expect(location).not.toContain('start_step=');
+    expect(location).not.toContain('max_points=');
   });
 
   it('renders canonical API errors and partial availability explicitly', async () => {

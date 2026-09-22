@@ -5,6 +5,7 @@ import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Overview } from './Boards';
+import { TrackingLink } from './components';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import type { WorkspaceScope } from './types';
 
@@ -55,5 +56,22 @@ describe('Platform overview', () => {
     expect(await within(costBoard).findByText('Estimated cost')).toBeVisible();
     expect(within(costBoard).getByText('$321.09')).toBeVisible();
     expect(within(costBoard).queryByText('987.6')).not.toBeInTheDocument();
+  });
+
+  it('emits resolvable canonical run links for workload tracking', () => {
+    const client = createPortalQueryClient();
+    render(<QueryClientProvider client={client}><MemoryRouter>
+      <WorkspaceProvider scope={scope} managed={false}>
+        <TrackingLink run={{
+          runId: 'train-77',
+          experimentPath: '/stellar?target=train-77&project=vision',
+          experimentTracking: 'available',
+        }}/>
+      </WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+
+    const link = screen.getByRole('link', { name: 'open ↗' });
+    expect(link).toHaveAttribute('href', '/portal/experiments?project=vision&run=train-77');
+    expect(link).not.toHaveAttribute('href', expect.stringContaining('target='));
   });
 });

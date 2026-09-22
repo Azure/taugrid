@@ -4,7 +4,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { experimentsAPI, useWorkspace } from '../data';
 import { Empty, PageTitle } from '../components';
 import type { MetricCatalogEntry, ResponseMeta, RunSummary, SeriesPoint } from './contracts';
-import { useExperimentsQuery, useMetricCatalogQuery, useMetricSeriesQuery, useRunDetailQuery, useRunsQuery } from './queries';
+import {
+  useExperimentsQuery, useMetricCatalogQuery, useMetricSeriesQuery, useRunDetailQuery, useRunResolverQuery, useRunsQuery,
+} from './queries';
 import { useExperimentURLState } from './url-state';
 import './workspace.css';
 
@@ -47,6 +49,8 @@ export function StellarWorkspace() {
 
 function ExperimentDashboard() {
   const { state, update } = useExperimentURLState();
+  const unresolvedRun = !state.experiment ? state.run || state.target : '';
+  if (unresolvedRun) return <RunTargetResolver runID={unresolvedRun}/>;
   return <div className="thin-dashboard">
     <ExperimentSearch/>
     {state.experiment && <RunsTable key={`${state.project}:${state.experiment}`} experiment={state.experiment}/>}
@@ -54,6 +58,27 @@ function ExperimentDashboard() {
     {!state.experiment && <div className="stellar-state">Choose an experiment to load runs.</div>}
     {state.experiment && <button className="stellar-clear" type="button" onClick={() => update({ experiment: '' }, false)}>Clear experiment selection</button>}
   </div>;
+}
+
+function RunTargetResolver({ runID }: { runID: string }) {
+  const { state, update } = useExperimentURLState();
+  const query = useRunResolverQuery(runID, state.project);
+  useEffect(() => {
+    const run = query.data?.run;
+    if (!run?.experiment_id) return;
+    update({
+      target: '',
+      project: run.project,
+      experiment: run.experiment_id,
+      run: run.run_id,
+    });
+  }, [query.data, update]);
+  if (query.data && !query.data.run.experiment_id) {
+    return <div className="stellar-state error" role="alert">Run detail did not identify an experiment for {runID}.</div>;
+  }
+  return <QueryState name="Run link" query={query}>{() =>
+    <div className="stellar-state" role="status">Opening experiment for {runID}…</div>
+  }</QueryState>;
 }
 
 function ExperimentSearch() {

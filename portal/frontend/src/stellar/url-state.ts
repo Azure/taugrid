@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useScopedURL } from '../data';
 
 export interface ExperimentURLState {
+  target: string;
   q: string;
   project: string;
   experiment: string;
@@ -33,6 +34,7 @@ export function useExperimentURLState() {
   const location = useLocation(), navigate = useNavigate(), scoped = useScopedURL();
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const state: ExperimentURLState = {
+    target: params.get('target') || '',
     q: params.get('q') || '',
     project: params.get('project') || '',
     experiment: params.get('experiment') || '',
@@ -48,11 +50,14 @@ export function useExperimentURLState() {
   function update(values: Partial<Record<keyof ExperimentURLState, string | number | undefined>>, replace = true) {
     const next = new URLSearchParams(location.search);
     const names: Record<keyof ExperimentURLState, string> = {
-      q: 'q', project: 'project', experiment: 'experiment', run: 'run', metric: 'metric',
+      target: 'target', q: 'q', project: 'project', experiment: 'experiment', run: 'run', metric: 'metric',
       filter: 'filter', cursor: 'cursor', startStep: 'start_step', endStep: 'end_step',
       stepInterval: 'step_interval', maxPoints: 'max_points',
     };
-    if (values.experiment !== undefined && String(values.experiment) !== state.experiment) {
+    const nextProject = values.project === undefined ? state.project : String(values.project);
+    const nextExperiment = values.experiment === undefined ? state.experiment : String(values.experiment);
+    if ((values.project !== undefined || values.experiment !== undefined) &&
+      (nextProject !== state.project || nextExperiment !== state.experiment)) {
       for (const name of ['run', 'metric', 'filter', 'cursor', 'start_step', 'end_step', 'step_interval', 'max_points']) next.delete(name);
     } else if (values.run !== undefined && String(values.run) !== state.run) {
       for (const name of ['metric', 'start_step', 'end_step', 'step_interval', 'max_points']) next.delete(name);

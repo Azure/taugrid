@@ -41,6 +41,12 @@ export function useRunDetailQuery(experiment: string, runID: string, project: st
   }), decodeRunDetail, !!experiment && !!runID);
 }
 
+export function useRunResolverQuery(runID: string, project: string) {
+  return useStellarQuery(stellarURL(`runs/${segment(runID)}`, {
+    project: project || undefined,
+  }), decodeRunDetail, !!runID);
+}
+
 export function useMetricCatalogQuery(experiment: string, runID: string, project: string) {
   return useStellarQuery(stellarURL(`runs/${segment(runID)}/metrics`, {
     project: project || undefined, target: experiment,

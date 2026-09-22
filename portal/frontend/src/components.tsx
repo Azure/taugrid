@@ -87,6 +87,10 @@ export function TrackingLink({ run, label = 'open ↗' }: { run: Tracking; label
   const { scope, managed } = useWorkspace();
   const path = run.experimentPath ? new URL(nativeExperimentURL(run.experimentPath), window.location.origin) : undefined;
   if (path && !path.searchParams.has('target') && run.runId) path.searchParams.set('target', run.runId);
+  if (path?.searchParams.has('target')) {
+    path.searchParams.set('run', path.searchParams.get('target')!);
+    path.searchParams.delete('target');
+  }
   return path ? <ScopedLink to={experimentPageURL(scope, managed, path.search)! + path.hash} className="back" title={run.runId}>{label}</ScopedLink>
     : run.experimentTracking === 'available' && scope.experimentsUrl
       ? <ScopedLink to="/portal/experiments" className="back">available ↗</ScopedLink>
