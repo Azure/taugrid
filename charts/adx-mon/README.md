@@ -284,8 +284,10 @@ ManagementCommand, so database defaults cannot shorten catalog history.
 
 The series key is workspace, cluster, source store, project, experiment, run
 group, run, and metric name. Unit/source/split remain latest metric metadata,
-not extra series dimensions, and the catalog requires no new remote-write or
-per-step label. The run catalog joins metric activity with
+not extra series dimensions. Latest sample selection orders by activity time
+and then export revision, so an appended correction with the same event ID,
+step, and wall time agrees with `TauExpMetricEventRows()`. The catalog requires
+no new remote-write or per-step label. The run catalog joins metric activity with
 `TauExpRunLifecycle`; new lifecycle rows persist `experiment_id`. Older
 lifecycle rows with a blank experiment ID are included only when a unique
 metric-run identity can enrich them, and unresolved historical lifecycle-only

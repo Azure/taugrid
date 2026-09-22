@@ -22,12 +22,18 @@ spec:
       | where isnotempty(event_id) and isnotempty(workspace_id) and isnotempty(['project'])
           and isnotempty(experiment_id) and isnotempty(run_group_id) and isnotempty(run_id)
           and isnotempty(metric_name)
+      // Fixed-width timestamps make wall_time the primary ordering key and
+      // exported_at the deterministic revision tie-breaker for the same event.
+      | extend latest_rank = strcat(
+          format_datetime(wall_time, 'yyyy-MM-ddTHH:mm:ss.fffffff'),
+          '|',
+          format_datetime(exported_at, 'yyyy-MM-ddTHH:mm:ss.fffffff'))
       | summarize
           first_activity_at = min(wall_time),
           latest_activity_at = max(wall_time),
           min_step = min(step),
           max_step = max(step),
-          arg_max(wall_time, step, value, metric_file_id, metric_file_path, unit, source, split)
+          arg_max(latest_rank, wall_time, exported_at, step, value, metric_file_id, metric_file_path, unit, source, split)
         by workspace_id, cluster, source_store_id, ['project'], experiment_id,
            run_group_id, run_id, metric_name
     }

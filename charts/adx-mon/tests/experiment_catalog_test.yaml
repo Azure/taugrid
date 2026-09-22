@@ -51,6 +51,24 @@ tests:
           path: spec.body
           pattern: "experiment_id = tostring\\(column_ifexists\\('experiment_id', ''\\)\\)"
 
+  - it: preserves corrected same-event revisions in latest series values
+    template: templates/management-commands/experiment-catalog-v1.yaml
+    set:
+      managementCommands.experimentCatalogV1.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: "latest_rank = strcat\\([\\s\\S]*format_datetime\\(wall_time, 'yyyy-MM-ddTHH:mm:ss\\.fffffff'\\),[\\s\\S]*format_datetime\\(exported_at, 'yyyy-MM-ddTHH:mm:ss\\.fffffff'\\)\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: 'arg_max\(latest_rank, wall_time, exported_at, step, value, metric_file_id, metric_file_path, unit, source, split\)'
+      - notMatchRegex:
+          path: spec.body
+          pattern: 'arg_max\(wall_time, step, value'
+      - matchRegex:
+          path: spec.body
+          pattern: 'first_activity_at = min\(wall_time\),[\s\S]*latest_activity_at = max\(wall_time\),[\s\S]*min_step = min\(step\),[\s\S]*max_step = max\(step\)'
+
   - it: reconciles catalog materialized-view retention separately
     template: templates/management-commands/experiment-catalog-v1-retention.yaml
     set:
