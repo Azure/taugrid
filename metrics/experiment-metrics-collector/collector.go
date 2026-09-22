@@ -55,6 +55,8 @@ type Runner struct {
 	options Options
 }
 
+const maxShutdownCompletionPollInterval = 100 * time.Millisecond
+
 func New(options Options) (*Runner, error) {
 	for name, value := range map[string]string{
 		"run": options.Run, "project": options.Project, "experiment": options.Experiment,
@@ -293,13 +295,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	manifestCount, err := r.replaySpool(ctx, &checkpoints, checkpointPath, &result)
 	if err != nil {
 		if ctx.Err() != nil {
-			completed, completionErr := fileExists(r.options.CompletionFile)
-			if completionErr != nil {
-				return result, completionErr
-			}
-			if !completed {
-				return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
-			}
+			return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
 		}
 		return result, err
 	}
@@ -328,13 +324,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	for iteration := 1; ; iteration++ {
 		if err := r.drain(ctx, &checkpoints, checkpointPath, &result, false); err != nil {
 			if ctx.Err() != nil {
-				completed, completionErr := fileExists(r.options.CompletionFile)
-				if completionErr != nil {
-					return result, completionErr
-				}
-				if !completed {
-					return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
-				}
+				return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
 			}
 			return result, err
 		}
@@ -350,10 +340,8 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 				return result, err
 			}
 			result.Completed = true
-			if r.options.DoneFile != "" {
-				if err := writeFileDurable(r.options.DoneFile, []byte("done\n"), 0o644, r.storage()); err != nil {
-					return result, fmt.Errorf("publish done file: %w", err)
-				}
+			if err := r.publishDone(); err != nil {
+				return result, err
 			}
 			return result, nil
 		}
@@ -586,11 +574,31 @@ func (r *Runner) finishCancelled(
 	}
 	drainCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	completed, err := r.waitForCompletion(drainCtx, shutdownCompletionWait(timeout))
+	if err != nil {
+		return result, fmt.Errorf("wait for workload completion during shutdown: %w", err)
+	}
 	if _, err := r.replaySpool(drainCtx, &checkpoints, checkpointPath, &result); err != nil {
 		return result, fmt.Errorf("final cancellation spool replay: %w", err)
 	}
 	if err := r.drain(drainCtx, &checkpoints, checkpointPath, &result, true); err != nil {
 		return result, fmt.Errorf("final cancellation history drain: %w", err)
+	}
+	if !completed {
+		completed, err = fileExists(r.options.CompletionFile)
+		if err != nil {
+			return result, err
+		}
+	}
+	if completed {
+		if err := r.publishStatus(drainCtx, &checkpoints, &result); err != nil {
+			return result, fmt.Errorf("publish workload terminal status during shutdown: %w", err)
+		}
+		result.Completed = true
+		if err := r.publishDone(); err != nil {
+			return result, err
+		}
+		return result, cause
 	}
 	status := completion{
 		State:       "cancelled",
@@ -603,6 +611,52 @@ func (r *Runner) finishCancelled(
 		return result, fmt.Errorf("publish cancelled terminal status: %w", err)
 	}
 	return result, cause
+}
+
+func (r *Runner) waitForCompletion(ctx context.Context, maxWait time.Duration) (bool, error) {
+	if strings.TrimSpace(r.options.CompletionFile) == "" || maxWait <= 0 {
+		return false, nil
+	}
+	completed, err := fileExists(r.options.CompletionFile)
+	if err != nil || completed {
+		return completed, err
+	}
+	pollInterval := min(r.options.Interval, maxShutdownCompletionPollInterval)
+	timer := time.NewTimer(maxWait)
+	defer timer.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-timer.C:
+			return false, nil
+		case <-ticker.C:
+			completed, err := fileExists(r.options.CompletionFile)
+			if err != nil || completed {
+				return completed, err
+			}
+		}
+	}
+}
+
+func shutdownCompletionWait(timeout time.Duration) time.Duration {
+	wait := metricsoffload.TerminalDrainGrace
+	if half := timeout / 2; wait > half {
+		wait = half
+	}
+	return wait
+}
+
+func (r *Runner) publishDone() error {
+	if r.options.DoneFile == "" {
+		return nil
+	}
+	if err := writeFileDurable(r.options.DoneFile, []byte("done\n"), 0o644, r.storage()); err != nil {
+		return fmt.Errorf("publish done file: %w", err)
+	}
+	return nil
 }
 
 func (r *Runner) terminalDrainTimeout() (time.Duration, error) {

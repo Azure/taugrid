@@ -226,9 +226,6 @@ func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		client.discovery.Close()
-		if err := client.ingestor.Close(); err != nil {
-			t.Error(err)
-		}
 	})
 
 	ingestByValue := "taugrid-metric-chunk-" + strings.Repeat("a", 64)
@@ -271,6 +268,113 @@ func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
 	}
 }
 
+func TestSDKADXQueuedClientRefreshesSignedIngestionResources(t *testing.T) {
+	var mu sync.Mutex
+	resourceGeneration := 0
+	var blobGenerations, queueGenerations []string
+	baseTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body []byte
+		if request.Body != nil {
+			var err error
+			body, err = io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+		}
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}
+		switch {
+		case strings.Contains(request.URL.Path, "/v1/rest/auth/metadata"):
+			response.Header.Set("Content-Type", "application/json")
+			response.Body = io.NopCloser(strings.NewReader(`{"AzureAD":{"LoginEndpoint":"https://login.microsoftonline.com","LoginMfaRequired":false,"KustoClientAppId":"client-id","KustoClientRedirectUri":"https://microsoft/kusto","KustoServiceResourceId":"https://kusto.windows.net","FirstPartyAuthorityUrl":"https://login.microsoftonline.com/tenant"},"dSTS":{"CloudEndpointSuffix":"windows.net","DstsRealm":"realm","DstsInstance":"dsts.core.windows.net","KustoDnsHostName":"kusto.windows.net","ServiceName":"kusto"}}`))
+		case strings.Contains(request.URL.Path, "/v1/rest/mgmt"):
+			var command struct {
+				CSL string `json:"csl"`
+			}
+			if err := json.Unmarshal(body, &command); err != nil {
+				return nil, err
+			}
+			response.Header.Set("Content-Type", "application/json")
+			switch command.CSL {
+			case ".get kusto identity token":
+				response.Body = io.NopCloser(strings.NewReader(`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"AuthorizationContext","DataType":"String","ColumnType":"string"}],"Rows":[["auth-context"]]}]}`))
+			case ".get ingestion resources":
+				mu.Lock()
+				resourceGeneration++
+				generation := resourceGeneration
+				mu.Unlock()
+				response.Body = io.NopCloser(strings.NewReader(fmt.Sprintf(
+					`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"ResourceTypeName","DataType":"String","ColumnType":"string"},{"ColumnName":"StorageRoot","DataType":"String","ColumnType":"string"}],"Rows":[["TempStorage","https://storage.blob.core.windows.net/container?sv=2024-01-01&sig=blob-%[1]d&generation=%[1]d"],["SecuredReadyForAggregationQueue","https://storage.queue.core.windows.net/queue?sv=2024-01-01&sig=queue-%[1]d&generation=%[1]d"],["IngestionsStatusTable","https://storage.table.core.windows.net/status?sv=2024-01-01&sig=table-%[1]d&generation=%[1]d"]]}]}`,
+					generation,
+				)))
+			default:
+				return nil, fmt.Errorf("unexpected management command %q", command.CSL)
+			}
+		case request.URL.Host == "storage.blob.core.windows.net":
+			mu.Lock()
+			blobGenerations = append(blobGenerations, request.URL.Query().Get("generation"))
+			mu.Unlock()
+			response.StatusCode = http.StatusCreated
+			response.Header.Set("ETag", `"test-etag"`)
+		case request.URL.Host == "storage.table.core.windows.net":
+			response.StatusCode = http.StatusNoContent
+		case request.URL.Host == "storage.queue.core.windows.net":
+			mu.Lock()
+			queueGenerations = append(queueGenerations, request.URL.Query().Get("generation"))
+			mu.Unlock()
+			response.StatusCode = http.StatusCreated
+			response.Header.Set("Content-Type", "application/xml")
+			response.Body = io.NopCloser(strings.NewReader(`<QueueMessagesList><QueueMessage><MessageId>message-id</MessageId><InsertionTime>Mon, 21 Sep 2026 00:00:00 GMT</InsertionTime><ExpirationTime>Tue, 22 Sep 2026 00:00:00 GMT</ExpirationTime><PopReceipt>receipt</PopReceipt><TimeNextVisible>Mon, 21 Sep 2026 00:00:00 GMT</TimeNextVisible></QueueMessage></QueueMessagesList>`))
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s", request.Method, request.URL)
+		}
+		return response, nil
+	})
+	httpClient := &http.Client{Transport: &adxResourceCachingTransport{base: baseTransport}}
+	kcsb := azkustodata.NewConnectionStringBuilder("https://cluster.kusto.windows.net").
+		WithTokenCredential(staticTokenCredential{})
+	client, err := newSDKADXQueuedClient(
+		kcsb,
+		ADXQueuedConfig{Database: "metrics", Table: "MetricEvents"},
+		httpClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := client.discovery.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	for generation := 1; generation <= 2; generation++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := client.Ingest(ctx, []byte("{}\n"), adxIngestRequest{
+			Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
+			IngestByValue: fmt.Sprintf("taugrid-metric-chunk-%064d", generation),
+		})
+		cancel()
+		if err != nil {
+			t.Fatalf("generation %d ingest: %v", generation, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if resourceGeneration != 2 {
+		t.Fatalf("bounded resource discoveries=%d, want 2", resourceGeneration)
+	}
+	if strings.Join(blobGenerations, ",") != "1,2" {
+		t.Fatalf("blob resource generations=%v, want refreshed 1,2", blobGenerations)
+	}
+	if strings.Join(queueGenerations, ",") != "1,2" {
+		t.Fatalf("queue resource generations=%v, want refreshed 1,2", queueGenerations)
+	}
+}
+
 func TestSDKADXQueuedColdResourceDiscoveryHonorsAttemptDeadline(t *testing.T) {
 	discoveryStarted := make(chan struct{})
 	var once sync.Once
@@ -306,9 +410,6 @@ func TestSDKADXQueuedColdResourceDiscoveryHonorsAttemptDeadline(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		client.discovery.Close()
-		if err := client.ingestor.Close(); err != nil {
-			t.Error(err)
-		}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -93,8 +93,10 @@ var (
 )
 
 type sdkADXQueuedClient struct {
-	ingestor  *azkustoingest.Ingestion
-	discovery *azkustodata.Client
+	discovery  *azkustodata.Client
+	kcsb       *azkustodata.ConnectionStringBuilder
+	config     ADXQueuedConfig
+	httpClient *http.Client
 }
 
 type sdkADXQueuedResult struct {
@@ -153,6 +155,28 @@ func newSDKADXQueuedClient(
 	if err != nil {
 		return nil, fmt.Errorf("create ADX resource discovery client: %w", err)
 	}
+	ingestor, err := newSDKADXIngestor(kcsb, config, httpClient)
+	if err != nil {
+		discovery.Close()
+		return nil, err
+	}
+	if err := ingestor.Close(); err != nil {
+		discovery.Close()
+		return nil, fmt.Errorf("close ADX queued ingestor validation client: %w", err)
+	}
+	return &sdkADXQueuedClient{
+		discovery:  discovery,
+		kcsb:       kcsb,
+		config:     config,
+		httpClient: httpClient,
+	}, nil
+}
+
+func newSDKADXIngestor(
+	kcsb *azkustodata.ConnectionStringBuilder,
+	config ADXQueuedConfig,
+	httpClient *http.Client,
+) (*azkustoingest.Ingestion, error) {
 	ingestor, err := azkustoingest.New(
 		kcsb,
 		azkustoingest.WithHttpClient(httpClient),
@@ -160,10 +184,9 @@ func newSDKADXQueuedClient(
 		azkustoingest.WithDefaultTable(strings.TrimSpace(config.Table)),
 	)
 	if err != nil {
-		discovery.Close()
 		return nil, fmt.Errorf("create ADX queued ingestor: %w", err)
 	}
-	return &sdkADXQueuedClient{ingestor: ingestor, discovery: discovery}, nil
+	return ingestor, nil
 }
 
 func newADXCredential(clientID string) (azcore.TokenCredential, error) {
@@ -346,11 +369,16 @@ func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request
 	if _, err := c.discovery.Mgmt(discoveryCtx, "NetDefaultDB", kql.New(".get ingestion resources")); err != nil {
 		return nil, normalizeADXSDKError(fmt.Errorf("discover ADX ingestion resources: %w", err))
 	}
+	ingestor, err := newSDKADXIngestor(c.kcsb, c.config, c.httpClient)
+	if err != nil {
+		return nil, err
+	}
+	defer ingestor.Close()
 	ingestIfNotExists, err := json.Marshal([]string{request.IngestByValue})
 	if err != nil {
 		return nil, fmt.Errorf("marshal ADX ingest-if-not-exists tags: %w", err)
 	}
-	result, err := c.ingestor.FromReader(
+	result, err := ingestor.FromReader(
 		ctx,
 		bytes.NewReader(payload),
 		azkustoingest.Database(request.Database),
@@ -428,11 +456,7 @@ func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Re
 		body:       body,
 	}
 	t.mu.Lock()
-	if t.resources == nil {
-		t.resources = cached
-	} else {
-		cached = t.resources
-	}
+	t.resources = cached
 	t.mu.Unlock()
 	return cached.response(request), nil
 }

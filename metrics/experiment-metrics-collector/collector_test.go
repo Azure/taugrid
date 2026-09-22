@@ -711,6 +711,80 @@ func TestCancellationDrainsTrailingHistoryAndPublishesCancelledStatus(t *testing
 	}
 }
 
+func TestCancellationWaitsForActualCompletionBeforeFinalDrain(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	completionPath := filepath.Join(root, "completion.json")
+	donePath := filepath.Join(root, "done")
+	writeFile(t, history, historyRow)
+	sink := &boundedContextSink{
+		recordingSink: recordingSink{name: "test", config: "v1"},
+		budget:        500 * time.Millisecond,
+	}
+	options := baseOptions(root, history, sink)
+	options.CompletionFile = completionPath
+	options.DoneFile = donePath
+	options.Watch = true
+	options.Interval = 10 * time.Millisecond
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := make(chan error, 1)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		file, err := os.OpenFile(history, os.O_APPEND|os.O_WRONLY, 0)
+		if err == nil {
+			_, err = file.WriteString(`{"_step":2,"_timestamp":1700000001,"eval/score":2}` + "\n")
+			closeErr := file.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+		if err == nil {
+			temp := completionPath + ".tmp"
+			err = os.WriteFile(
+				temp,
+				[]byte(`{"state":"succeeded","completed_at":"2023-11-14T22:16:00Z"}`),
+				0o644,
+			)
+			if err == nil {
+				err = os.Rename(temp, completionPath)
+			}
+		}
+		writeErr <- err
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := runner.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error=%v, want original context cancellation", err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+	if !result.Completed {
+		t.Fatalf("result=%+v, want actual completion publication", result)
+	}
+	if _, err := os.Stat(donePath); err != nil {
+		t.Fatalf("done file was not published: %v", err)
+	}
+	if len(sink.chunks) != 3 {
+		t.Fatalf("delivered chunks=%d, want pending history, trailing history, terminal", len(sink.chunks))
+	}
+	for index := 0; index < 2; index++ {
+		if sink.chunks[index].Events[0].MetricName == exptelemetry.RunStatusMetricName {
+			t.Fatalf("chunk %d published terminal status before history", index)
+		}
+	}
+	status := sink.chunks[2].Events[0]
+	if status.MetricName != exptelemetry.RunStatusMetricName ||
+		status.Tags[exptelemetry.RunStatusStateTag] != "succeeded" {
+		t.Fatalf("terminal event=%+v, want actual succeeded state", status)
+	}
+}
+
 func TestRetryPublishesFailedThenSucceededTerminalObservationsOnce(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
