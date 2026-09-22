@@ -11,15 +11,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-kusto-go/azkustodata"
 	kustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -52,6 +55,7 @@ type adxFinalStatus string
 
 const (
 	adxStatusSucceeded adxFinalStatus = "Succeeded"
+	adxStatusSkipped   adxFinalStatus = "Skipped"
 	adxStatusQueued    adxFinalStatus = "Queued"
 	adxStatusFailed    adxFinalStatus = "Failed"
 )
@@ -89,12 +93,27 @@ var (
 )
 
 type sdkADXQueuedClient struct {
-	ingestor *azkustoingest.Ingestion
+	ingestor  *azkustoingest.Ingestion
+	discovery *azkustodata.Client
 }
 
 type sdkADXQueuedResult struct {
 	result *azkustoingest.Result
 }
+
+type adxCachedHTTPResponse struct {
+	statusCode int
+	header     http.Header
+	body       []byte
+}
+
+type adxResourceCachingTransport struct {
+	base      http.RoundTripper
+	mu        sync.RWMutex
+	resources *adxCachedHTTPResponse
+}
+
+type adxResourceDiscoveryContextKey struct{}
 
 func NewADXQueuedSink(config ADXQueuedConfig, credential azcore.TokenCredential) (*ADXQueuedSink, error) {
 	sink := &ADXQueuedSink{Config: config, Credential: credential}
@@ -110,16 +129,41 @@ func NewADXQueuedSink(config ADXQueuedConfig, credential azcore.TokenCredential)
 		sink.Credential = credential
 	}
 	kcsb := azkustodata.NewConnectionStringBuilder(strings.TrimSpace(config.ClusterURI)).WithTokenCredential(credential)
+	transport := &adxResourceCachingTransport{base: http.DefaultTransport}
+	httpClient := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	client, err := newSDKADXQueuedClient(kcsb, config, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	sink.client = client
+	return sink, nil
+}
+
+func newSDKADXQueuedClient(
+	kcsb *azkustodata.ConnectionStringBuilder,
+	config ADXQueuedConfig,
+	httpClient *http.Client,
+) (*sdkADXQueuedClient, error) {
+	discovery, err := azkustodata.New(kcsb, azkustodata.WithHttpClient(httpClient))
+	if err != nil {
+		return nil, fmt.Errorf("create ADX resource discovery client: %w", err)
+	}
 	ingestor, err := azkustoingest.New(
 		kcsb,
+		azkustoingest.WithHttpClient(httpClient),
 		azkustoingest.WithDefaultDatabase(strings.TrimSpace(config.Database)),
 		azkustoingest.WithDefaultTable(strings.TrimSpace(config.Table)),
 	)
 	if err != nil {
+		discovery.Close()
 		return nil, fmt.Errorf("create ADX queued ingestor: %w", err)
 	}
-	sink.client = &sdkADXQueuedClient{ingestor: ingestor}
-	return sink, nil
+	return &sdkADXQueuedClient{ingestor: ingestor, discovery: discovery}, nil
 }
 
 func newADXCredential(clientID string) (azcore.TokenCredential, error) {
@@ -193,7 +237,7 @@ func (s *ADXQueuedSink) Deliver(ctx context.Context, chunk MetricEventChunk) (De
 		result, err := s.client.Ingest(attemptCtx, chunk.NDJSON, request)
 		if err == nil {
 			status, waitErr := result.Wait(attemptCtx, s.pollInterval())
-			if waitErr == nil && status == adxStatusSucceeded {
+			if waitErr == nil && (status == adxStatusSucceeded || status == adxStatusSkipped) {
 				cancel()
 				return DeliveryAck{
 					Samples: len(chunk.Events), Requests: attempt, Retries: attempt - 1,
@@ -288,6 +332,16 @@ func (s *ADXQueuedSink) pollInterval() time.Duration {
 }
 
 func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request adxIngestRequest) (adxQueuedResult, error) {
+	if c.discovery == nil {
+		return nil, fmt.Errorf("ADX resource discovery client is not initialized")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, fmt.Errorf("ADX queued ingestion requires an attempt deadline")
+	}
+	discoveryCtx := context.WithValue(ctx, adxResourceDiscoveryContextKey{}, true)
+	if _, err := c.discovery.Mgmt(discoveryCtx, "NetDefaultDB", kql.New(".get ingestion resources")); err != nil {
+		return nil, normalizeADXSDKError(fmt.Errorf("discover ADX ingestion resources: %w", err))
+	}
 	ingestIfNotExists, err := json.Marshal([]string{request.IngestByValue})
 	if err != nil {
 		return nil, fmt.Errorf("marshal ADX ingest-if-not-exists tags: %w", err)
@@ -312,6 +366,10 @@ func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request
 
 func (r *sdkADXQueuedResult) Wait(ctx context.Context, pollInterval time.Duration) (adxFinalStatus, error) {
 	err := <-r.result.Wait(ctx, azkustoingest.WithImmediateFirst(), azkustoingest.WithInterval(pollInterval))
+	return adxFinalStatusFromSDKError(err)
+}
+
+func adxFinalStatusFromSDKError(err error) (adxFinalStatus, error) {
 	if err == nil {
 		return adxStatusSucceeded, nil
 	}
@@ -322,11 +380,82 @@ func (r *sdkADXQueuedResult) Wait(ctx context.Context, pollInterval time.Duratio
 	switch status {
 	case azkustoingest.Succeeded:
 		return adxStatusSucceeded, nil
+	case azkustoingest.Skipped:
+		return adxStatusSkipped, nil
 	case azkustoingest.Queued:
 		return adxStatusQueued, fmt.Errorf("ADX ingestion is only queued, not final")
 	default:
 		return adxStatusFailed, err
 	}
+}
+
+func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if !isADXIngestionResourcesRequest(request) {
+		return t.base.RoundTrip(request)
+	}
+	t.mu.RLock()
+	cached := t.resources
+	t.mu.RUnlock()
+	isPreflight, _ := request.Context().Value(adxResourceDiscoveryContextKey{}).(bool)
+	if cached != nil && !isPreflight {
+		return cached.response(request), nil
+	}
+	if !isPreflight {
+		return nil, fmt.Errorf("ADX ingestion resources must be prefetched for this attempt")
+	}
+	response, err := t.base.RoundTrip(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return response, nil
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		_ = response.Body.Close()
+		return nil, err
+	}
+	if err := response.Body.Close(); err != nil {
+		return nil, err
+	}
+	cached = &adxCachedHTTPResponse{
+		statusCode: response.StatusCode,
+		header:     response.Header.Clone(),
+		body:       body,
+	}
+	t.mu.Lock()
+	if t.resources == nil {
+		t.resources = cached
+	} else {
+		cached = t.resources
+	}
+	t.mu.Unlock()
+	return cached.response(request), nil
+}
+
+func (r *adxCachedHTTPResponse) response(request *http.Request) *http.Response {
+	return &http.Response{
+		StatusCode: r.statusCode,
+		Status:     fmt.Sprintf("%d %s", r.statusCode, http.StatusText(r.statusCode)),
+		Header:     r.header.Clone(),
+		Body:       io.NopCloser(bytes.NewReader(r.body)),
+		Request:    request,
+	}
+}
+
+func isADXIngestionResourcesRequest(request *http.Request) bool {
+	if request.Body == nil || !strings.Contains(request.URL.Path, "/v1/rest/mgmt") {
+		return false
+	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return false
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	var command struct {
+		CSL string `json:"csl"`
+	}
+	return json.Unmarshal(body, &command) == nil && command.CSL == ".get ingestion resources"
 }
 
 func adxRetryable(err error) bool {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -57,6 +58,10 @@ type fakeADXResult struct {
 
 type timeoutADXResult struct{}
 
+type sdkStatusADXResult struct {
+	err error
+}
+
 type hangingADXClient struct {
 	mu       sync.Mutex
 	attempts int
@@ -85,6 +90,10 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 func (timeoutADXResult) Wait(ctx context.Context, _ time.Duration) (adxFinalStatus, error) {
 	<-ctx.Done()
 	return adxStatusFailed, ctx.Err()
+}
+
+func (r sdkStatusADXResult) Wait(context.Context, time.Duration) (adxFinalStatus, error) {
+	return adxFinalStatusFromSDKError(r.err)
 }
 
 func (r *fakeADXResult) Wait(context.Context, time.Duration) (adxFinalStatus, error) {
@@ -151,7 +160,7 @@ func TestADXQueuedWaitsForFinalSuccessBeforeAcknowledging(t *testing.T) {
 
 func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
 	var queueMessage []byte
-	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	baseTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body []byte
 		if request.Body != nil {
 			var err error
@@ -200,28 +209,29 @@ func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
 			return nil, fmt.Errorf("unexpected request %s %s", request.Method, request.URL)
 		}
 		return response, nil
-	})}
+	})
+	httpClient := &http.Client{Transport: &adxResourceCachingTransport{base: baseTransport}}
 	kcsb := azkustodata.NewConnectionStringBuilder("https://cluster.kusto.windows.net").
 		WithTokenCredential(staticTokenCredential{})
-	ingestor, err := azkustoingest.New(
+	client, err := newSDKADXQueuedClient(
 		kcsb,
-		azkustoingest.WithoutEndpointCorrection(),
-		azkustoingest.WithHttpClient(httpClient),
-		azkustoingest.WithDefaultDatabase("metrics"),
-		azkustoingest.WithDefaultTable("MetricEvents"),
+		ADXQueuedConfig{Database: "metrics", Table: "MetricEvents"},
+		httpClient,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := ingestor.Close(); err != nil {
+		client.discovery.Close()
+		if err := client.ingestor.Close(); err != nil {
 			t.Error(err)
 		}
 	})
 
-	client := &sdkADXQueuedClient{ingestor: ingestor}
 	ingestByValue := "taugrid-metric-chunk-" + strings.Repeat("a", 64)
-	if _, err := client.Ingest(context.Background(), []byte("{}\n"), adxIngestRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := client.Ingest(ctx, []byte("{}\n"), adxIngestRequest{
 		Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
 		IngestByValue: ingestByValue,
 	}); err != nil {
@@ -255,6 +265,66 @@ func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
 			properties.AdditionalProperties.IngestIfNotExists,
 			want,
 		)
+	}
+}
+
+func TestSDKADXQueuedColdResourceDiscoveryHonorsAttemptDeadline(t *testing.T) {
+	discoveryStarted := make(chan struct{})
+	var once sync.Once
+	baseTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}
+		if strings.Contains(request.URL.Path, "/v1/rest/auth/metadata") {
+			response.Header.Set("Content-Type", "application/json")
+			response.Body = io.NopCloser(strings.NewReader(`{"AzureAD":{"LoginEndpoint":"https://login.microsoftonline.com","LoginMfaRequired":false,"KustoClientAppId":"client-id","KustoClientRedirectUri":"https://microsoft/kusto","KustoServiceResourceId":"https://kusto.windows.net","FirstPartyAuthorityUrl":"https://login.microsoftonline.com/tenant"},"dSTS":{"CloudEndpointSuffix":"windows.net","DstsRealm":"realm","DstsInstance":"dsts.core.windows.net","KustoDnsHostName":"kusto.windows.net","ServiceName":"kusto"}}`))
+			return response, nil
+		}
+		if isADXIngestionResourcesRequest(request) {
+			once.Do(func() { close(discoveryStarted) })
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		}
+		return nil, fmt.Errorf("unexpected request %s %s", request.Method, request.URL)
+	})
+	httpClient := &http.Client{Transport: &adxResourceCachingTransport{base: baseTransport}}
+	kcsb := azkustodata.NewConnectionStringBuilder("https://cluster.kusto.windows.net").
+		WithTokenCredential(staticTokenCredential{})
+	client, err := newSDKADXQueuedClient(
+		kcsb,
+		ADXQueuedConfig{Database: "metrics", Table: "MetricEvents"},
+		httpClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		client.discovery.Close()
+		if err := client.ingestor.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err = client.Ingest(ctx, []byte("{}\n"), adxIngestRequest{
+		Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
+		IngestByValue: "taugrid-metric-chunk-" + strings.Repeat("b", 64),
+	})
+	if err == nil {
+		t.Fatal("cold-cache resource discovery unexpectedly succeeded")
+	}
+	select {
+	case <-discoveryStarted:
+	default:
+		t.Fatal("real SDK did not attempt cold-cache ingestion resource discovery")
+	}
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("cold-cache discovery elapsed %s, want the configured 1s deadline", elapsed)
 	}
 }
 
@@ -387,6 +457,59 @@ func TestADXQueuedConfigIdentityAndReceiptReplay(t *testing.T) {
 	}
 	if len(client.requests) != 1 {
 		t.Fatalf("receipt replay submitted %d ADX requests, want 1", len(client.requests))
+	}
+}
+
+func TestADXQueuedMissingReceiptReplayAcceptsSDKSkipped(t *testing.T) {
+	skipped := azkustoingest.StatusFromMapForTests(map[string]interface{}{
+		"Status":        "Skipped",
+		"FailureStatus": "Permanent",
+		"ErrorCode":     "IngestByTagAlreadyExists",
+	})
+	client := &fakeADXClient{results: []adxQueuedResult{
+		&fakeADXResult{status: adxStatusSucceeded},
+		sdkStatusADXResult{err: skipped},
+	}}
+	sink := adxTestSink(client)
+	root := t.TempDir()
+	chunk := adxTestChunk(t)
+	crash := errors.New("simulated crash before receipt persistence")
+
+	_, _, err := deliverWithReceipt(
+		context.Background(),
+		root,
+		sink,
+		chunk,
+		defaultStorage(),
+		func(point faultPoint) error {
+			if point == faultAfterSinkAccept {
+				return crash
+			}
+			return nil
+		},
+	)
+	if !errors.Is(err, crash) {
+		t.Fatalf("initial missing-receipt delivery error=%v, want %v", err, crash)
+	}
+	if _, err := os.Stat(receiptPath(root, sink, chunk.Digest)); !os.IsNotExist(err) {
+		t.Fatalf("receipt exists after simulated crash: %v", err)
+	}
+
+	ack, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused || ack.Metadata["final_status"] != "Skipped" {
+		t.Fatalf("recovered delivery reused=%v ack=%+v", reused, ack)
+	}
+	if _, err := os.Stat(receiptPath(root, sink, chunk.Digest)); err != nil {
+		t.Fatalf("recovered receipt was not persisted: %v", err)
+	}
+	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err != nil || !reused {
+		t.Fatalf("persisted recovery receipt replay reused=%v err=%v", reused, err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("missing-receipt replay submitted %d requests, want 2", len(client.requests))
 	}
 }
 
