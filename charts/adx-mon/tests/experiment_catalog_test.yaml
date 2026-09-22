@@ -1,11 +1,20 @@
 suite: Experiment catalog v1
 templates:
   - templates/management-commands/experiment-catalog-v1.yaml
+  - templates/management-commands/experiment-catalog-v1-retention.yaml
   - templates/functions/tau-exp-series-catalog-rows.yaml
   - templates/functions/tau-exp-run-catalog-rows.yaml
+release:
+  name: adx-mon
 tests:
   - it: suppresses the physical catalog by default
     template: templates/management-commands/experiment-catalog-v1.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: suppresses catalog retention reconciliation by default
+    template: templates/management-commands/experiment-catalog-v1-retention.yaml
     asserts:
       - hasDocuments:
           count: 0
@@ -37,7 +46,36 @@ tests:
           pattern: 'TauExpMetricRunCatalogV1 on table ExperimentMetrics'
       - notMatchRegex:
           path: spec.body
-          pattern: '\.alter-merge table TauExp.*CatalogV1 policy retention'
+          pattern: '\.alter-merge materialized-view TauExp.*CatalogV1 policy retention'
+      - matchRegex:
+          path: spec.body
+          pattern: "experiment_id = tostring\\(column_ifexists\\('experiment_id', ''\\)\\)"
+
+  - it: reconciles catalog materialized-view retention separately
+    template: templates/management-commands/experiment-catalog-v1-retention.yaml
+    set:
+      managementCommands.experimentCatalogV1.enabled: true
+    asserts:
+      - isKind:
+          of: ManagementCommand
+      - equal:
+          path: metadata.name
+          value: adx-mon-experiment-catalog-v1-retention
+      - equal:
+          path: spec.database
+          value: Metrics
+      - matchRegex:
+          path: spec.body
+          pattern: '\.alter-merge materialized-view TauExpTypedSeriesCatalogV1 policy retention softdelete = 400d recoverability = disabled'
+      - matchRegex:
+          path: spec.body
+          pattern: '\.alter-merge materialized-view TauExpTypedMetricRunCatalogV1 policy retention softdelete = 400d recoverability = disabled'
+      - matchRegex:
+          path: spec.body
+          pattern: '\.alter-merge materialized-view TauExpLifecycleRunCatalogV1 policy retention softdelete = 400d recoverability = disabled'
+      - notMatchRegex:
+          path: spec.body
+          pattern: '\.create (async )?ifnotexists materialized-view'
 
   - it: uses verified async syntax only when backfill is enabled
     template: templates/management-commands/experiment-catalog-v1.yaml

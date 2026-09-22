@@ -68,6 +68,7 @@ spec:
     {
       TauExpRunLifecycle
       | extend
+          experiment_id = tostring(column_ifexists('experiment_id', '')),
           durable_identity = iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id)),
           is_terminal = tolower(state) in ('succeeded', 'failed', 'cancelled')
       | where isnotempty(durable_identity)

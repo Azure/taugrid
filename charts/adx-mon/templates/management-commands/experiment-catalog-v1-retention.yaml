@@ -1,0 +1,18 @@
+{{- if .Values.managementCommands.experimentCatalogV1.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-experiment-catalog-v1-retention
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.managementCommands.experimentCatalogV1.database | quote }}
+  body: |
+    // This separate desired-state command retries until asynchronous materialized-view
+    // creation completes, so retention reconciliation cannot race view backfill.
+    .alter-merge materialized-view TauExpTypedSeriesCatalogV1 policy retention softdelete = {{ .Values.managementCommands.experimentCatalogV1.retention.softDeletePeriod }} recoverability = disabled
+    .alter-merge materialized-view TauExpTypedMetricRunCatalogV1 policy retention softdelete = {{ .Values.managementCommands.experimentCatalogV1.retention.softDeletePeriod }} recoverability = disabled
+    .alter-merge materialized-view TauExpLifecycleRunCatalogV1 policy retention softdelete = {{ .Values.managementCommands.experimentCatalogV1.retention.softDeletePeriod }} recoverability = disabled
+{{- end }}

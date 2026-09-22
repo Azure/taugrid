@@ -770,6 +770,9 @@ managementCommands:
     database: Metrics
     # -- Backfill catalogs from retained source data. Uses async creates only when true.
     backfillEnabled: false
+    retention:
+      # -- Retain each physical catalog materialized view independently of the database default.
+      softDeletePeriod: 400d
   precreateSummaryTables:
     # -- Create or merge SummaryRule table schemas, including upgrade columns.
     enabled: true

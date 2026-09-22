@@ -1,10 +1,19 @@
 suite: Typed experiment metric events v1
 templates:
   - templates/management-commands/typed-metric-events-v1.yaml
+  - templates/management-commands/typed-metric-events-v1-retention.yaml
   - templates/functions/tau-exp-metric-event-rows.yaml
+release:
+  name: adx-mon
 tests:
   - it: suppresses typed delivery assets by default
     template: templates/management-commands/typed-metric-events-v1.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: suppresses typed retention reconciliation by default
+    template: templates/management-commands/typed-metric-events-v1-retention.yaml
     asserts:
       - hasDocuments:
           count: 0
@@ -39,7 +48,7 @@ tests:
           pattern: '\.alter-merge table TauExpMetricEventsV1 policy retention softdelete = 400d'
       - notMatchRegex:
           path: spec.body
-          pattern: '\.alter-merge table TauExpMetricEventsV1Dedup policy retention'
+          pattern: '\.alter-merge materialized-view TauExpMetricEventsV1Dedup policy retention'
       - matchRegex:
           path: spec.body
           pattern: 'policy caching hot = 30d'
@@ -61,6 +70,26 @@ tests:
       - notMatchRegex:
           path: spec.body
           pattern: 'update policy'
+
+  - it: reconciles deduplicated materialized-view retention separately
+    template: templates/management-commands/typed-metric-events-v1-retention.yaml
+    set:
+      managementCommands.typedMetricEventsV1.enabled: true
+    asserts:
+      - isKind:
+          of: ManagementCommand
+      - equal:
+          path: metadata.name
+          value: adx-mon-typed-metric-events-v1-retention
+      - equal:
+          path: spec.database
+          value: Metrics
+      - matchRegex:
+          path: spec.body
+          pattern: '\.alter-merge materialized-view TauExpMetricEventsV1Dedup policy retention softdelete = 400d recoverability = disabled'
+      - notMatchRegex:
+          path: spec.body
+          pattern: '\.create (async )?ifnotexists materialized-view'
 
   - it: uses verified async syntax for explicit typed backfill
     template: templates/management-commands/typed-metric-events-v1.yaml

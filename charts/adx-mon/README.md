@@ -261,7 +261,9 @@ materialized view. Set
 view must backfill already-retained typed rows; ADX requires asynchronous
 materialized-view creation for backfill. `ifnotexists` does not reconcile a
 changed view definition, so definition changes require a versioned view or a
-controlled replacement.
+controlled replacement. A separate desired-state ManagementCommand applies the
+same retention period to the deduplicated materialized view. It retries until
+asynchronous view creation completes instead of racing the backfill operation.
 
 Enable `functions.items.tauExpMetricEventRows.enabled` to expose the stable
 `TauExpMetricEventRows()` contract. Workloads ingest only into the physical
@@ -277,7 +279,8 @@ the Metrics database: `TauExpTypedSeriesCatalogV1`,
 items to expose `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()`. The
 versioned views are created once with asynchronous full backfill; source-table
 retention bounds the available historical backfill. Each catalog view then
-applies an independent 400-day retention policy.
+applies an independent 400-day retention policy through a separate retrying
+ManagementCommand, so database defaults cannot shorten catalog history.
 
 The series key is workspace, cluster, source store, project, experiment, run
 group, run, and metric name. Unit/source/split remain latest metric metadata,
@@ -286,7 +289,9 @@ per-step label. The run catalog joins metric activity with
 `TauExpRunLifecycle`; new lifecycle rows persist `experiment_id`. Older
 lifecycle rows with a blank experiment ID are included only when a unique
 metric-run identity can enrich them, and unresolved historical lifecycle-only
-rows are deliberately omitted instead of assigned a guessed experiment.
+rows are deliberately omitted instead of assigned a guessed experiment. The
+catalog view also tolerates pre-migration lifecycle tables where the
+`experiment_id` column is not present.
 
 Enable the physical views first and wait for asynchronous backfills to
 complete, then enable the stable Functions. They always read typed event/catalog
