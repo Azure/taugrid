@@ -416,7 +416,7 @@ storage:
 	for _, want := range []string{
 		"TAU_METRICS_COMPLETION='/data/checkpoints/finetunes/vision-demo/metrics-completion.json'",
 		"TAU_METRICS_DONE='" + doneFile + "'",
-		"TAU_METRICS_DONE_TIMEOUT=120",
+		"TAU_METRICS_DONE_TIMEOUT=1833",
 		`while [ ! -f "$TAU_METRICS_DONE" ]`,
 	} {
 		if !strings.Contains(s, want) {
@@ -482,6 +482,9 @@ runtime:
 		"TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT": "5m0s",
 	} {
 		assertEnvVar(t, "metrics-offload", sidecar, name, value)
+	}
+	if got := string(out); !strings.Contains(got, "TAU_METRICS_DONE_TIMEOUT=1244") {
+		t.Fatalf("RayJob terminal drain deadline does not cover exhausted ADX delivery:\n%s", got)
 	}
 }
 

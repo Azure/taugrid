@@ -680,6 +680,7 @@ storage:
 		"value: \"/data/checkpoints/finetunes/vision-demo/metrics-completion.json\"",
 		"name: TAU_METRICS_OFFLOAD_DELIVERY_MODE",
 		"value: \"adx-required\"",
+		"TAU_METRICS_DONE_TIMEOUT=1833",
 		"name: \"TAU_GROUP\"",
 		"value: \"demo-experiment\"",
 		"name: \"TAU_EXPERIMENT\"",

@@ -15,11 +15,10 @@ import (
 )
 
 const (
-	DefaultSource      = "stellar-online"
-	DefaultInterval    = 10 * time.Second
-	DefaultDoneTimeout = 2 * time.Minute
-	DefaultADXTable    = "TauExpMetricEventsV1"
-	DefaultADXMapping  = "TauExpMetricEventsV1Json"
+	DefaultSource     = "stellar-online"
+	DefaultInterval   = 10 * time.Second
+	DefaultADXTable   = "TauExpMetricEventsV1"
+	DefaultADXMapping = "TauExpMetricEventsV1Json"
 
 	RuntimeCollectorV1 = runconfig.MetricsOffloadRuntimeCollectorV1
 
@@ -71,7 +70,7 @@ type Runtime struct {
 	ReadyFile               string
 	ReadyTimeout            time.Duration
 	DoneFile                string
-	DoneTimeout             time.Duration // Zero uses DefaultDoneTimeout.
+	DoneTimeout             time.Duration // Zero derives the ADX delivery budget.
 	DeliveryMode            string
 	ADXClusterURI           string
 	ADXDatabase             string
@@ -147,6 +146,13 @@ func (r Runtime) Validate() error {
 	if r.ADXFinalStatusTimeout < 0 {
 		return fmt.Errorf("metrics offload ADX final status timeout must not be negative")
 	}
+	if _, err := TerminalDrainTimeout(
+		r.ADXMaxAttempts,
+		r.ADXRetryBackoff,
+		r.ADXFinalStatusTimeout,
+	); err != nil {
+		return fmt.Errorf("metrics offload terminal drain: %w", err)
+	}
 	if r.BaselineExistingHistory && strings.TrimSpace(r.ReadyFile) == "" {
 		return fmt.Errorf("metrics offload ready file is required when existing history is baselined")
 	}
@@ -154,6 +160,10 @@ func (r Runtime) Validate() error {
 		return fmt.Errorf("metrics offload done timeout must not be negative")
 	}
 	return nil
+}
+
+func TerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time.Duration) (time.Duration, error) {
+	return runconfig.MetricsOffloadTerminalDrainTimeout(maxAttempts, retryBackoff, finalStatusTimeout)
 }
 
 func ResolveRuntime(value string) (string, error) {

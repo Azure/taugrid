@@ -737,6 +737,63 @@ experiment:
 	}
 }
 
+func TestMetricsOffloadTerminalDrainTimeoutCoversDelayedSuccessAndExhaustion(t *testing.T) {
+	got, err := MetricsOffloadTerminalDrainTimeout(4, 2*time.Second, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 20*time.Minute + 44*time.Second
+	if got != want {
+		t.Fatalf("terminal drain timeout = %s, want %s", got, want)
+	}
+	if got <= 2*time.Minute {
+		t.Fatalf("terminal drain timeout = %s, must cover delayed ADX success beyond 120s", got)
+	}
+
+	got, err = MetricsOffloadTerminalDrainTimeout(
+		MetricsOffloadMaxADXAttempts,
+		0,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = 109*time.Minute + time.Second
+	if got != want {
+		t.Fatalf("exhausted default delivery timeout = %s, want %s", got, want)
+	}
+}
+
+func TestMetricsOffloadTerminalDrainTimeoutRejectsUnboundedDelivery(t *testing.T) {
+	_, err := MetricsOffloadTerminalDrainTimeout(
+		MetricsOffloadMaxADXAttempts,
+		time.Minute,
+		12*time.Minute,
+	)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("terminal drain timeout error = %v, want maximum bound", err)
+	}
+
+	_, err = parse([]byte(`metrics:
+  history: [metrics.jsonl]
+  offload:
+    enabled: true
+    runtime: collector-v1
+    delivery_mode: adx-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: Metrics
+    adx_client_id: id
+    adx_max_attempts: 10
+    adx_final_status_timeout: 12m
+experiment:
+  project: project
+  name: experiment
+`), "tau.yaml")
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("unbounded config error = %v, want maximum bound", err)
+	}
+}
+
 func TestParseAcceptsRayMetricsAndStagedOutput(t *testing.T) {
 	cfg, err := parse([]byte(`name: tracked-ray
 engine: rayjob

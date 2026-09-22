@@ -387,6 +387,12 @@ const (
 
 	MetricsOffloadDeliveryADXRequired = "adx-required"
 	MetricsOffloadMaxADXAttempts      = 10
+	MetricsOffloadDefaultADXAttempts  = 3
+
+	MetricsOffloadDefaultADXRetryBackoff       = time.Second
+	MetricsOffloadDefaultADXFinalStatusTimeout = 10 * time.Minute
+	MetricsOffloadTerminalDrainGrace           = 30 * time.Second
+	MetricsOffloadMaxTerminalDrainTimeout      = 2 * time.Hour
 )
 
 // Experiment names where a run belongs in the identity hierarchy:
@@ -818,19 +824,83 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 	if m.Offload.ADXMaxAttempts < 0 || m.Offload.ADXMaxAttempts > MetricsOffloadMaxADXAttempts {
 		return fmt.Errorf("metrics.offload.adx_max_attempts must be between 0 and %d", MetricsOffloadMaxADXAttempts)
 	}
-	for field, raw := range map[string]string{
-		"adx_retry_backoff":        m.Offload.ADXRetryBackoff,
-		"adx_final_status_timeout": m.Offload.ADXFinalStatusTimeout,
+	var retryBackoff, finalStatusTimeout time.Duration
+	for field, value := range map[string]struct {
+		raw    string
+		target *time.Duration
+	}{
+		"adx_retry_backoff":        {raw: m.Offload.ADXRetryBackoff, target: &retryBackoff},
+		"adx_final_status_timeout": {raw: m.Offload.ADXFinalStatusTimeout, target: &finalStatusTimeout},
 	} {
-		if strings.TrimSpace(raw) == "" {
+		if strings.TrimSpace(value.raw) == "" {
 			continue
 		}
-		value, err := time.ParseDuration(raw)
-		if err != nil || value <= 0 {
-			return fmt.Errorf("metrics.offload.%s must be a positive duration (got %q)", field, raw)
+		parsed, err := time.ParseDuration(value.raw)
+		if err != nil || parsed <= 0 {
+			return fmt.Errorf("metrics.offload.%s must be a positive duration (got %q)", field, value.raw)
 		}
+		*value.target = parsed
+	}
+	if _, err := MetricsOffloadTerminalDrainTimeout(
+		m.Offload.ADXMaxAttempts,
+		retryBackoff,
+		finalStatusTimeout,
+	); err != nil {
+		return fmt.Errorf("metrics.offload: %w", err)
 	}
 	return nil
+}
+
+// MetricsOffloadTerminalDrainTimeout returns the finite workload-side deadline
+// that covers every configured ADX attempt, exponential retry backoff, and a
+// small coordination grace period. Configurations exceeding the platform
+// ceiling are rejected so workload teardown never races a longer collector
+// delivery budget.
+func MetricsOffloadTerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time.Duration) (time.Duration, error) {
+	if maxAttempts < 0 || maxAttempts > MetricsOffloadMaxADXAttempts {
+		return 0, fmt.Errorf("adx_max_attempts must be between 0 and %d", MetricsOffloadMaxADXAttempts)
+	}
+	attempts := maxAttempts
+	if attempts == 0 {
+		attempts = MetricsOffloadDefaultADXAttempts
+	}
+	if retryBackoff < 0 {
+		return 0, fmt.Errorf("adx_retry_backoff must not be negative")
+	}
+	if retryBackoff == 0 {
+		retryBackoff = MetricsOffloadDefaultADXRetryBackoff
+	}
+	if retryBackoff > MetricsOffloadMaxTerminalDrainTimeout {
+		return 0, fmt.Errorf(
+			"ADX delivery budget exceeds maximum terminal drain timeout %s",
+			MetricsOffloadMaxTerminalDrainTimeout,
+		)
+	}
+	if finalStatusTimeout < 0 {
+		return 0, fmt.Errorf("adx_final_status_timeout must not be negative")
+	}
+	if finalStatusTimeout == 0 {
+		finalStatusTimeout = MetricsOffloadDefaultADXFinalStatusTimeout
+	}
+	if finalStatusTimeout > MetricsOffloadMaxTerminalDrainTimeout {
+		return 0, fmt.Errorf(
+			"ADX delivery budget exceeds maximum terminal drain timeout %s",
+			MetricsOffloadMaxTerminalDrainTimeout,
+		)
+	}
+
+	backoffWindows := time.Duration((1 << (attempts - 1)) - 1)
+	timeout := time.Duration(attempts)*finalStatusTimeout +
+		backoffWindows*retryBackoff +
+		MetricsOffloadTerminalDrainGrace
+	if timeout > MetricsOffloadMaxTerminalDrainTimeout {
+		return 0, fmt.Errorf(
+			"ADX delivery budget %s exceeds maximum terminal drain timeout %s",
+			timeout,
+			MetricsOffloadMaxTerminalDrainTimeout,
+		)
+	}
+	return timeout, nil
 }
 
 // ResolveMetricsOffloadRuntime returns the sole supported metrics offload

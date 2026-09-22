@@ -121,7 +121,7 @@ func TestNewRunJobRequestIsolatesArtifactPublicationGenerations(t *testing.T) {
 	}
 }
 
-func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
+func TestResolveDirectJobMetricsOffloadReusesStableSessionAcrossRetry(t *testing.T) {
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/collector:v0.6.0")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
@@ -141,8 +141,8 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 			"tau_cluster":   "researcher-override",
 		},
 	}
-	o.env = []string{"TAU_RETRY_ATTEMPT=2"}
-	runtime, err := resolveMetricsOffload(
+	o.env = []string{"TAU_RETRY_ATTEMPT=1"}
+	firstAttempt, err := resolveMetricsOffload(
 		o,
 		"modernbert-bounded",
 		"research-workspace",
@@ -154,6 +154,19 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveMetricsOffload: %v", err)
 	}
+	o.env = []string{"TAU_RETRY_ATTEMPT=2"}
+	runtime, err := resolveMetricsOffload(
+		o,
+		"modernbert-bounded",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/modernbert-bounded",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err != nil {
+		t.Fatalf("resolveMetricsOffload retry: %v", err)
+	}
 	if runtime.Experiment != "modernbert-bounded" {
 		t.Fatalf("experiment = %q, want modernbert-bounded", runtime.Experiment)
 	}
@@ -161,15 +174,39 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 		t.Fatalf("relative history = %q, want %q", got, want)
 	}
 	for key, want := range map[string]string{
-		"tau_workspace":     "research-workspace",
-		"tau_namespace":     "research-workspace",
-		"tau_cluster":       "sample-gpu-cluster",
-		"tau_retry_attempt": "2",
-		"dataset":           "fineweb-edu",
+		"tau_workspace": "research-workspace",
+		"tau_namespace": "research-workspace",
+		"tau_cluster":   "sample-gpu-cluster",
+		"dataset":       "fineweb-edu",
 	} {
 		if got := runtime.Tags[key]; got != want {
 			t.Fatalf("tag %s = %q, want %q; tags=%v", key, got, want, runtime.Tags)
 		}
+	}
+	if _, ok := runtime.Tags["tau_retry_attempt"]; ok {
+		t.Fatalf("retry-specific tag leaked into stable collector identity: %v", runtime.Tags)
+	}
+	if len(runtime.Tags) != len(firstAttempt.Tags) {
+		t.Fatalf("retry changed collector tags: attempt 1 %v attempt 2 %v", firstAttempt.Tags, runtime.Tags)
+	}
+	for key, want := range firstAttempt.Tags {
+		if got := runtime.Tags[key]; got != want {
+			t.Fatalf("retry changed collector tag %s: attempt 1 %q attempt 2 %q", key, want, got)
+		}
+	}
+	if runtime.Store != firstAttempt.Store || runtime.Out != firstAttempt.Out {
+		t.Fatalf(
+			"retry changed persisted session paths: attempt 1 store=%q out=%q, attempt 2 store=%q out=%q",
+			firstAttempt.Store,
+			firstAttempt.Out,
+			runtime.Store,
+			runtime.Out,
+		)
+	}
+	firstArgs := fmt.Sprint(metricsoffload.BuildContainer(firstAttempt, nil)["args"])
+	retryArgs := fmt.Sprint(metricsoffload.BuildContainer(runtime, nil)["args"])
+	if retryArgs != firstArgs {
+		t.Fatalf("retry changed collector configuration for reused session:\nattempt 1: %s\nattempt 2: %s", firstArgs, retryArgs)
 	}
 	if runtime.ArtifactURI != "/data/research-workspace/modernbert-bounded" {
 		t.Fatalf("artifact URI = %q", runtime.ArtifactURI)
@@ -202,7 +239,7 @@ func TestResolveDirectJobMetricsOffloadProtectsWorkspaceScope(t *testing.T) {
 	if !runtime.BaselineExistingHistory || runtime.ReadyFile != "/var/run/tau/metrics-ready" {
 		t.Fatalf("fresh history gate = baseline %v ready %q", runtime.BaselineExistingHistory, runtime.ReadyFile)
 	}
-	if runtime.DoneFile != "/var/run/tau/metrics-done" || runtime.DoneTimeout <= 0 {
+	if runtime.DoneFile != "/var/run/tau/metrics-done" || runtime.DoneTimeout != 30*time.Minute+33*time.Second {
 		t.Fatalf("terminal publication gate = done %q timeout %s", runtime.DoneFile, runtime.DoneTimeout)
 	}
 }

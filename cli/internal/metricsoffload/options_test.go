@@ -68,7 +68,7 @@ func TestRuntimeValidationRejectsUnknownContract(t *testing.T) {
 	}
 }
 
-func TestRuntimeAllowsDefaultDoneTimeout(t *testing.T) {
+func TestRuntimeAllowsDerivedDoneTimeout(t *testing.T) {
 	runtime := Runtime{
 		Image:          "registry.example.com/taugrid/tau:v0.5.0",
 		RunID:          "run-1",
@@ -86,7 +86,7 @@ func TestRuntimeAllowsDefaultDoneTimeout(t *testing.T) {
 		DoneFile:       "/data/done",
 	}
 	if err := runtime.Validate(); err != nil {
-		t.Fatalf("Validate() with default done timeout: %v", err)
+		t.Fatalf("Validate() with derived done timeout: %v", err)
 	}
 	runtime.DoneTimeout = -time.Second
 	if err := runtime.Validate(); err == nil {

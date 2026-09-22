@@ -298,12 +298,15 @@ drift because moving the same session would abandon its checkpoints. Retries
 add uniquely named chunks without mutating already published history. Completed
 scalar chunks are not replayed after sidecar restart.
 Scope tags `tau_workspace`, `tau_namespace`, and, when known, `tau_cluster`
-are protected and attached before remote write. `tau_retry_attempt` is
-propagated when a Tau retry sets it. Terminal observations are checkpointed:
+are protected and attached before delivery. Retry-attempt metadata is not part
+of the collector configuration because automatic retries reuse the same
+session spool and must retain a stable replay identity. Terminal observations are checkpointed:
 identical retries deduplicate, while a failed attempt followed by success emits
 a newer `tau/run_status` marker that Stellar selects as final.
 The wrapper emits succeeded/failed status on normal process exit and waits for
-the offloader to acknowledge successful terminal publication. Missing
+the offloader to acknowledge successful terminal publication. The deadline
+covers the configured ADX attempts, final-status waits, exponential backoff,
+and a bounded coordination grace period. Missing
 acknowledgement fails the workload instead of hiding a sidecar failure. Graceful
 sidecar shutdown emits cancelled after one final drain. SIGKILL or node loss
 remains best-effort and requires a future platform lifecycle recorder for a

@@ -36,7 +36,6 @@ const (
 	directMetricsReadyFile    = "/var/run/tau/metrics-ready"
 	directMetricsDoneFile     = "/var/run/tau/metrics-done"
 	directMetricsReadyTimeout = 2 * time.Minute
-	directMetricsDoneTimeout  = 2 * time.Minute
 )
 
 func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest, error) {
@@ -581,9 +580,6 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	if cluster = strings.TrimSpace(cluster); cluster != "" {
 		protected[exptelemetry.TauClusterTag] = cluster
 	}
-	if attempt := runDispatchEnvValue(o.env, "TAU_RETRY_ATTEMPT"); attempt != "" {
-		protected[exptelemetry.TauRetryAttemptTag] = attempt
-	}
 	tags := metricsoffload.MergeTags(policy.Tags, o.experiment.Tags, protected)
 	interval := policy.Interval
 	if interval == 0 {
@@ -607,6 +603,14 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	// pod-local checkpoint durability.
 	runtimeRoot := path.Join(metricsoffload.RuntimeMountPath, "metrics", o.metricsSessionID)
 	durableRoot := path.Join(outputDir, ".tau", "metrics", o.metricsSessionID)
+	doneTimeout, err := metricsoffload.TerminalDrainTimeout(
+		policy.ADXMaxAttempts,
+		policy.ADXRetryBackoff,
+		policy.ADXFinalStatusTimeout,
+	)
+	if err != nil {
+		return metricsoffload.Runtime{}, err
+	}
 
 	return metricsoffload.Runtime{
 		Runtime:                 runtime,
@@ -628,7 +632,7 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 		ReadyFile:               directMetricsReadyFile,
 		ReadyTimeout:            directMetricsReadyTimeout,
 		DoneFile:                directMetricsDoneFile,
-		DoneTimeout:             directMetricsDoneTimeout,
+		DoneTimeout:             doneTimeout,
 		DeliveryMode:            policy.DeliveryMode,
 		ADXClusterURI:           policy.ADXClusterURI,
 		ADXDatabase:             policy.ADXDatabase,

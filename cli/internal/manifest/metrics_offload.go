@@ -131,6 +131,14 @@ func (opts RenderOptions) metricsOffloadRuntime(kind string) (metricsOffloadRunt
 	if mo.ADXFinalStatusTimeout < 0 {
 		return metricsOffloadRuntime{}, fmt.Errorf("--metrics-offload ADX final status timeout must not be negative")
 	}
+	doneTimeout, err := metricsoffload.TerminalDrainTimeout(
+		mo.ADXMaxAttempts,
+		mo.ADXRetryBackoff,
+		mo.ADXFinalStatusTimeout,
+	)
+	if err != nil {
+		return metricsOffloadRuntime{}, fmt.Errorf("--metrics-offload terminal drain: %w", err)
+	}
 	interval := mo.Interval
 	if interval == 0 {
 		interval = defaultMetricsOffloadInterval
@@ -152,7 +160,7 @@ func (opts RenderOptions) metricsOffloadRuntime(kind string) (metricsOffloadRunt
 		History:               runDir + "/metrics-history.jsonl",
 		CompletionFile:        runDir + "/metrics-completion.json",
 		DoneFile:              runDir + "/metrics-done.json",
-		DoneTimeout:           metricsoffload.DefaultDoneTimeout,
+		DoneTimeout:           doneTimeout,
 		Interval:              interval,
 		DeliveryMode:          deliveryMode,
 		ADXClusterURI:         strings.TrimSpace(mo.ADXClusterURI),

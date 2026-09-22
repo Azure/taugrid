@@ -190,7 +190,19 @@ func wrapperScript(runtime Runtime, launch string) (string, error) {
 		return "", err
 	}
 	readyTimeoutSeconds := timeoutSeconds(runtime.ReadyTimeout, 120*time.Second)
-	doneTimeoutSeconds := timeoutSeconds(runtime.DoneTimeout, DefaultDoneTimeout)
+	doneTimeout := runtime.DoneTimeout
+	if doneTimeout == 0 {
+		var err error
+		doneTimeout, err = TerminalDrainTimeout(
+			runtime.ADXMaxAttempts,
+			runtime.ADXRetryBackoff,
+			runtime.ADXFinalStatusTimeout,
+		)
+		if err != nil {
+			return "", err
+		}
+	}
+	doneTimeoutSeconds := timeoutSeconds(doneTimeout, 0)
 	return fmt.Sprintf(`tau_metrics_completion=%s
 tau_metrics_ready=%s
 tau_metrics_ready_timeout=%d
