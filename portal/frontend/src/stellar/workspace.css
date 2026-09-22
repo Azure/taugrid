@@ -4,6 +4,11 @@
 .portal-stellar-shell #view { border: 0; box-shadow: none; }
 .stellar-workspace { display: grid; gap: 18px; color: #242424; }
 .thin-dashboard { display: grid; gap: 16px; }
+.stellar-refresh { display: flex; justify-content: flex-end; }
+.stellar-refresh button {
+  min-height: 34px; padding: 6px 12px; border: 1px solid #c9c9c9; border-radius: 5px; background: #fff; color: inherit; font: inherit; font-weight: 650; cursor: pointer;
+}
+.stellar-refresh button:disabled { cursor: wait; opacity: .65; }
 .thin-panel { min-width: 0; padding: 18px; border: 1px solid #dedede; border-radius: 8px; background: #fff; }
 .thin-panel h2, .thin-metrics h2 { margin: 0 0 12px; font-size: 18px; }
 .thin-context { margin: -7px 0 14px; color: #666; overflow-wrap: anywhere; }

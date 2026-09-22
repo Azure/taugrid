@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { useEffect, useState, type ReactNode } from 'react';
-import { experimentsAPI, useWorkspace } from '../data';
+import { useQueryClient } from '@tanstack/react-query';
+import { boardScopeKey, experimentsAPI, useWorkspace } from '../data';
 import { Empty, PageTitle } from '../components';
 import type { MetricCatalogEntry, ResponseMeta, RunSummary, SeriesPoint } from './contracts';
 import {
@@ -49,20 +50,84 @@ export function StellarWorkspace() {
 
 function ExperimentDashboard() {
   const { state, update } = useExperimentURLState();
-  const unresolvedRun = !state.experiment ? state.run || state.target : '';
-  if (unresolvedRun) return <RunTargetResolver runID={unresolvedRun}/>;
+  const unresolvedRun = !state.experiment ? state.run : '';
   return <div className="thin-dashboard">
+    <RefreshExperimentData/>
     <ExperimentSearch/>
-    {state.experiment && <RunsTable key={`${state.project}:${state.experiment}`} experiment={state.experiment}/>}
-    {state.experiment && state.run && <RunDetailPanel key={`${state.project}:${state.experiment}:${state.run}`} experiment={state.experiment} runID={state.run}/>}
-    {!state.experiment && <div className="stellar-state">Choose an experiment to load runs.</div>}
+    {state.target ? <LegacyTargetResolver targetID={state.target}/> : unresolvedRun ? <RunTargetResolver runID={unresolvedRun}/> : <>
+      {state.experiment && <RunsTable key={`${state.project}:${state.experiment}`} experiment={state.experiment}/>}
+      {state.experiment && state.run && <RunDetailPanel key={`${state.project}:${state.experiment}:${state.run}`} experiment={state.experiment} runID={state.run}/>}
+      {!state.experiment && <div className="stellar-state">Choose an experiment to load runs.</div>}
+    </>}
     {state.experiment && <button className="stellar-clear" type="button" onClick={() => update({ experiment: '' }, false)}>Clear experiment selection</button>}
   </div>;
+}
+
+function RefreshExperimentData() {
+  const { scope, managed } = useWorkspace();
+  const client = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const prefix = boardScopeKey(scope, managed);
+      await client.invalidateQueries({
+        queryKey: prefix,
+        predicate: query => {
+          const path = query.queryKey.at(-1);
+          return typeof path === 'string' && path.startsWith('/api/v2/stellar/');
+        },
+        refetchType: 'active',
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  return <div className="stellar-refresh">
+    <button type="button" aria-label="Refresh experiment data" disabled={refreshing} onClick={() => void refresh()}>
+      {refreshing ? 'Refreshing…' : 'Refresh'}
+    </button>
+  </div>;
+}
+
+function LegacyTargetResolver({ targetID }: { targetID: string }) {
+  const { state, update } = useExperimentURLState();
+  const experiments = useExperimentsQuery({ q: targetID, project: state.project, cursor: '' });
+  const exact = experiments.data?.experiments.filter(experiment =>
+    experiment.experiment_id === targetID && (!state.project || experiment.project === state.project)) || [];
+  const run = useRunResolverQuery(targetID, state.project, experiments.isSuccess && exact.length === 0);
+  useEffect(() => {
+    if (exact.length !== 1) return;
+    update({ target: '', project: exact[0].project, experiment: exact[0].experiment_id });
+  }, [exact, update]);
+  useEffect(() => {
+    const detail = run.data?.run;
+    if (!detail?.experiment_id) return;
+    update({ target: '', project: detail.project, experiment: detail.experiment_id, run: detail.run_id });
+  }, [run.data, update]);
+  if (exact.length > 1) {
+    return <div className="stellar-state error" role="alert">Experiment ID {targetID} exists in multiple projects; specify a project.</div>;
+  }
+  if (!experiments.isSuccess || exact.length === 1) {
+    return <QueryState name="Experiment link" query={experiments}>{() =>
+      <div className="stellar-state" role="status">Opening experiment {targetID}…</div>
+    }</QueryState>;
+  }
+  return <ResolvedRunTarget runID={targetID} query={run}/>;
 }
 
 function RunTargetResolver({ runID }: { runID: string }) {
   const { state, update } = useExperimentURLState();
   const query = useRunResolverQuery(runID, state.project);
+  return <ResolvedRunTarget runID={runID} query={query}/>;
+}
+
+function ResolvedRunTarget({ runID, query }: {
+  runID: string;
+  query: ReturnType<typeof useRunResolverQuery>;
+}) {
+  const { update } = useExperimentURLState();
   useEffect(() => {
     const run = query.data?.run;
     if (!run?.experiment_id) return;

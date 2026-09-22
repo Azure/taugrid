@@ -182,6 +182,93 @@ describe('typed experiment dashboard', () => {
     expect(requests.some(url => url.includes('/runs/workload-1?') && !url.includes('target='))).toBe(true);
   });
 
+  it('resolves a legacy experiment target without treating it as a run', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/experiments/experiment-7/runs')) return Promise.resolve(json({
+        metadata: metadata(), target: 'experiment-7', runs: [],
+      }));
+      if (url.includes('/experiments/search') && url.includes('q=experiment-7')) return Promise.resolve(json({
+        metadata: metadata(), experiments: [experiment('experiment-7', 'vision', 'Legacy bookmark')],
+      }));
+      return Promise.resolve(json({ metadata: metadata(), experiments: [] }));
+    }));
+
+    renderWorkspace('/portal/experiments?target=experiment-7&project=vision');
+
+    expect(await screen.findByText('No runs match this experiment and filter.')).toBeVisible();
+    await waitFor(() => {
+      const location = screen.getByLabelText('location').textContent!;
+      expect(location).toContain('project=vision');
+      expect(location).toContain('experiment=experiment-7');
+      expect(location).not.toContain('target=');
+    });
+    expect(requests.some(url => url.includes('/runs/experiment-7'))).toBe(false);
+  });
+
+  it('keeps experiment search visible when an unresolved run link returns not found', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/runs/missing-run')) return Promise.resolve(json({
+        error: { code: 'NOT_FOUND', message: 'run was not found', classification: 'client', retryable: false },
+      }, 404));
+      return Promise.resolve(json({
+        metadata: metadata(), experiments: [experiment('e1', 'p', 'Search remains')],
+      }));
+    }));
+
+    renderWorkspace('/portal/experiments?run=missing-run&project=p');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('run was not found');
+    expect(screen.getByRole('button', { name: /Search remains/ })).toBeVisible();
+  });
+
+  it('refreshes successful scoped reads and displays newly returned series points', async () => {
+    let seriesReads = 0;
+    const reads = { experiments: 0, runs: 0, detail: 0, catalog: 0 };
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/series?')) {
+        seriesReads++;
+        const points = seriesReads === 1
+          ? [{ step: 0, value: 2 }]
+          : [{ step: 0, value: 2 }, { step: 1, value: 1 }];
+        return Promise.resolve(json({
+          metadata: metadata(), target: 'e1', metric: 'loss', run_id: 'r1',
+          max_points: 500, source_points: points.length, returned_points: points.length, points,
+        }));
+      }
+      if (url.includes('/runs/r1/metrics')) {
+        reads.catalog++;
+        return Promise.resolve(json({ metadata: metadata(), run_id: 'r1', metrics: [{ name: 'loss' }] }));
+      }
+      if (url.includes('/runs/r1')) {
+        reads.detail++;
+        return Promise.resolve(json({ metadata: metadata(), run: run('r1', 'p', 'running', ['loss'], 'e1') }));
+      }
+      if (url.includes('/experiments/e1/runs')) {
+        reads.runs++;
+        return Promise.resolve(json({
+          metadata: metadata(), target: 'e1', runs: [run('r1', 'p', 'running', ['loss'], 'e1')],
+        }));
+      }
+      reads.experiments++;
+      return Promise.resolve(json({
+        metadata: metadata(), experiments: [experiment('e1', 'p', 'Refreshable')],
+      }));
+    }));
+    const user = userEvent.setup();
+    renderWorkspace('/portal/experiments?project=p&experiment=e1&run=r1&metric=loss');
+
+    expect(await screen.findByText('loss · 1 points')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Refresh experiment data' }));
+    expect(await screen.findByText('loss · 2 points')).toBeVisible();
+    expect(seriesReads).toBe(2);
+    expect(reads).toEqual({ experiments: 2, runs: 2, detail: 2, catalog: 2 });
+  });
+
   it('clears dependent state when the project changes for the same experiment ID', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
