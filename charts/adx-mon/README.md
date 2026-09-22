@@ -264,6 +264,11 @@ changed view definition, so definition changes require a versioned view or a
 controlled replacement. A separate desired-state ManagementCommand applies the
 same retention period to the deduplicated materialized view. It retries until
 asynchronous view creation completes instead of racing the backfill operation.
+adx-mon v0.3.0 records successful submission of the asynchronous create command,
+not completion of its backfill operation. Monitor `.show operations`; if a
+backfill fails, ADX does not retry it automatically and `ifnotexists` cannot
+repair the disabled view. Drop the failed materialized view and rerun the
+ManagementCommand by changing its generation after correcting the failure.
 
 Enable `functions.items.tauExpMetricEventRows.enabled` to expose the stable
 `TauExpMetricEventRows()` contract. Workloads ingest only into the physical
@@ -281,6 +286,9 @@ versioned views are created once with asynchronous full backfill; source-table
 retention bounds the available historical backfill. Each catalog view then
 applies an independent 400-day retention policy through a separate retrying
 ManagementCommand, so database defaults cannot shorten catalog history.
+As with the typed deduplication view, operators must monitor asynchronous
+backfill operations and explicitly drop and recreate any view whose backfill
+fails.
 
 The series key is workspace, cluster, source store, project, experiment, run
 group, run, and metric name. Unit/source/split remain latest metric metadata,
