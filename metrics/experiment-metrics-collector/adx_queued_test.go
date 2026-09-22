@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/metricsoffload"
 )
 
 type fakeADXClient struct {
@@ -55,6 +56,19 @@ type fakeADXResult struct {
 }
 
 type timeoutADXResult struct{}
+
+type hangingADXClient struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (c *hangingADXClient) Ingest(ctx context.Context, _ []byte, _ adxIngestRequest) (adxQueuedResult, error) {
+	c.mu.Lock()
+	c.attempts++
+	c.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
 type staticTokenCredential struct{}
 
@@ -295,6 +309,27 @@ func TestADXQueuedFinalStatusTimeoutIsBoundedAndRetried(t *testing.T) {
 	}
 }
 
+func TestADXQueuedSubmissionTimeoutIsBoundedAndRetried(t *testing.T) {
+	client := &hangingADXClient{}
+	sink := adxTestSink(client)
+	sink.Config.MaxAttempts = 2
+	sink.Config.FinalStatusTimeout = time.Millisecond
+
+	start := time.Now()
+	if _, err := sink.Deliver(context.Background(), adxTestChunk(t)); err == nil {
+		t.Fatal("hung ADX submission unexpectedly succeeded")
+	}
+	client.mu.Lock()
+	attempts := client.attempts
+	client.mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("submission attempts=%d, want 2", attempts)
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("submission retries exceeded delivery budget: %s", elapsed)
+	}
+}
+
 func TestADXQueuedPermanentFailuresDoNotRetryAndErrorsAreBounded(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -466,8 +501,8 @@ func TestADXDiagnosticsDoNotExposeSASCredentials(t *testing.T) {
 
 func TestADXQueuedRejectsUnboundedAttempts(t *testing.T) {
 	sink := adxTestSink(&fakeADXClient{})
-	sink.Config.MaxAttempts = MaxADXQueuedAttempts + 1
-	if err := sink.validate(); err == nil || !strings.Contains(err.Error(), "max attempts") {
+	sink.Config.MaxAttempts = metricsoffload.MaxADXAttempts + 1
+	if err := sink.validate(); err == nil || !strings.Contains(err.Error(), "adx_max_attempts") {
 		t.Fatalf("validate max attempts error = %v", err)
 	}
 }

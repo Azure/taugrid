@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Azure/taugrid/core/metricsoffload"
 	"github.com/Azure/taugrid/core/version"
 	collector "github.com/Azure/taugrid/metrics/experiment-metrics-collector"
 )
@@ -84,9 +85,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&options.DoneFile, "done-file", "", "terminal delivery sentinel")
 	flags.StringVar(&options.StatusArtifactURI, "status-artifact-uri", "", "terminal artifact URI tag")
 	flags.StringVar(&options.StatusCheckpointURI, "status-checkpoint-uri", "", "terminal checkpoint URI tag")
-	flags.IntVar(&adxMaxAttempts, "adx-max-attempts", 3, "maximum ADX queued ingestion attempts")
-	flags.DurationVar(&adxBackoff, "adx-retry-backoff", time.Second, "initial ADX retry backoff")
-	flags.DurationVar(&adxFinalTimeout, "adx-final-status-timeout", 10*time.Minute, "maximum wait for terminal ADX ingestion status")
+	flags.IntVar(&adxMaxAttempts, "adx-max-attempts", metricsoffload.DefaultADXAttempts, "maximum ADX queued ingestion attempts")
+	flags.DurationVar(&adxBackoff, "adx-retry-backoff", metricsoffload.DefaultADXRetryBackoff, "initial ADX retry backoff")
+	flags.DurationVar(&adxFinalTimeout, "adx-final-status-timeout", metricsoffload.DefaultADXFinalStatusTimeout, "maximum time for each ADX submission and final-status attempt")
 	flags.BoolVar(&options.Watch, "watch", false, "watch until completion")
 	flags.IntVar(&options.MaxIterations, "max-iterations", 0, "maximum watch iterations (tests)")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -161,8 +162,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 		}
 	}
-	if adxMaxAttempts < 0 || adxMaxAttempts > collector.MaxADXQueuedAttempts {
-		return fmt.Errorf("--adx-max-attempts must be between 0 and %d", collector.MaxADXQueuedAttempts)
+	if adxMaxAttempts < 0 || adxMaxAttempts > metricsoffload.MaxADXAttempts {
+		return fmt.Errorf("--adx-max-attempts must be between 0 and %d", metricsoffload.MaxADXAttempts)
 	}
 	if adxBackoff < 0 || adxFinalTimeout <= 0 {
 		return fmt.Errorf("ADX backoff must be nonnegative and final status timeout must be positive")

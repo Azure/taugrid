@@ -23,12 +23,10 @@ import (
 	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/taugrid/core/metricsoffload"
 )
 
-const (
-	adxQueuedSinkName    = "adx-queued-v1"
-	MaxADXQueuedAttempts = 10
-)
+const adxQueuedSinkName = "adx-queued-v1"
 
 type ADXQueuedConfig struct {
 	ClusterURI         string
@@ -191,12 +189,12 @@ func (s *ADXQueuedSink) Deliver(ctx context.Context, chunk MetricEventChunk) (De
 	}
 	var last error
 	for attempt := 1; attempt <= s.attempts(); attempt++ {
-		result, err := s.client.Ingest(ctx, chunk.NDJSON, request)
+		attemptCtx, cancel := context.WithTimeout(ctx, s.finalTimeout())
+		result, err := s.client.Ingest(attemptCtx, chunk.NDJSON, request)
 		if err == nil {
-			waitCtx, cancel := context.WithTimeout(ctx, s.finalTimeout())
-			status, waitErr := result.Wait(waitCtx, s.pollInterval())
-			cancel()
+			status, waitErr := result.Wait(attemptCtx, s.pollInterval())
 			if waitErr == nil && status == adxStatusSucceeded {
+				cancel()
 				return DeliveryAck{
 					Samples: len(chunk.Events), Requests: attempt, Retries: attempt - 1,
 					Metadata: map[string]string{
@@ -213,8 +211,12 @@ func (s *ADXQueuedSink) Deliver(ctx context.Context, chunk MetricEventChunk) (De
 			}
 			err = fmt.Errorf("ADX final ingestion status: %w", waitErr)
 		} else {
+			if ctx.Err() == nil && errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+				err = adxTransientError{err: err}
+			}
 			err = fmt.Errorf("ADX queue submission: %w", err)
 		}
+		cancel()
 		last = err
 		if ctx.Err() != nil {
 			return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion canceled: %s", adxDiagnostic(ctx.Err()))))
@@ -244,30 +246,36 @@ func (s *ADXQueuedSink) validate() error {
 			return fmt.Errorf("ADX %s is required", name)
 		}
 	}
-	if s.Config.MaxAttempts < 0 || s.Config.MaxAttempts > MaxADXQueuedAttempts || s.Config.RetryBackoff < 0 ||
-		s.Config.FinalStatusTimeout < 0 || s.Config.StatusPollInterval < 0 {
-		return fmt.Errorf("ADX max attempts must be between 0 and %d and retry/timeout settings must be nonnegative", MaxADXQueuedAttempts)
+	if s.Config.StatusPollInterval < 0 {
+		return fmt.Errorf("ADX status poll interval must not be negative")
+	}
+	if _, err := metricsoffload.TerminalDrainTimeout(
+		s.Config.MaxAttempts,
+		s.Config.RetryBackoff,
+		s.Config.FinalStatusTimeout,
+	); err != nil {
+		return fmt.Errorf("ADX delivery budget: %w", err)
 	}
 	return nil
 }
 
 func (s *ADXQueuedSink) attempts() int {
 	if s.Config.MaxAttempts <= 0 {
-		return 3
+		return metricsoffload.DefaultADXAttempts
 	}
 	return s.Config.MaxAttempts
 }
 
 func (s *ADXQueuedSink) backoff() time.Duration {
 	if s.Config.RetryBackoff <= 0 {
-		return time.Second
+		return metricsoffload.DefaultADXRetryBackoff
 	}
 	return s.Config.RetryBackoff
 }
 
 func (s *ADXQueuedSink) finalTimeout() time.Duration {
 	if s.Config.FinalStatusTimeout <= 0 {
-		return 10 * time.Minute
+		return metricsoffload.DefaultADXFinalStatusTimeout
 	}
 	return s.Config.FinalStatusTimeout
 }
