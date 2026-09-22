@@ -33,9 +33,8 @@ type runJobRequest struct {
 }
 
 const (
-	directMetricsReadyFile    = "/var/run/tau/metrics-ready"
-	directMetricsDoneFile     = "/var/run/tau/metrics-done"
-	directMetricsReadyTimeout = 2 * time.Minute
+	directMetricsReadyFile = "/var/run/tau/metrics-ready"
+	directMetricsDoneFile  = "/var/run/tau/metrics-done"
 )
 
 func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest, error) {
@@ -630,7 +629,7 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 		CheckpointURI:           checkpointURI,
 		BaselineExistingHistory: true,
 		ReadyFile:               directMetricsReadyFile,
-		ReadyTimeout:            directMetricsReadyTimeout,
+		ReadyTimeout:            doneTimeout,
 		DoneFile:                directMetricsDoneFile,
 		DoneTimeout:             doneTimeout,
 		DeliveryMode:            policy.DeliveryMode,

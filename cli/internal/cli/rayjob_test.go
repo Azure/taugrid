@@ -106,6 +106,9 @@ func TestRayJobMetricsCollectorArgsStableAcrossRetryResume(t *testing.T) {
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS", "2")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF", "1s")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT", "1m")
 	script := writeRayScript(t, t.TempDir())
 	base := func(o *runDispatchOptions) {
 		o.script = script
@@ -137,6 +140,9 @@ func TestRayJobMetricsCollectorArgsStableAcrossRetryResume(t *testing.T) {
 	for name, rendered := range map[string]string{"retry": retry, "resume": resume} {
 		if got := renderedMetricsOffloadArgs(t, rendered); !slices.Equal(got, want) {
 			t.Fatalf("final Ray collector args changed on %s:\ninitial: %v\n%s: %v", name, want, name, got)
+		}
+		if !strings.Contains(rendered, "tau_metrics_ready_timeout=151") {
+			t.Fatalf("final Ray %s startup deadline does not cover pending ADX replay:\n%s", name, rendered)
 		}
 	}
 }

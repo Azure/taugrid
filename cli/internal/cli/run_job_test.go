@@ -319,6 +319,13 @@ func TestResolveDirectJobMetricsOffloadConfigAndEnvPrecedence(t *testing.T) {
 		runtime.ADXFinalStatusTimeout != 5*time.Minute {
 		t.Fatalf("platform typed ADX override = %+v", runtime)
 	}
+	wantTimeout, err := metricsoffload.TerminalDrainTimeout(4, 2*time.Second, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.ReadyTimeout != wantTimeout || runtime.DoneTimeout != wantTimeout {
+		t.Fatalf("startup/done timeouts = %s/%s, want shared delivery budget %s", runtime.ReadyTimeout, runtime.DoneTimeout, wantTimeout)
+	}
 }
 
 func TestResolveDirectJobMetricsOffloadRejectsUnknownRuntimeOverride(t *testing.T) {
@@ -379,6 +386,9 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS", "2")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF", "1s")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT", "1m")
 	script := filepath.Join(t.TempDir(), "train.sh")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nset -eu\nchunk_dir=\"$TAU_OUTPUT_DIR/metrics-history-attempt-0\"\nmkdir -p \"$chunk_dir\"\nprintf '{\"step\":1,\"loss\":1.0}\\n' > \"$chunk_dir/chunk-000001.jsonl.tmp\"\nmv \"$chunk_dir/chunk-000001.jsonl.tmp\" \"$chunk_dir/chunk-000001.jsonl\"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -451,12 +461,24 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	if strings.Contains(rendered, workloadmeta.AnnotationStellarExperimentTitle) {
 		t.Fatalf("rendered direct Job contains retired title annotation:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, "tau_metrics_ready_timeout=151") {
+		t.Fatalf("rendered direct Job startup deadline does not cover pending ADX replay:\n%s", rendered)
+	}
 
 	retry := o
 	retry.env = appendRetryEnv(retry.env, "/data/research-workspace/modernbert-bounded/checkpoints/attempt-1", 2, 3, "Evicted")
 	retryRendered := render(retry, "tau run --config tau.yaml (retry 2/3)")
-	if got, want := renderedMetricsOffloadArgs(t, retryRendered), renderedMetricsOffloadArgs(t, rendered); !slices.Equal(got, want) {
-		t.Fatalf("final Job collector args changed across retry:\ninitial: %v\nretry:   %v", want, got)
+	resume := o
+	resume.env = append(resume.env, "TAU_RESUME_FROM=/data/research-workspace/modernbert-bounded/checkpoints/manual")
+	resumeRendered := render(resume, "tau run resume modernbert-bounded --config tau.yaml")
+	wantArgs := renderedMetricsOffloadArgs(t, rendered)
+	for name, candidate := range map[string]string{"retry": retryRendered, "resume": resumeRendered} {
+		if got := renderedMetricsOffloadArgs(t, candidate); !slices.Equal(got, wantArgs) {
+			t.Fatalf("final Job collector args changed on %s:\ninitial: %v\n%s: %v", name, wantArgs, name, got)
+		}
+		if !strings.Contains(candidate, "tau_metrics_ready_timeout=151") {
+			t.Fatalf("final Job %s startup deadline does not cover pending ADX replay:\n%s", name, candidate)
+		}
 	}
 }
 
