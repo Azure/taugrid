@@ -113,7 +113,7 @@ func adxTestChunk(t *testing.T) MetricEventChunk {
 	}
 	chunk, err := writeChunk(t.TempDir(), MetricEventChunk{
 		Sequence: 1, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,10 +379,10 @@ func TestADXQueuedConfigIdentityAndReceiptReplay(t *testing.T) {
 
 	root := t.TempDir()
 	chunk := adxTestChunk(t)
-	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk); err != nil || reused {
+	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err != nil || reused {
 		t.Fatalf("initial delivery reused=%v err=%v", reused, err)
 	}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk); err != nil || !reused {
+	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err != nil || !reused {
 		t.Fatalf("replay delivery reused=%v err=%v", reused, err)
 	}
 	if len(client.requests) != 1 {
