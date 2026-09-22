@@ -118,7 +118,7 @@ function LegacyTargetResolver({ targetID }: { targetID: string }) {
 }
 
 function RunTargetResolver({ runID }: { runID: string }) {
-  const { state, update } = useExperimentURLState();
+  const { state } = useExperimentURLState();
   const query = useRunResolverQuery(runID, state.project);
   return <ResolvedRunTarget runID={runID} query={query}/>;
 }
