@@ -31,6 +31,10 @@ type HistoryScope struct {
 	// durable-history limit. It must not be sourced from browser input.
 	Kind  string
 	Limit int
+	// Range limits durable rows only; live Kubernetes reads do not use it.
+	Window string
+	Start  time.Time
+	End    time.Time
 }
 
 // HistoryReader lists durable lifecycle rows within one already-resolved scope.
@@ -97,6 +101,9 @@ func NewKustoHistoryReader(querier kustoquery.Querier) KustoHistoryReader {
 				WorkspaceID: scope.WorkspaceID,
 				Kind:        scope.Kind,
 				Limit:       scope.Limit,
+				Window:      scope.Window,
+				Start:       scope.Start,
+				End:         scope.End,
 			})
 		},
 	}
@@ -137,6 +144,7 @@ func (r KustoHistoryReader) GetHistoryTimeline(ctx context.Context, scope Histor
 	kql, err := expkusto.BuildRunHistoryTimelineQuery(expkusto.RunHistoryQueryOptions{
 		Table: scope.Table, Cluster: scope.Cluster, Namespace: scope.Namespace,
 		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Kind: scope.Kind, Limit: scope.Limit,
+		Window: scope.Window, Start: scope.Start, End: scope.End,
 	}, resourceUID)
 	if err != nil {
 		return nil, fmt.Errorf("build durable history timeline query: %w", err)

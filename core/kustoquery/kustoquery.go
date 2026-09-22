@@ -25,7 +25,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Azure/taugrid/core/expkusto"
+	"github.com/Azure/taugrid/core/exptelemetry"
+)
+
+const (
+	DefaultEndpoint = "https://example.kusto.windows.net"
+	DefaultDatabase = exptelemetry.RemoteWriteDatabase
 )
 
 // ErrNoQueryCommand is returned when a Client has no command configured. The
@@ -76,7 +81,7 @@ func (r Row) Num(col string) (float64, bool) {
 
 // Client executes KQL through an external command, matching Stellar's
 // --kusto-query-command contract. The zero endpoint/database fall back to the
-// Metrics ADX defaults (expkusto.DefaultEndpoint/DefaultDatabase), which is
+// Metrics ADX defaults (DefaultEndpoint/DefaultDatabase), which is
 // where GpuHealth() and GpuHours() live.
 type Client struct {
 	Command  string
@@ -92,8 +97,8 @@ func (c Client) Query(ctx context.Context, kql string) ([]Row, error) {
 	if strings.TrimSpace(c.Command) == "" {
 		return nil, ErrNoQueryCommand
 	}
-	endpoint := firstNonEmpty(c.Endpoint, expkusto.DefaultEndpoint)
-	database := firstNonEmpty(c.Database, expkusto.DefaultDatabase)
+	endpoint := firstNonEmpty(c.Endpoint, DefaultEndpoint)
+	database := firstNonEmpty(c.Database, DefaultDatabase)
 	args, queryInArgs := expandArgs(c.Args, endpoint, database, kql)
 	var stdin io.Reader
 	if !queryInArgs {

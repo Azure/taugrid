@@ -113,6 +113,21 @@
   .data-panel { min-width: 0; overflow-wrap: break-word; }
   .data-panel + .data-panel { margin-top: 24px; }
   .panel-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
+  .time-range { margin: 18px 0 12px; padding-block: 12px; border-block: 1px solid var(--line); }
+  .time-range-fields { display: flex; align-items: end; flex-wrap: wrap; gap: 10px 12px; }
+  .time-range-fields label { display: grid; gap: 5px; color: var(--text); font-size: 12px; font-weight: 700; }
+  .time-range-fields select, .time-range-fields input {
+    min-width: 160px; min-height: 44px; border: 1px solid var(--line); border-radius: 7px;
+    background: #fff; color: var(--text); padding: 7px 10px; font: inherit;
+  }
+  .time-range-fields .btn-primary { min-height: 44px; }
+  .time-range-active { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+  .time-range-error { margin-bottom: 0; }
+  .board-error { display: grid; gap: 6px; max-width: 76ch; line-height: 1.5; }
+  .board-error strong { color: var(--warn); }
+  .board-error details { color: var(--muted); }
+  .board-error summary { width: fit-content; cursor: pointer; }
+  .board-error code { display: block; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .btn { border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--accent); padding: 6px 10px; font: inherit; cursor: pointer; }
   .btn:hover { background: var(--hover); }
   .btn:disabled { color: var(--muted); cursor: wait; }
@@ -240,6 +255,8 @@
     }
     aside.sidebar .group { display: flex; flex-wrap: wrap; margin: 0; }
     aside.sidebar a { padding: 8px 12px; border-left: 0; border-bottom: 2px solid transparent; }
+    .time-range-fields { align-items: stretch; }
+    .time-range-fields label, .time-range-fields select, .time-range-fields input, .time-range-fields .btn-primary { width: 100%; }
     aside.sidebar a.active { border-bottom-color: var(--accent); }
     main { width: 100%; padding: 12px; }
     .card { padding: 14px; }

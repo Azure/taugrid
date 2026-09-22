@@ -37,3 +37,17 @@ charts/taugrid/charts
 # Portal frontend dependencies and local build metadata
 portal/frontend/node_modules/
 portal/frontend/*.tsbuildinfo
+
+.github/skills
+.specify
+specs
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Portal build output
+/portal/bin/
+.github/instructions
+controllers/tau-core/bin/

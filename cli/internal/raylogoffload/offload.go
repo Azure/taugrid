@@ -127,8 +127,10 @@ func WrapShellScript(command string) string {
 %s
 set -m
 tau_driver_child=""
+tau_driver_signal_pending=""
 tau_driver_signal_status=""
 tau_driver_forward_signal() {
+	tau_driver_signal_pending=1
   if [ -n "${tau_driver_child:-}" ]; then
     kill -TERM -- "-$tau_driver_child" 2>/dev/null || true
     wait "$tau_driver_child"
@@ -141,6 +143,9 @@ trap tau_driver_forward_signal TERM INT
 %s
 ) &
 tau_driver_child="$!"
+if [ -n "$tau_driver_signal_pending" ] && [ -z "$tau_driver_signal_status" ]; then
+  tau_driver_forward_signal
+fi
 wait "$tau_driver_child"
 tau_driver_status="$?"
 if [ -n "${tau_driver_signal_status:-}" ]; then

@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/kustoquery"
 )
 
 const (
-	DefaultEndpoint     = "https://example.kusto.windows.net"
-	DefaultDatabase     = exptelemetry.RemoteWriteDatabase
+	DefaultEndpoint     = kustoquery.DefaultEndpoint
+	DefaultDatabase     = kustoquery.DefaultDatabase
 	DefaultTargetPoints = 12000
 	MinTargetPoints     = 100
 )
@@ -30,6 +31,8 @@ type MetricsQueryOptions struct {
 	StartStep                   *int64
 	EndStep                     *int64
 	Since                       string
+	Start                       time.Time
+	End                         time.Time
 	Ingestion                   string
 	TargetPoints                int
 	Limit                       int
@@ -42,6 +45,51 @@ type MetricsQueryResult struct {
 	Database     string `json:"database"`
 	Query        string `json:"query"`
 	TargetPoints int    `json:"target_points"`
+}
+
+type RunEvidenceIdentity struct {
+	WorkspaceID string
+	Project     string
+	RunGroupID  string
+	RunID       string
+}
+
+func BuildRunSearchLifecycleEvidenceQuery(identities []RunEvidenceIdentity, ingestion string) (string, error) {
+	if len(identities) == 0 || len(identities) > 200 {
+		return "", fmt.Errorf("lifecycle evidence requires 1 to 200 identities")
+	}
+	ingestion = strings.ToLower(strings.TrimSpace(ingestion))
+	if ingestion == "" {
+		ingestion = "projection"
+	}
+	var query strings.Builder
+	query.WriteString("let run_search_evidence = materialize(\n")
+	switch ingestion {
+	case "projection":
+		query.WriteString(DefaultProjectionTable + "\n")
+		query.WriteString("| extend workspace_id=tostring(parse_json(tostring(tags))['tau_workspace'])\n")
+		query.WriteString("| project exported_at, cluster='', source_store_id, metric_file_id, metric_file_path, project_id=tostring(['project']), experiment_id=coalesce(tostring(column_ifexists('experiment_id', '')), tostring(column_ifexists('question_id', ''))), run_group_id, run_id, metric_name, step=tolong(step), wall_time=todatetime(wall_time), value=todouble(value), unit, source, split, tags, workspace_id\n")
+	case "remote-write":
+		query.WriteString(DefaultRemoteWriteTable + "\n")
+		query.WriteString("| project exported_at=Timestamp, workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), project_id=tostring(Labels['project']), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)\n")
+	default:
+		return "", fmt.Errorf("--ingestion must be projection or remote-write")
+	}
+	filters := make([]string, 0, len(identities))
+	for _, identity := range identities {
+		if strings.TrimSpace(identity.RunID) == "" {
+			return "", fmt.Errorf("lifecycle evidence requires a run ID")
+		}
+		filters = append(filters, fmt.Sprintf("(workspace_id == %s and project_id == %s and run_group_id == %s and run_id == %s)", kustoquery.QuoteString(identity.WorkspaceID), kustoquery.QuoteString(identity.Project), kustoquery.QuoteString(identity.RunGroupID), kustoquery.QuoteString(identity.RunID)))
+	}
+	query.WriteString("| where " + strings.Join(filters, " or ") + "\n")
+	query.WriteString("| where isnotnull(wall_time) and isnotnull(value) and isnotempty(metric_name)\n")
+	query.WriteString("| summarize arg_max(exported_at, *) by source_store_id, metric_file_id, project_id, experiment_id, run_group_id, run_id, metric_name, step, wall_time, workspace_id\n")
+	query.WriteString(");\nrun_search_evidence\n")
+	fmt.Fprintf(&query, "| extend status_evidence=metric_name == %s\n", kqlString(RunStatusMetricName))
+	query.WriteString("| summarize arg_max(wall_time, *) by workspace_id, project_id, run_group_id, run_id, status_evidence\n")
+	writeExperimentSearchProjection(&query, "project_id")
+	return query.String(), nil
 }
 
 type RunLifecycleQueryOptions struct {
@@ -74,6 +122,9 @@ type RunHistoryQueryOptions struct {
 	WorkspaceID string
 	Kind        string
 	Limit       int
+	Window      string
+	Start       time.Time
+	End         time.Time
 }
 
 func BuildMetricsQuery(opts MetricsQueryOptions) (string, error) {
@@ -158,7 +209,15 @@ func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	if opts.Ingestion == "" {
 		opts.Ingestion = "projection"
 	}
-	if opts.Since == "" {
+	if opts.Since != "" && (!opts.Start.IsZero() || !opts.End.IsZero()) {
+		return "", fmt.Errorf("use either since or start/end, not both")
+	}
+	if !opts.Start.IsZero() || !opts.End.IsZero() {
+		if opts.Start.IsZero() || opts.End.IsZero() || !opts.End.After(opts.Start) || opts.End.Sub(opts.Start) > 30*24*time.Hour {
+			return "", fmt.Errorf("start/end must define a positive range no greater than 30d")
+		}
+	}
+	if opts.Since == "" && opts.Start.IsZero() && opts.End.IsZero() {
 		opts.Since = "7d"
 	}
 	if opts.Ingestion != "projection" && opts.Ingestion != "remote-write" {
@@ -186,6 +245,10 @@ func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	writeMetricFilters(&b, opts)
 	if opts.Since != "" {
 		fmt.Fprintf(&b, "| where wall_time > ago(%s)\n", kqlDuration(opts.Since))
+	}
+	if !opts.Start.IsZero() {
+		fmt.Fprintf(&b, "| where wall_time between (datetime(%s) .. datetime(%s))\n",
+			opts.Start.UTC().Format(time.RFC3339Nano), opts.End.UTC().Format(time.RFC3339Nano))
 	}
 	b.WriteString("| where isnotnull(step) and isnotnull(value)\n")
 	b.WriteString(");\n")
@@ -289,6 +352,7 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	opts.LocalQueue = strings.TrimSpace(opts.LocalQueue)
 	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
 	opts.Kind = strings.TrimSpace(opts.Kind)
+	opts.Window = strings.TrimSpace(opts.Window)
 	if opts.Limit == 0 {
 		opts.Limit = 200
 	}
@@ -300,7 +364,12 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("let scoped = materialize(\n")
+	hasRange := opts.Window != "" || !opts.Start.IsZero() || !opts.End.IsZero()
+	if hasRange {
+		b.WriteString("let retained = (\n")
+	} else {
+		b.WriteString("let scoped = materialize(\n")
+	}
 	b.WriteString(table + "\n")
 	if opts.Cluster != "" {
 		fmt.Fprintf(&b, "| where cluster == %s\n", kqlString(opts.Cluster))
@@ -319,6 +388,15 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	}
 	b.WriteString("| extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))\n")
 	b.WriteString("| where isnotempty(durable_identity)\n")
+	if hasRange {
+		b.WriteString(");\nlet eligible = retained\n")
+		if err := appendHistoricalRange(&b, opts.Window, opts.Start, opts.End); err != nil {
+			return "", err
+		}
+		b.WriteString("| distinct cluster, namespace, durable_identity;\n")
+		b.WriteString("let scoped = materialize(\nretained\n")
+		b.WriteString("| join kind=leftsemi (eligible) on cluster, namespace, durable_identity\n")
+	}
 	b.WriteString("| extend observation_identity=iff(isnotempty(observation_id), observation_id, strcat(durable_identity, ':', state, ':', tostring(observed_at)))\n")
 	b.WriteString("| summarize arg_max(observed_at, *) by cluster, namespace, durable_identity, observation_identity\n")
 	b.WriteString(");\n")
@@ -373,12 +451,57 @@ func BuildRunHistoryTimelineQuery(opts RunHistoryQueryOptions, resourceUID strin
 	if kind := strings.TrimSpace(opts.Kind); kind != "" {
 		fmt.Fprintf(&b, "| where tolower(owning_resource_kind) == %s\n", kqlString(strings.ToLower(kind)))
 	}
+	if err := appendHistoricalRange(&b, strings.TrimSpace(opts.Window), opts.Start, opts.End); err != nil {
+		return "", err
+	}
 	fmt.Fprintf(&b, "| where resource_uid == %s\n", kqlString(resourceUID))
 	b.WriteString("| project observed_at, observation_id, run_id, durable_id, workspace_id, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, resource_uid, submit_time, created_time, kueue_admitted_time, pod_start_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, tau_command, result_path, result_pvc\n")
 	b.WriteString("| order by observed_at desc\n")
 	fmt.Fprintf(&b, "| take %d\n", opts.Limit)
 	b.WriteString("| order by observed_at asc\n")
 	return b.String(), nil
+}
+
+func appendHistoricalRange(b *strings.Builder, window string, start, end time.Time) error {
+	switch {
+	case window != "" && (!start.IsZero() || !end.IsZero()):
+		return fmt.Errorf("use either window or start/end, not both")
+	case window != "":
+		d, err := time.ParseDuration(window)
+		if err != nil || d <= 0 || d > 30*24*time.Hour {
+			return fmt.Errorf("window must be a positive duration no greater than 30d")
+		}
+		fmt.Fprintf(b, "| where observed_at > ago(%s)\n", kqlTimespan(d))
+	case !start.IsZero() || !end.IsZero():
+		if start.IsZero() || end.IsZero() {
+			return fmt.Errorf("custom history range requires both start and end")
+		}
+		if !end.After(start) || end.Sub(start) > 30*24*time.Hour {
+			return fmt.Errorf("custom history range must be positive and no greater than 30d")
+		}
+		fmt.Fprintf(b, "| where observed_at between (datetime(%s) .. datetime(%s))\n",
+			start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
+func kqlTimespan(d time.Duration) string {
+	for _, unit := range []struct {
+		duration time.Duration
+		suffix   string
+	}{
+		{time.Hour, "h"},
+		{time.Minute, "m"},
+		{time.Second, "s"},
+		{time.Millisecond, "ms"},
+		{time.Microsecond, "microsecond"},
+		{time.Nanosecond, "nanosecond"},
+	} {
+		if d%unit.duration == 0 {
+			return strconv.FormatInt(int64(d/unit.duration), 10) + unit.suffix
+		}
+	}
+	return strconv.FormatInt(d.Nanoseconds(), 10) + "nanosecond"
 }
 
 func buildRemoteWriteMetricsQuery(opts MetricsQueryOptions) string {
@@ -412,6 +535,10 @@ func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []
 	b.WriteString(DefaultRemoteWriteTable + "\n")
 	if opts.Since != "" {
 		fmt.Fprintf(&b, "| where Timestamp > ago(%s)\n", kqlDuration(opts.Since))
+	}
+	if !opts.Start.IsZero() {
+		fmt.Fprintf(&b, "| where Timestamp between (datetime(%s) .. datetime(%s))\n",
+			opts.Start.UTC().Format(time.RFC3339Nano), opts.End.UTC().Format(time.RFC3339Nano))
 	}
 	b.WriteString("| extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), project_id=tostring(Labels['project']), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)\n")
 	writeProjectFilter(&b, "project_id", projects)

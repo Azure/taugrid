@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Fleet } from './Fleet';
-import { WorkspaceProvider, createPortalQueryClient } from './data';
+import { boardScopeKey, WorkspaceProvider, createPortalQueryClient } from './data';
 import type { WorkspaceScope } from './types';
 import { fleetGPUHealth, fleetNodes, fleetNodeUtil } from './test/fleet-fixtures';
 
@@ -41,6 +41,49 @@ afterEach(() => {
 });
 
 describe('Fleet dashboard', () => {
+  it.each([
+    '/portal/fleet?instance=h200-node-a',
+    '/portal/fleet?instance=h200-node-a&window=24h',
+    '/portal/gpu?instance=h200-node-a&start=2026-08-01T00:00:00Z&end=2026-08-01T01:00:00Z&tz=utc',
+    '/portal/cluster?instance=h200-node-a&window=bad&window=1h&start=bad',
+    '/portal/nodes?instance=h200-node-a&window=720h',
+  ])('reads recent snapshots independently of temporal bookmarks: %s', async initialEntry => {
+    const client = createPortalQueryClient();
+    client.setQueryData([...boardScopeKey(scope, false), '/api/portal/cluster?window=24h'], {
+      ...fleetGPUHealth, gpus: fleetGPUHealth.gpus.map(gpu => ({ ...gpu, utilizationPct: 99 })),
+    });
+    client.setQueryData([...boardScopeKey(scope, false), '/api/portal/nodeutil?window=24h'], {
+      ...fleetNodeUtil, nodes: fleetNodeUtil.nodes.map(node => ({ ...node, cpuUtilPct: 98, memUsedPct: 97 })),
+    });
+    const fetch = vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      return Promise.resolve(json(url.includes('/nodes') ? fleetNodes
+        : url.includes('/cluster') ? fleetGPUHealth : fleetNodeUtil));
+    });
+    vi.stubGlobal('fetch', fetch);
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}>
+      <WorkspaceProvider scope={scope} managed={false}><Fleet/></WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+    await screen.findByText(/3\/3 nodes ready/);
+    expect(screen.queryByRole('region', { name: 'Historical time range' })).not.toBeInTheDocument();
+    expect(await screen.findByText('39% avg')).toBeVisible();
+    expect(screen.getByText('1 fault')).toBeVisible();
+    expect(screen.getByText('63%')).toBeVisible();
+    expect(screen.getByText('72%')).toBeVisible();
+    expect(screen.queryByText('99% avg')).not.toBeInTheDocument();
+    expect(screen.queryByText('98%')).not.toBeInTheDocument();
+    expect(screen.queryByText('97%')).not.toBeInTheDocument();
+    const focused = within(screen.getByRole('region', { name: 'GPU details for h200-node-a' }));
+    expect(within(focused.getByRole('table')).getAllByRole('row')).toHaveLength(2);
+    expect(within(screen.getByLabelText('Fleet data source freshness')).getAllByText(/Updated/)).toHaveLength(3);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    const endpoints = ['/api/portal/nodes', '/api/portal/cluster', '/api/portal/nodeutil'];
+    expect(fetch.mock.calls.map(([input]) => String(input)).sort()).toEqual([...endpoints].sort());
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh GPU dashboard data' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    expect(fetch.mock.calls.slice(3).map(([input]) => String(input)).sort()).toEqual([...endpoints].sort());
+  });
+
   it('combines fleet capacity, utilization, health, and InfiniBand without subtabs', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);

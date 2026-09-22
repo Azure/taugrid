@@ -25,8 +25,9 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   exposes `Board(ctx, source, Options) (Snapshot, error)`. Two data-source
   families back them: Kubernetes (Jobs/Ray/Nodes/Runs share one client-go
   `kubeclient` reader) and Kusto (Cluster/Cost/Node Utilization share a `kustoquery` querier).
-- **Soft-degrade contract** — a handler with a nil data source returns **503**;
-  a `Board()` error returns **502**; an empty-but-successful result is a normal
+- **Soft-degrade contract** — after authorization, Fleet requests
+  with a nil data source return **503**; upstream or sample-integrity failures
+  return **502**; an empty-but-successful result is a normal
   **200**. Boards light up together per source family, so a portal without
   cluster access still serves the shell, Stellar, and the Kusto boards.
 - **Workspace scope** — with a workspace directory configured, a trusted
@@ -123,13 +124,103 @@ unified Fleet page; an `instance` query focuses the inline per-GPU detail table.
 ## Fleet InfiniBand evidence
 
 The Fleet page combines authorized Kubernetes node inventory and current
-Metrics Server CPU/memory usage, per-GPU ADX telemetry, historical ADX node
+Metrics Server CPU/memory usage, per-GPU ADX telemetry, recent ADX node
 utilization, and continuous GPU/NVLink and InfiniBand Node conditions in one
 operational dashboard. Inventory, telemetry, and utilization refresh and retry
 together while retaining independent freshness and failure status. Current
 Metrics Server samples are preferred on exact inventory nodes; exact ADX node
 rows are a fallback, while mismatched telemetry remains visible as independent
 source evidence.
+
+Fleet remains a current operational snapshot view, without historical range
+controls. Temporal bookmark parameters do not change its data reads or refresh;
+the legacy Fleet route aliases and focused-node links remain supported. GPU and
+ADX node utilization use the backend-default **15-minute** lookback. This is not
+a historical reconstruction of inventory, Metrics Server samples or Node health.
+
+For direct API clients, `/api/portal/cluster` and `/api/portal/nodeutil` retain
+their original relative `window` contract: positive Go durations (including
+values above one hour) select a lookback; missing, malformed or nonpositive
+values fall back to 15 minutes. Repeated `window` values use the first value;
+unknown `start`/`end` parameters are ignored. The unmerged Fleet absolute-history
+expansion and temporary one-hour policy have been withdrawn. There is no new
+Fleet migration or one-hour limit. Non-Fleet history retains its 30-day contract.
+The raw CPU sample limits (250000 total and 4096 per core), reset handling and
+truncation checks remain intact: even a default-window query can exceed a
+sample budget on a large fleet and return **502**. Relative-window compatibility
+is not a large-fleet capacity guarantee. No data migration is needed.
+
+Experiment run-search fallback is restricted to the same historical data range.
+Changing range hides previous-range results while loading or after a failure,
+without resetting hidden-run selections, page size or other workspace state.
+Same-range pagination failures retain the last successful page for retry;
+display-timezone changes do not change data identity.
+
+An authorized historical run search can remain visible when the independent
+summary lookback contains no target data. Summary-mode snapshots distinguish
+this case with HTTP **404** and code `SUMMARY_NO_DATA`; the existing error,
+detail and status fields remain. The UI shows the selected runs without
+inventing a summary. Summary-dependent sections remain unavailable until a
+successful retry. Generic 404, other rejected requests and scope changes do
+not enable this fallback. Initial run-search loading and failures are not empty
+results: they show explicit status, and search failures count as query errors.
+Same-range retained pages display a stale-data notice while keeping their
+known operational status.
+
+Durable workload history uses the selected interval to choose identities, then
+resolves their latest retained lifecycle evidence in the same cluster,
+namespace, queue, workspace and kind scope before applying the list limit.
+A later terminal observation therefore survives live-object garbage collection
+even when it lies outside the membership interval. This is latest-known
+lifecycle, not lifecycle as of the interval end. Live objects retain precedence;
+timeline events remain range-filtered. Retention and ADX scan cost are unchanged
+constraints, not guarantees established by offline tests.
+
+Custom Apply preserves each untouched RFC3339 bound verbatim, including offsets
+and nanoseconds. Editing one bound changes only that bound to UTC millisecond
+precision. UTC/local selection changes presentation, not the requested instant.
+Validation compares exact instants through the 30-day limit; a positive 1ns
+interval is valid, but 30 days plus 1ns is not. This URL/API contract does not
+imply nanosecond storage in ADX. Nonexistent local DST times are rejected;
+ambiguous edited local times use the platform's earlier occurrence. Use an
+explicit offset or UTC for an unambiguous repeated local time.
+
+Run search determines historical membership, ordering, totals and pagination.
+Local run membership includes metric-file registration timestamps as well as
+run and event timestamps, before applying the result limit. A long-running run
+can therefore remain in range after a JSONL import without a new lifecycle
+event; its original run timestamps are not rewritten. Local experiment discovery
+also includes child metric-file registration, even when later imports move the
+experiment update time beyond an earlier selected interval. Registration time,
+not the metric sample's wall time, defines this import activity. Both local
+discovery and run search compare timestamp instants, including fractional seconds
+and equivalent timezone offsets, before applying result limits. Custom and
+relative Stellar bounds retain nanosecond precision through API serialization.
+Unscoped Kusto experiment discovery enforces the configured maximum discovery
+lookback on `since`, `window` and absolute interval lengths before querying;
+the existing project-scoped exemption is unchanged.
+Within the same workspace/source scope, matching snapshot runs (project and run
+ID) retain their authoritative lifecycle, evidence timestamps and detail fields;
+search-only fields and metric summaries remain available. Local search rows also
+carry authoritative `outcome_state` / `liveness_state` resolved from their own
+record and indexed metrics using the snapshot resolver. Thus runs absent from a
+truncated snapshot retain correct liveness without additional queries. Existing
+legacy classification and success-gate filtering remain unchanged. After selecting
+and limiting historical Kusto members, search looks up their latest retained
+terminal marker and ordinary metric, independent of the selected interval and
+snapshot cap. It matches exact workspace/project/group/run identities in batches
+of at most 200, returning at most two evidence rows per identity. File/in-memory
+sources reuse their already loaded rows; projection and remote-write use the
+existing query transport. These bounds limit transfer, not ADX scan cost.
+Evidence-query failure fails the Kusto source; auto retains local results with
+its existing warning and local-first duplicate policy. A successful empty lookup
+is explicitly unknown, never authoritative historical running. Matching snapshot
+authority replaces the page outcome/liveness/reason/source as one coherent group.
+Missing snapshot classification fields fall back to search classification. Snapshot-only runs
+never enter the range-filtered list. Lifecycle describes the latest available
+evidence, not a reconstruction of run state at the historical range end.
+Reconciliation uses a linear-time identity lookup over the existing responses;
+it does not issue additional requests or recompute lifecycle rules in the browser.
 
 The inventory reader selects the exact canonical `unbounded-cloud.io/site`
 label first and the exact deprecated `net.unbounded-cloud.io/site` migration
@@ -212,6 +303,16 @@ silently truncated series. `queriedAt` records query completion, not the age of
 every underlying sample.
 
 Cost remains allocation-based, using schema-v4 `GpuCostHourly` rows.
+Custom cost ranges must start and end on whole UTC hours; unsupported partial
+hours return **400** before querying Kusto. Allocation buckets use `[start, end)`:
+a 10:00-11:00 range includes the 10:00 bucket, not the bucket starting at 11:00.
+Raw utilization samples retain inclusive bounds, and relative lookback requests
+retain their existing behavior. Partial-hour costs are not prorated or inferred.
+Opening a new Cost Custom range defaults to the previous complete UTC hour.
+Both display timezones remain available. Apply validates actual UTC instants
+before navigation or a new request; nonaligned user input is never rounded.
+Direct invalid URLs still reach backend validation and can be corrected using
+the controls. Other boards retain their generic custom defaults.
 `costAvailable` and `gpuHoursAvailable` distinguish unknown totals from measured
 zero; their coverage counters expose partial sums. Raw GPU utilization is a
 separate efficiency signal. `idleAvailable` requires enough valid readings to

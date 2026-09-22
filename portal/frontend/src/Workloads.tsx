@@ -5,11 +5,13 @@ import { useLocation, useParams } from 'react-router-dom';
 import { useBoard } from './data';
 import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Subtabs, Table, TrackingLink, text } from './components';
 import type { JobDetail, Ray, RayHistory, Run, Runs, SourceDiagnostic } from './types';
+import { TimeRangeControls, useHistoricalRange } from './time-range';
 
 const kubeHint = ' — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).';
 function RunName({ run, namespace }: { run: Run; namespace?: string }) {
   const ns = run.namespace || namespace;
-  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name)}>{run.name}</ScopedLink> : text(run.name);
+  const range = useHistoricalRange('24h');
+  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name) + '?' + range.navigation}>{run.name}</ScopedLink> : text(run.name);
 }
 function Status({ value, tone = '' }: { value?: string; tone?: string }) { return <span className={'badge ' + tone}>{text(value)}</span>; }
 function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiagnostic; label: string; children: ReactNode }) {
@@ -42,9 +44,12 @@ function HistoryDiagnostic({ state, diagnostic, ray = false }: { state?: string;
   return state === 'history-unavailable' ? <Note warn>{diagnostic || `Durable ${ray ? 'RayJob' : 'run'} history is temporarily unavailable; showing live ${ray ? 'dashboards' : 'Kubernetes workloads'} only.`}</Note> : null;
 }
 export function RunsBoard() {
-  const query = useBoard<Runs>('/api/portal/runs');
+  const range = useHistoricalRange('24h');
+  const query = useBoard<Runs>('/api/portal/runs?' + range.api);
   return <><div className="page-head"><div><PageTitle title="Jobs">Tau-managed training and inference workloads.</PageTitle></div>
     <button className="btn-primary" disabled title="Submission from the portal is coming soon — the portal is read-only today.">+ Submit new</button></div>
+    <Note>Running and queued workloads are real-time Kubernetes snapshots. Durable history includes lifecycle observations within the selected range; live Kubernetes rows are not filtered.</Note>
+    <TimeRangeControls defaultWindow="24h"/>
     <BoardResult query={query} label="Jobs board" hint={kubeHint}>{snap => {
       const runs = snap.runs || [];
       const groups = [
@@ -65,11 +70,13 @@ export function RunsBoard() {
 }
 export function JobDetailBoard() {
   const { namespace = '', name = '' } = useParams();
+  const range = useHistoricalRange('24h');
   const query = useBoard<JobDetail>('/api/portal/runs/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(name), !!namespace && !!name, retainJobSections);
   const partial = Object.values(query.data?.diagnostics || {}).some(diagnostic => diagnostic.state === 'unavailable');
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
   const active = ['overview', 'pods', 'events', 'results'].includes(requested) ? requested : 'overview';
-  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to="/portal/runs" className="back">← Back to Jobs</ScopedLink></div>
+  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to={'/portal/runs?' + range.navigation} className="back">← Back to Jobs</ScopedLink></div>
+    <Note>Object, Kueue, pod, and event sections are current Kubernetes snapshots. Durable lifecycle/results show the retained record for this run; historical time filtering is not supported.</Note>
     {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
       <div className="detail-meta"><Status value={snap.kind} tone="kind"/><Status value={snap.status}/>
         {snap.resourceRelease && <span className={'badge' + (snap.resourceRelease.computeState === 'reusable' ? '' : ' warn')} title={snap.resourceRelease.message}>quota {snap.resourceRelease.quotaState || 'unknown'} · compute {snap.resourceRelease.computeState || 'unknown'}</span>}
@@ -106,21 +113,27 @@ function JobOverview({ snap }: { snap: JobDetail }) {
       rows={snap.workloads.map(w => [text(w.name), text(w.queue), text(w.clusterQueue), w.admitted ? 'yes' : 'no', w.finished ? 'yes' : 'no'])}/>}</SourceResult></>;
 }
 export function RayBoard() {
-  const query = useBoard<Ray>('/api/portal/ray');
+  const range = useHistoricalRange('24h');
+  const query = useBoard<Ray>('/api/portal/ray?' + range.api);
   return <><PageTitle title="Ray">Per-cluster Ray dashboards discovered from &lt;cluster&gt;-head-svc Services, via /api/portal/ray. The dashboard is proxied live by the portal and is only available while the RayCluster is running; finished RayJobs remain visible under RayJob history.</PageTitle>
+    <Note>Ray dashboards and cluster discovery are real-time Kubernetes surfaces with no historical filtering. Durable RayJob history includes lifecycle observations within the selected range.</Note>
+    <TimeRangeControls defaultWindow="24h"/>
     <BoardResult query={query} label="Ray board" hint={kubeHint}>{snap => <><Note>clusters: {snap.total ?? 0}</Note>
       {!snap.clusters?.length ? <Empty>No Ray clusters found. Either no RayClusters are running, or the portal has no Kubernetes access.</Empty>
         : <Table headers={['Cluster', 'Namespace', 'Service', 'Type', 'Dashboard']} rows={snap.clusters.map(c => [text(c.name), text(c.namespace), text(c.service), text(c.type),
           c.proxyPath ? (c.available ? <ScopedLink to={c.proxyPath} external className="back">open ↗</ScopedLink> : <span className="back disabled-link" title="Ray dashboard unreachable: head pod not Ready">open ↗</span>) : <span className="warn">—</span>])}/>}
       <h2>RayJob history</h2><Note>history: {snap.historyState || 'live-only'}</Note><HistoryDiagnostic state={snap.historyState} diagnostic={snap.historyDiagnostic} ray/>
       {!snap.history?.length ? <Empty>{snap.historyState === 'available' ? 'No durable RayJob records in this scope yet.' : 'Durable RayJob history is not configured for this portal; only live dashboards are shown.'}</Empty>
-        : <Table headers={['Name', 'Namespace', 'Status', 'Age', 'Run ID']} rows={snap.history.map(r => [r.resourceUid && r.name ? <ScopedLink to={'/portal/ray/history/' + encodeURIComponent(r.resourceUid)}>{r.name}</ScopedLink> : text(r.name), r.namespace || snap.namespace || '—', <Status value={r.status}/>, text(r.age), text(r.runId)])}/>}
+        : <Table headers={['Name', 'Namespace', 'Status', 'Age', 'Run ID']} rows={snap.history.map(r => [r.resourceUid && r.name ? <ScopedLink to={'/portal/ray/history/' + encodeURIComponent(r.resourceUid) + '?' + range.navigation}>{r.name}</ScopedLink> : text(r.name), r.namespace || snap.namespace || '—', <Status value={r.status}/>, text(r.age), text(r.runId)])}/>}
     </>}</BoardResult></>;
 }
 export function RayHistoryBoard() {
   const { resourceUID = '' } = useParams();
-  const query = useBoard<RayHistory>('/api/portal/ray/history/' + encodeURIComponent(resourceUID), !!resourceUID);
-  return <><ScopedLink to="/portal/ray" className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
+  const range = useHistoricalRange('24h');
+  const query = useBoard<RayHistory>('/api/portal/ray/history/' + encodeURIComponent(resourceUID) + '?' + range.api, !!resourceUID);
+  return <><ScopedLink to={'/portal/ray?' + range.navigation} className="back">← Ray</ScopedLink><PageTitle title="RayJob history">Durable lifecycle from ADX. This page does not read Kubernetes, so it remains available after RayCluster cleanup.</PageTitle>
+    <TimeRangeControls defaultWindow="24h"/>
+    <Note>This page filters retained lifecycle events by <code>observedAt</code> within the selected range.</Note>
     <BoardResult query={query} label="Durable RayJob history">{snap => {
       const last = snap.events?.at(-1);
       return !last ? <Empty>No durable lifecycle observations found.</Empty> : <><h2>Durable run metadata</h2><KV rows={[

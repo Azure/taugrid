@@ -6,6 +6,8 @@ package expcockpit
 import (
 	"strings"
 	"time"
+
+	"github.com/Azure/taugrid/portal/internal/expstore"
 )
 
 const (
@@ -36,6 +38,22 @@ type LifecycleTruth struct {
 	Freshness                time.Duration
 	Explicit                 bool
 	WorkloadAbsenceConfirmed bool
+}
+
+func LocalRunLifecycle(run expstore.RunRecord, summaries []expstore.MetricSummaryRecord) LifecycleTruth {
+	outcome := terminalOutcome(run.State)
+	reason := ""
+	if outcome != "" {
+		reason = "local run record has explicit terminal state " + outcome
+	}
+	return ResolveLifecycle(LifecycleEvidence{
+		ExplicitOutcome:      outcome,
+		ExplicitReason:       reason,
+		ExplicitSource:       "local_run_record",
+		TerminalAt:           parseLifecycleTime(run.CompletedAt),
+		LatestMetricAt:       parseLifecycleTime(latestMetricSummaryUpdatedAt(summaries)),
+		LatestControlPlaneAt: parseLifecycleTime(run.StartedAt),
+	})
 }
 
 func ResolveLifecycle(evidence LifecycleEvidence) LifecycleTruth {

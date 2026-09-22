@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 )
@@ -154,6 +155,50 @@ func TestBuildWorkspaceKQL(t *testing.T) {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("namespace KQL missing %q:\n%s", want, kql)
 		}
+	}
+}
+
+func TestBuildCostKQLCustomBounds(t *testing.T) {
+	start := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
+	want := "| where Timestamp >= datetime(2026-09-16T00:00:00Z) and Timestamp <= datetime(2026-09-17T09:00:00Z)"
+	for name, kql := range map[string]string{
+		"workspace": buildWorkspaceKQLRange(end.Sub(start), start, end, "", "", ""),
+		"idle":      buildIdleKQLRange(end.Sub(start), start, end, "", ""),
+	} {
+		if !strings.Contains(kql, want) {
+			t.Fatalf("%s custom bounds missing %q:\n%s", name, want, kql)
+		}
+		if strings.Contains(kql, "ago(") {
+			t.Fatalf("%s custom bounds must not use a relative window:\n%s", name, kql)
+		}
+	}
+	allocation, _, _ := strings.Cut(buildWorkspaceKQLRange(end.Sub(start), start, end, "", "", ""), "let WorkspaceUtil")
+	if !strings.Contains(allocation, "Timestamp < datetime(2026-09-17T09:00:00Z)") || strings.Contains(allocation, "Timestamp <=") {
+		t.Fatalf("allocation must exclude the bucket starting at the end: %s", allocation)
+	}
+}
+
+func TestBoardRejectsPartialHourAllocationRanges(t *testing.T) {
+	start := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	for _, bounds := range []struct {
+		name       string
+		start, end time.Time
+	}{
+		{"partial start", start.Add(time.Minute), start.Add(time.Hour)},
+		{"partial end", start, start.Add(90 * time.Minute)},
+		{"subsecond end", start, start.Add(time.Hour + time.Nanosecond)},
+	} {
+		t.Run(bounds.name, func(t *testing.T) {
+			querier := &scriptedQuerier{}
+			_, err := Board(context.Background(), querier, Options{Start: bounds.start, End: bounds.end})
+			if err == nil || !strings.Contains(err.Error(), "whole UTC hours") {
+				t.Fatalf("expected explicit hourly range error, got %v", err)
+			}
+			if querier.calls != 0 {
+				t.Fatalf("invalid range queried allocation data %d times", querier.calls)
+			}
+		})
 	}
 }
 

@@ -22,8 +22,25 @@ import (
 	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/portal/internal/portalbin"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
+
+func init() {
+	sqlite.MustRegisterCollationUtf8("tau_timestamp", func(left, right string) int {
+		leftTime, leftErr := time.Parse(time.RFC3339Nano, left)
+		rightTime, rightErr := time.Parse(time.RFC3339Nano, right)
+		if leftErr == nil && rightErr == nil {
+			return leftTime.Compare(rightTime)
+		}
+		if leftErr == nil {
+			return 1
+		}
+		if rightErr == nil {
+			return -1
+		}
+		return strings.Compare(left, right)
+	})
+}
 
 type Store struct {
 	Root     string

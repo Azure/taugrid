@@ -57,6 +57,286 @@ func TestSnapshotEndpointReturnsBoundedJSON(t *testing.T) {
 	}
 }
 
+func TestRunSearchLivenessOutsideSnapshot(t *testing.T) {
+	root := seedExpAPIStore(t, DefaultMaxRuns)
+	ctx := context.Background()
+	store, err := expstore.Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	stamp := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	_, err = store.RecordRunData(ctx, expstore.RecordRunDataOptions{Run: expstore.RunRecord{
+		RunID: "z-in-range", Project: "project-alpha", RunGroupID: "reference-group", State: "running", CreatedAt: stamp, StartedAt: stamp,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := expcockpit.BuildSnapshot(ctx, store, expcockpit.Options{Target: "experiment-alpha", MaxRuns: DefaultMaxRuns, Mode: expcockpit.SnapshotModeSummary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Runs) != DefaultMaxRuns {
+		t.Fatalf("snapshot runs=%d, want %d", len(snapshot.Runs), DefaultMaxRuns)
+	}
+	for _, run := range snapshot.Runs {
+		if run.RunID == "z-in-range" {
+			t.Fatal("fixture must be outside capped snapshot")
+		}
+	}
+	for _, source := range []string{"local", "auto"} {
+		t.Run(source, func(t *testing.T) {
+			server, err := NewServer(Options{StorePath: root, Source: source, KustoNativeQuery: func(context.Context, string) (string, error) { return "[]", nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			url := "/api/v2/stellar/runs?target=experiment-alpha&limit=1&start=" + now.Add(-2*time.Hour).Format(time.RFC3339Nano) + "&end=" + now.Add(-30*time.Minute).Format(time.RFC3339Nano)
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, url, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var result struct {
+				Runs []expcockpit.RunView `json:"runs"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Runs) != 1 || result.Runs[0].RunID != "z-in-range" {
+				t.Fatalf("page membership=%+v, want only z-in-range", result.Runs)
+			}
+			if result.Runs[0].LivenessState != "not_responding" {
+				t.Fatalf("liveness=%q, want not_responding", result.Runs[0].LivenessState)
+			}
+		})
+	}
+}
+
+func TestRunSearchKustoLatestLifecycleHTTP(t *testing.T) {
+	for _, source := range []string{"kusto", "auto"} {
+		for _, ingestion := range []string{"projection", "remote-write"} {
+			for _, failedLookup := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/failure=%t", source, ingestion, failedLookup), func(t *testing.T) {
+					server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 0), Source: source, Workspace: "review", KustoIngestion: ingestion,
+						KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+							if strings.Contains(query, "let run_search_evidence") {
+								if failedLookup {
+									return "", fmt.Errorf("evidence unavailable")
+								}
+								return `[{"workspace_id":"review","project":"history","run_group_id":"group","run_id":"remote","metric_name":"tau/run_status","wall_time":"2026-09-21T11:59:00Z","value":-1,"tags":"{\"tau.status.state\":\"failed\"}"}]`, nil
+							}
+							return `[{"workspace_id":"review","project":"history","run_group_id":"group","run_id":"remote","metric_name":"loss","wall_time":"2026-09-21T11:55:00Z","value":1}]`, nil
+						}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					recorder := httptest.NewRecorder()
+					server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs?project=history&limit=1&start=2026-09-21T11:50:00Z&end=2026-09-21T11:58:00Z", nil))
+					if failedLookup && source == "kusto" {
+						if recorder.Code != http.StatusBadRequest {
+							t.Fatalf("failed Kusto status=%d body=%s", recorder.Code, recorder.Body.String())
+						}
+						return
+					}
+					if recorder.Code != http.StatusOK {
+						t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+					}
+					var page runSearchResponse
+					if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+						t.Fatal(err)
+					}
+					if failedLookup {
+						if len(page.Runs) != 0 || !containsWarning(page.Warnings, "source=auto skipped Kusto") {
+							t.Fatalf("missing explicit source fallback: %+v", page)
+						}
+					} else if len(page.Runs) != 1 || page.Runs[0].RunID != "remote" || page.Runs[0].OutcomeState != "failed" || page.Runs[0].Source != "kusto" {
+						t.Fatalf("missing latest Kusto authority: %+v", page)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRunSearchAutoLatestLifecycleKeepsLocalPrecedence(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failure=%t", fail), func(t *testing.T) {
+			server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1), Source: "auto", Workspace: "sample", KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+				latest := strings.Contains(query, "let run_search_evidence")
+				if latest && fail {
+					return "", fmt.Errorf("latest lookup failed")
+				}
+				var rows []expcockpit.KustoMetricRow
+				for _, runID := range []string{"seed-1", "remote"} {
+					row := expcockpit.KustoMetricRow{WorkspaceID: "sample", Project: "project-alpha", RunGroupID: "reference-group", RunID: runID, MetricName: "loss", WallTime: "2026-09-21T07:00:00Z", Value: 1}
+					if latest {
+						row.MetricName = "tau/run_status"
+						row.Tags = `{"tau.status.state":"failed"}`
+					}
+					rows = append(rows, row)
+				}
+				raw, err := json.Marshal(rows)
+				return string(raw), err
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs?project=project-alpha", nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var page runSearchResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			byID := map[string]sourcedRun{}
+			for _, run := range page.Runs {
+				byID[run.RunID] = run
+			}
+			if byID["seed-1"].Source != "local" || byID["seed-1"].OutcomeState != "succeeded" {
+				t.Fatalf("local precedence lost: %+v", page)
+			}
+			if fail {
+				if len(page.Runs) != 1 || !containsWarning(page.Warnings, "source=auto skipped Kusto") {
+					t.Fatalf("fallback lost: %+v", page)
+				}
+			} else if len(page.Runs) != 2 || byID["remote"].OutcomeState != "failed" || byID["remote"].Source != "kusto" {
+				t.Fatalf("Kusto authority missing: %+v", page)
+			}
+		})
+	}
+}
+
+func TestKustoDiscoveryEffectiveRangeCap(t *testing.T) {
+	for _, sample := range []struct {
+		query string
+		want  int
+	}{
+		{"since=24h", http.StatusBadRequest},
+		{"window=24h", http.StatusBadRequest},
+		{"start=2026-09-17T00:00:00Z&end=2026-09-18T00:00:00Z", http.StatusBadRequest},
+		{"start=2026-09-17T00:00:00Z&end=2026-09-17T01:00:00.000000001Z", http.StatusBadRequest},
+		{"since=1h", http.StatusOK},
+		{"window=1h", http.StatusOK},
+		{"start=2026-09-17T00:00:00Z&end=2026-09-17T01:00:00Z", http.StatusOK},
+		{"window=24h&project=history", http.StatusOK},
+		{"start=2026-09-17T00:00:00Z&end=2026-09-18T00:00:00Z&project=history", http.StatusOK},
+	} {
+		t.Run(sample.query, func(t *testing.T) {
+			calls := 0
+			server, err := NewServer(Options{Source: "kusto", KustoMaxDiscoverySince: "1h",
+				KustoNativeQuery: func(context.Context, string) (string, error) {
+					calls++
+					return "[]", nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments?"+sample.query, nil))
+			if recorder.Code != sample.want {
+				t.Fatalf("status=%d, want %d; queries=%d; body=%s", recorder.Code, sample.want, calls, recorder.Body.String())
+			}
+			if sample.want == http.StatusBadRequest && calls != 0 {
+				t.Fatalf("rejected range executed %d queries", calls)
+			}
+			if sample.want == http.StatusOK && calls == 0 {
+				t.Fatal("accepted range did not query Kusto")
+			}
+		})
+	}
+}
+
+func TestHistoricalRangeQueryPreservesSubsecondBounds(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/stellar/runs?start=2026-09-16T10:00:00.100Z&end=2026-09-16T10:00:00.900Z", nil)
+	runOptions, err := runSearchOptionsFromRequest(request, "sample")
+	if err != nil {
+		t.Fatal(err)
+	}
+	experimentOptions, err := experimentSearchOptionsFromRequest(request, "sample")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bounds := range []struct{ start, end string }{
+		{runOptions.Start, runOptions.End},
+		{experimentOptions.Start, experimentOptions.End},
+	} {
+		start, startErr := time.Parse(time.RFC3339Nano, bounds.start)
+		end, endErr := time.Parse(time.RFC3339Nano, bounds.end)
+		if startErr != nil || endErr != nil || end.Sub(start) != 800*time.Millisecond ||
+			start.Nanosecond() != 100000000 || end.Nanosecond() != 900000000 {
+			t.Fatalf("subsecond bounds were changed: %+v, errors=%v/%v", bounds, startErr, endErr)
+		}
+	}
+}
+
+func TestHistoricalRelativeWindowPrecision(t *testing.T) {
+	for _, window := range []string{"1ns", "1.5s"} {
+		t.Run(window, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments?window="+window, nil)
+			startText, endText, _, err := parseHistoricalRangeQuery(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start, err := time.Parse(time.RFC3339Nano, startText)
+			if err != nil {
+				t.Fatal(err)
+			}
+			end, err := time.Parse(time.RFC3339Nano, endText)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := time.ParseDuration(window)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if end.Sub(start) != want {
+				t.Errorf("serialized interval=%s, want %s", end.Sub(start), want)
+			}
+			server, err := NewServer(Options{Source: "kusto", KustoNativeQuery: func(context.Context, string) (string, error) { return "[]", nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("valid window rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestKustoExperimentSearchAcceptsSubsecondRange(t *testing.T) {
+	for _, ingestion := range []string{"", "remote-write"} {
+		t.Run(ingestion, func(t *testing.T) {
+			var queries []string
+			server, err := NewServer(Options{
+				Source: "kusto", KustoIngestion: ingestion,
+				KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+					queries = append(queries, query)
+					return "[]", nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet,
+				"/api/v2/stellar/experiments?start=2026-09-16T10:00:00.100Z&end=2026-09-16T10:00:00.900Z", nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("positive subsecond range rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if len(queries) == 0 || !strings.Contains(strings.Join(queries, "\n"),
+				"datetime(2026-09-16T10:00:00.1Z) .. datetime(2026-09-16T10:00:00.9Z)") {
+				t.Fatalf("fractional bounds did not reach Kusto transport: %v", queries)
+			}
+		})
+	}
+}
+
 func TestRunSearchEndpointUsesIndexedMetricSummaries(t *testing.T) {
 	root := seedMetricRichExpAPIStore(t)
 	server, err := NewServer(Options{StorePath: root, MaxRuns: 10, MaxMetricRows: 100})
@@ -91,6 +371,55 @@ func TestWorkspaceScopeIsParsedForExperimentAndRunSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("historical range search options", func(t *testing.T) {
+		custom := httptest.NewRequest(http.MethodGet, "/api/stellar/runs?start=2026-09-16T00:00:00Z&end=2026-09-17T09:00:00Z", nil)
+		opts, err := runSearchOptionsFromRequest(custom, "sample")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Start != "2026-09-16T00:00:00Z" || opts.End != "2026-09-17T09:00:00Z" || opts.Since != "" {
+			t.Fatalf("run range options = %+v", opts)
+		}
+		window := httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?window=24h", nil)
+		experimentOpts, err := experimentSearchOptionsFromRequest(window, "sample")
+		if err != nil {
+			t.Fatal(err)
+		}
+		start, startErr := time.Parse(time.RFC3339, experimentOpts.Start)
+		end, endErr := time.Parse(time.RFC3339, experimentOpts.End)
+		if startErr != nil || endErr != nil || end.Sub(start) != 24*time.Hour {
+			t.Fatalf("experiment window options = %+v, errors=%v/%v", experimentOpts, startErr, endErr)
+		}
+	})
+
+	t.Run("historical range rejects invalid input", func(t *testing.T) {
+		for _, raw := range []string{
+			"/api/stellar/runs?window=bad",
+			"/api/stellar/runs?window=24h&start=2026-09-16T00:00:00Z&end=2026-09-17T00:00:00Z",
+			"/api/stellar/runs?since=24h&window=24h",
+			"/api/stellar/runs?window=1h&window=24h",
+			"/api/stellar/runs?start=2026-09-16T00:00:00Z&start=2026-09-16T01:00:00Z&end=2026-09-17T00:00:00Z",
+			"/api/stellar/runs?start=2026-09-16T00:00:00Z",
+			"/api/stellar/runs?start=2026-09-17T00:00:00Z&end=2026-09-16T00:00:00Z",
+		} {
+			if _, err := runSearchOptionsFromRequest(httptest.NewRequest(http.MethodGet, raw, nil), "sample"); err == nil {
+				t.Fatalf("expected range validation error for %s", raw)
+			}
+		}
+	})
+	t.Run("historical range endpoint returns 400", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/stellar/runs?window=bad",
+			"/api/stellar/experiments?start=2026-09-16T00:00:00Z",
+		} {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?workspace=sample", nil)
 	workspace, err := server.resolveWorkspace(req)
@@ -1901,6 +2230,74 @@ func TestSnapshotEndpointOmitsServerSVGPointStrings(t *testing.T) {
 	}
 	if len(snapshot.Sweep.Series) > 0 && snapshot.Sweep.Series[0].Points != "" {
 		t.Fatalf("API snapshot retained sweep SVG points: %+v", snapshot.Sweep.Series[0])
+	}
+}
+
+func TestHistoricalRunSearchOutlivesSummaryLookback(t *testing.T) {
+	var queries []string
+	server, err := NewServer(Options{Source: "kusto", Workspace: "sample", KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+		queries = append(queries, query)
+		if strings.Contains(query, "ago(365d)") {
+			return "[]", nil
+		}
+		return `{"workspace_id":"sample","project":"research","question_id":"archived","run_group_id":"group","run_id":"archived-run","metric_name":"loss","step":1,"wall_time":"2024-01-01T12:00:00Z","value":0.5}`, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs?target=archived&project=research&start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z", nil))
+	var result expstore.RunSearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || len(result.Runs) != 1 || result.Runs[0].RunID != "archived-run" {
+		t.Fatalf("historical membership: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(queries) == 0 || !strings.Contains(queries[0], "datetime(2024-01-01T00:00:00Z)") {
+		t.Fatalf("historical bounds not sent to ADX: %v", queries)
+	}
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/snapshot?target=archived&project=research&mode=summary", nil))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"code":"SUMMARY_NO_DATA"`) || !strings.Contains(queries[len(queries)-1], "ago(365d)") {
+		t.Fatalf("summary lookback contract: status=%d body=%s queries=%v", rec.Code, rec.Body.String(), queries)
+	}
+}
+
+func TestSnapshotSummaryNoDataCode(t *testing.T) {
+	for _, source := range []string{"local", "kusto", "auto"} {
+		t.Run(source, func(t *testing.T) {
+			server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1), Source: source,
+				KustoNativeQuery: func(context.Context, string) (string, error) { return "[]", nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, test := range []struct {
+				query  string
+				status int
+				code   string
+			}{
+				{"target=missing-target&mode=summary", http.StatusNotFound, "SUMMARY_NO_DATA"},
+				{"target=missing-target", http.StatusNotFound, "NOT_FOUND"},
+				{"mode=summary", http.StatusBadRequest, "INVALID_ARGUMENT"},
+				{"target=missing-target&mode=summary&source=invalid", http.StatusBadRequest, "INVALID_ARGUMENT"},
+			} {
+				rec := httptest.NewRecorder()
+				server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/snapshot?"+test.query, nil))
+				var body struct {
+					Code   string `json:"code"`
+					Detail string `json:"detail"`
+					Status int    `json:"status"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != test.status || body.Code != test.code || body.Status != test.status || body.Detail == "" {
+					t.Fatalf("%s: status=%d body=%s; want %d %s", test.query, rec.Code, rec.Body.String(), test.status, test.code)
+				}
+			}
+		})
 	}
 }
 

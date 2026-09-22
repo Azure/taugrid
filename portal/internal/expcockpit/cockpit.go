@@ -3556,27 +3556,13 @@ func attachRunSearchMetadata(ctx context.Context, store *expstore.Store, runs []
 			delete(run.Tags, experiment.LaunchTag)
 		}
 		run.MetricNames = metricSummaryNames(runSummaries)
-		latestMetricAt := time.Time{}
 		if updatedAt := latestMetricSummaryUpdatedAt(runSummaries); updatedAt != "" {
 			run.UpdatedAt = updatedAt
-			latestMetricAt = parseLifecycleTime(updatedAt)
 		}
 		if run.UpdatedAt == "" {
 			run.UpdatedAt = firstNonEmptyString(run.CompletedAt, run.StartedAt, run.CreatedAt)
 		}
-		explicitOutcome := terminalOutcome(run.State)
-		explicitReason := ""
-		if explicitOutcome != "" {
-			explicitReason = "local run record has explicit terminal state " + explicitOutcome
-		}
-		applyLifecycleTruth(run, ResolveLifecycle(LifecycleEvidence{
-			ExplicitOutcome:      explicitOutcome,
-			ExplicitReason:       explicitReason,
-			ExplicitSource:       "local_run_record",
-			TerminalAt:           parseLifecycleTime(run.CompletedAt),
-			LatestMetricAt:       latestMetricAt,
-			LatestControlPlaneAt: parseLifecycleTime(run.StartedAt),
-		}))
+		applyLifecycleTruth(run, LocalRunLifecycle(runRecordFromView(*run), runSummaries))
 	}
 	return runs, backfill.Warnings, nil
 }
