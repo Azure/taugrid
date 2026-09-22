@@ -97,10 +97,52 @@ against ADX.
 
 For a release that includes lifecycle schema management, enable adx-mon first
 and grant its identity the ADX database `Admin` role on `Metrics`. Explicitly
-enabling `lifecycleRecorder.schemaManagement` then creates an adx-mon `ManagementCommand` that
-idempotently creates or updates `Metrics.TauExpRunLifecycle`, its named JSON
-mapping, and `TauExpRunLifecycleDashboardRows()`. The recorder itself retains
-only the `Ingestor` role.
+enable the lifecycle recorder and schema management together. The schema
+template is intentionally gated by both
+`lifecycleRecorder.enabled=true` and
+`lifecycleRecorder.schemaManagement.enabled=true`; this chart does not expose
+a schema-only mode. The recorder also requires an existing target namespace,
+cluster label, ADX endpoint, dedicated ServiceAccount, workload identity, and
+read-only workload RBAC:
+
+```yaml
+lifecycleRecorder:
+  enabled: true
+  targetNamespace: <workspace-namespace>
+  cluster: <cluster-name>
+  kusto:
+    endpoint: https://<cluster>.<region>.kusto.windows.net
+    database: Metrics
+    table: TauExpRunLifecycle
+  workloadIdentity:
+    enabled: true
+  serviceAccount:
+    create: true
+    name: tau-lifecycle-recorder
+    annotations:
+      azure.workload.identity/client-id: <recorder-ingestion-client-id>
+  rbac:
+    create: true
+  schemaManagement:
+    enabled: true
+    namespace: <adx-mon-namespace>
+    resourceName: taugrid-lifecycle-schema
+```
+
+These values create the recorder Deployment plus an adx-mon
+`ManagementCommand` that idempotently creates or updates
+`Metrics.TauExpRunLifecycle`, its named JSON mapping, and
+`TauExpRunLifecycleDashboardRows()`. The recorder identity retains only the
+`Ingestor` role; the separate adx-mon identity executes the schema command.
+Render the exact objects before deployment:
+
+```bash
+helm template taugrid-core charts/taugrid-core \
+  --namespace tau-system \
+  --values <lifecycle-values.yaml> |
+  yq 'select(.kind == "ManagementCommand" or
+    (.kind == "Deployment" and .metadata.name == "tau-lifecycle-recorder"))'
+```
 
 Check that automation before enabling a Kusto-backed Portal capability:
 
@@ -148,12 +190,12 @@ functions:
       enabled: true
 ```
 
-Apply the lifecycle schema from `taugrid-core` with
-`lifecycleRecorder.schemaManagement.enabled=true`, or provision the identical
-`TauExpRunLifecycle` contract through platform-owned automation. Wait for both
-adx-mon ManagementCommands and the lifecycle schema command to succeed before
-routing Portal traffic or enabling collector sidecars. Verify the rendered
-objects and ADX assets:
+Apply the lifecycle schema from `taugrid-core` with the complete recorder values
+above, or leave both recorder/schema switches disabled and provision the
+identical `TauExpRunLifecycle` contract through platform-owned automation. Wait
+for both adx-mon ManagementCommands and the lifecycle schema command to succeed
+before routing Portal traffic or enabling collector sidecars. Verify the
+rendered objects and ADX assets:
 
 ```bash
 kubectl -n <adx-mon-namespace> get managementcommands,functions
@@ -186,9 +228,10 @@ for every workload using `adx-required`.
 
 Release owners must publish immutable `tau`, `taugrid-portal`, and
 `taugrid-metrics-collector` images from the same reviewed source stack. The
-`tau-core-controller` image is not part of this telemetry cutover unless its
-source changed independently. Hand consumers the collector digest, tested ADX
-endpoint, database, ServiceAccount subject, and non-secret identity client ID.
-The collector is a `tau run` workload sidecar, not a Helm-managed Deployment;
-there is no chart-side runtime selector. Then configure
-[Portal](../enable-portal/) or adx-mon.
+coordinated 0.4.3 chart train also references a publishable
+`tau-core-controller:0.4.3` artifact even though this telemetry change does not
+modify the controller binary's source dependencies. Hand consumers the
+collector digest, tested ADX endpoint, database, ServiceAccount subject, and
+non-secret identity client ID. The collector is a `tau run` workload sidecar,
+not a Helm-managed Deployment; there is no chart-side runtime selector. Then
+configure [Portal](../enable-portal/) or adx-mon.
