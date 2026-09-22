@@ -18,10 +18,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=9.1.1",
-    "ruff==0.16.7",
+    "ruff==0.16.8",
 ]
 lightning = [
-    "lightning>=2.6.5",
+    "lightning>=2.6.6",
 ]
 
 [tool.setuptools.packages.find]
