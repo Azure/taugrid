@@ -47,6 +47,10 @@ function Metric({ label, value, detail, tone }: { label: string; value: ReactNod
   </div>;
 }
 
+function gpuCountLabel(count: number) {
+  return `${count} GPU${count === 1 ? '' : 's'}`;
+}
+
 function CapacityBar({ allocated, available, total }: { allocated: number | null; available: number | null; total: number }) {
   const allocationKnown = allocated !== null && available !== null;
   const allocatedPct = allocationKnown && total > 0 ? Math.max(0, Math.min(100, allocated / total * 100)) : 0;
@@ -70,7 +74,7 @@ function SiteSelector({ sites, selected, onSelect }: { sites: SiteGroup[]; selec
       <span className="overview-site-status">{site.ready === site.nodes.length ? 'Ready' : `${site.ready}/${site.nodes.length} ready`}</span>
       <strong>{site.label}</strong>
       <small>{site.region}</small>
-      <span className="overview-site-total">{site.gpus} GPUs</span>
+      <span className="overview-site-total">{gpuCountLabel(site.gpus)}</span>
       <CapacityBar allocated={site.allocated} available={site.available} total={site.gpus}/>
     </button>)}
   </div>;
@@ -96,7 +100,7 @@ function PoolDetails({ site }: { site?: SiteGroup }) {
       const product = nodes.find(node => node.gpuProduct)?.gpuProduct || nodes.find(node => node.sku)?.sku || 'GPU model unknown';
       return <ScopedLink key={name} to={'/portal/fleet?pool=' + encodeURIComponent(name)} className="overview-pool">
         <span><strong>{name}</strong><small>{product}</small></span>
-        <span className="overview-pool-capacity"><small>{gpus} GPUs</small><CapacityBar allocated={allocated} available={available} total={gpus}/></span>
+        <span className="overview-pool-capacity"><small>{gpuCountLabel(gpus)}</small><CapacityBar allocated={allocated} available={available} total={gpus}/></span>
       </ScopedLink>;
     })}
   </div>;
