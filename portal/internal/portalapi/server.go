@@ -259,7 +259,7 @@ func NewServer(opts Options) (*Server, error) {
 			Name:              singleWorkspace,
 			Cluster:           singleWorkspaceCluster,
 			Namespace:         firstNonEmpty(opts.Runs.Namespace, opts.Ray.Namespace),
-			Source:            canonicalStellarSource(opts.Stellar),
+			Source:            opts.Stellar.Source,
 			AuthorizationMode: workspaceAuthorizationClusterWide,
 			ExperimentsURL:    "/stellar",
 			Availability:      workspaceAvailabilityAvailable,
@@ -275,12 +275,12 @@ func kustoStellarAvailable(opts expapi.Options) bool {
 		opts.KustoNativeQuery != nil
 }
 
-func canonicalStellarSource(opts expapi.Options) string {
-	source := strings.ToLower(strings.TrimSpace(opts.Source))
+func canonicalStellarSource(source string, kustoAvailable bool) string {
+	source = strings.ToLower(strings.TrimSpace(source))
 	if source != "" && source != "auto" {
 		return source
 	}
-	if source == "auto" && kustoStellarAvailable(opts) {
+	if source == "auto" && kustoAvailable {
 		return "kusto"
 	}
 	return "local"

@@ -88,7 +88,7 @@ func TestLocalSearchCursorAppliesBeforeThousandRowLimit(t *testing.T) {
 	}
 }
 
-func TestLocalSearchCursorOrdersMixedTimestampPrecisionChronologically(t *testing.T) {
+func TestLocalSearchCursorPreservesSubMillisecondPrecision(t *testing.T) {
 	ctx := context.Background()
 	store, _, err := Init(ctx, filepath.Join(t.TempDir(), "mixed-precision-cursor-store"), InitOptions{
 		Name: "initial", Project: "initial", Group: "initial",
@@ -111,8 +111,8 @@ func TestLocalSearchCursorOrdersMixedTimestampPrecisionChronologically(t *testin
 		runID        string
 		at           string
 	}{
-		{experimentID: "whole", runID: "whole", at: "2026-09-18T12:00:00Z"},
-		{experimentID: "fractional", runID: "fractional", at: "2026-09-18T12:00:00.5Z"},
+		{experimentID: "a-older", runID: "a-older", at: "2026-09-18T12:00:00.1231Z"},
+		{experimentID: "z-newer", runID: "z-newer", at: "2026-09-18T12:00:00.1232Z"},
 	} {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO experiments(
 			experiment_id, project, name, source, created_at, updated_at
@@ -135,7 +135,7 @@ func TestLocalSearchCursorOrdersMixedTimestampPrecisionChronologically(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(firstRuns.Runs) != 1 || firstRuns.Runs[0].RunID != "fractional" {
+	if len(firstRuns.Runs) != 1 || firstRuns.Runs[0].RunID != "z-newer" {
 		t.Fatalf("first run page=%+v", firstRuns.Runs)
 	}
 	secondRuns, err := store.SearchRuns(ctx, RunSearchOptions{
@@ -145,7 +145,7 @@ func TestLocalSearchCursorOrdersMixedTimestampPrecisionChronologically(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(secondRuns.Runs) != 1 || secondRuns.Runs[0].RunID != "whole" {
+	if len(secondRuns.Runs) != 1 || secondRuns.Runs[0].RunID != "a-older" {
 		t.Fatalf("second run page=%+v", secondRuns.Runs)
 	}
 
@@ -154,7 +154,7 @@ func TestLocalSearchCursorOrdersMixedTimestampPrecisionChronologically(t *testin
 		t.Fatal(err)
 	}
 	if len(firstExperiments.Experiments) != 1 ||
-		firstExperiments.Experiments[0].ExperimentID != "fractional" {
+		firstExperiments.Experiments[0].ExperimentID != "z-newer" {
 		t.Fatalf("first experiment page=%+v", firstExperiments.Experiments)
 	}
 	secondExperiments, err := store.SearchExperiments(ctx, ExperimentSearchOptions{
@@ -166,7 +166,7 @@ func TestLocalSearchCursorOrdersMixedTimestampPrecisionChronologically(t *testin
 		t.Fatal(err)
 	}
 	if len(secondExperiments.Experiments) != 1 ||
-		secondExperiments.Experiments[0].ExperimentID != "whole" {
+		secondExperiments.Experiments[0].ExperimentID != "a-older" {
 		t.Fatalf("second experiment page=%+v", secondExperiments.Experiments)
 	}
 }

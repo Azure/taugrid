@@ -627,6 +627,64 @@ func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	}
 }
 
+func TestV2LocalRunPaginationPreservesNanosecondOrdering(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "nanosecond-pagination-store")
+	store, _, err := expstore.Init(ctx, root, expstore.InitOptions{
+		Name: "experiment-a", Project: "project-a", Group: "group-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []expstore.RunRecord{
+		{
+			RunID: "a-older", Project: "project-a", ExperimentID: "experiment-a",
+			RunGroupID: "group-a", State: "succeeded", CreatedAt: "2026-09-18T12:00:00.1231Z",
+		},
+		{
+			RunID: "z-newer", Project: "project-a", ExperimentID: "experiment-a",
+			RunGroupID: "group-a", State: "succeeded", CreatedAt: "2026-09-18T12:00:00.1232Z",
+		},
+	} {
+		if _, err := store.RecordRunData(ctx, expstore.RecordRunDataOptions{Run: run}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(Options{StorePath: root, Source: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := httptest.NewRecorder()
+	server.Handler().ServeHTTP(first, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/experiment-a/runs?project=project-a&limit=1", nil))
+	var firstPage v2RunListResponse
+	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &firstPage) != nil {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	if len(firstPage.Runs) != 1 || firstPage.Runs[0].RunID != "z-newer" || firstPage.NextCursor == "" {
+		t.Fatalf("first page=%+v", firstPage)
+	}
+
+	second := httptest.NewRecorder()
+	server.Handler().ServeHTTP(second, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/experiment-a/runs?project=project-a&limit=1&cursor="+
+			url.QueryEscape(firstPage.NextCursor),
+		nil,
+	))
+	var secondPage v2RunListResponse
+	if second.Code != http.StatusOK || json.Unmarshal(second.Body.Bytes(), &secondPage) != nil {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	if len(secondPage.Runs) != 1 || secondPage.Runs[0].RunID != "a-older" {
+		t.Fatalf("second page=%+v", secondPage)
+	}
+}
+
 func TestV2ExactRunDetailAndMetricCatalogSupportLifecycleOnlyRuns(t *testing.T) {
 	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
 	if err != nil {

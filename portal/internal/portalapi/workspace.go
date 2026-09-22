@@ -640,7 +640,11 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 					return
 				}
 			}
-			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, s.singleWorkspaceScope.WorkspaceID, s.singleWorkspaceScope.Source)))
+			source := s.singleWorkspaceScope.Source
+			if expapi.IsCanonicalV2Read(r.URL.Path) {
+				source = canonicalStellarSource(source, s.stellarKustoAvailable)
+			}
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, s.singleWorkspaceScope.WorkspaceID, source)))
 			return
 		}
 		scope, err := s.resolveWorkspaceScope(r)
@@ -729,7 +733,11 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			return
 		}
 		if target.Host == "" {
-			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, target.Query(), scope.WorkspaceID, scope.Source)))
+			source := scope.Source
+			if expapi.IsCanonicalV2Read(r.URL.Path) {
+				source = canonicalStellarSource(source, s.stellarKustoAvailable)
+			}
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, target.Query(), scope.WorkspaceID, source)))
 			return
 		}
 		http.Redirect(w, r, workspaceExperimentRedirectURL(target, r, scope.WorkspaceID, scope.Source), http.StatusTemporaryRedirect)

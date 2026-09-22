@@ -312,9 +312,9 @@ func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchO
 		if err != nil {
 			return nil, err
 		}
-		cursorAt := "coalesce(max(julianday(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at))), julianday(e.updated_at))"
+		cursorAt := "coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at) COLLATE tau_rfc3339_nano), e.updated_at) COLLATE tau_rfc3339_nano"
 		having = fmt.Sprintf(`
-HAVING %s < julianday(?) OR (%s = julianday(?) AND (e.project > ? OR (e.project = ? AND e.experiment_id > ?)))`,
+HAVING %s < ? COLLATE tau_rfc3339_nano OR (%s = ? COLLATE tau_rfc3339_nano AND (e.project > ? OR (e.project = ? AND e.experiment_id > ?)))`,
 			cursorAt, cursorAt)
 		args = append(args, opts.CursorAt, opts.CursorAt, project, project, experimentID)
 	}
@@ -326,7 +326,7 @@ LEFT JOIN runs r ON r.run_id = re.run_id
 `+where+`
 GROUP BY e.experiment_id, e.project, e.name, e.description, e.source, e.created_at, e.updated_at
 `+having+`
-ORDER BY coalesce(max(julianday(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at))), julianday(e.updated_at)) DESC, e.project ASC, e.experiment_id ASC
+ORDER BY coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at) COLLATE tau_rfc3339_nano), e.updated_at) COLLATE tau_rfc3339_nano DESC, e.project ASC, e.experiment_id ASC
 LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
