@@ -55,6 +55,7 @@ var runLifecycleIngestionColumns = []RunLifecycleIngestionColumn{
 	{Column: "workspace_id", DataType: "string", Path: "$.workspace_id"},
 	{Column: "result_scope", DataType: "string", Path: "$.result_scope"},
 	{Column: "project", DataType: "string", Path: "$.project"},
+	{Column: "experiment_id", DataType: "string", Path: "$.experiment_id"},
 	{Column: "run_group_id", DataType: "string", Path: "$.run_group_id"},
 	{Column: "tags", DataType: "dynamic", Path: "$.tags"},
 	{Column: "owning_resource_kind", DataType: "string", Path: "$.owning_resource_kind"},
@@ -163,6 +164,7 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
     workspace_id: string,
     result_scope: string,
     ['project']: string,
+    experiment_id: string,
     run_group_id: string,
     tags: dynamic,
     owning_resource_kind: string,
@@ -211,7 +213,7 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
 | summarize arg_max(observed_at, *) by cluster, namespace, durable_identity, is_terminal
 | extend terminal_rank=iff(is_terminal, 1, 0)
 | summarize arg_max(terminal_rank, *) by cluster, namespace, durable_identity
-| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
+| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], experiment_id, run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
 }
 `, defaultRunLifecycleDashboardFunction, table)
 	return prefix + mapping + "\n" + suffix, nil

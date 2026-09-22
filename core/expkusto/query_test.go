@@ -347,7 +347,7 @@ let latest_by_state = scoped
 latest_by_state
 | extend terminal_rank=iff(is_terminal, 1, 0)
 | summarize arg_max(terminal_rank, *) by cluster, namespace, durable_identity
-| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
+| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], experiment_id, run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
 | order by observed_at desc, cluster asc, namespace asc, durable_id asc
 | take 25
 `
@@ -577,6 +577,7 @@ func TestBuildSchemaKQLDocumentsDashboardContracts(t *testing.T) {
 		"durable_id: string",
 		"workspace_id: string",
 		"result_scope: string",
+		"experiment_id: string",
 		"local_queue: string",
 		"cluster_queue: string",
 		"workload_kind: string",
@@ -607,6 +608,7 @@ func TestRunLifecycleIngestionMappingKQLIsSchemaOwnedAndIdempotent(t *testing.T)
 		".create-or-alter table TauExpRunLifecycle ingestion json mapping",
 		RunLifecycleIngestionMappingName,
 		`"column":"observed_at","datatype":"datetime","path":"$.observed_at"`,
+		`"column":"experiment_id","datatype":"string","path":"$.experiment_id"`,
 		`"column":"tags","datatype":"dynamic","path":"$.tags"`,
 		`"column":"generation","datatype":"long","path":"$.generation"`,
 	} {

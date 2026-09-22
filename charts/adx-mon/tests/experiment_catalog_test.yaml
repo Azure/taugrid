@@ -157,6 +157,24 @@ tests:
           path: spec.body
           pattern: '(^|\n)[[:space:]]+project ='
 
+  - it: retains lifecycle-only runs with persisted experiment identities
+    template: templates/functions/tau-exp-run-catalog-rows.yaml
+    set:
+      functions.items.tauExpRunCatalogRows.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.body
+          pattern: "lifecycle_experiment_id = tostring\\(experiment_id\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "experiment_id = iff\\([\\s\\S]*isnotempty\\(lifecycle_experiment_id\\),[\\s\\S]*lifecycle_experiment_id,[\\s\\S]*experiment_id_count == 1"
+      - matchRegex:
+          path: spec.body
+          pattern: "where isnotempty\\(workspace_id\\) and isnotempty\\(\\['project'\\]\\) and isnotempty\\(experiment_id\\)"
+      - matchRegex:
+          path: spec.body
+          pattern: "catalog_source = case\\([\\s\\S]*'lifecycle'\\)"
+
   - it: suppresses run catalog when functions are globally disabled
     template: templates/functions/tau-exp-run-catalog-rows.yaml
     set:
