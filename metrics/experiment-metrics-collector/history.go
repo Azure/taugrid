@@ -25,6 +25,7 @@ type SourceCheckpoint struct {
 	Sequence     uint64 `json:"sequence"`
 	ChunkDigest  string `json:"chunk_digest,omitempty"`
 	Lines        int    `json:"lines"`
+	Baseline     bool   `json:"baseline,omitempty"`
 	UpdatedAt    string `json:"updated_at"`
 }
 
@@ -99,9 +100,6 @@ func readSource(
 	if checkpoint.Path != "" {
 		if checkpoint.Path != path {
 			return sourceRead{}, fmt.Errorf("checkpoint path mismatch: %q != %q", checkpoint.Path, path)
-		}
-		if checkpoint.FileID != fileID {
-			return sourceRead{}, fmt.Errorf("history file identity changed for %s", path)
 		}
 		if checkpoint.Offset < 0 || checkpoint.Offset > info.Size() {
 			return sourceRead{}, fmt.Errorf("checkpoint offset %d is outside %s size %d", checkpoint.Offset, path, info.Size())
@@ -178,7 +176,8 @@ func baselineSource(path string, sequence uint64, syncSource func(*os.File) erro
 	}
 	return SourceCheckpoint{
 		Path: path, FileID: fileIdentity(info), Offset: end, PrefixSHA256: prefix,
-		Sequence: sequence, Lines: bytes.Count(raw[:end], []byte{'\n'}), UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Sequence: sequence, Lines: bytes.Count(raw[:end], []byte{'\n'}), Baseline: true,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}, nil
 }
 

@@ -322,34 +322,25 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 
 	for iteration := 1; ; iteration++ {
+		completed, err := fileExists(r.options.CompletionFile)
+		if err != nil {
+			return result, err
+		}
+		if completed {
+			return r.finishCompleted(ctx, checkpointPath, checkpoints, result)
+		}
 		if err := r.drain(ctx, &checkpoints, checkpointPath, &result, false); err != nil {
 			if ctx.Err() != nil {
 				return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
 			}
 			return result, err
 		}
-		completed, err := fileExists(r.options.CompletionFile)
+		completed, err = fileExists(r.options.CompletionFile)
 		if err != nil {
 			return result, err
 		}
 		if completed {
-			if err := r.drain(ctx, &checkpoints, checkpointPath, &result, true); err != nil {
-				if ctx.Err() != nil {
-					return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
-				}
-				return result, err
-			}
-			if err := r.publishStatus(ctx, &checkpoints, &result); err != nil {
-				if ctx.Err() != nil {
-					return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
-				}
-				return result, err
-			}
-			result.Completed = true
-			if err := r.publishDone(); err != nil {
-				return result, err
-			}
-			return result, nil
+			return r.finishCompleted(ctx, checkpointPath, checkpoints, result)
 		}
 		if !r.options.Watch || (r.options.MaxIterations > 0 && iteration >= r.options.MaxIterations) {
 			return result, nil
@@ -374,7 +365,7 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 		present[path] = true
 	}
 	for path := range checkpoints.Sources {
-		if !present[path] {
+		if !present[path] && !checkpoints.Sources[path].Baseline {
 			return fmt.Errorf("checkpointed history source disappeared: %s", path)
 		}
 	}
@@ -568,6 +559,41 @@ func (r *Runner) publishCompletion(
 	result.Chunks++
 	result.Events++
 	return nil
+}
+
+func (r *Runner) finishCompleted(
+	ctx context.Context,
+	checkpointPath string,
+	checkpoints checkpointSet,
+	result Result,
+) (Result, error) {
+	timeout, err := r.terminalDrainTimeout()
+	if err != nil {
+		return result, err
+	}
+	info, err := os.Stat(r.options.CompletionFile)
+	if err != nil {
+		return result, err
+	}
+	finalizeCtx, cancel := context.WithDeadline(ctx, info.ModTime().Add(timeout))
+	defer cancel()
+	if err := r.drain(finalizeCtx, &checkpoints, checkpointPath, &result, true); err != nil {
+		if ctx.Err() != nil {
+			return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
+		}
+		return result, fmt.Errorf("final workload history drain: %w", err)
+	}
+	if err := r.publishStatus(finalizeCtx, &checkpoints, &result); err != nil {
+		if ctx.Err() != nil {
+			return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
+		}
+		return result, fmt.Errorf("publish workload terminal status: %w", err)
+	}
+	result.Completed = true
+	if err := r.publishDone(); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func (r *Runner) finishCancelled(
