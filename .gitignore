@@ -37,3 +37,6 @@ charts/taugrid/charts
 # Portal frontend dependencies and local build metadata
 portal/frontend/node_modules/
 portal/frontend/*.tsbuildinfo
+
+# Impeccable local detector cache
+.impeccable/hook.cache.json
