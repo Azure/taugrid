@@ -35,6 +35,7 @@ describe('Platform overview', () => {
         nodes: [
           { name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
           { name: 'gpu-b', site: 'east', region: 'eastus2', agentPool: 'h100', gpuCapacity: 8, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
+          { name: 'system-a', site: 'west', region: 'westus3', agentPool: 'system', gpuCapacity: 0, gpuAvailable: 0, ready: true },
         ],
       }));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ window: '15m0s', gpus: [] }));
@@ -64,6 +65,7 @@ describe('Platform overview', () => {
     expect(within(costBoard).queryByText('987.6')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
     expect(screen.getByRole('button', { name: /west/i })).toBeVisible();
+    expect(screen.queryByText('system')).not.toBeInTheDocument();
   });
 
   it('emits resolvable canonical run links for workload tracking', () => {

@@ -20,7 +20,7 @@ interface SiteGroup {
 
 function groupSites(snapshot: Nodes | undefined): SiteGroup[] {
   const groups = new Map<string, FleetNode[]>();
-  for (const node of snapshot?.nodes || []) {
+  for (const node of (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0)) {
     const label = node.site || node.region || 'Unassigned';
     groups.set(label, [...(groups.get(label) || []), node]);
   }
@@ -181,7 +181,7 @@ function Atlas({ platform, data, nodes, cluster, cost, nodeError, clusterError, 
       <section className="overview-map" aria-label="Infrastructure topology">
         <header>
           <div><h2>Infrastructure topology</h2><p>Follow capacity from GPU sites through admission to active workloads.</p></div>
-          <span>{sites.length} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.nodes?.length ?? 0} nodes</span>
+          <span>{sites.length} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.nodes?.filter(node => node.gpuCapacity > 0).length ?? 0} GPU nodes</span>
         </header>
         <div className="overview-flow">
           <div className="overview-fleet-stage">
