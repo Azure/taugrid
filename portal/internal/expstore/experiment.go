@@ -312,9 +312,9 @@ func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchO
 		if err != nil {
 			return nil, err
 		}
-		cursorAt := "coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at)), e.updated_at)"
+		cursorAt := "coalesce(max(julianday(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at))), julianday(e.updated_at))"
 		having = fmt.Sprintf(`
-HAVING %s < ? OR (%s = ? AND (e.project > ? OR (e.project = ? AND e.experiment_id > ?)))`,
+HAVING %s < julianday(?) OR (%s = julianday(?) AND (e.project > ? OR (e.project = ? AND e.experiment_id > ?)))`,
 			cursorAt, cursorAt)
 		args = append(args, opts.CursorAt, opts.CursorAt, project, project, experimentID)
 	}
@@ -326,7 +326,7 @@ LEFT JOIN runs r ON r.run_id = re.run_id
 `+where+`
 GROUP BY e.experiment_id, e.project, e.name, e.description, e.source, e.created_at, e.updated_at
 `+having+`
-ORDER BY coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at)), e.updated_at) DESC, e.project ASC, e.experiment_id ASC
+ORDER BY coalesce(max(julianday(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at))), julianday(e.updated_at)) DESC, e.project ASC, e.experiment_id ASC
 LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err
@@ -378,7 +378,7 @@ func (s *Store) experimentSummary(ctx context.Context, experiment ExperimentReco
 	for _, run := range runs {
 		stateCounts[normalizeRunState(run.State)]++
 		groupIDs[run.RunGroupID] = true
-		if candidate := latestRunTimestamp(run); candidate > latestRunAt {
+		if candidate := latestRunTimestamp(run); timestampAfter(candidate, latestRunAt) {
 			latestRunAt = candidate
 		}
 		for _, summary := range metricSummaries[run.RunID] {
@@ -399,6 +399,15 @@ func (s *Store) experimentSummary(ctx context.Context, experiment ExperimentReco
 		LatestRunAt:      latestRunAt,
 		MetricNames:      sortedBoolKeys(metricNames),
 	}, nil
+}
+
+func timestampAfter(candidate, current string) bool {
+	candidateTime, candidateErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(candidate))
+	currentTime, currentErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(current))
+	if candidateErr != nil {
+		return false
+	}
+	return currentErr != nil || candidateTime.After(currentTime)
 }
 
 func latestRunTimestamp(run RunRecord) string {

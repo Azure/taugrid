@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -149,18 +148,6 @@ func TestKustoCatalogAndSeriesKeepDuplicateRunIDsProjectScoped(t *testing.T) {
 	}
 	if !strings.Contains(query, `'project-b'`) || strings.Contains(query, `'project-a'`) {
 		t.Fatalf("series query was not project scoped:\n%s", query)
-	}
-}
-
-func TestKustoCatalogRequiresLiveQueryTransport(t *testing.T) {
-	source := KustoSource{MetricsFile: filepath.Join(t.TempDir(), "legacy-metrics.jsonl")}
-	if _, err := source.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{Limit: 10}); err == nil ||
-		!strings.Contains(err.Error(), "live Kusto query transport") {
-		t.Fatalf("SearchCatalogExperiments error = %v", err)
-	}
-	if _, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{Limit: 10}); err == nil ||
-		!strings.Contains(err.Error(), "live Kusto query transport") {
-		t.Fatalf("SearchCatalogRuns error = %v", err)
 	}
 }
 
@@ -367,6 +354,26 @@ func TestKustoCatalogMinStepAppliesBeforeLifecycleFilter(t *testing.T) {
 	allRuns := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{MinStep: &required})
 	if len(allRuns) != 1 || allRuns[0].LifecycleState != "incomplete" || allRuns[0].Successful {
 		t.Fatalf("MinStep did not reclassify typed run before filtering: %+v", allRuns)
+	}
+}
+
+func TestKustoCatalogLatestFilterKeepsSucceededRun(t *testing.T) {
+	latestStep := int64(10)
+	runRows := []KustoMetricRow{{
+		Project: "project-a", ExperimentID: "experiment-a", RunID: "run-a", State: "succeeded",
+	}}
+	metricRows := []KustoMetricRow{{
+		Project: "project-a", ExperimentID: "experiment-a", RunID: "run-a",
+		MetricName: "loss", LatestStep: &latestStep, LatestValue: catalogFloat64Pointer(0.25),
+	}}
+	runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{
+		Lifecycle: "succeeded",
+		MetricFilters: []expstore.MetricFilter{{
+			MetricName: "loss", Field: "latest", Op: "<", Value: 0.5,
+		}},
+	})
+	if len(runs) != 1 || runs[0].LifecycleState != "succeeded" || !runs[0].Successful {
+		t.Fatalf("authoritative catalog latest filter removed succeeded run: %+v", runs)
 	}
 }
 

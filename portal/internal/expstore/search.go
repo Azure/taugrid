@@ -311,7 +311,7 @@ func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (stri
 		if err != nil {
 			return "", nil, err
 		}
-		clauses = append(clauses, `(r.created_at < ? OR (r.created_at = ? AND (r.project > ? OR (r.project = ? AND r.run_id > ?))))`)
+		clauses = append(clauses, `(julianday(r.created_at) < julianday(?) OR (julianday(r.created_at) = julianday(?) AND (r.project > ? OR (r.project = ? AND r.run_id > ?))))`)
 		args = append(args, opts.CursorAt, opts.CursorAt, project, project, runID)
 	}
 	if opts.Query != "" {
@@ -375,7 +375,7 @@ SELECT r.run_id, r.project, r.experiment_id, r.run_group_id,
 FROM runs r
 LEFT JOIN run_groups g ON g.run_group_id = r.run_group_id
 ` + where + `
-ORDER BY r.created_at DESC, r.project ASC, r.run_id ASC`
+ORDER BY julianday(r.created_at) DESC, r.project ASC, r.run_id ASC`
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 		if offset > 0 {

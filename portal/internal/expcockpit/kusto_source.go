@@ -646,12 +646,15 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 // TauExpSeriesCatalogRows(). Helm selects the function implementations; Portal
 // neither knows nor models alternate catalog implementations.
 func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
-	if !s.hasRemoteQuery() {
-		return expstore.ExperimentSearchResult{}, fmt.Errorf("typed experiment catalog requires a live Kusto query transport")
-	}
 	opts = normalizeKustoExperimentSearchOptions(opts)
 	if err := validateKustoCatalogMetricFilters(opts.MetricFilters); err != nil {
 		return expstore.ExperimentSearchResult{}, err
+	}
+	if !s.hasRemoteQuery() {
+		if strings.TrimSpace(s.MetricsFile) != "" {
+			return s.SearchExperiments(ctx, opts)
+		}
+		return expstore.ExperimentSearchResult{}, fmt.Errorf("typed experiment catalog requires a live Kusto query transport or Kusto metrics file")
 	}
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
@@ -818,12 +821,15 @@ func catalogExperimentSummaries(rows []KustoMetricRow, runs []expstore.RunSearch
 // TauExpSeriesCatalogRows() for metric names and summaries. The stable
 // functions encapsulate Helm-time implementation selection.
 func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
-	if !s.hasRemoteQuery() {
-		return expstore.RunSearchResult{}, fmt.Errorf("typed run catalog requires a live Kusto query transport")
-	}
 	opts = normalizeKustoRunSearchOptions(opts)
 	if err := validateKustoCatalogMetricFilters(opts.MetricFilters); err != nil {
 		return expstore.RunSearchResult{}, err
+	}
+	if !s.hasRemoteQuery() {
+		if strings.TrimSpace(s.MetricsFile) != "" {
+			return s.SearchRuns(ctx, opts)
+		}
+		return expstore.RunSearchResult{}, fmt.Errorf("typed run catalog requires a live Kusto query transport or Kusto metrics file")
 	}
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
@@ -1006,7 +1012,7 @@ func catalogRunSearchRuns(runRows, metricRows []KustoMetricRow, opts expstore.Ru
 		}
 		if lifecycle == "succeeded" {
 			classification := expstore.ClassifyRun(run.RunRecord, run.Tags, run.Metrics, expstore.SuccessOptions{
-				Tags: opts.Tags, MetricFilters: opts.MetricFilters, MinStep: opts.MinStep,
+				Tags: run.Tags, MinStep: opts.MinStep,
 			})
 			run.LifecycleState = classification.LifecycleState
 			run.Successful = classification.Successful
@@ -2223,6 +2229,9 @@ func kustoRunSearchRuns(rows []KustoMetricRow, opts expstore.RunSearchOptions, s
 }
 
 func kustoRunSearchMatches(run expstore.RunSearchRun, opts expstore.RunSearchOptions) bool {
+	if opts.ExactRunID != "" && run.RunID != opts.ExactRunID {
+		return false
+	}
 	if target := strings.TrimSpace(opts.Target); target != "" && run.RunID != target && run.RunGroupID != target && run.ExperimentID != target {
 		return false
 	}

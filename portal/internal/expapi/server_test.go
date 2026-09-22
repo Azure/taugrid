@@ -519,6 +519,52 @@ func TestV2CatalogFunctionsSurfaceFailure(t *testing.T) {
 	}
 }
 
+func TestV2CanonicalKustoReadsFromMetricsFileWithoutLiveTransport(t *testing.T) {
+	metricsFile := filepath.Join(t.TempDir(), "typed-compatible-metrics.jsonl")
+	if err := os.WriteFile(metricsFile, []byte(
+		`{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-a","run_group_id":"group-a","run_id":"run-a","metric_name":"loss","step":10,"wall_time":"2026-09-18T12:00:00Z","value":0.25}`+"\n"+
+			`{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-a","run_group_id":"group-a","run_id":"run-a","metric_name":"tau/run_status","step":10,"wall_time":"2026-09-18T12:00:01Z","value":1,"tags":"{\"tau.status.state\":\"succeeded\"}"}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(Options{
+		Source: "kusto", Workspace: "workspace-a", KustoMetricsFile: metricsFile,
+		KustoAllowedProjects: []string{"project-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	experiments := httptest.NewRecorder()
+	server.Handler().ServeHTTP(experiments, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/search?project=project-a", nil))
+	if experiments.Code != http.StatusOK {
+		t.Fatalf("experiment search status=%d body=%s", experiments.Code, experiments.Body.String())
+	}
+	var experimentResponse v2ExperimentSearchResponse
+	if err := json.Unmarshal(experiments.Body.Bytes(), &experimentResponse); err != nil {
+		t.Fatal(err)
+	}
+	if len(experimentResponse.Experiments) != 1 ||
+		experimentResponse.Experiments[0].ExperimentID != "experiment-a" {
+		t.Fatalf("experiment search response=%+v", experimentResponse)
+	}
+
+	detail := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detail, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/runs/run-a?project=project-a&target=experiment-a", nil))
+	if detail.Code != http.StatusOK {
+		t.Fatalf("run detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+	var detailResponse v2RunDetailResponse
+	if err := json.Unmarshal(detail.Body.Bytes(), &detailResponse); err != nil {
+		t.Fatal(err)
+	}
+	if detailResponse.Run.RunID != "run-a" || detailResponse.Run.ExperimentID != "experiment-a" {
+		t.Fatalf("run detail response=%+v", detailResponse)
+	}
+}
+
 func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 3)})
 	if err != nil {
