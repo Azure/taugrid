@@ -89,6 +89,17 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+type contextBlockingBody struct {
+	ctx context.Context
+}
+
+func (b contextBlockingBody) Read([]byte) (int, error) {
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (contextBlockingBody) Close() error { return nil }
+
 func (timeoutADXResult) Wait(ctx context.Context, _ time.Duration) (adxFinalStatus, error) {
 	<-ctx.Done()
 	return adxStatusFailed, ctx.Err()
@@ -484,6 +495,58 @@ func TestSDKADXQueuedColdResourceDiscoveryHonorsAttemptDeadline(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
 		t.Fatalf("cold-cache discovery elapsed %s, want the configured 1s deadline", elapsed)
+	}
+}
+
+func TestSDKADXQueuedColdMetadataBodyHonorsAttemptDeadline(t *testing.T) {
+	metadataStarted := make(chan struct{})
+	var once sync.Once
+	baseTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(request.URL.Path, "/v1/rest/auth/metadata") {
+			return nil, fmt.Errorf("unexpected request %s %s", request.Method, request.URL)
+		}
+		once.Do(func() { close(metadataStarted) })
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       contextBlockingBody{ctx: request.Context()},
+			Request:    request,
+		}, nil
+	})
+	httpClient := &http.Client{Transport: &adxResourceCachingTransport{base: baseTransport}}
+	kcsb := azkustodata.NewConnectionStringBuilder("https://cold-metadata-test.kusto.windows.net").
+		WithTokenCredential(staticTokenCredential{})
+	client, err := newSDKADXQueuedClient(
+		kcsb,
+		ADXQueuedConfig{Database: "metrics", Table: "MetricEvents"},
+		httpClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := client.discovery.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err = client.Ingest(ctx, []byte("{}\n"), adxIngestRequest{
+		Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
+		IngestByValue: "taugrid-metric-chunk-" + strings.Repeat("d", 64),
+	})
+	if err == nil {
+		t.Fatal("cold metadata body unexpectedly succeeded")
+	}
+	select {
+	case <-metadataStarted:
+	default:
+		t.Fatal("real SDK did not attempt cold metadata acquisition")
+	}
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("cold metadata elapsed %s, want the configured 1s deadline", elapsed)
 	}
 }
 

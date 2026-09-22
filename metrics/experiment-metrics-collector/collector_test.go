@@ -44,6 +44,13 @@ type cancelOnceSink struct {
 	once       sync.Once
 }
 
+type deliveryGateSink struct {
+	boundedContextSink
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
 func (s *recordingSink) Name() string           { return s.name }
 func (s *recordingSink) ConfigIdentity() string { return s.config }
 func (s *recordingSink) Deliver(_ context.Context, chunk MetricEventChunk) (DeliveryAck, error) {
@@ -92,6 +99,24 @@ func (s *cancelOnceSink) Deliver(ctx context.Context, chunk MetricEventChunk) (D
 			})
 			if cancelled {
 				return DeliveryAck{}, ctx.Err()
+			}
+		}
+	}
+	return s.boundedContextSink.Deliver(ctx, chunk)
+}
+
+func (s *deliveryGateSink) Deliver(ctx context.Context, chunk MetricEventChunk) (DeliveryAck, error) {
+	if chunk.Events[0].MetricName != exptelemetry.RunStatusMetricName {
+		blocked := false
+		s.once.Do(func() {
+			blocked = true
+			close(s.started)
+		})
+		if blocked {
+			select {
+			case <-ctx.Done():
+				return DeliveryAck{}, ctx.Err()
+			case <-s.release:
 			}
 		}
 	}
@@ -805,6 +830,82 @@ func TestCancellationWaitsForActualCompletionBeforeFinalDrain(t *testing.T) {
 	if status.MetricName != exptelemetry.RunStatusMetricName ||
 		status.Tags[exptelemetry.RunStatusStateTag] != "succeeded" {
 		t.Fatalf("terminal event=%+v, want actual succeeded state", status)
+	}
+}
+
+func TestCancellationRedrainsWhenCompletionAppearsDuringDelivery(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	completionPath := filepath.Join(root, "completion.json")
+	donePath := filepath.Join(root, "done")
+	writeFile(t, history, historyRow)
+	sink := &deliveryGateSink{
+		boundedContextSink: boundedContextSink{
+			recordingSink: recordingSink{name: "test", config: "v1"},
+			budget:        500 * time.Millisecond,
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	options := baseOptions(root, history, sink)
+	options.CompletionFile = completionPath
+	options.DoneFile = donePath
+	options.Watch = true
+	options.Interval = 10 * time.Millisecond
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := make(chan error, 1)
+	go func() {
+		<-sink.started
+		file, err := os.OpenFile(history, os.O_APPEND|os.O_WRONLY, 0)
+		if err == nil {
+			_, err = file.WriteString(`{"_step":2,"_timestamp":1700000001,"eval/score":2}` + "\n")
+			closeErr := file.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+		if err == nil {
+			temp := completionPath + ".tmp"
+			err = os.WriteFile(
+				temp,
+				[]byte(`{"state":"succeeded","completed_at":"2023-11-14T22:16:00Z"}`),
+				0o644,
+			)
+			if err == nil {
+				err = os.Rename(temp, completionPath)
+			}
+		}
+		close(sink.release)
+		writeErr <- err
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := runner.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error=%v, want original context cancellation", err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+	if !result.Completed || len(sink.chunks) != 3 {
+		t.Fatalf("result=%+v chunks=%d, want two history chunks then terminal", result, len(sink.chunks))
+	}
+	for index := 0; index < 2; index++ {
+		if sink.chunks[index].Events[0].MetricName == exptelemetry.RunStatusMetricName {
+			t.Fatalf("chunk %d published terminal before final history", index)
+		}
+	}
+	status := sink.chunks[2].Events[0]
+	if status.MetricName != exptelemetry.RunStatusMetricName ||
+		status.Tags[exptelemetry.RunStatusStateTag] != "succeeded" {
+		t.Fatalf("terminal event=%+v, want succeeded", status)
+	}
+	if _, err := os.Stat(donePath); err != nil {
+		t.Fatalf("done file was not published: %v", err)
 	}
 }
 

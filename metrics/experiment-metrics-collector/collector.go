@@ -597,6 +597,11 @@ func (r *Runner) finishCancelled(
 		if err != nil {
 			return result, err
 		}
+		if completed {
+			if err := r.drain(drainCtx, &checkpoints, checkpointPath, &result, true); err != nil {
+				return result, fmt.Errorf("drain trailing history after workload completion: %w", err)
+			}
+		}
 	}
 	if completed {
 		if err := r.publishStatus(drainCtx, &checkpoints, &result); err != nil {

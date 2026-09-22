@@ -94,10 +94,12 @@ var (
 )
 
 type sdkADXQueuedClient struct {
-	discovery  *azkustodata.Client
-	kcsb       *azkustodata.ConnectionStringBuilder
-	config     ADXQueuedConfig
-	httpClient *http.Client
+	discovery   *azkustodata.Client
+	kcsb        *azkustodata.ConnectionStringBuilder
+	config      ADXQueuedConfig
+	httpClient  *http.Client
+	transport   *adxResourceCachingTransport
+	discoveryMu sync.Mutex
 }
 
 type sdkADXQueuedResult struct {
@@ -111,9 +113,10 @@ type adxCachedHTTPResponse struct {
 }
 
 type adxResourceCachingTransport struct {
-	base      http.RoundTripper
-	mu        sync.RWMutex
-	resources *adxCachedHTTPResponse
+	base             http.RoundTripper
+	mu               sync.RWMutex
+	resources        *adxCachedHTTPResponse
+	discoveryContext context.Context
 }
 
 type adxResourceDiscoveryContextKey struct{}
@@ -152,6 +155,10 @@ func newSDKADXQueuedClient(
 	config ADXQueuedConfig,
 	httpClient *http.Client,
 ) (*sdkADXQueuedClient, error) {
+	transport, ok := httpClient.Transport.(*adxResourceCachingTransport)
+	if !ok {
+		return nil, fmt.Errorf("ADX queued HTTP client requires resource caching transport")
+	}
 	discoveryKCSB, err := adxIngestionConnectionString(kcsb)
 	if err != nil {
 		return nil, fmt.Errorf("resolve ADX ingestion endpoint: %w", err)
@@ -174,6 +181,7 @@ func newSDKADXQueuedClient(
 		kcsb:       kcsb,
 		config:     config,
 		httpClient: httpClient,
+		transport:  transport,
 	}, nil
 }
 
@@ -392,6 +400,10 @@ func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request
 	if _, ok := ctx.Deadline(); !ok {
 		return nil, fmt.Errorf("ADX queued ingestion requires an attempt deadline")
 	}
+	c.discoveryMu.Lock()
+	defer c.discoveryMu.Unlock()
+	clearDiscoveryContext := c.transport.setDiscoveryContext(ctx)
+	defer clearDiscoveryContext()
 	discoveryCtx := context.WithValue(ctx, adxResourceDiscoveryContextKey{}, true)
 	if _, err := c.discovery.Mgmt(discoveryCtx, "NetDefaultDB", kql.New(".get ingestion resources")); err != nil {
 		return nil, normalizeADXSDKError(fmt.Errorf("discover ADX ingestion resources: %w", err))
@@ -449,6 +461,15 @@ func adxFinalStatusFromSDKError(err error) (adxFinalStatus, error) {
 }
 
 func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/v1/rest/auth/metadata") {
+		t.mu.RLock()
+		discoveryCtx := t.discoveryContext
+		t.mu.RUnlock()
+		if discoveryCtx == nil {
+			return nil, fmt.Errorf("ADX auth metadata must be requested within an ingestion attempt")
+		}
+		request = request.Clone(discoveryCtx)
+	}
 	if !isADXIngestionResourcesRequest(request) {
 		return t.base.RoundTrip(request)
 	}
@@ -486,6 +507,17 @@ func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Re
 	t.resources = cached
 	t.mu.Unlock()
 	return cached.response(request), nil
+}
+
+func (t *adxResourceCachingTransport) setDiscoveryContext(ctx context.Context) func() {
+	t.mu.Lock()
+	t.discoveryContext = ctx
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		t.discoveryContext = nil
+		t.mu.Unlock()
+	}
 }
 
 func (r *adxCachedHTTPResponse) response(request *http.Request) *http.Response {
