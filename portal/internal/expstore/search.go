@@ -36,6 +36,8 @@ func (s *Store) SearchRuns(ctx context.Context, opts RunSearchOptions) (RunSearc
 	opts.Project = strings.TrimSpace(opts.Project)
 	opts.RunGroupID = strings.TrimSpace(opts.RunGroupID)
 	opts.Workspace = strings.TrimSpace(opts.Workspace)
+	opts.Target = strings.TrimSpace(opts.Target)
+	opts.ExactExperimentID = strings.TrimSpace(opts.ExactExperimentID)
 	opts.ExactRunID = strings.TrimSpace(opts.ExactRunID)
 	opts.CursorAt = strings.TrimSpace(opts.CursorAt)
 	opts.CursorID = strings.TrimSpace(opts.CursorID)
@@ -256,10 +258,18 @@ func ClassifyRun(run RunRecord, tags map[string]string, summaries []MetricSummar
 func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (string, []any, error) {
 	clauses := []string{}
 	args := []any{}
+	if opts.ExactExperimentID != "" {
+		clauses = append(clauses, "r.experiment_id = ?")
+		args = append(args, opts.ExactExperimentID)
+	}
 	if opts.ExactRunID != "" {
 		clauses = append(clauses, "r.run_id = ?")
 		args = append(args, opts.ExactRunID)
-	} else if target := strings.TrimSpace(opts.Target); target != "" {
+		if target := strings.TrimSpace(opts.Target); target != "" {
+			clauses = append(clauses, "(r.experiment_id = ? OR r.run_group_id = ? OR r.run_id = ?)")
+			args = append(args, target, target, target)
+		}
+	} else if target := strings.TrimSpace(opts.Target); opts.ExactExperimentID == "" && target != "" {
 		targetType, err := s.targetType(ctx, target)
 		if err != nil {
 			return "", nil, err

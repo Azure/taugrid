@@ -218,12 +218,54 @@ func (s *stubV2CatalogSource) searchRuns(_ context.Context, _ string, opts expst
 	return filtered, nil
 }
 
+func TestV2PaginationOrdersFractionalSecondsChronologically(t *testing.T) {
+	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.v2Catalog = &stubV2CatalogSource{
+		experiments: []expstore.ExperimentSummary{
+			{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "whole", UpdatedAt: "2026-09-18T12:00:00Z"}},
+			{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "fractional", UpdatedAt: "2026-09-18T12:00:00.5Z"}},
+		},
+		runs: runSearchResponse{Runs: []sourcedRun{
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{
+				RunID: "whole", ExperimentID: "experiment-a", CreatedAt: "2026-09-18T12:00:00Z",
+			}}, Source: "local"},
+			{RunSearchRun: expstore.RunSearchRun{RunRecord: expstore.RunRecord{
+				RunID: "fractional", ExperimentID: "experiment-a", CreatedAt: "2026-09-18T12:00:00.5Z",
+			}}, Source: "local"},
+		}},
+	}
+
+	experiments := httptest.NewRecorder()
+	server.Handler().ServeHTTP(experiments, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/search?limit=1", nil))
+	var experimentPage v2ExperimentSearchResponse
+	if experiments.Code != http.StatusOK || json.Unmarshal(experiments.Body.Bytes(), &experimentPage) != nil {
+		t.Fatalf("experiment status=%d body=%s", experiments.Code, experiments.Body.String())
+	}
+	if len(experimentPage.Experiments) != 1 || experimentPage.Experiments[0].ExperimentID != "fractional" {
+		t.Fatalf("experiment ordering was not chronological: %+v", experimentPage.Experiments)
+	}
+
+	runs := httptest.NewRecorder()
+	server.Handler().ServeHTTP(runs, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/experiment-a/runs?limit=1", nil))
+	var runPage v2RunListResponse
+	if runs.Code != http.StatusOK || json.Unmarshal(runs.Body.Bytes(), &runPage) != nil {
+		t.Fatalf("run status=%d body=%s", runs.Code, runs.Body.String())
+	}
+	if len(runPage.Runs) != 1 || runPage.Runs[0].RunID != "fractional" {
+		t.Fatalf("run ordering was not chronological: %+v", runPage.Runs)
+	}
+}
+
 func TestV2ExperimentSearchPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	catalog := &stubV2CatalogSource{experiments: []expstore.ExperimentSummary{
 		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-a", UpdatedAt: "2026-09-18T12:00:00Z"}},
 		{ExperimentRecord: expstore.ExperimentRecord{ExperimentID: "experiment-b", UpdatedAt: "2026-09-18T11:00:00Z"}},
@@ -520,6 +562,9 @@ func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	if catalog.lastRunOpts.CursorAt == "" || catalog.lastRunOpts.CursorID == "" {
 		t.Fatalf("validated cursor was not passed to the catalog source: %+v", catalog.lastRunOpts)
 	}
+	if catalog.lastRunOpts.ExactExperimentID != "experiment-alpha" {
+		t.Fatalf("experiment path was not passed as an exact source predicate: %+v", catalog.lastRunOpts)
+	}
 
 	tampered := httptest.NewRecorder()
 	tamperedPath := "/api/v2/stellar/experiments/experiment-alpha/runs?limit=1&cursor=" + url.QueryEscape(firstPage.NextCursor+"x")
@@ -650,6 +695,9 @@ func TestV2ExactRunRequiresProjectWhenRunIDsCollide(t *testing.T) {
 	if response.Run.Project != "project-b" || response.Run.ExperimentID != "experiment-b" {
 		t.Fatalf("wrong exact run: %+v", response.Run)
 	}
+	if got := server.v2Catalog.(*stubV2CatalogSource).lastRunOpts.Target; got != "experiment-b" {
+		t.Fatalf("requested target was not passed to the source before limiting: %q", got)
+	}
 }
 
 func TestV2ExactRunQueriesRunIDBeforeSourceLimit(t *testing.T) {
@@ -674,8 +722,8 @@ func TestV2ExactRunQueriesRunIDBeforeSourceLimit(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(runQuery, "run_id in ('needle')") ||
-		strings.Contains(runQuery, "experiment_id == 'needle' or") {
-		t.Fatalf("exact lookup used an auto-target query:\n%s", runQuery)
+		!strings.Contains(runQuery, "experiment_id == 'experiment-a' or run_group_id == 'experiment-a' or run_id == 'experiment-a'") {
+		t.Fatalf("exact lookup did not source-filter both run ID and requested target:\n%s", runQuery)
 	}
 }
 

@@ -491,6 +491,9 @@ func normalizeKustoExperimentSearchOptions(opts expstore.ExperimentSearchOptions
 }
 
 func normalizeKustoRunSearchOptions(opts expstore.RunSearchOptions) expstore.RunSearchOptions {
+	opts.Target = strings.TrimSpace(opts.Target)
+	opts.ExactExperimentID = strings.TrimSpace(opts.ExactExperimentID)
+	opts.ExactRunID = strings.TrimSpace(opts.ExactRunID)
 	opts.Query = strings.TrimSpace(opts.Query)
 	opts.Workspace = strings.TrimSpace(opts.Workspace)
 	opts.Project = strings.TrimSpace(opts.Project)
@@ -555,8 +558,9 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 		summaries = filterKustoExperimentSummariesByLifecycle(summaries, opts.Lifecycle)
 	}
 	sort.SliceStable(summaries, func(i, j int) bool {
-		if summaries[i].LatestRunAt != summaries[j].LatestRunAt {
-			return summaries[i].LatestRunAt > summaries[j].LatestRunAt
+		left, right := catalogTime(summaries[i].LatestRunAt), catalogTime(summaries[j].LatestRunAt)
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		if summaries[i].Project != summaries[j].Project {
 			return summaries[i].Project < summaries[j].Project
@@ -722,8 +726,9 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 		summaries = append(summaries, summary)
 	}
 	sort.SliceStable(summaries, func(i, j int) bool {
-		if summaries[i].LatestRunAt != summaries[j].LatestRunAt {
-			return summaries[i].LatestRunAt > summaries[j].LatestRunAt
+		left, right := catalogTime(summaries[i].LatestRunAt), catalogTime(summaries[j].LatestRunAt)
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		if summaries[i].Project != summaries[j].Project {
 			return summaries[i].Project < summaries[j].Project
@@ -752,8 +757,8 @@ func catalogExperimentSummaries(rows []KustoMetricRow, runs []expstore.RunSearch
 	}
 	latestActivity := map[string]string{}
 	for _, row := range rows {
-		key := catalogRunKey(row.Project, row.ExperimentID)
-		if row.LatestActivityAt > latestActivity[key] {
+		key := catalogExperimentKey(row.Project, row.ExperimentID)
+		if catalogTime(row.LatestActivityAt).After(catalogTime(latestActivity[key])) {
 			latestActivity[key] = row.LatestActivityAt
 		}
 	}
@@ -781,12 +786,13 @@ func catalogExperimentSummaries(rows []KustoMetricRow, runs []expstore.RunSearch
 		}
 		item.summary.StateCounts[firstNonEmptyString(run.State, "unknown")]++
 		item.summary.LifecycleCounts[firstNonEmptyString(run.LifecycleState, "unknown")]++
-		latest := firstNonEmptyString(latestActivity[catalogRunKey(run.Project, experimentID)], run.CompletedAt, run.StartedAt, run.CreatedAt)
-		if latest > item.summary.LatestRunAt {
+		latest := firstNonEmptyString(latestActivity[catalogExperimentKey(run.Project, experimentID)], run.CompletedAt, run.StartedAt, run.CreatedAt)
+		if catalogTime(latest).After(catalogTime(item.summary.LatestRunAt)) {
 			item.summary.LatestRunAt = latest
 			item.summary.UpdatedAt = latest
 		}
-		if run.CreatedAt != "" && (item.summary.CreatedAt == "" || run.CreatedAt < item.summary.CreatedAt) {
+		if run.CreatedAt != "" && (item.summary.CreatedAt == "" ||
+			catalogTime(run.CreatedAt).Before(catalogTime(item.summary.CreatedAt))) {
 			item.summary.CreatedAt = run.CreatedAt
 		}
 		for _, metric := range run.MetricNames {
@@ -842,7 +848,8 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 	sourceExhausted := false
 	for len(runsByKey) <= opts.Limit && !sourceExhausted {
 		query, err := expkusto.BuildRunCatalogQuery(expkusto.CatalogQueryOptions{
-			WorkspaceID: s.WorkspaceID, Projects: projects, Target: opts.Target, RunIDs: compactExactRunID(opts.ExactRunID),
+			WorkspaceID: s.WorkspaceID, Projects: projects, Target: firstNonEmptyString(opts.ExactExperimentID, opts.Target),
+			TargetType: catalogTargetType(opts), RunIDs: compactExactRunID(opts.ExactRunID),
 			RunGroupID: opts.RunGroupID, MetricNames: opts.MetricNames, Since: opts.Since,
 			Limit: sourceBatchSize, AfterAt: afterAt, AfterProject: afterProject, AfterRunID: afterRun,
 		})
@@ -865,7 +872,7 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 			return expstore.RunSearchResult{}, err
 		}
 		for _, run := range catalogRunSearchRuns(rows, metricRows, opts) {
-			runsByKey[catalogRunKey(run.Project, run.RunID)] = run
+			runsByKey[catalogRunKey(run.Project, run.ExperimentID, run.RunID)] = run
 		}
 		pageCursor := catalogRunPageCursor(rows)
 		if len(rows) < sourceBatchSize {
@@ -881,8 +888,9 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 		runs = append(runs, run)
 	}
 	sort.SliceStable(runs, func(i, j int) bool {
-		if runs[i].CreatedAt != runs[j].CreatedAt {
-			return runs[i].CreatedAt > runs[j].CreatedAt
+		left, right := catalogTime(runs[i].CreatedAt), catalogTime(runs[j].CreatedAt)
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		if runs[i].Project != runs[j].Project {
 			return runs[i].Project < runs[j].Project
@@ -959,7 +967,7 @@ func catalogRunSearchRuns(runRows, metricRows []KustoMetricRow, opts expstore.Ru
 	out := make([]expstore.RunSearchRun, 0, len(runRows))
 	seen := map[string]bool{}
 	for _, row := range runRows {
-		key := catalogRunKey(row.Project, row.RunID)
+		key := catalogRunKey(row.Project, row.ExperimentID, row.RunID)
 		if row.RunID == "" || seen[key] {
 			continue
 		}
@@ -996,6 +1004,14 @@ func catalogRunSearchRuns(runRows, metricRows []KustoMetricRow, opts expstore.Ru
 			MetricNames:    metricSummaryNames(metricsByRun[key]),
 			Metrics:        metricsByRun[key],
 		}
+		if lifecycle == "succeeded" {
+			classification := expstore.ClassifyRun(run.RunRecord, run.Tags, run.Metrics, expstore.SuccessOptions{
+				Tags: opts.Tags, MetricFilters: opts.MetricFilters, MinStep: opts.MinStep,
+			})
+			run.LifecycleState = classification.LifecycleState
+			run.Successful = classification.Successful
+			run.SuccessReasons = classification.Reasons
+		}
 		if kustoRunSearchMatches(run, opts) {
 			out = append(out, run)
 		}
@@ -1031,7 +1047,7 @@ func catalogMetricSummariesByRun(rows []KustoMetricRow) map[string][]expstore.Me
 		} else {
 			summary.LatestValue = row.Value
 		}
-		key := catalogRunKey(row.Project, row.RunID)
+		key := catalogRunKey(row.Project, row.ExperimentID, row.RunID)
 		out[key] = append(out[key], summary)
 	}
 	for key := range out {
@@ -1040,8 +1056,19 @@ func catalogMetricSummariesByRun(rows []KustoMetricRow) map[string][]expstore.Me
 	return out
 }
 
-func catalogRunKey(project, runID string) string {
-	return strings.TrimSpace(project) + "\x00" + strings.TrimSpace(runID)
+func catalogRunKey(project, experimentID, runID string) string {
+	return strings.TrimSpace(project) + "\x00" + strings.TrimSpace(experimentID) + "\x00" + strings.TrimSpace(runID)
+}
+
+func catalogExperimentKey(project, experimentID string) string {
+	return strings.TrimSpace(project) + "\x00" + strings.TrimSpace(experimentID)
+}
+
+func catalogTargetType(opts expstore.RunSearchOptions) string {
+	if strings.TrimSpace(opts.ExactExperimentID) != "" {
+		return "experiment"
+	}
+	return "auto"
 }
 
 func catalogCursorParts(cursorID string) (string, string) {
@@ -1064,8 +1091,9 @@ func catalogRunPageCursor(rows []KustoMetricRow) catalogPageCursor {
 		})
 	}
 	sort.Slice(cursors, func(i, j int) bool {
-		if cursors[i].At != cursors[j].At {
-			return cursors[i].At > cursors[j].At
+		left, right := catalogTime(cursors[i].At), catalogTime(cursors[j].At)
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		if cursors[i].Project != cursors[j].Project {
 			return cursors[i].Project < cursors[j].Project
@@ -1080,7 +1108,7 @@ func catalogExperimentPageCursor(rows []KustoMetricRow) (catalogPageCursor, int)
 	for _, row := range rows {
 		key := strings.TrimSpace(row.Project) + "\x00" + strings.TrimSpace(row.ExperimentID)
 		cursor, exists := byExperiment[key]
-		if !exists || row.LatestActivityAt > cursor.At {
+		if !exists || catalogTime(row.LatestActivityAt).After(catalogTime(cursor.At)) {
 			cursor = catalogPageCursor{
 				At: row.LatestActivityAt, Project: strings.TrimSpace(row.Project), ID: strings.TrimSpace(row.ExperimentID),
 			}
@@ -1092,8 +1120,9 @@ func catalogExperimentPageCursor(rows []KustoMetricRow) (catalogPageCursor, int)
 		cursors = append(cursors, cursor)
 	}
 	sort.Slice(cursors, func(i, j int) bool {
-		if cursors[i].At != cursors[j].At {
-			return cursors[i].At > cursors[j].At
+		left, right := catalogTime(cursors[i].At), catalogTime(cursors[j].At)
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		if cursors[i].Project != cursors[j].Project {
 			return cursors[i].Project < cursors[j].Project
@@ -2412,6 +2441,16 @@ func kustoMetricFilterSummaryValue(summary expstore.MetricSummaryRecord, field s
 	switch normalizedKustoMetricFilterField(field) {
 	case "latest":
 		return summary.LatestValue, summary.LatestStep != nil || summary.UpdatedAt != ""
+	case "min":
+		return summary.MinValue, summary.FiniteCount > 0
+	case "max":
+		return summary.MaxValue, summary.FiniteCount > 0
+	case "count":
+		return float64(summary.Count), true
+	case "finite_count":
+		return float64(summary.FiniteCount), true
+	case "non_finite_count":
+		return float64(summary.NonFiniteCount), true
 	case "latest_step":
 		if summary.LatestStep == nil {
 			return 0, false
@@ -2430,6 +2469,11 @@ func kustoMetricFilterSummaryValue(summary expstore.MetricSummaryRecord, field s
 	default:
 		return 0, false
 	}
+}
+
+func catalogTime(value string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	return parsed
 }
 
 func normalizedKustoMetricFilterField(field string) string {

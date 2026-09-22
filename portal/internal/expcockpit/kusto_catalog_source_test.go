@@ -249,6 +249,131 @@ func TestKustoCatalogOrderingMatchesCursorOrdering(t *testing.T) {
 	}
 }
 
+func TestKustoCatalogOrderingUsesChronologicalTimestamps(t *testing.T) {
+	source := KustoSource{
+		WorkspaceID: "workspace-a",
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.SeriesCatalogRowsFunction+"()") {
+				return `[]`, nil
+			}
+			return `[
+				{"workspace_id":"workspace-a","project":"project-a","experiment_id":"whole","run_id":"whole","created_time":"2026-09-18T12:00:00Z","latest_activity_at":"2026-09-18T12:00:00Z","state":"succeeded","has_lifecycle":true},
+				{"workspace_id":"workspace-a","project":"project-a","experiment_id":"fractional","run_id":"fractional","created_time":"2026-09-18T12:00:00.5Z","latest_activity_at":"2026-09-18T12:00:00.5Z","state":"succeeded","has_lifecycle":true}
+			]`, nil
+		},
+	}
+	runs, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.Runs) != 1 || runs.Runs[0].RunID != "fractional" {
+		t.Fatalf("run truncation was not chronological: %+v", runs.Runs)
+	}
+	experiments, err := source.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{
+		Workspace: "workspace-a", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(experiments.Experiments) != 1 || experiments.Experiments[0].ExperimentID != "fractional" {
+		t.Fatalf("experiment truncation was not chronological: %+v", experiments.Experiments)
+	}
+}
+
+func TestKustoCatalogRunListingUsesExactExperimentPredicate(t *testing.T) {
+	var runQuery string
+	source := KustoSource{
+		WorkspaceID: "workspace-a",
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.SeriesCatalogRowsFunction+"()") {
+				return `[]`, nil
+			}
+			runQuery = query
+			return `[]`, nil
+		},
+	}
+	_, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Target: "experiment-a", ExactExperimentID: "experiment-a", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(runQuery, "| where experiment_id == 'experiment-a'") ||
+		strings.Contains(runQuery, "run_group_id == 'experiment-a'") {
+		t.Fatalf("run listing did not use an exact experiment predicate:\n%s", runQuery)
+	}
+}
+
+func TestKustoCatalogRunIdentityIncludesExperiment(t *testing.T) {
+	runRows := []KustoMetricRow{
+		{Project: "project-a", ExperimentID: "experiment-a", RunID: "shared", State: "succeeded"},
+		{Project: "project-a", ExperimentID: "experiment-b", RunID: "shared", State: "succeeded"},
+	}
+	metricRows := []KustoMetricRow{
+		{Project: "project-a", ExperimentID: "experiment-a", RunID: "shared", MetricName: "loss-a", LatestValue: catalogFloat64Pointer(1)},
+		{Project: "project-a", ExperimentID: "experiment-b", RunID: "shared", MetricName: "loss-b", LatestValue: catalogFloat64Pointer(2)},
+	}
+	runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{})
+	if len(runs) != 2 {
+		t.Fatalf("same project/run ID across experiments was collapsed: %+v", runs)
+	}
+	for _, run := range runs {
+		if len(run.MetricNames) != 1 || run.MetricNames[0] != "loss-"+strings.TrimPrefix(run.ExperimentID, "experiment-") {
+			t.Fatalf("metrics crossed experiment identity: %+v", run)
+		}
+	}
+}
+
+func TestKustoLegacyMetricEvaluatorSupportsAllStatistics(t *testing.T) {
+	step1, step9 := int64(1), int64(9)
+	summary := expstore.MetricSummaryRecord{
+		MetricName: "loss", Count: 10, FiniteCount: 8, NonFiniteCount: 2,
+		MinValue: 0.25, MaxValue: 4, LatestValue: 1,
+		MinStep: &step1, MaxStep: &step9, LatestStep: &step9,
+	}
+	tests := []struct {
+		field string
+		want  float64
+	}{
+		{"min", 0.25}, {"max", 4}, {"count", 10}, {"finite_count", 8},
+		{"non_finite_count", 2}, {"latest", 1}, {"min_step", 1}, {"max_step", 9}, {"latest_step", 9},
+	}
+	for _, test := range tests {
+		got, ok := kustoMetricFilterSummaryValue(summary, test.field)
+		if !ok || got != test.want {
+			t.Fatalf("%s = %v, %v; want %v, true", test.field, got, ok, test.want)
+		}
+	}
+}
+
+func TestKustoCatalogMinStepAppliesBeforeLifecycleFilter(t *testing.T) {
+	maxStep := int64(5)
+	runRows := []KustoMetricRow{{
+		Project: "project-a", ExperimentID: "experiment-a", RunID: "run-a", State: "succeeded",
+	}}
+	metricRows := []KustoMetricRow{{
+		Project: "project-a", ExperimentID: "experiment-a", RunID: "run-a",
+		MetricName: "loss", MaxStep: &maxStep, LatestStep: &maxStep, LatestValue: catalogFloat64Pointer(1),
+	}}
+	required := int64(10)
+	runs := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{
+		Lifecycle: "succeeded", MinStep: &required,
+	})
+	if len(runs) != 0 {
+		t.Fatalf("run below MinStep passed succeeded lifecycle filter: %+v", runs)
+	}
+	allRuns := catalogRunSearchRuns(runRows, metricRows, expstore.RunSearchOptions{MinStep: &required})
+	if len(allRuns) != 1 || allRuns[0].LifecycleState != "incomplete" || allRuns[0].Successful {
+		t.Fatalf("MinStep did not reclassify typed run before filtering: %+v", allRuns)
+	}
+}
+
+func catalogFloat64Pointer(value float64) *float64 {
+	return &value
+}
+
 func TestKustoCatalogExactRunAndUnsupportedStatistics(t *testing.T) {
 	var query string
 	calls := 0

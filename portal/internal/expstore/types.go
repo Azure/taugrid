@@ -315,22 +315,23 @@ type MetricFilter struct {
 }
 
 type RunSearchOptions struct {
-	Target        string
-	ExactRunID    string
-	Workspace     string
-	Query         string
-	Project       string
-	RunGroupID    string
-	State         string
-	Lifecycle     string
-	Tags          map[string]string
-	MetricNames   []string
-	MetricFilters []MetricFilter
-	Since         string
-	Limit         int
-	MinStep       *int64
-	CursorAt      string
-	CursorID      string
+	Target            string
+	ExactExperimentID string
+	ExactRunID        string
+	Workspace         string
+	Query             string
+	Project           string
+	RunGroupID        string
+	State             string
+	Lifecycle         string
+	Tags              map[string]string
+	MetricNames       []string
+	MetricFilters     []MetricFilter
+	Since             string
+	Limit             int
+	MinStep           *int64
+	CursorAt          string
+	CursorID          string
 }
 
 type RunClassification struct {

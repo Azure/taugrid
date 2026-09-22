@@ -267,9 +267,9 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 	result := catalogResult.Result
 	experiments := append([]expstore.ExperimentSummary(nil), result.Experiments...)
 	sort.SliceStable(experiments, func(i, j int) bool {
-		left, right := v2ExperimentSortAt(experiments[i]), v2ExperimentSortAt(experiments[j])
-		if left != right {
-			return left > right
+		left, right := v2ExperimentSortTime(experiments[i]), v2ExperimentSortTime(experiments[j])
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		return v2ExperimentCursorID(experiments[i]) < v2ExperimentCursorID(experiments[j])
 	})
@@ -380,6 +380,7 @@ func (s *Server) handleV2RunList(w http.ResponseWriter, r *http.Request, target 
 		return
 	}
 	opts.Target = target
+	opts.ExactExperimentID = target
 	limit, err := v2Limit(r)
 	if err != nil {
 		s.writeV2Error(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
@@ -405,9 +406,9 @@ func (s *Server) handleV2RunList(w http.ResponseWriter, r *http.Request, target 
 	}
 	runs := append([]sourcedRun(nil), result.Runs...)
 	sort.SliceStable(runs, func(i, j int) bool {
-		left, right := v2RunSortAt(runs[i]), v2RunSortAt(runs[j])
-		if left != right {
-			return left > right
+		left, right := v2RunSortTime(runs[i]), v2RunSortTime(runs[j])
+		if !left.Equal(right) {
+			return left.After(right)
 		}
 		if runs[i].Project != runs[j].Project {
 			return runs[i].Project < runs[j].Project
@@ -559,7 +560,10 @@ func (s *Server) handleV2Series(w http.ResponseWriter, r *http.Request, runID st
 
 func (s *Server) v2ExactRun(r *http.Request, source, workspace, runID string) (sourcedRun, []string, error) {
 	project := strings.TrimSpace(r.URL.Query().Get("project"))
-	opts := expstore.RunSearchOptions{ExactRunID: runID, Workspace: workspace, Project: project, Limit: 2}
+	target := strings.TrimSpace(r.URL.Query().Get("target"))
+	opts := expstore.RunSearchOptions{
+		Target: target, ExactRunID: runID, Workspace: workspace, Project: project, Limit: 2,
+	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
 	result, err := s.v2CatalogSource().searchRuns(ctx, source, opts)
@@ -571,7 +575,6 @@ func (s *Server) v2ExactRun(r *http.Request, source, workspace, runID string) (s
 		if run.RunID != runID || (project != "" && run.Project != project) {
 			continue
 		}
-		target := strings.TrimSpace(r.URL.Query().Get("target"))
 		if target != "" && target != run.RunID && target != run.ExperimentID && target != run.RunGroupID {
 			continue
 		}
@@ -671,13 +674,13 @@ func decodeV2PathID(raw string) (string, error) {
 
 func v2RunFilterHash(source, workspace string, opts expstore.RunSearchOptions) string {
 	payload, _ := json.Marshal(struct {
-		Source, Workspace, Target, Query, Project, Group, State, Lifecycle, Since string
-		Tags                                                                      map[string]string
-		Metrics                                                                   []string
-		Filters                                                                   []expstore.MetricFilter
-		MinStep                                                                   *int64
+		Source, Workspace, Target, ExactExperimentID, Query, Project, Group, State, Lifecycle, Since string
+		Tags                                                                                         map[string]string
+		Metrics                                                                                      []string
+		Filters                                                                                      []expstore.MetricFilter
+		MinStep                                                                                      *int64
 	}{
-		source, workspace, opts.Target, opts.Query, opts.Project, opts.RunGroupID,
+		source, workspace, opts.Target, opts.ExactExperimentID, opts.Query, opts.Project, opts.RunGroupID,
 		opts.State, opts.Lifecycle, opts.Since, opts.Tags, opts.MetricNames, opts.MetricFilters, opts.MinStep,
 	})
 	sum := sha256.Sum256(payload)
@@ -776,20 +779,22 @@ func validV2CursorProject(value string) bool {
 }
 
 func v2RunAfterCursor(run sourcedRun, cursor v2CursorPayload) bool {
-	sortAt := v2RunSortAt(run)
+	sortAt := v2RunSortTime(run)
+	cursorAt, _ := time.Parse(time.RFC3339Nano, cursor.SortAt)
 	project := strings.TrimSpace(run.Project)
 	runID := strings.TrimSpace(run.RunID)
-	return sortAt < cursor.SortAt ||
-		(sortAt == cursor.SortAt && (project > cursor.Project ||
+	return sortAt.Before(cursorAt) ||
+		(sortAt.Equal(cursorAt) && (project > cursor.Project ||
 			(project == cursor.Project && runID > cursor.ItemID)))
 }
 
 func v2ExperimentAfterCursor(experiment expstore.ExperimentSummary, cursor v2CursorPayload) bool {
-	sortAt := v2ExperimentSortAt(experiment)
+	sortAt := v2ExperimentSortTime(experiment)
+	cursorAt, _ := time.Parse(time.RFC3339Nano, cursor.SortAt)
 	project := strings.TrimSpace(experiment.Project)
 	experimentID := strings.TrimSpace(experiment.ExperimentID)
-	return sortAt < cursor.SortAt ||
-		(sortAt == cursor.SortAt && (project > cursor.Project ||
+	return sortAt.Before(cursorAt) ||
+		(sortAt.Equal(cursorAt) && (project > cursor.Project ||
 			(project == cursor.Project && experimentID > cursor.ItemID)))
 }
 
@@ -798,21 +803,29 @@ func v2ExperimentCursorID(experiment expstore.ExperimentSummary) string {
 }
 
 func v2ExperimentSortAt(experiment expstore.ExperimentSummary) string {
+	return v2ExperimentSortTime(experiment).UTC().Format(time.RFC3339Nano)
+}
+
+func v2ExperimentSortTime(experiment expstore.ExperimentSummary) time.Time {
 	for _, value := range []string{experiment.LatestRunAt, experiment.UpdatedAt, experiment.CreatedAt} {
 		if strings.TrimSpace(value) != "" {
-			if canonical, err := canonicalV2Timestamp(value); err == nil {
-				return canonical
+			if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+				return parsed
 			}
 		}
 	}
-	return "0001-01-01T00:00:00Z"
+	return time.Time{}
 }
 
 func v2RunSortAt(run sourcedRun) string {
-	if canonical, err := canonicalV2Timestamp(run.CreatedAt); err == nil {
-		return canonical
+	return v2RunSortTime(run).UTC().Format(time.RFC3339Nano)
+}
+
+func v2RunSortTime(run sourcedRun) time.Time {
+	if parsed, err := time.Parse(time.RFC3339Nano, run.CreatedAt); err == nil {
+		return parsed
 	}
-	return "0001-01-01T00:00:00Z"
+	return time.Time{}
 }
 
 func sourceListForRuns(requested string, runs []sourcedRun) []string {

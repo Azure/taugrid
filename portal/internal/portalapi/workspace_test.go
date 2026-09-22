@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Azure/taugrid/portal/internal/expapi"
 )
 
 func testWorkspaceDirectory(t *testing.T) WorkspaceDirectory {
@@ -132,6 +134,44 @@ func TestWorkspaceAwareStellarDelegatesLocalRouteWithScope(t *testing.T) {
 	}
 	if gotPath != "/api/stellar/experiments" || gotWorkspace != "alpha" || gotProject != "vision" || gotSource != "kusto" {
 		t.Fatalf("delegated route = path %q workspace %q project %q source %q", gotPath, gotWorkspace, gotProject, gotSource)
+	}
+}
+
+func TestSingleWorkspaceCanonicalStellarResolvesAutoSource(t *testing.T) {
+	native := func(context.Context, string) (string, error) { return "[]", nil }
+	tests := []struct {
+		name string
+		opts expapi.Options
+		want string
+	}{
+		{name: "kusto available", opts: expapi.Options{Source: "auto", StorePath: t.TempDir(), KustoNativeQuery: native}, want: "kusto"},
+		{name: "local only", opts: expapi.Options{Source: "auto", StorePath: t.TempDir()}, want: "local"},
+		{name: "explicit source", opts: expapi.Options{Source: "kusto", KustoNativeQuery: native}, want: "kusto"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, err := NewServer(Options{Stellar: test.opts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if server.singleWorkspaceScope.Source != test.want {
+				t.Fatalf("single-workspace source=%q, want %q", server.singleWorkspaceScope.Source, test.want)
+			}
+			var gotSource string
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotSource = r.URL.Query().Get("source")
+				w.WriteHeader(http.StatusNoContent)
+			})
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search", nil)
+			server.workspaceAwareStellar(next).ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if gotSource != test.want || gotSource == "auto" {
+				t.Fatalf("canonical source=%q, want %q", gotSource, test.want)
+			}
+		})
 	}
 }
 
