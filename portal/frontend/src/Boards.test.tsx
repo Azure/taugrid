@@ -52,6 +52,9 @@ describe('Platform overview', () => {
     expect(screen.getByRole('button', { name: /west/i })).toBeVisible();
     expect(screen.queryByText('system')).not.toBeInTheDocument();
     expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
+    expect(screen.getByText('Admitted, unfinished workloads')).toBeInTheDocument();
+    expect(screen.getByText('Admission reserves quota; it does not prove that the workload is running.')).toBeInTheDocument();
+    expect(screen.queryByText('Active work')).not.toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: 'Operational evidence' })).not.toBeInTheDocument();
     expect(screen.getAllByLabelText(/allocated GPUs and .* available GPUs/).length).toBeGreaterThan(0);
     expect(screen.getByText('gpu-a')).toBeVisible();

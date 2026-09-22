@@ -324,6 +324,7 @@
   .overview-workload strong { font-size: 11px; }
   .overview-workload small { margin-top: 3px; color: var(--muted); font-size: 9px; }
   .overview-workload .back { grid-column: 2; font-size: 9px; }
+  .overview-stage-note { margin: 12px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
   .overview-stage-link { display: inline-block; margin-top: 14px; color: var(--accent); font-size: 10px; font-weight: 650; text-decoration: none; }
   .overview-stage-link:hover { text-decoration: underline; }
   .overview-unavailable { padding: 11px; border: 1px solid #efcaca; border-radius: 7px; background: var(--warn-bg); color: var(--warn); font-size: 10px; line-height: 1.45; }

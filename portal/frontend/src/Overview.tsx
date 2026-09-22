@@ -149,15 +149,16 @@ function QueueBridge({ data }: { data: OverviewData }) {
 
 function WorkloadFlow({ data }: { data: OverviewData }) {
   return <div className="overview-workloads">
-    <div className="overview-stage-title"><span>Active work</span><strong>Admitted workloads</strong></div>
+    <div className="overview-stage-title"><span>Queue admission</span><strong>Admitted, unfinished workloads</strong></div>
     {data.runningUnavailable ? <div className="overview-unavailable">{data.runningUnavailable}</div>
-      : !data.running?.length ? <Empty>No admitted workloads right now.</Empty>
+      : !data.running?.length ? <Empty>No admitted, unfinished workloads right now.</Empty>
         : <div className="overview-workload-list">{data.running.slice(0, 5).map(run => <div className="overview-workload" key={`${run.namespace}/${run.name}`}>
-          <span className="overview-workload-state">Admitted</span>
+          <span className="overview-workload-state">Quota admitted</span>
           <div><strong>{run.job || run.name}</strong><small>{run.namespace} · {run.queue || 'queue unknown'}</small></div>
           <TrackingLink run={run} label="Experiment ↗"/>
         </div>)}</div>}
-    <ScopedLink to="/portal/runs" className="overview-stage-link">View all workload activity →</ScopedLink>
+    <p className="overview-stage-note">Admission reserves quota; it does not prove that the workload is running.</p>
+    <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queue admission →</ScopedLink>
   </div>;
 }
 
@@ -181,7 +182,7 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
         <Metric label="Observed health" value={observedHealth.length ? unhealthy : '—'} detail={observedHealth.length ? `unhealthy of ${observedHealth.length} observed` : 'no health observations'} tone={unhealthy ? 'danger' : undefined}/>
         <Metric label="Queue pressure" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail={`${queue?.pending ?? '—'} workloads pending`} tone={queue?.pending ? 'warning' : undefined}/>
       </> : <>
-        <Metric label="Active workloads" value={data.runningUnavailable ? '—' : data.running.length} detail="admitted and unfinished"/>
+        <Metric label="Admitted workloads" value={data.runningUnavailable ? '—' : data.running.length} detail="quota admitted, completion not observed"/>
         <Metric label="Pending admission" value={queue?.pending ?? '—'} detail="waiting for quota" tone={queue?.pending ? 'warning' : undefined}/>
         <Metric label="GPU reservation" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail="reserved / reported quota"/>
         <Metric label="Measured utilization" value={utilization.average === null ? '—' : `${n1(utilization.average)}%`} detail={`${utilization.observed}/${utilization.total} GPUs observed`}/>
