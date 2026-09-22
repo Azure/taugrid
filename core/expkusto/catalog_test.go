@@ -43,6 +43,26 @@ func TestBuildSeriesCatalogQueryUsesStableFunctionAndFilters(t *testing.T) {
 	assertCatalogProjectColumnEscaped(t, query)
 }
 
+func TestBuildCatalogQueryRendersAbsoluteSinceAsDatetime(t *testing.T) {
+	query, err := BuildExperimentCatalogQuery(CatalogQueryOptions{
+		Since: "2026-09-01T00:00:00.1234-07:00",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(query, "latest_activity_at > todatetime('2026-09-01T07:00:00.1234Z')") ||
+		strings.Contains(query, "ago('2026-09-01") {
+		t.Fatalf("absolute since was not rendered as a datetime:\n%s", query)
+	}
+}
+
+func TestBuildCatalogQueryRejectsMalformedSince(t *testing.T) {
+	if _, err := BuildRunCatalogQuery(CatalogQueryOptions{Since: "last Tuesday"}); err == nil ||
+		!strings.Contains(err.Error(), "--since") {
+		t.Fatalf("malformed since error = %v", err)
+	}
+}
+
 func TestBuildRunCatalogQueryIncludesLifecycleContract(t *testing.T) {
 	query, err := BuildRunCatalogQuery(CatalogQueryOptions{
 		WorkspaceID: "workspace-a",

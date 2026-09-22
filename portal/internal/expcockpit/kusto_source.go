@@ -176,7 +176,7 @@ func (s KustoSource) buildSeries(ctx context.Context, opts SeriesOptions, typed 
 		return SeriesDetail{}, err
 	}
 	rows = filterKustoRowsByWorkspace(rows, s.WorkspaceID)
-	projects, err := s.rawProjectScope(ctx, s.Project)
+	projects, err := s.rawProjectScope(ctx, opts.Project)
 	if err != nil {
 		return SeriesDetail{}, err
 	}
@@ -515,6 +515,10 @@ func normalizeKustoSearchLimit(limit int) (int, error) {
 }
 
 func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
+	return s.searchExperiments(ctx, opts, false)
+}
+
+func (s KustoSource) searchExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions, canonical bool) (expstore.ExperimentSearchResult, error) {
 	opts = normalizeKustoExperimentSearchOptions(opts)
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
@@ -530,7 +534,7 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 	}
 	if s.hasRemoteQuery() {
 		if err := s.validateDiscoverySince(opts.Since, opts.Project); err != nil {
-			return expstore.ExperimentSearchResult{}, err
+			return expstore.ExperimentSearchResult{}, fmt.Errorf("%w: %v", expstore.ErrInvalidArgument, err)
 		}
 	}
 	rows, warnings, err := s.loadRowsForExperimentSearch(ctx, opts)
@@ -567,6 +571,9 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 		}
 		return summaries[i].ExperimentID < summaries[j].ExperimentID
 	})
+	if canonical {
+		summaries = catalogExperimentsAfterCursor(summaries, opts.CursorAt, opts.CursorID)
+	}
 	truncated := len(summaries) > opts.Limit
 	if truncated {
 		summaries = summaries[:opts.Limit]
@@ -583,6 +590,10 @@ func (s KustoSource) SearchExperiments(ctx context.Context, opts expstore.Experi
 }
 
 func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
+	return s.searchRuns(ctx, opts, false)
+}
+
+func (s KustoSource) searchRuns(ctx context.Context, opts expstore.RunSearchOptions, canonical bool) (expstore.RunSearchResult, error) {
 	opts = normalizeKustoRunSearchOptions(opts)
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
@@ -617,13 +628,26 @@ func (s KustoSource) SearchRuns(ctx context.Context, opts expstore.RunSearchOpti
 	rows = filterKustoRowsByProjects(rows, s.effectiveProjectScope(opts.Project))
 	runs := kustoRunSearchRuns(rows, opts, s.sourcePath(), s.effectiveNow(), s.effectiveStaleAfter())
 	sort.SliceStable(runs, func(i, j int) bool {
-		left := firstNonEmptyString(runs[i].CompletedAt, runs[i].StartedAt, runs[i].CreatedAt)
-		right := firstNonEmptyString(runs[j].CompletedAt, runs[j].StartedAt, runs[j].CreatedAt)
-		if left != right {
-			return left > right
+		if canonical {
+			left, right := catalogTime(runs[i].CreatedAt), catalogTime(runs[j].CreatedAt)
+			if !left.Equal(right) {
+				return left.After(right)
+			}
+			if runs[i].Project != runs[j].Project {
+				return runs[i].Project < runs[j].Project
+			}
+		} else {
+			left := firstNonEmptyString(runs[i].CompletedAt, runs[i].StartedAt, runs[i].CreatedAt)
+			right := firstNonEmptyString(runs[j].CompletedAt, runs[j].StartedAt, runs[j].CreatedAt)
+			if left != right {
+				return left > right
+			}
 		}
 		return runs[i].RunID < runs[j].RunID
 	})
+	if canonical {
+		runs = catalogRunsAfterCursor(runs, opts.CursorAt, opts.CursorID)
+	}
 	truncated := len(runs) > opts.Limit
 	total := len(runs)
 	if truncated {
@@ -652,7 +676,7 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 	}
 	if !s.hasRemoteQuery() {
 		if strings.TrimSpace(s.MetricsFile) != "" {
-			return s.SearchExperiments(ctx, opts)
+			return s.searchExperiments(ctx, opts, true)
 		}
 		return expstore.ExperimentSearchResult{}, fmt.Errorf("typed experiment catalog requires a live Kusto query transport or Kusto metrics file")
 	}
@@ -827,7 +851,7 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 	}
 	if !s.hasRemoteQuery() {
 		if strings.TrimSpace(s.MetricsFile) != "" {
-			return s.SearchRuns(ctx, opts)
+			return s.searchRuns(ctx, opts, true)
 		}
 		return expstore.RunSearchResult{}, fmt.Errorf("typed run catalog requires a live Kusto query transport or Kusto metrics file")
 	}
@@ -842,6 +866,9 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 	}
 	if strings.TrimSpace(opts.Since) == "" {
 		opts.Since = s.effectiveTargetSince()
+	}
+	if _, err := parseKustoLookbackDuration(opts.Since, s.effectiveNow()); err != nil {
+		return expstore.RunSearchResult{}, fmt.Errorf("%w: %v", expstore.ErrInvalidArgument, err)
 	}
 	projects, err := s.rawProjectScope(ctx, opts.Project)
 	if err != nil {
@@ -934,7 +961,6 @@ func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []st
 		WorkspaceID: s.WorkspaceID,
 		Projects:    projects,
 		RunIDs:      runIDs,
-		MetricNames: opts.MetricNames,
 		Since:       opts.Since,
 		Limit:       1000,
 	})
@@ -949,6 +975,42 @@ func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []st
 		return nil, err
 	}
 	return rows, nil
+}
+
+func catalogRunsAfterCursor(runs []expstore.RunSearchRun, cursorAt, cursorID string) []expstore.RunSearchRun {
+	cursorTime := catalogTime(cursorAt)
+	if cursorTime.IsZero() {
+		return runs
+	}
+	cursorProject, cursorRun := catalogCursorParts(cursorID)
+	filtered := runs[:0]
+	for _, run := range runs {
+		runTime := catalogTime(run.CreatedAt)
+		if runTime.Before(cursorTime) ||
+			(runTime.Equal(cursorTime) && (run.Project > cursorProject ||
+				(run.Project == cursorProject && run.RunID > cursorRun))) {
+			filtered = append(filtered, run)
+		}
+	}
+	return filtered
+}
+
+func catalogExperimentsAfterCursor(experiments []expstore.ExperimentSummary, cursorAt, cursorID string) []expstore.ExperimentSummary {
+	cursorTime := catalogTime(cursorAt)
+	if cursorTime.IsZero() {
+		return experiments
+	}
+	cursorProject, cursorExperiment := catalogCursorParts(cursorID)
+	filtered := experiments[:0]
+	for _, experiment := range experiments {
+		experimentTime := catalogTime(experiment.LatestRunAt)
+		if experimentTime.Before(cursorTime) ||
+			(experimentTime.Equal(cursorTime) && (experiment.Project > cursorProject ||
+				(experiment.Project == cursorProject && experiment.ExperimentID > cursorExperiment))) {
+			filtered = append(filtered, experiment)
+		}
+	}
+	return filtered
 }
 
 func validateKustoCatalogRowsScope(rows []KustoMetricRow, workspace string, projects []string) error {

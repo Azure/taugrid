@@ -5,6 +5,8 @@ package expkusto
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -158,6 +160,9 @@ func normalizeCatalogQueryOptions(opts CatalogQueryOptions) (CatalogQueryOptions
 	if opts.Since == "" {
 		opts.Since = "7d"
 	}
+	if _, err := catalogSinceExpression(opts.Since); err != nil {
+		return CatalogQueryOptions{}, nil, err
+	}
 	if opts.Limit == 0 {
 		opts.Limit = 200
 	}
@@ -170,7 +175,8 @@ func normalizeCatalogQueryOptions(opts CatalogQueryOptions) (CatalogQueryOptions
 
 func writeCatalogFilters(b *strings.Builder, opts CatalogQueryOptions, projects []string, includeMetrics bool) {
 	if opts.Since != "" {
-		fmt.Fprintf(b, "| where latest_activity_at > ago(%s)\n", kqlDuration(opts.Since))
+		since, _ := catalogSinceExpression(opts.Since)
+		fmt.Fprintf(b, "| where latest_activity_at > %s\n", since)
 	}
 	if opts.WorkspaceID != "" {
 		fmt.Fprintf(b, "| where workspace_id == %s\n", kqlString(opts.WorkspaceID))
@@ -189,6 +195,7 @@ func writeCatalogFilters(b *strings.Builder, opts CatalogQueryOptions, projects 
 			fmt.Fprintf(b, "| where experiment_id == %s or run_group_id == %s or run_id == %s\n", target, target, target)
 		}
 	}
+
 	if opts.RunGroupID != "" {
 		fmt.Fprintf(b, "| where run_group_id == %s\n", kqlString(opts.RunGroupID))
 	}
@@ -198,4 +205,23 @@ func writeCatalogFilters(b *strings.Builder, opts CatalogQueryOptions, projects 
 	if includeMetrics && len(opts.MetricNames) > 0 {
 		fmt.Fprintf(b, "| where metric_name in (%s)\n", kqlStringList(opts.MetricNames))
 	}
+}
+
+func catalogSinceExpression(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return "todatetime(" + kqlString(parsed.UTC().Format(time.RFC3339Nano)) + ")", nil
+	}
+	if strings.HasSuffix(value, "d") || strings.HasSuffix(value, "w") {
+		amount, err := strconv.ParseFloat(value[:len(value)-1], 64)
+		if err != nil || amount < 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+			return "", fmt.Errorf("--since must be RFC3339, a Go duration, Nd, or Nw")
+		}
+		return "ago(" + value + ")", nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < 0 {
+		return "", fmt.Errorf("--since must be RFC3339, a Go duration, Nd, or Nw")
+	}
+	return "ago(" + value + ")", nil
 }

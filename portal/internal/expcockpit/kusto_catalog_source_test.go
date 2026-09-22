@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/portal/internal/expstore"
@@ -148,6 +149,20 @@ func TestKustoCatalogAndSeriesKeepDuplicateRunIDsProjectScoped(t *testing.T) {
 	}
 	if !strings.Contains(query, `'project-b'`) || strings.Contains(query, `'project-a'`) {
 		t.Fatalf("series query was not project scoped:\n%s", query)
+	}
+
+	detail, err := (KustoSource{
+		WorkspaceID: "workspace-a", Project: "project-a",
+		AllowedProjects: []string{"project-a", "project-b"},
+		NativeQuery: func(_ context.Context, _ string) (string, error) {
+			return `[{"workspace_id":"workspace-a","project":"project-b","experiment_id":"experiment-b","run_id":"shared-run","metric_name":"accuracy","step":1,"wall_time":"2026-09-18T18:01:00Z","value":3}]`, nil
+		},
+	}).BuildTypedSeries(context.Background(), SeriesOptions{
+		Workspace: "workspace-a", Project: "project-b", Target: "experiment-b",
+		RunID: "shared-run", Metric: "accuracy", MaxPoints: 100,
+	})
+	if err != nil || !detail.Chart.HasData {
+		t.Fatalf("request-scoped project series detail=%+v err=%v", detail, err)
 	}
 }
 
@@ -377,6 +392,108 @@ func TestKustoCatalogLatestFilterKeepsSucceededRun(t *testing.T) {
 	}
 }
 
+func TestKustoCatalogMetricNameDoesNotHideFilterOrMinStepMetrics(t *testing.T) {
+	maxLossStep, maxAccuracyStep := int64(1), int64(20)
+	source := KustoSource{
+		WorkspaceID: "workspace-a", AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.RunCatalogRowsFunction+"()") {
+				return `[{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-a","run_id":"run-a","created_time":"2026-09-18T18:00:00Z","latest_activity_at":"2026-09-18T18:10:00Z","state":"succeeded","has_metrics":true,"has_lifecycle":true}]`, nil
+			}
+			rows := []KustoMetricRow{{
+				WorkspaceID: "workspace-a", Project: "project-a", ExperimentID: "experiment-a",
+				RunID: "run-a", MetricName: "loss", MaxStep: &maxLossStep, LatestStep: &maxLossStep,
+				LatestValue: catalogFloat64Pointer(1),
+			}}
+			if !strings.Contains(query, "metric_name in ('loss')") {
+				rows = append(rows, KustoMetricRow{
+					WorkspaceID: "workspace-a", Project: "project-a", ExperimentID: "experiment-a",
+					RunID: "run-a", MetricName: "accuracy", MaxStep: &maxAccuracyStep, LatestStep: &maxAccuracyStep,
+					LatestValue: catalogFloat64Pointer(0.9),
+				})
+			}
+			raw, err := json.Marshal(rows)
+			return string(raw), err
+		},
+	}
+	minStep := int64(10)
+	result, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Project: "project-a", Limit: 10,
+		MetricNames: []string{"loss"}, MinStep: &minStep,
+		MetricFilters: []expstore.MetricFilter{{
+			MetricName: "accuracy", Field: "latest", Op: ">", Value: 0.8,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Runs) != 1 || len(result.Runs[0].MetricNames) != 2 {
+		t.Fatalf("combined metric filters lost enrichment: %+v", result.Runs)
+	}
+}
+
+func TestKustoFileCatalogPaginationAppliesCursorBeforeLimit(t *testing.T) {
+	base := time.Date(2026, 9, 18, 18, 0, 0, 0, time.UTC)
+	runRows := make([]KustoMetricRow, 0, 1001)
+	experimentRows := make([]KustoMetricRow, 0, 1001)
+	for i := range 1001 {
+		at := base.Add(-time.Duration(i) * time.Second).Format(time.RFC3339Nano)
+		runRows = append(runRows, KustoMetricRow{
+			Project: "project-a", ExperimentID: "experiment-a", RunID: fmt.Sprintf("run-%04d", i),
+			MetricName: "loss", Step: int64(i), WallTime: at, Value: float64(i),
+		})
+		experimentRows = append(experimentRows, KustoMetricRow{
+			Project: "project-a", ExperimentID: fmt.Sprintf("experiment-%04d", i), RunID: fmt.Sprintf("run-%04d", i),
+			MetricName: "loss", Step: int64(i), WallTime: at, Value: float64(i),
+		})
+	}
+
+	runSource := KustoSource{MetricsFile: "configured.json", Metrics: runRows}
+	firstRuns, err := runSource.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Project: "project-a", Target: "experiment-a", ExactExperimentID: "experiment-a", Limit: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstRuns.Runs) != 1000 || !firstRuns.Truncated {
+		t.Fatalf("first run page count=%d truncated=%v", len(firstRuns.Runs), firstRuns.Truncated)
+	}
+	lastRun := firstRuns.Runs[len(firstRuns.Runs)-1]
+	secondRuns, err := runSource.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Project: "project-a", Target: "experiment-a", ExactExperimentID: "experiment-a", Limit: 1000,
+		CursorAt: lastRun.CreatedAt, CursorID: lastRun.Project + "\x00" + lastRun.RunID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondRuns.Runs) != 1 || secondRuns.Runs[0].RunID != "run-1000" {
+		t.Fatalf("second run page=%+v", secondRuns.Runs)
+	}
+
+	experimentSource := KustoSource{MetricsFile: "configured.json", Metrics: experimentRows}
+	firstExperiments, err := experimentSource.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{
+		Project: "project-a", Limit: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstExperiments.Experiments) != 1000 || !firstExperiments.Truncated {
+		t.Fatalf("first experiment page count=%d truncated=%v", len(firstExperiments.Experiments), firstExperiments.Truncated)
+	}
+	lastExperiment := firstExperiments.Experiments[len(firstExperiments.Experiments)-1]
+	secondExperiments, err := experimentSource.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{
+		Project: "project-a", Limit: 1000, CursorAt: lastExperiment.LatestRunAt,
+		CursorID: lastExperiment.Project + "\x00" + lastExperiment.ExperimentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondExperiments.Experiments) != 1 ||
+		secondExperiments.Experiments[0].ExperimentID != "experiment-1000" {
+		t.Fatalf("second experiment page=%+v", secondExperiments.Experiments)
+	}
+}
+
 func catalogFloat64Pointer(value float64) *float64 {
 	return &value
 }
@@ -410,6 +527,23 @@ func TestKustoCatalogExactRunAndUnsupportedStatistics(t *testing.T) {
 	})
 	if !errors.Is(err, expstore.ErrInvalidArgument) || calls != 0 {
 		t.Fatalf("unsupported statistic err=%v calls=%d", err, calls)
+	}
+}
+
+func TestKustoCatalogRejectsMalformedSinceBeforeQuery(t *testing.T) {
+	calls := 0
+	source := KustoSource{
+		AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, _ string) (string, error) {
+			calls++
+			return `[]`, nil
+		},
+	}
+	_, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Project: "project-a", Since: "last Tuesday", Limit: 10,
+	})
+	if !errors.Is(err, expstore.ErrInvalidArgument) || calls != 0 {
+		t.Fatalf("malformed since err=%v calls=%d", err, calls)
 	}
 }
 
