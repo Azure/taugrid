@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
+	offloadcontract "github.com/Azure/taugrid/core/metricsoffload"
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
 )
@@ -386,13 +387,13 @@ const (
 	MetricsOffloadRuntimeCollectorV1 = "collector-v1"
 
 	MetricsOffloadDeliveryADXRequired = "adx-required"
-	MetricsOffloadMaxADXAttempts      = 10
-	MetricsOffloadDefaultADXAttempts  = 3
+	MetricsOffloadMaxADXAttempts      = offloadcontract.MaxADXAttempts
+	MetricsOffloadDefaultADXAttempts  = offloadcontract.DefaultADXAttempts
 
-	MetricsOffloadDefaultADXRetryBackoff       = time.Second
-	MetricsOffloadDefaultADXFinalStatusTimeout = 10 * time.Minute
-	MetricsOffloadTerminalDrainGrace           = 30 * time.Second
-	MetricsOffloadMaxTerminalDrainTimeout      = 2 * time.Hour
+	MetricsOffloadDefaultADXRetryBackoff       = offloadcontract.DefaultADXRetryBackoff
+	MetricsOffloadDefaultADXFinalStatusTimeout = offloadcontract.DefaultADXFinalStatusTimeout
+	MetricsOffloadTerminalDrainGrace           = offloadcontract.TerminalDrainGrace
+	MetricsOffloadMaxTerminalDrainTimeout      = offloadcontract.MaxTerminalDrainTimeout
 )
 
 // Experiment names where a run belongs in the identity hierarchy:
@@ -857,50 +858,7 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 // ceiling are rejected so workload teardown never races a longer collector
 // delivery budget.
 func MetricsOffloadTerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time.Duration) (time.Duration, error) {
-	if maxAttempts < 0 || maxAttempts > MetricsOffloadMaxADXAttempts {
-		return 0, fmt.Errorf("adx_max_attempts must be between 0 and %d", MetricsOffloadMaxADXAttempts)
-	}
-	attempts := maxAttempts
-	if attempts == 0 {
-		attempts = MetricsOffloadDefaultADXAttempts
-	}
-	if retryBackoff < 0 {
-		return 0, fmt.Errorf("adx_retry_backoff must not be negative")
-	}
-	if retryBackoff == 0 {
-		retryBackoff = MetricsOffloadDefaultADXRetryBackoff
-	}
-	if retryBackoff > MetricsOffloadMaxTerminalDrainTimeout {
-		return 0, fmt.Errorf(
-			"ADX delivery budget exceeds maximum terminal drain timeout %s",
-			MetricsOffloadMaxTerminalDrainTimeout,
-		)
-	}
-	if finalStatusTimeout < 0 {
-		return 0, fmt.Errorf("adx_final_status_timeout must not be negative")
-	}
-	if finalStatusTimeout == 0 {
-		finalStatusTimeout = MetricsOffloadDefaultADXFinalStatusTimeout
-	}
-	if finalStatusTimeout > MetricsOffloadMaxTerminalDrainTimeout {
-		return 0, fmt.Errorf(
-			"ADX delivery budget exceeds maximum terminal drain timeout %s",
-			MetricsOffloadMaxTerminalDrainTimeout,
-		)
-	}
-
-	backoffWindows := time.Duration((1 << (attempts - 1)) - 1)
-	timeout := time.Duration(attempts)*finalStatusTimeout +
-		backoffWindows*retryBackoff +
-		MetricsOffloadTerminalDrainGrace
-	if timeout > MetricsOffloadMaxTerminalDrainTimeout {
-		return 0, fmt.Errorf(
-			"ADX delivery budget %s exceeds maximum terminal drain timeout %s",
-			timeout,
-			MetricsOffloadMaxTerminalDrainTimeout,
-		)
-	}
-	return timeout, nil
+	return offloadcontract.TerminalDrainTimeout(maxAttempts, retryBackoff, finalStatusTimeout)
 }
 
 // ResolveMetricsOffloadRuntime returns the sole supported metrics offload
