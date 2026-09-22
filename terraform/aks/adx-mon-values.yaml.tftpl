@@ -8,6 +8,23 @@ global:
   clusterName: ${cluster_name}
   region: ${location}
 
+%{ if typed_experiment_telemetry_enabled }
+managementCommands:
+  typedMetricEventsV1:
+    enabled: true
+  experimentCatalogV1:
+    enabled: true
+
+functions:
+  items:
+    tauExpMetricEventRows:
+      enabled: true
+    tauExpSeriesCatalogRows:
+      enabled: true
+    tauExpRunCatalogRows:
+      enabled: true
+%{ endif }
+
 %{ if gpu_stack_mode == "aks_managed_preview" }
 collector:
   prometheusScrape:

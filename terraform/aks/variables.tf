@@ -194,13 +194,18 @@ variable "enable_adx" {
 }
 
 variable "enable_lifecycle_recorder" {
-  description = "Enable the TauGrid lifecycle recorder and Portal run history. Requires enable_adx=true; Terraform bootstraps workspace_namespace before installing TauGrid."
+  description = "Enable the TauGrid lifecycle recorder, typed experiment schema, and Portal run history. Required when Terraform installs TauGrid with ADX enabled; Terraform bootstraps workspace_namespace before installing TauGrid."
   type        = bool
   default     = false
 
   validation {
     condition     = !var.enable_lifecycle_recorder || var.enable_adx
     error_message = "enable_lifecycle_recorder requires enable_adx=true."
+  }
+
+  validation {
+    condition     = !var.install_taugrid || !var.enable_adx || var.enable_lifecycle_recorder
+    error_message = "install_taugrid with enable_adx=true requires enable_lifecycle_recorder=true so the typed Portal schema is provisioned before its ADX Functions."
   }
 }
 

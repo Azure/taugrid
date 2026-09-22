@@ -133,7 +133,11 @@ adx_cluster_name          = ""
 The variable defaults remain opt-in so an invocation without a reviewed
 variable file cannot create billable ADX resources or remote telemetry. The
 tracked `terraform.tfvars.example` deliberately enables ADX and lifecycle
-recording for the complete observability path. Function definitions use Kusto
+recording for the complete observability path. When Terraform installs TauGrid
+with ADX enabled, lifecycle recording is required because its schema must
+exist before Terraform enables the typed experiment catalogs and stable Portal
+Functions. ADX-only deployments can keep `install_taugrid=false` and leave the
+recorder disabled. Function definitions use Kusto
 `skipvalidation` so a first install can create them while adx-mon creates their
 dependent tables asynchronously. This avoids treating a transient schema-order
 race as a failed chart installation.
