@@ -1524,6 +1524,22 @@ func TestRender_GracePeriod_OptionOverride(t *testing.T) {
 	}
 }
 
+func TestRender_GracePeriod_CoversMetricsShutdown(t *testing.T) {
+	runtime := testMetricsRuntime("/data/completion", "/data/ready", time.Second)
+	runtime.DoneTimeout = 15 * time.Minute
+	out, err := Render(trainProfile(), Options{
+		Name: "j", Namespace: "tau", Command: []string{"true"}, PVCMount: "data",
+		TerminationGracePeriodSeconds: 300, MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := pod["terminationGracePeriodSeconds"]; got != 930 {
+		t.Fatalf("terminationGracePeriodSeconds=%v, want 930", got)
+	}
+}
+
 func TestRender_DevicePluginDoesNotUseClaims(t *testing.T) {
 	p := trainProfile()
 	out, err := Render(p, Options{

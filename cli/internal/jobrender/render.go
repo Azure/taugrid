@@ -776,6 +776,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if o.TerminationGracePeriodSeconds > 0 {
 		grace = o.TerminationGracePeriodSeconds
 	}
+	if o.MetricsOffload.Enabled() {
+		grace = metricsoffload.ShutdownGracePeriodSeconds(o.MetricsOffload.DoneTimeout, grace)
+	}
 	pod["terminationGracePeriodSeconds"] = grace
 	if tols := gpuTolerations(gpu.Count); len(tols) > 0 {
 		pod["tolerations"] = tols

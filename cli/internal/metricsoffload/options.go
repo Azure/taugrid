@@ -166,6 +166,20 @@ func TerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time
 	return runconfig.MetricsOffloadTerminalDrainTimeout(maxAttempts, retryBackoff, finalStatusTimeout)
 }
 
+// ShutdownGracePeriodSeconds keeps Kubernetes from sending SIGKILL before the
+// collector's bounded final drain can finish and the pod can exit cleanly.
+func ShutdownGracePeriodSeconds(doneTimeout time.Duration, minimum int64) int64 {
+	if doneTimeout <= 0 {
+		return minimum
+	}
+	timeout := doneTimeout + runconfig.MetricsOffloadTerminalDrainGrace
+	seconds := int64((timeout + time.Second - 1) / time.Second)
+	if seconds > minimum {
+		return seconds
+	}
+	return minimum
+}
+
 func ResolveRuntime(value string) (string, error) {
 	return runconfig.ResolveMetricsOffloadRuntime(value)
 }

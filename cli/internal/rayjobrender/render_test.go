@@ -1278,6 +1278,34 @@ func TestRenderGracePeriodDefaultIs600(t *testing.T) {
 	}
 }
 
+func TestRenderGracePeriodCoversHeadMetricsShutdown(t *testing.T) {
+	runtime := metricsoffload.Runtime{
+		Image: "example.test/collector:v1", RunID: "run", Project: "project",
+		Experiment: "experiment", Group: "group", Store: "/data/store", Out: "/data/out",
+		History: []string{"/data/history.jsonl"}, CompletionFile: "/data/completion",
+		ADXClusterURI: "https://example.kusto.windows.net", ADXDatabase: "TauGrid",
+		ADXClientID: "00000000-0000-0000-0000-000000000001", Interval: time.Second,
+		DoneTimeout: 15 * time.Minute,
+	}
+	out, err := Render(Options{
+		Name: "gp-metrics", Namespace: "tau", ScriptName: "train.py",
+		Script: []byte("print('train')\n"), Workers: 1, GPUsPerWorker: 1,
+		DataPVC: "data", MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headPod := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := headPod["terminationGracePeriodSeconds"]; got != 930 {
+		t.Fatalf("head terminationGracePeriodSeconds=%v, want 930", got)
+	}
+	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := workerPod["terminationGracePeriodSeconds"]; got != 600 {
+		t.Fatalf("worker terminationGracePeriodSeconds=%v, want 600", got)
+	}
+}
+
 func asYAML(t *testing.T, v any) string {
 	t.Helper()
 	data, err := yaml.Marshal(v)

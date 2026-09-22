@@ -486,6 +486,9 @@ runtime:
 	if got := string(out); !strings.Contains(got, "TAU_METRICS_DONE_TIMEOUT=1244") {
 		t.Fatalf("RayJob terminal drain deadline does not cover exhausted ADX delivery:\n%s", got)
 	}
+	if got := dig(workload, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "terminationGracePeriodSeconds"); got != 1274 {
+		t.Fatalf("RayJob head termination grace=%v, want 1274", got)
+	}
 }
 
 func TestRenderRayJobHeadDriverLogOffloadSidecar(t *testing.T) {

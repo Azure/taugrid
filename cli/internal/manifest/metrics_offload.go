@@ -68,6 +68,7 @@ type metricsOffloadTemplateData struct {
 	DoneFileShell             string
 	DoneFileYAML              string
 	DoneTimeoutSeconds        int64
+	ShutdownGraceSeconds      int64
 	IntervalYAML              string
 	DeliveryModeYAML          string
 	ADXClusterURIYAML         string
@@ -205,6 +206,7 @@ func (m metricsOffloadRuntime) templateData() metricsOffloadTemplateData {
 		DoneFileShell:             shellQuote(m.DoneFile),
 		DoneFileYAML:              quoteYAMLString(m.DoneFile),
 		DoneTimeoutSeconds:        int64(m.DoneTimeout / time.Second),
+		ShutdownGraceSeconds:      metricsoffload.ShutdownGracePeriodSeconds(m.DoneTimeout, 30),
 		IntervalYAML:              quoteYAMLString(m.Interval.String()),
 		DeliveryModeYAML:          quoteYAMLString(m.DeliveryMode),
 		ADXClusterURIYAML:         quoteYAMLString(m.ADXClusterURI),

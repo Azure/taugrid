@@ -159,6 +159,8 @@ ${ARTIFACT_FINALIZE}
 ${POD_METADATA_BLOCK}
         spec:
           restartPolicy: Never
+{{if .MetricsOffload.Enabled}}          terminationGracePeriodSeconds: {{.MetricsOffload.ShutdownGraceSeconds}}
+{{end}}
 ${NODE_SELECTOR_BLOCK}
 ${POD_PRIORITY_CLASS_BLOCK}${SERVICE_ACCOUNT_BLOCK}
           tolerations:
