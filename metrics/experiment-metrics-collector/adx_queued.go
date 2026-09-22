@@ -518,10 +518,7 @@ func adxSDKRetryable(err error) bool {
 		return true
 	}
 	var networkErr net.Error
-	if errors.As(err, &networkErr) {
-		return true
-	}
-	return false
+	return errors.As(err, &networkErr)
 }
 
 func adxDiagnostic(err error) string {
