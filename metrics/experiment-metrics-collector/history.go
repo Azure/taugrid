@@ -80,7 +80,12 @@ func expandHistory(patterns []string) ([]string, error) {
 	return out, nil
 }
 
-func readSource(path string, checkpoint SourceCheckpoint, includeTrailingRecord bool) (sourceRead, error) {
+func readSource(
+	path string,
+	checkpoint SourceCheckpoint,
+	includeTrailingRecord bool,
+	syncSource func(*os.File) error,
+) (sourceRead, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return sourceRead{}, err
@@ -129,6 +134,9 @@ func readSource(path string, checkpoint SourceCheckpoint, includeTrailingRecord 
 	if err != nil {
 		return sourceRead{}, err
 	}
+	if err := syncSource(f); err != nil {
+		return sourceRead{}, fmt.Errorf("sync history source %s: %w", path, err)
+	}
 	return sourceRead{
 		path: path, fileID: fileID, data: raw, start: checkpoint.Offset, end: end,
 		prefix: prefix, startLine: checkpoint.Lines + 1, modTime: info.ModTime().UTC(),
@@ -143,7 +151,7 @@ func sourceLineCount(raw []byte) int {
 	return count
 }
 
-func baselineSource(path string, sequence uint64) (SourceCheckpoint, error) {
+func baselineSource(path string, sequence uint64, syncSource func(*os.File) error) (SourceCheckpoint, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return SourceCheckpoint{}, err
@@ -164,6 +172,9 @@ func baselineSource(path string, sequence uint64) (SourceCheckpoint, error) {
 	prefix, err := prefixDigest(f, end)
 	if err != nil {
 		return SourceCheckpoint{}, err
+	}
+	if err := syncSource(f); err != nil {
+		return SourceCheckpoint{}, fmt.Errorf("sync history source %s: %w", path, err)
 	}
 	return SourceCheckpoint{
 		Path: path, FileID: fileIdentity(info), Offset: end, PrefixSHA256: prefix,

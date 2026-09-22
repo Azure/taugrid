@@ -58,7 +58,7 @@ func baseOptions(root, history string, sink Sink) Options {
 	return Options{
 		Run: "run-1", Project: "project", Experiment: "experiment", Group: "group",
 		Source: "stellar-online", Out: filepath.Join(root, "out"), History: []string{history},
-		Interval: 5 * time.Millisecond, Sinks: []Sink{sink},
+		Interval: 5 * time.Millisecond, Sink: sink,
 		Now: func() time.Time { return time.Unix(1700000100, 0).UTC() },
 	}
 }
@@ -88,7 +88,7 @@ func runCollector(t *testing.T, options Options) Result {
 
 func TestRunnerRequiresSink(t *testing.T) {
 	options := baseOptions(t.TempDir(), filepath.Join(t.TempDir(), "history.jsonl"), nil)
-	options.Sinks = nil
+	options.Sink = nil
 	if _, err := New(options); err == nil || !strings.Contains(err.Error(), "required sink") {
 		t.Fatalf("error=%v, want required sink validation", err)
 	}
@@ -106,24 +106,13 @@ func TestCanonicalChunkAndRestartNoReplay(t *testing.T) {
 	if first.Events != 1 || second.Events != 0 || sink.deliveries != 1 {
 		t.Fatalf("first=%+v second=%+v deliveries=%d", first, second, sink.deliveries)
 	}
-	if paths, err := filepath.Glob(filepath.Join(options.Out, "chunks", "*.ndjson")); err != nil || len(paths) != 0 {
-		t.Fatalf("acknowledged chunk paths=%v err=%v", paths, err)
+	if paths, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json")); err != nil || len(paths) != 0 {
+		t.Fatalf("pending chunks=%v err=%v", paths, err)
 	}
 	raw := sink.chunks[0].NDJSON
 	events, err := decodeCanonicalEvents(raw)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("canonical events=%d err=%v", len(events), err)
-	}
-	manifestRaw, err := os.ReadFile(onlyPath(t, filepath.Join(options.Out, "manifests", "*.json")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest chunkManifest
-	if err := decodeOneJSON(manifestRaw, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if !manifest.Compacted || len(manifest.NDJSON) != 0 {
-		t.Fatalf("manifest was not compacted: %+v", manifest)
 	}
 }
 
@@ -277,48 +266,6 @@ func TestWatchDrainsLineAppendedImmediatelyBeforeCompletion(t *testing.T) {
 	}
 }
 
-func TestReceiptReuseAndConfigInvalidation(t *testing.T) {
-	root := t.TempDir()
-	event := testEvent(t, "train/loss")
-	raw, err := event.MarshalNDJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chunk, err := writeChunk(root, MetricEventChunk{Sequence: 1, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := &recordingSink{name: "sink", config: "a"}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, first, chunk, defaultStorage()); err != nil || reused {
-		t.Fatalf("first reused=%v err=%v", reused, err)
-	}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, first, chunk, defaultStorage()); err != nil || !reused {
-		t.Fatalf("second reused=%v err=%v", reused, err)
-	}
-	changed := &recordingSink{name: "sink", config: "b"}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, changed, chunk, defaultStorage()); err != nil || reused {
-		t.Fatalf("changed reused=%v err=%v", reused, err)
-	}
-	if first.deliveries != 1 || changed.deliveries != 1 {
-		t.Fatalf("deliveries first=%d changed=%d", first.deliveries, changed.deliveries)
-	}
-	otherEvent := testEvent(t, "eval/score")
-	otherRaw, err := otherEvent.MarshalNDJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherChunk, err := writeChunk(root, MetricEventChunk{Sequence: 2, Events: []exptelemetry.MetricEvent{otherEvent}, NDJSON: otherRaw}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, first, otherChunk, defaultStorage()); err != nil || reused {
-		t.Fatalf("new digest reused=%v err=%v", reused, err)
-	}
-	if first.deliveries != 2 {
-		t.Fatalf("new digest deliveries=%d, want 2", first.deliveries)
-	}
-}
-
 func TestCompletionStatusDeliveredBeforeDone(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
@@ -412,12 +359,12 @@ func TestCorruptCheckpointAndChunkFailClosed(t *testing.T) {
 			t.Fatal("corrupt checkpoint unexpectedly succeeded")
 		}
 	})
-	t.Run("chunk", func(t *testing.T) {
+	t.Run("pending chunk", func(t *testing.T) {
 		root := t.TempDir()
 		history := filepath.Join(root, "history.jsonl")
 		writeFile(t, history, historyRow)
 		options := baseOptions(root, history, &recordingSink{name: "test", config: "v1"})
-		writeFile(t, filepath.Join(options.Out, "chunks", "00000000000000000001-deadbeef.ndjson"), "broken\n")
+		writeFile(t, filepath.Join(options.Out, "pending", "00000000000000000001-deadbeef.json"), "broken\n")
 		runner, err := New(options)
 		if err != nil {
 			t.Fatal(err)
@@ -489,22 +436,6 @@ func TestCompletionFallsBackToFileModTime(t *testing.T) {
 	}
 }
 
-func TestReceiptDigestTamperingFailsClosed(t *testing.T) {
-	root := t.TempDir()
-	event := testEvent(t, "metric")
-	raw, _ := event.MarshalNDJSON()
-	chunk, err := writeChunk(root, MetricEventChunk{Sequence: 1, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink := &recordingSink{name: "sink", config: "v1"}
-	receipt := receiptPath(root, sink, chunk.Digest)
-	writeFile(t, receipt, fmt.Sprintf(`{"schema_version":%q,"chunk_digest":"wrong","config_identity":%q}`, ReceiptSchemaV1, sink.ConfigIdentity()))
-	if _, _, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err == nil {
-		t.Fatal("tampered receipt unexpectedly succeeded")
-	}
-}
-
 func TestCheckpointContainsIdentityPrefixOffsetAndSequence(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
@@ -564,9 +495,8 @@ func TestHistoryCrashBoundariesReplaySameDurableChunk(t *testing.T) {
 		deliveriesAfterRestart int
 	}{
 		{name: "after chunk write", point: faultAfterChunkWrite, deliveriesAfterRun: 0, deliveriesAfterRestart: 1},
-		{name: "after checkpoint write", point: faultAfterCheckpointWrite, deliveriesAfterRun: 0, deliveriesAfterRestart: 1},
+		{name: "after checkpoint write", point: faultAfterCheckpointWrite, deliveriesAfterRun: 1, deliveriesAfterRestart: 1},
 		{name: "after sink accept", point: faultAfterSinkAccept, deliveriesAfterRun: 1, deliveriesAfterRestart: 2},
-		{name: "after sink receipt", point: faultAfterSinkReceipt, deliveriesAfterRun: 1, deliveriesAfterRestart: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -586,7 +516,7 @@ func TestHistoryCrashBoundariesReplaySameDurableChunk(t *testing.T) {
 			if sink.deliveries != tt.deliveriesAfterRun {
 				t.Fatalf("deliveries after fault=%d, want %d", sink.deliveries, tt.deliveriesAfterRun)
 			}
-			manifests, err := filepath.Glob(filepath.Join(options.Out, "manifests", "*.json"))
+			manifests, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json"))
 			if err != nil || len(manifests) != 1 {
 				t.Fatalf("manifests=%v err=%v", manifests, err)
 			}
@@ -607,7 +537,7 @@ func TestHistoryCrashBoundariesReplaySameDurableChunk(t *testing.T) {
 					t.Fatalf("restarted digest=%s, durable digest=%s", chunk.Digest, durable.ChunkDigest)
 				}
 			}
-			chunks, err := filepath.Glob(filepath.Join(options.Out, "chunks", "*.ndjson"))
+			chunks, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json"))
 			if err != nil || len(chunks) != 0 {
 				t.Fatalf("acknowledged chunks=%v err=%v", chunks, err)
 			}
@@ -623,9 +553,8 @@ func TestTerminalCrashBoundariesReplaySameChunkBeforeDone(t *testing.T) {
 		deliveriesAfterRestart int
 	}{
 		{name: "after terminal chunk write", point: faultAfterTerminalChunkWrite, deliveriesAfterRun: 0, deliveriesAfterRestart: 1},
-		{name: "after terminal checkpoint write", point: faultAfterTerminalCheckpointWrite, deliveriesAfterRun: 0, deliveriesAfterRestart: 1},
+		{name: "after terminal checkpoint write", point: faultAfterTerminalCheckpointWrite, deliveriesAfterRun: 1, deliveriesAfterRestart: 1},
 		{name: "after terminal sink accept", point: faultAfterTerminalSinkAccept, deliveriesAfterRun: 1, deliveriesAfterRestart: 2},
-		{name: "after terminal sink receipt", point: faultAfterTerminalSinkReceipt, deliveriesAfterRun: 1, deliveriesAfterRestart: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -651,7 +580,7 @@ func TestTerminalCrashBoundariesReplaySameChunkBeforeDone(t *testing.T) {
 			if sink.deliveries != tt.deliveriesAfterRun {
 				t.Fatalf("deliveries after fault=%d, want %d", sink.deliveries, tt.deliveriesAfterRun)
 			}
-			manifests, err := filepath.Glob(filepath.Join(options.Out, "manifests", "*.json"))
+			manifests, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json"))
 			if err != nil || len(manifests) != 1 {
 				t.Fatalf("manifests=%v err=%v", manifests, err)
 			}
@@ -699,7 +628,7 @@ func TestPendingDurableChunkIsDeliveredBeforeReadingNewHistory(t *testing.T) {
 		t.Fatal("chunk-write fault unexpectedly succeeded")
 	}
 	var durable chunkManifest
-	raw, err := os.ReadFile(onlyPath(t, filepath.Join(options.Out, "manifests", "*.json")))
+	raw, err := os.ReadFile(onlyPath(t, filepath.Join(options.Out, "pending", "*.json")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,52 +647,12 @@ func TestPendingDurableChunkIsDeliveredBeforeReadingNewHistory(t *testing.T) {
 	}
 }
 
-func TestRestartDeliversOnlySinksMissingReceipts(t *testing.T) {
-	root := t.TempDir()
-	history := filepath.Join(root, "history.jsonl")
-	writeFile(t, history, historyRow)
-	first := &recordingSink{name: "first", config: "v1"}
-	second := &recordingSink{name: "second", config: "v1"}
-	options := baseOptions(root, history, first)
-	options.Sinks = []Sink{first, second}
-	options.fault = failOnce(faultAfterSinkReceipt)
-	runner, err := New(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runner.Run(context.Background()); err == nil {
-		t.Fatal("receipt fault unexpectedly succeeded")
-	}
-	if first.deliveries != 1 || second.deliveries != 0 {
-		t.Fatalf("deliveries before restart first=%d second=%d", first.deliveries, second.deliveries)
-	}
-	options.fault = nil
-	runCollector(t, options)
-	if first.deliveries != 1 || second.deliveries != 1 {
-		t.Fatalf("deliveries after restart first=%d second=%d", first.deliveries, second.deliveries)
-	}
-}
-
-func TestCompactedSpoolRejectsRequiredSinkChanges(t *testing.T) {
+func TestPendingSpoolRejectsSinkConfigurationChanges(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
 	writeFile(t, history, historyRow)
 	original := &recordingSink{name: "remote-write-v1", config: "endpoint-a"}
 	options := baseOptions(root, history, original)
-	runCollector(t, options)
-
-	reconfigured := &recordingSink{name: "remote-write-v1", config: "endpoint-b"}
-	added := &recordingSink{name: "added-sink", config: "destination-a"}
-	options.Sinks = []Sink{reconfigured, added}
-	expectRunError(t, options, "configuration")
-}
-
-func TestManifestCanReconstructMissingChunk(t *testing.T) {
-	root := t.TempDir()
-	history := filepath.Join(root, "history.jsonl")
-	writeFile(t, history, historyRow)
-	sink := &recordingSink{name: "test", config: "v1"}
-	options := baseOptions(root, history, sink)
 	options.fault = failOnce(faultAfterChunkWrite)
 	runner, err := New(options)
 	if err != nil {
@@ -772,52 +661,34 @@ func TestManifestCanReconstructMissingChunk(t *testing.T) {
 	if _, err := runner.Run(context.Background()); err == nil {
 		t.Fatal("chunk-write fault unexpectedly succeeded")
 	}
-	chunkPath := onlyPath(t, filepath.Join(options.Out, "chunks", "*.ndjson"))
-	if err := os.Remove(chunkPath); err != nil {
-		t.Fatal(err)
-	}
+
+	reconfigured := &recordingSink{name: "remote-write-v1", config: "endpoint-b"}
+	options.Sink = reconfigured
 	options.fault = nil
-	runCollector(t, options)
-	if _, err := os.Stat(chunkPath); !os.IsNotExist(err) {
-		t.Fatalf("acknowledged reconstructed chunk was not compacted: %v", err)
-	}
-	if sink.deliveries != 1 {
-		t.Fatalf("reconstructed chunk deliveries=%d, want 1", sink.deliveries)
-	}
+	expectRunError(t, options, "configuration")
 }
 
 func TestAbandonedWriterTempsAreDiscarded(t *testing.T) {
-	t.Run("manifest", func(t *testing.T) {
+	t.Run("pending", func(t *testing.T) {
 		options, sink := pendingSpool(t)
-		manifest := onlyPath(t, filepath.Join(options.Out, "manifests", "*.json"))
-		writeFile(t, filepath.Join(filepath.Dir(manifest), "."+filepath.Base(manifest)+".tmp-dead"), "{")
+		pending := onlyPath(t, filepath.Join(options.Out, "pending", "*.json"))
+		writeFile(t, filepath.Join(filepath.Dir(pending), "."+filepath.Base(pending)+".tmp-dead"), "{")
 		runCollector(t, options)
 		if sink.deliveries != 1 {
 			t.Fatalf("deliveries=%d, want 1", sink.deliveries)
-		}
-	})
-	t.Run("chunk", func(t *testing.T) {
-		options, sink := pendingSpool(t)
-		chunk := onlyPath(t, filepath.Join(options.Out, "chunks", "*.ndjson"))
-		writeFile(t, filepath.Join(filepath.Dir(chunk), "."+filepath.Base(chunk)+".tmp-dead"), "partial")
-		runCollector(t, options)
-		if sink.deliveries != 1 {
-			t.Fatalf("deliveries=%d, want 1", sink.deliveries)
-		}
-	})
-	t.Run("receipt", func(t *testing.T) {
-		options, sink := completedSpool(t)
-		receipt := onlyPath(t, filepath.Join(options.Out, "receipts", "*", "*", "*.json"))
-		writeFile(t, filepath.Join(filepath.Dir(receipt), "."+filepath.Base(receipt)+".tmp-dead"), "{")
-		runCollector(t, options)
-		if sink.deliveries != 1 {
-			t.Fatalf("receipt recovery redelivered chunk: %d", sink.deliveries)
 		}
 	})
 	t.Run("unknown file remains fail closed", func(t *testing.T) {
 		options, _ := pendingSpool(t)
-		writeFile(t, filepath.Join(options.Out, "chunks", ".unknown.tmp-dead"), "partial")
+		writeFile(t, filepath.Join(options.Out, "pending", ".unknown.tmp-dead"), "partial")
 		expectRunError(t, options, "unexpected file")
+	})
+	t.Run("unknown directory remains fail closed", func(t *testing.T) {
+		options, _ := pendingSpool(t)
+		if err := os.Mkdir(filepath.Join(options.Out, "pending", "unknown"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		expectRunError(t, options, "unexpected directory")
 	})
 }
 
@@ -825,8 +696,7 @@ func TestDurableWriteReportsSyncFailures(t *testing.T) {
 	syncErr := errors.New("injected sync failure")
 	for _, relative := range []string{
 		"checkpoint.json",
-		filepath.Join("manifests", strings.Repeat("0", 20)+"-"+strings.Repeat("a", 64)+".json"),
-		filepath.Join("receipts", "sink", strings.Repeat("b", 64), strings.Repeat("c", 64)+".json"),
+		filepath.Join("pending", strings.Repeat("0", 20)+"-"+strings.Repeat("a", 64)+".json"),
 	} {
 		t.Run(relative, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), relative)
@@ -844,7 +714,7 @@ func TestDurableWriteReportsSyncFailures(t *testing.T) {
 		})
 	}
 
-	path := filepath.Join(t.TempDir(), "chunks", strings.Repeat("0", 20)+"-"+strings.Repeat("d", 64)+".ndjson")
+	path := filepath.Join(t.TempDir(), "pending", strings.Repeat("0", 20)+"-"+strings.Repeat("d", 64)+".json")
 	ops := defaultStorage()
 	ops.syncFile = func(*os.File) error { return syncErr }
 	if err := writeFileDurable(path, []byte("{}\n"), 0o644, ops); !errors.Is(err, syncErr) {
@@ -855,7 +725,38 @@ func TestDurableWriteReportsSyncFailures(t *testing.T) {
 	}
 }
 
-func TestAcknowledgedPayloadsAreCompactedAndRestartIsBounded(t *testing.T) {
+func TestSourceSyncFailurePreventsDurableProgress(t *testing.T) {
+	syncErr := errors.New("source sync failed")
+	t.Run("history", func(t *testing.T) {
+		root := t.TempDir()
+		history := filepath.Join(root, "history.jsonl")
+		writeFile(t, history, historyRow)
+		options := baseOptions(root, history, &recordingSink{name: "test", config: "v1"})
+		options.syncSource = func(*os.File) error { return syncErr }
+		expectRunError(t, options, "source sync failed")
+		if _, err := os.Stat(filepath.Join(options.Out, "checkpoint.json")); !os.IsNotExist(err) {
+			t.Fatalf("source sync failure wrote checkpoint: %v", err)
+		}
+		if pending, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json")); err != nil || len(pending) != 0 {
+			t.Fatalf("source sync failure wrote pending chunks=%v err=%v", pending, err)
+		}
+	})
+	t.Run("baseline", func(t *testing.T) {
+		root := t.TempDir()
+		history := filepath.Join(root, "history.jsonl")
+		writeFile(t, history, historyRow)
+		options := baseOptions(root, history, &recordingSink{name: "test", config: "v1"})
+		options.BaselineExistingHistory = true
+		options.ReadyFile = filepath.Join(root, "ready")
+		options.syncSource = func(*os.File) error { return syncErr }
+		expectRunError(t, options, "source sync failed")
+		if _, err := os.Stat(filepath.Join(options.Out, "checkpoint.json")); !os.IsNotExist(err) {
+			t.Fatalf("baseline sync failure wrote checkpoint: %v", err)
+		}
+	})
+}
+
+func TestAcknowledgedPayloadsAreDeletedAndRestartIsBounded(t *testing.T) {
 	root := t.TempDir()
 	history := filepath.Join(root, "history.jsonl")
 	writeFile(t, history, "")
@@ -866,25 +767,8 @@ func TestAcknowledgedPayloadsAreCompactedAndRestartIsBounded(t *testing.T) {
 		runCollector(t, options)
 	}
 	deliveries := sink.deliveries
-	manifests, err := filepath.Glob(filepath.Join(options.Out, "manifests", "*.json"))
-	if err != nil || len(manifests) != 25 {
-		t.Fatalf("manifests=%d err=%v", len(manifests), err)
-	}
-	for _, path := range manifests {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var manifest chunkManifest
-		if err := decodeOneJSON(raw, &manifest); err != nil {
-			t.Fatal(err)
-		}
-		if !manifest.Compacted || len(manifest.NDJSON) != 0 {
-			t.Fatalf("manifest retained acknowledged payload: %s", path)
-		}
-	}
-	if chunks, err := filepath.Glob(filepath.Join(options.Out, "chunks", "*.ndjson")); err != nil || len(chunks) != 0 {
-		t.Fatalf("acknowledged chunks=%v err=%v", chunks, err)
+	if pending, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json")); err != nil || len(pending) != 0 {
+		t.Fatalf("acknowledged pending chunks=%v err=%v", pending, err)
 	}
 	runCollector(t, options)
 	if sink.deliveries != deliveries {
@@ -893,48 +777,27 @@ func TestAcknowledgedPayloadsAreCompactedAndRestartIsBounded(t *testing.T) {
 }
 
 func TestSpoolMetadataAndJSONFramingFailClosed(t *testing.T) {
-	t.Run("manifest schema", func(t *testing.T) {
-		options, _ := completedSpool(t)
-		path := onlyPath(t, filepath.Join(options.Out, "manifests", "*.json"))
-		rewriteJSONField(t, path, "schema_version", "unknown")
-		expectRunError(t, options, "manifest")
-	})
-	t.Run("chunk digest", func(t *testing.T) {
+	t.Run("pending schema", func(t *testing.T) {
 		options, _ := pendingSpool(t)
-		path := onlyPath(t, filepath.Join(options.Out, "chunks", "*.ndjson"))
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.WriteString("{}\n"); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.Close(); err != nil {
-			t.Fatal(err)
-		}
-		expectRunError(t, options, "chunk")
-	})
-	t.Run("receipt schema", func(t *testing.T) {
-		options, _ := completedSpool(t)
-		path := onlyPath(t, filepath.Join(options.Out, "receipts", "*", "*", "*.json"))
+		path := onlyPath(t, filepath.Join(options.Out, "pending", "*.json"))
 		rewriteJSONField(t, path, "schema_version", "unknown")
-		expectRunError(t, options, "receipt")
+		expectRunError(t, options, "pending")
 	})
-	t.Run("receipt config", func(t *testing.T) {
-		options, _ := completedSpool(t)
-		path := onlyPath(t, filepath.Join(options.Out, "receipts", "*", "*", "*.json"))
-		rewriteJSONField(t, path, "config_identity", "other")
-		expectRunError(t, options, "receipt")
+	t.Run("pending digest", func(t *testing.T) {
+		options, _ := pendingSpool(t)
+		path := onlyPath(t, filepath.Join(options.Out, "pending", "*.json"))
+		rewriteJSONField(t, path, "chunk_digest", strings.Repeat("0", 64))
+		expectRunError(t, options, "digest")
 	})
 	t.Run("collector config", func(t *testing.T) {
-		options, _ := completedSpool(t)
+		options, _ := pendingSpool(t)
 		options.Project = "other-project"
 		expectRunError(t, options, "configuration")
 	})
-	t.Run("manifest trailing object", func(t *testing.T) {
-		options, _ := completedSpool(t)
-		appendFile(t, onlyPath(t, filepath.Join(options.Out, "manifests", "*.json")), "{}")
-		expectRunError(t, options, "manifest")
+	t.Run("pending trailing object", func(t *testing.T) {
+		options, _ := pendingSpool(t)
+		appendFile(t, onlyPath(t, filepath.Join(options.Out, "pending", "*.json")), "{}")
+		expectRunError(t, options, "pending")
 	})
 	t.Run("checkpoint trailing object", func(t *testing.T) {
 		options, _ := completedSpool(t)
@@ -954,7 +817,7 @@ func TestSpoolMetadataAndJSONFramingFailClosed(t *testing.T) {
 		}
 		sources := checkpoint["sources"].(map[string]any)
 		for _, source := range sources {
-			source.(map[string]any)["chunk_digest"] = strings.Repeat("0", 64)
+			source.(map[string]any)["chunk_digest"] = "wrong"
 		}
 		raw, err = json.Marshal(checkpoint)
 		if err != nil {
@@ -964,11 +827,6 @@ func TestSpoolMetadataAndJSONFramingFailClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		expectRunError(t, options, "checkpoint")
-	})
-	t.Run("receipt trailing object", func(t *testing.T) {
-		options, _ := completedSpool(t)
-		appendFile(t, onlyPath(t, filepath.Join(options.Out, "receipts", "*", "*", "*.json")), "{}")
-		expectRunError(t, options, "receipt")
 	})
 	t.Run("history trailing object", func(t *testing.T) {
 		root := t.TempDir()

@@ -5,7 +5,6 @@ package collector
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -35,14 +34,12 @@ type terminalCheckpoint struct {
 	ChunkDigest string `json:"chunk_digest"`
 }
 
-// chunkManifest is the durable transaction record: it is written before the
-// checkpoint advances, contains enough data to reconstruct the chunk, and is
-// replayed to every configured sink before any new source bytes are read.
+// chunkManifest is the single durable pending-delivery record. It contains
+// enough source metadata and payload to resume after a crash.
 type chunkManifest struct {
 	SchemaVersion     string `json:"schema_version"`
 	ManifestDigest    string `json:"manifest_digest"`
 	ChunkDigest       string `json:"chunk_digest"`
-	ChunkFile         string `json:"chunk_file"`
 	ConfigIdentity    string `json:"config_identity"`
 	Kind              string `json:"kind"`
 	Sequence          uint64 `json:"sequence"`
@@ -55,8 +52,7 @@ type chunkManifest struct {
 	StartPrefixSHA256 string `json:"start_prefix_sha256,omitempty"`
 	PrefixSHA256      string `json:"prefix_sha256,omitempty"`
 	EventCount        int    `json:"event_count"`
-	Compacted         bool   `json:"compacted,omitempty"`
-	NDJSON            []byte `json:"ndjson,omitempty"`
+	NDJSON            []byte `json:"ndjson"`
 }
 
 type storageOps struct {
@@ -70,11 +66,9 @@ const (
 	faultAfterChunkWrite              faultPoint = "after_chunk_write"
 	faultAfterCheckpointWrite         faultPoint = "after_checkpoint_write"
 	faultAfterSinkAccept              faultPoint = "after_sink_accept"
-	faultAfterSinkReceipt             faultPoint = "after_sink_receipt"
 	faultAfterTerminalChunkWrite      faultPoint = "after_terminal_chunk_write"
 	faultAfterTerminalCheckpointWrite faultPoint = "after_terminal_checkpoint_write"
 	faultAfterTerminalSinkAccept      faultPoint = "after_terminal_sink_accept"
-	faultAfterTerminalSinkReceipt     faultPoint = "after_terminal_sink_receipt"
 )
 
 func loadCheckpoints(path string) (checkpointSet, bool, error) {
@@ -103,6 +97,19 @@ func loadCheckpoints(path string) (checkpointSet, bool, error) {
 		}
 	}
 	return result, true, nil
+}
+
+func cloneCheckpoints(checkpoints checkpointSet) checkpointSet {
+	clone := checkpoints
+	clone.Sources = make(map[string]SourceCheckpoint, len(checkpoints.Sources))
+	for path, checkpoint := range checkpoints.Sources {
+		clone.Sources[path] = checkpoint
+	}
+	if checkpoints.Terminal != nil {
+		terminal := *checkpoints.Terminal
+		clone.Terminal = &terminal
+	}
+	return clone
 }
 
 func (r *Runner) storage() storageOps {
@@ -233,129 +240,74 @@ func selectStorage(stores []storageOps) storageOps {
 	return stores[0]
 }
 
-func writeChunk(out string, chunk MetricEventChunk, manifest *chunkManifest, stores ...storageOps) (MetricEventChunk, error) {
+func pendingPath(out string, sequence uint64, digest string) string {
+	return filepath.Join(out, "pending", fmt.Sprintf("%020d-%s.json", sequence, digest))
+}
+
+func writePending(out string, chunk MetricEventChunk, manifest *chunkManifest, stores ...storageOps) (MetricEventChunk, string, error) {
 	ops := selectStorage(stores)
 	sum := sha256.Sum256(chunk.NDJSON)
 	chunk.Digest = hex.EncodeToString(sum[:])
 	chunk.SchemaVersion = ChunkSchemaV1
-	dir := filepath.Join(out, "chunks")
-	chunk.Path = filepath.Join(dir, fmt.Sprintf("%020d-%s.ndjson", chunk.Sequence, chunk.Digest))
-	if manifest != nil {
-		persistedManifest := *manifest
-		persistedManifest.SchemaVersion = ChunkManifestSchemaV1
-		persistedManifest.ChunkDigest = chunk.Digest
-		persistedManifest.ChunkFile = filepath.Base(chunk.Path)
-		persistedManifest.Sequence = chunk.Sequence
-		persistedManifest.SourcePath = chunk.SourcePath
-		persistedManifest.SourceFileID = chunk.SourceFileID
-		persistedManifest.StartOffset = chunk.StartOffset
-		persistedManifest.EndOffset = chunk.EndOffset
-		persistedManifest.EventCount = len(chunk.Events)
-		persistedManifest.NDJSON = chunk.NDJSON
-		persistedManifest.ManifestDigest = manifestDigest(persistedManifest)
-		*manifest = persistedManifest
-		manifestPath := filepath.Join(out, "manifests", fmt.Sprintf("%020d-%s.json", chunk.Sequence, chunk.Digest))
-		if existing, err := os.ReadFile(manifestPath); err == nil {
-			var persisted chunkManifest
-			if err := decodeOneJSON(existing, &persisted); err != nil || persisted.ManifestDigest != persistedManifest.ManifestDigest {
-				return MetricEventChunk{}, fmt.Errorf("immutable manifest collision at %s", manifestPath)
-			}
-		} else if !os.IsNotExist(err) {
-			return MetricEventChunk{}, err
-		} else if err := writeJSONDurable(manifestPath, persistedManifest, ops); err != nil {
-			return MetricEventChunk{}, err
-		}
-	}
-	if existing, err := os.ReadFile(chunk.Path); err == nil {
-		if !bytes.Equal(existing, chunk.NDJSON) {
-			return MetricEventChunk{}, fmt.Errorf("immutable chunk collision at %s", chunk.Path)
+	path := pendingPath(out, chunk.Sequence, chunk.Digest)
+	chunk.Path = path
+
+	persisted := *manifest
+	persisted.SchemaVersion = ChunkManifestSchemaV1
+	persisted.ChunkDigest = chunk.Digest
+	persisted.Sequence = chunk.Sequence
+	persisted.SourcePath = chunk.SourcePath
+	persisted.SourceFileID = chunk.SourceFileID
+	persisted.StartOffset = chunk.StartOffset
+	persisted.EndOffset = chunk.EndOffset
+	persisted.EventCount = len(chunk.Events)
+	persisted.NDJSON = chunk.NDJSON
+	persisted.ManifestDigest = manifestDigest(persisted)
+	*manifest = persisted
+
+	if raw, err := os.ReadFile(path); err == nil {
+		var existing chunkManifest
+		if err := decodeOneJSON(raw, &existing); err != nil || existing.ManifestDigest != persisted.ManifestDigest {
+			return MetricEventChunk{}, "", fmt.Errorf("immutable pending chunk collision at %s", path)
 		}
 	} else if !os.IsNotExist(err) {
-		return MetricEventChunk{}, err
-	} else if err := writeFileDurable(chunk.Path, chunk.NDJSON, 0o644, ops); err != nil {
-		return MetricEventChunk{}, err
+		return MetricEventChunk{}, "", err
+	} else if err := writeJSONDurable(path, persisted, ops); err != nil {
+		return MetricEventChunk{}, "", err
 	}
-	return chunk, nil
+	return chunk, path, nil
 }
 
-func scanSpool(out, configIdentity string, sinks []Sink, ops storageOps, visit func(string, chunkManifest) error) (int, error) {
-	manifestRoot := filepath.Join(out, "manifests")
-	paths, err := spoolFiles(manifestRoot, "manifest", ops)
+func loadPending(out, configIdentity string, ops storageOps) (string, *chunkManifest, error) {
+	root := filepath.Join(out, "pending")
+	paths, err := spoolFiles(root, ops)
 	if err != nil {
-		return 0, err
+		return "", nil, err
 	}
-	sort.Strings(paths)
-	terminalSeen := false
-	for index, path := range paths {
-		if filepath.Dir(path) != manifestRoot || filepath.Ext(path) != ".json" {
-			return 0, fmt.Errorf("unexpected file in manifest spool: %s", path)
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return 0, err
-		}
-		var manifest chunkManifest
-		if err := decodeOneJSON(raw, &manifest); err != nil {
-			return 0, fmt.Errorf("read spool manifest %s: %w", path, err)
-		}
-		if err := validateManifest(path, manifest, configIdentity); err != nil {
-			return 0, err
-		}
-		if manifest.Sequence != uint64(index)+1 {
-			return 0, fmt.Errorf("spool manifest sequence gap at %s", path)
-		}
-		if terminalSeen {
-			return 0, fmt.Errorf("spool manifest follows terminal manifest: %s", path)
-		}
-		terminalSeen = manifest.Kind == "terminal"
-		chunkPath := filepath.Join(out, "chunks", manifest.ChunkFile)
-		if manifest.Compacted {
-			if err := requireReceipts(out, sinks, manifest); err != nil {
-				return 0, err
-			}
-			if err := removeDurable(chunkPath, ops); err != nil {
-				return 0, err
-			}
-		} else if raw, err := os.ReadFile(chunkPath); err == nil {
-			if !bytes.Equal(raw, manifest.NDJSON) {
-				return 0, fmt.Errorf("spool chunk does not match manifest: %s", chunkPath)
-			}
-		} else if !os.IsNotExist(err) {
-			return 0, err
-		} else if err := writeFileDurable(chunkPath, manifest.NDJSON, 0o644, ops); err != nil {
-			return 0, fmt.Errorf("restore spool chunk %s: %w", chunkPath, err)
-		}
-		if err := visit(path, manifest); err != nil {
-			return 0, err
+	for _, path := range paths {
+		if filepath.Dir(path) != root || !validPendingName(filepath.Base(path)) {
+			return "", nil, fmt.Errorf("unexpected file in pending spool: %s", path)
 		}
 	}
-	chunkRoot := filepath.Join(out, "chunks")
-	chunks, err := spoolFiles(chunkRoot, "chunk", ops)
+	if len(paths) > 1 {
+		return "", nil, fmt.Errorf("pending spool contains multiple chunks")
+	}
+	if len(paths) == 0 {
+		return "", nil, nil
+	}
+	path := paths[0]
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return 0, err
+		return "", nil, err
 	}
-	for _, path := range chunks {
-		if filepath.Dir(path) != chunkRoot || filepath.Ext(path) != ".ndjson" {
-			return 0, fmt.Errorf("unexpected file in chunk spool: %s", path)
-		}
-		base := strings.TrimSuffix(filepath.Base(path), ".ndjson")
-		manifestPath := filepath.Join(manifestRoot, base+".json")
-		raw, err := os.ReadFile(manifestPath)
-		if err != nil {
-			return 0, fmt.Errorf("spool contains chunk without a matching manifest: %s", path)
-		}
-		var manifest chunkManifest
-		if err := decodeOneJSON(raw, &manifest); err != nil {
-			return 0, fmt.Errorf("read spool manifest %s: %w", manifestPath, err)
-		}
-		if manifest.Compacted {
-			return 0, fmt.Errorf("compacted manifest retains chunk payload: %s", path)
-		}
+	var manifest chunkManifest
+	if err := decodeOneJSON(raw, &manifest); err != nil {
+		return "", nil, fmt.Errorf("read pending chunk %s: %w", path, err)
 	}
-	if err := validateReceipts(out, ops); err != nil {
-		return 0, err
+	if err := validateManifest(path, manifest, configIdentity); err != nil {
+		return "", nil, err
 	}
-	return len(paths), nil
+	return path, &manifest, nil
 }
 
 func newHistoryManifest(configIdentity string, checkpoint SourceCheckpoint, read sourceRead, eventCount int) chunkManifest {
@@ -401,25 +353,19 @@ func validateManifest(path string, manifest chunkManifest, configIdentity string
 		manifest.ManifestDigest != manifestDigest(manifest) ||
 		manifest.ConfigIdentity != configIdentity ||
 		manifest.EventCount <= 0 {
-		return fmt.Errorf("spool manifest %s has invalid schema, digest, or configuration", path)
+		return fmt.Errorf("pending chunk %s has invalid schema, digest, or configuration", path)
 	}
-	wantFile := fmt.Sprintf("%020d-%s.ndjson", manifest.Sequence, manifest.ChunkDigest)
-	if manifest.ChunkFile != wantFile || filepath.Base(path) != strings.TrimSuffix(wantFile, ".ndjson")+".json" {
-		return fmt.Errorf("spool manifest %s has invalid chunk reference", path)
+	wantFile := fmt.Sprintf("%020d-%s.json", manifest.Sequence, manifest.ChunkDigest)
+	if filepath.Base(path) != wantFile {
+		return fmt.Errorf("pending chunk %s has invalid filename", path)
 	}
-	if manifest.Compacted {
-		if len(manifest.NDJSON) != 0 {
-			return fmt.Errorf("spool manifest %s has compacted payload bytes", path)
-		}
-	} else {
-		sum := sha256.Sum256(manifest.NDJSON)
-		if hex.EncodeToString(sum[:]) != manifest.ChunkDigest {
-			return fmt.Errorf("spool manifest %s payload digest mismatch", path)
-		}
-		events, err := decodeCanonicalEvents(manifest.NDJSON)
-		if err != nil || len(events) != manifest.EventCount {
-			return fmt.Errorf("spool manifest %s has invalid events: count=%d err=%v", path, len(events), err)
-		}
+	sum := sha256.Sum256(manifest.NDJSON)
+	if hex.EncodeToString(sum[:]) != manifest.ChunkDigest {
+		return fmt.Errorf("pending chunk %s payload digest mismatch", path)
+	}
+	events, err := decodeCanonicalEvents(manifest.NDJSON)
+	if err != nil || len(events) != manifest.EventCount {
+		return fmt.Errorf("pending chunk %s has invalid events: count=%d err=%v", path, len(events), err)
 	}
 	switch manifest.Kind {
 	case "history":
@@ -427,53 +373,21 @@ func validateManifest(path string, manifest chunkManifest, configIdentity string
 			manifest.StartOffset < 0 || manifest.EndOffset <= manifest.StartOffset ||
 			manifest.StartLines < 0 || manifest.EndLines <= manifest.StartLines ||
 			manifest.PrefixSHA256 == "" {
-			return fmt.Errorf("spool manifest %s has invalid history range", path)
+			return fmt.Errorf("pending chunk %s has invalid history range", path)
 		}
 	case "terminal":
 		if manifest.SourcePath == "" || manifest.SourceFileID != "completion-status" ||
 			manifest.StartOffset != 0 || manifest.EndOffset != 0 ||
 			manifest.StartLines != 0 || manifest.EndLines != 0 {
-			return fmt.Errorf("spool manifest %s has invalid terminal metadata", path)
+			return fmt.Errorf("pending chunk %s has invalid terminal metadata", path)
 		}
 	default:
-		return fmt.Errorf("spool manifest %s has unknown kind %q", path, manifest.Kind)
+		return fmt.Errorf("pending chunk %s has unknown kind %q", path, manifest.Kind)
 	}
 	return nil
 }
 
-func validateReceipts(out string, ops storageOps) error {
-	root := filepath.Join(out, "receipts")
-	paths, err := spoolFiles(root, "receipt", ops)
-	if err != nil {
-		return err
-	}
-	for _, path := range paths {
-		if filepath.Ext(path) != ".json" {
-			return fmt.Errorf("unexpected file in receipt spool: %s", path)
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		var ack DeliveryAck
-		if err := decodeOneJSON(raw, &ack); err != nil {
-			return fmt.Errorf("read delivery receipt %s: %w", path, err)
-		}
-		if err := validateReceipt(path, ack); err != nil {
-			return err
-		}
-		matches, err := filepath.Glob(filepath.Join(out, "manifests", "*-"+ack.ChunkDigest+".json"))
-		if err != nil {
-			return err
-		}
-		if len(matches) != 1 {
-			return fmt.Errorf("delivery receipt %s has no matching durable chunk", path)
-		}
-	}
-	return nil
-}
-
-func spoolFiles(root, kind string, ops storageOps) ([]string, error) {
+func spoolFiles(root string, ops storageOps) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -482,15 +396,18 @@ func spoolFiles(root, kind string, ops storageOps) ([]string, error) {
 			}
 			return err
 		}
-		if path == root || entry.IsDir() {
+		if path == root {
 			return nil
+		}
+		if entry.IsDir() {
+			return fmt.Errorf("unexpected directory in pending spool: %s", path)
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("spool symlink is not allowed: %s", path)
 		}
-		if atomicTarget, ok := recognizedAtomicTemp(entry.Name(), kind); ok {
-			if !validSpoolName(atomicTarget, kind) {
-				return fmt.Errorf("unexpected writer temp file in %s spool: %s", kind, path)
+		if target, ok := recognizedAtomicTemp(entry.Name()); ok {
+			if !validPendingName(target) {
+				return fmt.Errorf("unexpected writer temp file in pending spool: %s", path)
 			}
 			return removeDurable(path, ops)
 		}
@@ -501,7 +418,7 @@ func spoolFiles(root, kind string, ops storageOps) ([]string, error) {
 	return paths, err
 }
 
-func recognizedAtomicTemp(name, kind string) (string, bool) {
+func recognizedAtomicTemp(name string) (string, bool) {
 	if !strings.HasPrefix(name, ".") {
 		return "", false
 	}
@@ -510,66 +427,23 @@ func recognizedAtomicTemp(name, kind string) (string, bool) {
 		return "", false
 	}
 	target := name[1:index]
-	return target, validSpoolName(target, kind)
+	return target, validPendingName(target)
 }
 
-func validSpoolName(name, kind string) bool {
-	switch kind {
-	case "manifest":
-		if len(name) != 20+1+sha256.Size*2+len(".json") || !strings.HasSuffix(name, ".json") {
-			return false
-		}
-		return validSequenceDigestName(strings.TrimSuffix(name, ".json"))
-	case "chunk":
-		if len(name) != 20+1+sha256.Size*2+len(".ndjson") || !strings.HasSuffix(name, ".ndjson") {
-			return false
-		}
-		return validSequenceDigestName(strings.TrimSuffix(name, ".ndjson"))
-	case "receipt":
-		return len(name) == sha256.Size*2+len(".json") &&
-			strings.HasSuffix(name, ".json") &&
-			validDigest(strings.TrimSuffix(name, ".json"))
-	default:
+func validPendingName(name string) bool {
+	if len(name) != 20+1+sha256.Size*2+len(".json") || !strings.HasSuffix(name, ".json") {
 		return false
 	}
-}
-
-func validSequenceDigestName(name string) bool {
-	if len(name) != 20+1+sha256.Size*2 || name[20] != '-' {
+	stem := strings.TrimSuffix(name, ".json")
+	if stem[20] != '-' {
 		return false
 	}
-	for _, char := range name[:20] {
+	for _, char := range stem[:20] {
 		if char < '0' || char > '9' {
 			return false
 		}
 	}
-	return validDigest(name[21:])
-}
-
-func validateReceipt(path string, ack DeliveryAck) error {
-	if ack.SchemaVersion != ReceiptSchemaV1 ||
-		!validDigest(ack.ChunkDigest) ||
-		strings.TrimSpace(ack.ConfigIdentity) == "" ||
-		strings.TrimSpace(ack.Sink) == "" ||
-		ack.Samples < 0 || ack.Requests < 0 || ack.Retries < 0 ||
-		ack.DeliveredAt.IsZero() {
-		return fmt.Errorf("delivery receipt %s has invalid schema or fields", path)
-	}
-	for key, value := range ack.Metadata {
-		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 1024 {
-			return fmt.Errorf("delivery receipt %s has invalid metadata", path)
-		}
-	}
-	configHash := sha256.Sum256([]byte(ack.ConfigIdentity))
-	wantSuffix := filepath.Join(
-		fileutil.SafePathComponent(ack.Sink),
-		hex.EncodeToString(configHash[:]),
-		ack.ChunkDigest+".json",
-	)
-	if !strings.HasSuffix(path, wantSuffix) {
-		return fmt.Errorf("delivery receipt %s path does not match its contents", path)
-	}
-	return nil
+	return validDigest(stem[21:])
 }
 
 func validDigest(value string) bool {
@@ -607,124 +481,6 @@ func decodeCanonicalEvents(raw []byte) ([]exptelemetry.MetricEvent, error) {
 		events = append(events, event)
 	}
 	return events, nil
-}
-
-func receiptPath(out string, sink Sink, digest string) string {
-	configHash := sha256.Sum256([]byte(sink.ConfigIdentity()))
-	return filepath.Join(out, "receipts", fileutil.SafePathComponent(sink.Name()), hex.EncodeToString(configHash[:]), digest+".json")
-}
-
-func requireReceipts(out string, sinks []Sink, manifest chunkManifest) error {
-	for _, sink := range sinks {
-		path := receiptPath(out, sink, manifest.ChunkDigest)
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("compacted chunk %s is missing required receipt for %s: %w", manifest.ChunkDigest, sink.Name(), err)
-		}
-		var ack DeliveryAck
-		if err := decodeOneJSON(raw, &ack); err != nil {
-			return fmt.Errorf("read delivery receipt %s: %w", path, err)
-		}
-		if err := validateReceipt(path, ack); err != nil {
-			return err
-		}
-		if ack.ChunkDigest != manifest.ChunkDigest ||
-			ack.ConfigIdentity != sink.ConfigIdentity() ||
-			ack.Sink != sink.Name() ||
-			ack.Samples != manifest.EventCount {
-			return fmt.Errorf("delivery receipt %s does not match compacted chunk and sink configuration", path)
-		}
-	}
-	return nil
-}
-
-func compactManifest(out, path string, manifest chunkManifest, sinks []Sink, ops storageOps) error {
-	if manifest.Compacted {
-		return removeDurable(filepath.Join(out, "chunks", manifest.ChunkFile), ops)
-	}
-	if err := requireReceipts(out, sinks, manifest); err != nil {
-		return err
-	}
-	manifest.Compacted = true
-	manifest.NDJSON = nil
-	manifest.ManifestDigest = manifestDigest(manifest)
-	if err := writeJSONDurable(path, manifest, ops); err != nil {
-		return fmt.Errorf("compact spool manifest %s: %w", path, err)
-	}
-	if err := removeDurable(filepath.Join(out, "chunks", manifest.ChunkFile), ops); err != nil {
-		return fmt.Errorf("remove acknowledged chunk %s: %w", manifest.ChunkDigest, err)
-	}
-	return nil
-}
-
-func deliverWithReceipt(
-	ctx context.Context,
-	out string,
-	sink Sink,
-	chunk MetricEventChunk,
-	ops storageOps,
-	injectors ...func(faultPoint) error,
-) (DeliveryAck, bool, error) {
-	var inject func(faultPoint) error
-	if len(injectors) > 1 {
-		return DeliveryAck{}, false, fmt.Errorf("deliverWithReceipt accepts at most one fault injector")
-	}
-	if len(injectors) == 1 {
-		inject = injectors[0]
-	}
-	path := receiptPath(out, sink, chunk.Digest)
-	if raw, err := os.ReadFile(path); err == nil {
-		var ack DeliveryAck
-		if err := decodeOneJSON(raw, &ack); err != nil {
-			return DeliveryAck{}, false, fmt.Errorf("read delivery receipt %s: %w", path, err)
-		}
-		if err := validateReceipt(path, ack); err != nil {
-			return DeliveryAck{}, false, err
-		}
-		if ack.ChunkDigest != chunk.Digest || ack.ConfigIdentity != sink.ConfigIdentity() || ack.Sink != sink.Name() {
-			return DeliveryAck{}, false, fmt.Errorf("delivery receipt %s does not match chunk and sink configuration", path)
-		}
-		if ack.Samples != len(chunk.Events) {
-			return DeliveryAck{}, false, fmt.Errorf("delivery receipt %s sample count does not match chunk", path)
-		}
-		return ack, true, nil
-	} else if !os.IsNotExist(err) {
-		return DeliveryAck{}, false, err
-	}
-	ack, err := sink.Deliver(ctx, chunk)
-	if err != nil {
-		return DeliveryAck{}, false, err
-	}
-	acceptPoint := faultAfterSinkAccept
-	receiptPoint := faultAfterSinkReceipt
-	if chunk.SourceFileID == "completion-status" {
-		acceptPoint = faultAfterTerminalSinkAccept
-		receiptPoint = faultAfterTerminalSinkReceipt
-	}
-	if inject != nil {
-		if err := inject(acceptPoint); err != nil {
-			return DeliveryAck{}, false, err
-		}
-	}
-	ack.SchemaVersion = ReceiptSchemaV1
-	ack.ChunkDigest = chunk.Digest
-	ack.ConfigIdentity = sink.ConfigIdentity()
-	ack.Sink = sink.Name()
-	if ack.DeliveredAt.IsZero() {
-		ack.DeliveredAt = time.Now().UTC()
-	}
-	if err := validateReceipt(path, ack); err != nil {
-		return DeliveryAck{}, false, err
-	}
-	if err := writeJSONDurable(path, ack, ops); err != nil {
-		return DeliveryAck{}, false, err
-	}
-	if inject != nil {
-		if err := inject(receiptPoint); err != nil {
-			return DeliveryAck{}, false, err
-		}
-	}
-	return ack, false, nil
 }
 
 func decodeOneJSON(raw []byte, value any) error {
