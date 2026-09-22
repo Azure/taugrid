@@ -47,7 +47,11 @@ export function useExperimentURLState() {
     stepInterval: optionalNumber(params, 'step_interval'),
     maxPoints: pointBudget(params),
   };
-  function update(values: Partial<Record<keyof ExperimentURLState, string | number | undefined>>, replace = true) {
+  function update(
+    values: Partial<Record<keyof ExperimentURLState, string | number | undefined>>,
+    replace = true,
+    preserveDependents = false,
+  ) {
     const next = new URLSearchParams(location.search);
     const names: Record<keyof ExperimentURLState, string> = {
       target: 'target', q: 'q', project: 'project', experiment: 'experiment', run: 'run', metric: 'metric',
@@ -56,10 +60,10 @@ export function useExperimentURLState() {
     };
     const nextProject = values.project === undefined ? state.project : String(values.project);
     const nextExperiment = values.experiment === undefined ? state.experiment : String(values.experiment);
-    if ((values.project !== undefined || values.experiment !== undefined) &&
+    if (!preserveDependents && (values.project !== undefined || values.experiment !== undefined) &&
       (nextProject !== state.project || nextExperiment !== state.experiment)) {
       for (const name of ['run', 'metric', 'filter', 'cursor', 'start_step', 'end_step', 'step_interval', 'max_points']) next.delete(name);
-    } else if (values.run !== undefined && String(values.run) !== state.run) {
+    } else if (!preserveDependents && values.run !== undefined && String(values.run) !== state.run) {
       for (const name of ['metric', 'start_step', 'end_step', 'step_interval', 'max_points']) next.delete(name);
     }
     if (values.q !== undefined || values.project !== undefined || values.filter !== undefined) next.delete('cursor');

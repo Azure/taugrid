@@ -208,6 +208,93 @@ describe('typed experiment dashboard', () => {
     expect(requests.some(url => url.includes('/runs/experiment-7'))).toBe(false);
   });
 
+  it('checks every legacy search page before falling back to run resolution', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = new URL(String(input), window.location.origin);
+      requests.push(url.pathname + url.search);
+      if (url.pathname.endsWith('/experiments/search') && url.searchParams.get('q') === 'experiment-7') {
+        if (url.searchParams.get('cursor') === 'page-2') {
+          return Promise.resolve(json({
+            metadata: metadata(), experiments: [experiment('experiment-7', 'vision', 'Legacy bookmark')],
+          }));
+        }
+        return Promise.resolve(json({
+          metadata: metadata(), experiments: [experiment('experiment-70', 'vision', 'Fuzzy match')],
+          next_cursor: 'page-2',
+        }));
+      }
+      if (url.pathname.endsWith('/experiments/experiment-7/runs')) {
+        return Promise.resolve(json({ metadata: metadata(), target: 'experiment-7', runs: [] }));
+      }
+      return Promise.resolve(json({ metadata: metadata(), experiments: [] }));
+    }));
+
+    renderWorkspace('/portal/experiments?target=experiment-7&project=vision');
+
+    expect(await screen.findByText('No runs match this experiment and filter.')).toBeVisible();
+    expect(requests.some(url => url.includes('cursor=page-2'))).toBe(true);
+    expect(requests.some(url => url.includes('/runs/experiment-7'))).toBe(false);
+  });
+
+  it('does not use cached run data when a legacy target is an experiment', async () => {
+    const client = createPortalQueryClient();
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname.endsWith('/runs/r1')) {
+        return Promise.resolve(json({ metadata: metadata(), run: run('r1', 'p', 'running', [], 'e1') }));
+      }
+      if (url.pathname.endsWith('/experiments/search') && url.searchParams.get('q') === 'r1') {
+        return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('r1', 'p', 'Experiment r1')] }));
+      }
+      if (url.pathname.endsWith('/experiments/e1/runs') || url.pathname.endsWith('/experiments/r1/runs')) {
+        const target = url.pathname.includes('/experiments/r1/') ? 'r1' : 'e1';
+        return Promise.resolve(json({ metadata: metadata(), target, runs: [] }));
+      }
+      return Promise.resolve(json({ metadata: metadata(), experiments: [] }));
+    }));
+    const first = render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/portal/experiments?run=r1&project=p']}>
+      <WorkspaceProvider scope={baseScope} managed={false}><StellarWorkspace/><LocationView/></WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByLabelText('location')).toHaveTextContent('experiment=e1'));
+    first.unmount();
+
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/portal/experiments?target=r1&project=p']}>
+      <WorkspaceProvider scope={baseScope} managed={false}><StellarWorkspace/><LocationView/></WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+
+    await waitFor(() => expect(screen.getByLabelText('location')).toHaveTextContent('experiment=r1'));
+    expect(screen.getByLabelText('location')).not.toHaveTextContent('experiment=e1');
+  });
+
+  it('clears a failed legacy target when selecting a search result', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname.endsWith('/runs/missing')) {
+        return Promise.resolve(json({
+          error: { code: 'NOT_FOUND', message: 'run was not found', classification: 'client', retryable: false },
+        }, 404));
+      }
+      if (url.pathname.endsWith('/experiments/search') && url.searchParams.get('q') === 'missing') {
+        return Promise.resolve(json({ metadata: metadata(), experiments: [] }));
+      }
+      if (url.pathname.endsWith('/experiments/e1/runs')) {
+        return Promise.resolve(json({ metadata: metadata(), target: 'e1', runs: [] }));
+      }
+      return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('e1', 'p', 'Search result')] }));
+    }));
+    const user = userEvent.setup();
+    renderWorkspace('/portal/experiments?target=missing&project=p');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('run was not found');
+    await user.click(screen.getByRole('button', { name: /Search result/ }));
+
+    expect(await screen.findByText('No runs match this experiment and filter.')).toBeVisible();
+    const location = screen.getByLabelText('location').textContent!;
+    expect(location).toContain('experiment=e1');
+    expect(location).not.toContain('target=');
+  });
+
   it('keeps experiment search visible when an unresolved run link returns not found', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
@@ -223,6 +310,66 @@ describe('typed experiment dashboard', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('run was not found');
     expect(screen.getByRole('button', { name: /Search remains/ })).toBeVisible();
+  });
+
+  it('preserves metric and range controls while resolving a run deep link', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/series?')) return Promise.resolve(json({
+        metadata: metadata(), target: 'e1', metric: 'loss', run_id: 'r1',
+        start_step: 10, end_step: 20, max_points: 40, source_points: 1, returned_points: 1,
+        points: [{ step: 10, value: 3 }],
+      }));
+      if (url.includes('/runs/r1/metrics')) {
+        return Promise.resolve(json({ metadata: metadata(), run_id: 'r1', metrics: [{ name: 'loss' }] }));
+      }
+      if (url.includes('/runs/r1')) {
+        return Promise.resolve(json({ metadata: metadata(), run: run('r1', 'p', 'running', ['loss'], 'e1') }));
+      }
+      if (url.includes('/experiments/e1/runs')) {
+        return Promise.resolve(json({ metadata: metadata(), target: 'e1', runs: [run('r1', 'p', 'running', ['loss'], 'e1')] }));
+      }
+      return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('e1', 'p', 'Resolved')] }));
+    }));
+
+    renderWorkspace('/portal/experiments?project=p&run=r1&metric=loss&start_step=10&end_step=20&max_points=40');
+
+    expect(await screen.findByRole('img', { name: 'loss series chart' })).toBeVisible();
+    const location = screen.getByLabelText('location').textContent!;
+    expect(location).toContain('experiment=e1');
+    expect(location).toContain('metric=loss');
+    expect(location).toContain('start_step=10');
+    expect(location).toContain('end_step=20');
+    expect(location).toContain('max_points=40');
+    const seriesRequest = requests.find(url => url.includes('/series?'))!;
+    expect(seriesRequest).toContain('start_step=10');
+    expect(seriesRequest).toContain('end_step=20');
+    expect(seriesRequest).toContain('max_points=40');
+  });
+
+  it('uses the canonical lifecycle filter for recognized run states', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/experiments/e1/runs')) {
+        return Promise.resolve(json({ metadata: metadata(), target: 'e1', runs: [] }));
+      }
+      return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('e1', 'p', 'Filtered')] }));
+    }));
+    const user = userEvent.setup();
+    renderWorkspace('/portal/experiments?project=p&experiment=e1');
+    await screen.findByText('No runs match this experiment and filter.');
+
+    await user.type(screen.getByLabelText('Filter runs'), 'running');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(requests.some(url =>
+      url.includes('/experiments/e1/runs') && url.includes('lifecycle=running'))).toBe(true));
+    const filteredRequest = requests.find(url =>
+      url.includes('/experiments/e1/runs') && url.includes('lifecycle=running'))!;
+    expect(filteredRequest).not.toContain('q=running');
   });
 
   it('refreshes successful scoped reads and displays newly returned series points', async () => {

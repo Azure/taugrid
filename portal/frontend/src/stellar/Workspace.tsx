@@ -6,7 +6,8 @@ import { boardScopeKey, experimentsAPI, useWorkspace } from '../data';
 import { Empty, PageTitle } from '../components';
 import type { MetricCatalogEntry, ResponseMeta, RunSummary, SeriesPoint } from './contracts';
 import {
-  useExperimentsQuery, useMetricCatalogQuery, useMetricSeriesQuery, useRunDetailQuery, useRunResolverQuery, useRunsQuery,
+  useExperimentsQuery, useLegacyExperimentResolverQuery, useMetricCatalogQuery, useMetricSeriesQuery,
+  useRunDetailQuery, useRunResolverQuery, useRunsQuery,
 } from './queries';
 import { useExperimentURLState } from './url-state';
 import './workspace.css';
@@ -93,19 +94,20 @@ function RefreshExperimentData() {
 
 function LegacyTargetResolver({ targetID }: { targetID: string }) {
   const { state, update } = useExperimentURLState();
-  const experiments = useExperimentsQuery({ q: targetID, project: state.project, cursor: '' });
-  const exact = experiments.data?.experiments.filter(experiment =>
-    experiment.experiment_id === targetID && (!state.project || experiment.project === state.project)) || [];
-  const run = useRunResolverQuery(targetID, state.project, experiments.isSuccess && exact.length === 0);
+  const experiments = useLegacyExperimentResolverQuery(targetID, state.project);
+  const exact = experiments.data?.experiments || [];
+  const resolveRun = experiments.isSuccess && exact.length === 0;
+  const run = useRunResolverQuery(targetID, state.project, resolveRun);
   useEffect(() => {
     if (exact.length !== 1) return;
     update({ target: '', project: exact[0].project, experiment: exact[0].experiment_id });
   }, [exact, update]);
   useEffect(() => {
+    if (!resolveRun) return;
     const detail = run.data?.run;
     if (!detail?.experiment_id) return;
-    update({ target: '', project: detail.project, experiment: detail.experiment_id, run: detail.run_id });
-  }, [run.data, update]);
+    update({ target: '', project: detail.project, experiment: detail.experiment_id, run: detail.run_id }, true, true);
+  }, [resolveRun, run.data, update]);
   if (exact.length > 1) {
     return <div className="stellar-state error" role="alert">Experiment ID {targetID} exists in multiple projects; specify a project.</div>;
   }
@@ -136,7 +138,7 @@ function ResolvedRunTarget({ runID, query }: {
       project: run.project,
       experiment: run.experiment_id,
       run: run.run_id,
-    });
+    }, true, true);
   }, [query.data, update]);
   if (query.data && !query.data.run.experiment_id) {
     return <div className="stellar-state error" role="alert">Run detail did not identify an experiment for {runID}.</div>;
@@ -167,7 +169,7 @@ function ExperimentSearch() {
     <form className="thin-controls" onSubmit={event => {
       event.preventDefault();
       setQueryProject(draftProject);
-      update({ q: draft, project: draftProject, experiment: '', cursor: '' }, false);
+      update({ target: '', q: draft, project: draftProject, experiment: '', cursor: '' }, false);
     }}>
       <label>Search<input aria-label="Search experiments" type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Name or experiment ID"/></label>
       <label>Project<input aria-label="Project" value={draftProject} onChange={event => setDraftProject(event.target.value)} placeholder="All projects"/></label>
@@ -179,7 +181,7 @@ function ExperimentSearch() {
         {!data.experiments.length ? <Empty>No experiments match this search.</Empty> :
           <ul className="thin-experiment-list">{data.experiments.map(experiment => <li key={`${experiment.project}:${experiment.experiment_id}`}>
             <button type="button" aria-pressed={state.experiment === experiment.experiment_id && state.project === experiment.project}
-              onClick={() => update({ experiment: experiment.experiment_id, project: experiment.project, cursor: '' }, false)}>
+              onClick={() => update({ target: '', experiment: experiment.experiment_id, project: experiment.project, cursor: '' }, false)}>
               <strong>{experiment.name}</strong><span>{experiment.experiment_id}</span>
               <small>{experiment.project || 'default project'}{experiment.run_count === undefined ? '' : ` · ${experiment.run_count} runs`}</small>
             </button>
