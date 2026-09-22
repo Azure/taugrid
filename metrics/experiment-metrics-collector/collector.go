@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,8 @@ type Options struct {
 	Sinks                   []Sink
 	Now                     func() time.Time
 	fault                   func(faultPoint) error
+	syncFile                func(*os.File) error
+	syncDir                 func(string) error
 }
 
 type Result struct {
@@ -74,8 +77,17 @@ func New(options Options) (*Runner, error) {
 	if options.BaselineExistingHistory && strings.TrimSpace(options.ReadyFile) == "" {
 		return nil, fmt.Errorf("--ready-file is required with --baseline-existing-history")
 	}
+	if len(options.Sinks) == 0 {
+		return nil, fmt.Errorf("at least one required sink is required")
+	}
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	if options.syncFile == nil {
+		options.syncFile = func(file *os.File) error { return file.Sync() }
+	}
+	if options.syncDir == nil {
+		options.syncDir = syncDirectory
 	}
 	sinkNames := map[string]bool{}
 	receiptNamespaces := map[string]bool{}
@@ -115,6 +127,7 @@ func (r *Runner) configIdentity() string {
 		Tags                map[string]string `json:"tags"`
 		StatusArtifactURI   string            `json:"status_artifact_uri"`
 		StatusCheckpointURI string            `json:"status_checkpoint_uri"`
+		Sinks               []string          `json:"sinks"`
 	}{
 		Version: ChunkManifestSchemaV1, Run: r.options.Run, Project: r.options.Project,
 		Experiment: r.options.Experiment, Group: r.options.Group, Source: r.options.Source,
@@ -122,6 +135,10 @@ func (r *Runner) configIdentity() string {
 		Tags: r.options.Tags, StatusArtifactURI: r.options.StatusArtifactURI,
 		StatusCheckpointURI: r.options.StatusCheckpointURI,
 	}
+	for _, sink := range r.options.Sinks {
+		config.Sinks = append(config.Sinks, sink.Name()+"\x00"+sink.ConfigIdentity())
+	}
+	sort.Strings(config.Sinks)
 	raw, _ := json.Marshal(config)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -148,17 +165,42 @@ func (r *Runner) sourceStoreID() string {
 
 func (r *Runner) replaySpool(
 	ctx context.Context,
-	manifests []chunkManifest,
 	checkpoints *checkpointSet,
 	checkpointPath string,
 	result *Result,
-) error {
-	bySequence := make(map[uint64]chunkManifest, len(manifests))
-	for _, manifest := range manifests {
-		if _, exists := bySequence[manifest.Sequence]; exists {
-			return fmt.Errorf("multiple spool manifests use sequence %d", manifest.Sequence)
+) (int, error) {
+	foundSources := make(map[string]bool, len(checkpoints.Sources))
+	terminalFound := false
+	count, err := scanSpool(r.options.Out, r.configIdentity(), r.options.Sinks, r.storage(), func(path string, manifest chunkManifest) error {
+		changed, err := advanceCheckpointForManifest(checkpoints, manifest)
+		if err != nil {
+			return err
 		}
-		bySequence[manifest.Sequence] = manifest
+		if changed {
+			if err := writeCheckpoints(checkpointPath, *checkpoints, r.storage()); err != nil {
+				return err
+			}
+		}
+		for source, checkpoint := range checkpoints.Sources {
+			if checkpoint.Sequence != manifest.Sequence {
+				continue
+			}
+			if manifest.Kind != "history" || manifest.SourcePath != source ||
+				manifest.ChunkDigest != checkpoint.ChunkDigest ||
+				manifest.EndOffset > checkpoint.Offset {
+				return fmt.Errorf("source checkpoint %s does not match a durable manifest", source)
+			}
+			foundSources[source] = true
+		}
+		if checkpoints.Terminal != nil && checkpoints.Terminal.Sequence == manifest.Sequence {
+			if manifest.Kind != "terminal" || manifest.ChunkDigest != checkpoints.Terminal.ChunkDigest {
+				return fmt.Errorf("terminal checkpoint does not match a durable manifest")
+			}
+			terminalFound = true
+		}
+		if manifest.Compacted {
+			return nil
+		}
 		events, err := decodeCanonicalEvents(manifest.NDJSON)
 		if err != nil {
 			return err
@@ -175,40 +217,29 @@ func (r *Runner) replaySpool(
 			Events:        events,
 			NDJSON:        manifest.NDJSON,
 		}
-		changed, err := advanceCheckpointForManifest(checkpoints, manifest)
-		if err != nil {
-			return err
-		}
-		if changed {
-			if err := writeCheckpoints(checkpointPath, *checkpoints); err != nil {
-				return err
-			}
-		}
 		if err := r.deliverChunk(ctx, chunk, result); err != nil {
 			return fmt.Errorf("replay durable chunk: %w", err)
 		}
+		if err := compactManifest(r.options.Out, path, manifest, r.options.Sinks, r.storage()); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	for source, checkpoint := range checkpoints.Sources {
-		if checkpoint.Sequence == 0 {
-			continue
-		}
-		manifest, ok := bySequence[checkpoint.Sequence]
-		if !ok || manifest.Kind != "history" || manifest.SourcePath != source ||
-			manifest.ChunkDigest != checkpoint.ChunkDigest ||
-			manifest.EndOffset > checkpoint.Offset {
-			return fmt.Errorf("source checkpoint %s does not match a durable manifest", source)
+		if checkpoint.Sequence > 0 && !foundSources[source] {
+			return 0, fmt.Errorf("source checkpoint %s does not match a durable manifest", source)
 		}
 	}
-	if checkpoints.Terminal != nil {
-		manifest, ok := bySequence[checkpoints.Terminal.Sequence]
-		if !ok || manifest.Kind != "terminal" || manifest.ChunkDigest != checkpoints.Terminal.ChunkDigest {
-			return fmt.Errorf("terminal checkpoint does not match a durable manifest")
-		}
+	if checkpoints.Terminal != nil && !terminalFound {
+		return 0, fmt.Errorf("terminal checkpoint does not match a durable manifest")
 	}
-	if checkpoints.NextSequence != uint64(len(manifests))+1 {
-		return fmt.Errorf("checkpoint next sequence %d does not match %d durable manifests", checkpoints.NextSequence, len(manifests))
+	if checkpoints.NextSequence != uint64(count)+1 {
+		return 0, fmt.Errorf("checkpoint next sequence %d does not match %d durable manifests", checkpoints.NextSequence, count)
 	}
-	return nil
+	return count, nil
 }
 
 func advanceCheckpointForManifest(checkpoints *checkpointSet, manifest chunkManifest) (bool, error) {
@@ -250,7 +281,7 @@ func advanceCheckpointForManifest(checkpoints *checkpointSet, manifest chunkMani
 
 func (r *Runner) Run(ctx context.Context) (Result, error) {
 	var result Result
-	if err := os.MkdirAll(r.options.Out, 0o755); err != nil {
+	if err := ensureDirectory(r.options.Out, r.storage()); err != nil {
 		return result, err
 	}
 	checkpointPath := filepath.Join(r.options.Out, "checkpoint.json")
@@ -258,18 +289,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	manifests, err := loadSpool(r.options.Out, r.configIdentity(), r.options.Sinks)
+	manifestCount, err := r.replaySpool(ctx, &checkpoints, checkpointPath, &result)
 	if err != nil {
-		return result, err
-	}
-	if err := r.replaySpool(ctx, manifests, &checkpoints, checkpointPath, &result); err != nil {
 		return result, err
 	}
 	files, err := expandHistory(r.options.History)
 	if err != nil {
 		return Result{}, err
 	}
-	if r.options.BaselineExistingHistory && !existed && len(manifests) == 0 {
+	if r.options.BaselineExistingHistory && !existed && manifestCount == 0 {
 		for _, path := range files {
 			checkpoint, err := baselineSource(path, checkpoints.NextSequence-1)
 			if err != nil {
@@ -277,12 +305,12 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			}
 			checkpoints.Sources[path] = checkpoint
 		}
-		if err := writeCheckpoints(checkpointPath, checkpoints); err != nil {
+		if err := writeCheckpoints(checkpointPath, checkpoints, r.storage()); err != nil {
 			return Result{}, err
 		}
 	}
 	if r.options.ReadyFile != "" {
-		if err := fileutil.WriteFileAtomic(r.options.ReadyFile, []byte("ready\n"), 0o644); err != nil {
+		if err := writeFileDurable(r.options.ReadyFile, []byte("ready\n"), 0o644, r.storage()); err != nil {
 			return Result{}, fmt.Errorf("publish ready file: %w", err)
 		}
 	}
@@ -304,7 +332,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			}
 			result.Completed = true
 			if r.options.DoneFile != "" {
-				if err := fileutil.WriteFileAtomic(r.options.DoneFile, []byte("done\n"), 0o644); err != nil {
+				if err := writeFileDurable(r.options.DoneFile, []byte("done\n"), 0o644, r.storage()); err != nil {
 					return result, fmt.Errorf("publish done file: %w", err)
 				}
 			}
@@ -356,15 +384,16 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 				Path: path, FileID: read.fileID, Offset: read.end, PrefixSHA256: read.prefix,
 				Sequence: checkpoint.Sequence, ChunkDigest: checkpoint.ChunkDigest, Lines: checkpoint.Lines + lines,
 			}
-			if err := writeCheckpoints(checkpointPath, *checkpoints); err != nil {
+			if err := writeCheckpoints(checkpointPath, *checkpoints, r.storage()); err != nil {
 				return err
 			}
 			continue
 		}
+		manifest := newHistoryManifest(r.configIdentity(), checkpoint, read, len(events))
 		chunk, err := writeChunk(r.options.Out, MetricEventChunk{
 			SourcePath: read.path, SourceFileID: read.fileID, StartOffset: read.start,
 			EndOffset: read.end, Sequence: checkpoints.NextSequence, Events: events, NDJSON: ndjson,
-		}, newHistoryManifest(r.configIdentity(), checkpoint, read, len(events)))
+		}, &manifest, r.storage())
 		if err != nil {
 			return err
 		}
@@ -377,13 +406,17 @@ func (r *Runner) drain(ctx context.Context, checkpoints *checkpointSet, checkpoi
 			Sequence: checkpoints.NextSequence, ChunkDigest: chunk.Digest, Lines: checkpoint.Lines + lines,
 		}
 		checkpoints.NextSequence++
-		if err := writeCheckpoints(checkpointPath, *checkpoints); err != nil {
+		if err := writeCheckpoints(checkpointPath, *checkpoints, r.storage()); err != nil {
 			return err
 		}
 		if err := r.inject(faultAfterCheckpointWrite); err != nil {
 			return err
 		}
 		if err := r.deliverChunk(ctx, chunk, result); err != nil {
+			return err
+		}
+		manifestPath := filepath.Join(r.options.Out, "manifests", strings.TrimSuffix(manifest.ChunkFile, ".ndjson")+".json")
+		if err := compactManifest(r.options.Out, manifestPath, manifest, r.options.Sinks, r.storage()); err != nil {
 			return err
 		}
 		result.Chunks++
@@ -471,10 +504,11 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 	if err != nil {
 		return err
 	}
+	manifest := newTerminalManifest(r.configIdentity(), checkpoints.NextSequence, r.options.CompletionFile, raw)
 	chunk, err := writeChunk(r.options.Out, MetricEventChunk{
 		Sequence: checkpoints.NextSequence, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw,
 		SourcePath: r.options.CompletionFile, SourceFileID: "completion-status",
-	}, newTerminalManifest(r.configIdentity(), checkpoints.NextSequence, r.options.CompletionFile, raw))
+	}, &manifest, r.storage())
 	if err != nil {
 		return err
 	}
@@ -483,7 +517,7 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 	}
 	checkpoints.Terminal = &terminalCheckpoint{Sequence: chunk.Sequence, ChunkDigest: chunk.Digest}
 	checkpoints.NextSequence++
-	if err := writeCheckpoints(filepath.Join(r.options.Out, "checkpoint.json"), *checkpoints); err != nil {
+	if err := writeCheckpoints(filepath.Join(r.options.Out, "checkpoint.json"), *checkpoints, r.storage()); err != nil {
 		return err
 	}
 	if err := r.inject(faultAfterTerminalCheckpointWrite); err != nil {
@@ -492,6 +526,10 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 	if err := r.deliverChunk(ctx, chunk, result); err != nil {
 		return fmt.Errorf("deliver terminal status: %w", err)
 	}
+	manifestPath := filepath.Join(r.options.Out, "manifests", strings.TrimSuffix(manifest.ChunkFile, ".ndjson")+".json")
+	if err := compactManifest(r.options.Out, manifestPath, manifest, r.options.Sinks, r.storage()); err != nil {
+		return err
+	}
 	result.Chunks++
 	result.Events++
 	return nil
@@ -499,7 +537,7 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 
 func (r *Runner) deliverChunk(ctx context.Context, chunk MetricEventChunk, result *Result) error {
 	for _, sink := range r.options.Sinks {
-		_, reused, err := deliverWithReceipt(ctx, r.options.Out, sink, chunk, r.inject)
+		_, reused, err := deliverWithReceipt(ctx, r.options.Out, sink, chunk, r.storage(), r.inject)
 		if err != nil {
 			return fmt.Errorf("deliver chunk %s to %s: %w", chunk.Digest, sink.Name(), err)
 		}
