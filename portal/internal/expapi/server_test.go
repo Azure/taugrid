@@ -5,6 +5,8 @@ package expapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -261,6 +263,85 @@ func TestV2ExperimentSearchPaginatesWithValidatedOpaqueCursor(t *testing.T) {
 	server.Handler().ServeHTTP(tampered, httptest.NewRequest(http.MethodGet, path+"x", nil))
 	if tampered.Code != http.StatusBadRequest {
 		t.Fatalf("tampered cursor status = %d, body=%s", tampered.Code, tampered.Body.String())
+	}
+}
+
+func TestV2CursorRejectsPublicDerivedAndMalformedTokens(t *testing.T) {
+	privateKey := []byte("0123456789abcdef0123456789abcdef")
+	server, err := NewServer(Options{
+		StorePath: seedExpAPIStore(t, 1), CursorSigningKey: privateKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &stubV2CatalogSource{}
+	server.v2Catalog = catalog
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/search", nil)
+	opts, err := experimentSearchOptionsFromRequest(request, DefaultWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filterHash := v2ExperimentFilterHash("local", DefaultWorkspace, opts)
+	payload := v2CursorPayload{
+		Version: 2, FilterHash: filterHash, SortAt: "2026-09-18T12:00:00Z",
+		Project: "project-a", ItemID: "experiment-a",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := sha256.Sum256([]byte("tau.stellar.v2.cursor\x00" + DefaultWorkspace + "\x00local"))
+	publicMAC := hmac.New(sha256.New, publicKey[:])
+	_, _ = publicMAC.Write(body)
+	forged := base64.RawURLEncoding.EncodeToString(append(body, publicMAC.Sum(nil)...))
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/search?cursor="+url.QueryEscape(forged), nil))
+	if rec.Code != http.StatusBadRequest || catalog.experimentCalls != 0 {
+		t.Fatalf("public-derived cursor was accepted: status=%d calls=%d body=%s",
+			rec.Code, catalog.experimentCalls, rec.Body.String())
+	}
+
+	payload.SortAt = "not-a-time"
+	body, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateMAC := hmac.New(sha256.New, privateKey)
+	_, _ = privateMAC.Write(body)
+	malformed := base64.RawURLEncoding.EncodeToString(append(body, privateMAC.Sum(nil)...))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/search?cursor="+url.QueryEscape(malformed), nil))
+	if rec.Code != http.StatusBadRequest || catalog.experimentCalls != 0 {
+		t.Fatalf("malformed cursor reached catalog: status=%d calls=%d body=%s",
+			rec.Code, catalog.experimentCalls, rec.Body.String())
+	}
+
+	payload.Version = 1
+	payload.SortAt = "2026-09-18T12:00:00Z"
+	body, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateMAC = hmac.New(sha256.New, privateKey)
+	_, _ = privateMAC.Write(body)
+	legacy := base64.RawURLEncoding.EncodeToString(append(body, privateMAC.Sum(nil)...))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/experiments/search?cursor="+url.QueryEscape(legacy), nil))
+	if rec.Code != http.StatusBadRequest || catalog.experimentCalls != 0 {
+		t.Fatalf("legacy cursor was accepted: status=%d calls=%d body=%s",
+			rec.Code, catalog.experimentCalls, rec.Body.String())
+	}
+}
+
+func TestNewServerRejectsShortCursorSigningKey(t *testing.T) {
+	if _, err := NewServer(Options{
+		StorePath: seedExpAPIStore(t, 1), CursorSigningKey: []byte("too-short"),
+	}); err == nil || !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Fatalf("short cursor signing key error = %v", err)
 	}
 }
 
@@ -568,6 +649,99 @@ func TestV2ExactRunRequiresProjectWhenRunIDsCollide(t *testing.T) {
 	}
 	if response.Run.Project != "project-b" || response.Run.ExperimentID != "experiment-b" {
 		t.Fatalf("wrong exact run: %+v", response.Run)
+	}
+}
+
+func TestV2ExactRunQueriesRunIDBeforeSourceLimit(t *testing.T) {
+	var runQuery string
+	server, err := NewServer(Options{
+		Source: "kusto", Workspace: "workspace-a", KustoAllowedProjects: []string{"project-a"},
+		KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.SeriesCatalogRowsFunction+"()") {
+				return `[]`, nil
+			}
+			runQuery = query
+			return `[{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-a","run_group_id":"group-a","run_id":"needle","created_time":"2026-09-18T12:00:00Z","latest_activity_at":"2026-09-18T12:00:00Z","state":"succeeded","has_lifecycle":true}]`, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/runs/needle?project=project-a&target=experiment-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(runQuery, "run_id in ('needle')") ||
+		strings.Contains(runQuery, "experiment_id == 'needle' or") {
+		t.Fatalf("exact lookup used an auto-target query:\n%s", runQuery)
+	}
+}
+
+func TestV2LocalExactRunWinsRunGroupCollisionBeforeLimit(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "exact-run-store")
+	store, _, err := expstore.Init(ctx, root, expstore.InitOptions{
+		Name: "experiment-a", Project: "project-a", Group: "needle",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, runID := range []string{"needle", "newer-a", "newer-b", "newer-c"} {
+		at := time.Date(2026, 9, 18, 12+i, 0, 0, 0, time.UTC).Format(time.RFC3339)
+		if _, err := store.RecordRunData(ctx, expstore.RecordRunDataOptions{
+			Run: expstore.RunRecord{
+				RunID: runID, Project: "project-a", ExperimentID: "experiment-a",
+				RunGroupID: "needle", State: "succeeded", CreatedAt: at,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(Options{StorePath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v2/stellar/runs/needle?project=project-a&target=experiment-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exact run hidden by run-group collision: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2RunDetailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Run.RunID != "needle" {
+		t.Fatalf("wrong exact run: %+v", response.Run)
+	}
+}
+
+func TestV2KustoRejectsUnsupportedMetricStatistics(t *testing.T) {
+	queryCalls := 0
+	server, err := NewServer(Options{
+		Source: "kusto", Workspace: "workspace-a", KustoAllowedProjects: []string{"project-a"},
+		KustoNativeQuery: func(_ context.Context, _ string) (string, error) {
+			queryCalls++
+			return `[]`, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/experiments/search?project=project-a&metric_filter=train%2Floss%40count%3E0",
+		nil,
+	))
+	if rec.Code != http.StatusBadRequest || queryCalls != 0 {
+		t.Fatalf("unsupported Kusto statistic did not fail before query: status=%d calls=%d body=%s",
+			rec.Code, queryCalls, rec.Body.String())
 	}
 }
 

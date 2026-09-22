@@ -6,6 +6,7 @@ package expkusto
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
 )
@@ -57,6 +58,9 @@ func BuildRunCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if opts.AfterAt != "" && opts.AfterRunID == "" {
+		return "", fmt.Errorf("--after-run-id is required with --after-at")
+	}
 
 	var b strings.Builder
 	if len(opts.MetricNames) > 0 {
@@ -88,6 +92,9 @@ func BuildExperimentCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	opts, projects, err := normalizeCatalogQueryOptions(opts)
 	if err != nil {
 		return "", err
+	}
+	if opts.AfterAt != "" && opts.AfterExperimentID == "" {
+		return "", fmt.Errorf("--after-experiment-id is required with --after-at")
 	}
 	var b strings.Builder
 	if len(opts.MetricNames) > 0 {
@@ -132,6 +139,14 @@ func normalizeCatalogQueryOptions(opts CatalogQueryOptions) (CatalogQueryOptions
 	opts.AfterProject = strings.TrimSpace(opts.AfterProject)
 	opts.AfterRunID = strings.TrimSpace(opts.AfterRunID)
 	opts.AfterExperimentID = strings.TrimSpace(opts.AfterExperimentID)
+	if opts.AfterAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, opts.AfterAt); err != nil {
+			return CatalogQueryOptions{}, nil, fmt.Errorf("--after-at must be an RFC3339 timestamp")
+		}
+		if opts.AfterProject == "" {
+			return CatalogQueryOptions{}, nil, fmt.Errorf("--after-project is required with --after-at")
+		}
+	}
 	if opts.TargetType == "" {
 		opts.TargetType = "auto"
 	}

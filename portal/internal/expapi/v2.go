@@ -4,6 +4,7 @@
 package expapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -146,6 +148,7 @@ type v2CursorPayload struct {
 	Version    int    `json:"v"`
 	FilterHash string `json:"f"`
 	SortAt     string `json:"t"`
+	Project    string `json:"p"`
 	ItemID     string `json:"i"`
 }
 
@@ -220,11 +223,6 @@ func (s *Server) v2CatalogSource() v2CatalogSource {
 	return stableFunctionCatalogSource{server: s}
 }
 
-func newV2CursorKey(workspace, source string) []byte {
-	sum := sha256.Sum256([]byte("tau.stellar.v2.cursor\x00" + workspace + "\x00" + source))
-	return sum[:]
-}
-
 func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != stellarAPIV2Base+"/experiments/search" {
 		s.writeV2Error(w, http.StatusNotFound, "NOT_FOUND", "route was not found")
@@ -259,7 +257,7 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	if cursor != nil {
 		opts.CursorAt = cursor.SortAt
-		opts.CursorID = cursor.ItemID
+		opts.CursorID = cursor.Project + "\x00" + cursor.ItemID
 	}
 	catalogResult, err := s.v2CatalogSource().searchExperiments(ctx, source, opts)
 	if err != nil {
@@ -277,6 +275,9 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 	})
 	filtered := experiments[:0]
 	for _, item := range experiments {
+		if opts.Project != "" && item.Project != opts.Project {
+			continue
+		}
 		if cursor != nil && !v2ExperimentAfterCursor(item, *cursor) {
 			continue
 		}
@@ -290,7 +291,8 @@ func (s *Server) handleV2ExperimentSearch(w http.ResponseWriter, r *http.Request
 	if hasMore && len(filtered) > 0 {
 		last := filtered[len(filtered)-1]
 		nextCursor, err = s.encodeV2Cursor(v2CursorPayload{
-			Version: 1, FilterHash: filterHash, SortAt: v2ExperimentSortAt(last), ItemID: v2ExperimentCursorID(last),
+			Version: 2, FilterHash: filterHash, SortAt: v2ExperimentSortAt(last),
+			Project: strings.TrimSpace(last.Project), ItemID: strings.TrimSpace(last.ExperimentID),
 		})
 		if err != nil {
 			s.writeV2ClassifiedError(w, err)
@@ -394,7 +396,7 @@ func (s *Server) handleV2RunList(w http.ResponseWriter, r *http.Request, target 
 	defer cancel()
 	if cursor != nil {
 		opts.CursorAt = cursor.SortAt
-		opts.CursorID = cursor.ItemID
+		opts.CursorID = cursor.Project + "\x00" + cursor.ItemID
 	}
 	result, err := s.v2CatalogSource().searchRuns(ctx, source, opts)
 	if err != nil {
@@ -403,14 +405,21 @@ func (s *Server) handleV2RunList(w http.ResponseWriter, r *http.Request, target 
 	}
 	runs := append([]sourcedRun(nil), result.Runs...)
 	sort.SliceStable(runs, func(i, j int) bool {
-		if runs[i].CreatedAt != runs[j].CreatedAt {
-			return runs[i].CreatedAt > runs[j].CreatedAt
+		left, right := v2RunSortAt(runs[i]), v2RunSortAt(runs[j])
+		if left != right {
+			return left > right
 		}
-		return v2RunCursorID(runs[i]) < v2RunCursorID(runs[j])
+		if runs[i].Project != runs[j].Project {
+			return runs[i].Project < runs[j].Project
+		}
+		return runs[i].RunID < runs[j].RunID
 	})
 	filtered := runs[:0]
 	for _, run := range runs {
 		if run.ExperimentID != target {
+			continue
+		}
+		if opts.Project != "" && run.Project != opts.Project {
 			continue
 		}
 		if cursor != nil && !v2RunAfterCursor(run, *cursor) {
@@ -425,7 +434,10 @@ func (s *Server) handleV2RunList(w http.ResponseWriter, r *http.Request, target 
 	nextCursor := ""
 	if hasMore && len(filtered) > 0 {
 		last := filtered[len(filtered)-1]
-		nextCursor, err = s.encodeV2Cursor(v2CursorPayload{Version: 1, FilterHash: filterHash, SortAt: last.CreatedAt, ItemID: v2RunCursorID(last)})
+		nextCursor, err = s.encodeV2Cursor(v2CursorPayload{
+			Version: 2, FilterHash: filterHash, SortAt: v2RunSortAt(last),
+			Project: strings.TrimSpace(last.Project), ItemID: strings.TrimSpace(last.RunID),
+		})
 		if err != nil {
 			s.writeV2ClassifiedError(w, err)
 			return
@@ -547,7 +559,7 @@ func (s *Server) handleV2Series(w http.ResponseWriter, r *http.Request, runID st
 
 func (s *Server) v2ExactRun(r *http.Request, source, workspace, runID string) (sourcedRun, []string, error) {
 	project := strings.TrimSpace(r.URL.Query().Get("project"))
-	opts := expstore.RunSearchOptions{Target: runID, Workspace: workspace, Project: project, Limit: 3}
+	opts := expstore.RunSearchOptions{ExactRunID: runID, Workspace: workspace, Project: project, Limit: 2}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
 	result, err := s.v2CatalogSource().searchRuns(ctx, source, opts)
@@ -687,6 +699,9 @@ func v2ExperimentFilterHash(source, workspace string, opts expstore.ExperimentSe
 }
 
 func (s *Server) encodeV2Cursor(payload v2CursorPayload) (string, error) {
+	if err := validateV2CursorPayload(&payload, payload.FilterHash); err != nil {
+		return "", err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -713,15 +728,60 @@ func (s *Server) decodeV2Cursor(raw, filterHash string) (*v2CursorPayload, error
 		return nil, fmt.Errorf("cursor signature is invalid")
 	}
 	var payload v2CursorPayload
-	if err := json.Unmarshal(body, &payload); err != nil || payload.Version != 1 ||
-		payload.FilterHash != filterHash || payload.SortAt == "" || payload.ItemID == "" {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, fmt.Errorf("cursor is malformed")
+	}
+	if err := validateV2CursorPayload(&payload, filterHash); err != nil {
 		return nil, fmt.Errorf("cursor does not match this query")
 	}
 	return &payload, nil
 }
 
+func validateV2CursorPayload(payload *v2CursorPayload, filterHash string) error {
+	if payload.Version != 2 || payload.FilterHash != filterHash ||
+		len(payload.FilterHash) != sha256.Size*2 {
+		return fmt.Errorf("cursor metadata is invalid")
+	}
+	if _, err := hex.DecodeString(payload.FilterHash); err != nil {
+		return fmt.Errorf("cursor filter hash is invalid")
+	}
+	canonicalAt, err := canonicalV2Timestamp(payload.SortAt)
+	if err != nil || canonicalAt != payload.SortAt {
+		return fmt.Errorf("cursor timestamp is invalid")
+	}
+	if !validV2CursorProject(payload.Project) || !validV2CursorComponent(payload.ItemID) {
+		return fmt.Errorf("cursor identity is invalid")
+	}
+	return nil
+}
+
+func canonicalV2Timestamp(value string) (string, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "", err
+	}
+	return parsed.UTC().Format(time.RFC3339Nano), nil
+}
+
+func validV2CursorComponent(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && len(value) <= 512 &&
+		!strings.ContainsAny(value, "\x00\r\n\t")
+}
+
+func validV2CursorProject(value string) bool {
+	return value == strings.TrimSpace(value) && len(value) <= 512 &&
+		!strings.ContainsAny(value, "\x00\r\n\t")
+}
+
 func v2RunAfterCursor(run sourcedRun, cursor v2CursorPayload) bool {
-	return run.CreatedAt < cursor.SortAt || (run.CreatedAt == cursor.SortAt && v2RunCursorID(run) > cursor.ItemID)
+	sortAt := v2RunSortAt(run)
+	project := strings.TrimSpace(run.Project)
+	runID := strings.TrimSpace(run.RunID)
+	return sortAt < cursor.SortAt ||
+		(sortAt == cursor.SortAt && (project > cursor.Project ||
+			(project == cursor.Project && runID > cursor.ItemID)))
 }
 
 func v2RunCursorID(run sourcedRun) string {
@@ -730,7 +790,11 @@ func v2RunCursorID(run sourcedRun) string {
 
 func v2ExperimentAfterCursor(experiment expstore.ExperimentSummary, cursor v2CursorPayload) bool {
 	sortAt := v2ExperimentSortAt(experiment)
-	return sortAt < cursor.SortAt || (sortAt == cursor.SortAt && v2ExperimentCursorID(experiment) > cursor.ItemID)
+	project := strings.TrimSpace(experiment.Project)
+	experimentID := strings.TrimSpace(experiment.ExperimentID)
+	return sortAt < cursor.SortAt ||
+		(sortAt == cursor.SortAt && (project > cursor.Project ||
+			(project == cursor.Project && experimentID > cursor.ItemID)))
 }
 
 func v2ExperimentCursorID(experiment expstore.ExperimentSummary) string {
@@ -740,8 +804,17 @@ func v2ExperimentCursorID(experiment expstore.ExperimentSummary) string {
 func v2ExperimentSortAt(experiment expstore.ExperimentSummary) string {
 	for _, value := range []string{experiment.LatestRunAt, experiment.UpdatedAt, experiment.CreatedAt} {
 		if strings.TrimSpace(value) != "" {
-			return value
+			if canonical, err := canonicalV2Timestamp(value); err == nil {
+				return canonical
+			}
 		}
+	}
+	return "0001-01-01T00:00:00Z"
+}
+
+func v2RunSortAt(run sourcedRun) string {
+	if canonical, err := canonicalV2Timestamp(run.CreatedAt); err == nil {
+		return canonical
 	}
 	return "0001-01-01T00:00:00Z"
 }
@@ -796,6 +869,8 @@ func (s *Server) writeV2ClassifiedError(w http.ResponseWriter, err error) {
 		s.writeV2Error(w, http.StatusNotFound, "NOT_FOUND", "requested experiment data was not found")
 	case errors.Is(err, expstore.ErrConflict):
 		s.writeV2Error(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, expstore.ErrInvalidArgument):
+		s.writeV2Error(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 	case errors.Is(err, ErrWorkspaceForbidden):
 		s.writeV2Error(w, http.StatusForbidden, "WORKSPACE_FORBIDDEN", err.Error())
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):

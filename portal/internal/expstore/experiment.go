@@ -154,6 +154,8 @@ func (s *Store) SearchExperiments(ctx context.Context, opts ExperimentSearchOpti
 	opts.Query = strings.TrimSpace(opts.Query)
 	opts.Workspace = strings.TrimSpace(opts.Workspace)
 	opts.Project = strings.TrimSpace(opts.Project)
+	opts.CursorAt = strings.TrimSpace(opts.CursorAt)
+	opts.CursorID = strings.TrimSpace(opts.CursorID)
 	opts.Lifecycle = normalizeLifecycle(opts.Lifecycle)
 	if opts.Limit < 0 {
 		return ExperimentSearchResult{}, fmt.Errorf("limit must be non-negative")
@@ -304,6 +306,18 @@ func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchO
 	if opts.Lifecycle != "" {
 		limit = 1000
 	}
+	having := ""
+	if opts.CursorAt != "" || opts.CursorID != "" {
+		project, experimentID, err := searchCursorParts(opts.CursorAt, opts.CursorID)
+		if err != nil {
+			return nil, err
+		}
+		cursorAt := "coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at)), e.updated_at)"
+		having = fmt.Sprintf(`
+HAVING %s < ? OR (%s = ? AND (e.project > ? OR (e.project = ? AND e.experiment_id > ?)))`,
+			cursorAt, cursorAt)
+		args = append(args, opts.CursorAt, opts.CursorAt, project, project, experimentID)
+	}
 	rows, err := s.db.QueryContext(ctx, with+`
 SELECT e.experiment_id, e.project, e.name, coalesce(e.description, ''), e.source, e.created_at, e.updated_at
 FROM experiments e
@@ -311,7 +325,8 @@ LEFT JOIN workspace_run_experiments re ON re.experiment_id = e.experiment_id
 LEFT JOIN runs r ON r.run_id = re.run_id
 `+where+`
 GROUP BY e.experiment_id, e.project, e.name, e.description, e.source, e.created_at, e.updated_at
-ORDER BY coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at)), e.updated_at) DESC, e.experiment_id
+`+having+`
+ORDER BY coalesce(max(coalesce(nullif(r.started_at, ''), nullif(r.completed_at, ''), r.created_at)), e.updated_at) DESC, e.project ASC, e.experiment_id ASC
 LIMIT `+strconv.Itoa(limit), args...)
 	if err != nil {
 		return nil, err

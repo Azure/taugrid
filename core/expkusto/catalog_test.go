@@ -134,6 +134,11 @@ func TestBuildCatalogQueryRejectsInvalidOptions(t *testing.T) {
 	if _, err := BuildRunCatalogQuery(CatalogQueryOptions{Limit: -1}); err == nil {
 		t.Fatal("expected negative limit error")
 	}
+	if _, err := BuildRunCatalogQuery(CatalogQueryOptions{
+		AfterAt: "not-a-time", AfterProject: "project-a", AfterRunID: "run-a",
+	}); err == nil {
+		t.Fatal("expected invalid cursor timestamp error")
+	}
 }
 
 func assertCatalogProjectColumnEscaped(t *testing.T, query string) {

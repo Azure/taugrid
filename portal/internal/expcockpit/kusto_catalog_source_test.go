@@ -6,6 +6,7 @@ package expcockpit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,20 @@ func TestKustoCatalogRequiresLiveQueryTransport(t *testing.T) {
 	}
 }
 
+func TestKustoCatalogRejectsOutOfScopeResponseRows(t *testing.T) {
+	source := KustoSource{
+		WorkspaceID: "workspace-a", AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, _ string) (string, error) {
+			return `[{"workspace_id":"workspace-b","project":"project-a","run_id":"run-a","latest_activity_at":"2026-09-18T12:00:00Z"}]`, nil
+		},
+	}
+	if _, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Limit: 10,
+	}); err == nil || !strings.Contains(err.Error(), "outside configured scope") {
+		t.Fatalf("out-of-scope catalog row error = %v", err)
+	}
+}
+
 func TestCatalogExperimentSummariesKeepProjectsDistinct(t *testing.T) {
 	runs := []expstore.RunSearchRun{
 		{RunRecord: expstore.RunRecord{Project: "project-a", ExperimentID: "shared", RunID: "run-a"}},
@@ -198,6 +213,71 @@ func TestCatalogLatestMetricFilterUsesKnownLatestValue(t *testing.T) {
 		MetricName: "train/loss", Field: "latest", Op: "<", Value: 0.5,
 	}) {
 		t.Fatalf("known catalog latest value was treated as unavailable: %+v", summary)
+	}
+}
+
+func TestKustoCatalogOrderingMatchesCursorOrdering(t *testing.T) {
+	source := KustoSource{
+		WorkspaceID: "workspace-a",
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.SeriesCatalogRowsFunction+"()") {
+				return `[]`, nil
+			}
+			return `[
+				{"workspace_id":"workspace-a","project":"project-b","experiment_id":"experiment-a","run_id":"run-a","created_time":"2026-09-18T12:00:00Z","latest_activity_at":"2026-09-18T12:00:00Z","state":"succeeded","has_lifecycle":true},
+				{"workspace_id":"workspace-a","project":"project-a","experiment_id":"experiment-z","run_id":"run-z","created_time":"2026-09-18T12:00:00Z","latest_activity_at":"2026-09-18T12:00:00Z","state":"succeeded","has_lifecycle":true}
+			]`, nil
+		},
+	}
+	runs, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.Runs) != 1 || runs.Runs[0].Project != "project-a" {
+		t.Fatalf("run truncation order diverged from cursor order: %+v", runs.Runs)
+	}
+	experiments, err := source.SearchCatalogExperiments(context.Background(), expstore.ExperimentSearchOptions{
+		Workspace: "workspace-a", Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(experiments.Experiments) != 1 || experiments.Experiments[0].Project != "project-a" {
+		t.Fatalf("experiment truncation order diverged from cursor order: %+v", experiments.Experiments)
+	}
+}
+
+func TestKustoCatalogExactRunAndUnsupportedStatistics(t *testing.T) {
+	var query string
+	calls := 0
+	source := KustoSource{
+		WorkspaceID: "workspace-a",
+		NativeQuery: func(_ context.Context, generated string) (string, error) {
+			calls++
+			query = generated
+			return `[]`, nil
+		},
+	}
+	if _, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", ExactRunID: "needle", Limit: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(query, "run_id in ('needle')") ||
+		strings.Contains(query, "experiment_id == 'needle' or") {
+		t.Fatalf("exact run query was not source-filtered:\n%s", query)
+	}
+	calls = 0
+	_, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Limit: 10,
+		MetricFilters: []expstore.MetricFilter{{
+			MetricName: "train/loss", Field: "count", Op: ">", Value: 0,
+		}},
+	})
+	if !errors.Is(err, expstore.ErrInvalidArgument) || calls != 0 {
+		t.Fatalf("unsupported statistic err=%v calls=%d", err, calls)
 	}
 }
 

@@ -646,6 +646,9 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 		return expstore.ExperimentSearchResult{}, fmt.Errorf("typed experiment catalog requires a live Kusto query transport")
 	}
 	opts = normalizeKustoExperimentSearchOptions(opts)
+	if err := validateKustoCatalogMetricFilters(opts.MetricFilters); err != nil {
+		return expstore.ExperimentSearchResult{}, err
+	}
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
 	if err != nil {
@@ -683,6 +686,9 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 		if err != nil {
 			return expstore.ExperimentSearchResult{}, err
 		}
+		if err := validateKustoCatalogRowsScope(runRows, s.WorkspaceID, projects); err != nil {
+			return expstore.ExperimentSearchResult{}, err
+		}
 		if len(runRows) == 0 {
 			sourceExhausted = true
 			break
@@ -718,6 +724,9 @@ func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore
 	sort.SliceStable(summaries, func(i, j int) bool {
 		if summaries[i].LatestRunAt != summaries[j].LatestRunAt {
 			return summaries[i].LatestRunAt > summaries[j].LatestRunAt
+		}
+		if summaries[i].Project != summaries[j].Project {
+			return summaries[i].Project < summaries[j].Project
 		}
 		return summaries[i].ExperimentID < summaries[j].ExperimentID
 	})
@@ -807,6 +816,9 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 		return expstore.RunSearchResult{}, fmt.Errorf("typed run catalog requires a live Kusto query transport")
 	}
 	opts = normalizeKustoRunSearchOptions(opts)
+	if err := validateKustoCatalogMetricFilters(opts.MetricFilters); err != nil {
+		return expstore.RunSearchResult{}, err
+	}
 	var err error
 	s, err = s.scopedToWorkspace(opts.Workspace)
 	if err != nil {
@@ -830,7 +842,7 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 	sourceExhausted := false
 	for len(runsByKey) <= opts.Limit && !sourceExhausted {
 		query, err := expkusto.BuildRunCatalogQuery(expkusto.CatalogQueryOptions{
-			WorkspaceID: s.WorkspaceID, Projects: projects, Target: opts.Target,
+			WorkspaceID: s.WorkspaceID, Projects: projects, Target: opts.Target, RunIDs: compactExactRunID(opts.ExactRunID),
 			RunGroupID: opts.RunGroupID, MetricNames: opts.MetricNames, Since: opts.Since,
 			Limit: sourceBatchSize, AfterAt: afterAt, AfterProject: afterProject, AfterRunID: afterRun,
 		})
@@ -839,6 +851,9 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 		}
 		rows, err := s.executeKustoQueryCommand(ctx, query)
 		if err != nil {
+			return expstore.RunSearchResult{}, err
+		}
+		if err := validateKustoCatalogRowsScope(rows, s.WorkspaceID, projects); err != nil {
 			return expstore.RunSearchResult{}, err
 		}
 		if len(rows) == 0 {
@@ -868,6 +883,9 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 	sort.SliceStable(runs, func(i, j int) bool {
 		if runs[i].CreatedAt != runs[j].CreatedAt {
 			return runs[i].CreatedAt > runs[j].CreatedAt
+		}
+		if runs[i].Project != runs[j].Project {
+			return runs[i].Project < runs[j].Project
 		}
 		return runs[i].RunID < runs[j].RunID
 	})
@@ -909,7 +927,31 @@ func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []st
 	if err != nil {
 		return nil, err
 	}
-	return s.executeKustoQueryCommand(ctx, query)
+	rows, err := s.executeKustoQueryCommand(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateKustoCatalogRowsScope(rows, s.WorkspaceID, projects); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func validateKustoCatalogRowsScope(rows []KustoMetricRow, workspace string, projects []string) error {
+	workspace = strings.TrimSpace(workspace)
+	allowedProjects := map[string]bool{}
+	for _, project := range projects {
+		allowedProjects[strings.TrimSpace(project)] = true
+	}
+	for _, row := range rows {
+		if workspace != "" && strings.TrimSpace(row.WorkspaceID) != workspace {
+			return fmt.Errorf("Kusto typed catalog response contained workspace %q outside configured scope", row.WorkspaceID)
+		}
+		if len(allowedProjects) > 0 && !allowedProjects[strings.TrimSpace(row.Project)] {
+			return fmt.Errorf("Kusto typed catalog response contained project %q outside configured scope", row.Project)
+		}
+	}
+	return nil
 }
 
 func catalogRunSearchRuns(runRows, metricRows []KustoMetricRow, opts expstore.RunSearchOptions) []expstore.RunSearchRun {
@@ -2348,21 +2390,28 @@ func kustoMetricFilterMatches(summaries []expstore.MetricSummaryRecord, filter e
 	return false
 }
 
+func validateKustoCatalogMetricFilters(filters []expstore.MetricFilter) error {
+	for _, filter := range filters {
+		switch normalizedKustoMetricFilterField(filter.Field) {
+		case "latest", "latest_step", "min_step", "max_step":
+		default:
+			return fmt.Errorf("%w: Kusto catalog metric filter field %q is unsupported", expstore.ErrInvalidArgument, filter.Field)
+		}
+	}
+	return nil
+}
+
+func compactExactRunID(runID string) []string {
+	if runID = strings.TrimSpace(runID); runID != "" {
+		return []string{runID}
+	}
+	return nil
+}
+
 func kustoMetricFilterSummaryValue(summary expstore.MetricSummaryRecord, field string) (float64, bool) {
 	switch normalizedKustoMetricFilterField(field) {
 	case "latest":
-		return summary.LatestValue, summary.FiniteCount > 0 || summary.Count > 0 ||
-			summary.LatestStep != nil || summary.UpdatedAt != ""
-	case "min":
-		return summary.MinValue, summary.FiniteCount > 0
-	case "max":
-		return summary.MaxValue, summary.FiniteCount > 0
-	case "count":
-		return float64(summary.Count), true
-	case "finite_count":
-		return float64(summary.FiniteCount), true
-	case "non_finite_count":
-		return float64(summary.NonFiniteCount), true
+		return summary.LatestValue, summary.LatestStep != nil || summary.UpdatedAt != ""
 	case "latest_step":
 		if summary.LatestStep == nil {
 			return 0, false

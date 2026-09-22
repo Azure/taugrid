@@ -12,7 +12,81 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestLocalSearchCursorAppliesBeforeThousandRowLimit(t *testing.T) {
+	ctx := context.Background()
+	store, _, err := Init(ctx, filepath.Join(t.TempDir(), "cursor-store"), InitOptions{
+		Name: "initial", Project: "initial", Group: "initial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"runs", "run_groups", "experiments"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for i := range 1001 {
+		project := fmt.Sprintf("project-%04d", i%2)
+		experimentID := fmt.Sprintf("experiment-%04d", i)
+		runID := fmt.Sprintf("run-%04d", i)
+		at := base.Add(-time.Duration(i) * time.Second).Format(time.RFC3339)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO experiments(
+			experiment_id, project, name, source, created_at, updated_at
+		) VALUES (?, ?, ?, 'explicit', ?, ?)`, experimentID, project, experimentID, at, at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs(
+			run_id, project, experiment_id, run_group_id, state, created_at, index_version
+		) VALUES (?, ?, ?, '', 'succeeded', ?, ?)`, runID, project, experimentID, at, SchemaVersion); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	runPage, err := store.SearchRuns(ctx, RunSearchOptions{Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastRun := runPage.Runs[len(runPage.Runs)-1]
+	nextRuns, err := store.SearchRuns(ctx, RunSearchOptions{
+		Limit: 1000, CursorAt: lastRun.CreatedAt,
+		CursorID: lastRun.Project + "\x00" + lastRun.RunID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nextRuns.Runs) != 1 || nextRuns.Runs[0].RunID != "run-1000" {
+		t.Fatalf("run after 1000-row boundary was unreachable: %+v", nextRuns.Runs)
+	}
+
+	experimentPage, err := store.SearchExperiments(ctx, ExperimentSearchOptions{Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastExperiment := experimentPage.Experiments[len(experimentPage.Experiments)-1]
+	nextExperiments, err := store.SearchExperiments(ctx, ExperimentSearchOptions{
+		Limit: 1000, CursorAt: lastExperiment.LatestRunAt,
+		CursorID: lastExperiment.Project + "\x00" + lastExperiment.ExperimentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nextExperiments.Experiments) != 1 ||
+		nextExperiments.Experiments[0].ExperimentID != "experiment-1000" {
+		t.Fatalf("experiment after 1000-row boundary was unreachable: %+v", nextExperiments.Experiments)
+	}
+}
 
 func TestInitCreatesStoreAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()

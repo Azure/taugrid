@@ -5,6 +5,8 @@ package expapi
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -80,6 +82,9 @@ type Options struct {
 	MaxRuns           int
 	MaxMetricRows     int
 	RequestTimeout    time.Duration
+	// CursorSigningKey authenticates canonical v2 pagination cursors. Production
+	// deployments should provide the same secret to every Portal replica.
+	CursorSigningKey []byte
 }
 
 // DefaultWorkspace is the workspace Stellar serves when none is configured.
@@ -193,6 +198,10 @@ func NewServer(opts Options) (*Server, error) {
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = DefaultRequestTimeout
 	}
+	cursorKey, err := newV2CursorKey(opts.CursorSigningKey)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		storeRoot:              root,
 		defaultTarget:          strings.TrimSpace(opts.DefaultTarget),
@@ -217,12 +226,26 @@ func NewServer(opts Options) (*Server, error) {
 		maxRuns:                opts.MaxRuns,
 		maxMetricRows:          opts.MaxMetricRows,
 		requestTimeout:         opts.RequestTimeout,
-		cursorKey:              newV2CursorKey(defaultWorkspace(opts), source),
+		cursorKey:              cursorKey,
 		mux:                    http.NewServeMux(),
 	}
 	s.v2Catalog = stableFunctionCatalogSource{server: s}
 	s.routes()
 	return s, nil
+}
+
+func newV2CursorKey(configured []byte) ([]byte, error) {
+	if len(configured) > 0 {
+		if len(configured) < sha256.Size {
+			return nil, fmt.Errorf("cursor signing key must be at least %d bytes", sha256.Size)
+		}
+		return append([]byte(nil), configured...), nil
+	}
+	key := make([]byte, sha256.Size)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate cursor signing key: %w", err)
+	}
+	return key, nil
 }
 
 func (s *Server) Handler() http.Handler {
