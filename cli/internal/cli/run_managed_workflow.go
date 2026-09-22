@@ -397,7 +397,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 		capture.Launch.CPUWorkers = &m.Eval.CPUWorkers
 	}
 	capture = addLaunchGPUResources(capture, gpuResourceMode, o.migProfile)
-	metricsOffloadOptions.Tags = addLaunchTag(metricsOffloadOptions.Tags, capture)
+	metricsOffloadOptions.Tags = addStableMetricsLaunchTag(metricsOffloadOptions.Tags, capture)
 	labels, annotations := experiment.MergeMetadata(topologyHolder.Labels, topologyHolder.Annotations, capture)
 	labels = workloadmeta.StampWorkspace(labels, o.workspace)
 	if o.submissionID != "" {

@@ -323,7 +323,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	capture = addLaunchMetadata(capture, opts.GPUClass, resolvedProfileName, o.script, o.launcher, max(1, o.nodes), gpuCountFromProfile(p))
 	// Direct Job rendering only supports the standard device-plugin resource.
 	capture = addLaunchGPUResources(capture, "device-plugin", "")
-	opts.MetricsOffload.Tags = addLaunchTag(opts.MetricsOffload.Tags, capture)
+	opts.MetricsOffload.Tags = addStableMetricsLaunchTag(opts.MetricsOffload.Tags, capture)
 	opts.Labels, opts.Annotations = experiment.MergeMetadata(opts.Labels, opts.Annotations, capture)
 	opts.Labels = workloadmeta.StampWorkspace(opts.Labels, o.workspace)
 	if o.submissionID != "" {
@@ -705,16 +705,6 @@ func applyDirectMetricsOffloadEnvPolicy(opts *metricsoffload.Options) error {
 		}
 	}
 	return nil
-}
-
-func runDispatchEnvValue(values []string, name string) string {
-	prefix := name + "="
-	for i := len(values) - 1; i >= 0; i-- {
-		if strings.HasPrefix(values[i], prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(values[i], prefix))
-		}
-	}
-	return ""
 }
 
 func resolvePVCMounts(volumeSpecs, mountSpecs []string) (string, []jobrender.Volume, []jobrender.VolumeMount, error) {

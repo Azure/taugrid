@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/jobrender"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/core/workloadmeta"
+	"gopkg.in/yaml.v3"
 )
 
 func TestResolveRunTargetUsesTypedJobExecutor(t *testing.T) {
@@ -396,6 +398,7 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	o.metricsSessionID = "session-render"
 	o.metricsOffloadEnabled = true
 	o.metricsHistory = []string{"metrics-history-attempt-*/*.jsonl"}
+	o.checkpointPath = "/data/research-workspace/modernbert-bounded/checkpoints"
 	o.experiment = runExperimentMetadata{
 		Workspace:    "research-workspace",
 		Project:      "pretraining",
@@ -404,16 +407,20 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	}
 	o.dryRun = "client"
 	attachAuthoritativeProfileForTest(&o)
-	var stdout, stderr bytes.Buffer
-	ctx := withRunExperimentMetadata(context.Background(), o.experiment)
-	err := executeRunJob(ctx, &stdout, &stderr, &runJobRequest{
-		Name:    "modernbert-bounded",
-		Options: resolveRunJobOptions(o),
-	}, "tau run --config tau.yaml")
-	if err != nil {
-		t.Fatalf("executeRunJob: %v\nstderr:\n%s", err, stderr.String())
+	render := func(options runDispatchOptions, captureCommand string) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		ctx := withRunExperimentMetadata(context.Background(), options.experiment)
+		err := executeRunJob(ctx, &stdout, &stderr, &runJobRequest{
+			Name:    "modernbert-bounded",
+			Options: resolveRunJobOptions(options),
+		}, captureCommand)
+		if err != nil {
+			t.Fatalf("executeRunJob: %v\nstderr:\n%s", err, stderr.String())
+		}
+		return stdout.String()
 	}
-	rendered := stdout.String()
+	rendered := render(o, "tau run --config tau.yaml")
 	for _, want := range []string{
 		"name: metrics-offload",
 		"registry.example.com/taugrid/collector:v0.6.0",
@@ -444,6 +451,45 @@ func TestExecuteRunJobRendersOptInMetricsProducer(t *testing.T) {
 	if strings.Contains(rendered, workloadmeta.AnnotationStellarExperimentTitle) {
 		t.Fatalf("rendered direct Job contains retired title annotation:\n%s", rendered)
 	}
+
+	retry := o
+	retry.env = appendRetryEnv(retry.env, "/data/research-workspace/modernbert-bounded/checkpoints/attempt-1", 2, 3, "Evicted")
+	retryRendered := render(retry, "tau run --config tau.yaml (retry 2/3)")
+	if got, want := renderedMetricsOffloadArgs(t, retryRendered), renderedMetricsOffloadArgs(t, rendered); !slices.Equal(got, want) {
+		t.Fatalf("final Job collector args changed across retry:\ninitial: %v\nretry:   %v", want, got)
+	}
+}
+
+func renderedMetricsOffloadArgs(t *testing.T, rendered string) []string {
+	t.Helper()
+	var object map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &object); err != nil {
+		t.Fatalf("decode rendered workload: %v\n%s", err, rendered)
+	}
+	spec := object["spec"].(map[string]any)
+	var containers []any
+	switch object["kind"] {
+	case "Job":
+		containers = spec["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	case "RayJob":
+		containers = spec["rayClusterSpec"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	default:
+		t.Fatalf("unsupported rendered workload kind %v", object["kind"])
+	}
+	for _, raw := range containers {
+		container := raw.(map[string]any)
+		if container["name"] != "metrics-offload" {
+			continue
+		}
+		rawArgs := container["args"].([]any)
+		args := make([]string, len(rawArgs))
+		for i, rawArg := range rawArgs {
+			args[i] = rawArg.(string)
+		}
+		return args
+	}
+	t.Fatalf("rendered workload has no metrics-offload container:\n%s", rendered)
+	return nil
 }
 
 func TestRunJobDryRunPreservesTypedConfig(t *testing.T) {
