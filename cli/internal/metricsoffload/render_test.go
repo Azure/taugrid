@@ -4,6 +4,7 @@
 package metricsoffload
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -58,6 +60,75 @@ func TestWrapCommandSurfacesMissingTerminalPublication(t *testing.T) {
 	}
 	if _, err := os.Stat(runtime.CompletionFile); err != nil {
 		t.Fatalf("workload completion was not published before the sidecar timeout: %v", err)
+	}
+}
+
+func TestWrapCommandWaitsForTerminatedChildBeforeCompletion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executes and signals a Bash wrapper")
+	}
+	dir := t.TempDir()
+	childStarted := filepath.Join(dir, "child-started")
+	childFinished := filepath.Join(dir, "child-finished")
+	runtime := testRuntime(dir)
+	runtime.DoneFile = ""
+	if err := os.WriteFile(runtime.ReadyFile, []byte("ready\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childScript := `trap 'sleep 0.25; printf finished > "$2"; exit 42' TERM
+printf started > "$1"
+while :; do sleep 1; done`
+	wrapped, err := WrapCommand([]string{"bash", "-c", childScript, "child", childStarted, childFinished}, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(wrapped[0], wrapped[1:]...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, childStarted, time.Second)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(runtime.CompletionFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completion file appeared before child termination: %v", err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("terminated workload wrapper unexpectedly succeeded")
+	}
+	if _, err := os.Stat(childFinished); err != nil {
+		t.Fatalf("child termination handler did not finish: %v", err)
+	}
+	raw, err := os.ReadFile(runtime.CompletionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completion struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &completion); err != nil {
+		t.Fatal(err)
+	}
+	if completion.State != "cancelled" || completion.Reason != "workload-termination" {
+		t.Fatalf("completion = %+v, want workload cancellation", completion)
+	}
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
