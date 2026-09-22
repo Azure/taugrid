@@ -19,7 +19,7 @@ Use real workspace-scoped fleet, cluster telemetry, queue, workload, experiment,
 
 ## Direction
 
-Infrastructure atlas: a topology-first canvas groups GPU inventory by site and pool, connects it through Kueue pressure to admitted workloads, and keeps independent source evidence visible in a compact rail. The memorable moment is selecting a site and seeing its concrete GPU pools while the rest of the operational path remains in view.
+Infrastructure atlas: a topology-first canvas groups GPU inventory by site and pool, shows allocated-versus-available capacity directly inside each node, and connects capacity through Kueue pressure to admitted workloads. The memorable moment is selecting a site and seeing its concrete GPU pools while the rest of the operational path remains in view.
 
 ## Unresolved decisions
 

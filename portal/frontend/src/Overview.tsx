@@ -4,7 +4,7 @@
 import { useState, type ReactNode } from 'react';
 import { BoardResult, Empty, PageTitle, ScopedLink, TrackingLink, n1, utilizationSummary } from './components';
 import { useBoard } from './data';
-import type { Cluster, Cost, Nodes, Overview as OverviewData } from './types';
+import type { Cluster, Nodes, Overview as OverviewData } from './types';
 
 type FleetNode = Nodes['nodes'][number];
 
@@ -15,6 +15,7 @@ interface SiteGroup {
   nodes: FleetNode[];
   ready: number;
   gpus: number;
+  allocated: number | null;
   available: number | null;
 }
 
@@ -31,22 +32,32 @@ function groupSites(snapshot: Nodes | undefined): SiteGroup[] {
     nodes,
     ready: nodes.filter(node => node.ready).length,
     gpus: nodes.reduce((sum, node) => sum + node.gpuCapacity, 0),
+    allocated: nodes.every(node => node.gpuAllocated !== undefined)
+      ? nodes.reduce((sum, node) => sum + (node.gpuAllocated ?? 0), 0)
+      : null,
     available: nodes.every(node => node.gpuAvailable !== undefined)
       ? nodes.reduce((sum, node) => sum + (node.gpuAvailable ?? 0), 0)
       : null,
   })).sort((a, b) => b.gpus - a.gpus || a.label.localeCompare(b.label));
 }
 
-function SourceState({ label, state, detail }: { label: string; state: 'ready' | 'warning' | 'unavailable'; detail: ReactNode }) {
-  return <div className="overview-source">
-    <span className={'overview-source-mark ' + state} aria-hidden="true"/>
-    <div><strong>{label}</strong><span>{detail}</span></div>
-  </div>;
-}
-
 function Metric({ label, value, detail, tone }: { label: string; value: ReactNode; detail: ReactNode; tone?: string }) {
   return <div className={'overview-metric' + (tone ? ' ' + tone : '')}>
     <span>{label}</span><strong>{value}</strong><small>{detail}</small>
+  </div>;
+}
+
+function CapacityBar({ allocated, available, total }: { allocated: number | null; available: number | null; total: number }) {
+  const allocationKnown = allocated !== null && available !== null;
+  const allocatedPct = allocationKnown && total > 0 ? Math.max(0, Math.min(100, allocated / total * 100)) : 0;
+  return <div className="overview-capacity">
+    <div className="overview-capacity-bar" aria-label={allocationKnown
+      ? `${allocated} allocated GPUs and ${available} available GPUs`
+      : `Allocation unavailable for ${total} GPUs`}>
+      {allocationKnown && <span style={{ width: `${allocatedPct}%` }}/>}
+    </div>
+    <span><b>{allocationKnown ? allocated : '—'}</b> allocated</span>
+    <span><b>{allocationKnown ? available : '—'}</b> available</span>
   </div>;
 }
 
@@ -59,7 +70,8 @@ function SiteSelector({ sites, selected, onSelect }: { sites: SiteGroup[]; selec
       <span className="overview-site-status">{site.ready === site.nodes.length ? 'Ready' : `${site.ready}/${site.nodes.length} ready`}</span>
       <strong>{site.label}</strong>
       <small>{site.region}</small>
-      <span className="overview-site-capacity"><b>{site.gpus}</b> GPUs <i>{site.available ?? 'Unknown'} available</i></span>
+      <span className="overview-site-total">{site.gpus} GPUs</span>
+      <CapacityBar allocated={site.allocated} available={site.available} total={site.gpus}/>
     </button>)}
   </div>;
 }
@@ -75,13 +87,16 @@ function PoolDetails({ site }: { site?: SiteGroup }) {
     <div className="overview-stage-title"><span>Selected site</span><strong>{site.label}</strong></div>
     {[...pools.entries()].map(([name, nodes]) => {
       const gpus = nodes.reduce((sum, node) => sum + node.gpuCapacity, 0);
+      const allocated = nodes.every(node => node.gpuAllocated !== undefined)
+        ? nodes.reduce((sum, node) => sum + (node.gpuAllocated ?? 0), 0)
+        : null;
       const available = nodes.every(node => node.gpuAvailable !== undefined)
         ? nodes.reduce((sum, node) => sum + (node.gpuAvailable ?? 0), 0)
         : null;
       const product = nodes.find(node => node.gpuProduct)?.gpuProduct || nodes.find(node => node.sku)?.sku || 'GPU model unknown';
       return <ScopedLink key={name} to={'/portal/fleet?pool=' + encodeURIComponent(name)} className="overview-pool">
         <span><strong>{name}</strong><small>{product}</small></span>
-        <span><b>{available === null ? `—/${gpus}` : `${available}/${gpus}`}</b><small>GPUs available</small></span>
+        <span className="overview-pool-capacity"><small>{gpus} GPUs</small><CapacityBar allocated={allocated} available={available} total={gpus}/></span>
       </ScopedLink>;
     })}
   </div>;
@@ -125,34 +140,8 @@ function WorkloadFlow({ data }: { data: OverviewData }) {
   </div>;
 }
 
-function EvidenceRail({ platform, overview, nodes, cluster, cost, nodeError, clusterError, costError }: {
-  platform: boolean; overview: OverviewData; nodes?: Nodes; cluster?: Cluster; cost?: Cost;
-  nodeError?: Error | null; clusterError?: Error | null; costError?: Error | null;
-}) {
-  const utilization = utilizationSummary(cluster?.gpus || []);
-  const observedHealth = (cluster?.gpus || []).filter(gpu => typeof gpu.healthy === 'boolean');
-  const unhealthy = observedHealth.filter(gpu => gpu.healthy === false).length;
-  return <aside className="overview-evidence" aria-label="Operational evidence">
-    <div><h3>Operational evidence</h3><p>Independent sources remain explicit when coverage is partial or unavailable.</p></div>
-    <SourceState label="Fleet inventory" state={nodeError ? 'unavailable' : nodes ? 'ready' : 'warning'}
-      detail={nodeError?.message || (nodes ? `${nodes.readyNodes}/${nodes.totalNodes} nodes ready` : 'Loading inventory')}/>
-    <SourceState label="GPU telemetry" state={clusterError ? 'unavailable' : !utilization.observed ? 'warning' : unhealthy ? 'warning' : 'ready'}
-      detail={clusterError?.message || (!utilization.observed ? 'No utilization observations' : `${utilization.observed}/${utilization.total} GPUs measured · ${unhealthy} unhealthy`)}/>
-    <SourceState label="Queue state" state={overview.cards.queueUnavailable ? 'unavailable' : 'ready'}
-      detail={overview.cards.queueUnavailable || `${overview.cards.queue?.admitted ?? 0} admitted · ${overview.cards.queue?.pending ?? 0} pending`}/>
-    {platform && <section aria-label="GPU cost" className="overview-cost">
-      <SourceState label="Cost telemetry" state={costError ? 'unavailable' : !cost?.costAvailable ? 'warning' : 'ready'}
-        detail={costError?.message || (!cost ? 'Loading cost data' : cost.costAvailable ? `${cost.window || 'Current window'} measured` : 'Cost samples unavailable')}/>
-      <div><span>Estimated cost</span><strong>{cost?.costAvailable ? `$${cost.totalEstimatedCostUSD.toFixed(2)}` : '—'}</strong></div>
-      <div><span>Observed idle GPUs</span><strong>{cost?.idleAvailable ? cost.idleGPUs.length : '—'}</strong></div>
-    </section>}
-    <ScopedLink to="/portal/observability" className="overview-stage-link">Review observability sources →</ScopedLink>
-  </aside>;
-}
-
-function Atlas({ platform, data, nodes, cluster, cost, nodeError, clusterError, costError }: {
-  platform: boolean; data: OverviewData; nodes?: Nodes; cluster?: Cluster; cost?: Cost;
-  nodeError?: Error | null; clusterError?: Error | null; costError?: Error | null;
+function Atlas({ platform, data, nodes, cluster, nodeError }: {
+  platform: boolean; data: OverviewData; nodes?: Nodes; cluster?: Cluster; nodeError?: Error | null;
 }) {
   const sites = groupSites(nodes);
   const [selectedSite, setSelectedSite] = useState<string>();
@@ -180,7 +169,7 @@ function Atlas({ platform, data, nodes, cluster, cost, nodeError, clusterError, 
     <div className="overview-atlas">
       <section className="overview-map" aria-label="Infrastructure topology">
         <header>
-          <div><h2>Infrastructure topology</h2><p>Follow capacity from GPU sites through admission to active workloads.</p></div>
+          <h2>Infrastructure topology</h2>
           <span>{sites.length} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.nodes?.filter(node => node.gpuCapacity > 0).length ?? 0} GPU nodes</span>
         </header>
         <div className="overview-flow">
@@ -195,8 +184,6 @@ function Atlas({ platform, data, nodes, cluster, cost, nodeError, clusterError, 
           <WorkloadFlow data={data}/>
         </div>
       </section>
-      <EvidenceRail platform={platform} overview={data} nodes={nodes} cluster={cluster} cost={cost}
-        nodeError={nodeError} clusterError={clusterError} costError={costError}/>
     </div>
   </div>;
 }
@@ -206,14 +193,12 @@ export function Overview({ persona }: { persona: string }) {
   const overview = useBoard<OverviewData>(platform ? '/api/portal/overview' : '/api/portal/overview?view=workloads');
   const nodes = useBoard<Nodes>('/api/portal/nodes');
   const cluster = useBoard<Cluster>('/api/portal/cluster');
-  const costs = useBoard<Cost>('/api/portal/cost', platform);
   return <><PageTitle title="Overview">{platform
     ? 'See how fleet capacity, scheduler pressure, and active workloads connect.'
     : 'See where your workloads are admitted, what capacity they consume, and where to investigate next.'}</PageTitle>
     <BoardResult query={overview} label="Infrastructure overview"
       partial={!!overview.data && !!(overview.data.cards.queueUnavailable || overview.data.runningUnavailable)}>
-      {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data} cost={costs.data}
-        nodeError={nodes.error} clusterError={cluster.error} costError={costs.error}/>}
+      {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data} nodeError={nodes.error}/>}
     </BoardResult>
   </>;
 }

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Overview } from './Boards';
@@ -26,31 +26,19 @@ afterEach(() => {
 });
 
 describe('Platform overview', () => {
-  it('shows the current estimated GPU cost instead of GPU-hours', async () => {
+  it('shows GPU topology with allocated and available capacity', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({ cards: { queue: { admitted: 1, pending: 0, gpuUsed: 8, gpuHeadroom: 8 } }, running: [] }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
         nodes: [
-          { name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
-          { name: 'gpu-b', site: 'east', region: 'eastus2', agentPool: 'h100', gpuCapacity: 8, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
-          { name: 'system-a', site: 'west', region: 'westus3', agentPool: 'system', gpuCapacity: 0, gpuAvailable: 0, ready: true },
+          { name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 4, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
+          { name: 'gpu-b', site: 'east', region: 'eastus2', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 4, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
+          { name: 'system-a', site: 'west', region: 'westus3', agentPool: 'system', gpuCapacity: 0, gpuAllocated: 0, gpuAvailable: 0, ready: true },
         ],
       }));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ window: '15m0s', gpus: [] }));
-      if (url.includes('/api/portal/cost')) return Promise.resolve(json({
-        window: '168h0m0s',
-        totalGPUHours: 987.6,
-        totalEstimatedCostUSD: 321.09,
-        costAvailable: true,
-        gpuHoursAvailable: true,
-        costCoverage: { observedSamples: 24, gpuHoursSamples: 24, costSamples: 24, utilizationSamples: 0 },
-        idleAvailable: false,
-        idleCoverage: { observedGPUs: 0, measuredGPUs: 0, eligibleGPUs: 0, observedSamples: 0, validSamples: 0 },
-        workspaces: [],
-        idleGPUs: [],
-      }));
       return Promise.resolve(json({}));
     }));
 
@@ -59,13 +47,12 @@ describe('Platform overview', () => {
       <WorkspaceProvider scope={scope} managed={false}><Overview persona="platform"/></WorkspaceProvider>
     </MemoryRouter></QueryClientProvider>);
 
-    const costBoard = await screen.findByLabelText('GPU cost');
-    expect(await within(costBoard).findByText('Estimated cost')).toBeVisible();
-    expect(within(costBoard).getByText('$321.09')).toBeVisible();
-    expect(within(costBoard).queryByText('987.6')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
     expect(screen.getByRole('button', { name: /west/i })).toBeVisible();
     expect(screen.queryByText('system')).not.toBeInTheDocument();
+    expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: 'Operational evidence' })).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText(/allocated GPUs and .* available GPUs/).length).toBeGreaterThan(0);
   });
 
   it('emits resolvable canonical run links for workload tracking', () => {
