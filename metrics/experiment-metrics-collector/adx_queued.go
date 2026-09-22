@@ -182,6 +182,10 @@ func newADXCredential(clientID string) (azcore.TokenCredential, error) {
 
 func (s *ADXQueuedSink) Name() string { return adxQueuedSinkName }
 
+func (s *ADXQueuedSink) TerminalDrainTimeout() (time.Duration, error) {
+	return metricsoffload.TerminalDrainTimeout(s.Config.MaxAttempts, s.Config.RetryBackoff, s.Config.FinalStatusTimeout)
+}
+
 func (s *ADXQueuedSink) ConfigIdentity() string {
 	config := struct {
 		Version            string `json:"version"`

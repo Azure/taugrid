@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
+	"github.com/Azure/taugrid/core/metricsoffload"
 )
 
 type Options struct {
@@ -228,9 +229,9 @@ func validateAcknowledgedManifest(checkpoints checkpointSet, manifest chunkManif
 			return fmt.Errorf("checkpoint does not acknowledge pending history chunk %d", manifest.Sequence)
 		}
 	case "terminal":
-		if checkpoints.Terminal == nil ||
-			checkpoints.Terminal.Sequence != manifest.Sequence ||
-			checkpoints.Terminal.ChunkDigest != manifest.ChunkDigest {
+		observationID := terminalObservationIDFromManifest(manifest)
+		terminal, ok := checkpoints.Terminals[observationID]
+		if !ok || terminal.Sequence != manifest.Sequence || terminal.ChunkDigest != manifest.ChunkDigest {
 			return fmt.Errorf("checkpoint does not acknowledge pending terminal chunk %d", manifest.Sequence)
 		}
 	default:
@@ -265,10 +266,13 @@ func advanceCheckpointForManifest(checkpoints *checkpointSet, manifest chunkMani
 			Sequence: manifest.Sequence, ChunkDigest: manifest.ChunkDigest, Lines: manifest.EndLines,
 		}
 	case "terminal":
-		if checkpoints.Terminal != nil {
-			return false, fmt.Errorf("pending data follows terminal checkpoint")
+		observationID := terminalObservationIDFromManifest(manifest)
+		if _, exists := checkpoints.Terminals[observationID]; exists {
+			return false, fmt.Errorf("duplicate terminal observation %s", observationID)
 		}
-		checkpoints.Terminal = &terminalCheckpoint{Sequence: manifest.Sequence, ChunkDigest: manifest.ChunkDigest}
+		checkpoints.Terminals[observationID] = terminalCheckpoint{
+			Sequence: manifest.Sequence, ChunkDigest: manifest.ChunkDigest,
+		}
 	default:
 		return false, fmt.Errorf("unknown manifest kind %q", manifest.Kind)
 	}
@@ -288,6 +292,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 	manifestCount, err := r.replaySpool(ctx, &checkpoints, checkpointPath, &result)
 	if err != nil {
+		if ctx.Err() != nil {
+			completed, completionErr := fileExists(r.options.CompletionFile)
+			if completionErr != nil {
+				return result, completionErr
+			}
+			if !completed {
+				return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
+			}
+		}
 		return result, err
 	}
 	files, err := expandHistory(r.options.History)
@@ -314,6 +327,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 
 	for iteration := 1; ; iteration++ {
 		if err := r.drain(ctx, &checkpoints, checkpointPath, &result, false); err != nil {
+			if ctx.Err() != nil {
+				completed, completionErr := fileExists(r.options.CompletionFile)
+				if completionErr != nil {
+					return result, completionErr
+				}
+				if !completed {
+					return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
+				}
+			}
 			return result, err
 		}
 		completed, err := fileExists(r.options.CompletionFile)
@@ -342,7 +364,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return result, ctx.Err()
+			return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
 		case <-timer.C:
 		}
 	}
@@ -469,12 +491,22 @@ func (r *Runner) project(read sourceRead) ([]exptelemetry.MetricEvent, []byte, e
 }
 
 func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, result *Result) error {
-	if checkpoints.Terminal != nil {
-		return nil
-	}
 	status, err := readCompletion(r.options.CompletionFile)
 	if err != nil {
 		return err
+	}
+	return r.publishCompletion(ctx, checkpoints, result, status, terminalObservationID(status))
+}
+
+func (r *Runner) publishCompletion(
+	ctx context.Context,
+	checkpoints *checkpointSet,
+	result *Result,
+	status completion,
+	observationID string,
+) error {
+	if _, exists := checkpoints.Terminals[observationID]; exists {
+		return nil
 	}
 	tags := cloneTags(r.options.Tags)
 	tags[exptelemetry.RunStatusStateTag] = status.State
@@ -505,10 +537,12 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 	if err != nil {
 		return err
 	}
-	manifest := newTerminalManifest(r.configIdentity(), checkpoints.NextSequence, r.options.CompletionFile, raw)
+	manifest := newTerminalManifest(
+		r.configIdentity(), checkpoints.NextSequence, r.options.CompletionFile, observationID, raw,
+	)
 	chunk, pending, err := writePending(r.options.Out, MetricEventChunk{
 		Sequence: checkpoints.NextSequence, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw,
-		SourcePath: r.options.CompletionFile, SourceFileID: "completion-status",
+		SourcePath: r.options.CompletionFile, SourceFileID: manifest.SourceFileID,
 	}, &manifest, r.storage())
 	if err != nil {
 		return err
@@ -523,7 +557,7 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 		return err
 	}
 	next := cloneCheckpoints(*checkpoints)
-	next.Terminal = &terminalCheckpoint{Sequence: chunk.Sequence, ChunkDigest: chunk.Digest}
+	next.Terminals[observationID] = terminalCheckpoint{Sequence: chunk.Sequence, ChunkDigest: chunk.Digest}
 	next.NextSequence++
 	if err := writeCheckpoints(filepath.Join(r.options.Out, "checkpoint.json"), next, r.storage()); err != nil {
 		return err
@@ -538,6 +572,61 @@ func (r *Runner) publishStatus(ctx context.Context, checkpoints *checkpointSet, 
 	result.Chunks++
 	result.Events++
 	return nil
+}
+
+func (r *Runner) finishCancelled(
+	checkpointPath string,
+	checkpoints checkpointSet,
+	result Result,
+	cause error,
+) (Result, error) {
+	timeout, err := r.terminalDrainTimeout()
+	if err != nil {
+		return result, err
+	}
+	drainCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if _, err := r.replaySpool(drainCtx, &checkpoints, checkpointPath, &result); err != nil {
+		return result, fmt.Errorf("final cancellation spool replay: %w", err)
+	}
+	if err := r.drain(drainCtx, &checkpoints, checkpointPath, &result, true); err != nil {
+		return result, fmt.Errorf("final cancellation history drain: %w", err)
+	}
+	status := completion{
+		State:       "cancelled",
+		Reason:      "collector_context_cancelled",
+		Message:     "metrics collector received cancellation before workload completion",
+		CompletedAt: r.options.Now().UTC(),
+	}
+	observationID := terminalObservationIDForCancellation(r.configIdentity())
+	if err := r.publishCompletion(drainCtx, &checkpoints, &result, status, observationID); err != nil {
+		return result, fmt.Errorf("publish cancelled terminal status: %w", err)
+	}
+	return result, cause
+}
+
+func (r *Runner) terminalDrainTimeout() (time.Duration, error) {
+	if provider, ok := r.options.Sink.(interface {
+		TerminalDrainTimeout() (time.Duration, error)
+	}); ok {
+		return provider.TerminalDrainTimeout()
+	}
+	return metricsoffload.TerminalDrainTimeout(0, 0, 0)
+}
+
+func terminalObservationID(status completion) string {
+	raw, _ := json.Marshal(status)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func terminalObservationIDForCancellation(configIdentity string) string {
+	sum := sha256.Sum256([]byte("cancelled\x00" + configIdentity))
+	return hex.EncodeToString(sum[:])
+}
+
+func terminalObservationIDFromManifest(manifest chunkManifest) string {
+	return strings.TrimPrefix(manifest.SourceFileID, "completion-status/")
 }
 
 func (r *Runner) deliverChunk(ctx context.Context, chunk MetricEventChunk) error {

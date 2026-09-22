@@ -31,6 +31,12 @@ type recordingSink struct {
 	mu         sync.Mutex
 }
 
+type boundedContextSink struct {
+	recordingSink
+	contexts int
+	budget   time.Duration
+}
+
 func (s *recordingSink) Name() string           { return s.name }
 func (s *recordingSink) ConfigIdentity() string { return s.config }
 func (s *recordingSink) Deliver(_ context.Context, chunk MetricEventChunk) (DeliveryAck, error) {
@@ -52,6 +58,21 @@ func (s *recordingSink) Deliver(_ context.Context, chunk MetricEventChunk) (Deli
 	s.deliveries++
 	s.chunks = append(s.chunks, chunk)
 	return DeliveryAck{Samples: len(chunk.Events)}, nil
+}
+
+func (s *boundedContextSink) Deliver(ctx context.Context, chunk MetricEventChunk) (DeliveryAck, error) {
+	if err := ctx.Err(); err != nil {
+		return DeliveryAck{}, fmt.Errorf("delivery inherited cancelled context: %w", err)
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return DeliveryAck{}, errors.New("delivery context has no deadline")
+	}
+	s.contexts++
+	return s.recordingSink.Deliver(ctx, chunk)
+}
+
+func (s *boundedContextSink) TerminalDrainTimeout() (time.Duration, error) {
+	return s.budget, nil
 }
 
 func baseOptions(root, history string, sink Sink) Options {
@@ -648,6 +669,95 @@ func TestTerminalCrashBoundariesReplaySameChunkBeforeDone(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCancellationDrainsTrailingHistoryAndPublishesCancelledStatus(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	writeFile(t, history, strings.TrimSuffix(historyRow, "\n"))
+	sink := &boundedContextSink{
+		recordingSink: recordingSink{name: "test", config: "v1"},
+		budget:        250 * time.Millisecond,
+	}
+	options := baseOptions(root, history, sink)
+	options.Watch = true
+	options.Interval = time.Hour
+	options.Now = func() time.Time { return time.Unix(1700000200, 0).UTC() }
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	result, err := runner.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error=%v, want context cancellation", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cancelled drain took %s, want bounded exit", elapsed)
+	}
+	if result.Events != 2 || result.Chunks != 2 || sink.contexts != 2 || len(sink.chunks) != 2 {
+		t.Fatalf("result=%+v contexts=%d chunks=%d", result, sink.contexts, len(sink.chunks))
+	}
+	if sink.chunks[0].Events[0].MetricName == exptelemetry.RunStatusMetricName {
+		t.Fatal("terminal status was published before trailing history")
+	}
+	status := sink.chunks[1].Events[0]
+	if status.MetricName != exptelemetry.RunStatusMetricName ||
+		status.Tags[exptelemetry.RunStatusStateTag] != "cancelled" {
+		t.Fatalf("terminal event=%+v, want cancelled run status", status)
+	}
+}
+
+func TestRetryPublishesFailedThenSucceededTerminalObservationsOnce(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	completionPath := filepath.Join(root, "completion.json")
+	writeFile(t, history, "")
+	writeFile(t, completionPath, `{"state":"failed","reason":"exit","completed_at":"2023-11-14T22:15:00Z"}`)
+	sink := &recordingSink{name: "test", config: "v1"}
+	options := baseOptions(root, history, sink)
+	options.CompletionFile = completionPath
+
+	first := runCollector(t, options)
+	if !first.Completed || len(sink.chunks) != 1 {
+		t.Fatalf("failed attempt result=%+v chunks=%d", first, len(sink.chunks))
+	}
+	writeFile(t, completionPath, `{"state":"succeeded","completed_at":"2023-11-14T22:16:00Z"}`)
+	second := runCollector(t, options)
+	if !second.Completed || len(sink.chunks) != 2 {
+		t.Fatalf("successful retry result=%+v chunks=%d", second, len(sink.chunks))
+	}
+	third := runCollector(t, options)
+	if !third.Completed || len(sink.chunks) != 2 {
+		t.Fatalf("replay result=%+v chunks=%d, want no duplicate terminal delivery", third, len(sink.chunks))
+	}
+	var states []string
+	for _, chunk := range sink.chunks {
+		if len(chunk.Events) != 1 || chunk.Events[0].MetricName != exptelemetry.RunStatusMetricName {
+			t.Fatalf("terminal chunk=%+v", chunk)
+		}
+		states = append(states, chunk.Events[0].Tags[exptelemetry.RunStatusStateTag])
+	}
+	if strings.Join(states, ",") != "failed,succeeded" {
+		t.Fatalf("terminal states=%v, want failed then succeeded", states)
+	}
+	raw, err := os.ReadFile(filepath.Join(options.Out, "checkpoint.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints checkpointSet
+	if err := json.Unmarshal(raw, &checkpoints); err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints.Terminals) != 2 {
+		t.Fatalf("terminal checkpoints=%d, want 2", len(checkpoints.Terminals))
+	}
+	pending, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json"))
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending terminal observations=%v err=%v", pending, err)
 	}
 }
 

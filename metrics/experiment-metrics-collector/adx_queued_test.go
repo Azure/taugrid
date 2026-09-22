@@ -5,14 +5,16 @@ package collector
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -120,13 +122,14 @@ func adxTestChunk(t *testing.T) MetricEventChunk {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunk, err := writeChunk(t.TempDir(), MetricEventChunk{
-		Sequence: 1, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
+	sum := sha256.Sum256(raw)
+	return MetricEventChunk{
+		SchemaVersion: ChunkSchemaV1,
+		Digest:        hex.EncodeToString(sum[:]),
+		Sequence:      1,
+		Events:        []exptelemetry.MetricEvent{event},
+		NDJSON:        raw,
 	}
-	return chunk
 }
 
 func TestADXQueuedWaitsForFinalSuccessBeforeAcknowledging(t *testing.T) {
@@ -427,7 +430,7 @@ func TestADXQueuedPermanentFailuresDoNotRetryAndErrorsAreBounded(t *testing.T) {
 	}
 }
 
-func TestADXQueuedConfigIdentityAndReceiptReplay(t *testing.T) {
+func TestADXQueuedConfigIdentity(t *testing.T) {
 	client := &fakeADXClient{results: []adxQueuedResult{
 		&fakeADXResult{status: adxStatusSucceeded},
 	}}
@@ -447,16 +450,23 @@ func TestADXQueuedConfigIdentityAndReceiptReplay(t *testing.T) {
 		t.Fatal("identity client ID change did not change ADX configuration identity")
 	}
 
-	root := t.TempDir()
-	chunk := adxTestChunk(t)
-	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err != nil || reused {
-		t.Fatalf("initial delivery reused=%v err=%v", reused, err)
+}
+
+func TestADXQueuedTerminalDrainTimeoutUsesSharedContract(t *testing.T) {
+	sink := adxTestSink(&fakeADXClient{})
+	sink.Config.MaxAttempts = 2
+	sink.Config.RetryBackoff = 3 * time.Second
+	sink.Config.FinalStatusTimeout = 4 * time.Second
+	got, err := sink.TerminalDrainTimeout()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err != nil || !reused {
-		t.Fatalf("replay delivery reused=%v err=%v", reused, err)
+	want, err := metricsoffload.TerminalDrainTimeout(2, 3*time.Second, 4*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(client.requests) != 1 {
-		t.Fatalf("receipt replay submitted %d ADX requests, want 1", len(client.requests))
+	if got != want {
+		t.Fatalf("terminal drain timeout=%s, want shared contract %s", got, want)
 	}
 }
 
@@ -472,44 +482,37 @@ func TestADXQueuedMissingReceiptReplayAcceptsSDKSkipped(t *testing.T) {
 	}}
 	sink := adxTestSink(client)
 	root := t.TempDir()
-	chunk := adxTestChunk(t)
+	history := filepath.Join(root, "history.jsonl")
+	writeFile(t, history, historyRow)
+	options := baseOptions(root, history, sink)
 	crash := errors.New("simulated crash before receipt persistence")
-
-	_, _, err := deliverWithReceipt(
-		context.Background(),
-		root,
-		sink,
-		chunk,
-		defaultStorage(),
-		func(point faultPoint) error {
-			if point == faultAfterSinkAccept {
-				return crash
-			}
-			return nil
-		},
-	)
-	if !errors.Is(err, crash) {
-		t.Fatalf("initial missing-receipt delivery error=%v, want %v", err, crash)
+	options.fault = func(point faultPoint) error {
+		if point == faultAfterSinkAccept {
+			return crash
+		}
+		return nil
 	}
-	if _, err := os.Stat(receiptPath(root, sink, chunk.Digest)); !os.IsNotExist(err) {
-		t.Fatalf("receipt exists after simulated crash: %v", err)
-	}
-
-	ack, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage())
+	runner, err := New(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reused || ack.Metadata["final_status"] != "Skipped" {
-		t.Fatalf("recovered delivery reused=%v ack=%+v", reused, ack)
+	_, err = runner.Run(context.Background())
+	if !errors.Is(err, crash) {
+		t.Fatalf("initial missing-receipt delivery error=%v, want %v", err, crash)
 	}
-	if _, err := os.Stat(receiptPath(root, sink, chunk.Digest)); err != nil {
-		t.Fatalf("recovered receipt was not persisted: %v", err)
+	pending, err := filepath.Glob(filepath.Join(options.Out, "pending", "*.json"))
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending ADX delivery=%v err=%v, want one durable record", pending, err)
 	}
-	if _, reused, err := deliverWithReceipt(context.Background(), root, sink, chunk, defaultStorage()); err != nil || !reused {
-		t.Fatalf("persisted recovery receipt replay reused=%v err=%v", reused, err)
-	}
+	options.fault = nil
+	runCollector(t, options)
+	runCollector(t, options)
 	if len(client.requests) != 2 {
 		t.Fatalf("missing-receipt replay submitted %d requests, want 2", len(client.requests))
+	}
+	pending, err = filepath.Glob(filepath.Join(options.Out, "pending", "*.json"))
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending ADX delivery after replay=%v err=%v", pending, err)
 	}
 }
 

@@ -198,7 +198,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	options.Sinks = append(options.Sinks, sink)
+	options.Sink = sink
 	runner, err := collector.New(options)
 	if err != nil {
 		return err
