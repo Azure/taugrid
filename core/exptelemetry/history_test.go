@@ -136,6 +136,33 @@ func TestProjectJSONLHistoryRowPreservesInt64Step(t *testing.T) {
 	}
 }
 
+func TestProjectJSONLHistoryRowPreservesMaxInt64JSONStep(t *testing.T) {
+	row := map[string]any{"_step": json.Number("9223372036854775807"), "_timestamp": 1.0, "loss": 1.0}
+	events, err := ProjectJSONLHistoryRow(row, validHistoryOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Step != math.MaxInt64 {
+		t.Fatalf("JSON history step projection = %+v, want MaxInt64", events)
+	}
+}
+
+func TestProjectJSONLHistoryRowRejectsOverflowingJSONIntegerStep(t *testing.T) {
+	row := map[string]any{"_step": json.Number("9223372036854775808"), "_timestamp": 1.0, "loss": 1.0}
+	_, err := ProjectJSONLHistoryRow(row, validHistoryOptions())
+	if err == nil || !strings.Contains(err.Error(), "representable as int64") {
+		t.Fatalf("error = %v, want int64 range error", err)
+	}
+}
+
+func TestProjectJSONLHistoryRowRejectsFloatStepAtInt64Limit(t *testing.T) {
+	row := map[string]any{"_step": math.Exp2(63), "_timestamp": 1.0, "loss": 1.0}
+	_, err := ProjectJSONLHistoryRow(row, validHistoryOptions())
+	if err == nil || !strings.Contains(err.Error(), "representable as int64") {
+		t.Fatalf("error = %v, want int64 range error", err)
+	}
+}
+
 func TestResearchMetricMappingMatchesPortalImporter(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -150,6 +150,9 @@ func historyStep(value any) (int64, error) {
 			}
 			return step, nil
 		}
+		if !strings.ContainsAny(number.String(), ".eE") {
+			return 0, fmt.Errorf("must be numeric and representable as int64")
+		}
 	}
 	switch value := value.(type) {
 	case int:
@@ -180,7 +183,7 @@ func historyStep(value any) (int64, error) {
 		return int64(value), nil
 	}
 	number, numeric, invalid := historyNumber(value)
-	if invalid || !numeric || number > math.MaxInt64 || number < math.MinInt64 {
+	if invalid || !numeric || number >= float64(uint64(1)<<63) || number < math.MinInt64 {
 		return 0, fmt.Errorf("must be numeric and representable as int64")
 	}
 	step := int64(number)
