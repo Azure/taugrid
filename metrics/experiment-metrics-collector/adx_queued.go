@@ -14,10 +14,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Azure/azure-kusto-go/azkustodata"
+	kustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -77,6 +79,16 @@ type adxTransientError struct {
 
 func (e adxTransientError) Error() string { return e.err.Error() }
 func (e adxTransientError) Unwrap() error { return e.err }
+
+var (
+	adxURLPattern             = regexp.MustCompile(`https?://[^\s"'<>]+`)
+	adxSASQueryPattern        = regexp.MustCompile(`(?i)([?&]?(?:sig|se|sp|spr|st|srt|ss|skoid|sktid|skt|ske|sks|skv)=)[^&\s]+`)
+	adxFlattenedHTTPStatus    = regexp.MustCompile(`Kind\(KHTTPError\): [^(]*\(([45][0-9]{2})(?: [^)]*)?\):`)
+	adxFlattenedKustoPrefixes = []string{
+		"problem getting authorization context from Kusto via Mgmt: ",
+		"problem getting ingestion resources from Kusto: ",
+	}
+)
 
 type sdkADXQueuedClient struct {
 	ingestor *azkustoingest.Ingestion
@@ -205,22 +217,22 @@ func (s *ADXQueuedSink) Deliver(ctx context.Context, chunk MetricEventChunk) (De
 		}
 		last = err
 		if ctx.Err() != nil {
-			return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion canceled: %v", ctx.Err())))
+			return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion canceled: %s", adxDiagnostic(ctx.Err()))))
 		}
 		if !adxRetryable(err) || attempt == s.attempts() {
 			return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf(
-				"ADX ingestion failed after %d attempt(s): %v", attempt, err,
+				"ADX ingestion failed after %d attempt(s): %s", attempt, adxDiagnostic(err),
 			)))
 		}
 		timer := time.NewTimer(s.backoff() * time.Duration(1<<(attempt-1)))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion canceled: %v", ctx.Err())))
+			return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion canceled: %s", adxDiagnostic(ctx.Err()))))
 		case <-timer.C:
 		}
 	}
-	return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion failed: %v", last)))
+	return DeliveryAck{}, errors.New(boundedText(fmt.Sprintf("ADX ingestion failed: %s", adxDiagnostic(last))))
 }
 
 func (s *ADXQueuedSink) validate() error {
@@ -268,6 +280,10 @@ func (s *ADXQueuedSink) pollInterval() time.Duration {
 }
 
 func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request adxIngestRequest) (adxQueuedResult, error) {
+	ingestIfNotExists, err := json.Marshal([]string{request.IngestByValue})
+	if err != nil {
+		return nil, fmt.Errorf("marshal ADX ingest-if-not-exists tags: %w", err)
+	}
 	result, err := c.ingestor.FromReader(
 		ctx,
 		bytes.NewReader(payload),
@@ -276,12 +292,12 @@ func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request
 		azkustoingest.IngestionMappingRef(request.Mapping, azkustoingest.JSON),
 		azkustoingest.FileFormat(azkustoingest.JSON),
 		azkustoingest.RawDataSize(int64(len(payload))),
-		azkustoingest.IfNotExists(request.IngestByValue),
+		azkustoingest.IfNotExists(string(ingestIfNotExists)),
 		azkustoingest.Tags([]string{"ingest-by:" + request.IngestByValue}),
 		azkustoingest.ReportResultToTable(),
 	)
 	if err != nil {
-		return nil, err
+		return nil, normalizeADXSDKError(err)
 	}
 	return &sdkADXQueuedResult{result: result}, nil
 }
@@ -313,12 +329,28 @@ func adxRetryable(err error) bool {
 	if errors.As(err, &transient) {
 		return true
 	}
+	return adxSDKRetryable(err)
+}
+
+func normalizeADXSDKError(err error) error {
+	if err == nil || !adxSDKRetryable(err) {
+		return err
+	}
+	return adxTransientError{err: err}
+}
+
+func adxSDKRetryable(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var authErr *azidentity.AuthenticationFailedError
 	if errors.As(err, &authErr) {
 		return false
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if azkustoingest.IsStatusRecord(current) {
+			return azkustoingest.IsRetryable(current)
+		}
 	}
 	var responseErr *azcore.ResponseError
 	if errors.As(err, &responseErr) {
@@ -330,24 +362,111 @@ func adxRetryable(err error) bool {
 			responseErr.StatusCode == http.StatusConflict ||
 			responseErr.StatusCode == http.StatusTooManyRequests || responseErr.StatusCode >= 500
 	}
-	for current := err; current != nil; current = errors.Unwrap(current) {
-		if azkustoingest.IsStatusRecord(current) {
-			return azkustoingest.IsRetryable(current)
-		}
+	var httpErr *kustoerrors.HttpError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == http.StatusRequestTimeout ||
+			httpErr.StatusCode == http.StatusConflict ||
+			httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode >= 500
+	}
+	if status, ok := flattenedKustoHTTPStatus(err); ok {
+		return status == http.StatusRequestTimeout ||
+			status == http.StatusConflict ||
+			status == http.StatusTooManyRequests || status >= 500
+	}
+	if kustoerrors.Retry(err) {
+		return true
 	}
 	var networkErr net.Error
 	if errors.As(err, &networkErr) {
 		return true
 	}
-	text := strings.ToLower(err.Error())
-	for _, permanent := range []string{
-		"authentication", "authorization", "unauthorized", "forbidden",
-		"mapping", "schema", "database does not exist", "table does not exist",
-		"bad request", "invalid",
-	} {
-		if strings.Contains(text, permanent) {
-			return false
+	return false
+}
+
+func adxDiagnostic(err error) string {
+	if err == nil {
+		return "no error"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "context canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "context deadline exceeded"
+	}
+	var authErr *azidentity.AuthenticationFailedError
+	if errors.As(err, &authErr) {
+		return "Azure authentication failed"
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if !azkustoingest.IsStatusRecord(current) {
+			continue
+		}
+		status, _ := azkustoingest.GetIngestionStatus(current)
+		failure, _ := azkustoingest.GetIngestionFailureStatus(current)
+		code, _ := azkustoingest.GetErrorCode(current)
+		return fmt.Sprintf(
+			"ingestion status=%s failure=%s code=%s",
+			redactADXDiagnosticText(string(status)),
+			redactADXDiagnosticText(string(failure)),
+			redactADXDiagnosticText(code),
+		)
+	}
+	var responseErr *azcore.ResponseError
+	if errors.As(err, &responseErr) {
+		return fmt.Sprintf(
+			"Azure HTTP status=%d code=%s",
+			responseErr.StatusCode,
+			redactADXDiagnosticText(responseErr.ErrorCode),
+		)
+	}
+	var httpErr *kustoerrors.HttpError
+	if errors.As(err, &httpErr) {
+		return fmt.Sprintf("Kusto HTTP status=%d", httpErr.StatusCode)
+	}
+	if status, ok := flattenedKustoHTTPStatus(err); ok {
+		return fmt.Sprintf("Kusto HTTP status=%d", status)
+	}
+	var kustoErr *kustoerrors.Error
+	if errors.As(err, &kustoErr) {
+		return fmt.Sprintf("Kusto operation=%s kind=%s", kustoErr.Op.String(), kustoErr.Kind.String())
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return fmt.Sprintf("network error timeout=%t", networkErr.Timeout())
+	}
+	return fmt.Sprintf("error type=%T", err)
+}
+
+func flattenedKustoHTTPStatus(err error) (int, bool) {
+	text := err.Error()
+	matchedPrefix := false
+	for _, prefix := range adxFlattenedKustoPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			text = strings.TrimPrefix(text, prefix)
+			matchedPrefix = true
+			break
 		}
 	}
-	return false
+	if !matchedPrefix {
+		return 0, false
+	}
+	match := adxFlattenedHTTPStatus.FindStringSubmatch(text)
+	if len(match) != 2 {
+		return 0, false
+	}
+	status := 0
+	for _, digit := range match[1] {
+		status = status*10 + int(digit-'0')
+	}
+	return status, true
+}
+
+func redactADXDiagnosticText(text string) string {
+	text = adxURLPattern.ReplaceAllStringFunc(text, func(raw string) string {
+		if index := strings.IndexByte(raw, '?'); index >= 0 {
+			return raw[:index] + "?REDACTED"
+		}
+		return raw
+	})
+	return adxSASQueryPattern.ReplaceAllString(text, "${1}REDACTED")
 }

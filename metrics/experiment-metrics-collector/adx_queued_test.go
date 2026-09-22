@@ -5,15 +5,23 @@ package collector
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-kusto-go/azkustodata"
+	kustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	"github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/taugrid/core/exptelemetry"
 )
 
@@ -47,6 +55,18 @@ type fakeADXResult struct {
 }
 
 type timeoutADXResult struct{}
+
+type staticTokenCredential struct{}
+
+func (staticTokenCredential) GetToken(context.Context, policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{Token: "test-token", ExpiresOn: time.Now().Add(time.Hour)}, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func (timeoutADXResult) Wait(ctx context.Context, _ time.Duration) (adxFinalStatus, error) {
 	<-ctx.Done()
@@ -112,6 +132,115 @@ func TestADXQueuedWaitsForFinalSuccessBeforeAcknowledging(t *testing.T) {
 	if request.IngestByValue != wantValue || ack.Metadata["ingest_by_tag"] != wantTag ||
 		request.Mapping != "MetricEventChunkNDJSON" {
 		t.Fatalf("request=%+v ack=%+v", request, ack)
+	}
+}
+
+func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
+	var queueMessage []byte
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body []byte
+		if request.Body != nil {
+			var err error
+			body, err = io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+		}
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}
+		switch {
+		case strings.Contains(request.URL.Path, "/v1/rest/auth/metadata"):
+			response.Header.Set("Content-Type", "application/json")
+			response.Body = io.NopCloser(strings.NewReader(`{"AzureAD":{"LoginEndpoint":"https://login.microsoftonline.com","LoginMfaRequired":false,"KustoClientAppId":"client-id","KustoClientRedirectUri":"https://microsoft/kusto","KustoServiceResourceId":"https://kusto.windows.net","FirstPartyAuthorityUrl":"https://login.microsoftonline.com/tenant"},"dSTS":{"CloudEndpointSuffix":"windows.net","DstsRealm":"realm","DstsInstance":"dsts.core.windows.net","KustoDnsHostName":"kusto.windows.net","ServiceName":"kusto"}}`))
+		case strings.Contains(request.URL.Path, "/v1/rest/mgmt"):
+			var command struct {
+				CSL string `json:"csl"`
+			}
+			if err := json.Unmarshal(body, &command); err != nil {
+				return nil, err
+			}
+			response.Header.Set("Content-Type", "application/json")
+			switch command.CSL {
+			case ".get kusto identity token":
+				response.Body = io.NopCloser(strings.NewReader(`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"AuthorizationContext","DataType":"String","ColumnType":"string"}],"Rows":[["auth-context"]]}]}`))
+			case ".get ingestion resources":
+				response.Body = io.NopCloser(strings.NewReader(`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"ResourceTypeName","DataType":"String","ColumnType":"string"},{"ColumnName":"StorageRoot","DataType":"String","ColumnType":"string"}],"Rows":[["TempStorage","https://storage.blob.core.windows.net/container?sv=2024-01-01&sig=blob-secret"],["SecuredReadyForAggregationQueue","https://storage.queue.core.windows.net/queue?sv=2024-01-01&sig=queue-secret"],["IngestionsStatusTable","https://storage.table.core.windows.net/status?sv=2024-01-01&sig=table-secret"]]}]}`))
+			default:
+				return nil, fmt.Errorf("unexpected management command %q", command.CSL)
+			}
+		case request.URL.Host == "storage.blob.core.windows.net":
+			response.StatusCode = http.StatusCreated
+			response.Header.Set("ETag", `"test-etag"`)
+		case request.URL.Host == "storage.table.core.windows.net":
+			response.StatusCode = http.StatusNoContent
+		case request.URL.Host == "storage.queue.core.windows.net":
+			response.StatusCode = http.StatusCreated
+			queueMessage = append([]byte(nil), body...)
+			response.Header.Set("Content-Type", "application/xml")
+			response.Body = io.NopCloser(strings.NewReader(`<QueueMessagesList><QueueMessage><MessageId>message-id</MessageId><InsertionTime>Mon, 21 Sep 2026 00:00:00 GMT</InsertionTime><ExpirationTime>Tue, 22 Sep 2026 00:00:00 GMT</ExpirationTime><PopReceipt>receipt</PopReceipt><TimeNextVisible>Mon, 21 Sep 2026 00:00:00 GMT</TimeNextVisible></QueueMessage></QueueMessagesList>`))
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s", request.Method, request.URL)
+		}
+		return response, nil
+	})}
+	kcsb := azkustodata.NewConnectionStringBuilder("https://cluster.kusto.windows.net").
+		WithTokenCredential(staticTokenCredential{})
+	ingestor, err := azkustoingest.New(
+		kcsb,
+		azkustoingest.WithoutEndpointCorrection(),
+		azkustoingest.WithHttpClient(httpClient),
+		azkustoingest.WithDefaultDatabase("metrics"),
+		azkustoingest.WithDefaultTable("MetricEvents"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ingestor.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	client := &sdkADXQueuedClient{ingestor: ingestor}
+	ingestByValue := "taugrid-metric-chunk-" + strings.Repeat("a", 64)
+	if _, err := client.Ingest(context.Background(), []byte("{}\n"), adxIngestRequest{
+		Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
+		IngestByValue: ingestByValue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		MessageText string `xml:"MessageText"`
+	}
+	if err := xml.Unmarshal(queueMessage, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	message, err := base64.StdEncoding.DecodeString(envelope.MessageText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var properties struct {
+		AdditionalProperties struct {
+			IngestIfNotExists string `json:"ingestIfNotExists"`
+		} `json:"AdditionalProperties"`
+	}
+	if err := json.Unmarshal(message, &properties); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal([]string{ingestByValue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if properties.AdditionalProperties.IngestIfNotExists != string(want) {
+		t.Fatalf(
+			"queued ingestIfNotExists=%q, want JSON array %q",
+			properties.AdditionalProperties.IngestIfNotExists,
+			want,
+		)
 	}
 }
 
@@ -253,6 +382,85 @@ func TestADXRetryClassification(t *testing.T) {
 	})
 	if adxRetryable(permanentStatus) {
 		t.Fatal("SDK permanent status was retryable")
+	}
+	management503 := kustoerrors.HTTP(
+		kustoerrors.OpMgmt,
+		"503 Service Unavailable",
+		http.StatusServiceUnavailable,
+		io.NopCloser(strings.NewReader(`{"error":{"code":"ServiceUnavailable","@permanent":false}}`)),
+		"management request failed",
+	)
+	flattenedManagement503 := fmt.Errorf(
+		"problem getting authorization context from Kusto via Mgmt: %s",
+		management503,
+	)
+	if !adxRetryable(normalizeADXSDKError(flattenedManagement503)) {
+		t.Fatal("flattened Kusto management 503 was not normalized as retryable")
+	}
+	management400 := kustoerrors.HTTP(
+		kustoerrors.OpMgmt,
+		"400 Bad Request",
+		http.StatusBadRequest,
+		io.NopCloser(strings.NewReader(`{"error":{"code":"BadRequest","@permanent":true}}`)),
+		"management request failed",
+	)
+	flattenedManagement400 := fmt.Errorf(
+		"problem getting ingestion resources from Kusto: %s",
+		management400,
+	)
+	if adxRetryable(normalizeADXSDKError(flattenedManagement400)) {
+		t.Fatal("flattened permanent Kusto management 400 was retryable")
+	}
+	exhaustedStorage := kustoerrors.ES(
+		kustoerrors.OpFileIngest,
+		kustoerrors.KBlobstore,
+		"could not upload file to any queue",
+	)
+	if !adxRetryable(normalizeADXSDKError(exhaustedStorage)) {
+		t.Fatal("exhausted SDK storage transport was not normalized as retryable")
+	}
+	permanentClientError := kustoerrors.ES(
+		kustoerrors.OpFileIngest,
+		kustoerrors.KClientArgs,
+		"invalid ingestion arguments",
+	).SetNoRetry()
+	if adxRetryable(normalizeADXSDKError(permanentClientError)) {
+		t.Fatal("permanent SDK client error was retryable")
+	}
+}
+
+func TestADXDiagnosticsDoNotExposeSASCredentials(t *testing.T) {
+	const secret = "super-secret-signature"
+	status := azkustoingest.StatusFromMapForTests(map[string]interface{}{
+		"Status":        "Failed",
+		"FailureStatus": "Permanent",
+		"ErrorCode":     "BadRequest",
+		"Details":       "source https://storage.blob.core.windows.net/container/blob?sv=2024-01-01&sp=r&sig=" + secret,
+	})
+	client := &fakeADXClient{results: []adxQueuedResult{
+		&fakeADXResult{status: adxStatusFailed, err: status},
+	}}
+	sink := adxTestSink(client)
+	_, err := sink.Deliver(context.Background(), adxTestChunk(t))
+	if err == nil {
+		t.Fatal("SAS-bearing ADX failure unexpectedly succeeded")
+	}
+	for _, forbidden := range []string{secret, "sig=", "sv=2024-01-01", "storage.blob.core.windows.net"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("diagnostic leaked %q: %s", forbidden, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "status=Failed") ||
+		!strings.Contains(err.Error(), "failure=Permanent") ||
+		!strings.Contains(err.Error(), "code=BadRequest") {
+		t.Fatalf("diagnostic omitted allowlisted status fields: %s", err)
+	}
+
+	redacted := redactADXDiagnosticText(
+		"request https://storage.queue.core.windows.net/q?sv=2024-01-01&sig=" + secret + " failed; sig=" + secret,
+	)
+	if strings.Contains(redacted, secret) || strings.Contains(redacted, "sv=2024-01-01") {
+		t.Fatalf("redaction retained SAS credentials: %s", redacted)
 	}
 }
 
