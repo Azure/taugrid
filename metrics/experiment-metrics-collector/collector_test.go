@@ -37,6 +37,13 @@ type boundedContextSink struct {
 	budget   time.Duration
 }
 
+type cancelOnceSink struct {
+	boundedContextSink
+	cancel     context.CancelFunc
+	metricName string
+	once       sync.Once
+}
+
 func (s *recordingSink) Name() string           { return s.name }
 func (s *recordingSink) ConfigIdentity() string { return s.config }
 func (s *recordingSink) Deliver(_ context.Context, chunk MetricEventChunk) (DeliveryAck, error) {
@@ -73,6 +80,22 @@ func (s *boundedContextSink) Deliver(ctx context.Context, chunk MetricEventChunk
 
 func (s *boundedContextSink) TerminalDrainTimeout() (time.Duration, error) {
 	return s.budget, nil
+}
+
+func (s *cancelOnceSink) Deliver(ctx context.Context, chunk MetricEventChunk) (DeliveryAck, error) {
+	for _, event := range chunk.Events {
+		if event.MetricName == s.metricName {
+			cancelled := false
+			s.once.Do(func() {
+				cancelled = true
+				s.cancel()
+			})
+			if cancelled {
+				return DeliveryAck{}, ctx.Err()
+			}
+		}
+	}
+	return s.boundedContextSink.Deliver(ctx, chunk)
 }
 
 func baseOptions(root, history string, sink Sink) Options {
@@ -782,6 +805,136 @@ func TestCancellationWaitsForActualCompletionBeforeFinalDrain(t *testing.T) {
 	if status.MetricName != exptelemetry.RunStatusMetricName ||
 		status.Tags[exptelemetry.RunStatusStateTag] != "succeeded" {
 		t.Fatalf("terminal event=%+v, want actual succeeded state", status)
+	}
+}
+
+func TestCompletedRunCancellationUsesBoundedShutdownRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		history    string
+		cancelOn   string
+		wantChunks int
+	}{
+		{
+			name:       "trailing history delivery",
+			history:    strings.TrimSuffix(historyRow, "\n"),
+			cancelOn:   "train/loss",
+			wantChunks: 2,
+		},
+		{
+			name:       "terminal delivery",
+			history:    "",
+			cancelOn:   exptelemetry.RunStatusMetricName,
+			wantChunks: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			history := filepath.Join(root, "history.jsonl")
+			completionPath := filepath.Join(root, "completion.json")
+			donePath := filepath.Join(root, "done")
+			writeFile(t, history, test.history)
+			writeFile(t, completionPath, `{"state":"succeeded","completed_at":"2023-11-14T22:16:00Z"}`)
+			ctx, cancel := context.WithCancel(context.Background())
+			sink := &cancelOnceSink{
+				boundedContextSink: boundedContextSink{
+					recordingSink: recordingSink{name: "test", config: "v1"},
+					budget:        500 * time.Millisecond,
+				},
+				cancel:     cancel,
+				metricName: test.cancelOn,
+			}
+			options := baseOptions(root, history, sink)
+			options.CompletionFile = completionPath
+			options.DoneFile = donePath
+			runner, err := New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runner.Run(ctx)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run error=%v, want original context cancellation", err)
+			}
+			if !result.Completed || len(sink.chunks) != test.wantChunks {
+				t.Fatalf("result=%+v chunks=%d, want completed with %d chunks", result, len(sink.chunks), test.wantChunks)
+			}
+			if _, err := os.Stat(donePath); err != nil {
+				t.Fatalf("done file was not published: %v", err)
+			}
+			status := sink.chunks[len(sink.chunks)-1].Events[0]
+			if status.MetricName != exptelemetry.RunStatusMetricName ||
+				status.Tags[exptelemetry.RunStatusStateTag] != "succeeded" {
+				t.Fatalf("terminal event=%+v, want succeeded", status)
+			}
+		})
+	}
+}
+
+func TestSyntheticCancellationPendingReplayWithoutCompletionFile(t *testing.T) {
+	root := t.TempDir()
+	history := filepath.Join(root, "history.jsonl")
+	writeFile(t, history, historyRow)
+	sink := &boundedContextSink{
+		recordingSink: recordingSink{
+			name: "test", config: "v1", failMetric: exptelemetry.RunStatusMetricName,
+		},
+		budget: 250 * time.Millisecond,
+	}
+	options := baseOptions(root, history, sink)
+	options.Watch = true
+	options.Interval = 10 * time.Millisecond
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runner.Run(ctx); err == nil {
+		t.Fatal("synthetic cancellation delivery failure unexpectedly succeeded")
+	}
+	pending := onlyPath(t, filepath.Join(options.Out, "pending", "*.json"))
+	raw, err := os.ReadFile(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest chunkManifest
+	if err := decodeOneJSON(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateManifest(pending, manifest, runner.configIdentity()); err != nil {
+		t.Fatalf("synthetic cancellation manifest is not replayable: %v", err)
+	}
+	if manifest.SourcePath != "collector-generated://cancellation" {
+		t.Fatalf("synthetic cancellation source=%q", manifest.SourcePath)
+	}
+
+	sink.failMetric = ""
+	restarted, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartCtx, restartCancel := context.WithCancel(context.Background())
+	restartCancel()
+	result, err := restarted.Run(restartCtx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("restart error=%v, want original cancellation", err)
+	}
+	if result.Events != 1 || len(sink.chunks) != 2 {
+		t.Fatalf("restart result=%+v delivered chunks=%d", result, len(sink.chunks))
+	}
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatalf("pending synthetic cancellation remained after replay: %v", err)
+	}
+	raw, err = os.ReadFile(filepath.Join(options.Out, "checkpoint.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints checkpointSet
+	if err := json.Unmarshal(raw, &checkpoints); err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints.Terminals) != 1 {
+		t.Fatalf("terminal checkpoints=%d, want one deduplicated cancellation", len(checkpoints.Terminals))
 	}
 }
 

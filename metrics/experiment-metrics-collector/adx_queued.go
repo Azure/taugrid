@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -151,7 +152,11 @@ func newSDKADXQueuedClient(
 	config ADXQueuedConfig,
 	httpClient *http.Client,
 ) (*sdkADXQueuedClient, error) {
-	discovery, err := azkustodata.New(kcsb, azkustodata.WithHttpClient(httpClient))
+	discoveryKCSB, err := adxIngestionConnectionString(kcsb)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ADX ingestion endpoint: %w", err)
+	}
+	discovery, err := azkustodata.New(discoveryKCSB, azkustodata.WithHttpClient(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("create ADX resource discovery client: %w", err)
 	}
@@ -170,6 +175,28 @@ func newSDKADXQueuedClient(
 		config:     config,
 		httpClient: httpClient,
 	}, nil
+}
+
+func adxIngestionConnectionString(
+	kcsb *azkustodata.ConnectionStringBuilder,
+) (*azkustodata.ConnectionStringBuilder, error) {
+	endpoint, err := url.Parse(kcsb.DataSource)
+	if err != nil {
+		return nil, err
+	}
+	host := endpoint.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("ADX cluster URI has no hostname")
+	}
+	if net.ParseIP(host) == nil &&
+		!strings.EqualFold(host, "localhost") &&
+		!strings.EqualFold(host, "onebox.dev.kusto.windows.net") &&
+		!strings.HasPrefix(strings.ToLower(host), "ingest-") {
+		endpoint.Host = "ingest-" + endpoint.Host
+	}
+	copy := *kcsb
+	copy.DataSource = endpoint.String()
+	return &copy, nil
 }
 
 func newSDKADXIngestor(

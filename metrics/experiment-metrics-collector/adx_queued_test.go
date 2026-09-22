@@ -268,6 +268,61 @@ func TestSDKADXQueuedClientSendsJSONIngestIfNotExistsArray(t *testing.T) {
 	}
 }
 
+func TestSDKADXQueuedDiscoveryUsesIngestionEndpoint(t *testing.T) {
+	var discoveryHost string
+	baseTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}
+		if strings.Contains(request.URL.Path, "/v1/rest/auth/metadata") {
+			response.Header.Set("Content-Type", "application/json")
+			response.Body = io.NopCloser(strings.NewReader(`{"AzureAD":{"LoginEndpoint":"https://login.microsoftonline.com","LoginMfaRequired":false,"KustoClientAppId":"client-id","KustoClientRedirectUri":"https://microsoft/kusto","KustoServiceResourceId":"https://kusto.windows.net","FirstPartyAuthorityUrl":"https://login.microsoftonline.com/tenant"},"dSTS":{"CloudEndpointSuffix":"windows.net","DstsRealm":"realm","DstsInstance":"dsts.core.windows.net","KustoDnsHostName":"kusto.windows.net","ServiceName":"kusto"}}`))
+			return response, nil
+		}
+		if request.URL.Path == "/v1/rest/mgmt" {
+			if request.URL.Host != "ingest-cluster.kusto.windows.net" {
+				return nil, fmt.Errorf("management request used wrong host %q", request.URL.Host)
+			}
+			if !isADXIngestionResourcesRequest(request) {
+				return nil, fmt.Errorf("unexpected ingestion management request")
+			}
+			discoveryHost = request.URL.Host
+			response.Header.Set("Content-Type", "application/json")
+			response.Body = io.NopCloser(strings.NewReader(`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"ResourceTypeName","DataType":"String","ColumnType":"string"},{"ColumnName":"StorageRoot","DataType":"String","ColumnType":"string"}],"Rows":[]}]}`))
+			return response, nil
+		}
+		return nil, fmt.Errorf("unexpected request %s %s", request.Method, request.URL)
+	})
+	httpClient := &http.Client{Transport: &adxResourceCachingTransport{base: baseTransport}}
+	kcsb := azkustodata.NewConnectionStringBuilder("https://cluster.kusto.windows.net").
+		WithTokenCredential(staticTokenCredential{})
+	client, err := newSDKADXQueuedClient(
+		kcsb,
+		ADXQueuedConfig{Database: "metrics", Table: "MetricEvents"},
+		httpClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := client.discovery.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = client.Ingest(ctx, []byte("{}\n"), adxIngestRequest{
+		Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
+		IngestByValue: "taugrid-metric-chunk-" + strings.Repeat("c", 64),
+	})
+	if err == nil || discoveryHost != "ingest-cluster.kusto.windows.net" {
+		t.Fatalf("discovery host=%q err=%v", discoveryHost, err)
+	}
+}
+
 func TestSDKADXQueuedClientRefreshesSignedIngestionResources(t *testing.T) {
 	var mu sync.Mutex
 	resourceGeneration := 0

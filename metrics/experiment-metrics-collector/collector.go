@@ -334,9 +334,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		}
 		if completed {
 			if err := r.drain(ctx, &checkpoints, checkpointPath, &result, true); err != nil {
+				if ctx.Err() != nil {
+					return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
+				}
 				return result, err
 			}
 			if err := r.publishStatus(ctx, &checkpoints, &result); err != nil {
+				if ctx.Err() != nil {
+					return r.finishCancelled(checkpointPath, checkpoints, result, ctx.Err())
+				}
 				return result, err
 			}
 			result.Completed = true
@@ -525,12 +531,14 @@ func (r *Runner) publishCompletion(
 	if err != nil {
 		return err
 	}
-	manifest := newTerminalManifest(
-		r.configIdentity(), checkpoints.NextSequence, r.options.CompletionFile, observationID, raw,
-	)
+	sourcePath := r.options.CompletionFile
+	if sourcePath == "" {
+		sourcePath = "collector-generated://cancellation"
+	}
+	manifest := newTerminalManifest(r.configIdentity(), checkpoints.NextSequence, sourcePath, observationID, raw)
 	chunk, pending, err := writePending(r.options.Out, MetricEventChunk{
 		Sequence: checkpoints.NextSequence, Events: []exptelemetry.MetricEvent{event}, NDJSON: raw,
-		SourcePath: r.options.CompletionFile, SourceFileID: manifest.SourceFileID,
+		SourcePath: sourcePath, SourceFileID: manifest.SourceFileID,
 	}, &manifest, r.storage())
 	if err != nil {
 		return err
