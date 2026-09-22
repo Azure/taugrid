@@ -407,6 +407,40 @@ func TestBuildRunLifecycleQueryJoinsLifecycleWithRemoteWriteMetrics(t *testing.T
 	}
 }
 
+func TestBuildRunHistoryQuerySeparatesMembershipFromRetainedEvidence(t *testing.T) {
+	start := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	for _, opts := range []RunHistoryQueryOptions{
+		{Window: "24h", Cluster: "cluster-a", Namespace: "team-a", LocalQueue: "queue-a", WorkspaceID: "workspace-a", Kind: "Job", Limit: 1},
+		{Start: start, End: start.Add(time.Hour), Cluster: "cluster-a", Namespace: "team-a", LocalQueue: "queue-a", WorkspaceID: "workspace-a", Kind: "RayJob", Limit: 1},
+	} {
+		query, err := BuildRunHistoryQuery(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retained, rest, ok := strings.Cut(query, ");\nlet eligible = retained\n")
+		if !ok || strings.Contains(retained, "| where observed_at") {
+			t.Fatalf("retained scoped evidence must not be time-filtered:\n%s", query)
+		}
+		for _, scope := range []string{"cluster == 'cluster-a'", "namespace == 'team-a'", "local_queue == 'queue-a'", "workspace_id == 'workspace-a'", "tolower(owning_resource_kind)"} {
+			if !strings.Contains(retained, scope) {
+				t.Fatalf("retained evidence missing scope %q", scope)
+			}
+		}
+		for _, fragment := range []string{
+			"| where observed_at", "| distinct cluster, namespace, durable_identity;",
+			"let scoped = materialize(\nretained\n| join kind=leftsemi (eligible) on cluster, namespace, durable_identity",
+		} {
+			if !strings.Contains(rest, fragment) {
+				t.Fatalf("membership query missing %q:\n%s", fragment, query)
+			}
+		}
+		if strings.Count(query, "| where observed_at") != 1 || strings.Count(query, "| take ") != 1 ||
+			strings.Index(query, "| take 1") < strings.Index(query, "arg_max(terminal_rank") {
+			t.Fatalf("time selection must not truncate evidence or apply a pre-resolution limit:\n%s", query)
+		}
+	}
+}
+
 func TestBuildRunHistoryQueryScopesBeforeDedupe(t *testing.T) {
 	query, err := BuildRunHistoryQuery(RunHistoryQueryOptions{
 		Table:       "TauExpRunLifecycle",

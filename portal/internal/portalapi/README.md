@@ -156,6 +156,26 @@ without resetting hidden-run selections, page size or other workspace state.
 Same-range pagination failures retain the last successful page for retry;
 display-timezone changes do not change data identity.
 
+An authorized historical run search can remain visible when the independent
+summary lookback contains no target data. Summary-mode snapshots distinguish
+this case with HTTP **404** and code `SUMMARY_NO_DATA`; the existing error,
+detail and status fields remain. The UI shows the selected runs without
+inventing a summary. Summary-dependent sections remain unavailable until a
+successful retry. Generic 404, other rejected requests and scope changes do
+not enable this fallback. Initial run-search loading and failures are not empty
+results: they show explicit status, and search failures count as query errors.
+Same-range retained pages display a stale-data notice while keeping their
+known operational status.
+
+Durable workload history uses the selected interval to choose identities, then
+resolves their latest retained lifecycle evidence in the same cluster,
+namespace, queue, workspace and kind scope before applying the list limit.
+A later terminal observation therefore survives live-object garbage collection
+even when it lies outside the membership interval. This is latest-known
+lifecycle, not lifecycle as of the interval end. Live objects retain precedence;
+timeline events remain range-filtered. Retention and ADX scan cost are unchanged
+constraints, not guarantees established by offline tests.
+
 Custom Apply preserves each untouched RFC3339 bound verbatim, including offsets
 and nanoseconds. Editing one bound changes only that bound to UTC millisecond
 precision. UTC/local selection changes presentation, not the requested instant.

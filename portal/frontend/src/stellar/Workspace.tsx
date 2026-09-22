@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { boardScopeKey, experimentsAPI, readableQuery, requestRejected, staleReadMessage, useBoard, useScopedURL, useWorkspace } from '../data';
+import { APIError, boardScopeKey, experimentsAPI, readableQuery, requestRejected, staleReadMessage, useBoard, useScopedURL, useWorkspace } from '../data';
 import { Empty, Note, PageTitle } from '../components';
 import { ChartWorkbench } from './ChartWorkbench';
 import { TimeRangeControls, useHistoricalRange, withHistoricalRange } from '../time-range';
@@ -99,9 +99,10 @@ function StellarHeader({ target, loadedRuns = 0 }: { target: string; loadedRuns?
       <button type="submit">Search</button>
     </form>}
     <div className="stellar-topbar-actions"><span className="stellar-meta-pill"><b>{scope.source === 'local' ? 'local expstore' : scope.source === 'kusto' ? 'Kusto/ADX' : scope.source}</b> source</span>
-      {target && <QueryResult query={summary} name="Experiment header">{snapshot => <>
-        <span className="stellar-meta-pill"><b>{loadedRuns}</b> loaded runs</span><span className="stellar-meta-pill"><b>{snapshot.status.metric_files}</b> metric files</span>
-      </>}</QueryResult>}
+      {target && <><span className="stellar-meta-pill"><b>{loadedRuns}</b> loaded runs</span>
+        <QueryResult query={summary} name="Experiment header">{snapshot =>
+          <span className="stellar-meta-pill"><b>{snapshot.status.metric_files}</b> metric files</span>
+        }</QueryResult></>}
       <RefreshControls target={target}/>
     </div>
   </header>;
@@ -219,10 +220,11 @@ function TargetWorkspace({ target }: { target: string }) {
   }, []);
   const query = readableQuery(useBoard<Snapshot>(stellarURL('snapshot', { target, mode: 'summary', project: params.get('project') || undefined })));
   const more = readableQuery(useBoard<RunSearchResult>(withHistoricalRange(stellarURL('runs', { target, limit, project: params.get('project') || undefined }), range.api)));
+  const summaryMissing = query.error instanceof APIError && query.error.status === 404 && query.error.state === 'SUMMARY_NO_DATA';
   useEffect(() => {
-    if (requestRejected(more.error) || requestRejected(query.error)) setPreviousPage(undefined);
+    if (requestRejected(more.error) || (requestRejected(query.error) && !summaryMissing)) setPreviousPage(undefined);
     else if (more.data) setPreviousPage({ data: more.data, dataUpdatedAt: more.dataUpdatedAt, rangeIdentity: range.api });
-  }, [more.data, more.dataUpdatedAt, more.error, query.error, range.api]);
+  }, [more.data, more.dataUpdatedAt, more.error, query.error, range.api, summaryMissing]);
   const sections = sectionsFromURL(params, saved.sections);
   const visibleSections = sections.filter(section => section.visible);
   const requestedPanel = params.get('panel') || (
@@ -244,7 +246,9 @@ function TargetWorkspace({ target }: { target: string }) {
     lifecycle: (params.get('lifecycle') || '').replace(/^stale$/, 'not_responding'),
     updated: params.get('updated') || '', sort: params.get('updated_sort') || '' };
   const retainedPage = previousPage?.rangeIdentity === range.api ? previousPage : undefined;
-  const page = requestRejected(more.error) || !query.data ? undefined : more.data || retainedPage?.data;
+  const page = requestRejected(more.error) || (!query.data && !summaryMissing) ? undefined : more.data || retainedPage?.data;
+  const snapshot = query.data;
+  const membershipStatus = !page ? (more.error ? 'Run data unavailable' : more.isPending ? 'Loading runs' : undefined) : undefined;
   const runs = page ? reconcilePageRuns(page.runs || [], query.data?.runs || []) : [];
   const augmentedSnapshot = query.data ? { ...query.data, runs: runs.map(run =>
     'systems' in run ? run : { ...run, systems: [], observe_cli: '' }) } : undefined;
@@ -289,7 +293,8 @@ function TargetWorkspace({ target }: { target: string }) {
       </details>
     </div>;
   return <><StellarHeader target={target} loadedRuns={runs.length}/><div className="stellar-target-workspace">
-    <QueryResult query={query} name="Experiment summary">{snapshot => <>
+    <QueryResult query={query} name="Experiment summary">{() => null}</QueryResult>
+    {(snapshot || summaryMissing) && <>
       <div className="stellar-workbench-layout">
       <aside className="stellar-selection-rail" aria-label="Experiment and run selection">
       <RecentExperiments target={target}/>
@@ -315,7 +320,7 @@ function TargetWorkspace({ target }: { target: string }) {
       <div className="stellar-run-picker">
         {focused.error && <div role="alert" className="warn">Run metric values unavailable: {focused.error.message} {staleReadMessage(focused)}
           <button type="button" onClick={() => void focused.refetch()}>Retry metric values</button></div>}
-        {!listed.length ? <Empty>No loaded runs match these filters.</Empty> : <ul aria-label="Select runs">{listed.map((run, index) => <li className={hidden.has(run.run_id) ? 'is-hidden' : ''} key={run.run_id}>
+        {!listed.length ? <Empty>{membershipStatus || 'No loaded runs match these filters.'}</Empty> : <ul aria-label="Select runs">{listed.map((run, index) => <li className={hidden.has(run.run_id) ? 'is-hidden' : ''} key={run.run_id}>
           <input type="checkbox" aria-label={run.run_id} checked={!hidden.has(run.run_id)} onChange={e => {
             const next = new Set(hidden); e.target.checked ? next.delete(run.run_id) : next.add(run.run_id); setHidden(next);
           }}/><i className="stellar-run-dot" style={{ background: ('color' in run && run.color) || focused.data?.chart.series?.find(series => series.run_id === run.run_id)?.color || ['#2563eb', '#6046ff'][index % 2] }}/>
@@ -336,32 +341,34 @@ function TargetWorkspace({ target }: { target: string }) {
         {settings}</details></aside>
       <div className="stellar-metric-canvas">
       <section className={'stellar-summary' + (runs.some(run => ['failed', 'not_responding'].includes(runLifecycle(run))) ? ' needs-attention' : '')} aria-label="Loaded run operational status">
-        <h2>{runs.some(run => ['failed', 'not_responding'].includes(runLifecycle(run))) ? 'Needs attention' : runs.some(run => ['running', 'pending'].includes(runLifecycle(run))) ? 'Operational' : 'No active runs'}</h2>
+        <h2>{membershipStatus || (runs.some(run => ['failed', 'not_responding'].includes(runLifecycle(run))) ? 'Needs attention' : runs.some(run => ['running', 'pending'].includes(runLifecycle(run))) ? 'Operational' : 'No active runs')}</h2>
+        {more.error && page && <p role="status">Showing stale run data from the last successful read.</p>}
         <div className="stellar-operational-counts">{[
           ['active', runs.filter(run => ['running', 'pending'].includes(runLifecycle(run))).length],
           ['stale', runs.filter(run => runLifecycle(run) === 'not_responding').length],
           ['failed', runs.filter(run => runLifecycle(run) === 'failed').length],
           ['missing telemetry', runs.filter(run => !run.metric_names?.length).length],
-          ['query errors', Number(!!focused.error) + Number(!!query.error) + Number(launchQueryError)],
+          ['query errors', Number(!!more.error) + Number(!!focused.error) + Number(!!query.error) + Number(launchQueryError)],
         ].map(([label, count]) => <span key={label}><b>{count}</b> {label}</span>)}
         </div>
         <details className="stellar-summary-details" onToggle={event => setSummaryOpen(event.currentTarget.open)}><summary>Experiment summary</summary>
-        {summaryOpen && <LaunchSummary target={target} visibleRunIds={visibleRunIds} onQueryError={setLaunchQueryError}/>}
-        {snapshot.summary?.current_answer && <p>{snapshot.summary.current_answer}</p>}
-        <dl><div><dt>Status</dt><dd>{snapshot.summary?.status || 'Unknown'}</dd></div>
+        {summaryOpen && snapshot && <LaunchSummary target={target} visibleRunIds={visibleRunIds} onQueryError={setLaunchQueryError}/>}
+        {!snapshot && <p role="status">Summary data unavailable for this target.</p>}
+        {snapshot?.summary?.current_answer && <p>{snapshot.summary.current_answer}</p>}
+        <dl><div><dt>Status</dt><dd>{snapshot?.summary?.status || 'Unknown'}</dd></div>
           <div><dt>Loaded runs</dt><dd>{runs.length} / {total}</dd></div>
-          <div><dt>Seed coverage</dt><dd>{snapshot.seed_coverage || snapshot.summary?.seed_coverage || 'Not recorded'}</dd></div>
-          <div><dt>Confidence</dt><dd>{snapshot.summary?.confidence || 'Not recorded'}</dd></div></dl>
+          <div><dt>Seed coverage</dt><dd>{snapshot?.seed_coverage || snapshot?.summary?.seed_coverage || 'Not recorded'}</dd></div>
+          <div><dt>Confidence</dt><dd>{snapshot?.summary?.confidence || 'Not recorded'}</dd></div></dl>
         </details>
       </section>
-      {snapshot.warnings?.map(warning => <p className="warn" role="status" key={warning}>{warning}</p>)}
+      {snapshot?.warnings?.map(warning => <p className="warn" role="status" key={warning}>{warning}</p>)}
       <div className="stellar-section-grid">{visibleSections.map(section => {
-        if (section.id === 'labels' && !labelGroups(snapshot).length && requestedPanel !== 'labels' && !params.has('sections') && section.title === defaultSections().find(s => s.id === 'labels')?.title && !section.subtitle) return null;
+        if (snapshot && section.id === 'labels' && !labelGroups(snapshot).length && requestedPanel !== 'labels' && !params.has('sections') && section.title === defaultSections().find(s => s.id === 'labels')?.title && !section.subtitle) return null;
         const title = section.title || defaultSections().find(s => s.id === section.id)?.title || section.id;
         const headingId = 'stellar-' + section.id;
         const custom = title !== defaultSections().find(s => s.id === section.id)?.title;
         return <section className={'stellar-section stellar-section-' + section.id} id={'stellar-section-' + section.id} tabIndex={-1} key={section.id} aria-labelledby={headingId}>
-          {['charts', 'timeline', 'catalog', 'runs'].includes(section.id)
+          {!snapshot ? <><h2 id={headingId}>{title}</h2><p role="status">Summary data unavailable for this target.</p></> : ['charts', 'timeline', 'catalog', 'runs'].includes(section.id)
             ? <><h2 id={headingId} className={custom ? '' : 'stellar-sr-only'}>{title}</h2>
               {section.subtitle && <p className="muted">{section.subtitle}</p>}
               <ChartWorkbench target={target} snapshot={augmentedSnapshot || snapshot} visibleRunIds={visibleRunIds} metrics={metrics} onMetricsChange={setMetrics} section={section.id}
@@ -372,6 +379,6 @@ function TargetWorkspace({ target }: { target: string }) {
       })}</div>
       {!sections.some(section => section.visible) && <Empty>All sections are hidden. Use Customize sections to restore your layout.</Empty>}
       </div></div>
-    </>}</QueryResult>
+    </>}
   </div></>;
 }

@@ -2233,6 +2233,74 @@ func TestSnapshotEndpointOmitsServerSVGPointStrings(t *testing.T) {
 	}
 }
 
+func TestHistoricalRunSearchOutlivesSummaryLookback(t *testing.T) {
+	var queries []string
+	server, err := NewServer(Options{Source: "kusto", Workspace: "sample", KustoNativeQuery: func(_ context.Context, query string) (string, error) {
+		queries = append(queries, query)
+		if strings.Contains(query, "ago(365d)") {
+			return "[]", nil
+		}
+		return `{"workspace_id":"sample","project":"research","question_id":"archived","run_group_id":"group","run_id":"archived-run","metric_name":"loss","step":1,"wall_time":"2024-01-01T12:00:00Z","value":0.5}`, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/runs?target=archived&project=research&start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z", nil))
+	var result expstore.RunSearchResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || len(result.Runs) != 1 || result.Runs[0].RunID != "archived-run" {
+		t.Fatalf("historical membership: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(queries) == 0 || !strings.Contains(queries[0], "datetime(2024-01-01T00:00:00Z)") {
+		t.Fatalf("historical bounds not sent to ADX: %v", queries)
+	}
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/snapshot?target=archived&project=research&mode=summary", nil))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"code":"SUMMARY_NO_DATA"`) || !strings.Contains(queries[len(queries)-1], "ago(365d)") {
+		t.Fatalf("summary lookback contract: status=%d body=%s queries=%v", rec.Code, rec.Body.String(), queries)
+	}
+}
+
+func TestSnapshotSummaryNoDataCode(t *testing.T) {
+	for _, source := range []string{"local", "kusto", "auto"} {
+		t.Run(source, func(t *testing.T) {
+			server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1), Source: source,
+				KustoNativeQuery: func(context.Context, string) (string, error) { return "[]", nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, test := range []struct {
+				query  string
+				status int
+				code   string
+			}{
+				{"target=missing-target&mode=summary", http.StatusNotFound, "SUMMARY_NO_DATA"},
+				{"target=missing-target", http.StatusNotFound, "NOT_FOUND"},
+				{"mode=summary", http.StatusBadRequest, "INVALID_ARGUMENT"},
+				{"target=missing-target&mode=summary&source=invalid", http.StatusBadRequest, "INVALID_ARGUMENT"},
+			} {
+				rec := httptest.NewRecorder()
+				server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/stellar/snapshot?"+test.query, nil))
+				var body struct {
+					Code   string `json:"code"`
+					Detail string `json:"detail"`
+					Status int    `json:"status"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != test.status || body.Code != test.code || body.Status != test.status || body.Detail == "" {
+					t.Fatalf("%s: status=%d body=%s; want %d %s", test.query, rec.Code, rec.Body.String(), test.status, test.code)
+				}
+			}
+		})
+	}
+}
+
 func TestSnapshotEndpointErrors(t *testing.T) {
 	root := seedExpAPIStore(t, 1)
 	server, err := NewServer(Options{StorePath: root})

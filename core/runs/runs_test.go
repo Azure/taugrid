@@ -306,6 +306,30 @@ func TestNormalizeHistoryStatusMatchesLiveDomain(t *testing.T) {
 	}
 }
 
+func TestBoardHistoricalMembershipRetainsTerminalEvidence(t *testing.T) {
+	start := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	querier := &fakeKustoQuerier{rows: []kustoquery.Row{{
+		"owning_resource_name": "train", "owning_resource_kind": "Job",
+		"state": "succeeded", "created_time": start.Format(time.RFC3339),
+		"observed_at": start.Add(2 * time.Hour).Format(time.RFC3339),
+		"namespace":   "team-a", "cluster": "cluster-a", "resource_uid": "uid-a",
+		"durable_id": "durable-a",
+	}}}
+	snapshot, err := Board(t.Context(), fakeReader{jobs: []byte(`{"items":[]}`), ray: []byte(`{"items":[]}`)}, Options{
+		Namespace: "team-a", History: NewKustoHistoryReader(querier),
+		HistoryScope: HistoryScope{Cluster: "cluster-a", WorkspaceID: "workspace-a", Start: start, End: start.Add(time.Hour)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(querier.kql, "| join kind=leftsemi (eligible) on cluster, namespace, durable_identity") {
+		t.Fatalf("historical membership must select retained lifecycle evidence before the board loses its live object:\n%s", querier.kql)
+	}
+	if snapshot.HistoryState != historyStateAvailable || len(snapshot.Runs) != 1 || snapshot.Runs[0].Status != "Succeeded" {
+		t.Fatalf("historical terminal status = %+v", snapshot)
+	}
+}
+
 func TestNewKustoHistoryReaderBuildsScopedLifecycleQuery(t *testing.T) {
 	querier := &fakeKustoQuerier{}
 	reader := NewKustoHistoryReader(querier)

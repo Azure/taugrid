@@ -873,6 +873,14 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	snapshot, err := s.buildSnapshot(ctx, r, target, metric)
 	if err != nil {
+		mode, _ := expcockpit.ParseSnapshotMode(r.URL.Query().Get("mode"))
+		if mode == expcockpit.SnapshotModeSummary && errors.Is(err, expstore.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{
+				"error": http.StatusText(http.StatusNotFound), "code": "SUMMARY_NO_DATA",
+				"detail": err.Error(), "status": http.StatusNotFound,
+			})
+			return
+		}
 		writeError(w, statusCode(err), err.Error())
 		return
 	}

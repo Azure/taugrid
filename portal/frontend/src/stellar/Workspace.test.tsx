@@ -45,6 +45,101 @@ function otherResponse(url: URL) {
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+it('distinguishes pending membership from a successful empty search', async () => {
+  let finish: (response: Response) => void = () => {};
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return new Promise<Response>(resolve => { finish = resolve; });
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace();
+  const operational = await screen.findByRole('region', { name: 'Loaded run operational status' });
+  expect(within(operational).getByRole('heading', { name: 'Loading runs' })).toBeVisible();
+  expect(screen.queryByText('No loaded runs match these filters.')).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'No active runs' })).not.toBeInTheDocument();
+  await act(async () => { finish(json({ runs: [], total: 0, truncated: false })); });
+  expect(within(operational).getByRole('heading', { name: 'No active runs' })).toBeVisible();
+  expect(within(operational).getByText('query errors')).toHaveTextContent('0 query errors');
+});
+
+it('reports unavailable membership on initial search failure and recovers on retry', async () => {
+  let failed = true;
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return Promise.resolve(failed ? json({ error: 'historical search failed' }, 502) : json(page));
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace();
+  await screen.findByText(/More runs unavailable: 502 historical search failed/);
+  const operational = screen.getByRole('region', { name: 'Loaded run operational status' });
+  expect(within(operational).getByRole('heading', { name: 'Run data unavailable' })).toBeVisible();
+  expect(screen.queryByText('No loaded runs match these filters.')).not.toBeInTheDocument();
+  expect(within(operational).getByText('query errors')).toHaveTextContent('1 query errors');
+  expect(screen.queryByRole('heading', { name: 'No active runs' })).not.toBeInTheDocument();
+  failed = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading runs' }));
+  await screen.findByRole('checkbox', { name: 'range-a-run' });
+  expect(within(operational).getByText('query errors')).toHaveTextContent('0 query errors');
+  expect(within(operational).getByRole('heading', { name: 'Needs attention' })).toBeVisible();
+});
+
+it('renders historical members without summary data and recovers summary independently', async () => {
+  let missing = true;
+  vi.stubGlobal('innerWidth', 1280);
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return Promise.resolve(json({ ...page, total: 1, truncated: false }));
+    if (url.pathname.endsWith('/snapshot') && missing) return Promise.resolve(json({ error: 'no retained summary data', code: 'SUMMARY_NO_DATA' }, 404));
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace(createPortalQueryClient(), '/portal/experiments?target=experiment&sections=&start=2024-01-01T00:00:00Z&end=2024-01-02T00:00:00Z&refresh=off');
+  await screen.findByRole('checkbox', { name: 'range-a-run' });
+  expect(screen.getByText('loaded runs')).toHaveTextContent('1 loaded runs');
+  expect(screen.getByRole('button', { name: 'Running 1' })).toBeVisible();
+  missing = false;
+  const alert = screen.getAllByRole('alert').find(item => item.textContent?.includes('Experiment summary unavailable'));
+  if (!alert) throw new Error('Missing summary availability alert');
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+  await screen.findByRole('button', { name: 'Not responding 1' });
+  expect(screen.getByRole('checkbox', { name: 'range-a-run' })).toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: 'outside-range' })).not.toBeInTheDocument();
+});
+
+it.each([400, 401, 403, 404])('clears historical members on generic summary rejection %s', async status => {
+  let rejected = false;
+  const client = createPortalQueryClient();
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return Promise.resolve(json(page));
+    if (url.pathname.endsWith('/snapshot')) return Promise.resolve(json(
+      { error: rejected ? 'summary rejected' : 'summary absent', code: rejected ? 'NOT_FOUND' : 'SUMMARY_NO_DATA' }, rejected ? status : 404));
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace(client);
+  await screen.findByRole('checkbox', { name: 'range-a-run' });
+  rejected = true;
+  await act(async () => { await client.invalidateQueries(); });
+  await waitFor(() => expect(screen.queryByRole('checkbox', { name: 'range-a-run' })).not.toBeInTheDocument());
+  expect(screen.getByText('loaded runs')).toHaveTextContent('0 loaded runs');
+});
+
+it.each([400, 401, 403, 404])('clears rejected run search %s even when summary has no data', async status => {
+  let rejected = false;
+  const client = createPortalQueryClient();
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const url = new URL(String(input), 'http://localhost');
+    if (url.pathname.endsWith('/runs')) return Promise.resolve(rejected ? json({ error: 'search rejected' }, status) : json(page));
+    if (url.pathname.endsWith('/snapshot')) return Promise.resolve(json({ error: 'summary absent', code: 'SUMMARY_NO_DATA' }, 404));
+    return Promise.resolve(otherResponse(url));
+  }));
+  renderWorkspace(client);
+  await screen.findByRole('checkbox', { name: 'range-a-run' });
+  rejected = true;
+  await act(async () => { await client.invalidateQueries(); });
+  await waitFor(() => expect(screen.queryByRole('checkbox', { name: 'range-a-run' })).not.toBeInTheDocument());
+  expect(screen.getByText('loaded runs')).toHaveTextContent('0 loaded runs');
+});
+
 it('preserves snapshot liveness for in-range runs without adding snapshot-only runs', async () => {
   vi.stubGlobal('innerWidth', 1280);
   const reason = 'run has no recent liveness evidence and no terminal outcome';

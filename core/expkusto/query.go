@@ -364,7 +364,12 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("let scoped = materialize(\n")
+	hasRange := opts.Window != "" || !opts.Start.IsZero() || !opts.End.IsZero()
+	if hasRange {
+		b.WriteString("let retained = (\n")
+	} else {
+		b.WriteString("let scoped = materialize(\n")
+	}
 	b.WriteString(table + "\n")
 	if opts.Cluster != "" {
 		fmt.Fprintf(&b, "| where cluster == %s\n", kqlString(opts.Cluster))
@@ -381,11 +386,17 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	if opts.Kind != "" {
 		fmt.Fprintf(&b, "| where tolower(owning_resource_kind) == %s\n", kqlString(strings.ToLower(opts.Kind)))
 	}
-	if err := appendHistoricalRange(&b, opts.Window, opts.Start, opts.End); err != nil {
-		return "", err
-	}
 	b.WriteString("| extend durable_identity=iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id))\n")
 	b.WriteString("| where isnotempty(durable_identity)\n")
+	if hasRange {
+		b.WriteString(");\nlet eligible = retained\n")
+		if err := appendHistoricalRange(&b, opts.Window, opts.Start, opts.End); err != nil {
+			return "", err
+		}
+		b.WriteString("| distinct cluster, namespace, durable_identity;\n")
+		b.WriteString("let scoped = materialize(\nretained\n")
+		b.WriteString("| join kind=leftsemi (eligible) on cluster, namespace, durable_identity\n")
+	}
 	b.WriteString("| extend observation_identity=iff(isnotempty(observation_id), observation_id, strcat(durable_identity, ':', state, ':', tostring(observed_at)))\n")
 	b.WriteString("| summarize arg_max(observed_at, *) by cluster, namespace, durable_identity, observation_identity\n")
 	b.WriteString(");\n")
