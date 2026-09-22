@@ -22,11 +22,12 @@ import (
 )
 
 type checkpointSet struct {
-	SchemaVersion string                      `json:"schema_version"`
-	NextSequence  uint64                      `json:"next_sequence"`
-	Sources       map[string]SourceCheckpoint `json:"sources"`
-	Terminal      *terminalCheckpoint         `json:"terminal,omitempty"`
-	UpdatedAt     string                      `json:"updated_at"`
+	SchemaVersion  string                      `json:"schema_version"`
+	ConfigIdentity string                      `json:"config_identity"`
+	NextSequence   uint64                      `json:"next_sequence"`
+	Sources        map[string]SourceCheckpoint `json:"sources"`
+	Terminal       *terminalCheckpoint         `json:"terminal,omitempty"`
+	UpdatedAt      string                      `json:"updated_at"`
 }
 
 type terminalCheckpoint struct {
@@ -71,11 +72,16 @@ const (
 	faultAfterTerminalSinkAccept      faultPoint = "after_terminal_sink_accept"
 )
 
-func loadCheckpoints(path string) (checkpointSet, bool, error) {
+func loadCheckpoints(path, configIdentity string) (checkpointSet, bool, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return checkpointSet{SchemaVersion: CheckpointSchemaV1, NextSequence: 1, Sources: map[string]SourceCheckpoint{}}, false, nil
+			return checkpointSet{
+				SchemaVersion:  CheckpointSchemaV1,
+				ConfigIdentity: configIdentity,
+				NextSequence:   1,
+				Sources:        map[string]SourceCheckpoint{},
+			}, false, nil
 		}
 		return checkpointSet{}, false, err
 	}
@@ -83,8 +89,12 @@ func loadCheckpoints(path string) (checkpointSet, bool, error) {
 	if err := decodeOneJSON(raw, &result); err != nil {
 		return checkpointSet{}, true, fmt.Errorf("read checkpoint %s: %w", path, err)
 	}
-	if result.SchemaVersion != CheckpointSchemaV1 || result.NextSequence == 0 || result.Sources == nil {
+	if result.SchemaVersion != CheckpointSchemaV1 || result.ConfigIdentity == "" ||
+		result.NextSequence == 0 || result.Sources == nil {
 		return checkpointSet{}, true, fmt.Errorf("checkpoint %s has invalid schema or fields", path)
+	}
+	if result.ConfigIdentity != configIdentity {
+		return checkpointSet{}, true, fmt.Errorf("checkpoint %s has different collector or sink configuration", path)
 	}
 	if result.Terminal != nil && (result.Terminal.Sequence == 0 || !validDigest(result.Terminal.ChunkDigest)) {
 		return checkpointSet{}, true, fmt.Errorf("checkpoint %s has invalid terminal reference", path)
@@ -228,6 +238,9 @@ func removeDurable(path string, ops storageOps) error {
 }
 
 func writeCheckpoints(path string, checkpoint checkpointSet, stores ...storageOps) error {
+	if checkpoint.ConfigIdentity == "" {
+		return fmt.Errorf("checkpoint config identity is required")
+	}
 	checkpoint.SchemaVersion = CheckpointSchemaV1
 	checkpoint.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return writeJSONDurable(path, checkpoint, selectStorage(stores))

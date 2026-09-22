@@ -86,6 +86,15 @@ func runCollector(t *testing.T, options Options) Result {
 	return result
 }
 
+func runnerConfigIdentity(t *testing.T, options Options) string {
+	t.Helper()
+	runner, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runner.configIdentity()
+}
+
 func TestRunnerRequiresSink(t *testing.T) {
 	options := baseOptions(t.TempDir(), filepath.Join(t.TempDir(), "history.jsonl"), nil)
 	options.Sink = nil
@@ -450,6 +459,9 @@ func TestCheckpointContainsIdentityPrefixOffsetAndSequence(t *testing.T) {
 	if err := json.Unmarshal(raw, &checkpoint); err != nil {
 		t.Fatal(err)
 	}
+	if checkpoint.ConfigIdentity != runnerConfigIdentity(t, options) {
+		t.Fatalf("checkpoint config identity=%q", checkpoint.ConfigIdentity)
+	}
 	source := checkpoint.Sources[history]
 	if source.FileID == "" || source.PrefixSHA256 == "" || source.Offset != int64(len(historyRow)) || source.Sequence != 1 {
 		t.Fatalf("source checkpoint=%+v", source)
@@ -666,6 +678,29 @@ func TestPendingSpoolRejectsSinkConfigurationChanges(t *testing.T) {
 	options.Sink = reconfigured
 	options.fault = nil
 	expectRunError(t, options, "configuration")
+}
+
+func TestCheckpointRejectsSinkConfigurationChanges(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		name := "history"
+		if terminal {
+			name = "terminal"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			history := filepath.Join(root, "history.jsonl")
+			writeFile(t, history, historyRow)
+			options := baseOptions(root, history, &recordingSink{name: "remote-write-v1", config: "endpoint-a"})
+			if terminal {
+				options.CompletionFile = filepath.Join(root, "complete")
+				writeFile(t, options.CompletionFile, "succeeded\n")
+			}
+			runCollector(t, options)
+
+			options.Sink = &recordingSink{name: "remote-write-v1", config: "endpoint-b"}
+			expectRunError(t, options, "different collector or sink configuration")
+		})
+	}
 }
 
 func TestAbandonedWriterTempsAreDiscarded(t *testing.T) {

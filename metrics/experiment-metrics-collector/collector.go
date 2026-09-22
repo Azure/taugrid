@@ -282,7 +282,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		return result, err
 	}
 	checkpointPath := filepath.Join(r.options.Out, "checkpoint.json")
-	checkpoints, existed, err := loadCheckpoints(checkpointPath)
+	checkpoints, existed, err := loadCheckpoints(checkpointPath, r.configIdentity())
 	if err != nil {
 		return result, err
 	}
