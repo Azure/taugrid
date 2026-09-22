@@ -4,6 +4,7 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -331,6 +332,137 @@ func TestSDKADXQueuedDiscoveryUsesIngestionEndpoint(t *testing.T) {
 	})
 	if err == nil || discoveryHost != "ingest-cluster.kusto.windows.net" {
 		t.Fatalf("discovery host=%q err=%v", discoveryHost, err)
+	}
+}
+
+func TestSDKADXQueuedInitialStatusTimeoutRemainsRetryable(t *testing.T) {
+	var tableWrites, queueWrites int
+	failTableWrites := true
+	baseTransport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body []byte
+		if request.Body != nil {
+			var err error
+			body, err = io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+			request.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}
+		switch {
+		case strings.Contains(request.URL.Path, "/v1/rest/auth/metadata"):
+			response.Header.Set("Content-Type", "application/json")
+			response.Body = io.NopCloser(strings.NewReader(`{"AzureAD":{"LoginEndpoint":"https://login.microsoftonline.com","LoginMfaRequired":false,"KustoClientAppId":"client-id","KustoClientRedirectUri":"https://microsoft/kusto","KustoServiceResourceId":"https://kusto.windows.net","FirstPartyAuthorityUrl":"https://login.microsoftonline.com/tenant"}}`))
+		case strings.Contains(request.URL.Path, "/v1/rest/mgmt"):
+			var command struct {
+				CSL string `json:"csl"`
+			}
+			if err := json.Unmarshal(body, &command); err != nil {
+				return nil, err
+			}
+			response.Header.Set("Content-Type", "application/json")
+			switch command.CSL {
+			case ".get kusto identity token":
+				response.Body = io.NopCloser(strings.NewReader(`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"AuthorizationContext","DataType":"String","ColumnType":"string"}],"Rows":[["auth-context"]]}]}`))
+			case ".get ingestion resources":
+				response.Body = io.NopCloser(strings.NewReader(`{"Tables":[{"TableName":"Table_0","Columns":[{"ColumnName":"ResourceTypeName","DataType":"String","ColumnType":"string"},{"ColumnName":"StorageRoot","DataType":"String","ColumnType":"string"}],"Rows":[["TempStorage","https://storage.blob.core.windows.net/container?sig=blob-secret"],["SecuredReadyForAggregationQueue","https://storage.queue.core.windows.net/queue?sig=queue-secret"],["IngestionsStatusTable","https://storage.table.core.windows.net/status?sig=table-secret"]]}]}`))
+			default:
+				return nil, fmt.Errorf("unexpected management command %q", command.CSL)
+			}
+		case request.URL.Host == "storage.blob.core.windows.net":
+			response.StatusCode = http.StatusCreated
+			response.Header.Set("ETag", `"test-etag"`)
+		case request.URL.Host == "storage.table.core.windows.net":
+			tableWrites++
+			if failTableWrites {
+				return nil, context.DeadlineExceeded
+			}
+			response.StatusCode = http.StatusNoContent
+		case request.URL.Host == "storage.queue.core.windows.net":
+			queueWrites++
+			response.StatusCode = http.StatusCreated
+			response.Header.Set("Content-Type", "application/xml")
+			response.Body = io.NopCloser(strings.NewReader(`<QueueMessagesList><QueueMessage><MessageId>message-id</MessageId><InsertionTime>Mon, 21 Sep 2026 00:00:00 GMT</InsertionTime><ExpirationTime>Tue, 22 Sep 2026 00:00:00 GMT</ExpirationTime><PopReceipt>receipt</PopReceipt><TimeNextVisible>Mon, 21 Sep 2026 00:00:00 GMT</TimeNextVisible></QueueMessage></QueueMessagesList>`))
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s body=%s", request.Method, request.URL, body)
+		}
+		return response, nil
+	})
+	httpClient := &http.Client{Transport: &adxResourceCachingTransport{base: baseTransport}}
+	kcsb := azkustodata.NewConnectionStringBuilder("https://status-timeout-test.kusto.windows.net").
+		WithTokenCredential(staticTokenCredential{})
+	client, err := newSDKADXQueuedClient(
+		kcsb,
+		ADXQueuedConfig{Database: "metrics", Table: "MetricEvents"},
+		httpClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := client.discovery.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	request := adxIngestRequest{
+		Database: "metrics", Table: "MetricEvents", Mapping: "MetricEventChunkNDJSON",
+		IngestByValue: "taugrid-metric-chunk-" + strings.Repeat("e", 64),
+	}
+	_, err = client.Ingest(ctx, []byte("{}\n"), request)
+	if err == nil {
+		t.Fatal("initial status table timeout unexpectedly succeeded")
+	}
+	if !adxRetryable(err) {
+		t.Fatalf("initial status table timeout was not retryable: %T %v", err, err)
+	}
+	failTableWrites = false
+	if _, err := client.Ingest(ctx, []byte("{}\n"), request); err != nil {
+		t.Fatalf("second submission failed: %v", err)
+	}
+	if tableWrites < 2 || queueWrites != 1 {
+		t.Fatalf("table writes=%d queue writes=%d, want multiple retries then one queue write", tableWrites, queueWrites)
+	}
+}
+
+func TestADXTransportPermanentResponseClearsTransientFailure(t *testing.T) {
+	calls := 0
+	transport := &adxResourceCachingTransport{
+		base: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return nil, context.DeadlineExceeded
+			}
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		}),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	clear := transport.setDiscoveryContext(ctx)
+	defer clear()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://storage.table.core.windows.net/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.roundTripBase(request); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first transport error=%v, want deadline exceeded", err)
+	}
+	if response, err := transport.roundTripBase(request); err != nil || response.StatusCode != http.StatusForbidden {
+		t.Fatalf("permanent response=%v err=%v", response, err)
+	}
+	if err := transport.takeSubmissionFailure(); err != nil {
+		t.Fatalf("permanent response retained stale transient failure: %v", err)
 	}
 }
 

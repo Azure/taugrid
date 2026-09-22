@@ -113,10 +113,11 @@ type adxCachedHTTPResponse struct {
 }
 
 type adxResourceCachingTransport struct {
-	base             http.RoundTripper
-	mu               sync.RWMutex
-	resources        *adxCachedHTTPResponse
-	discoveryContext context.Context
+	base              http.RoundTripper
+	mu                sync.RWMutex
+	resources         *adxCachedHTTPResponse
+	discoveryContext  context.Context
+	submissionFailure error
 }
 
 type adxResourceDiscoveryContextKey struct{}
@@ -430,8 +431,12 @@ func (c *sdkADXQueuedClient) Ingest(ctx context.Context, payload []byte, request
 		azkustoingest.ReportResultToTable(),
 	)
 	if err != nil {
+		if transportErr := c.transport.takeSubmissionFailure(); transportErr != nil {
+			return nil, transportErr
+		}
 		return nil, normalizeADXSDKError(err)
 	}
+	c.transport.takeSubmissionFailure()
 	return &sdkADXQueuedResult{result: result}, nil
 }
 
@@ -471,7 +476,7 @@ func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Re
 		request = request.Clone(discoveryCtx)
 	}
 	if !isADXIngestionResourcesRequest(request) {
-		return t.base.RoundTrip(request)
+		return t.roundTripBase(request)
 	}
 	t.mu.RLock()
 	cached := t.resources
@@ -483,7 +488,7 @@ func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Re
 	if !isPreflight {
 		return nil, fmt.Errorf("ADX ingestion resources must be prefetched for this attempt")
 	}
-	response, err := t.base.RoundTrip(request)
+	response, err := t.roundTripBase(request)
 	if err != nil {
 		return nil, err
 	}
@@ -512,12 +517,52 @@ func (t *adxResourceCachingTransport) RoundTrip(request *http.Request) (*http.Re
 func (t *adxResourceCachingTransport) setDiscoveryContext(ctx context.Context) func() {
 	t.mu.Lock()
 	t.discoveryContext = ctx
+	t.submissionFailure = nil
 	t.mu.Unlock()
 	return func() {
 		t.mu.Lock()
 		t.discoveryContext = nil
 		t.mu.Unlock()
 	}
+}
+
+func (t *adxResourceCachingTransport) roundTripBase(request *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(request)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch {
+	case err != nil && t.discoveryContext != nil && t.discoveryContext.Err() == nil &&
+		isTimeoutError(err):
+		t.submissionFailure = adxTransientError{err: errors.New("ADX transport request timed out")}
+	case err == nil && response != nil && retryableADXHTTPStatus(response.StatusCode):
+		t.submissionFailure = adxTransientError{err: fmt.Errorf("ADX transport HTTP status=%d", response.StatusCode)}
+	default:
+		t.submissionFailure = nil
+	}
+	return response, err
+}
+
+func (t *adxResourceCachingTransport) takeSubmissionFailure() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	err := t.submissionFailure
+	t.submissionFailure = nil
+	return err
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr) && networkErr.Timeout()
+}
+
+func retryableADXHTTPStatus(status int) bool {
+	return status == http.StatusRequestTimeout ||
+		status == http.StatusConflict ||
+		status == http.StatusTooManyRequests ||
+		status >= http.StatusInternalServerError
 }
 
 func (r *adxCachedHTTPResponse) response(request *http.Request) *http.Response {
@@ -582,20 +627,14 @@ func adxSDKRetryable(err error) bool {
 			responseErr.StatusCode == http.StatusBadRequest || responseErr.StatusCode == http.StatusNotFound {
 			return false
 		}
-		return responseErr.StatusCode == http.StatusRequestTimeout ||
-			responseErr.StatusCode == http.StatusConflict ||
-			responseErr.StatusCode == http.StatusTooManyRequests || responseErr.StatusCode >= 500
+		return retryableADXHTTPStatus(responseErr.StatusCode)
 	}
 	var httpErr *kustoerrors.HttpError
 	if errors.As(err, &httpErr) {
-		return httpErr.StatusCode == http.StatusRequestTimeout ||
-			httpErr.StatusCode == http.StatusConflict ||
-			httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode >= 500
+		return retryableADXHTTPStatus(httpErr.StatusCode)
 	}
 	if status, ok := flattenedKustoHTTPStatus(err); ok {
-		return status == http.StatusRequestTimeout ||
-			status == http.StatusConflict ||
-			status == http.StatusTooManyRequests || status >= 500
+		return retryableADXHTTPStatus(status)
 	}
 	if kustoerrors.Retry(err) {
 		return true
@@ -654,6 +693,10 @@ func adxDiagnostic(err error) string {
 	var networkErr net.Error
 	if errors.As(err, &networkErr) {
 		return fmt.Sprintf("network error timeout=%t", networkErr.Timeout())
+	}
+	var transient adxTransientError
+	if errors.As(err, &transient) {
+		return redactADXDiagnosticText(transient.Error())
 	}
 	return fmt.Sprintf("error type=%T", err)
 }
