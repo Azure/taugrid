@@ -65,6 +65,18 @@ function CapacityBar({ allocated, available, total }: { allocated: number | null
   </div>;
 }
 
+function GPUTiles({ node }: { node: FleetNode }) {
+  const allocated = node.gpuAllocated;
+  const available = node.gpuAvailable;
+  const allocationKnown = allocated !== undefined && available !== undefined;
+  return <div className="overview-gpu-tiles" aria-label={allocationKnown
+    ? `${node.name}: ${allocated} allocated GPUs and ${available} available GPUs`
+    : `${node.name}: GPU allocation unavailable`}>
+    {Array.from({ length: node.gpuCapacity }, (_, index) =>
+      <span key={index} className={allocationKnown ? index < allocated ? 'allocated' : 'available' : 'unknown'}/>)}
+  </div>;
+}
+
 function SiteSelector({ sites, selected, onSelect }: { sites: SiteGroup[]; selected?: string; onSelect: (id: string) => void }) {
   if (!sites.length) return <Empty>Inventory loaded without site or node detail.</Empty>;
   return <div className="overview-sites" aria-label="GPU sites">
@@ -91,17 +103,22 @@ function PoolDetails({ site }: { site?: SiteGroup }) {
     <div className="overview-stage-title"><span>Selected site</span><strong>{site.label}</strong></div>
     {[...pools.entries()].map(([name, nodes]) => {
       const gpus = nodes.reduce((sum, node) => sum + node.gpuCapacity, 0);
-      const allocated = nodes.every(node => node.gpuAllocated !== undefined)
-        ? nodes.reduce((sum, node) => sum + (node.gpuAllocated ?? 0), 0)
-        : null;
-      const available = nodes.every(node => node.gpuAvailable !== undefined)
-        ? nodes.reduce((sum, node) => sum + (node.gpuAvailable ?? 0), 0)
-        : null;
       const product = nodes.find(node => node.gpuProduct)?.gpuProduct || nodes.find(node => node.sku)?.sku || 'GPU model unknown';
-      return <ScopedLink key={name} to={'/portal/fleet?pool=' + encodeURIComponent(name)} className="overview-pool">
-        <span><strong>{name}</strong><small>{product}</small></span>
-        <span className="overview-pool-capacity"><small>{gpuCountLabel(gpus)}</small><CapacityBar allocated={allocated} available={available} total={gpus}/></span>
-      </ScopedLink>;
+      return <section key={name} className="overview-pool">
+        <div className="overview-pool-head">
+          <span><strong>{name}</strong><small>{product}</small></span>
+          <b>{gpuCountLabel(gpus)}</b>
+        </div>
+        <div className="overview-node-list">{nodes.map(node =>
+          <ScopedLink key={node.name} to={'/portal/fleet?instance=' + encodeURIComponent(node.name)} className="overview-node">
+            <span><strong>{node.name}</strong><small>{node.ready ? 'Ready' : 'Not ready'} · {node.sku || 'SKU unknown'}</small></span>
+            <span className="overview-node-capacity">
+              <GPUTiles node={node}/>
+              <small>{node.gpuAllocated ?? '—'} allocated · {node.gpuAvailable ?? '—'} available</small>
+            </span>
+          </ScopedLink>)}
+        </div>
+      </section>;
     })}
   </div>;
 }

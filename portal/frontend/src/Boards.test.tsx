@@ -34,6 +34,7 @@ describe('Platform overview', () => {
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
         nodes: [
           { name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 4, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
+          { name: 'gpu-a2', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 8, gpuAvailable: 0, gpuProduct: 'NVIDIA H100', ready: true },
           { name: 'gpu-b', site: 'east', region: 'eastus2', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 4, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
           { name: 'system-a', site: 'west', region: 'westus3', agentPool: 'system', gpuCapacity: 0, gpuAllocated: 0, gpuAvailable: 0, ready: true },
         ],
@@ -53,6 +54,9 @@ describe('Platform overview', () => {
     expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: 'Operational evidence' })).not.toBeInTheDocument();
     expect(screen.getAllByLabelText(/allocated GPUs and .* available GPUs/).length).toBeGreaterThan(0);
+    expect(screen.getByText('gpu-a')).toBeVisible();
+    expect(screen.getByText('gpu-a2')).toBeVisible();
+    expect(screen.getByLabelText('gpu-a: 4 allocated GPUs and 4 available GPUs')).toBeVisible();
   });
 
   it('emits resolvable canonical run links for workload tracking', () => {

@@ -275,17 +275,30 @@
   .overview-capacity b { color: var(--text); font-size: 9px; font-variant-numeric: tabular-nums; }
   .overview-pools { margin-top: 18px; }
   .overview-pool {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0;
-    border-top: 1px solid var(--line); color: inherit; text-decoration: none;
+    padding: 11px 0; border-top: 1px solid var(--line);
   }
-  .overview-pool:hover strong { color: var(--accent); }
-  .overview-pool > span { min-width: 0; }
-  .overview-pool > span:last-child { flex: 0 0 145px; }
-  .overview-pool strong, .overview-pool small { display: block; }
-  .overview-pool strong { font-size: 11px; }
-  .overview-pool small { margin-top: 2px; color: var(--muted); font-size: 9px; }
-  .overview-pool-capacity > small { text-align: right; }
-  .overview-pool-capacity .overview-capacity { margin-top: 4px; }
+  .overview-pool-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .overview-pool-head > span { min-width: 0; }
+  .overview-pool-head strong, .overview-pool-head small { display: block; }
+  .overview-pool-head strong { font-size: 11px; }
+  .overview-pool-head small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+  .overview-pool-head b { flex: 0 0 auto; font-size: 10px; }
+  .overview-node-list { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+  .overview-node {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, .75fr); gap: 12px; align-items: center;
+    padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: inherit; text-decoration: none;
+  }
+  .overview-node:hover { border-color: #9db9ef; }
+  .overview-node > span { min-width: 0; }
+  .overview-node strong, .overview-node small { display: block; overflow-wrap: anywhere; }
+  .overview-node strong { font-size: 10px; }
+  .overview-node small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+  .overview-node-capacity > small { text-align: right; }
+  .overview-gpu-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(8px, 1fr)); gap: 3px; }
+  .overview-gpu-tiles span { height: 9px; border: 1px solid #cbd5e1; border-radius: 2px; background: #eef2f6; }
+  .overview-gpu-tiles span.allocated { border-color: var(--accent); background: var(--accent); }
+  .overview-gpu-tiles span.available { border-color: #9fc3a8; background: #dbe8df; }
+  .overview-gpu-tiles span.unknown { border-style: dashed; }
   .overview-queue { display: flex; flex-direction: column; justify-content: center; background: rgba(255,255,255,.72); }
   .overview-queue-dial { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .overview-queue-dial > span { color: var(--muted); font-size: 10px; }
