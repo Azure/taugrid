@@ -171,30 +171,3 @@ Serve's handling upstream by using `is_repeated` with a legacy fallback
 that patch release rather than a protobuf upper-bound workaround or a local
 Ray monkeypatch. The regression combination is Ray 2.56.1 with protobuf 7.36.0;
 verify the resolved versions and Serve behavior during release validation.
-
-## Azure Blob Storage TLS (Native Clients)
-
-Ray Data's `write_delta`/`read_delta` and other native Azure Blob I/O paths can
-use libraries with their own TLS stacks — pyarrow's C++ `AzureFileSystem` and
-`azure-sdk-cpp` use libcurl/OpenSSL directly, bypassing Python's `certifi` and
-Rust's `rustls`. Azure Linux ships its CA bundle at the RHEL-style path
-`/etc/pki/tls/certs/ca-bundle.crt`; some native libraries default to the
-Debian-style `/etc/ssl/certs/ca-certificates.crt` instead, which can produce
-`unable to get local issuer certificate` errors even though a valid bundle
-exists on disk. This image sets `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the
-Azure Linux bundle so any native client that honors these conventional env
-vars resolves a correct path ambiently, regardless of which default path it
-assumes. Both variables are harmless to Python (`certifi`) and Rust
-(`rustls`) TLS paths — neither reads them.
-
-`AZURE_TOKEN_CREDENTIALS` is a second, unrelated collision risk for the same
-native libraries. `azure-sdk-cpp`'s `DefaultAzureCredential` chain reads this
-variable to restrict which credential type it attempts, and only recognizes
-SDK-defined values such as `WorkloadIdentityCredential`. If job code also uses
-this variable name for its own Python credential-provider convention (e.g. a
-custom value like `managedidentity`), the C++ credential chain fails because
-that value isn't one of its recognized types, even though the same value works
-fine for the job's own Python code. This image does not set
-`AZURE_TOKEN_CREDENTIALS` itself; jobs that set it for their own Python code
-and also perform native Azure Blob I/O should use an SDK-recognized value
-(e.g. `WorkloadIdentityCredential`) that satisfies both consumers.

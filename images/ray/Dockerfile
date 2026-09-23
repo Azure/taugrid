@@ -36,13 +36,7 @@ RUN tdnf install -y ca-certificates which gcc gcc-c++ binutils glibc-devel kerne
         ninja-build python3-devel \
         rdma-core libibverbs librdmacm && tdnf clean all
 
-# pyarrow's C++ AzureFileSystem and azure-sdk-cpp use libcurl/OpenSSL directly
-# for TLS, bypassing Python's certifi and Rust's rustls. Some native clients
-# default to the Debian-style /etc/ssl/certs/ca-certificates.crt bundle path
-# instead of Azure Linux's RHEL-style one. Pin both conventional env vars to
-# Azure Linux's actual bundle so any native library resolves a correct path
-# ambiently, regardless of which default it assumes. Harmless to certifi/
-# rustls-based paths (Python, Rust) — neither reads these variables.
+# Pin Azure Linux's CA bundle for native TLS clients.
 ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 ENV CURL_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
 
