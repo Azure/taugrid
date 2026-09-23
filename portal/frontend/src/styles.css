@@ -221,6 +221,12 @@
   .focused-gpus > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   .focused-gpus h3 { margin: 0; }
   .code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .log-snapshot {
+    max-height: 32rem; margin: 12px 0; padding: 14px; overflow: auto;
+    border: 1px solid var(--line); background: #0f172a; color: #e2e8f0;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
   .disabled-link { color: var(--accent); font-size: 13px; opacity: .5; cursor: not-allowed; }
   .overview-dashboard { margin-top: 6px; }
   .overview-metrics {

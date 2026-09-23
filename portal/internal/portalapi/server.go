@@ -35,6 +35,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/nodes"
 	"github.com/Azure/taugrid/portal/internal/portal/nodeutil"
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
+	"github.com/Azure/taugrid/portal/internal/portal/workloadlogs"
 )
 
 // DefaultAddr is the portal's default listen address. It mirrors Stellar's
@@ -380,6 +381,7 @@ func (s *Server) routes() {
 	// Trailing slash keeps the per-job detail route
 	// ("/api/portal/runs/{namespace}/{name}") distinct from the runs list above.
 	s.mux.HandleFunc("/api/portal/runs/", s.handleJobDetail)
+	s.mux.HandleFunc("/api/portal/workloads/", s.handleWorkloadDetail)
 	// KueueViz "Kueue (Live)" board — reverse-proxied under
 	// /api/portal/kueueviz/. The frontend/env.js/asset routes are embedded in a
 	// same-origin iframe, so wrap them with framedSameOrigin to relax any DENY
@@ -469,6 +471,7 @@ type overviewResponse struct {
 	Active             []runs.Run               `json:"active"`
 	ActiveUnavailable  string                   `json:"activeUnavailable,omitempty"`
 	Running            []runningItem            `json:"running"`
+	Waiting            []runningItem            `json:"waiting"`
 	RunningUnavailable string                   `json:"runningUnavailable,omitempty"`
 	WorkloadProfiles   jobs.ProfileAvailability `json:"workloadProfiles"`
 }
@@ -552,6 +555,7 @@ type runningItem struct {
 	Job          string `json:"job,omitempty"`
 	Name         string `json:"name"`
 	Namespace    string `json:"namespace"`
+	ResourceUID  string `json:"resourceUid,omitempty"`
 	RunID        string `json:"runId,omitempty"`
 	Queue        string `json:"queue,omitempty"`
 	ClusterQueue string `json:"clusterQueue,omitempty"`
@@ -571,6 +575,8 @@ type runningItem struct {
 	AdmissionPriorityClassKind string   `json:"admissionPriorityClassKind,omitempty"`
 	AdmissionPriority          *int32   `json:"admissionPriority,omitempty"`
 	PodPriorityClasses         []string `json:"podPriorityClasses,omitempty"`
+	PendingReason              string   `json:"pendingReason,omitempty"`
+	PendingMessage             string   `json:"pendingMessage,omitempty"`
 }
 
 // portalBoards is the canonical board list surfaced by the shell. Experiments
@@ -628,7 +634,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := overviewResponse{
 		Boards: s.boardsForScope(scope), Pending: []queue.PendingWorkload{},
-		Active: []runs.Run{}, Running: []runningItem{},
+		Active: []runs.Run{}, Running: []runningItem{}, Waiting: []runningItem{},
 	}
 	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
 	if view == "workloads" {
@@ -812,7 +818,7 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 		}
 	}
 	for _, wl := range workloads {
-		if !wl.Running() {
+		if wl.Finished {
 			continue
 		}
 		experimentPath := ""
@@ -826,10 +832,11 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 				experimentTracking = "legacy"
 			}
 		}
-		resp.Running = append(resp.Running, runningItem{
+		item := runningItem{
 			Job:                        wl.Job,
 			Name:                       wl.Name,
 			Namespace:                  wl.Namespace,
+			ResourceUID:                wl.ResourceUID,
 			RunID:                      wl.RunID,
 			Queue:                      wl.Queue,
 			ClusterQueue:               wl.ClusterQueue,
@@ -843,7 +850,14 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 			AdmissionPriorityClassKind: wl.AdmissionPriorityClassKind,
 			AdmissionPriority:          wl.AdmissionPriority,
 			PodPriorityClasses:         wl.PodPriorityClasses,
-		})
+			PendingReason:              wl.PendingReason,
+			PendingMessage:             wl.PendingMessage,
+		}
+		if wl.Running() {
+			resp.Running = append(resp.Running, item)
+		} else {
+			resp.Waiting = append(resp.Waiting, item)
+		}
 	}
 }
 
@@ -1412,6 +1426,265 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, "ready")
+}
+
+// handleWorkloadDetail serves the canonical workload detail route by immutable
+// Kubernetes resource UID. Live objects reuse jobdetail.Detail; deleted objects
+// fall back to the durable lifecycle timeline within the same trusted scope.
+func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	scope, ok := s.localWorkspaceScope(w, r)
+	if !ok {
+		return
+	}
+	tail := strings.TrimPrefix(r.URL.Path, "/api/portal/workloads/")
+	parts := strings.Split(tail, "/")
+	if len(parts) == 2 && parts[1] == "logs" {
+		s.handleWorkloadLogs(w, r, scope, parts[0])
+		return
+	}
+	if len(parts) != 1 || parts[0] == "" {
+		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/workloads/{resourceUID}")
+		return
+	}
+	resourceUID := parts[0]
+
+	namespace := scope.Namespace
+	if !scope.Managed && namespace == "" {
+		namespace = s.runs.Namespace
+	}
+	snapshot, found, liveErr := s.resolveLiveWorkload(r.Context(), scope, resourceUID)
+	if found && liveErr == nil {
+		writeScopedJSON(w, http.StatusOK, snapshot, scope, "ready")
+		return
+	}
+	if liveErr != nil && s.runs.History == nil {
+		writeScopedError(w, http.StatusBadGateway, scope, liveErr.Error())
+		return
+	}
+
+	reader, ok := s.runs.History.(runs.HistoryDetailReader)
+	if !ok || reader == nil {
+		if s.runs.Reader == nil {
+			writeScopedError(w, http.StatusServiceUnavailable, scope, "workload detail unavailable: Kubernetes and durable history are not configured")
+			return
+		}
+		writeScopedError(w, http.StatusNotFound, scope, "workload not found")
+		return
+	}
+	historyScope := runs.HistoryScope{
+		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: namespace,
+		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Limit: s.runs.HistoryLimit,
+	}
+	if !scope.Managed {
+		historyScope.Cluster = s.singleWorkspaceScope.Cluster
+		historyScope.Namespace = s.singleWorkspaceScope.Namespace
+	}
+	events, err := reader.GetHistoryTimeline(r.Context(), historyScope, resourceUID)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "durable workload history query failed")
+		return
+	}
+	if len(events) == 0 || !historyEventInScope(events[0], historyScope, resourceUID) {
+		writeScopedError(w, http.StatusNotFound, scope, "workload not found")
+		return
+	}
+	writeScopedJSON(w, http.StatusOK, historicalWorkloadSnapshot(events), scope, "ready")
+}
+
+func (s *Server) resolveLiveWorkload(ctx context.Context, scope WorkspaceScope, resourceUID string) (jobdetail.Snapshot, bool, error) {
+	if s.runs.Reader == nil {
+		return jobdetail.Snapshot{}, false, nil
+	}
+	namespace := scope.Namespace
+	if !scope.Managed && namespace == "" {
+		namespace = s.runs.Namespace
+	}
+	live, err := runs.Board(ctx, s.runs.Reader, runs.Options{Namespace: namespace})
+	if err != nil {
+		return jobdetail.Snapshot{}, false, err
+	}
+	for _, run := range live.Runs {
+		if run.ResourceUID != resourceUID {
+			continue
+		}
+		reader, ok := s.runs.Reader.(jobdetail.Reader)
+		if !ok {
+			return jobdetail.Snapshot{}, false, errors.New("workload detail reader does not support single-object reads")
+		}
+		snapshot, detailErr := jobdetail.Detail(ctx, reader, s.cluster.Querier, jobdetail.Options{
+			Namespace: namespace, Name: run.Name, WorkspaceID: scope.WorkspaceID, Cluster: scope.Cluster,
+		})
+		if detailErr != nil {
+			if errors.Is(detailErr, jobdetail.ErrNotFound) {
+				return jobdetail.Snapshot{}, false, nil
+			}
+			return jobdetail.Snapshot{}, false, detailErr
+		}
+		if snapshot.ResourceUID != resourceUID {
+			return jobdetail.Snapshot{}, false, nil
+		}
+		return snapshot, true, nil
+	}
+	return jobdetail.Snapshot{}, false, nil
+}
+
+type workloadLogReader interface {
+	GetPodLogs(ctx context.Context, namespace, pod, container string, previous bool, tailLines, limitBytes int64) ([]byte, error)
+}
+
+func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request, scope WorkspaceScope, resourceUID string) {
+	if resourceUID == "" || strings.Contains(resourceUID, "/") {
+		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/workloads/{resourceUID}/logs")
+		return
+	}
+	reader, ok := s.runs.Reader.(workloadLogReader)
+	if !ok || reader == nil {
+		writeScopedError(w, http.StatusServiceUnavailable, scope, "workload logs unavailable: Kubernetes log access is not configured")
+		return
+	}
+	snapshot, found, err := s.resolveLiveWorkload(r.Context(), scope, resourceUID)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "workload logs unavailable")
+		return
+	}
+	if !found {
+		writeScopedError(w, http.StatusNotFound, scope, "live workload not found; logs may have expired")
+		return
+	}
+	podName := strings.TrimSpace(r.URL.Query().Get("pod"))
+	containerName := strings.TrimSpace(r.URL.Query().Get("container"))
+	previous, err := strconv.ParseBool(firstNonEmpty(r.URL.Query().Get("previous"), "false"))
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, "previous must be true or false")
+		return
+	}
+	tailLines, err := boundedPositiveQuery(r, "tailLines", workloadlogs.DefaultTailLines, workloadlogs.MaxTailLines)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
+	limitBytes, err := boundedPositiveQuery(r, "limitBytes", workloadlogs.DefaultLimitBytes, workloadlogs.MaxLimitBytes)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
+	container, ok := workloadContainer(snapshot.Pods, podName, containerName)
+	if !ok {
+		writeScopedError(w, http.StatusNotFound, scope, "pod or container does not belong to this workload")
+		return
+	}
+	if previous && !container.PreviousAvailable {
+		writeScopedError(w, http.StatusNotFound, scope, "previous container logs are not available")
+		return
+	}
+	data, err := reader.GetPodLogs(r.Context(), snapshot.Namespace, podName, containerName, previous, tailLines, limitBytes+1)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "container logs could not be read")
+		return
+	}
+	content, truncated, redacted := workloadlogs.Sanitize(data, limitBytes)
+	w.Header().Set("Cache-Control", "no-store")
+	writeScopedJSON(w, http.StatusOK, workloadlogs.Snapshot{
+		Pod: podName, Container: containerName, Previous: previous, Content: content,
+		TailLines: tailLines, LimitBytes: limitBytes, Truncated: truncated, RedactionApplied: redacted,
+	}, scope, "ready")
+}
+
+func boundedPositiveQuery(r *http.Request, name string, fallback, maximum int64) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 || value > maximum {
+		return 0, fmt.Errorf("%s must be between 1 and %d", name, maximum)
+	}
+	return value, nil
+}
+
+func workloadContainer(pods []jobdetail.PodDetail, podName, containerName string) (jobdetail.ContainerDetail, bool) {
+	for _, pod := range pods {
+		if pod.Name != podName {
+			continue
+		}
+		for _, container := range pod.Containers {
+			if container.Name == containerName {
+				return container, true
+			}
+		}
+	}
+	return jobdetail.ContainerDetail{}, false
+}
+
+func historyEventInScope(event runs.LifecycleEvent, scope runs.HistoryScope, resourceUID string) bool {
+	return event.ResourceUID == resourceUID &&
+		(scope.Namespace == "" || strings.EqualFold(event.Namespace, scope.Namespace)) &&
+		(scope.Cluster == "" || strings.EqualFold(event.Cluster, scope.Cluster))
+}
+
+func historicalWorkloadSnapshot(events []runs.LifecycleEvent) jobdetail.Snapshot {
+	first := events[0]
+	last := events[len(events)-1]
+	created := firstNonEmptyTime(first.SubmitTime, first.ObservedAt)
+	status := historicalWorkloadStatus(last.State)
+	snapshot := jobdetail.Snapshot{
+		Namespace: first.Namespace, Name: first.Name, Kind: first.Kind,
+		ResourceUID: first.ResourceUID, ObjectState: "deleted", Status: status,
+		RunID: first.RunID, History: events,
+		Diagnostics: jobdetail.Diagnostics{
+			Workloads: jobdetail.SourceDiagnostic{State: "unavailable", Message: "The Kubernetes object was deleted; live Kueue evidence is no longer retained."},
+			Pods:      jobdetail.SourceDiagnostic{State: "unavailable", Message: "The Kubernetes object was deleted; pod state and logs are no longer retained."},
+			Events:    jobdetail.SourceDiagnostic{State: "unavailable", Message: "The Kubernetes object was deleted; Kubernetes events may have expired."},
+			Tracking:  jobdetail.SourceDiagnostic{State: "empty", Message: "No experiment identity is available in durable history."},
+			Telemetry: jobdetail.SourceDiagnostic{State: "unavailable", Message: "Historical GPU attribution is unavailable after pod placement data is deleted."},
+		},
+		Lifecycle: &jobdetail.LifecycleRow{
+			State: last.State, EffectiveState: last.State, Reason: last.Reason, Message: last.Message,
+			CompletionTime: last.CompletionTime, ArtifactURI: last.ArtifactURI, CheckpointURI: last.CheckpointURI,
+		},
+	}
+	if first.RunID != "" {
+		snapshot.Diagnostics.Tracking = jobdetail.SourceDiagnostic{State: "ready"}
+	}
+	if !created.IsZero() {
+		snapshot.Object.Created = &created
+		snapshot.Object.Age = runs.FormatAge(time.Now(), created)
+	}
+	snapshot.Stages = jobdetail.LifecycleStages{
+		Object: "deleted", Admission: "unavailable", Scheduling: "unavailable",
+		Application: strings.ToLower(status), Tracking: map[bool]string{true: "linked", false: "unlinked"}[first.RunID != ""],
+	}
+	return snapshot
+}
+
+func firstNonEmptyTime(values ...string) time.Time {
+	for _, value := range values {
+		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func historicalWorkloadStatus(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "submitted", "queued", "admitted", "pending":
+		return "Pending"
+	case "running":
+		return "Running"
+	case "succeeded", "complete", "completed":
+		return "Succeeded"
+	case "failed":
+		return "Failed"
+	case "cancelled", "canceled":
+		return "Cancelled"
+	default:
+		return state
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -48,11 +48,14 @@ describe('Platform overview', () => {
           runId: 'live-ray-train-01', experimentPath: '/stellar?target=live-ray-train-01', experimentTracking: 'legacy' },
         { name: 'live-batch-eval', namespace: 'tau-default', kind: 'Job', status: 'Running', age: '2m',
           experimentTracking: 'untracked' },
+      ], waiting: [
+        { name: 'gpu-waiting', namespace: 'aks-ai-runtime-e2e', resourceUid: 'uid-pending', queue: 'jobqueue', clusterQueue: 'tau-cq',
+          pendingReason: 'Pending', admissionPriorityClass: 'taugrid-priority', admissionPriority: 1200, podPriorityClasses: ['taugrid-priority'] },
       ], running: [
         { name: 'gpu-service', namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq',
-          admissionPriorityClass: 'taugrid-priority', admissionPriority: 1200, podPriorityClasses: ['taugrid-priority'] },
+          resourceUid: 'uid-gpu', admissionPriorityClass: 'taugrid-priority', admissionPriority: 1200, podPriorityClasses: ['taugrid-priority'] },
         { name: 'cpu-viewer', namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq',
-          admissionPriorityClass: 'taugrid-default', admissionPriority: 1000, podPriorityClasses: ['taugrid-default'] },
+          resourceUid: 'uid-cpu', admissionPriorityClass: 'taugrid-default', admissionPriority: 1000, podPriorityClasses: ['taugrid-default'] },
       ] }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
@@ -86,6 +89,8 @@ describe('Platform overview', () => {
     expect(screen.getByRole('link', { name: 'Inspect active jobs →' })).toHaveAttribute('href', '/portal/runs');
     expect(screen.getByText('GPU quota admitted')).toBeInTheDocument();
     expect(screen.getByText('CPU quota admitted')).toBeInTheDocument();
+    expect(screen.getAllByText('Waiting for quota').length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: 'gpu-waiting' })).toHaveAttribute('href', '/portal/workloads/uid-pending');
     expect(screen.getByText('gpu-service')).toBeInTheDocument();
     expect(screen.getByText('cpu-viewer')).toBeInTheDocument();
     expect(screen.getByText(/Active jobs come from Job and RayJob runtime status/)).toBeInTheDocument();

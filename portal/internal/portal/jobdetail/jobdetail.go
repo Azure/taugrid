@@ -43,6 +43,8 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/Azure/taugrid/portal/internal/portal/links"
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
+	"github.com/Azure/taugrid/portal/internal/portal/workloadlogs"
+	"github.com/Azure/taugrid/portal/internal/portal/workloadtelemetry"
 )
 
 // rayClusterLabel is the label KubeRay stamps on a RayJob's pods (value is the
@@ -94,18 +96,22 @@ type Options struct {
 // a board shape. Optional tiers are omitted when empty so the frontend can
 // render each independently.
 type Snapshot struct {
-	Namespace   string           `json:"namespace"`
-	Name        string           `json:"name"`
-	Kind        string           `json:"kind"` // Job | RayJob
-	ResourceUID string           `json:"resourceUid,omitempty"`
-	Status      string           `json:"status"`
-	RunID       string           `json:"runId,omitempty"`
-	Object      ObjectDetail     `json:"object"`
-	Workloads   []links.Workload `json:"workloads,omitempty"`
-	Pods        []PodDetail      `json:"pods,omitempty"`
-	Events      []EventDetail    `json:"events,omitempty"`
-	Links       DetailLinks      `json:"links"`
-	Lifecycle   *LifecycleRow    `json:"lifecycle,omitempty"`
+	Namespace   string                     `json:"namespace"`
+	Name        string                     `json:"name"`
+	Kind        string                     `json:"kind"` // Job | RayJob
+	ResourceUID string                     `json:"resourceUid,omitempty"`
+	ObjectState string                     `json:"objectState"` // live | deleted
+	Status      string                     `json:"status"`
+	RunID       string                     `json:"runId,omitempty"`
+	Object      ObjectDetail               `json:"object"`
+	Workloads   []links.Workload           `json:"workloads,omitempty"`
+	Pods        []PodDetail                `json:"pods,omitempty"`
+	Events      []EventDetail              `json:"events,omitempty"`
+	Links       DetailLinks                `json:"links"`
+	Lifecycle   *LifecycleRow              `json:"lifecycle,omitempty"`
+	History     []runs.LifecycleEvent      `json:"history,omitempty"`
+	Telemetry   *workloadtelemetry.Summary `json:"telemetry,omitempty"`
+	Stages      LifecycleStages            `json:"stages"`
 	// ResourceRelease distinguishes scheduler quota accounting from physical
 	// Ray pod teardown. It is populated for RayJobs after Workloads and Pods are
 	// read so the UI never treats "Finished" as proof that GPUs are reusable.
@@ -123,6 +129,15 @@ type Diagnostics struct {
 	Pods      SourceDiagnostic `json:"pods"`
 	Events    SourceDiagnostic `json:"events"`
 	Tracking  SourceDiagnostic `json:"tracking"`
+	Telemetry SourceDiagnostic `json:"telemetry"`
+}
+
+type LifecycleStages struct {
+	Object      string `json:"object"`
+	Admission   string `json:"admission"`
+	Scheduling  string `json:"scheduling"`
+	Application string `json:"application"`
+	Tracking    string `json:"tracking"`
 }
 
 type SourceDiagnostic struct {
@@ -204,13 +219,25 @@ type ResourceReleaseDetail struct {
 
 // PodDetail is one pod backing the run: phase, placement, and restart count.
 type PodDetail struct {
-	Name     string `json:"name"`
-	Phase    string `json:"phase"`
-	Node     string `json:"node,omitempty"`
-	Restarts int    `json:"restarts"`
+	Name       string            `json:"name"`
+	Phase      string            `json:"phase"`
+	Node       string            `json:"node,omitempty"`
+	Restarts   int               `json:"restarts"`
+	Containers []ContainerDetail `json:"containers,omitempty"`
+	StartedAt  *time.Time        `json:"startedAt,omitempty"`
 	// NodePath deep-links the Cluster board to this pod's node (empty when the
 	// pod is unscheduled).
 	NodePath string `json:"nodePath,omitempty"`
+}
+
+type ContainerDetail struct {
+	Name              string `json:"name"`
+	Ready             bool   `json:"ready"`
+	Restarts          int    `json:"restarts"`
+	State             string `json:"state,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	Message           string `json:"message,omitempty"`
+	PreviousAvailable bool   `json:"previousAvailable,omitempty"`
 }
 
 // EventDetail is one recent Kubernetes event for troubleshooting. Last is a
@@ -220,11 +247,13 @@ type PodDetail struct {
 // lastTimestamp empty and carry the time in eventTime or series.lastObservedTime
 // instead, so parseEvents falls back through all three.
 type EventDetail struct {
-	Type    string     `json:"type"`
-	Reason  string     `json:"reason"`
-	Message string     `json:"message"`
-	Count   int        `json:"count"`
-	Last    *time.Time `json:"last,omitempty"`
+	Type             string     `json:"type"`
+	Reason           string     `json:"reason"`
+	Message          string     `json:"message"`
+	Count            int        `json:"count"`
+	Last             *time.Time `json:"last,omitempty"`
+	Truncated        bool       `json:"truncated,omitempty"`
+	RedactionApplied bool       `json:"redactionApplied,omitempty"`
 }
 
 // DetailLinks holds the tier-2 cross-links. StellarPath requires indexed metrics
@@ -282,9 +311,10 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 		Name:        opts.Name,
 		Kind:        obj.kind,
 		ResourceUID: obj.uid,
+		ObjectState: "live",
 		Status:      obj.status,
 		RunID:       obj.runID,
-		Object:      obj.detail,
+		Object:      safeObjectDetail(obj.detail),
 	}
 	if !obj.experiment.empty() {
 		identity := obj.experiment
@@ -368,8 +398,119 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	snap.Diagnostics.Events = sourceDiagnostic("events", len(snap.Events), eventErr)
 
 	snap.Links.StellarPath, snap.Lifecycle, snap.Diagnostics.Tracking = tracking(ctx, q, obj.runID, opts)
+	snap.Telemetry, snap.Diagnostics.Telemetry = workloadTelemetry(ctx, q, snap, opts)
+	snap.Stages = lifecycleStages(snap)
 
 	return snap, nil
+}
+
+func safeObjectDetail(detail ObjectDetail) ObjectDetail {
+	labels := map[string]string{}
+	for key, value := range detail.Labels {
+		if strings.HasPrefix(key, "tau.azure.com/") || strings.HasPrefix(key, "kueue.x-k8s.io/") || strings.HasPrefix(key, "ray.io/") {
+			labels[key] = value
+		}
+	}
+	detail.Labels = labels
+	detail.Annotations = nil
+	return detail
+}
+
+func lifecycleStages(snap Snapshot) LifecycleStages {
+	stages := LifecycleStages{Object: snap.ObjectState, Admission: "not_managed", Scheduling: "no_pods", Application: "unknown", Tracking: "unlinked"}
+	for _, workload := range snap.Workloads {
+		switch {
+		case workload.Finished:
+			stages.Admission = "finished"
+		case workload.Admitted && stages.Admission != "finished":
+			stages.Admission = "admitted"
+		case stages.Admission == "not_managed":
+			stages.Admission = "pending"
+		}
+	}
+	if snap.Diagnostics.Workloads.State == "unavailable" {
+		stages.Admission = "unavailable"
+	}
+	scheduled := 0
+	completed := 0
+	for _, pod := range snap.Pods {
+		if pod.Node != "" {
+			scheduled++
+		}
+		if pod.Phase == "Succeeded" || pod.Phase == "Failed" {
+			completed++
+		}
+	}
+	switch {
+	case len(snap.Pods) == 0 && snap.Diagnostics.Pods.State == "unavailable":
+		stages.Scheduling = "unavailable"
+	case len(snap.Pods) == 0:
+		stages.Scheduling = "no_pods"
+	case completed == len(snap.Pods):
+		stages.Scheduling = "completed"
+	case scheduled == 0:
+		stages.Scheduling = "unscheduled"
+	case scheduled < len(snap.Pods):
+		stages.Scheduling = "partially_scheduled"
+	default:
+		stages.Scheduling = "scheduled"
+	}
+	switch strings.ToLower(snap.Status) {
+	case "pending", "suspended":
+		stages.Application = "waiting"
+	case "running":
+		stages.Application = "running"
+	case "succeeded", "complete", "completed":
+		stages.Application = "succeeded"
+	case "failed", "cancelled", "canceled":
+		stages.Application = "failed"
+	}
+	switch snap.Diagnostics.Tracking.State {
+	case "ready":
+		stages.Tracking = "linked"
+	case "unavailable":
+		stages.Tracking = "unavailable"
+	}
+	return stages
+}
+
+func workloadTelemetry(ctx context.Context, q kustoquery.Querier, snap Snapshot, opts Options) (*workloadtelemetry.Summary, SourceDiagnostic) {
+	if q == nil {
+		return nil, SourceDiagnostic{State: "not_configured", Message: "GPU telemetry is not configured on this Portal."}
+	}
+	targets := make([]workloadtelemetry.PodTarget, 0, len(snap.Pods))
+	start := time.Time{}
+	for _, pod := range snap.Pods {
+		if pod.Node == "" {
+			continue
+		}
+		targets = append(targets, workloadtelemetry.PodTarget{Pod: pod.Name, Instance: pod.Node})
+		if pod.StartedAt != nil && (start.IsZero() || pod.StartedAt.Before(start)) {
+			start = *pod.StartedAt
+		}
+	}
+	if len(targets) == 0 {
+		return nil, SourceDiagnostic{State: "empty", Message: "GPU telemetry starts after workload pods are placed on nodes."}
+	}
+	if start.IsZero() && snap.Object.Created != nil {
+		start = *snap.Object.Created
+	}
+	end := time.Now()
+	if snap.Lifecycle != nil && snap.Lifecycle.CompletionTime != "" {
+		if completed, err := time.Parse(time.RFC3339Nano, snap.Lifecycle.CompletionTime); err == nil {
+			end = completed
+		}
+	}
+	summary, err := workloadtelemetry.Fetch(ctx, q, workloadtelemetry.Query{
+		Cluster: opts.Cluster, Namespace: opts.Namespace, Pods: targets, Start: start, End: end,
+	})
+	if err != nil {
+		return nil, SourceDiagnostic{State: "unavailable", Message: "Workload GPU telemetry could not be read. Retry this detail view."}
+	}
+	if summary.SampleCount == 0 {
+		return &summary, SourceDiagnostic{State: "empty", Message: "No GPU telemetry samples matched this workload and time range."}
+	}
+	return &summary, SourceDiagnostic{State: "ready"}
 }
 
 // resolved carries the fields extracted from whichever object was found.
@@ -668,15 +809,38 @@ type podList struct {
 			} `json:"ownerReferences"`
 		} `json:"metadata"`
 		Spec struct {
-			NodeName string `json:"nodeName"`
+			NodeName   string `json:"nodeName"`
+			Containers []struct {
+				Name string `json:"name"`
+			} `json:"containers"`
 		} `json:"spec"`
 		Status struct {
 			Phase             string `json:"phase"`
+			StartTime         string `json:"startTime"`
 			ContainerStatuses []struct {
-				RestartCount int `json:"restartCount"`
+				Name         string             `json:"name"`
+				Ready        bool               `json:"ready"`
+				RestartCount int                `json:"restartCount"`
+				State        containerStateJSON `json:"state"`
+				LastState    containerStateJSON `json:"lastState"`
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	} `json:"items"`
+}
+
+type containerStateJSON struct {
+	Waiting *struct {
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+	} `json:"waiting"`
+	Running *struct {
+		StartedAt string `json:"startedAt"`
+	} `json:"running"`
+	Terminated *struct {
+		Reason   string `json:"reason"`
+		Message  string `json:"message"`
+		ExitCode int32  `json:"exitCode"`
+	} `json:"terminated"`
 }
 
 type podLabelSelector struct {
@@ -707,21 +871,58 @@ func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, sel
 			continue
 		}
 		restarts := 0
+		statuses := make(map[string]struct {
+			ready    bool
+			restarts int
+			state    containerStateJSON
+			previous containerStateJSON
+		}, len(it.Status.ContainerStatuses))
 		for _, cs := range it.Status.ContainerStatuses {
 			restarts += cs.RestartCount
+			statuses[cs.Name] = struct {
+				ready    bool
+				restarts int
+				state    containerStateJSON
+				previous containerStateJSON
+			}{cs.Ready, cs.RestartCount, cs.State, cs.LastState}
+		}
+		containers := make([]ContainerDetail, 0, len(it.Spec.Containers))
+		for _, container := range it.Spec.Containers {
+			status := statuses[container.Name]
+			state, reason, message := describeContainerState(status.state)
+			containers = append(containers, ContainerDetail{
+				Name: container.Name, Ready: status.ready, Restarts: status.restarts,
+				State: state, Reason: reason, Message: message,
+				PreviousAvailable: status.previous.Terminated != nil,
+			})
 		}
 		out = append(out, PodDetail{
-			Name:     it.Metadata.Name,
-			Phase:    it.Status.Phase,
-			Node:     it.Spec.NodeName,
-			Restarts: restarts,
-			NodePath: links.ClusterInstancePath(it.Spec.NodeName),
+			Name:       it.Metadata.Name,
+			Phase:      it.Status.Phase,
+			Node:       it.Spec.NodeName,
+			Restarts:   restarts,
+			Containers: containers,
+			StartedAt:  optionalTime(parseTime(it.Status.StartTime)),
+			NodePath:   links.ClusterInstancePath(it.Spec.NodeName),
 		})
 		if it.Metadata.UID != "" {
 			uids[it.Metadata.UID] = "Pod"
 		}
 	}
 	return out, uids, nil
+}
+
+func describeContainerState(state containerStateJSON) (name, reason, message string) {
+	switch {
+	case state.Waiting != nil:
+		return "waiting", state.Waiting.Reason, state.Waiting.Message
+	case state.Running != nil:
+		return "running", "", ""
+	case state.Terminated != nil:
+		return "terminated", state.Terminated.Reason, state.Terminated.Message
+	default:
+		return "unknown", "", ""
+	}
 }
 
 func hasUsablePodSelector(selectors []podLabelSelector) bool {
@@ -873,18 +1074,24 @@ func parseEvents(data []byte, objectKinds map[string]string, requireUID bool, jo
 		if !requireUID && !eventBelongsTo(it.InvolvedObject.Name, jobName) && !eventBelongsTo(it.InvolvedObject.Name, rayClusterName) {
 			continue
 		}
+		message, truncated, redacted := workloadlogs.Sanitize([]byte(it.Message), 4096)
 		out = append(out, EventDetail{
-			Type:    it.Type,
-			Reason:  it.Reason,
-			Message: it.Message,
-			Count:   it.Count,
-			Last:    resolveEventTime(it.LastTimestamp, it.EventTime, it.Series.LastObservedTime),
+			Type:             it.Type,
+			Reason:           it.Reason,
+			Message:          message,
+			Count:            it.Count,
+			Last:             resolveEventTime(it.LastTimestamp, it.EventTime, it.Series.LastObservedTime),
+			Truncated:        truncated,
+			RedactionApplied: redacted,
 		})
 	}
 	if len(out) == 0 {
 		return nil, nil
 	}
 	sortEventsNewestFirst(out)
+	if len(out) > 100 {
+		out = out[:100]
+	}
 	return out, nil
 }
 

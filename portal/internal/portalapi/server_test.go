@@ -1282,7 +1282,22 @@ func (s *stubRunsReader) ListRayJobs(_ context.Context, _ string) ([]byte, error
     ]}`), nil
 }
 
-type jobDetailAPIReader struct{ stubRunsReader }
+type jobDetailAPIReader struct {
+	lastLogPod       string
+	lastLogContainer string
+	lastLogPrevious  bool
+	lastLogTail      int64
+	lastLogLimit     int64
+}
+
+func (*jobDetailAPIReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"ray","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
+		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil
+}
+
+func (*jobDetailAPIReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
 
 func (*jobDetailAPIReader) GetJob(context.Context, string, string) ([]byte, error) {
 	return []byte(`{"metadata":{"name":"train","namespace":"ray","uid":"job-current",
@@ -1299,7 +1314,9 @@ func (*jobDetailAPIReader) GetRayCluster(context.Context, string, string) ([]byt
 
 func (*jobDetailAPIReader) ListPods(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[
-		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},"status":{"phase":"Running"}},
+		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","startTime":"2026-07-02T10:01:00Z","containerStatuses":[{"name":"trainer","ready":true,"restartCount":1,"state":{"running":{"startedAt":"2026-07-02T10:01:00Z"}},"lastState":{"terminated":{"reason":"Error","exitCode":1}}}]}},
 		{"metadata":{"name":"train-stale","uid":"pod-stale","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-stale","controller":true}]},"status":{"phase":"Failed"}}
 	]}`), nil
 }
@@ -1323,6 +1340,15 @@ func (*jobDetailAPIReader) ListServices(context.Context, string) ([]byte, error)
 	return []byte(`{"items":[]}`), nil
 }
 
+func (r *jobDetailAPIReader) GetPodLogs(_ context.Context, _, pod, container string, previous bool, tailLines, limitBytes int64) ([]byte, error) {
+	r.lastLogPod = pod
+	r.lastLogContainer = container
+	r.lastLogPrevious = previous
+	r.lastLogTail = tailLines
+	r.lastLogLimit = limitBytes
+	return []byte("step=1 Authorization: Bearer top-secret\nloss=0.2\n"), nil
+}
+
 func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	reader := &jobDetailAPIReader{}
 	server, err := NewServer(Options{
@@ -1332,6 +1358,99 @@ func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+
+	t.Run("workload detail resolves immutable UID", func(t *testing.T) {
+		reader := &jobDetailAPIReader{}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"},
+			Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/job-current", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"resourceUid":"job-current"`) ||
+			!strings.Contains(rec.Body.String(), `"objectState":"live"`) ||
+			!strings.Contains(rec.Body.String(), `"scheduling":"scheduled"`) {
+			t.Fatalf("workload detail missing UID lifecycle evidence: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("workload logs are UID fenced bounded and redacted", func(t *testing.T) {
+		reader := &jobDetailAPIReader{}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"},
+			Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		path := "/api/portal/workloads/job-current/logs?pod=train-current&container=trainer&previous=true&tailLines=25&limitBytes=128"
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("Cache-Control = %q, want no-store", rec.Header().Get("Cache-Control"))
+		}
+		if strings.Contains(rec.Body.String(), "top-secret") || !strings.Contains(rec.Body.String(), "[REDACTED]") {
+			t.Fatalf("log response was not redacted: %s", rec.Body.String())
+		}
+		if reader.lastLogPod != "train-current" || reader.lastLogContainer != "trainer" || !reader.lastLogPrevious ||
+			reader.lastLogTail != 25 || reader.lastLogLimit != 129 {
+			t.Fatalf("log request = pod %q container %q previous %v tail %d limit %d", reader.lastLogPod, reader.lastLogContainer, reader.lastLogPrevious, reader.lastLogTail, reader.lastLogLimit)
+		}
+
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/portal/workloads/job-current/logs?pod=train-stale&container=trainer", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("stale pod status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/portal/workloads/job-current/logs?pod=train-current&container=trainer&limitBytes=1048577", nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("oversized limit status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("workload detail falls back to deleted history", func(t *testing.T) {
+		history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+			ObservedAt: "2026-07-02T10:00:00Z", SubmitTime: "2026-07-02T09:59:00Z",
+			State: "failed", Reason: "TrainingError", ResourceUID: "deleted-uid",
+			Name: "deleted-run", Namespace: "ray", Cluster: "cluster-a", Kind: "RayJob", RunID: "run-deleted",
+		}}}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto", Workspace: "taugrid-default"},
+			Cluster: ClusterOptions{Cluster: "cluster-a"},
+			Runs: RunsOptions{
+				Reader: &stubRunsReader{}, Namespace: "ray", History: history,
+				HistoryTable: "TauExpRunLifecycle", HistoryLimit: 25,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		server.singleWorkspaceScope.Cluster = "cluster-a"
+		server.singleWorkspaceScope.Namespace = "ray"
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/deleted-uid", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"objectState":"deleted"`) ||
+			!strings.Contains(rec.Body.String(), `"resourceUid":"deleted-uid"`) ||
+			!strings.Contains(rec.Body.String(), `"application":"failed"`) {
+			t.Fatalf("deleted workload response = %s", rec.Body.String())
+		}
+	})
 
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs/ray/train", nil))
