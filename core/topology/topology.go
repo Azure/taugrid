@@ -242,6 +242,12 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	if p.Topology == (profile.Topology{}) && p.Lane == "" && !o.hasValues() {
 		return Plan{}, nil
 	}
+	if o.PriorityTier != "" &&
+		(o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.DisableDefaultPriorities) {
+		return Plan{}, fmt.Errorf(
+			"priority tier cannot be combined with explicit priority classes or disabled default priorities",
+		)
+	}
 
 	spec := contractFromProfile(p)
 	spec.apply(o)

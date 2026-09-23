@@ -156,6 +156,29 @@ For the full submit-to-evidence loop against a named target, see
 
 The installed CLI is the final schema authority: use `tau run schema`.
 
+## Workload priority
+
+`policy.priority_tier` selects one of the TauGrid-owned priority pairs:
+
+| Tier | Kueue admission class | Pod scheduling class |
+|---|---|---|
+| `default` | `taugrid-default` (1000) | `taugrid-default` (1000) |
+| `priority` | `taugrid-priority` (1200) | `taugrid-priority` (1200) |
+
+The compatibility field `policy.priority` is an alias. A run-level tier can
+override the priority pair supplied by a selected workload profile; the
+profile remains authoritative for queue, resources, topology, and
+applicability. Do not combine a tier with
+`policy.workload_priority_class`, `policy.pod_priority_class`, or
+`policy.disable_default_priorities`.
+
+The exact-class fields remain available for operator-managed compatibility,
+but ordinary consumers should use the built-in tiers rather than creating
+priority classes. Kueue admission priority controls queue ordering and
+workload preemption. Pod priority controls Kubernetes scheduling and pod
+preemption after admission; neither proves that an admitted workload is
+currently running.
+
 ## Restricted pod security
 
 Set `runtime.security.mode: restricted` when the workload images can run as non-root:

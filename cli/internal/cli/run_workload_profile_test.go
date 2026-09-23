@@ -241,6 +241,88 @@ func TestSelectedProfileRejectsAuthoritativeConflicts(t *testing.T) {
 	}
 }
 
+func TestSelectedProfileAllowsBuiltInPriorityTier(t *testing.T) {
+	provider := testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 2, 3)
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = "research-profile"
+	options.namespace = "alpha"
+	options.team = "research"
+	options.lane = "training"
+	options.priorityTier = "priority"
+	options.explicitPolicyFields = map[string]bool{"priority_tier": true}
+
+	selected, err := selectRunWorkloadProfile(context.Background(), options, provider)
+	if err != nil {
+		t.Fatalf("selectRunWorkloadProfile: %v", err)
+	}
+	if selected.priorityTier != "priority" {
+		t.Fatalf("priority tier = %q, want priority", selected.priorityTier)
+	}
+	if selected.workloadPriorityClass != "" || selected.podPriorityClass != "" {
+		t.Fatalf(
+			"explicit tier should defer class selection to topology: workload=%q pod=%q",
+			selected.workloadPriorityClass,
+			selected.podPriorityClass,
+		)
+	}
+}
+
+func TestSelectedProfilePriorityTierOverridesDisabledProfilePriorities(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 2, 3, 11)
+	resolved.Priorities = profile.ProfilePriorities{DisableDefaultPriorities: true}
+	resolved.WorkloadPriorityClasses = nil
+	resolved.PodPriorityClasses = nil
+	provider := testRunProviderForResolved(t, 11, resolved)
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = "research-profile"
+	options.namespace = "alpha"
+	options.team = "research"
+	options.lane = "training"
+	options.priorityTier = "priority"
+	options.explicitPolicyFields = map[string]bool{"priority_tier": true}
+
+	selected, err := selectRunWorkloadProfile(context.Background(), options, provider)
+	if err != nil {
+		t.Fatalf("selectRunWorkloadProfile: %v", err)
+	}
+	if selected.disableDefaultPriorities {
+		t.Fatal("explicit tier should enable TauGrid-managed priority classes")
+	}
+}
+
+func TestSelectedProfileRejectsAmbiguousPriorityTier(t *testing.T) {
+	provider := testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 2, 3)
+	for _, test := range []struct {
+		name   string
+		mutate func(*unresolvedRunOptions)
+	}{
+		{"exact class", func(o *unresolvedRunOptions) { o.podPriorityClass = "tau-default" }},
+		{"disabled priorities", func(o *unresolvedRunOptions) {
+			o.disableDefaultPriorities, o.disablePrioritiesExplicit = true, true
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := defaultRunDispatchOptions()
+			options.engine = runconfig.EngineRayJob
+			options.profileName = "research-profile"
+			options.namespace = "alpha"
+			options.team = "research"
+			options.lane = "training"
+			options.priorityTier = "priority"
+			options.explicitPolicyFields = map[string]bool{"priority_tier": true}
+			test.mutate(&options)
+
+			_, err := selectRunWorkloadProfile(context.Background(), options, provider)
+			if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+				t.Fatalf("error = %v, want ambiguous priority rejection", err)
+			}
+		})
+	}
+}
+
 func TestSelectedProfilePreservesExplicitRuntimeAndStorageSettings(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.engine = runconfig.EngineRayJob

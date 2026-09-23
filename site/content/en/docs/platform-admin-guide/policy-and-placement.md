@@ -26,6 +26,27 @@ LocalQueues are tenant-facing entry points. ClusterQueues own quota and fairness
 ResourceFlavors describe resource pools. Priority and preemption remain
 cluster-owned policy.
 
+## Priority and preemption
+
+TauGrid installs two workload and pod priority pairs: `taugrid-default` at
+1000 and `taugrid-priority` at 1200. Runs select them with
+`policy.priority_tier: default|priority`; consumers do not need to create
+their own classes. An explicit run tier overrides only the priority pair from
+the selected workload profile.
+
+The portable ClusterQueue uses Kueue `BestEffortFIFO`: higher resolved
+Workload priority is considered before FIFO order, and equal-priority work is
+ordered oldest first. `withinClusterQueue: LowerPriority` allows admitted
+lower-priority work to be reclaimed for eligible higher-priority work in the
+same ClusterQueue. Both pod classes use `PreemptLowerPriority`, which is a
+separate Kubernetes scheduler decision after Kueue admission.
+
+Portal queue views show the resolved Kueue priority class/value and the pod
+priority class separately. “Pending admission,” “quota admitted,” and
+“running” remain distinct states: quota, ResourceFlavor eligibility,
+admission checks, and node availability can still prevent the highest
+priority row from running immediately.
+
 ## GPU class contract
 
 `policy.gpu_class` is hardware-only and maps exactly to the node label

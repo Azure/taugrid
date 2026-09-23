@@ -68,13 +68,7 @@ func BuildSnapshot(namespace string, pol topology.Policy, localQueuesRaw, cluste
 	filter := normalizedFilter(opts)
 	for _, g := range groups {
 		sort.Strings(g.Presets)
-		sort.Slice(g.PendingWorkloads, func(i, j int) bool {
-			a, b := g.PendingWorkloads[i], g.PendingWorkloads[j]
-			if !a.CreatedAt.Equal(b.CreatedAt) {
-				return a.CreatedAt.Before(b.CreatedAt)
-			}
-			return a.Name < b.Name
-		})
+		SortPendingWorkloads(g.PendingWorkloads)
 		if filter.matches(g) {
 			out.Groups = append(out.Groups, g)
 		}
@@ -220,22 +214,50 @@ func pendingWorkloads(l workloadList) []PendingWorkload {
 		}
 		labels := it.Metadata.Labels
 		gpuClass, _ := topology.NormalizeGPUClass(labels[topology.LabelGPUClass])
+		priorityClass, priorityClassKind := workloadPriorityClass(it.Spec)
 		out = append(out, PendingWorkload{
-			Name:         it.Metadata.Name,
-			Namespace:    it.Metadata.Namespace,
-			Queue:        it.Spec.QueueName,
-			ClusterQueue: it.Status.Admission.ClusterQueue,
-			Team:         labels[topology.LabelTeam],
-			Lane:         labels[topology.LabelLane],
-			GPUClass:     gpuClass,
-			Shape:        labels[topology.LabelShape],
-			Preset:       labels[topology.LabelPreset],
-			GPURequested: requestedGPU(it.Spec.PodSets),
-			Reason:       reason,
-			Message:      message,
-			CreatedAt:    it.Metadata.CreationTimestamp,
+			Name:                       it.Metadata.Name,
+			Namespace:                  it.Metadata.Namespace,
+			Queue:                      it.Spec.QueueName,
+			ClusterQueue:               it.Status.Admission.ClusterQueue,
+			Team:                       labels[topology.LabelTeam],
+			Lane:                       labels[topology.LabelLane],
+			GPUClass:                   gpuClass,
+			Shape:                      labels[topology.LabelShape],
+			Preset:                     labels[topology.LabelPreset],
+			GPURequested:               requestedGPU(it.Spec.PodSets),
+			AdmissionPriorityClass:     priorityClass,
+			AdmissionPriorityClassKind: priorityClassKind,
+			AdmissionPriority:          it.Spec.Priority,
+			PodPriorityClasses:         podPriorityClasses(it.Spec.PodSets),
+			Reason:                     reason,
+			Message:                    message,
+			CreatedAt:                  it.Metadata.CreationTimestamp,
 		})
 	}
+	return out
+}
+
+func workloadPriorityClass(spec workloadSpec) (string, string) {
+	if spec.PriorityClassRef.Name != "" {
+		return spec.PriorityClassRef.Name, spec.PriorityClassRef.Kind
+	}
+	return spec.PriorityClassName, spec.PriorityClassSource
+}
+
+func podPriorityClasses(podSets []workloadPodSet) []string {
+	seen := map[string]struct{}{}
+	for _, podSet := range podSets {
+		name := strings.TrimSpace(podSet.Template.Spec.PriorityClassName)
+		if name != "" {
+			seen[name] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -364,10 +386,7 @@ type workloadItem struct {
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
 	} `json:"metadata"`
-	Spec struct {
-		QueueName string           `json:"queueName"`
-		PodSets   []workloadPodSet `json:"podSets"`
-	} `json:"spec"`
+	Spec   workloadSpec `json:"spec"`
 	Status struct {
 		Admission struct {
 			ClusterQueue string `json:"clusterQueue"`
@@ -376,11 +395,25 @@ type workloadItem struct {
 	} `json:"status"`
 }
 
+type workloadSpec struct {
+	QueueName           string `json:"queueName"`
+	Priority            *int32 `json:"priority"`
+	PriorityClassName   string `json:"priorityClassName"`
+	PriorityClassSource string `json:"priorityClassSource"`
+	PriorityClassRef    struct {
+		Name  string `json:"name"`
+		Group string `json:"group"`
+		Kind  string `json:"kind"`
+	} `json:"priorityClassRef"`
+	PodSets []workloadPodSet `json:"podSets"`
+}
+
 type workloadPodSet struct {
 	Count    int `json:"count"`
 	Template struct {
 		Spec struct {
-			Containers []struct {
+			PriorityClassName string `json:"priorityClassName"`
+			Containers        []struct {
 				Resources struct {
 					Requests map[string]kueueapi.Quantity `json:"requests"`
 					Limits   map[string]kueueapi.Quantity `json:"limits"`

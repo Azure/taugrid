@@ -158,7 +158,7 @@ func workspaceHasDurableOutputMount(o unresolvedRunOptions) bool {
 func workspacePriorityTier(priority string) string {
 	switch priority {
 	case "normal":
-		return "default"
+		return ""
 	default:
 		return priority
 	}

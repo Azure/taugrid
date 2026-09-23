@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -38,9 +38,21 @@ describe('Platform overview', () => {
           { namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 1, pending: 0 },
           { namespace: 'aks-ai-runtime-e2e', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 0, pending: 1 },
         ],
-      } }, running: [
-        { name: 'gpu-service', namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq' },
-        { name: 'cpu-viewer', namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq' },
+      } }, pending: [
+        { name: 'priority-finetune', namespace: 'tau-default', queue: 'jobqueue', gpuRequested: 8,
+          admissionPriorityClass: 'taugrid-priority', admissionPriority: 1200, podPriorityClasses: ['taugrid-priority'], reason: 'QuotaNotReserved' },
+        { name: 'default-eval', namespace: 'tau-default', queue: 'jobqueue', gpuRequested: 1,
+          admissionPriorityClass: 'taugrid-default', admissionPriority: 1000, podPriorityClasses: ['taugrid-default'] },
+      ], active: [
+        { name: 'live-ray-train', namespace: 'tau-default', kind: 'RayJob', status: 'Running', age: '8m',
+          runId: 'live-ray-train-01', experimentPath: '/stellar?target=live-ray-train-01', experimentTracking: 'legacy' },
+        { name: 'live-batch-eval', namespace: 'tau-default', kind: 'Job', status: 'Running', age: '2m',
+          experimentTracking: 'untracked' },
+      ], running: [
+        { name: 'gpu-service', namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq',
+          admissionPriorityClass: 'taugrid-priority', admissionPriority: 1200, podPriorityClasses: ['taugrid-priority'] },
+        { name: 'cpu-viewer', namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq',
+          admissionPriorityClass: 'taugrid-default', admissionPriority: 1000, podPriorityClasses: ['taugrid-default'] },
       ] }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
@@ -65,12 +77,26 @@ describe('Platform overview', () => {
     expect(screen.getByRole('button', { name: /west/i })).toBeVisible();
     expect(screen.queryByText('system')).not.toBeInTheDocument();
     expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
-    expect(screen.getByText('Admitted workloads by resource')).toBeInTheDocument();
+    expect(screen.getByText('Runtime and admission state')).toBeInTheDocument();
+    const active = screen.getByLabelText('Active jobs');
+    expect(active).toHaveTextContent('live-ray-train');
+    expect(active).toHaveTextContent('RayJob · 8m');
+    expect(active).toHaveTextContent('live-batch-eval');
+    expect(within(active).getAllByText('Running')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'Inspect active jobs →' })).toHaveAttribute('href', '/portal/runs');
     expect(screen.getByText('GPU quota admitted')).toBeInTheDocument();
     expect(screen.getByText('CPU quota admitted')).toBeInTheDocument();
     expect(screen.getByText('gpu-service')).toBeInTheDocument();
     expect(screen.getByText('cpu-viewer')).toBeInTheDocument();
-    expect(screen.getByText('Admission reserves quota; it does not prove that the workload is running.')).toBeInTheDocument();
+    expect(screen.getByText(/Active jobs come from Job and RayJob runtime status/)).toBeInTheDocument();
+    const pending = screen.getByLabelText('Pending admission by priority');
+    expect(pending).toHaveTextContent('priority-finetune');
+    expect(pending).toHaveTextContent('default-eval');
+    expect(pending.textContent!.indexOf('priority-finetune')).toBeLessThan(pending.textContent!.indexOf('default-eval'));
+    expect(screen.getAllByText('Admission: taugrid-priority (1200)').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Pod: taugrid-priority').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Waiting')).toHaveLength(2);
+    expect(screen.getAllByText('Quota admitted')).toHaveLength(2);
     expect(screen.queryByText('Active work')).not.toBeInTheDocument();
     expect(screen.getByText('CPU queue')).toBeInTheDocument();
     expect(screen.getAllByText('GPU queue')).toHaveLength(2);

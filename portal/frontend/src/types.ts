@@ -18,8 +18,18 @@ export interface Tracking { experimentPath?: string; experimentTracking?: string
 export interface Run extends Tracking { name: string; namespace?: string; kind: string; status: string; age: string; resourceUid?: string }
 export interface Runs extends Scoped { namespace?: string; total: number; historyState?: string; historyDiagnostic?: string; runs: Run[] }
 export interface Overview extends Scoped {
-  workloadProfiles?: Profiles; runningUnavailable?: string;
-  running: (Tracking & { name: string; job?: string; namespace: string; queue?: string; clusterQueue?: string })[];
+  workloadProfiles?: Profiles; activeUnavailable?: string; runningUnavailable?: string;
+  pending: {
+    name: string; namespace: string; queue: string; clusterQueue?: string; gpuRequested?: number;
+    reason?: string; message?: string; admissionPriorityClass?: string;
+    admissionPriorityClassKind?: string; admissionPriority?: number; podPriorityClasses?: string[];
+  }[];
+  active: Run[];
+  running: (Tracking & {
+    name: string; job?: string; namespace: string; queue?: string; clusterQueue?: string;
+    admissionPriorityClass?: string; admissionPriorityClassKind?: string;
+    admissionPriority?: number; podPriorityClasses?: string[];
+  })[];
   cards: {
     fleet?: {
       readyNodes: number; totalNodes: number; gpuNodes: number; totalGPUs: number;

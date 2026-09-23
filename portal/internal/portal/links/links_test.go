@@ -5,8 +5,9 @@ package links
 
 import (
 	"context"
-	"github.com/Azure/taugrid/core/workloadmeta"
 	"testing"
+
+	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
 // stubReader returns canned Kueue Workloads JSON so the projection can be
@@ -32,7 +33,9 @@ func TestListWorkloadsProjectsJoinKeys(t *testing.T) {
 	const raw = `{"items":[
       {"metadata":{"name":"wl-admitted","namespace":"ray","creationTimestamp":"2026-01-02T03:04:05Z",
         "labels":{"` + workloadmeta.LabelRunID + `":"train-77","` + workloadmeta.LabelJob + `":"phi-finetune"}},
-       "spec":{"queueName":"jobqueue"},
+       "spec":{"queueName":"jobqueue","priority":1200,
+         "priorityClassRef":{"group":"kueue.x-k8s.io","kind":"WorkloadPriorityClass","name":"taugrid-priority"},
+         "podSets":[{"template":{"spec":{"priorityClassName":"taugrid-priority"}}}]},
        "status":{"admission":{"clusterQueue":"taugrid-cq"},
          "conditions":[{"type":"Admitted","status":"True"}]}},
       {"metadata":{"name":"wl-pending","namespace":"ray"},
@@ -73,6 +76,14 @@ func TestListWorkloadsProjectsJoinKeys(t *testing.T) {
 	}
 	if admitted.CreatedAt.IsZero() {
 		t.Fatal("admitted CreatedAt should be parsed")
+	}
+	if admitted.AdmissionPriority == nil || *admitted.AdmissionPriority != 1200 ||
+		admitted.AdmissionPriorityClass != "taugrid-priority" ||
+		admitted.AdmissionPriorityClassKind != "WorkloadPriorityClass" {
+		t.Fatalf("admitted priority = %+v", admitted)
+	}
+	if len(admitted.PodPriorityClasses) != 1 || admitted.PodPriorityClasses[0] != "taugrid-priority" {
+		t.Fatalf("admitted pod priority classes = %v", admitted.PodPriorityClasses)
 	}
 
 	pending := byName["wl-pending"]

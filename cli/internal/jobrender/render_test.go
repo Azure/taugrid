@@ -1442,6 +1442,28 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 	}
 }
 
+func TestRender_PriorityTierUsesTauGridManagedClasses(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:         "priority-job",
+		Namespace:    "tau",
+		Command:      []string{"true"},
+		QueueName:    "jobqueue",
+		PriorityTier: "priority",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := parseYAML(t, out)
+	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels["kueue.x-k8s.io/priority-class"] != "taugrid-priority" {
+		t.Fatalf("workload priority = %v", labels["kueue.x-k8s.io/priority-class"])
+	}
+	pod := manifest["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if pod["priorityClassName"] != "taugrid-priority" {
+		t.Fatalf("pod priority = %v", pod["priorityClassName"])
+	}
+}
+
 func TestRender_NoImage_NoOverride_Errors(t *testing.T) {
 	p := trainProfile()
 	p.Runtime = profile.Runtime{}
