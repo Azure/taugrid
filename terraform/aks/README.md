@@ -17,10 +17,15 @@ supported GPU SKU. The GPU ResourceFlavor labels match the node-pool labels.
   binary for Linux or macOS with `install.sh`. On Windows amd64, download the
   release `install.ps1`, run it, and add `%LOCALAPPDATA%\TauGrid\bin` to PATH;
   alternatively pass the installed executable path to the verification script.
-- PowerShell 7. Terraform uses it for local installation commands and the
+- PowerShell 7.3 or later (including its native argument-passing support).
+  Terraform uses it for local installation commands and the
   maintainer verification entry point on Windows, Linux, and macOS. Linux,
   WSL, and macOS deployments can instead set
-  `command_interpreter = ["bash", "-c"]`.
+  `command_interpreter = ["bash", "-c"]`. The Function waiter supports Bash 3.2
+  (including stock macOS Bash) and later.
+- For ADX installation, `jq` 1.6 or later and
+  [Mike Farah `yq` v4](https://github.com/mikefarah/yq) on PATH in either
+  interpreter. A different `yq` implementation is not compatible.
 
 ## GPU stack modes
 
@@ -140,6 +145,58 @@ race as a failed chart installation.
 Set
 both feature flags to `false`
 for a Kubernetes-only Portal deployment.
+
+### Function readiness and bounded installation recovery
+
+The Terraform Function waiter renders the local adx-mon chart with the same
+ordered base and environment values, release name, and release namespace used
+by its installation attempts. Every rendered Function is required; disabled
+items are not. The initial controller-only install uses `functions.enabled=false`;
+the subsequent waiter upgrades use `--reset-values` with the supplied values,
+not that bootstrap override or values inferred from live Helm release storage.
+Chart contents and the shared readiness policy participate in Terraform's
+installation replacement triggers.
+
+Readiness requires every expected namespace/name to exist with current-generation
+`Success`. The Helm managed-by and instance labels and release-name/release-namespace
+annotations must match. Missing or conflicting ownership fails before an upgrade
+and is checked again while polling; the waiter never adopts an object. Unrelated
+Functions cannot satisfy a missing requirement, block readiness, or become retry
+targets. Missing/stale status waits with diagnostics; unreadable, malformed,
+duplicate, or incomplete sources fail closed.
+
+Only current-generation permanent failures identifying ADX throttling are eligible
+for compensation. Invalid KQL and other permanent failures stop immediately.
+The six-attempt default retry limit is retained. Deletes send Kubernetes
+`DeleteOptions` with **both UID and resourceVersion preconditions** for each
+verified expected, release-owned object. A conflict or disappearance causes
+re-observation within the same budget, including another ownership preflight
+before Helm runs; other delete errors stop. There is no name-only delete fallback.
+
+Terraform uses release `adx-mon` in release namespace `adx-mon`. For an explicitly
+authorized standalone installation, the scripts also accept `-ReleaseName` and
+`-ReleaseNamespace` (PowerShell), or optional eighth and ninth positional arguments
+(Bash). The resource namespace comes from each rendered Function, including
+`global.namespace`, and can differ from the Helm release namespace. Supply the
+actual ordered values files; do not run these installers merely to inspect a
+shared namespace. An empty rendered Function set is rejected unless intentionally
+acknowledged with `-AllowNoFunctions` or `ADX_ALLOW_NO_FUNCTIONS=true`; an empty or
+failed chart render is never accepted, even with that opt-out.
+
+This is **installation mitigation**, not an upstream adx-mon controller fix:
+direct `helm install`/`upgrade` does not run it, and throttling recovery without
+deletion remains tracked by [#162](https://github.com/Azure/taugrid/issues/162).
+Function `Success` with `skipvalidation` does not prove underlying table/schema
+readiness or lossless startup history ([#190](https://github.com/Azure/taugrid/issues/190)).
+Live candidate, fault-recovery, and schema qualification require separate approval.
+
+Offline regressions (no Azure or Kubernetes access) run through the existing
+entry points and require Helm, jq, yq, and Python 3 in addition to the interpreter:
+
+```bash
+bash terraform/aks/test-wait-for-adx-functions-ready.sh
+pwsh -NoProfile -File terraform/aks/test-wait-for-adx-functions-ready.ps1
+```
 
 An empty `adx_cluster_name` generates a stable globally-scoped 20-character
 candidate with the form `taugrid<13-hex-characters>`. The 13-character (52-bit)
