@@ -5,9 +5,11 @@ package jobdetail
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,6 +55,30 @@ type fakeQuerier struct {
 
 func (f fakeQuerier) Query(context.Context, string) ([]kustoquery.Row, error) {
 	return f.rows, f.err
+}
+
+func TestWorkloadTelemetryNonFiniteMetricsKeepDetailSerializable(t *testing.T) {
+	started := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	snap := Snapshot{
+		Namespace: "team-a",
+		Name:      "train",
+		Kind:      "Job",
+		Object:    ObjectDetail{Created: &started},
+		Pods:      []PodDetail{{Name: "trainer-0", Node: "gpu-a", StartedAt: &started}},
+	}
+	telemetry, diagnostic := workloadTelemetry(context.Background(), fakeQuerier{rows: []kustoquery.Row{{
+		"instance": "gpu-a", "pod": "trainer-0", "gpu": "0", "modelName": "H100",
+		"samples": "8", "utilizationSamples": "0", "averageUtilizationPct": "NaN",
+		"peakUtilizationPct": "+Inf", "maxTemperatureCelsius": "70",
+	}}}, snap, Options{Cluster: "cluster-a", Namespace: "team-a"})
+	if diagnostic.State != "ready" || telemetry == nil || telemetry.Coverage != "partial" {
+		t.Fatalf("telemetry = %+v, diagnostic = %+v", telemetry, diagnostic)
+	}
+	snap.Telemetry = telemetry
+	snap.Diagnostics.Telemetry = diagnostic
+	if _, err := json.Marshal(snap); err != nil {
+		t.Fatalf("marshal complete workload detail: %v", err)
+	}
 }
 
 func TestDetailNilReader(t *testing.T) {

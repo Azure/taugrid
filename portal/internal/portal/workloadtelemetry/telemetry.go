@@ -6,6 +6,7 @@ package workloadtelemetry
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -137,7 +138,7 @@ func aggregate(rows []kustoquery.Row, query Query) Summary {
 
 func number(row kustoquery.Row, key string) *float64 {
 	value, ok := row.Num(key)
-	if !ok {
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 		return nil
 	}
 	return &value

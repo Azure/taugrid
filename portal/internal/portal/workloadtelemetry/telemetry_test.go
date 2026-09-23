@@ -5,6 +5,7 @@ package workloadtelemetry
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -55,5 +56,32 @@ func TestFetchRejectsIncompleteIdentity(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected incomplete query error")
+	}
+}
+
+func TestFetchPreservesPartialCoverageWithSerializableNonFiniteMetrics(t *testing.T) {
+	q := &fakeQuerier{rows: []kustoquery.Row{{
+		"instance": "gpu-a", "pod": "trainer-0", "gpu": "0", "modelName": "H100",
+		"samples": "8", "utilizationSamples": "0", "averageUtilizationPct": "NaN",
+		"peakUtilizationPct": "+Inf", "maxTemperatureCelsius": "70",
+	}}}
+	start := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	got, err := Fetch(context.Background(), q, Query{
+		Cluster: "cluster-a", Namespace: "team-a",
+		Pods:  []PodTarget{{Pod: "trainer-0", Instance: "gpu-a"}},
+		Start: start, End: start.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Coverage != "partial" || got.AverageUtilizationPct != nil || len(got.GPUs) != 1 {
+		t.Fatalf("summary = %+v", got)
+	}
+	if got.GPUs[0].AverageUtilizationPct != nil || got.GPUs[0].PeakUtilizationPct != nil ||
+		got.GPUs[0].MaxTemperatureCelsius == nil || *got.GPUs[0].MaxTemperatureCelsius != 70 {
+		t.Fatalf("GPU = %+v", got.GPUs[0])
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("marshal summary: %v", err)
 	}
 }
