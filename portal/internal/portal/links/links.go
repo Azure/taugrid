@@ -359,8 +359,3 @@ type workloadPodSet struct {
 		} `json:"spec"`
 	} `json:"template"`
 }
-
-type conditionJSON struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
-}
