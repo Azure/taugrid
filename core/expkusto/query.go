@@ -328,7 +328,7 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	b.WriteString("latest_by_state\n")
 	b.WriteString("| extend terminal_rank=iff(is_terminal, 1, 0)\n")
 	b.WriteString("| summarize arg_max(terminal_rank, *) by cluster, namespace, durable_identity\n")
-	b.WriteString("| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version\n")
+	b.WriteString("| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], experiment_id=tostring(column_ifexists('experiment_id', '')), run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version\n")
 	b.WriteString("| order by observed_at desc, cluster asc, namespace asc, durable_id asc\n")
 	fmt.Fprintf(&b, "| take %d\n", opts.Limit)
 	return b.String(), nil

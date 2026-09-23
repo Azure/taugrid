@@ -1,0 +1,127 @@
+{{- if .Values.managementCommands.experimentCatalogV1.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-experiment-catalog-v1
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management-command
+spec:
+  database: {{ .Values.managementCommands.experimentCatalogV1.database | quote }}
+  body: |
+    // Portal catalogs are typed-only. Legacy ExperimentMetrics remains outside
+    // this contract for explicit compatibility consumers.
+    {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
+    .create async ifnotexists materialized-view with (backfill=true) TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1
+    {{- else }}
+    .create ifnotexists materialized-view TauExpTypedSeriesCatalogV1 on table TauExpMetricEventsV1
+    {{- end }}
+    {
+      TauExpMetricEventsV1
+      | where isnotempty(event_id) and isnotempty(workspace_id) and isnotempty(['project'])
+          and isnotempty(experiment_id) and isnotempty(run_group_id) and isnotempty(run_id)
+          and isnotempty(metric_name)
+      // Fixed-width timestamps make wall_time the primary ordering key and
+      // exported_at the deterministic revision tie-breaker for the same event.
+      | extend latest_rank = strcat(
+          format_datetime(wall_time, 'yyyy-MM-ddTHH:mm:ss.fffffff'),
+          '|',
+          format_datetime(exported_at, 'yyyy-MM-ddTHH:mm:ss.fffffff'))
+      | summarize
+          first_activity_at = min(wall_time),
+          latest_activity_at = max(wall_time),
+          min_step = min(step),
+          max_step = max(step),
+          arg_max(latest_rank, wall_time, exported_at, step, value, metric_file_id, metric_file_path, unit, source, split)
+        by workspace_id, cluster, source_store_id, ['project'], experiment_id,
+           run_group_id, run_id, metric_name
+    }
+
+    {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
+    .create async ifnotexists materialized-view with (backfill=true) TauExpTypedMetricRunCatalogV1 on table TauExpMetricEventsV1
+    {{- else }}
+    .create ifnotexists materialized-view TauExpTypedMetricRunCatalogV1 on table TauExpMetricEventsV1
+    {{- end }}
+    {
+      TauExpMetricEventsV1
+      | where isnotempty(event_id) and isnotempty(workspace_id) and isnotempty(['project'])
+          and isnotempty(experiment_id) and isnotempty(run_group_id) and isnotempty(run_id)
+      | extend
+          status_state = tolower(tostring(tags['tau.status.state'])),
+          is_terminal_marker = metric_name == 'tau/run_status'
+              and tolower(tostring(tags['tau.status.state'])) in ('succeeded', 'failed', 'cancelled')
+      | extend
+          terminal_observed_at = iff(is_terminal_marker, wall_time, datetime(null)),
+          terminal_state = iff(is_terminal_marker, status_state, ''),
+          terminal_reason = iff(is_terminal_marker, tostring(tags['tau.status.reason']), ''),
+          terminal_message = iff(is_terminal_marker, tostring(tags['tau.status.message']), ''),
+          terminal_artifact_uri = iff(is_terminal_marker, tostring(tags['tau.status.artifact_uri']), ''),
+          terminal_checkpoint_uri = iff(is_terminal_marker, tostring(tags['tau.status.checkpoint_uri']), '')
+      | summarize
+          first_metric_time = min(wall_time),
+          latest_metric_time = max(wall_time),
+          arg_max(wall_time, source_store_id),
+          arg_max(terminal_observed_at, terminal_state, terminal_reason, terminal_message, terminal_artifact_uri, terminal_checkpoint_uri)
+        by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
+    }
+
+    {{- if .Values.managementCommands.experimentCatalogV1.backfillEnabled }}
+    .create async ifnotexists materialized-view with (backfill=true) TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle
+    {{- else }}
+    .create ifnotexists materialized-view TauExpLifecycleRunCatalogV1 on table TauExpRunLifecycle
+    {{- end }}
+    {
+      TauExpRunLifecycle
+      | extend
+          experiment_id = tostring(column_ifexists('experiment_id', '')),
+          durable_identity = iff(isnotempty(durable_id), durable_id, iff(isnotempty(resource_uid), resource_uid, run_id)),
+          is_terminal = tolower(state) in ('succeeded', 'failed', 'cancelled')
+      | where isnotempty(durable_identity)
+      | summarize arg_max(
+          observed_at,
+          observation_id,
+          durable_id,
+          run_id,
+          workspace_id,
+          result_scope,
+          ['project'],
+          experiment_id,
+          run_group_id,
+          tags,
+          owning_resource_kind,
+          owning_resource_name,
+          namespace,
+          cluster,
+          local_queue,
+          cluster_queue,
+          workload_kind,
+          resource_uid,
+          resource_version,
+          generation,
+          submit_time,
+          created_time,
+          kueue_admitted_time,
+          pod_start_time,
+          first_metric_time,
+          latest_metric_time,
+          completion_time,
+          state,
+          reason,
+          message,
+          artifact_uri,
+          checkpoint_uri,
+          image,
+          image_digest,
+          config_hash,
+          code_sha,
+          tau_command,
+          result_path,
+          result_pvc,
+          experiment_tracking,
+          experiment_source,
+          controller_version)
+        by lifecycle_cluster = cluster, lifecycle_namespace = namespace, durable_identity, is_terminal
+    }
+
+{{- end }}

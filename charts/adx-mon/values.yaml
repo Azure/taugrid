@@ -585,8 +585,17 @@ functions:
     trainingJobSummary:
       enabled: true
       database: Metrics
-    experimentMetricsDashboardRows:
-      enabled: true
+    # -- Stable deduplicated TauExpMetricEventsV1 rows.
+    tauExpMetricEventRows:
+      enabled: false
+      database: Metrics
+    # -- Stable v1 experiment metric-series catalog over the physical catalog view.
+    tauExpSeriesCatalogRows:
+      enabled: false
+      database: Metrics
+    # -- Stable v1 experiment run catalog joining metric and lifecycle evidence.
+    tauExpRunCatalogRows:
+      enabled: false
       database: Metrics
     # -- AuditEvents() — parses KubeAuditLogs from the audit pipeline (WI-26).
     # Safe to enable unconditionally: Kusto functions are lazy and only error at query time
@@ -741,6 +750,29 @@ _test:
 # commands exceed the ADX control plane limit (20/window), causing a 10-20 min data blackout.
 # These ManagementCommands use .create-merge tables (batched) to pre-create known tables.
 managementCommands:
+  typedMetricEventsV1:
+    # -- Create the additive typed metric event table, JSON mapping, policies, and deduplicated view.
+    enabled: false
+    database: Metrics
+    # -- Backfill the deduplicated view from retained table data. Uses an async create only when true.
+    backfillEnabled: false
+    retention:
+      softDeletePeriod: 400d
+      hotCachePeriod: 30d
+    ingestionBatching:
+      maxBatchingTimeSpan: "00:00:15"
+      maxNumberOfItems: 500
+      maxRawDataSizeMB: 1024
+  experimentCatalogV1:
+    # -- Create the immutable v1 physical experiment catalog materialized views.
+    enabled: false
+    # -- Catalog materialized-view database.
+    database: Metrics
+    # -- Backfill catalogs from retained source data. Uses async creates only when true.
+    backfillEnabled: false
+    retention:
+      # -- Retain each physical catalog materialized view independently of the database default.
+      softDeletePeriod: 400d
   precreateSummaryTables:
     # -- Create or merge SummaryRule table schemas, including upgrade columns.
     enabled: true

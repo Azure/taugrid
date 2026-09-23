@@ -77,7 +77,7 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 		// Keep the mapping inline for direct upgrades from releases that created
 		// only the table. The schema command also creates the same named mapping
 		// for operators and other ADX clients; both derive from expkusto.
-		azkustoingest.IngestionMapping(expkusto.RunLifecycleIngestionMapping(), azkustoingest.JSON),
+		azkustoingest.IngestionMapping(lifecycleIngestionMapping(), azkustoingest.JSON),
 		azkustoingest.FlushImmediately(),
 		azkustoingest.ReportResultToTable(),
 		azkustoingest.Tags([]string{"ingest-by:" + tag}),
@@ -97,6 +97,10 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 		return fmt.Errorf("close queued Kusto ingestor: %w", err)
 	}
 	return nil
+}
+
+func lifecycleIngestionMapping() []expkusto.RunLifecycleIngestionColumn {
+	return expkusto.RunLifecycleIngestionMapping()
 }
 
 // isSuccessfulIngestionStatus recognizes final ADX statuses that complete a

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -508,17 +509,26 @@ func TestLifecycleMappingReferencesRecordFields(t *testing.T) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, mapping := range expkusto.RunLifecycleIngestionMapping() {
+	mappingColumns := lifecycleIngestionMapping()
+	for _, mapping := range mappingColumns {
 		path := strings.TrimPrefix(mapping.Path, "$.")
 		if _, ok := fields[path]; !ok {
 			t.Fatalf("ingestion mapping column %q references missing record field %q", mapping.Column, path)
 		}
 	}
+	if !slices.ContainsFunc(mappingColumns, func(mapping expkusto.RunLifecycleIngestionColumn) bool {
+		return mapping.Column == "experiment_id" && mapping.DataType == "string" && mapping.Path == "$.experiment_id"
+	}) {
+		t.Fatalf("inline lifecycle mapping does not persist experiment_id: %#v", mappingColumns)
+	}
+	if got := fields["experiment_id"]; got != "experiment" {
+		t.Fatalf("lifecycle payload experiment_id = %v, want experiment", got)
+	}
 }
 
 func TestMarshalLifecycleRecordsUsesNDJSON(t *testing.T) {
 	data, err := marshalLifecycleRecords([]Record{
-		{ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "one", State: StateQueued},
+		{ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "one", ExperimentID: "experiment", State: StateQueued},
 		{ObservedAt: time.Unix(2, 0).UTC(), ObservationID: "two", State: StateSucceeded},
 	})
 	if err != nil {
@@ -532,6 +542,9 @@ func TestMarshalLifecycleRecordsUsesNDJSON(t *testing.T) {
 		var row map[string]any
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			t.Fatalf("NDJSON line %q is not a JSON object: %v", line, err)
+		}
+		if row["observation_id"] == "one" && row["experiment_id"] != "experiment" {
+			t.Fatalf("queued lifecycle payload dropped experiment_id: %v", row)
 		}
 	}
 	if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {

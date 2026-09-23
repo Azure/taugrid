@@ -250,7 +250,63 @@ cluster DNS.
 | `functions.items.<name>.enabled` | Enable individual function | `true` |
 | `functions.items.<name>.database` | Target ADX database | varies |
 
-Available functions: `gpuHealth`, `nodeHealth`, `containerMetrics`, `kueueMetrics`, `ncclErrors`, `xidErrors`, `trainingJobSummary`, `experimentMetricsDashboardRows`.
+Available functions: `gpuHealth`, `nodeHealth`, `containerMetrics`, `kueueMetrics`, `ncclErrors`, `xidErrors`, `trainingJobSummary`, `tauExpMetricEventRows`, `tauExpSeriesCatalogRows`, `tauExpRunCatalogRows`.
+
+The additive typed delivery path is disabled by default. Enable
+`managementCommands.typedMetricEventsV1.enabled` to create
+`TauExpMetricEventsV1`, the named `TauExpMetricEventsV1Json` mapping, explicit
+retention/cache/batching policies, and the `TauExpMetricEventsV1Dedup`
+materialized view. Set
+`managementCommands.typedMetricEventsV1.backfillEnabled=true` only when the
+view must backfill already-retained typed rows; ADX requires asynchronous
+materialized-view creation for backfill. `ifnotexists` does not reconcile a
+changed view definition, so definition changes require a versioned view or a
+controlled replacement. A separate desired-state ManagementCommand applies the
+same retention period to the deduplicated materialized view. It retries until
+asynchronous view creation completes instead of racing the backfill operation.
+adx-mon v0.3.0 records successful submission of the asynchronous create command,
+not completion of its backfill operation. Monitor `.show operations`; if a
+backfill fails, ADX does not retry it automatically and `ifnotexists` cannot
+repair the disabled view. Drop the failed materialized view and rerun the
+ManagementCommand by changing its generation after correcting the failure.
+
+Enable `functions.items.tauExpMetricEventRows.enabled` to expose the stable
+`TauExpMetricEventRows()` contract. Workloads ingest only into the physical
+table and require the ADX database/table Ingestor role; the adx-mon operator
+retains management-command ownership. The collector uses digest-derived
+`ingest-by:` tags for chunk replay suppression and `event_id` for record-level
+deduplication.
+
+The opt-in v1 experiment catalog creates three physical materialized views in
+the Metrics database: `TauExpTypedSeriesCatalogV1`,
+`TauExpTypedMetricRunCatalogV1`, and `TauExpLifecycleRunCatalogV1`. Enable
+`managementCommands.experimentCatalogV1.enabled` and the two catalog Function
+items to expose `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()`. The
+versioned views are created once with asynchronous full backfill; source-table
+retention bounds the available historical backfill. Each catalog view then
+applies an independent 400-day retention policy through a separate retrying
+ManagementCommand, so database defaults cannot shorten catalog history.
+As with the typed deduplication view, operators must monitor asynchronous
+backfill operations and explicitly drop and recreate any view whose backfill
+fails.
+
+The series key is workspace, cluster, source store, project, experiment, run
+group, run, and metric name. Unit/source/split remain latest metric metadata,
+not extra series dimensions. Latest sample selection orders by activity time
+and then export revision, so an appended correction with the same event ID,
+step, and wall time agrees with `TauExpMetricEventRows()`. The catalog requires
+no new remote-write or per-step label. The run catalog joins metric activity with
+`TauExpRunLifecycle`; new lifecycle rows persist `experiment_id`. Older
+lifecycle rows with a blank experiment ID are included only when a unique
+metric-run identity can enrich them, and unresolved historical lifecycle-only
+rows are deliberately omitted instead of assigned a guessed experiment. The
+catalog view also tolerates pre-migration lifecycle tables where the
+`experiment_id` column is not present.
+
+Enable the physical views first and wait for asynchronous backfills to
+complete, then enable the stable Functions. They always read typed event/catalog
+assets and fail closed. Portal canonical v2 reads never use raw
+`ExperimentMetrics`.
 
 ### AlertRules
 
@@ -289,6 +345,7 @@ rule generation changes. The Portal reads `GpuCostHourly` directly.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `managementCommands.experimentCatalogV1.enabled` | Create the v1 experiment catalog materialized views | `false` |
 | `managementCommands.precreateMetricsTables.enabled` | Pre-create metrics tables | `false` |
 | `managementCommands.precreateLogsTables.enabled` | Pre-create log tables | `false` |
 | `managementCommands.ingestionBatching.enabled` | Set ingestion batching policies | `false` |

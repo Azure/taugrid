@@ -27,6 +27,15 @@ tests:
           pattern: "TauExpRunLifecycleMapping"
       - matchRegex:
           path: spec.body
+          pattern: "experiment_id: string"
+      - matchRegex:
+          path: spec.body
+          pattern: '"column":"experiment_id","datatype":"string","path":"\$\.experiment_id"'
+      - matchRegex:
+          path: spec.body
+          pattern: "\\['project'\\], experiment_id, run_group_id"
+      - matchRegex:
+          path: spec.body
           pattern: "TauExpRunLifecycleDashboardRows"
 
   - it: can place the ManagementCommand in a non-default adx-mon namespace

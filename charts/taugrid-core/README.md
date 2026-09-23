@@ -258,7 +258,9 @@ With `lifecycleRecorder.schemaManagement.enabled=true`, the chart creates an
 adx-mon `ManagementCommand` in
 `lifecycleRecorder.schemaManagement.namespace` (default `adx-mon`). adx-mon
 idempotently creates the `TauExpRunLifecycle` table, its named JSON ingestion
-mapping, and the dashboard function. Install and authorize adx-mon before this
+mapping, and the dashboard function. The lifecycle contract persists
+`experiment_id`, allowing queued, running, failed, and other lifecycle-only runs
+to appear in the typed run catalog before metric evidence arrives. Install and authorize adx-mon before this
 chart: its identity needs database-management permission on the recorder's ADX
 database. The recorder retains only `Ingestor` permission and does not execute
 database-management commands itself. This is opt-in so existing recorder

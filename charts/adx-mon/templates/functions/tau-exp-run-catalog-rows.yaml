@@ -1,0 +1,227 @@
+{{- if and .Values.functions.enabled .Values.functions.items.tauExpRunCatalogRows.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-tau-exp-run-catalog-rows
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.tauExpRunCatalogRows.database | quote }}
+  body: |
+    .create-or-alter function with (folder = 'Tau/catalog', docstring = 'Stable v1 experiment run catalog from metric and lifecycle evidence.', skipvalidation = 'true') TauExpRunCatalogRows()
+    {
+      let metric_series_counts =
+        TauExpSeriesCatalogRows()
+        | where metric_name != 'tau/run_status'
+        | summarize metric_series_count = count()
+          by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id;
+      let typed_metric_runs =
+        TauExpTypedMetricRunCatalogV1
+        | project
+            workspace_id = tostring(workspace_id),
+            cluster = tostring(cluster),
+            metric_source_store_id = tostring(source_store_id),
+            ['project'] = tostring(['project']),
+            experiment_id = tostring(experiment_id),
+            run_group_id = tostring(run_group_id),
+            run_id = tostring(run_id),
+            metric_first_time = todatetime(first_metric_time),
+            metric_latest_time = todatetime(latest_metric_time),
+            metric_terminal_observed_at = todatetime(terminal_observed_at),
+            metric_terminal_state = tolower(tostring(terminal_state)),
+            metric_terminal_reason = tostring(terminal_reason),
+            metric_terminal_message = tostring(terminal_message),
+            metric_terminal_artifact_uri = tostring(terminal_artifact_uri),
+            metric_terminal_checkpoint_uri = tostring(terminal_checkpoint_uri);
+      let metric_run_evidence =
+        typed_metric_runs
+        | extend metric_latest_rank = metric_latest_time, terminal_rank = metric_terminal_observed_at
+        | summarize
+            metric_first_time = min(metric_first_time),
+            metric_latest_time = max(metric_latest_time),
+            arg_max(metric_latest_rank, metric_source_store_id),
+            arg_max(terminal_rank, metric_terminal_observed_at, metric_terminal_state,
+                metric_terminal_reason, metric_terminal_message, metric_terminal_artifact_uri,
+                metric_terminal_checkpoint_uri)
+          by workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id;
+      let metric_runs = materialize(
+        metric_run_evidence
+        | join kind=leftouter metric_series_counts
+            on workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
+        | extend metric_series_count = coalesce(tolong(metric_series_count), 0)
+        | project-away workspace_id1, cluster1, ['project1'], experiment_id1, run_group_id1, run_id1
+      );
+      let unique_metric_identities =
+        metric_runs
+        | where isnotempty(workspace_id) and isnotempty(['project']) and isnotempty(run_group_id)
+            and isnotempty(run_id) and isnotempty(experiment_id)
+        | summarize
+            experiment_id_count = dcount(experiment_id),
+            candidate_experiment_id = take_any(experiment_id)
+          by workspace_id, cluster, ['project'], run_group_id, run_id
+        | where experiment_id_count == 1;
+      let lifecycle_runs =
+        TauExpLifecycleRunCatalogV1
+        | extend terminal_rank = iff(is_terminal, 1, 0)
+        | summarize arg_max(terminal_rank, *) by lifecycle_cluster, lifecycle_namespace, durable_identity
+        | project
+            workspace_id = tostring(workspace_id),
+            ['project'] = tostring(['project']),
+            lifecycle_experiment_id = tostring(experiment_id),
+            run_group_id = tostring(run_group_id),
+            run_id = tostring(run_id),
+            cluster = tostring(cluster),
+            lifecycle_namespace = tostring(namespace),
+            durable_id = tostring(durable_identity),
+            result_scope = tostring(result_scope),
+            lifecycle_observed_at = todatetime(observed_at),
+            lifecycle_submit_time = todatetime(submit_time),
+            lifecycle_created_time = todatetime(created_time),
+            lifecycle_admitted_time = todatetime(kueue_admitted_time),
+            lifecycle_pod_start_time = todatetime(pod_start_time),
+            lifecycle_completion_time = todatetime(completion_time),
+            lifecycle_state = tolower(tostring(state)),
+            lifecycle_reason = tostring(reason),
+            lifecycle_message = tostring(message),
+            lifecycle_artifact_uri = tostring(artifact_uri),
+            lifecycle_checkpoint_uri = tostring(checkpoint_uri),
+            lifecycle_tags = todynamic(tags),
+            owning_resource_kind = tostring(owning_resource_kind),
+            owning_resource_name = tostring(owning_resource_name),
+            local_queue = tostring(local_queue),
+            cluster_queue = tostring(cluster_queue),
+            workload_kind = tostring(workload_kind),
+            resource_uid = tostring(resource_uid),
+            image = tostring(image),
+            image_digest = tostring(image_digest),
+            config_hash = tostring(config_hash),
+            code_sha = tostring(code_sha),
+            tau_command = tostring(tau_command),
+            result_path = tostring(result_path),
+            result_pvc = tostring(result_pvc),
+            experiment_tracking = tostring(experiment_tracking),
+            experiment_source = tostring(experiment_source),
+            controller_version = tostring(controller_version)
+        | join kind=leftouter unique_metric_identities on workspace_id, cluster, ['project'], run_group_id, run_id
+        | extend experiment_id = iff(
+            isnotempty(lifecycle_experiment_id),
+            lifecycle_experiment_id,
+            iff(experiment_id_count == 1, candidate_experiment_id, ''))
+        | where isnotempty(workspace_id) and isnotempty(['project']) and isnotempty(experiment_id)
+            and isnotempty(run_group_id) and isnotempty(run_id)
+        | project-away lifecycle_experiment_id, experiment_id_count, candidate_experiment_id,
+            workspace_id1, cluster1, ['project1'], run_group_id1, run_id1;
+      metric_runs
+      | join kind=fullouter lifecycle_runs on workspace_id, cluster, ['project'], experiment_id, run_group_id, run_id
+      | extend
+          catalog_workspace_id = coalesce(workspace_id, workspace_id1),
+          catalog_cluster = coalesce(cluster, cluster1),
+          catalog_project = coalesce(['project'], ['project1']),
+          catalog_experiment_id = coalesce(experiment_id, experiment_id1),
+          catalog_run_group_id = coalesce(run_group_id, run_group_id1),
+          catalog_run_id = coalesce(run_id, run_id1),
+          lifecycle_is_terminal = lifecycle_state in ('succeeded', 'failed', 'cancelled'),
+          metric_is_terminal = metric_terminal_state in ('succeeded', 'failed', 'cancelled')
+      | where isnotempty(catalog_workspace_id) and isnotempty(catalog_project)
+          and isnotempty(catalog_experiment_id) and isnotempty(catalog_run_group_id)
+          and isnotempty(catalog_run_id)
+      | extend
+          terminal_state = case(lifecycle_is_terminal, lifecycle_state, metric_is_terminal, metric_terminal_state, ''),
+          state = case(
+            lifecycle_is_terminal, lifecycle_state,
+            metric_is_terminal, metric_terminal_state,
+            isnotempty(lifecycle_state), lifecycle_state,
+            'unknown'),
+          terminal_observed_at = case(
+            lifecycle_is_terminal, lifecycle_observed_at,
+            metric_is_terminal, metric_terminal_observed_at,
+            datetime(null)),
+          reason = case(
+            lifecycle_is_terminal, lifecycle_reason,
+            metric_is_terminal, metric_terminal_reason,
+            lifecycle_reason),
+          message = case(
+            lifecycle_is_terminal, lifecycle_message,
+            metric_is_terminal, metric_terminal_message,
+            lifecycle_message),
+          artifact_uri = case(
+            lifecycle_is_terminal and isnotempty(lifecycle_artifact_uri), lifecycle_artifact_uri,
+            metric_is_terminal, metric_terminal_artifact_uri,
+            lifecycle_artifact_uri),
+          checkpoint_uri = case(
+            lifecycle_is_terminal and isnotempty(lifecycle_checkpoint_uri), lifecycle_checkpoint_uri,
+            metric_is_terminal, metric_terminal_checkpoint_uri,
+            lifecycle_checkpoint_uri),
+          catalog_source = case(
+            isnotnull(metric_latest_time) and isnotnull(lifecycle_observed_at), 'metrics+lifecycle',
+            isnotnull(metric_latest_time), 'metrics',
+            'lifecycle'),
+          has_metrics = isnotnull(metric_latest_time),
+          has_lifecycle = isnotnull(lifecycle_observed_at),
+          lifecycle_first_activity = coalesce(
+            lifecycle_submit_time,
+            lifecycle_created_time,
+            lifecycle_admitted_time,
+            lifecycle_pod_start_time,
+            lifecycle_observed_at)
+      | extend
+          first_activity_at = case(
+            isnull(metric_first_time), lifecycle_first_activity,
+            isnull(lifecycle_first_activity), metric_first_time,
+            min_of(metric_first_time, lifecycle_first_activity)),
+          latest_activity_at = case(
+            isnull(metric_latest_time), lifecycle_observed_at,
+            isnull(lifecycle_observed_at), metric_latest_time,
+            max_of(metric_latest_time, lifecycle_observed_at))
+      | project
+          catalog_version = 'v1',
+          workspace_id = tostring(catalog_workspace_id),
+          cluster = tostring(catalog_cluster),
+          source_store_id = metric_source_store_id,
+          ['project'] = tostring(catalog_project),
+          experiment_id = tostring(catalog_experiment_id),
+          run_group_id = tostring(catalog_run_group_id),
+          run_id = tostring(catalog_run_id),
+          first_activity_at,
+          latest_activity_at,
+          first_metric_at = metric_first_time,
+          latest_metric_at = metric_latest_time,
+          latest_observation_at = lifecycle_observed_at,
+          terminal_at = terminal_observed_at,
+          state,
+          reason,
+          message,
+          durable_id,
+          result_scope,
+          tags = lifecycle_tags,
+          owning_resource_kind,
+          owning_resource_name,
+          namespace = lifecycle_namespace,
+          local_queue,
+          cluster_queue,
+          workload_kind,
+          resource_uid,
+          submit_time = lifecycle_submit_time,
+          created_time = lifecycle_created_time,
+          kueue_admitted_time = lifecycle_admitted_time,
+          pod_start_time = lifecycle_pod_start_time,
+          completion_time = lifecycle_completion_time,
+          artifact_uri,
+          checkpoint_uri,
+          image,
+          image_digest,
+          config_hash,
+          code_sha,
+          tau_command,
+          result_path,
+          result_pvc,
+          experiment_tracking,
+          experiment_source,
+          controller_version,
+          metric_series_count,
+          has_metrics,
+          has_lifecycle
+    }
+{{- end }}
