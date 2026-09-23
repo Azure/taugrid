@@ -832,11 +832,15 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 				experimentTracking = "legacy"
 			}
 		}
+		resourceUID := ""
+		if reader, ok := s.runs.Reader.(jobdetail.Reader); ok && jobdetail.SupportsKind(reader, wl.ResourceKind) {
+			resourceUID = wl.ResourceUID
+		}
 		item := runningItem{
 			Job:                        wl.Job,
 			Name:                       wl.Name,
 			Namespace:                  wl.Namespace,
-			ResourceUID:                wl.ResourceUID,
+			ResourceUID:                resourceUID,
 			RunID:                      wl.RunID,
 			Queue:                      wl.Queue,
 			ClusterQueue:               wl.ClusterQueue,
@@ -1528,6 +1532,40 @@ func (s *Server) resolveLiveWorkload(ctx context.Context, scope WorkspaceScope, 
 			return jobdetail.Snapshot{}, false, nil
 		}
 		return snapshot, true, nil
+	}
+
+	reader, ok := s.runs.Reader.(jobdetail.Reader)
+	if !ok || s.jobs.Reader == nil {
+		return jobdetail.Snapshot{}, false, nil
+	}
+	jobScopes, err := s.resolvedJobScopes(scope)
+	if err != nil {
+		return jobdetail.Snapshot{}, false, err
+	}
+	for _, jobScope := range jobScopes {
+		workloads, listErr := links.ListWorkloads(ctx, s.jobs.Reader, jobScope.Namespace)
+		if listErr != nil {
+			return jobdetail.Snapshot{}, false, listErr
+		}
+		for _, workload := range workloads {
+			if workload.Queue != jobScope.Queue || workload.ResourceUID != resourceUID ||
+				!jobdetail.SupportsKind(reader, workload.ResourceKind) {
+				continue
+			}
+			snapshot, detailErr := jobdetail.DetailReference(ctx, reader, s.cluster.Querier, jobdetail.Options{
+				Namespace: workload.Namespace, Name: workload.ResourceName,
+				WorkspaceID: scope.WorkspaceID, Cluster: scope.Cluster,
+			}, jobdetail.WorkloadReference{
+				Kind: workload.ResourceKind, Name: workload.ResourceName, UID: workload.ResourceUID,
+			})
+			if detailErr != nil {
+				if errors.Is(detailErr, jobdetail.ErrNotFound) {
+					return jobdetail.Snapshot{}, false, nil
+				}
+				return jobdetail.Snapshot{}, false, detailErr
+			}
+			return snapshot, true, nil
+		}
 	}
 	return jobdetail.Snapshot{}, false, nil
 }

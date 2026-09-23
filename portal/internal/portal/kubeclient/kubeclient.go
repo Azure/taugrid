@@ -60,6 +60,9 @@ var (
 	rayJobGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayjobs",
 	}
+	rayServiceGVR = schema.GroupVersionResource{
+		Group: "ray.io", Version: "v1", Resource: "rayservices",
+	}
 	rayClusterGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayclusters",
 	}
@@ -230,6 +233,12 @@ func (c *Client) GetJob(ctx context.Context, namespace, name string) ([]byte, er
 // not installed) surfaces as a get error, which the detail page tolerates.
 func (c *Client) GetRayJob(ctx context.Context, namespace, name string) ([]byte, error) {
 	return c.getRaw(ctx, rayJobGVR, namespace, name)
+}
+
+// GetRayService returns a single ray.io RayService so workload detail can
+// resolve Kueue Workloads whose canonical controller owner is a RayService.
+func (c *Client) GetRayService(ctx context.Context, namespace, name string) ([]byte, error) {
+	return c.getRaw(ctx, rayServiceGVR, namespace, name)
 }
 
 // GetRayCluster returns one RayCluster so Job detail can verify that the

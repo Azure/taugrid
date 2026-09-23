@@ -179,6 +179,7 @@ tests:
             resources:
              - rayjobs
              - rayclusters
+             - rayservices
             verbs:
              - get
              - list

@@ -44,13 +44,18 @@ type WorkloadReader interface {
 // so the overview can list what is running now and link each row to its
 // experiment.
 type Workload struct {
-	Name           string    `json:"name"`
-	Namespace      string    `json:"namespace"`
-	Job            string    `json:"job,omitempty"`
-	RunID          string    `json:"runId,omitempty"`
-	Owners         []string  `json:"owners,omitempty"`
-	OwnerUIDs      []string  `json:"-"`
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace"`
+	Job       string   `json:"job,omitempty"`
+	RunID     string   `json:"runId,omitempty"`
+	Owners    []string `json:"owners,omitempty"`
+	OwnerUIDs []string `json:"-"`
+	// Resource* is the canonical detail-route owner. Keep it empty for owner
+	// kinds the detail resolver does not support; emitting an arbitrary
+	// controller UID here creates a guaranteed /portal/workloads/{uid} 404.
 	ResourceUID    string    `json:"resourceUid,omitempty"`
+	ResourceKind   string    `json:"resourceKind,omitempty"`
+	ResourceName   string    `json:"resourceName,omitempty"`
 	Queue          string    `json:"queue,omitempty"`
 	ClusterQueue   string    `json:"clusterQueue,omitempty"`
 	Admitted       bool      `json:"admitted"`
@@ -125,17 +130,17 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 		priorityClass, priorityClassKind := workloadPriorityClass(it.Spec)
 		var owners []string
 		var ownerUIDs []string
+		resourceUID, resourceKind, resourceName := "", "", ""
 		for _, ref := range it.Metadata.OwnerReferences {
 			if ref.Name != "" {
 				owners = append(owners, ref.Name)
 			}
 			if ref.UID != "" && ref.Controller != nil && *ref.Controller {
 				ownerUIDs = append(ownerUIDs, ref.UID)
+				if resourceUID == "" && ref.Name != "" && supportedWorkloadOwnerKind(ref.Kind) {
+					resourceUID, resourceKind, resourceName = ref.UID, ref.Kind, ref.Name
+				}
 			}
-		}
-		resourceUID := ""
-		if len(ownerUIDs) > 0 {
-			resourceUID = ownerUIDs[0]
 		}
 		out = append(out, Workload{
 			Name:                       it.Metadata.Name,
@@ -145,6 +150,8 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 			Owners:                     owners,
 			OwnerUIDs:                  ownerUIDs,
 			ResourceUID:                resourceUID,
+			ResourceKind:               resourceKind,
+			ResourceName:               resourceName,
 			Queue:                      it.Spec.QueueName,
 			ClusterQueue:               it.Status.Admission.ClusterQueue,
 			Admitted:                   admitted,
@@ -173,6 +180,15 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 		return ja < jb
 	})
 	return out, nil
+}
+
+func supportedWorkloadOwnerKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "job", "rayjob", "pod", "rayservice":
+		return true
+	default:
+		return false
+	}
 }
 
 func workloadPriorityClass(spec workloadSpec) (string, string) {
@@ -324,6 +340,7 @@ type workloadItem struct {
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
 		OwnerReferences   []struct {
+			Kind       string `json:"kind"`
 			Name       string `json:"name"`
 			UID        string `json:"uid"`
 			Controller *bool  `json:"controller"`

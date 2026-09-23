@@ -1290,6 +1290,131 @@ type jobDetailAPIReader struct {
 	lastLogLimit     int64
 }
 
+type ownerKindDetailReader struct {
+	jobDetailAPIReader
+}
+
+func (*ownerKindDetailReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":"jobqueue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}}]}`, namespace)), nil
+}
+
+func (*ownerKindDetailReader) ListClusterQueues(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"pod-owner","namespace":"ray","ownerReferences":[{"apiVersion":"v1","kind":"Pod","name":"standalone-train","uid":"pod-owner","controller":true}]},
+		 "spec":{"queueName":"jobqueue"},"status":{"admission":{"clusterQueue":"taugrid-cq"},"conditions":[{"type":"Admitted","status":"True"}]}},
+		{"metadata":{"name":"rayservice-owner","namespace":"ray","ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayService","name":"serve-model","uid":"rayservice-owner","controller":true}]},
+		 "spec":{"queueName":"jobqueue"},"status":{"admission":{"clusterQueue":"taugrid-cq"},"conditions":[{"type":"Admitted","status":"True"}]}}
+	]}`), nil
+}
+
+func (*ownerKindDetailReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"standalone-train","namespace":"ray","uid":"pod-owner","creationTimestamp":"2026-09-23T01:00:00Z",
+		 "labels":{"` + workloadmeta.LabelRunID + `":"pod-run"},"annotations":{}},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","startTime":"2026-09-23T01:00:30Z","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{"startedAt":"2026-09-23T01:00:30Z"}}}]}},
+		{"metadata":{"name":"serve-head","namespace":"ray","uid":"serve-head","labels":{"ray.io/cluster":"serve-cluster"},"ownerReferences":[{"kind":"RayCluster","uid":"serve-cluster-uid","controller":true}]},
+		 "spec":{"nodeName":"gpu-b","containers":[{"name":"ray-head"}]},
+		 "status":{"phase":"Running","startTime":"2026-09-23T01:01:00Z","containerStatuses":[{"name":"ray-head","ready":true,"state":{"running":{"startedAt":"2026-09-23T01:01:00Z"}}}]}}
+	]}`), nil
+}
+
+func (*ownerKindDetailReader) GetRayService(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"serve-model","namespace":"ray","uid":"rayservice-owner","creationTimestamp":"2026-09-23T01:00:00Z",
+		"labels":{"` + workloadmeta.LabelRunID + `":"serve-run"},"annotations":{}},
+		"status":{"serviceStatus":"Running","activeServiceStatus":{"rayClusterName":"serve-cluster"}}}`), nil
+}
+
+func (*ownerKindDetailReader) GetRayCluster(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"serve-cluster","uid":"serve-cluster-uid",
+		"ownerReferences":[{"kind":"RayService","uid":"rayservice-owner","controller":true}]}}`), nil
+}
+
+func (*ownerKindDetailReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestOverviewOwnerKindLinksResolveWorkloadDetail(t *testing.T) {
+	reader := &ownerKindDetailReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Jobs:    testOperatorJobs(t, reader),
+		Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	overview := httptest.NewRecorder()
+	server.Handler().ServeHTTP(overview, httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil))
+	if overview.Code != http.StatusOK {
+		t.Fatalf("overview status = %d, body = %s", overview.Code, overview.Body.String())
+	}
+	var got overviewResponse
+	if err := json.Unmarshal(overview.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if len(got.Running) != 2 {
+		t.Fatalf("running = %+v, want admitted Pod and RayService", got.Running)
+	}
+	linked := map[string]bool{}
+	for _, item := range got.Running {
+		linked[item.ResourceUID] = true
+	}
+	if !linked["pod-owner"] || !linked["rayservice-owner"] {
+		t.Fatalf("overview resource UIDs = %+v, want Pod and RayService canonical links", linked)
+	}
+
+	for _, tc := range []struct {
+		uid  string
+		kind string
+	}{
+		{uid: "pod-owner", kind: "Pod"},
+		{uid: "rayservice-owner", kind: "RayService"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/"+tc.uid, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), `"resourceUid":"`+tc.uid+`"`) ||
+				!strings.Contains(rec.Body.String(), `"kind":"`+tc.kind+`"`) {
+				t.Fatalf("detail = %s", rec.Body.String())
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/workloads/pod-owner/logs?pod=serve-head&container=ray-head", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-workload pod status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/not-an-owner", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown UID status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func (*jobDetailAPIReader) ListJobs(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"ray","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
 		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil

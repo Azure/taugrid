@@ -82,6 +82,10 @@ type Reader interface {
 	ListServices(ctx context.Context, namespace string) ([]byte, error)
 }
 
+type rayServiceReader interface {
+	GetRayService(ctx context.Context, namespace, name string) ([]byte, error)
+}
+
 // Options scopes the detail read to one object by namespace and name.
 type Options struct {
 	Namespace string
@@ -98,7 +102,7 @@ type Options struct {
 type Snapshot struct {
 	Namespace   string                     `json:"namespace"`
 	Name        string                     `json:"name"`
-	Kind        string                     `json:"kind"` // Job | RayJob
+	Kind        string                     `json:"kind"` // Job | RayJob | Pod | RayService
 	ResourceUID string                     `json:"resourceUid,omitempty"`
 	ObjectState string                     `json:"objectState"` // live | deleted
 	Status      string                     `json:"status"`
@@ -121,6 +125,24 @@ type Snapshot struct {
 	// without experiment metadata).
 	Experiment  *ExperimentIdentity `json:"experiment,omitempty"`
 	Diagnostics Diagnostics         `json:"diagnostics"`
+}
+
+type WorkloadReference struct {
+	Kind string
+	Name string
+	UID  string
+}
+
+func SupportsKind(r Reader, kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "job", "rayjob", "pod":
+		return true
+	case "rayservice":
+		_, ok := r.(rayServiceReader)
+		return ok
+	default:
+		return false
+	}
 }
 
 // Diagnostics keeps source failures distinct from successful empty reads.
@@ -305,7 +327,21 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	if err != nil {
 		return Snapshot{}, err
 	}
+	return detailResolved(ctx, r, q, opts, obj)
+}
 
+func DetailReference(ctx context.Context, r Reader, q kustoquery.Querier, opts Options, ref WorkloadReference) (Snapshot, error) {
+	if r == nil {
+		return Snapshot{}, errors.New("jobdetail: nil reader")
+	}
+	obj, err := resolveReference(ctx, r, opts, ref)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return detailResolved(ctx, r, q, opts, obj)
+}
+
+func detailResolved(ctx context.Context, r Reader, q kustoquery.Querier, opts Options, obj resolved) (Snapshot, error) {
 	snap := Snapshot{
 		Namespace:   opts.Namespace,
 		Name:        opts.Name,
@@ -334,7 +370,7 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 	podOwnerUID := obj.uid
 	rayClusterUID := ""
 	var rayOwnershipErr error
-	if obj.kind == "RayJob" && obj.uid != "" {
+	if (obj.kind == "RayJob" || obj.kind == "RayService") && obj.uid != "" {
 		podOwnerUID = ""
 		if obj.rayClusterName == "" {
 			rayOwnershipErr = errors.New("RayCluster identity is not available")
@@ -368,7 +404,11 @@ func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (
 		rawPods, err := r.ListPods(ctx, opts.Namespace)
 		podErr = err
 		if podErr == nil {
-			snap.Pods, podUIDs, podErr = parsePodsWithStatus(rawPods, podOwnerUID, obj.uid != "", obj.podSelectors)
+			if obj.directPod {
+				snap.Pods, podUIDs, podErr = parsePodByUID(rawPods, obj.uid)
+			} else {
+				snap.Pods, podUIDs, podErr = parsePodsWithStatus(rawPods, podOwnerUID, obj.uid != "", obj.podSelectors)
+			}
 		}
 	}
 	snap.Diagnostics.Pods = sourceDiagnostic("pods", len(snap.Pods), podErr)
@@ -524,6 +564,7 @@ type resolved struct {
 	detail         ObjectDetail
 	rayClusterName string
 	podSelectors   []podLabelSelector
+	directPod      bool
 }
 
 // resolveObject tries the RayJob first (its pods and native status are richer),
@@ -572,6 +613,59 @@ func resolveObject(ctx context.Context, r Reader, opts Options) (resolved, error
 	return resolved{}, ErrNotFound
 }
 
+func resolveReference(ctx context.Context, r Reader, opts Options, ref WorkloadReference) (resolved, error) {
+	if ref.UID == "" || ref.Name == "" || !SupportsKind(r, ref.Kind) {
+		return resolved{}, ErrNotFound
+	}
+	var (
+		obj resolved
+		ok  bool
+		err error
+	)
+	switch strings.ToLower(strings.TrimSpace(ref.Kind)) {
+	case "job":
+		var raw []byte
+		raw, err = r.GetJob(ctx, opts.Namespace, ref.Name)
+		if err == nil {
+			obj, ok = parseJob(raw)
+		}
+	case "rayjob":
+		var raw []byte
+		raw, err = r.GetRayJob(ctx, opts.Namespace, ref.Name)
+		if err == nil {
+			obj, ok = parseRayJob(raw)
+		}
+	case "pod":
+		var raw []byte
+		raw, err = r.ListPods(ctx, opts.Namespace)
+		if err == nil {
+			obj, ok, err = parsePodObject(raw, ref.UID)
+		}
+	case "rayservice":
+		var raw []byte
+		raw, err = r.(rayServiceReader).GetRayService(ctx, opts.Namespace, ref.Name)
+		if err == nil {
+			obj, ok = parseRayService(raw)
+		}
+	}
+	if err != nil {
+		if errors.Is(err, errDecode) {
+			return resolved{}, err
+		}
+		if apierrors.IsNotFound(err) {
+			return resolved{}, ErrNotFound
+		}
+		return resolved{}, err
+	}
+	if !ok {
+		return resolved{}, errDecode
+	}
+	if obj.uid != ref.UID || !strings.EqualFold(obj.kind, ref.Kind) {
+		return resolved{}, ErrNotFound
+	}
+	return obj, nil
+}
+
 // objectMeta is the metadata subset shared by Job and RayJob.
 type objectMeta struct {
 	Name              string            `json:"name"`
@@ -617,6 +711,25 @@ type rayJobObject struct {
 		JobID               string `json:"jobId"`
 		Reason              string `json:"reason"`
 		Message             string `json:"message"`
+	} `json:"status"`
+}
+
+type rayServiceObject struct {
+	Metadata objectMeta `json:"metadata"`
+	Status   struct {
+		ServiceStatus       string `json:"serviceStatus"`
+		ActiveServiceStatus struct {
+			RayClusterName string `json:"rayClusterName"`
+		} `json:"activeServiceStatus"`
+		PendingServiceStatus struct {
+			RayClusterName string `json:"rayClusterName"`
+		} `json:"pendingServiceStatus"`
+		Conditions []struct {
+			Type    string `json:"type"`
+			Status  string `json:"status"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"conditions"`
 	} `json:"status"`
 }
 
@@ -713,9 +826,67 @@ func parseRayJob(data []byte) (resolved, bool) {
 	}, true
 }
 
+func parseRayService(data []byte) (resolved, bool) {
+	var o rayServiceObject
+	if err := json.Unmarshal(data, &o); err != nil || o.Metadata.Name == "" {
+		return resolved{}, false
+	}
+	created := parseTime(o.Metadata.CreationTimestamp)
+	clusterName := firstNonEmpty(o.Status.ActiveServiceStatus.RayClusterName, o.Status.PendingServiceStatus.RayClusterName)
+	reason, message := "", ""
+	for i := len(o.Status.Conditions) - 1; i >= 0; i-- {
+		if strings.EqualFold(o.Status.Conditions[i].Status, "true") {
+			reason, message = o.Status.Conditions[i].Reason, o.Status.Conditions[i].Message
+			break
+		}
+	}
+	return resolved{
+		kind:       "RayService",
+		name:       o.Metadata.Name,
+		uid:        o.Metadata.UID,
+		status:     rayServiceStatus(o.Status.ServiceStatus),
+		runID:      o.Metadata.Labels[workloadmeta.LabelRunID],
+		experiment: experimentIdentity(o.Metadata.Annotations),
+		detail: ObjectDetail{
+			Created:             optionalTime(created),
+			Age:                 runs.FormatAge(time.Now(), created),
+			Labels:              o.Metadata.Labels,
+			Annotations:         o.Metadata.Annotations,
+			JobDeploymentStatus: o.Status.ServiceStatus,
+			RayClusterName:      clusterName,
+			Reason:              reason,
+			Message:             message,
+		},
+		rayClusterName: clusterName,
+		podSelectors: []podLabelSelector{
+			{key: rayClusterLabel, value: clusterName},
+		},
+	}, true
+}
+
+func rayServiceStatus(status string) string {
+	switch {
+	case strings.EqualFold(status, "running"):
+		return "Running"
+	case strings.Contains(strings.ToLower(status), "fail"):
+		return "Failed"
+	default:
+		return "Pending"
+	}
+}
+
 func objectExecutionTarget(managedBy string) string {
 	if strings.TrimSpace(managedBy) == "kueue.x-k8s.io/multikueue" {
 		return "multiKueue"
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
 	}
 	return ""
 }
@@ -798,34 +969,39 @@ func parseOwnedObjectUID(data []byte, ownerUID string) (string, error) {
 
 // podList is the subset of the core v1 Pod list the detail page reads.
 type podList struct {
-	Items []struct {
-		Metadata struct {
-			Name            string            `json:"name"`
-			UID             string            `json:"uid"`
-			Labels          map[string]string `json:"labels"`
-			OwnerReferences []struct {
-				UID        string `json:"uid"`
-				Controller *bool  `json:"controller"`
-			} `json:"ownerReferences"`
-		} `json:"metadata"`
-		Spec struct {
-			NodeName   string `json:"nodeName"`
-			Containers []struct {
-				Name string `json:"name"`
-			} `json:"containers"`
-		} `json:"spec"`
-		Status struct {
-			Phase             string `json:"phase"`
-			StartTime         string `json:"startTime"`
-			ContainerStatuses []struct {
-				Name         string             `json:"name"`
-				Ready        bool               `json:"ready"`
-				RestartCount int                `json:"restartCount"`
-				State        containerStateJSON `json:"state"`
-				LastState    containerStateJSON `json:"lastState"`
-			} `json:"containerStatuses"`
-		} `json:"status"`
-	} `json:"items"`
+	Items []podItem `json:"items"`
+}
+
+type podItem struct {
+	Metadata struct {
+		Name              string            `json:"name"`
+		Namespace         string            `json:"namespace"`
+		UID               string            `json:"uid"`
+		CreationTimestamp string            `json:"creationTimestamp"`
+		Labels            map[string]string `json:"labels"`
+		Annotations       map[string]string `json:"annotations"`
+		OwnerReferences   []struct {
+			UID        string `json:"uid"`
+			Controller *bool  `json:"controller"`
+		} `json:"ownerReferences"`
+	} `json:"metadata"`
+	Spec struct {
+		NodeName   string `json:"nodeName"`
+		Containers []struct {
+			Name string `json:"name"`
+		} `json:"containers"`
+	} `json:"spec"`
+	Status struct {
+		Phase             string `json:"phase"`
+		StartTime         string `json:"startTime"`
+		ContainerStatuses []struct {
+			Name         string             `json:"name"`
+			Ready        bool               `json:"ready"`
+			RestartCount int                `json:"restartCount"`
+			State        containerStateJSON `json:"state"`
+			LastState    containerStateJSON `json:"lastState"`
+		} `json:"containerStatuses"`
+	} `json:"status"`
 }
 
 type containerStateJSON struct {
@@ -870,46 +1046,101 @@ func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, sel
 		if requireOwnerUID && !metadataControlledByUID(it.Metadata.OwnerReferences, ownerUID) {
 			continue
 		}
-		restarts := 0
-		statuses := make(map[string]struct {
-			ready    bool
-			restarts int
-			state    containerStateJSON
-			previous containerStateJSON
-		}, len(it.Status.ContainerStatuses))
-		for _, cs := range it.Status.ContainerStatuses {
-			restarts += cs.RestartCount
-			statuses[cs.Name] = struct {
-				ready    bool
-				restarts int
-				state    containerStateJSON
-				previous containerStateJSON
-			}{cs.Ready, cs.RestartCount, cs.State, cs.LastState}
-		}
-		containers := make([]ContainerDetail, 0, len(it.Spec.Containers))
-		for _, container := range it.Spec.Containers {
-			status := statuses[container.Name]
-			state, reason, message := describeContainerState(status.state)
-			containers = append(containers, ContainerDetail{
-				Name: container.Name, Ready: status.ready, Restarts: status.restarts,
-				State: state, Reason: reason, Message: message,
-				PreviousAvailable: status.previous.Terminated != nil,
-			})
-		}
-		out = append(out, PodDetail{
-			Name:       it.Metadata.Name,
-			Phase:      it.Status.Phase,
-			Node:       it.Spec.NodeName,
-			Restarts:   restarts,
-			Containers: containers,
-			StartedAt:  optionalTime(parseTime(it.Status.StartTime)),
-			NodePath:   links.ClusterInstancePath(it.Spec.NodeName),
-		})
+		out = append(out, podDetail(it))
 		if it.Metadata.UID != "" {
 			uids[it.Metadata.UID] = "Pod"
 		}
 	}
 	return out, uids, nil
+}
+
+func parsePodObject(data []byte, uid string) (resolved, bool, error) {
+	var list podList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return resolved{}, false, errDecode
+	}
+	if list.Items == nil {
+		return resolved{}, false, errDecode
+	}
+	for _, item := range list.Items {
+		if item.Metadata.UID != uid {
+			continue
+		}
+		created := parseTime(item.Metadata.CreationTimestamp)
+		return resolved{
+			kind:       "Pod",
+			name:       item.Metadata.Name,
+			uid:        item.Metadata.UID,
+			status:     firstNonEmpty(item.Status.Phase, "Unknown"),
+			runID:      item.Metadata.Labels[workloadmeta.LabelRunID],
+			experiment: experimentIdentity(item.Metadata.Annotations),
+			detail: ObjectDetail{
+				Created:     optionalTime(created),
+				Age:         runs.FormatAge(time.Now(), created),
+				Labels:      item.Metadata.Labels,
+				Annotations: item.Metadata.Annotations,
+			},
+			directPod: true,
+		}, true, nil
+	}
+	return resolved{}, false, nil
+}
+
+func parsePodByUID(data []byte, uid string) ([]PodDetail, map[string]string, error) {
+	if uid == "" {
+		return nil, nil, errors.New("pod UID is empty")
+	}
+	var list podList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, nil, err
+	}
+	if list.Items == nil {
+		return nil, nil, errors.New("pod response has no items array")
+	}
+	for _, item := range list.Items {
+		if item.Metadata.UID == uid {
+			return []PodDetail{podDetail(item)}, map[string]string{uid: "Pod"}, nil
+		}
+	}
+	return nil, nil, ErrNotFound
+}
+
+func podDetail(item podItem) PodDetail {
+	restarts := 0
+	statuses := make(map[string]struct {
+		ready    bool
+		restarts int
+		state    containerStateJSON
+		previous containerStateJSON
+	}, len(item.Status.ContainerStatuses))
+	for _, cs := range item.Status.ContainerStatuses {
+		restarts += cs.RestartCount
+		statuses[cs.Name] = struct {
+			ready    bool
+			restarts int
+			state    containerStateJSON
+			previous containerStateJSON
+		}{cs.Ready, cs.RestartCount, cs.State, cs.LastState}
+	}
+	containers := make([]ContainerDetail, 0, len(item.Spec.Containers))
+	for _, container := range item.Spec.Containers {
+		status := statuses[container.Name]
+		state, reason, message := describeContainerState(status.state)
+		containers = append(containers, ContainerDetail{
+			Name: container.Name, Ready: status.ready, Restarts: status.restarts,
+			State: state, Reason: reason, Message: message,
+			PreviousAvailable: status.previous.Terminated != nil,
+		})
+	}
+	return PodDetail{
+		Name:       item.Metadata.Name,
+		Phase:      item.Status.Phase,
+		Node:       item.Spec.NodeName,
+		Restarts:   restarts,
+		Containers: containers,
+		StartedAt:  optionalTime(parseTime(item.Status.StartTime)),
+		NodePath:   links.ClusterInstancePath(item.Spec.NodeName),
+	}
 }
 
 func describeContainerState(state containerStateJSON) (name, reason, message string) {
