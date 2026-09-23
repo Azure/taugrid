@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Overview } from './Boards';
@@ -22,12 +23,13 @@ function json(body: unknown) {
 }
 
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('Platform overview', () => {
   it('shows GPU topology with allocated and available capacity', async () => {
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({ cards: { queue: {
         admitted: 3, pending: 1, gpuUsed: 8, gpuHeadroom: 8,
@@ -51,7 +53,8 @@ describe('Platform overview', () => {
       }));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ window: '15m0s', gpus: [] }));
       return Promise.resolve(json({}));
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     const client = createPortalQueryClient();
     render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/portal?persona=platform']}>
@@ -77,6 +80,51 @@ describe('Platform overview', () => {
     expect(screen.getByText('gpu-a')).toBeVisible();
     expect(screen.getByText('gpu-a2')).toBeVisible();
     expect(screen.getByLabelText('gpu-a: 4 allocated GPUs and 4 available GPUs')).toBeVisible();
+    expect(screen.getByText('Infrastructure overview: Auto-refreshing every 15 seconds.')).toBeVisible();
+    expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('Fleet capacity');
+    expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('GPU telemetry');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh Infrastructure overview' }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/overview'))).toHaveLength(2);
+      expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/nodes'))).toHaveLength(2);
+      expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/cluster'))).toHaveLength(2);
+    });
+  });
+
+  it('keeps stale source data visible when a coordinated refresh fails', async () => {
+    let clusterRequests = 0;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/overview')) return Promise.resolve(json({
+        cards: { queue: { admitted: 0, pending: 0, gpuUsed: 0, gpuHeadroom: 0, queues: [] } },
+        running: [],
+      }));
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
+        readyNodes: 1, totalNodes: 1, totalGPUs: 8, gpuNodes: 1, gpuSchedulable: 8, gpuAvailable: 8,
+        nodes: [{ name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 0, gpuAvailable: 8, ready: true }],
+      }));
+      if (url.includes('/api/portal/cluster')) {
+        clusterRequests += 1;
+        return clusterRequests === 1
+          ? Promise.resolve(json({ window: '15m0s', gpus: [{ healthy: true }] }))
+          : Promise.resolve(new Response('telemetry backend unavailable', { status: 503 }));
+      }
+      return Promise.resolve(json({}));
+    }));
+
+    const client = createPortalQueryClient();
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/portal?persona=platform']}>
+      <WorkspaceProvider scope={scope} managed={false}><Overview persona="platform"/></WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
+    expect(screen.getByText('unhealthy of 1 observed')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh Infrastructure overview' }));
+    expect(await screen.findByText(/GPU telemetry refresh failed: 503 telemetry backend unavailable/)).toBeVisible();
+    expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('GPU telemetry: refresh failed; stale data retained');
+    expect(screen.getByText('unhealthy of 1 observed')).toBeVisible();
+    expect(screen.getByText('gpu-a')).toBeVisible();
   });
 
   it('emits resolvable canonical run links for workload tracking', () => {

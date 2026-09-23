@@ -137,7 +137,12 @@ export function useDirectory(workspace: string) {
     staleTime: 0,
   });
 }
-export function useBoard<T>(path: string, enabled = true, merge?: (previous: T | undefined, next: T) => T) {
+export function useBoard<T>(
+  path: string,
+  enabled = true,
+  merge?: (previous: T | undefined, next: T) => T,
+  refetchInterval?: number,
+) {
   const { scope, managed } = useWorkspace();
   const client = useQueryClient();
   const url = scopedURL(path, scope.workspace, managed, scope.source);
@@ -152,6 +157,7 @@ export function useBoard<T>(path: string, enabled = true, merge?: (previous: T |
     enabled,
     refetchOnWindowFocus: !path.startsWith('/api/v2/stellar/'),
     refetchOnReconnect: !path.startsWith('/api/v2/stellar/'),
+    refetchInterval,
   });
 }
 export function boardScopeKey(scope: WorkspaceScope, managed: boolean) {

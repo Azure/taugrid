@@ -6,6 +6,8 @@ import { BoardResult, Empty, PageTitle, ScopedLink, TrackingLink, n1, utilizatio
 import { useBoard } from './data';
 import type { Cluster, Nodes, Overview as OverviewData } from './types';
 
+const overviewRefreshMs = 15_000;
+
 type FleetNode = Nodes['nodes'][number];
 
 interface SiteGroup {
@@ -233,15 +235,26 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
 
 export function Overview({ persona }: { persona: string }) {
   const platform = persona === 'platform';
-  const overview = useBoard<OverviewData>(platform ? '/api/portal/overview' : '/api/portal/overview?view=workloads');
-  const nodes = useBoard<Nodes>('/api/portal/nodes');
-  const cluster = useBoard<Cluster>('/api/portal/cluster');
+  const overview = useBoard<OverviewData>(
+    platform ? '/api/portal/overview' : '/api/portal/overview?view=workloads',
+    true,
+    undefined,
+    overviewRefreshMs,
+  );
+  const nodes = useBoard<Nodes>('/api/portal/nodes', true, undefined, overviewRefreshMs);
+  const cluster = useBoard<Cluster>('/api/portal/cluster', true, undefined, overviewRefreshMs);
   return <><PageTitle title="Overview">{platform
     ? 'See how fleet capacity, scheduler pressure, and active workloads connect.'
     : 'See where your workloads are admitted, what capacity they consume, and where to investigate next.'}</PageTitle>
     <BoardResult query={overview} label="Infrastructure overview"
+      sources={[
+        { label: 'Fleet capacity', query: nodes },
+        { label: 'GPU telemetry', query: cluster },
+      ]}
+      autoRefreshMs={overviewRefreshMs}
       partial={!!overview.data && !!(overview.data.cards.queueUnavailable || overview.data.runningUnavailable)}>
-      {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data} nodeError={nodes.error}/>}
+      {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data}
+        nodeError={nodes.data ? null : nodes.error}/>}
     </BoardResult>
   </>;
 }
