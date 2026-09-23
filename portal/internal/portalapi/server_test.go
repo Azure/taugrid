@@ -1474,6 +1474,106 @@ func (r *jobDetailAPIReader) GetPodLogs(_ context.Context, _, pod, container str
 	return []byte("step=1 Authorization: Bearer top-secret\nloss=0.2\n"), nil
 }
 
+type clusterWideDetailReader struct {
+	jobDetailAPIReader
+	lastDetailNamespace string
+	lastLogNamespace    string
+}
+
+func (*clusterWideDetailReader) ListJobs(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "" {
+		return nil, fmt.Errorf("list jobs namespace = %q, want cluster-wide", namespace)
+	}
+	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"team-a","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
+		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil
+}
+
+func (*clusterWideDetailReader) ListRayJobs(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "" {
+		return nil, fmt.Errorf("list RayJobs namespace = %q, want cluster-wide", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *clusterWideDetailReader) GetJob(_ context.Context, namespace, _ string) ([]byte, error) {
+	r.lastDetailNamespace = namespace
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("get job namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"metadata":{"name":"train","namespace":"team-a","uid":"job-current",
+		"labels":{"batch.kubernetes.io/job-name":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}`), nil
+}
+
+func (*clusterWideDetailReader) ListPods(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list pods namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[
+		{"metadata":{"name":"train-current","namespace":"team-a","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}}
+	]}`), nil
+}
+
+func (*clusterWideDetailReader) ListEvents(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list events namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*clusterWideDetailReader) ListWorkloads(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list workloads namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*clusterWideDetailReader) ListServices(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list services namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *clusterWideDetailReader) GetPodLogs(_ context.Context, namespace, _, _ string, _ bool, _, _ int64) ([]byte, error) {
+	r.lastLogNamespace = namespace
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("get pod logs namespace = %q, want team-a", namespace)
+	}
+	return []byte("training"), nil
+}
+
+func TestSingleWorkspaceClusterWideWorkloadDetailUsesRunNamespace(t *testing.T) {
+	reader := &clusterWideDetailReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Runs:    RunsOptions{Reader: reader},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/job-current", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail = %d %s", rec.Code, rec.Body.String())
+	}
+	if reader.lastDetailNamespace != "team-a" {
+		t.Fatalf("detail namespace = %q, want team-a", reader.lastDetailNamespace)
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/workloads/job-current/logs?pod=train-current&container=trainer", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logs = %d %s", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogNamespace != "team-a" {
+		t.Fatalf("log namespace = %q, want team-a", reader.lastLogNamespace)
+	}
+}
+
 type queueScopedDetailReader struct {
 	jobDetailAPIReader
 }

@@ -1520,7 +1520,7 @@ func (s *Server) resolveLiveWorkload(ctx context.Context, scope WorkspaceScope, 
 			return jobdetail.Snapshot{}, false, errors.New("workload detail reader does not support single-object reads")
 		}
 		snapshot, detailErr := jobdetail.Detail(ctx, reader, s.cluster.Querier, jobdetail.Options{
-			Namespace: namespace, Name: run.Name, WorkspaceID: scope.WorkspaceID, Cluster: scope.Cluster,
+			Namespace: run.Namespace, Name: run.Name, WorkspaceID: scope.WorkspaceID, Cluster: scope.Cluster,
 		})
 		if detailErr != nil {
 			if errors.Is(detailErr, jobdetail.ErrNotFound) {
