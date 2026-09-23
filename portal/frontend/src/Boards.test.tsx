@@ -36,7 +36,10 @@ describe('Platform overview', () => {
           { namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 1, pending: 0 },
           { namespace: 'aks-ai-runtime-e2e', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 0, pending: 1 },
         ],
-      } }, running: [] }));
+      } }, running: [
+        { name: 'gpu-service', namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq' },
+        { name: 'cpu-viewer', namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq' },
+      ] }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
         nodes: [
@@ -59,7 +62,11 @@ describe('Platform overview', () => {
     expect(screen.getByRole('button', { name: /west/i })).toBeVisible();
     expect(screen.queryByText('system')).not.toBeInTheDocument();
     expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
-    expect(screen.getByText('Admitted, unfinished workloads')).toBeInTheDocument();
+    expect(screen.getByText('Admitted workloads by resource')).toBeInTheDocument();
+    expect(screen.getByText('GPU quota admitted')).toBeInTheDocument();
+    expect(screen.getByText('CPU quota admitted')).toBeInTheDocument();
+    expect(screen.getByText('gpu-service')).toBeInTheDocument();
+    expect(screen.getByText('cpu-viewer')).toBeInTheDocument();
     expect(screen.getByText('Admission reserves quota; it does not prove that the workload is running.')).toBeInTheDocument();
     expect(screen.queryByText('Active work')).not.toBeInTheDocument();
     expect(screen.getByText('CPU queue')).toBeInTheDocument();

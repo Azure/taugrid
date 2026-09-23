@@ -159,15 +159,25 @@ function QueueBridge({ data }: { data: OverviewData }) {
 }
 
 function WorkloadFlow({ data }: { data: OverviewData }) {
+  const admitted = data.running ?? [];
+  const cpu = admitted.filter(run => run.queue === 'cpu' || run.clusterQueue === 'tau-cpu-cq');
+  const gpu = admitted.filter(run => !cpu.includes(run));
+  const group = (label: string, runs: typeof admitted) => <section className="overview-workload-group">
+    <div className="overview-workload-group-head"><strong>{label}</strong><span>{runs.length}</span></div>
+    {!runs.length ? <p className="overview-workload-empty">No admitted workloads.</p>
+      : <div className="overview-workload-list">{runs.slice(0, 5).map(run => <div className="overview-workload" key={`${run.namespace}/${run.name}`}>
+        <span className="overview-workload-state">Quota admitted</span>
+        <div><strong>{run.job || run.name}</strong><small>{run.namespace} · {run.queue || 'queue unknown'}</small></div>
+        <TrackingLink run={run} label="Experiment ↗"/>
+      </div>)}</div>}
+  </section>;
   return <div className="overview-workloads">
-    <div className="overview-stage-title"><span>Queue admission</span><strong>Admitted, unfinished workloads</strong></div>
+    <div className="overview-stage-title"><span>Queue admission</span><strong>Admitted workloads by resource</strong></div>
     {data.runningUnavailable ? <div className="overview-unavailable">{data.runningUnavailable}</div>
-      : !data.running?.length ? <Empty>No admitted, unfinished workloads right now.</Empty>
-        : <div className="overview-workload-list">{data.running.slice(0, 5).map(run => <div className="overview-workload" key={`${run.namespace}/${run.name}`}>
-          <span className="overview-workload-state">Quota admitted</span>
-          <div><strong>{run.job || run.name}</strong><small>{run.namespace} · {run.queue || 'queue unknown'}</small></div>
-          <TrackingLink run={run} label="Experiment ↗"/>
-        </div>)}</div>}
+      : <div className="overview-workload-groups">
+        {group('GPU quota admitted', gpu)}
+        {group('CPU quota admitted', cpu)}
+      </div>}
     <p className="overview-stage-note">Admission reserves quota; it does not prove that the workload is running.</p>
     <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queue admission →</ScopedLink>
   </div>;
