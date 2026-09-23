@@ -691,8 +691,8 @@ func (s *Server) buildV2Series(ctx context.Context, r *http.Request, opts expcoc
 		defer store.Close()
 		return expcockpit.BuildSeries(ctx, store, opts)
 	case "kusto":
-		if !s.hasKustoRemoteQuery() {
-			return expcockpit.SeriesDetail{}, fmt.Errorf("typed v2 series require a live Kusto query")
+		if !s.hasKustoSource() {
+			return expcockpit.SeriesDetail{}, fmt.Errorf("source=kusto has no metrics file or query command configured")
 		}
 		return s.baseKustoSource().BuildTypedSeries(ctx, opts)
 	case "auto":
@@ -705,7 +705,7 @@ func (s *Server) buildV2Series(ctx context.Context, r *http.Request, opts expcoc
 			}
 			err = localErr
 		}
-		if !errors.Is(err, expstore.ErrNotFound) || !s.hasKustoRemoteQuery() {
+		if !errors.Is(err, expstore.ErrNotFound) || !s.hasKustoSource() {
 			return expcockpit.SeriesDetail{}, err
 		}
 		return s.baseKustoSource().BuildTypedSeries(ctx, opts)
